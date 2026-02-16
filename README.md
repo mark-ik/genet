@@ -3,7 +3,7 @@
     An open source, prototype, spatial browser that represents webpages as nodes in a force-directed graph
 
 - Force-directed node graph canvas with adjustable physics and node/edge criteria enabling many graph topologies
-- Servo-powered web rendering
+- Servo-powered web rendering in viewports powered by egui_tiles panes/tabs structured by graph layout
 - Clipping: DOM inspection & element extraction from nodes into graph UI as nodes
 - Local-first, permissions-based P2P co-op browsing
 
