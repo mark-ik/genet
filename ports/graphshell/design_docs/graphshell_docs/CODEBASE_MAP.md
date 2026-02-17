@@ -23,26 +23,21 @@ Quick reference for navigating the graphshell codebase.
 - Sets position, label, color, radius based on node data
 - Lifecycle-based styling (Active=blue, Cold=gray, Selected=gold)
 
-**`graph/spatial.rs`** (105 lines)
-- Spatial hash using kiddo KD-tree for efficient neighbor queries
+**`graph/spatial.rs`**
+- Removed from active runtime as part of physics migration
 
 ---
 
 ### Physics & Simulation
 
-**`physics/mod.rs`** (385 lines)
-- `PhysicsEngine` — Force-directed layout (springs + repulsion + damping)
-- `PhysicsConfig` — Tunable parameters
-- Auto-pause on convergence
-- Methods: `step()`, `update_graph()`, `is_converged()`
+**`app.rs` + `render/mod.rs`** (active runtime path)
+- App-owned `FruchtermanReingoldState` (`GraphBrowserApp.physics`)
+- egui_graphs force-directed layout integration (`LayoutForceDirected<FruchtermanReingold>`)
+- Physics controls (`T` toggle, panel sliders) update FR state directly
+- Layout state bridged each frame via `set_layout_state` / `get_layout_state`
 
-**`physics/worker.rs`** (221 lines)
-- Background thread simulation
-- Commands: UpdateGraph, Step, Toggle, Pause, Resume, UpdateConfig, Shutdown
-- Responses: NodePositions (HashMap updates), IsRunning
-- Target: 60 FPS
-
-**`physics/spatial.rs`** (duplicate ref — see graph/spatial.rs)
+**Removed from active runtime**
+- Legacy `physics/mod.rs`, `physics/worker.rs`, and spatial-hash worker path (see physics migration plan)
 
 ---
 

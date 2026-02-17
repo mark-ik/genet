@@ -18,6 +18,17 @@ We prioritize keeping the number of docs manageable. Add information to existing
 
 Documentation should be organized and edited to prevent duplicate information across files. Conduct periodic (before any commit, or upon a substantial change with confirmation) audits to ensure all documentation is properly organized and non-redundant. Archival docs do not need to be kept up-to-date with the project unless directly relevant developments have occurred. Only add to archival docs when necessary (e.g., when a related feature is deprecated). If a more realistic redundancy elimination plan emerges, suggest it in discussion. Newer documents should be considered more authoritative, generally.
 
+### 2.1 Architecture-First Evolution (No Legacy Friction)
+
+When a new framework or architecture path is chosen, optimize for a clean fit with that path rather than preserving legacy implementations by default.
+
+- Keep unique behavior/semantics that are hard to recreate and still align with the active architecture.
+- Reimplement features instead of preserving legacy subsystems when preservation adds complexity or friction.
+- Preserve fallback mechanisms only when they provide clear architectural/technical safety (for example, preventing crashes on empty runtime state), not to keep obsolete parallel systems alive.
+- Do not add migration branches for historical formats unless explicitly requested.
+- Keep tests focused on current semantics and current persistence schema.
+- This default remains in force until an explicit product release introduces real-user migration requirements.
+
 ### 3. Documentation Location and Archival Strategy
 
 - **Active project docs**: Store in `graphshell_docs/` or `verse_docs/`, or in subdirectories of either. Only create, delete, merge, or alter subdirectories to eliminate redundancy and make it easier to track large-scale project shifts, upon discussion and confirmation.

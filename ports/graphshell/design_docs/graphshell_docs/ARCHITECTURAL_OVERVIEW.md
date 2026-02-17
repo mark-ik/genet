@@ -40,17 +40,11 @@ Graphshell is a **spatial tab manager** where webpages are nodes in a force-dire
 - Tile-derived view state (legacy `View` enum retired)
 - Tab bars are projections of graph clusters; closing a tab removes the node everywhere
 
-**Physics Engine** (`physics/mod.rs`, 385 lines) — **Planned for replacement**
-- Force-directed layout: repulsion (spatial hash O(n)), spring attraction (Hooke's law), damping
-- Auto-pause on convergence (monitors max velocity, pauses after configurable delay)
-- **Known bug**: Springs applied over both `out_neighbors` AND `in_neighbors`, doubling effective attraction
-- Will be replaced by egui_graphs `FruchtermanReingold` — see [physics_selection_plan.md](implementation_strategy/2026-02-12_physics_selection_plan.md)
-- Spatial grid (`spatial.rs`): kiddo KD-tree — will be removed (unnecessary at browsing scale)
-
-**Physics Worker** (`physics/worker.rs`, 221 lines) — **Planned for removal**
-- Background thread using `crossbeam_channel` for non-blocking simulation
-- Unnecessary for browsing-scale graphs (~100-300 nodes); egui_graphs FR runs synchronously on UI thread
-- Will be deleted as part of physics migration
+**Physics Runtime** (`app.rs` + `render/mod.rs`) — **Implemented via egui_graphs**
+- Force-directed layout uses egui_graphs `FruchtermanReingoldState`
+- Runtime state is app-owned (`GraphBrowserApp.physics`) and bridged through `set_layout_state`/`get_layout_state` each frame
+- Physics panel controls operate directly on FR state (damping, attraction, repulsion, scale, run/pause)
+- Previous custom physics module/worker path has been removed from active runtime
 
 **Rendering** (`render/mod.rs`, 339 lines)
 - Delegates graph visualization to `egui_graphs::GraphView` widget
@@ -71,7 +65,7 @@ Graphshell is a **spatial tab manager** where webpages are nodes in a force-dire
 - Tile-derived view state (graph pane vs detail panes determined by tile tree)
 - Bidirectional webview↔node mapping: `HashMap<WebViewId, NodeKey>` and inverse
 - Selection management (single/multi), focus switching
-- Physics worker lifecycle (sync graph, receive positions) — planned for removal
+- FR layout state lifecycle (sync app-owned state with egui_graphs per frame)
 - Persistence integration: log mutations, periodic snapshots
 - `egui_state_dirty` flag controls when egui_graphs state is rebuilt
 - Camera: zoom bounds (0.1x–10.0x), post-frame clamping via `MetadataFrame`
@@ -96,8 +90,8 @@ Graphshell is a **spatial tab manager** where webpages are nodes in a force-dire
 **In active development:**
 
 1. **Navigation control-plane cleanup** — Wire Servo delegate callbacks, remove polling-based node creation ([plan](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md))
-2. **Physics migration** — Replace custom physics/worker with egui_graphs FruchtermanReingold ([plan](implementation_strategy/2026-02-14_physics_migration_plan.md))
-3. **Selection consolidation** — Remove duplicated selection state ([plan](implementation_strategy/2026-02-14_selection_semantics_plan.md))
+2. **Selection consolidation** — Remove duplicated selection state ([plan](implementation_strategy/2026-02-14_selection_semantics_plan.md))
+3. **Physics follow-up** — Keep FR tuning/profile work visible after migration ([plan](implementation_strategy/2026-02-14_physics_migration_plan.md))
 
 **Phase 2+ features (not started):**
 
@@ -137,11 +131,11 @@ Graphshell is a **spatial tab manager** where webpages are nodes in a force-dire
 - Event-driven interaction model (events collected in `Rc<RefCell<Vec<Event>>>`)
 - Reduced custom rendering code by ~80% (input went from 313 → 100 LOC)
 
-**Why `LayoutRandom` (no-op layout)?** — **Will be replaced**
-- Currently: custom physics engine controls node positions; egui_graphs just renders
-- Planned: switch to egui_graphs `FruchtermanReingold` force-directed layout
-- Custom `PinnedFruchtermanReingold` wrapper will skip displacement for pinned nodes
-- See [physics_selection_plan.md](implementation_strategy/2026-02-12_physics_selection_plan.md)
+**Why `FruchtermanReingold` layout in egui_graphs?**
+- Removes custom physics/worker complexity while keeping force-directed behavior
+- Keeps layout integration inside GraphView (single framework path)
+- Supports the existing physics panel and interaction model with fewer bespoke subsystems
+- See [2026-02-14_physics_migration_plan.md](implementation_strategy/2026-02-14_physics_migration_plan.md)
 
 **Why post-frame zoom clamp?**
 - egui_graphs has no built-in zoom bounds
@@ -203,7 +197,7 @@ If sync runs before lifecycle or in graph view, it sees stale webviews and creat
 | `egui_graphs` 0.29 | Graph visualization | GraphView widget, events, navigation |
 | `egui` 0.33.3 | UI framework | Immediate mode, integrated with Servo |
 | `egui_tiles` | Multi-pane tile layout | Tile tree, per-pane tab bars |
-| `kiddo` 4.2 | KD-tree spatial queries | Physics only; planned for removal |
+| `kiddo` 4.2 | KD-tree spatial queries | Removed from active graphshell runtime |
 | `fjall` 3 | Append-only log | Persistence mutations |
 | `redb` 3 | KV store | Persistence snapshots |
 | `rkyv` 0.8 | Serialization | Zero-copy, used by both fjall and redb |

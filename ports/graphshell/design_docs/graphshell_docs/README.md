@@ -63,21 +63,21 @@ Graphshell is a spatial browser built on Servo's engine. Webpages are nodes in a
 
 ## Implementation Status
 
-**Last Updated**: February 12, 2026
+**Last Updated**: February 17, 2026
 **Codebase**: `ports/graphshell/` (active desktop + graph runtime)
 
 ### What Works
 
 - **Real browsing**: Servo webviews integrated, navigation creates nodes + edges
 - **Graph visualization**: egui_graphs GraphView with zoom/pan/drag/selection
-- **Physics**: Custom force-directed path currently active; migration plan targets egui_graphs force-directed integration next
+- **Physics**: egui_graphs `FruchtermanReingold` force-directed layout active (migration landed)
 - **Persistence**: fjall log + redb snapshots + rkyv serialization, survives restarts
 - **Keyboard shortcuts**: T (physics), C (fit), P (config panel), N (new node), Home/Esc (view toggle), Del (remove)
 
 ### What's Next
 
-- **Physics + selection simplification**: Replace custom physics/worker path and consolidate duplicated selection state. See [physics selection plan](implementation_strategy/2026-02-12_physics_selection_plan.md).
-- **Selection semantics follow-up**: Keep reducer-driven selection metadata stable as the graph/tile architecture evolves.
+- **Selection semantics follow-up**: Consolidate duplicated selection state and keep reducer-driven selection metadata stable as the graph/tile architecture evolves. See [selection semantics plan](implementation_strategy/2026-02-14_selection_semantics_plan.md).
+- **EGL extension path**: Keep single-window stable while converging EGL on desktop control-plane/event semantics and preparing optional multi-window capability. See [EGL embedder extension plan](implementation_strategy/2026-02-17_egl_embedder_extension_plan.md).
 - **FT2 thumbnail completion**: Landed (async capture, persistence, and thumbnail -> favicon -> color fallback).
 - **Search/filtering (FT6)**: Landed (Ctrl+F search UI, nucleo fuzzy matching, highlight/filter, match navigation).
 
@@ -94,8 +94,8 @@ Graphshell is a spatial browser built on Servo's engine. Webpages are nodes in a
 | UI Framework | egui 0.33.3 | Immediate mode, integrated with Servo |
 | Graph Storage | petgraph 0.8 (StableGraph) | Stable indices, algorithm ecosystem |
 | Graph Visualization | egui_graphs 0.29 | GraphView widget, events, zoom/pan |
-| Physics | Custom (current) -> egui_graphs FR (planned) | See physics selection plan |
-| Worker Thread | crossbeam_channel | Used by current custom physics path; planned for removal |
+| Physics | egui_graphs FruchtermanReingold | Runtime force-directed layout |
+| Worker Thread | crossbeam_channel | Still used by other runtime channels (not physics worker) |
 | Persistence | fjall 3 + redb 3 + rkyv 0.8 | Append log + snapshots + zero-copy serialization |
 | Geometry | euclid | 2D math (Point2D, Vector2D) |
 

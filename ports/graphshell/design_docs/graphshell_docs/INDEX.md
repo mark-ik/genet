@@ -1,7 +1,7 @@
 # Graphshell Design Documentation Index
 
 **Last Updated**: February 16, 2026
-**Status**: M1 complete; active: navigation control-plane, physics migration, selection consolidation
+**Status**: M1 complete; active: navigation control-plane, selection consolidation follow-up
 
 ---
 
@@ -12,7 +12,7 @@
 3. **[ARCHITECTURAL_OVERVIEW.md](ARCHITECTURAL_OVERVIEW.md)** — Foundation code, architecture decisions, key crates
 4. **[GRAPHSHELL_AS_BROWSER.md](GRAPHSHELL_AS_BROWSER.md)** — Browser behavior specification
 5. **[IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)** — Feature targets, validation criteria, execution order
-6. **[2026-02-14_no_legacy_development_policy.md](2026-02-14_no_legacy_development_policy.md)** — No-legacy development defaults
+6. **[../DOC_POLICY.md](../DOC_POLICY.md)** — Documentation and no-legacy defaults (see "Architecture-First Evolution")
 
 ---
 
@@ -31,7 +31,8 @@
 | Document | Scope |
 | -------- | ----- |
 | **[2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md)** | Consolidated architecture: semantic parity model, Servo delegate wiring, intent boundary, legacy cleanup |
-| **[2026-02-14_physics_migration_plan.md](implementation_strategy/2026-02-14_physics_migration_plan.md)** | Replace custom physics with egui_graphs FruchtermanReingold |
+| **[2026-02-17_egl_embedder_extension_plan.md](implementation_strategy/2026-02-17_egl_embedder_extension_plan.md)** | EGL extension phases: single-window hardening, semantic convergence, host/vsync contract, optional multi-window |
+| **[2026-02-14_physics_migration_plan.md](implementation_strategy/2026-02-14_physics_migration_plan.md)** | Physics migration record (implemented) |
 | **[2026-02-14_selection_semantics_plan.md](implementation_strategy/2026-02-14_selection_semantics_plan.md)** | Single-source selection state |
 
 ## Future Feature Plans

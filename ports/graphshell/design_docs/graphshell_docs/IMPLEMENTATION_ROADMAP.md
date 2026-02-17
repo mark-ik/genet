@@ -3,7 +3,7 @@
 **Document Type**: Feature-driven implementation plan
 **Organization**: By feature targets with validation tests (not calendar time)
 **Last Updated**: February 16, 2026
-**Priority Focus**: M1 complete (FT1-6); active: navigation control-plane, physics migration, selection consolidation
+**Priority Focus**: M1 complete (FT1-6); active: navigation control-plane, selection consolidation
 
 **Policy Note (2026-02-14)**: Graphshell has no production users and no legacy dataset obligations. Do not add backward-compat contingency branches unless explicitly requested.
 
@@ -48,10 +48,9 @@ These five features enable the core MVP: **users can browse real websites in a s
 **Execution order now:**
 
 1. Navigation control-plane stabilization (see [2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md))
-2. Physics migration (see [2026-02-14_physics_migration_plan.md](implementation_strategy/2026-02-14_physics_migration_plan.md))
-3. Selection consolidation (see [2026-02-14_selection_semantics_plan.md](implementation_strategy/2026-02-14_selection_semantics_plan.md))
-4. FT2 thumbnail completion ✅
-5. FT6 search/filtering (`nucleo`) ✅
+2. Selection consolidation (see [2026-02-14_selection_semantics_plan.md](implementation_strategy/2026-02-14_selection_semantics_plan.md))
+3. FT2 thumbnail completion ✅
+4. FT6 search/filtering (`nucleo`) ✅
 
 ---
 
@@ -383,7 +382,7 @@ These five features enable the core MVP: **users can browse real websites in a s
 | ------- | ----- | ------ |
 | Graph data structure | **petgraph** 0.8 | ✅ StableGraph as primary store |
 | Graph visualization | **egui_graphs** 0.29 | ✅ GraphView widget, events, navigation |
-| Spatial queries | **kiddo** 4.2 | Used by custom physics only; planned for removal with physics migration |
+| Spatial queries | n/a | `kiddo` removed with physics migration |
 | Persistence snapshots | **redb** 2 | ✅ Periodic full graph snapshots |
 | Persistence log | **fjall** 3 | ✅ Append-only mutation log |
 | Serialization | **rkyv** 0.8 | ✅ Zero-copy, used by both fjall and redb |
