@@ -1,150 +1,63 @@
 # Graphshell Design Documentation Index
 
-**Last Updated**: February 15, 2026
-**Status**: Core browsing graph functional; active path is reducer-driven semantics with UUID identity and no-legacy policy
+**Last Updated**: February 16, 2026
+**Status**: M1 complete; active: navigation control-plane, physics migration, selection consolidation
 
 ---
 
 ## Essential Reading Order
 
-### Phase 0: Understanding Current Status (Read These First)
-
-1. **[README.md](README.md)** (10 min)
-   - Project vision: spatial browser on Servo
-   - Quick start: build & run commands
-   - Implementation status summary (what works, what's next)
-
-2. **[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)** (15 min) **← Start here for development**
-   - Quick orientation for new contributors and AI assistants
-   - Essential commands, common patterns, debugging
-   - Current work status and troubleshooting
-
-3. **[ARCHITECTURAL_OVERVIEW.md](ARCHITECTURAL_OVERVIEW.md)** — Required (20 min)
-   - Foundation code breakdown (~7,000 LOC)
-   - Architecture decisions with rationale (petgraph StableGraph, egui_graphs, kiddo KD-tree, fjall+redb+rkyv persistence)
-   - Webview lifecycle management and frame execution order
-   - Key crates and their roles
-
-4. **[CODEBASE_MAP.md](CODEBASE_MAP.md)** — Reference (30 min)
-   - Detailed module breakdown with line counts
-   - Test distribution across modules
-   - Data flow diagrams and hot paths
-   - File size reference for context window planning
-
-5. **[IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)** (30 min)
-   - Feature-driven plan (11 feature targets)
-   - egui_tiles migration complete
-   - Next block: post-FT2/FT6 hardening (selection semantics + follow-on polish)
-   - Validation tests and success criteria for each target
-
-6. **[2026-02-14_no_legacy_development_policy.md](2026-02-14_no_legacy_development_policy.md)** (5 min)
-   - Explicit project policy: no users, no legacy compatibility obligations
-   - Prefer deletion over compatibility shims
-
-### Phase 1: Detailed Specs
-
-1. **[GRAPHSHELL_AS_BROWSER.md](GRAPHSHELL_AS_BROWSER.md)** (15 min)
-   - Browser behavior specification
-   - How graph UI works as browser (navigation model, view toggle, lifecycle management)
-
-2. **[BUILD.md](BUILD.md)** (10 min)
-   - Windows 11 build setup (Rust 1.91+, Python, MozillaBuild)
-   - Platform-specific instructions
+1. **[README.md](README.md)** — Project vision, build & run, status summary
+2. **[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)** — Orientation for contributors and AI assistants
+3. **[ARCHITECTURAL_OVERVIEW.md](ARCHITECTURAL_OVERVIEW.md)** — Foundation code, architecture decisions, key crates
+4. **[GRAPHSHELL_AS_BROWSER.md](GRAPHSHELL_AS_BROWSER.md)** — Browser behavior specification
+5. **[IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)** — Feature targets, validation criteria, execution order
+6. **[2026-02-14_no_legacy_development_policy.md](2026-02-14_no_legacy_development_policy.md)** — No-legacy development defaults
 
 ---
 
-## Document Map (DOC_POLICY Categories)
+## Reference Docs
 
-### Entry Points
-
-- **[README.md](README.md)** — Project overview and current status
-- **[INDEX.md](INDEX.md)** — This map
-
-### 1. Technical Architecture
-
-| Document | Purpose | Read When |
-| -------- | ------- | --------- |
-| **[DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)** | Quick orientation, commands, patterns, debugging | First (for contributors/AI) |
-| **[CODEBASE_MAP.md](CODEBASE_MAP.md)** | Detailed module map, test distribution, data flow | Reference during development |
-| **[ARCHITECTURAL_OVERVIEW.md](ARCHITECTURAL_OVERVIEW.md)** | Foundation code, architecture decisions | Second (Required) |
-| **[technical_architecture/SERVO_INTEGRATION_BRIEF.md](technical_architecture/SERVO_INTEGRATION_BRIEF.md)** | Servo webview integration architecture | Reference for webview work |
-| **[BUILD.md](BUILD.md)** | Platform build instructions | Before first build |
-| **[QUICKSTART.md](QUICKSTART.md)** | Quick reference for building | When you forget commands |
-
-### 2. Design
-
-| Document | Purpose | Read When |
-| -------- | ------- | --------- |
-| **[GRAPHSHELL_AS_BROWSER.md](GRAPHSHELL_AS_BROWSER.md)** | Browser behavior spec | Implementing navigation/views |
-
-### 3. Features
-
-- **No dedicated feature briefs yet.** Use [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) until features warrant separate briefs.
-
-### 4. Tests
-
-- **No test specifications yet.** Create under a `tests/` category when validation docs exist.
-
-### 5. Implementation Strategy
-
-| Document | Purpose | Read When |
-| -------- | ------- | --------- |
-| **[IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)** | Feature targets, validation criteria, tech stack | Before implementing features |
-| **[2026-02-14_no_legacy_development_policy.md](2026-02-14_no_legacy_development_policy.md)** | Explicit no-legacy development defaults | Before architecture changes |
-| **[implementation_strategy/2026-02-11_phase1_refinement_plan.md](implementation_strategy/2026-02-11_phase1_refinement_plan.md)** | **Active:** Phase 1 refinement (11 steps) | Current work reference |
-| **[implementation_strategy/2026-02-12_persistence_ux_plan.md](implementation_strategy/2026-02-12_persistence_ux_plan.md)** | Persistence reset UX plan | Reference (completed) |
-| **[implementation_strategy/2026-02-12_physics_selection_plan.md](implementation_strategy/2026-02-12_physics_selection_plan.md)** | Physics migration + selection consolidation plan | Current work reference |
-| **[implementation_strategy/2026-02-15_navigation_control_plane_plan.md](implementation_strategy/2026-02-15_navigation_control_plane_plan.md)** | Servoshell control-path constraints, validated findings, and navigation decontamination plan | Current work reference |
-
-**Architecture Plans**
-
-- **[implementation_strategy/2026-02-12_architecture_reconciliation.md](implementation_strategy/2026-02-12_architecture_reconciliation.md)** — **Required reading:** Reconciles two architectural proposals, defines egui_tiles approach
-- **[implementation_strategy/2026-02-12_servoshell_inheritance_analysis.md](implementation_strategy/2026-02-12_servoshell_inheritance_analysis.md)** — What to keep/replace from servoshell, egui_tiles integration plan
-- **[implementation_strategy/2026-02-12_egui_tiles_implementation_guide.md](implementation_strategy/2026-02-12_egui_tiles_implementation_guide.md)** — **Step-by-step guide:** Concrete API calls, code examples, 7-phase migration plan
-
-**Feature Plans (by target)**
-
-- **[implementation_strategy/2026-02-11_thumbnails_favicons_plan.md](implementation_strategy/2026-02-11_thumbnails_favicons_plan.md)** — Feature Target 2
-- **[implementation_strategy/2026-02-11_graph_persistence_plan.md](implementation_strategy/2026-02-11_graph_persistence_plan.md)** — Feature Target 3
-- **[implementation_strategy/2026-02-11_camera_zoom_plan.md](implementation_strategy/2026-02-11_camera_zoom_plan.md)** — Feature Target 4
-- **[implementation_strategy/2026-02-11_center_camera_plan.md](implementation_strategy/2026-02-11_center_camera_plan.md)** — Feature Target 5
-- **[implementation_strategy/2026-02-11_search_filtering_plan.md](implementation_strategy/2026-02-11_search_filtering_plan.md)** — Feature Target 6
-- **[implementation_strategy/2026-02-11_bookmarks_history_import_plan.md](implementation_strategy/2026-02-11_bookmarks_history_import_plan.md)** — Feature Target 7
-- **[implementation_strategy/2026-02-11_performance_optimization_plan.md](implementation_strategy/2026-02-11_performance_optimization_plan.md)** — Feature Target 8
-- **[implementation_strategy/2026-02-11_clipping_dom_extraction_plan.md](implementation_strategy/2026-02-11_clipping_dom_extraction_plan.md)** — Feature Target 9
-- **[implementation_strategy/2026-02-11_diagnostic_inspector_plan.md](implementation_strategy/2026-02-11_diagnostic_inspector_plan.md)** — Feature Target 10
-- **[implementation_strategy/2026-02-11_p2p_collaboration_plan.md](implementation_strategy/2026-02-11_p2p_collaboration_plan.md)** — Feature Target 11
-
-### 6. Phase 3+ Research (P2P/Tokenization)
-
-| Document | Purpose | Phase |
-| -------- | ------- | ----- |
-| **[verse_docs/VERSE.md](../verse_docs/VERSE.md)** | Tokenization research | Phase 3+ |
-| **[verse_docs/GRAPHSHELL_P2P_COLLABORATION.md](../verse_docs/GRAPHSHELL_P2P_COLLABORATION.md)** | P2P collaboration patterns | Phase 3+ |
-| **[verse_docs/SEARCH_FINDINGS_SUMMARY.md](../verse_docs/SEARCH_FINDINGS_SUMMARY.md)** | Verse research scan | Phase 3+ |
-
-### 7. Archive
-
-- **[archive_docs/](../archive_docs/)** — Superseded analyses, historical reference, checkpoint snapshots
-- **[archive_docs/alternative_approaches/](../archive_docs/alternative_approaches/)** — Alternative architectural proposals not pursued
-  - [2026-02-12_unified_architecture_plan_ARCHIVED.md](../archive_docs/alternative_approaches/2026-02-12_unified_architecture_plan_ARCHIVED.md) — Continuous zoom approach (not pursued)
+| Document | Purpose |
+| -------- | ------- |
+| **[CODEBASE_MAP.md](CODEBASE_MAP.md)** | Module breakdown, test distribution, data flow |
+| **[BUILD.md](BUILD.md)** | Platform build instructions |
+| **[QUICKSTART.md](QUICKSTART.md)** | Quick build reference |
 
 ---
 
-## Status Snapshot
+## Active Implementation Plans
 
-- **Core browsing graph functional** (~7,000 LOC total, ~1,300 core graph+physics). Details in [ARCHITECTURAL_OVERVIEW.md](ARCHITECTURAL_OVERVIEW.md).
-- **Phase 1 progress**: egui_tiles migration complete; FT2 thumbnail/fallback pipeline complete; FT6 search/filter complete.
-- **Refinement**: 11/11 steps complete. See [phase1_refinement_plan.md](implementation_strategy/2026-02-11_phase1_refinement_plan.md).
-- **Tests**: 161 passing
-- **Tech stack**: petgraph + egui_graphs + kiddo + fjall + redb + rkyv. Details in [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md).
+| Document | Scope |
+| -------- | ----- |
+| **[2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md)** | Consolidated architecture: semantic parity model, Servo delegate wiring, intent boundary, legacy cleanup |
+| **[2026-02-14_physics_migration_plan.md](implementation_strategy/2026-02-14_physics_migration_plan.md)** | Replace custom physics with egui_graphs FruchtermanReingold |
+| **[2026-02-14_selection_semantics_plan.md](implementation_strategy/2026-02-14_selection_semantics_plan.md)** | Single-source selection state |
+
+## Future Feature Plans
+
+| Document | Feature Target |
+| -------- | -------------- |
+| **[2026-02-11_bookmarks_history_import_plan.md](implementation_strategy/2026-02-11_bookmarks_history_import_plan.md)** | FT7: Bookmarks & history import |
+| **[2026-02-11_performance_optimization_plan.md](implementation_strategy/2026-02-11_performance_optimization_plan.md)** | FT8: 500+ node performance |
+| **[2026-02-11_clipping_dom_extraction_plan.md](implementation_strategy/2026-02-11_clipping_dom_extraction_plan.md)** | FT9: DOM element clipping |
+| **[2026-02-11_diagnostic_inspector_plan.md](implementation_strategy/2026-02-11_diagnostic_inspector_plan.md)** | FT10: Engine inspector |
+| **[2026-02-11_p2p_collaboration_plan.md](implementation_strategy/2026-02-11_p2p_collaboration_plan.md)** | FT11: P2P collaboration |
 
 ---
 
-## Quick Links
+## Verse (Phase 3+ Research)
 
-- **Entry Point**: [README.md](README.md)
-- **Architecture**: [ARCHITECTURAL_OVERVIEW.md](ARCHITECTURAL_OVERVIEW.md) — Required reading
-- **Implementation Plan**: [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)
-- **Browser Behavior**: [GRAPHSHELL_AS_BROWSER.md](GRAPHSHELL_AS_BROWSER.md)
-- **Build Setup**: [BUILD.md](BUILD.md)
+| Document | Purpose |
+| -------- | ------- |
+| **[verse_docs/VERSE.md](../verse_docs/VERSE.md)** | Tokenization research |
+| **[verse_docs/GRAPHSHELL_P2P_COLLABORATION.md](../verse_docs/GRAPHSHELL_P2P_COLLABORATION.md)** | P2P collaboration patterns |
+| **[verse_docs/SEARCH_FINDINGS_SUMMARY.md](../verse_docs/SEARCH_FINDINGS_SUMMARY.md)** | Verse research scan |
+
+---
+
+## Archive
+
+**[archive_docs/](../archive_docs/)** — Superseded plans, completed work, checkpoint snapshots.
+
+Latest checkpoint: `checkpoint_2026-02-16/` (19 archived docs including completed FT2-6 plans, egui_tiles migration, architecture research, and navigation options).

@@ -19,7 +19,8 @@
       "Bash(cargo info:*)",
       "Bash(grep:*)",
       "Bash(wc:*)",
-      "Bash(python mach:*)"
+      "Bash(python mach:*)",
+      "WebFetch(domain:firefox-source-docs.mozilla.org)"
     ]
   }
 }

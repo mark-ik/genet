@@ -140,6 +140,19 @@ pub enum GraphIntent {
         key: NodeKey,
         new_url: String,
     },
+    PromoteNodeToActive {
+        key: NodeKey,
+    },
+    DemoteNodeToCold {
+        key: NodeKey,
+    },
+    MapWebviewToNode {
+        webview_id: WebViewId,
+        key: NodeKey,
+    },
+    UnmapWebview {
+        webview_id: WebViewId,
+    },
     WebViewCreated {
         parent_webview_id: WebViewId,
         child_webview_id: WebViewId,
@@ -377,6 +390,18 @@ impl GraphBrowserApp {
             GraphIntent::SetNodeUrl { key, new_url } => {
                 let _ = self.update_node_url_and_log(key, new_url);
             },
+            GraphIntent::PromoteNodeToActive { key } => {
+                self.promote_node_to_active(key);
+            },
+            GraphIntent::DemoteNodeToCold { key } => {
+                self.demote_node_to_cold(key);
+            },
+            GraphIntent::MapWebviewToNode { webview_id, key } => {
+                self.map_webview_to_node(webview_id, key);
+            },
+            GraphIntent::UnmapWebview { webview_id } => {
+                let _ = self.unmap_webview(webview_id);
+            },
             GraphIntent::WebViewCreated {
                 parent_webview_id,
                 child_webview_id,
@@ -395,8 +420,11 @@ impl GraphBrowserApp {
                     .filter(|url| !url.is_empty() && url != "about:blank")
                     .unwrap_or_else(|| self.next_placeholder_url());
                 let child_node = self.add_node_and_sync(node_url, position);
-                self.map_webview_to_node(child_webview_id, child_node);
-                self.promote_node_to_active(child_node);
+                self.apply_intent(GraphIntent::MapWebviewToNode {
+                    webview_id: child_webview_id,
+                    key: child_node,
+                });
+                self.apply_intent(GraphIntent::PromoteNodeToActive { key: child_node });
                 if let Some(parent_key) = parent_node {
                     let _ = self.add_edge_and_sync(parent_key, child_node, EdgeType::Hyperlink);
                 }

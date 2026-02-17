@@ -1,7 +1,7 @@
 # Graphshell Architectural Overview
 
-**Last Updated**: February 13, 2026
-**Status**: Core browsing graph functional — Servo integration, egui_tiles multi-pane, persistence, zoom/camera all working
+**Last Updated**: February 16, 2026
+**Status**: Core browsing graph functional — Servo integration, egui_tiles multi-pane, persistence, thumbnails/favicons, search/filter all working
 
 ---
 
@@ -21,8 +21,8 @@ Graphshell is a **spatial tab manager** where webpages are nodes in a force-dire
 
 **Graph Core** (`graph/mod.rs`, 461 lines)
 - `Graph`: petgraph `StableGraph<Node, EdgeType, Directed>` as primary store
-- `Node`: URL, title, position, velocity, pinned, lifecycle (Active/Inactive/Closed), favicon data
-- `EdgeType`: Hyperlink (new tab from parent), History (back/forward), UserGrouped (manual tab move)
+- `Node`: URL, title, position, velocity, pinned, lifecycle (Active/Cold), favicon data, thumbnail data, history entries
+- `EdgeType`: Hyperlink (new tab from parent), History (back/forward). `UserGrouped` planned but not yet implemented.
 - `NodeKey = NodeIndex`, `EdgeKey = EdgeIndex` — stable handles surviving deletions
 - `url_to_node: HashMap<String, NodeKey>` for O(1) URL lookup
 - `out_neighbors()`, `in_neighbors()`, `has_edge_between()` for traversal
@@ -93,17 +93,16 @@ Graphshell is a **spatial tab manager** where webpages are nodes in a force-dire
 
 ### Not Yet Implemented
 
-**Planned for Phase 1 completion:**
+**In active development:**
 
-1. **Physics migration** — Replace custom physics/worker with egui_graphs FruchtermanReingold ([plan](implementation_strategy/2026-02-12_physics_selection_plan.md))
-2. **Selection consolidation** — Remove duplicated selection state (same plan)
-3. **Graph-tile unification** — Implement unified spatial tab manager model ([plan](implementation_strategy/2026-02-13_graph_tile_unification_plan.md))
-4. **Thumbnails & Favicon Rendering** — Nodes show page screenshots or favicons (favicon vertical slice done)
+1. **Navigation control-plane cleanup** — Wire Servo delegate callbacks, remove polling-based node creation ([plan](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md))
+2. **Physics migration** — Replace custom physics/worker with egui_graphs FruchtermanReingold ([plan](implementation_strategy/2026-02-14_physics_migration_plan.md))
+3. **Selection consolidation** — Remove duplicated selection state ([plan](implementation_strategy/2026-02-14_selection_semantics_plan.md))
 
 **Phase 2+ features (not started):**
 
-- Search/filtering (nucleo fuzzy search)
 - Bookmarks/history import
+- Performance optimization (500+ nodes)
 - Clipping (DOM element extraction)
 - Diagnostic/Engine Inspector mode
 - P2P collaboration (Verse)
@@ -123,7 +122,7 @@ Graphshell is a **spatial tab manager** where webpages are nodes in a force-dire
 **Why URL-to-NodeKey HashMap?**
 - Fast duplicate detection: "Does this URL already have a node?"
 - O(1) lookup for persistence recovery (log replay uses URLs as stable identity)
-- **Note**: The unified model allows duplicate URLs (same URL in multiple tabs). Node identity will migrate from URL-based to UUID-based. See [graph_tile_unification_plan.md](implementation_strategy/2026-02-13_graph_tile_unification_plan.md).
+- **Note**: The unified model allows duplicate URLs (same URL in multiple tabs). Node identity will migrate from URL-based to UUID-based. See [2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md).
 
 **Why NodeIndex keys not stable across sessions?**
 - petgraph NodeIndex values change when graph is rebuilt from persistence
@@ -303,8 +302,9 @@ Scope: Readme/docs and selected files from GraphRAG, Midori Desktop, egui_node_g
 - [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) — Feature targets and execution order
 
 **Implementation Plans**:
-- [physics_selection_plan.md](implementation_strategy/2026-02-12_physics_selection_plan.md) — Physics migration + selection consolidation
-- [graph_tile_unification_plan.md](implementation_strategy/2026-02-13_graph_tile_unification_plan.md) — Graph-tile-webview unification implementation
+- [2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md) — Architecture and navigation consolidation
+- [2026-02-14_physics_migration_plan.md](implementation_strategy/2026-02-14_physics_migration_plan.md) — Physics migration
+- [2026-02-14_selection_semantics_plan.md](implementation_strategy/2026-02-14_selection_semantics_plan.md) — Selection consolidation
 
 **Checkpoint Analyses**:
 - `archive_docs/checkpoint_2026-02-10/2026-02-10_crate_refactor_plan.md` — egui_graphs + petgraph + kiddo integration history

@@ -47,7 +47,7 @@ Servo provides two distinct signals that drive the graph (no Servo modifications
 
 ## Research Conclusions (2026-02-15)
 
-Recent fixes confirmed a gap between this model and current runtime behavior. The implementation still relies on URL polling in `sync_to_graph` and does not treat `notify_url_changed` as the primary driver for same-tab navigation. This leads to node creation at the wrong times and makes navigation target selection fragile when window-global routing is used. The conclusion is to move navigation to the delegate-driven path, remove polling-based node creation, and enforce an explicit intent boundary for multi-source mutations. See NAVIGATION_NEXT_STEPS_OPTIONS.md for the decision options.
+Recent fixes confirmed a gap between this model and current runtime behavior. The implementation still relies on URL polling in `sync_to_graph` and does not treat `notify_url_changed` as the primary driver for same-tab navigation. This leads to node creation at the wrong times and makes navigation target selection fragile when window-global routing is used. The conclusion is to move navigation to the delegate-driven path, remove polling-based node creation, and enforce an explicit intent boundary for multi-source mutations. See [2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md) for the consolidated plan.
 
 ### Edge Types
 
@@ -55,7 +55,7 @@ Recent fixes confirmed a gap between this model and current runtime behavior. Th
 |-----------|-----------|---------|
 | `Hyperlink` | `request_create_new` (new tab from parent) | User opened a new tab from this page |
 | `History` | Back/forward detection (existing reverse edge) | Navigation reversal |
-| `UserGrouped` | Dragging a tab/node to a different pane in graph or tile view | User deliberately associated these tabs |
+| `UserGrouped` (planned) | Dragging a tab/node to a different pane in graph or tile view | User deliberately associated these tabs (not yet implemented) |
 
 ### Pane Membership
 
@@ -66,15 +66,17 @@ Recent fixes confirmed a gap between this model and current runtime behavior. Th
 
 ### Node Lifecycle
 
-| State | Has webview? | Shown in tab bar? | Shown in graph? |
-|-------|-------------|-------------------|-----------------|
-| **Active** | Yes | Yes (highlighted) | Yes (full color) |
-| **Inactive** | No (suspended) | Yes (dimmed) | Yes (dimmed) |
-| **Closed** | No (destroyed) | No | No |
+**Current code** implements `Active` and `Cold` (see `graph/mod.rs`). The target model below extends this:
 
-- Navigate away from a tab: old node becomes **inactive** (no webview, still in tab bar).
-- Click inactive tab: **reactivates** it (creates webview, navigates to its current URL).
-- Close tab (from tab bar, graph, or keyboard): node becomes **closed** (removed from everything).
+| State | Has webview? | Shown in tab bar? | Shown in graph? | Code status |
+|-------|-------------|-------------------|-----------------|-------------|
+| **Active** | Yes | Yes (highlighted) | Yes (full color) | Implemented |
+| **Cold** (spec: Inactive) | No (suspended) | Yes (dimmed) | Yes (dimmed) | Implemented as `Cold` |
+| **Closed** | No (destroyed) | No | No | Not yet a distinct state; removal deletes the node |
+
+- Navigate away from a tab: old node becomes **Cold** (no webview, still in graph and tab bar).
+- Click cold tab: **reactivates** it (creates webview, navigates to its current URL).
+- Close tab (from tab bar, graph, or keyboard): node is removed. A distinct `Closed` lifecycle state is planned but not yet implemented.
 
 ### Intent-Based Mutation
 
@@ -180,5 +182,5 @@ Servo provides the full back/forward list via `notify_history_changed(webview, e
 
 ## Related
 
-- Graph-tile unification plan: [implementation_strategy/2026-02-13_graph_tile_unification_plan.md](implementation_strategy/2026-02-13_graph_tile_unification_plan.md)
+- Architecture and navigation plan: [implementation_strategy/2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md)
 - Architecture and code status: [ARCHITECTURAL_OVERVIEW.md](ARCHITECTURAL_OVERVIEW.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)

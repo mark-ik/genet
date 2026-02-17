@@ -17,7 +17,7 @@ use url::Url;
 use crate::app::{GraphBrowserApp, GraphIntent};
 use crate::graph::NodeKey;
 use crate::parser::location_bar_input_to_url;
-use crate::running_app_state::{RunningAppState, UserInterfaceCommand};
+use crate::running_app_state::RunningAppState;
 use crate::search::fuzzy_match_node_keys;
 use crate::window::ServoShellWindow;
 
@@ -45,7 +45,7 @@ fn reconcile_mappings_and_selection(
         .collect();
 
     for wv_id in old_webviews {
-        app.unmap_webview(wv_id);
+        intents.push(GraphIntent::UnmapWebview { webview_id: wv_id });
     }
     intents
 }
@@ -112,6 +112,11 @@ pub(crate) fn manage_lifecycle(
     window_rendering_context: &Rc<WindowRenderingContext>,
     tile_rendering_contexts: &mut HashMap<NodeKey, Rc<OffscreenRenderingContext>>,
 ) {
+    // Phase A pragmatic interpretation:
+    // We keep the primary per-frame intent apply boundary in Gui::update, then allow a
+    // small lifecycle-local intent flush during reconcile for runtime mapping intents
+    // (`MapWebviewToNode` / `UnmapWebview`) because `WebViewId` is only known after
+    // side effects (create/destroy) complete.
     let mut render_context_for_node = |node_key: NodeKey| {
         tile_rendering_contexts
             .entry(node_key)
@@ -138,9 +143,13 @@ pub(crate) fn manage_lifecycle(
                 .map(|(wv_id, _)| wv_id)
                 .collect();
             for wv_id in webviews_to_close {
+                let unmapped_key = app.get_node_for_webview(wv_id);
                 window.close_webview(wv_id);
-                if let Some(node_key) = app.unmap_webview(wv_id) {
-                    app.demote_node_to_cold(node_key);
+                if let Some(node_key) = unmapped_key {
+                    app.apply_intents([
+                        GraphIntent::UnmapWebview { webview_id: wv_id },
+                        GraphIntent::DemoteNodeToCold { key: node_key },
+                    ]);
                 }
             }
         }
@@ -166,11 +175,13 @@ pub(crate) fn manage_lifecycle(
                             window.activate_webview(webview.id());
                         }
 
-                        app.map_webview_to_node(webview.id(), node_key);
-
-                        if node_key == active_node {
-                            app.promote_node_to_active(node_key);
-                        }
+                        app.apply_intents([
+                            GraphIntent::MapWebviewToNode {
+                                webview_id: webview.id(),
+                                key: node_key,
+                            },
+                            GraphIntent::PromoteNodeToActive { key: node_key },
+                        ]);
                     }
                 }
             }
@@ -192,12 +203,17 @@ pub(crate) fn manage_lifecycle(
                 );
                 window.activate_webview(webview.id());
 
-                app.map_webview_to_node(webview.id(), active_node);
-                app.promote_node_to_active(active_node);
+                app.apply_intents([
+                    GraphIntent::MapWebviewToNode {
+                        webview_id: webview.id(),
+                        key: active_node,
+                    },
+                    GraphIntent::PromoteNodeToActive { key: active_node },
+                ]);
             }
         } else {
             // Webview exists, just mark as active
-            app.promote_node_to_active(active_node);
+            app.apply_intents([GraphIntent::PromoteNodeToActive { key: active_node }]);
         }
     }
 }
@@ -260,8 +276,7 @@ pub(crate) fn handle_address_bar_submit_intents(
             intents,
         }
     } else {
-        // PHASE 0 PROOF: Direct webview targeting instead of command queue
-        // Parse URL first before attempting to navigate
+        // Parse URL first before attempting to navigate.
         let Some(parsed_url) = location_bar_input_to_url(input, searchpage) else {
             log::warn!("Failed to parse location: {}", input);
             return AddressBarIntentOutcome {
@@ -287,13 +302,17 @@ pub(crate) fn handle_address_bar_submit_intents(
             };
         }
 
-        window.queue_user_interface_command(UserInterfaceCommand::Go(input.to_string()));
+        // No focused live webview in detail mode: create a new graph node at the URL and
+        // let tile/runtime lifecycle open it via the normal intent path.
         AddressBarIntentOutcome {
             outcome: AddressBarSubmitOutcome {
-                mark_clean: false,
-                open_selected_tile: false,
+                mark_clean: true,
+                open_selected_tile: true,
             },
-            intents: Vec::new(),
+            intents: vec![GraphIntent::CreateNodeAtUrl {
+                url: parsed_url.into_url().to_string(),
+                position: euclid::default::Point2D::new(400.0, 300.0),
+            }],
         }
     }
 }
@@ -320,7 +339,7 @@ pub(crate) fn close_all_webviews(app: &mut GraphBrowserApp, window: &ServoShellW
         window.webviews().into_iter().map(|(id, _)| id).collect();
     for wv_id in webviews_to_close {
         window.close_webview(wv_id);
-        app.unmap_webview(wv_id);
+        app.apply_intents([GraphIntent::UnmapWebview { webview_id: wv_id }]);
     }
 }
 

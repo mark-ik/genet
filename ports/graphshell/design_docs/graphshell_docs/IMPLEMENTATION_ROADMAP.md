@@ -2,8 +2,8 @@
 
 **Document Type**: Feature-driven implementation plan
 **Organization**: By feature targets with validation tests (not calendar time)
-**Last Updated**: February 15, 2026
-**Priority Focus**: FT2/FT6 landed; continue post-core polish
+**Last Updated**: February 16, 2026
+**Priority Focus**: M1 complete (FT1-6); active: navigation control-plane, physics migration, selection consolidation
 
 **Policy Note (2026-02-14)**: Graphshell has no production users and no legacy dataset obligations. Do not add backward-compat contingency branches unless explicitly requested.
 
@@ -47,9 +47,9 @@ These five features enable the core MVP: **users can browse real websites in a s
 
 **Execution order now:**
 
-1. Navigation control-plane stabilization (see implementation_strategy/2026-02-15_navigation_control_plane_plan.md)
-2. Physics migration (see implementation_strategy/2026-02-12_physics_selection_plan.md)
-3. Selection consolidation (same plan)
+1. Navigation control-plane stabilization (see [2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md))
+2. Physics migration (see [2026-02-14_physics_migration_plan.md](implementation_strategy/2026-02-14_physics_migration_plan.md))
+3. Selection consolidation (see [2026-02-14_selection_semantics_plan.md](implementation_strategy/2026-02-14_selection_semantics_plan.md))
 4. FT2 thumbnail completion ✅
 5. FT6 search/filtering (`nucleo`) ✅
 
@@ -388,11 +388,12 @@ These five features enable the core MVP: **users can browse real websites in a s
 | Persistence log | **fjall** 3 | ✅ Append-only mutation log |
 | Serialization | **rkyv** 0.8 | ✅ Zero-copy, used by both fjall and redb |
 
+| Search (fuzzy) | **nucleo** | ✅ Integrated for graph search/filter (FT6) |
+
 **Planned (Not Yet Integrated)**:
 
 | Feature | Recommended Crate | Why |
 | ------- | ----------------- | --- |
-| Search (fuzzy) | **nucleo** | By helix-editor, fzf-like, 6x faster than fuzzy-matcher |
 | Search (full-text) | **tantivy** | Lucene equivalent, BM25, for future content indexing |
 
 **Avoid**:
@@ -411,16 +412,16 @@ These five features enable the core MVP: **users can browse real websites in a s
 
 ## Success Milestones
 
-**M1: Browsable Graph** (Feature Targets 1-5) — 4/5 complete
+**M1: Browsable Graph** (Feature Targets 1-5) — ✅ Complete
 
 - ✅ Can browse real websites (Servo webviews integrated)
 - ✅ Graph persists across sessions (fjall + redb + rkyv)
 - ✅ Basic navigation (zoom, pan, center via egui_graphs)
-- ❌ Thumbnails for spatial recognition (remaining target)
+- ✅ Thumbnails and favicons for spatial recognition
 
 **M2: Usable Browser** (Feature Targets 6-8)
 
-- Search/filter works
+- ✅ Search/filter works (nucleo fuzzy search, FT6 complete)
 - Performance acceptable (500 nodes)
 - Bookmarks import seeded graph
 

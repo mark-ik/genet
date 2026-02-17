@@ -489,6 +489,7 @@ impl Gui {
         let winit_window = headed_window.winit_window();
         context.run(winit_window, |ctx| {
             let mut frame_intents = Vec::new();
+            let mut post_render_intents = Vec::new();
             let mut pending_open_child_webviews = Vec::new();
             let mut open_selected_tile_after_intents = false;
 
@@ -624,68 +625,10 @@ impl Gui {
             }
             frame_intents.extend(input::intents_from_actions(&keyboard_actions));
 
-            // If graph was cleared (no nodes), reset tracking state
-            if graph_app.graph.node_count() == 0 {
-                graph_app.active_webview_nodes.clear();
-                Self::reset_runtime_webview_state(
-                    tiles_tree,
-                    tile_rendering_contexts,
-                    tile_favicon_textures,
-                    favicon_textures,
-                );
-            }
-
-            Self::prune_stale_webview_tiles(tiles_tree, graph_app, window, tile_rendering_contexts);
-            tile_favicon_textures
-                .retain(|node_key, _| graph_app.graph.get_node(*node_key).is_some());
-
             // Check which view mode we're in (used throughout rendering)
             let active_webview_node = Self::active_webview_tile_node(tiles_tree);
             let has_webview_tiles = Self::has_any_webview_tiles_in(tiles_tree);
             let is_graph_view = !has_webview_tiles;
-            let should_sync_webviews = has_webview_tiles;
-
-            // Webview lifecycle management (create/destroy based on view)
-            webview_controller::manage_lifecycle(
-                graph_app,
-                window,
-                app_state,
-                has_webview_tiles,
-                active_webview_node,
-                rendering_context,
-                window_rendering_context,
-                tile_rendering_contexts,
-            );
-
-            // Sync webviews to graph nodes (only in detail view — graph view has no webviews)
-            if should_sync_webviews {
-                frame_intents.extend(webview_controller::sync_to_graph_intents(graph_app, window));
-
-                // Keep WebView/context mappings complete for all tile nodes (not only visible ones).
-                for node_key in Self::all_webview_tile_nodes(tiles_tree) {
-                    Self::ensure_webview_for_node(
-                        graph_app,
-                        window,
-                        app_state,
-                        rendering_context,
-                        window_rendering_context,
-                        tile_rendering_contexts,
-                        node_key,
-                    );
-                }
-            }
-
-            #[cfg(debug_assertions)]
-            {
-                for violation in Self::collect_tile_invariant_violations(
-                    tiles_tree,
-                    graph_app,
-                    tile_rendering_contexts,
-                ) {
-                    warn!("{violation}");
-                }
-            }
-
             // TODO: While in fullscreen add some way to mitigate the increased phishing risk
             // when not displaying the URL bar: https://github.com/servo/servo/issues/32443
             if winit_window.fullscreen().is_none() {
@@ -733,38 +676,21 @@ impl Gui {
                                 }
                             }
 
-                            match self.load_status {
-                                LoadStatus::Started | LoadStatus::HeadParsed => {
-                                    let stop_button = ui.add(Gui::toolbar_button("X"));
-                                    stop_button.widget_info(|| {
-                                        let mut info = WidgetInfo::new(WidgetType::Button);
-                                        info.label = Some("Stop".into());
-                                        info
-                                    });
-                                    if stop_button.clicked() {
-                                        warn!("Do not support stop yet.");
-                                    }
-                                },
-                                LoadStatus::Complete => {
-                                    let reload_button = ui.add(Gui::toolbar_button("R"));
-                                    reload_button.widget_info(|| {
-                                        let mut info = WidgetInfo::new(WidgetType::Button);
-                                        info.label = Some("Reload".into());
-                                        info
-                                    });
-                                    if reload_button.clicked() {
-                                        *location_dirty = false;
-                                        if let Some(node_key) = active_webview_node
-                                            && let Some(webview_id) =
-                                                graph_app.get_webview_for_node(node_key)
-                                            && let Some(webview) =
-                                                window.webview_by_id(webview_id)
-                                        {
-                                            webview.reload();
-                                            window.set_needs_update();
-                                        }
-                                    }
-                                },
+                            let reload_button = ui.add(Gui::toolbar_button("R"));
+                            reload_button.widget_info(|| {
+                                let mut info = WidgetInfo::new(WidgetType::Button);
+                                info.label = Some("Reload".into());
+                                info
+                            });
+                            if reload_button.clicked() {
+                                *location_dirty = false;
+                                if let Some(node_key) = active_webview_node
+                                    && let Some(webview_id) = graph_app.get_webview_for_node(node_key)
+                                    && let Some(webview) = window.webview_by_id(webview_id)
+                                {
+                                    webview.reload();
+                                    window.set_needs_update();
+                                }
                             }
                             ui.add_space(2.0);
 
@@ -942,8 +868,8 @@ impl Gui {
                                         let submit_outcome = submit_result.outcome;
                                         if submit_outcome.mark_clean {
                                             *location_dirty = false;
-                                            open_selected_tile_after_intents = is_graph_view
-                                                && submit_outcome.open_selected_tile;
+                                            open_selected_tile_after_intents =
+                                                submit_outcome.open_selected_tile;
                                         }
                                     }
                                 },
@@ -1148,6 +1074,69 @@ impl Gui {
                     });
             }
 
+            if !frame_intents.is_empty() {
+                graph_app.apply_intents(std::mem::take(&mut frame_intents));
+            }
+
+            if open_selected_tile_after_intents
+                && let Some(node_key) = graph_app.get_single_selected_node()
+            {
+                Self::open_or_focus_webview_tile(tiles_tree, node_key);
+            }
+            for child_webview_id in pending_open_child_webviews {
+                if let Some(node_key) = graph_app.get_node_for_webview(child_webview_id) {
+                    Self::open_or_focus_webview_tile(tiles_tree, node_key);
+                }
+            }
+            if graph_app.graph.node_count() == 0 {
+                graph_app.active_webview_nodes.clear();
+                Self::reset_runtime_webview_state(
+                    tiles_tree,
+                    tile_rendering_contexts,
+                    tile_favicon_textures,
+                    favicon_textures,
+                );
+            }
+
+            Self::prune_stale_webview_tiles(tiles_tree, graph_app, window, tile_rendering_contexts);
+            tile_favicon_textures
+                .retain(|node_key, _| graph_app.graph.get_node(*node_key).is_some());
+
+            let has_webview_tiles = Self::has_any_webview_tiles_in(tiles_tree);
+            if has_webview_tiles {
+                frame_intents.extend(webview_controller::sync_to_graph_intents(graph_app, window));
+
+                // Keep WebView/context mappings complete for all tile nodes (not only visible ones).
+                for node_key in Self::all_webview_tile_nodes(tiles_tree) {
+                    Self::ensure_webview_for_node(
+                        graph_app,
+                        window,
+                        app_state,
+                        rendering_context,
+                        window_rendering_context,
+                        tile_rendering_contexts,
+                        node_key,
+                    );
+                }
+            }
+            if !frame_intents.is_empty() {
+                graph_app.apply_intents(std::mem::take(&mut frame_intents));
+            }
+
+            #[cfg(debug_assertions)]
+            {
+                for violation in Self::collect_tile_invariant_violations(
+                    tiles_tree,
+                    graph_app,
+                    tile_rendering_contexts,
+                ) {
+                    warn!("{violation}");
+                }
+            }
+
+            let has_webview_tiles = Self::has_any_webview_tiles_in(tiles_tree);
+            let is_graph_view = !has_webview_tiles;
+
             *toolbar_height = Length::new(ctx.available_rect().min.y);
 
             // Check periodic persistence snapshot
@@ -1179,7 +1168,7 @@ impl Gui {
                         tiles_tree.ui(&mut behavior, ui);
                         pending_open_nodes.extend(behavior.take_pending_open_nodes());
                         pending_closed_nodes.extend(behavior.take_pending_closed_nodes());
-                        frame_intents.extend(behavior.take_pending_graph_intents());
+                        post_render_intents.extend(behavior.take_pending_graph_intents());
                     });
                 for node_key in pending_open_nodes {
                     Self::open_or_focus_webview_tile(tiles_tree, node_key);
@@ -1327,28 +1316,8 @@ impl Gui {
                 }
             }
 
-            if !frame_intents.is_empty() {
-                graph_app.apply_intents(frame_intents);
-            }
-
-            if open_selected_tile_after_intents
-                && let Some(node_key) = graph_app.get_single_selected_node()
-            {
-                Self::open_or_focus_webview_tile(tiles_tree, node_key);
-            }
-            for child_webview_id in pending_open_child_webviews {
-                if let Some(node_key) = graph_app.get_node_for_webview(child_webview_id) {
-                    Self::open_or_focus_webview_tile(tiles_tree, node_key);
-                }
-            }
-            if graph_app.graph.node_count() == 0 {
-                graph_app.active_webview_nodes.clear();
-                Self::reset_runtime_webview_state(
-                    tiles_tree,
-                    tile_rendering_contexts,
-                    tile_favicon_textures,
-                    favicon_textures,
-                );
+            if !post_render_intents.is_empty() {
+                graph_app.apply_intents(post_render_intents);
             }
 
             // Render floating panels (available in both views)
@@ -1545,8 +1514,13 @@ impl Gui {
         let url = Url::parse(&node.url).unwrap_or_else(|_| Url::parse("about:blank").unwrap());
         let webview =
             window.create_toplevel_webview_with_context(state.clone(), url, render_context);
-        graph_app.map_webview_to_node(webview.id(), node_key);
-        graph_app.promote_node_to_active(node_key);
+        graph_app.apply_intents([
+            GraphIntent::MapWebviewToNode {
+                webview_id: webview.id(),
+                key: node_key,
+            },
+            GraphIntent::PromoteNodeToActive { key: node_key },
+        ]);
     }
 
     fn close_webview_for_node(
@@ -1557,10 +1531,10 @@ impl Gui {
     ) {
         if let Some(wv_id) = graph_app.get_webview_for_node(node_key) {
             window.close_webview(wv_id);
-            graph_app.unmap_webview(wv_id);
+            graph_app.apply_intents([GraphIntent::UnmapWebview { webview_id: wv_id }]);
         }
         tile_rendering_contexts.remove(&node_key);
-        graph_app.demote_node_to_cold(node_key);
+        graph_app.apply_intents([GraphIntent::DemoteNodeToCold { key: node_key }]);
     }
 
     fn open_or_focus_webview_tile(
