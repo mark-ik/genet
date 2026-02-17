@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use crate::graph::egui_adapter::EguiGraphState;
 use crate::graph::{EdgeType, Graph, NodeKey};
@@ -54,6 +55,13 @@ pub struct SelectionState {
     nodes: HashSet<NodeKey>,
     primary: Option<NodeKey>,
     revision: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct NodeCrashState {
+    pub reason: String,
+    pub has_backtrace: bool,
+    pub crashed_at: SystemTime,
 }
 
 impl SelectionState {
@@ -171,6 +179,11 @@ pub enum GraphIntent {
         webview_id: WebViewId,
         title: Option<String>,
     },
+    WebViewCrashed {
+        webview_id: WebViewId,
+        reason: String,
+        has_backtrace: bool,
+    },
     SetNodeThumbnail {
         key: NodeKey,
         png_bytes: Vec<u8>,
@@ -202,6 +215,8 @@ pub struct GraphBrowserApp {
     /// Bidirectional mapping between browser tabs and graph nodes
     webview_to_node: HashMap<WebViewId, NodeKey>,
     node_to_webview: HashMap<NodeKey, WebViewId>,
+    /// Runtime-only crash metadata keyed by graph node.
+    node_crash_state: HashMap<NodeKey, NodeCrashState>,
 
     /// Nodes that had webviews before switching to graph view (for restoration).
     /// Managed by the webview_controller module.
@@ -278,6 +293,7 @@ impl GraphBrowserApp {
             selected_nodes: SelectionState::new(),
             webview_to_node: HashMap::new(),
             node_to_webview: HashMap::new(),
+            node_crash_state: HashMap::new(),
             active_webview_nodes: Vec::new(),
             next_placeholder_id,
             is_interacting: false,
@@ -301,6 +317,7 @@ impl GraphBrowserApp {
             selected_nodes: SelectionState::new(),
             webview_to_node: HashMap::new(),
             node_to_webview: HashMap::new(),
+            node_crash_state: HashMap::new(),
             active_webview_nodes: Vec::new(),
             next_placeholder_id: 0,
             is_interacting: false,
@@ -458,16 +475,31 @@ impl GraphBrowserApp {
                 entries,
                 current,
             } => {
+                // Delegate traces show traversal can change history index even when URL callbacks
+                // remain on the latest route string. Treat history index/list as authoritative.
                 let Some(node_key) = self.get_node_for_webview(webview_id) else {
                     return;
                 };
+                let (old_entries, old_index) = if let Some(node) = self.graph.get_node(node_key) {
+                    (node.history_entries.clone(), node.history_index)
+                } else {
+                    return;
+                };
+                let new_index = if entries.is_empty() {
+                    0
+                } else {
+                    current.min(entries.len() - 1)
+                };
+                self.maybe_add_history_traversal_edge(
+                    node_key,
+                    &old_entries,
+                    old_index,
+                    &entries,
+                    new_index,
+                );
                 if let Some(node) = self.graph.get_node_mut(node_key) {
                     node.history_entries = entries;
-                    node.history_index = if node.history_entries.is_empty() {
-                        0
-                    } else {
-                        current.min(node.history_entries.len() - 1)
-                    };
+                    node.history_index = new_index;
                 }
             },
             GraphIntent::WebViewTitleChanged { webview_id, title } => {
@@ -491,6 +523,29 @@ impl GraphBrowserApp {
                     self.log_title_mutation(node_key);
                     self.egui_state_dirty = true;
                 }
+            },
+            GraphIntent::WebViewCrashed {
+                webview_id,
+                reason,
+                has_backtrace,
+            } => {
+                if let Some(node_key) = self.get_node_for_webview(webview_id) {
+                    self.node_crash_state.insert(
+                        node_key,
+                        NodeCrashState {
+                            reason: reason.clone(),
+                            has_backtrace,
+                            crashed_at: SystemTime::now(),
+                        },
+                    );
+                    self.demote_node_to_cold(node_key);
+                } else {
+                    let _ = self.unmap_webview(webview_id);
+                }
+                warn!(
+                    "WebView {:?} crashed: reason={} has_backtrace={}",
+                    webview_id, reason, has_backtrace
+                );
             },
             GraphIntent::SetNodeThumbnail {
                 key,
@@ -653,6 +708,7 @@ impl GraphBrowserApp {
         self.selected_nodes.clear();
         self.webview_to_node.clear();
         self.node_to_webview.clear();
+        self.node_crash_state.clear();
         self.active_webview_nodes.clear();
         self.next_placeholder_id = next_placeholder_id;
         self.egui_state = None;
@@ -681,6 +737,10 @@ impl GraphBrowserApp {
     /// Get the node key for a given webview
     pub fn get_node_for_webview(&self, webview_id: WebViewId) -> Option<NodeKey> {
         self.webview_to_node.get(&webview_id).copied()
+    }
+
+    pub fn get_node_crash_state(&self, node_key: NodeKey) -> Option<&NodeCrashState> {
+        self.node_crash_state.get(&node_key)
     }
 
     /// Get the webview ID for a given node
@@ -726,6 +786,7 @@ impl GraphBrowserApp {
         if let Some(node) = self.graph.get_node_mut(node_key) {
             node.lifecycle = NodeLifecycle::Active;
         }
+        self.node_crash_state.remove(&node_key);
     }
 
     /// Demote a node to Cold lifecycle (mark as not needing webview)
@@ -760,6 +821,54 @@ impl GraphBrowserApp {
         let url = format!("about:blank#{}", self.next_placeholder_id);
         self.next_placeholder_id += 1;
         url
+    }
+
+    fn maybe_add_history_traversal_edge(
+        &mut self,
+        node_key: NodeKey,
+        old_entries: &[String],
+        old_index: usize,
+        new_entries: &[String],
+        new_index: usize,
+    ) {
+        let Some(old_url) = old_entries.get(old_index).filter(|url| !url.is_empty()) else {
+            return;
+        };
+        let Some(new_url) = new_entries.get(new_index).filter(|url| !url.is_empty()) else {
+            return;
+        };
+        if old_url == new_url {
+            return;
+        }
+
+        let is_back = new_index < old_index;
+        let is_forward_same_list = new_index > old_index && new_entries.len() == old_entries.len();
+        if !is_back && !is_forward_same_list {
+            return;
+        }
+
+        let from_key = self
+            .graph
+            .get_nodes_by_url(old_url)
+            .into_iter()
+            .find(|&key| key != node_key)
+            .or(Some(node_key));
+        let to_key = self
+            .graph
+            .get_nodes_by_url(new_url)
+            .into_iter()
+            .find(|&key| key != node_key)
+            .or(Some(node_key));
+        let (Some(from_key), Some(to_key)) = (from_key, to_key) else {
+            return;
+        };
+
+        let has_history_edge = self.graph.edges().any(|edge| {
+            edge.edge_type == EdgeType::History && edge.from == from_key && edge.to == to_key
+        });
+        if !has_history_edge {
+            let _ = self.add_edge_and_sync(from_key, to_key, EdgeType::History);
+        }
     }
 
     /// Create a new node near the center of the graph (or at origin if graph is empty)
@@ -821,6 +930,7 @@ impl GraphBrowserApp {
                 self.webview_to_node.remove(&webview_id);
                 self.node_to_webview.remove(&node_key);
             }
+            self.node_crash_state.remove(&node_key);
 
             // Remove from graph
             self.graph.remove_node(node_key);
@@ -851,6 +961,7 @@ impl GraphBrowserApp {
         self.selected_nodes.clear();
         self.webview_to_node.clear();
         self.node_to_webview.clear();
+        self.node_crash_state.clear();
         self.egui_state_dirty = true;
     }
 
@@ -865,6 +976,7 @@ impl GraphBrowserApp {
         self.selected_nodes.clear();
         self.webview_to_node.clear();
         self.node_to_webview.clear();
+        self.node_crash_state.clear();
         self.active_webview_nodes.clear();
         self.next_placeholder_id = 0;
         self.egui_state_dirty = true;
@@ -1056,22 +1168,18 @@ mod tests {
     }
 
     #[test]
-    fn test_intent_webview_url_changed_creates_mapping_when_missing() {
+    fn test_intent_webview_url_changed_ignores_unmapped_webview() {
         let mut app = GraphBrowserApp::new_for_testing();
         let wv = test_webview_id();
         let before = app.graph.node_count();
 
         app.apply_intents([GraphIntent::WebViewUrlChanged {
             webview_id: wv,
-            new_url: "https://newly-mapped.com".into(),
+            new_url: "https://ignored.com".into(),
         }]);
 
-        assert_eq!(app.graph.node_count(), before + 1);
-        let key = app.get_node_for_webview(wv).unwrap();
-        assert_eq!(
-            app.graph.get_node(key).unwrap().url,
-            "https://newly-mapped.com"
-        );
+        assert_eq!(app.graph.node_count(), before);
+        assert_eq!(app.get_node_for_webview(wv), None);
     }
 
     #[test]
@@ -1092,6 +1200,113 @@ mod tests {
         let node = app.graph.get_node(key).unwrap();
         assert_eq!(node.history_entries.len(), 2);
         assert_eq!(node.history_index, 1);
+    }
+
+    #[test]
+    fn test_intent_webview_history_changed_adds_history_edge_on_back() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let from = app
+            .graph
+            .add_node("https://a.com".into(), Point2D::new(0.0, 0.0));
+        let to = app
+            .graph
+            .add_node("https://b.com".into(), Point2D::new(100.0, 0.0));
+        let wv = test_webview_id();
+        app.map_webview_to_node(wv, to);
+        if let Some(node) = app.graph.get_node_mut(to) {
+            node.history_entries = vec!["https://a.com".into(), "https://b.com".into()];
+            node.history_index = 1;
+        }
+
+        app.apply_intents([GraphIntent::WebViewHistoryChanged {
+            webview_id: wv,
+            entries: vec!["https://a.com".into(), "https://b.com".into()],
+            current: 0,
+        }]);
+
+        let has_edge = app
+            .graph
+            .edges()
+            .any(|e| e.edge_type == EdgeType::History && e.from == to && e.to == from);
+        assert!(has_edge);
+    }
+
+    #[test]
+    fn test_intent_webview_history_changed_does_not_add_edge_on_normal_navigation() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app
+            .graph
+            .add_node("https://b.com".into(), Point2D::new(0.0, 0.0));
+        let wv = test_webview_id();
+        app.map_webview_to_node(wv, key);
+        if let Some(node) = app.graph.get_node_mut(key) {
+            node.history_entries = vec!["https://a.com".into(), "https://b.com".into()];
+            node.history_index = 1;
+        }
+
+        app.apply_intents([GraphIntent::WebViewHistoryChanged {
+            webview_id: wv,
+            entries: vec![
+                "https://a.com".into(),
+                "https://b.com".into(),
+                "https://c.com".into(),
+            ],
+            current: 2,
+        }]);
+
+        let history_edge_count = app
+            .graph
+            .edges()
+            .filter(|e| e.edge_type == EdgeType::History)
+            .count();
+        assert_eq!(history_edge_count, 0);
+    }
+
+    #[test]
+    fn test_history_changed_is_authoritative_when_url_callback_stays_latest() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let step1 = app
+            .graph
+            .add_node("https://site.example/?step=1".into(), Point2D::new(0.0, 0.0));
+        let step2 = app
+            .graph
+            .add_node("https://site.example/?step=2".into(), Point2D::new(10.0, 0.0));
+        let wv = test_webview_id();
+        app.map_webview_to_node(wv, step2);
+        if let Some(node) = app.graph.get_node_mut(step2) {
+            node.history_entries = vec![
+                "https://site.example/?step=0".into(),
+                "https://site.example/?step=1".into(),
+                "https://site.example/?step=2".into(),
+            ];
+            node.history_index = 2;
+        }
+
+        // Mirrors observed delegate behavior: URL callback can stay at the latest route
+        // while history callback index moves backward.
+        app.apply_intents([
+            GraphIntent::WebViewUrlChanged {
+                webview_id: wv,
+                new_url: "https://site.example/?step=2".into(),
+            },
+            GraphIntent::WebViewHistoryChanged {
+                webview_id: wv,
+                entries: vec![
+                    "https://site.example/?step=0".into(),
+                    "https://site.example/?step=1".into(),
+                    "https://site.example/?step=2".into(),
+                ],
+                current: 1,
+            },
+        ]);
+
+        let node = app.graph.get_node(step2).unwrap();
+        assert_eq!(node.history_index, 1);
+
+        let has_edge = app.graph.edges().any(|e| {
+            e.edge_type == EdgeType::History && e.from == step2 && e.to == step1
+        });
+        assert!(has_edge);
     }
 
     #[test]
@@ -1503,6 +1718,63 @@ mod tests {
         app.demote_node_to_cold(key);
         assert!(app.get_webview_for_node(key).is_none());
         assert!(app.get_node_for_webview(fake_wv_id).is_none());
+    }
+
+    #[test]
+    fn test_webview_crashed_demotes_node_and_unmaps_webview() {
+        use crate::graph::NodeLifecycle;
+
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app.graph.add_node("a".to_string(), Point2D::new(0.0, 0.0));
+        let wv_id = test_webview_id();
+
+        app.promote_node_to_active(key);
+        app.map_webview_to_node(wv_id, key);
+        assert!(matches!(
+            app.graph.get_node(key).unwrap().lifecycle,
+            NodeLifecycle::Active
+        ));
+
+        app.apply_intents([GraphIntent::WebViewCrashed {
+            webview_id: wv_id,
+            reason: "gpu reset".to_string(),
+            has_backtrace: false,
+        }]);
+
+        assert!(matches!(
+            app.graph.get_node(key).unwrap().lifecycle,
+            NodeLifecycle::Cold
+        ));
+        assert_eq!(
+            app.get_node_crash_state(key).map(|state| state.reason.as_str()),
+            Some("gpu reset")
+        );
+        assert!(app.get_node_for_webview(wv_id).is_none());
+        assert!(app.get_webview_for_node(key).is_none());
+
+        app.apply_intents([GraphIntent::PromoteNodeToActive { key }]);
+        assert!(matches!(
+            app.graph.get_node(key).unwrap().lifecycle,
+            NodeLifecycle::Active
+        ));
+        assert!(app.get_node_crash_state(key).is_none());
+    }
+
+    #[test]
+    fn test_clear_graph_clears_runtime_crash_state() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app.graph.add_node("https://a.com".to_string(), Point2D::new(0.0, 0.0));
+        let wv_id = test_webview_id();
+        app.map_webview_to_node(wv_id, key);
+        app.apply_intents([GraphIntent::WebViewCrashed {
+            webview_id: wv_id,
+            reason: "boom".to_string(),
+            has_backtrace: true,
+        }]);
+        assert!(app.get_node_crash_state(key).is_some());
+
+        app.clear_graph();
+        assert!(app.get_node_crash_state(key).is_none());
     }
 
     // --- TEST-1: webview mapping ---

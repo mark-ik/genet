@@ -93,9 +93,11 @@ Handles structural mutations (new nodes, URL changes, history, titles). Does not
 
 Paths 1 and 2 can disagree within the same frame. If tile A is focused in the tile tree but Servo's `active_webview` is webview B (because `window.activate_webview()` wasn't called after a tile switch), the command queue path acts on B while the toolbar acts on A. This is resolved by eliminating Path 1 callers (Phases B+D).
 
-### Edge glue: `manage_lifecycle()`
+### Edge glue: lifecycle reconciliation helpers
 
-`manage_lifecycle()` (`webview_controller.rs:105-203`) is the main bridge between the two worlds. It directly calls both `app` state methods (promote/demote/map/unmap) and Servo/window methods (create/destroy webviews) in a single function, outside the reducer. Lines 142-144 are phase-1 work (state mutation), lines 160-164 are phase-2 work (side effects), lines 169-172 are phase-1 again. Phase A untangles this into intent emission + reconciliation.
+Legacy `manage_lifecycle()` has been removed. The bridge now lives in focused helpers in `webview_controller.rs` and `gui.rs`:
+- reconciliation emits lifecycle intents (`MapWebviewToNode`, `UnmapWebview`, `PromoteNodeToActive`, `DemoteNodeToCold`),
+- frame code applies semantic intents first, then reconciliation/lifecycle intents at frame boundaries.
 
 ### `handle_interface_commands()` fate
 
@@ -170,19 +172,19 @@ Four new `GraphIntent` variants:
 
 **Dependency**: None (decisions resolved above)
 
-**Status**: Ready for implementation.
+**Status**: Implemented with pragmatic backpressure heuristic.
 
 **Migration checklist:**
 
-- [ ] Add 4 lifecycle intent variants to `GraphIntent` enum (`app.rs:113`)
-- [ ] Implement handlers in `apply_intent()` (reuse existing `promote_node_to_active`, `demote_node_to_cold`, `map_webview_to_node`, `unmap_webview` at `app.rs:638-714`)
-- [ ] Extract reconciliation function from `manage_lifecycle()` (`webview_controller.rs:105-203`)
-- [ ] Refactor `manage_lifecycle()` to emit intents instead of calling app methods directly
-- [ ] Update frame loop in `gui.rs`: intents -> apply -> reconcile -> render
-- [ ] Update `WebViewCreated` handler (`app.rs:380-404`) to use lifecycle intents internally
-- [ ] Add failure backpressure: retry counter on nodes, demote after 3 failures
-- [ ] Add tests for lifecycle intents and reconciliation
-- [ ] Document phase gap invariant in code comments
+- [x] Add 4 lifecycle intent variants to `GraphIntent` enum (`app.rs`)
+- [x] Implement handlers in `apply_intent()` (`promote_node_to_active`, `demote_node_to_cold`, `map_webview_to_node`, `unmap_webview`)
+- [x] Extract reconciliation duties out of the legacy `manage_lifecycle()` shape
+- [x] Remove legacy `manage_lifecycle()` path (lifecycle now emitted as intents from reconciliation helpers)
+- [x] Update frame loop in `gui.rs` to apply semantic intents, reconcile lifecycle, then apply lifecycle intents
+- [x] Update `WebViewCreated` handler (`app.rs`) to use lifecycle intents internally
+- [x] Add failure backpressure: retry counter on nodes, demote after 3 failed creation probes (timeout/no-confirmation heuristic in `gui.rs`)
+- [x] Add tests for lifecycle intents/reconciliation behavior (`app.rs` + `webview_controller.rs` unit coverage)
+- [x] Document phase gap invariant in code comments (`gui.rs`)
 
 **Risks and mitigations:**
 
@@ -209,11 +211,11 @@ The Servo delegate -> `GraphIntent` path already works (`window.rs` -> `pending_
 **Tasks:**
 
 1. Ensure `notify_url_changed` intent path handles same-tab URL updates without creating new nodes. (Already works -- `WebViewUrlChanged` handler at `app.rs:405-426` updates URL on existing node.)
-2. **History edge creation (missing behavior)**: `WebViewHistoryChanged` (`app.rs:428-443`) currently stores metadata on the node but does not generate structural History edges. Extend to create History edges from navigation history.
+2. **History edge creation**: `WebViewHistoryChanged` now stores metadata and creates structural `History` edges on traversal transitions.
 3. Ensure `request_create_new` emits graph-meaningful intent (new node + Hyperlink edge). (Already works -- `WebViewCreated` handler at `app.rs:380-404` does this.)
 4. Remove URL-change -> new-node creation path from `sync_to_graph` in `webview_controller.rs`. (Already done -- `sync_to_graph_intents` at line 210 is reconciliation-only.)
-5. Decide `sync_to_graph` residual scope: keep as reconciliation (stale mapping cleanup + selection) or fold into event-driven path.
-6. Remove `PHASE 0 PROOF` comment and convert fallback `Go` command at `webview_controller.rs:263-290`. The fallback fires when `focused_webview` is None (no tile has a webview). The correct behavior is to emit a graph intent that creates a new node + webview for the URL, not to call `UserInterfaceCommand::Go` on a nonexistent active webview.
+5. **Decision**: keep `sync_to_graph_intents` as reconciliation-only (stale mapping cleanup + active selection), not structural node creation.
+6. Remove `PHASE 0 PROOF` comment and convert fallback `Go` command at `webview_controller.rs:263-290`. **Done** (detail-mode no-focused-webview path emits `CreateNodeAtUrl` intent).
 
 **Risks and mitigations:**
 
@@ -250,9 +252,9 @@ The Servo delegate -> `GraphIntent` path already works (`window.rs` -> `pending_
 
 **Tasks:**
 
-1. Replace direct `manage_lifecycle()` calls in `gui.rs` with intent emission + reconciliation.
+1. Replace direct lifecycle mutation calls in `gui.rs` with intent emission + reconciliation.
 2. The 4 lifecycle intents from Phase A are already in the reducer. This phase wires the callers.
-3. `manage_lifecycle()` becomes a function that returns `Vec<GraphIntent>` (like `sync_to_graph_intents`), not one that mutates directly.
+3. Legacy `manage_lifecycle()` path is removed; lifecycle helpers now emit `Vec<GraphIntent>` and frame code applies them at boundary points.
 
 **Risks and mitigations:**
 
@@ -265,13 +267,13 @@ The Servo delegate -> `GraphIntent` path already works (`window.rs` -> `pending_
 **Success criteria:**
 
 - No direct `app.promote_node_to_active()` / `app.demote_node_to_cold()` calls outside `apply_intent()`.
-- `manage_lifecycle()` returns intents, doesn't mutate app state directly.
+- Lifecycle helpers return intents; no helper-local `apply_intents()` calls in `gui.rs`/`webview_controller.rs` lifecycle paths.
 - Webview create/destroy still works through reconciliation.
 
 **Testable invariants:**
 
 - `grep -rn 'promote_node_to_active\|demote_node_to_cold' webview_controller.rs gui.rs` returns zero direct calls (all go through `GraphIntent` variants).
-- `manage_lifecycle()` signature returns `Vec<GraphIntent>` (compile-time enforced).
+- `grep -rn 'manage_lifecycle\\(' ports/graphshell/` returns docs-only hits (no runtime code path).
 
 ### Phase D: Delete legacy paths and close UI loose ends
 
@@ -313,11 +315,157 @@ The Servo delegate -> `GraphIntent` path already works (`window.rs` -> `pending_
 
 ## Open Blockers
 
-1. ~~Phase A is the blocker~~ -- **Design resolved** (two-phase apply decided, identity invariants documented, lifecycle vocabulary defined). Implementation not yet started.
-2. **Delegate ordering**: Need to confirm ordering guarantees between `notify_url_changed`, `notify_page_title_changed`, and `notify_history_changed` under redirects and SPA transitions. Can validate empirically during Phase B.
-3. **Close-tab policy**: What does closing a webview tile mean for the graph node? Current behavior: demote to Cold. Design docs suggest mode-dependent (delete vs hide). For now, keep current Cold demotion; defer mode-pluggable policy to later.
+1. ~~Phase A is the blocker~~ -- **Core implementation complete** (lifecycle intents wired, legacy lifecycle path removed, frame boundary comments added, retry/demote backpressure heuristic added).
+2. ~~Delegate ordering~~ -- **Resolved for current model** via deterministic queue-transform tests (`gui.rs`) plus runtime traces (redirect, SPA pushState, hash-change, back/forward burst, `window.open`). Key rule captured in reducer/tests: traversal semantics use `history_changed` index/list as authoritative, not URL callback deltas alone.
+3. ~~Close-tab policy~~ -- **Resolved for current model**: closing a webview tile demotes its node to `Cold` (does not delete graph node). This is implemented in lifecycle close paths (`gui.rs`, `webview_controller.rs`) and lifecycle reducer behavior (`DemoteNodeToCold` in `app.rs`). Mode-pluggable delete-vs-hide remains a future enhancement.
 4. ~~Stop button API~~ -- **Resolved**: `webview.stop()` does not exist in Servo's `WebView` API (verified Feb 16). Decision: remove the stop button in Phase D.
-5. **AccessKit / webview accessibility**: Blocked on Servo exposing an accessibility tree API to embedders. No graphshell-side work possible until then. Noted as known limitation in Phase D.
+5. **AccessKit / webview accessibility**: Partially blocked on Servo/embedder bridge surface. Graphshell-side handling now records and warns on dropped webview accessibility updates (non-silent failure), but true web-content accessibility exposure still requires upstream API/bridge support.
+
+## Crash Handling Policy (Specified 2026-02-17)
+
+### Current state
+
+- `RunningAppState::notify_crashed(...)` forwards to platform window.
+- `PlatformWindow::notify_crashed(...)` default implementation is currently a no-op in graphshell.
+- Result: crash behavior is underspecified and effectively silent in current graphshell paths.
+
+### Policy goals
+
+1. Web content process crashes must not crash graphshell.
+2. Crashes must be visible to the user in the affected tab/tile context.
+3. Graph integrity must remain valid (`node` persists; runtime webview state is cleaned up).
+4. Recovery path should be explicit (reload/reopen), not implicit infinite retry.
+
+### Required behavior
+
+1. **On `notify_crashed(webview_id, reason, backtrace)`**:
+   - close/unmap crashed webview runtime state,
+   - demote mapped node lifecycle to `Cold`,
+   - record transient crash metadata for UI (reason summary + timestamp + optional backtrace presence),
+   - request UI update/repaint.
+2. **UI behavior**:
+   - if crashed node has an open tile, show a non-blocking crash banner in that tile context:
+     - `"Tab crashed"` + actions: `Reload` and `Close Tile`.
+   - graph view remains interactive.
+3. **Recovery**:
+   - `Reload`/reopen uses standard lifecycle intent path (`PromoteNodeToActive` + reconcile),
+   - no automatic per-frame recreation loop after crash.
+4. **Persistence policy**:
+   - crash metadata is runtime-only (not persisted in graph snapshots/log entries).
+
+### Testable invariants
+
+1. Crash callback does not panic and does not terminate app event loop.
+2. After crash handling:
+   - webview mapping is absent for crashed webview,
+   - mapped node lifecycle is `Cold`,
+   - node still exists in graph.
+3. Reopening crashed node produces a new webview mapping and returns node to `Active`.
+
+### Implementation checklist
+
+- [x] Add crash semantic event/intent path (`window.rs` -> `gui.rs` conversion -> `app.rs` reducer).
+- [x] Add runtime crash metadata store in GUI/app state.
+- [x] Add tile-level crash banner/actions.
+- [x] Add unit tests for reducer-side crash transitions and reopen flow.
+
+## Delegate Ordering Validation Protocol
+
+Use this protocol to resolve Open Blocker #2 with reproducible evidence.
+
+### Setup
+
+1. Run graphshell with delegate tracing enabled:
+   - Windows PowerShell: `$env:GRAPHSHELL_TRACE_DELEGATE_EVENTS=1; cargo run -p graphshell`
+2. Ensure log level includes `debug` for `graph_event_trace` lines.
+3. Capture logs to a file for each scenario.
+
+### Scenario Matrix
+
+1. Redirect chain:
+   - Navigate to a URL that issues 2+ HTTP redirects.
+   - Expected trace characteristic: multiple `url_changed` events, then stable title/history updates.
+2. SPA pushState:
+   - Open a SPA that changes route without full reload.
+   - Expected: URL/title/history ordering may differ from full navigation; confirm reducer final state is correct.
+3. Hash-only navigation:
+   - Trigger `#fragment` changes on same document.
+   - Expected: URL changes may occur without meaningful history edge transitions.
+4. Back/Forward traversal:
+   - Perform back/forward repeatedly on a tab with known history.
+   - Expected: `history_changed` reflects traversal direction and index movement.
+5. `window.open` new tab:
+   - Trigger a child webview creation.
+   - Expected: `create_new` appears, child receives subsequent URL/title/history callbacks.
+
+### Acceptance Criteria
+
+1. For each scenario, callback traces are explainable by current event routing (`running_app_state.rs` -> `window.rs` -> `gui.rs` intent conversion).
+2. No unexplained ordering causes structural graph regressions (wrong node mapping, duplicate node creation, missing expected edge updates).
+3. Any unstable ordering pattern is documented and either:
+   - normalized in event preprocessing/reducer rules, or
+   - explicitly tolerated with rationale and tests.
+
+### Initial Trace Snapshot (2026-02-17)
+
+Collected with:
+- `GRAPHSHELL_TRACE_DELEGATE_EVENTS=1`
+- `RUST_LOG=graphshell=debug`
+- `-z -x --tracing-filter debug`
+
+Artifacts:
+- Redirect trace: `ports/graphshell/design_docs/graphshell_docs/implementation_strategy/delegate_trace_redirect.log`
+- SPA script trace (file URL): `ports/graphshell/design_docs/graphshell_docs/implementation_strategy/delegate_trace_spa_pushstate.log`
+- Hash script trace (file URL): `ports/graphshell/design_docs/graphshell_docs/implementation_strategy/delegate_trace_hash_change.log`
+- SPA script trace (HTTP): `ports/graphshell/design_docs/graphshell_docs/implementation_strategy/delegate_trace_spa_pushstate_http.log`
+- Hash script trace (HTTP): `ports/graphshell/design_docs/graphshell_docs/implementation_strategy/delegate_trace_hash_change_http.log`
+- Back/forward burst trace (HTTP): `ports/graphshell/design_docs/graphshell_docs/implementation_strategy/delegate_trace_back_forward_burst_http.log`
+- `window.open` trace (HTTP): `ports/graphshell/design_docs/graphshell_docs/implementation_strategy/delegate_trace_window_open_http.log`
+
+Observed ordering in these runs:
+- Redirect case (`https://httpbin.org/redirect/2`): `url_changed` -> `history_changed` (final URL observed as `https://httpbin.org/get`).
+- Local file script cases: initial `url_changed` + `history_changed`, then title callbacks (`title_present=false` then `title_present=true`).
+- SPA pushState over HTTP: initial `url_changed/history_changed`, then same-frame `url_changed/history_changed` for `?step=0`, followed by `url_changed/history_changed` for `?step=1`, with title updates interleaved.
+- Hash-change over HTTP: initial `url_changed/history_changed`, then title updates only (no subsequent `url_changed`/`history_changed` for fragment change in this run).
+- Back/forward burst over HTTP: history index changed (`2 -> 1 -> 2`) while URL callback values remained at `?step=2`, so traversal semantics should rely on `history_changed` index/list callbacks, not URL changes alone.
+- `window.open` over HTTP: `create_new` event emitted before child URL/history callbacks; child first appeared as `about:blank` (initial URL absent), followed by child `url_changed/history_changed` events.
+
+Interpretation:
+- Delegate queue ordering is behaving deterministically in sampled runs.
+- SPA/hash HTTP traces now confirm key runtime behavior patterns needed by reducer logic.
+- Back/forward and `window.open` scenarios are now captured with trace artifacts.
+- Important nuance from back/forward burst trace: callback payload may advance history index without carrying the expected traversed URL string; reducer logic should treat `history_changed` index/list as authoritative for traversal semantics and not infer direction solely from consecutive `url_changed` values.
+
+## Servoshell Scaffold Relationship
+
+Graphshell is a thin fork of servoshell, not a plugin. Understanding the inheritance boundary clarifies what each phase can safely change.
+
+### Unchanged files (~25)
+
+`lib.rs`, `main.rs`, `build.rs`, `backtrace.rs`, `crash_handler.rs`, `panic_hook.rs`, `parser.rs`, `prefs.rs`, `resources.rs`, `test.rs`, `webdriver.rs`, `desktop/accelerated_gl_media.rs`, `desktop/cli.rs`, `desktop/dialog.rs`, `desktop/event_loop.rs`, `desktop/gamepad.rs`, `desktop/geometry.rs`, `desktop/headless_window.rs`, `desktop/keyutils.rs`, `desktop/mod.rs`, `desktop/protocols/*`, `desktop/tracing.rs`, `desktop/webxr.rs`, `egl/*`, `platform/macos/*`.
+
+These provide Servo engine lifecycle, cross-platform windowing (winit), input event routing, rendering context abstraction (OpenGL), webdriver/testing harness, and gamepad support — all for free.
+
+### Surgically extended files (4 touch points)
+
+| File | What graphshell adds | Lines added |
+| ---- | -------------------- | ----------- |
+| `window.rs` | `GraphSemanticEvent` enum, `pending_graph_events` queue, `create_toplevel_webview_with_context()` for per-tile rendering | ~60 |
+| `running_app_state.rs` | Hooks 4 delegate callbacks to push `GraphSemanticEvent`s instead of just `set_needs_update()` | ~20 |
+| `headed_window.rs` | Graph-view input routing (T/P/C/Home/Escape bypass webview), multi-webview mouse targeting via `webview_at_point()`, per-tile focus | ~100 |
+| `desktop/app.rs` | Graph store init, tile system, persistence recovery, per-tile rendering contexts | 3x larger |
+
+### Wholly new modules (9)
+
+`app.rs` (reducer + intent system), `graph/` (petgraph model + egui adapter), `persistence/` (fjall + redb + rkyv), `render/` (graph rendering + physics integration), `input/` (keyboard actions), `search.rs` (nucleo fuzzy matching), `desktop/gui.rs` (3.5x servoshell's — tiles, graph view, search UI, thumbnails, physics panel), `desktop/webview_controller.rs` (lifecycle + reconciliation), `desktop/tile_*.rs` (tile behavior + kinds).
+
+### What this means for the plan
+
+**Benefits**: Phases A-D only modify the 4 extended files and the 9 new modules. The ~25 unchanged files are not touched, so Servo embedder integration (rendering contexts, webdriver, gamepad, crash handling) remains stable.
+
+**Upstream merge risk**: When upstream servoshell changes delegate signatures in `running_app_state.rs`, WebView APIs in `window.rs`, or input handling in `headed_window.rs`, graphshell's extensions break at the 4 touch points. Mitigation: keep the touch points minimal and well-isolated (currently ~200 lines across 4 files). After Phase D deletes `UserInterfaceCommand::{Go,Back,Forward,Reload}`, the `window.rs` touch point simplifies further because `handle_interface_commands()` shrinks to just `ReloadAll`.
+
+**Phase D specifically**: deleting `UserInterfaceCommand` variants modifies `running_app_state.rs` (shared file). This is the one phase that changes the scaffold itself, not just the extensions. The EGL path (`egl/app.rs`, unchanged file) also needs refactoring here — it's the only unchanged file that Phase D promotes to "extended."
 
 ## Guardrails (from prior debugging)
 

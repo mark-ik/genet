@@ -8,16 +8,13 @@
 //! testable functions. All Servo WebView operations (create, close,
 //! sync to graph nodes) live here.
 
-use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
+use std::collections::HashSet;
 
-use servo::{OffscreenRenderingContext, RenderingContext, WebViewId, WindowRenderingContext};
-use url::Url;
+use servo::WebViewId;
 
 use crate::app::{GraphBrowserApp, GraphIntent};
 use crate::graph::NodeKey;
 use crate::parser::location_bar_input_to_url;
-use crate::running_app_state::RunningAppState;
 use crate::search::fuzzy_match_node_keys;
 use crate::window::ServoShellWindow;
 
@@ -93,129 +90,6 @@ fn intents_for_omnibox_node_search(app: &GraphBrowserApp, query: &str) -> (bool,
         );
     }
     (false, Vec::new())
-}
-
-/// Manage webview lifecycle based on current view.
-///
-/// - **Graph-only mode** (`has_webview_tiles == false`): save which nodes have
-///   webviews (for later restoration), then destroy all webviews to prevent
-///   framebuffer bleed-through.
-/// - **Tile-detail mode** (`has_webview_tiles == true`): recreate/ensure webviews
-///   and activate the currently active webview tile node, if provided.
-pub(crate) fn manage_lifecycle(
-    app: &mut GraphBrowserApp,
-    window: &ServoShellWindow,
-    state: &Option<Rc<RunningAppState>>,
-    has_webview_tiles: bool,
-    active_webview_node: Option<NodeKey>,
-    base_rendering_context: &Rc<OffscreenRenderingContext>,
-    window_rendering_context: &Rc<WindowRenderingContext>,
-    tile_rendering_contexts: &mut HashMap<NodeKey, Rc<OffscreenRenderingContext>>,
-) {
-    // Phase A pragmatic interpretation:
-    // We keep the primary per-frame intent apply boundary in Gui::update, then allow a
-    // small lifecycle-local intent flush during reconcile for runtime mapping intents
-    // (`MapWebviewToNode` / `UnmapWebview`) because `WebViewId` is only known after
-    // side effects (create/destroy) complete.
-    let mut render_context_for_node = |node_key: NodeKey| {
-        tile_rendering_contexts
-            .entry(node_key)
-            .or_insert_with(|| {
-                Rc::new(window_rendering_context.offscreen_context(base_rendering_context.size()))
-            })
-            .clone()
-    };
-
-    if !has_webview_tiles {
-        // Only save once when entering graph view (webviews exist but list empty)
-        if app.active_webview_nodes.is_empty() && window.webviews().into_iter().next().is_some() {
-            // Save node keys before destroying webviews
-            for (wv_id, _) in window.webviews().into_iter() {
-                if let Some(node_key) = app.get_node_for_webview(wv_id) {
-                    app.active_webview_nodes.push(node_key);
-                }
-            }
-
-            // Destroy all webviews
-            let webviews_to_close: Vec<_> = window
-                .webviews()
-                .into_iter()
-                .map(|(wv_id, _)| wv_id)
-                .collect();
-            for wv_id in webviews_to_close {
-                let unmapped_key = app.get_node_for_webview(wv_id);
-                window.close_webview(wv_id);
-                if let Some(node_key) = unmapped_key {
-                    app.apply_intents([
-                        GraphIntent::UnmapWebview { webview_id: wv_id },
-                        GraphIntent::DemoteNodeToCold { key: node_key },
-                    ]);
-                }
-            }
-        }
-    } else if let Some(active_node) = active_webview_node {
-        if !app.active_webview_nodes.is_empty() {
-            // Recreate webviews for all nodes that had them before
-            let nodes_to_restore: Vec<NodeKey> = app.active_webview_nodes.clone();
-            for &node_key in &nodes_to_restore {
-                if app.get_webview_for_node(node_key).is_none() {
-                    if let (Some(node), Some(app_state)) =
-                        (app.graph.get_node(node_key), state.as_ref())
-                    {
-                        let url = Url::parse(&node.url)
-                            .unwrap_or_else(|_| Url::parse("about:blank").unwrap());
-
-                        let render_context = render_context_for_node(node_key);
-                        let webview = window.create_toplevel_webview_with_context(
-                            app_state.clone(),
-                            url,
-                            render_context,
-                        );
-                        if node_key == active_node {
-                            window.activate_webview(webview.id());
-                        }
-
-                        app.apply_intents([
-                            GraphIntent::MapWebviewToNode {
-                                webview_id: webview.id(),
-                                key: node_key,
-                            },
-                            GraphIntent::PromoteNodeToActive { key: node_key },
-                        ]);
-                    }
-                }
-            }
-
-            // Clear the saved list after recreation
-            app.active_webview_nodes.clear();
-        } else if app.get_webview_for_node(active_node).is_none() {
-            // No saved nodes, just create webview for active node
-            if let (Some(node), Some(app_state)) = (app.graph.get_node(active_node), state.as_ref())
-            {
-                let url =
-                    Url::parse(&node.url).unwrap_or_else(|_| Url::parse("about:blank").unwrap());
-
-                let render_context = render_context_for_node(active_node);
-                let webview = window.create_toplevel_webview_with_context(
-                    app_state.clone(),
-                    url,
-                    render_context,
-                );
-                window.activate_webview(webview.id());
-
-                app.apply_intents([
-                    GraphIntent::MapWebviewToNode {
-                        webview_id: webview.id(),
-                        key: active_node,
-                    },
-                    GraphIntent::PromoteNodeToActive { key: active_node },
-                ]);
-            }
-        } else {
-            // Webview exists, just mark as active
-            app.apply_intents([GraphIntent::PromoteNodeToActive { key: active_node }]);
-        }
-    }
 }
 
 /// Sync existing webviews to graph mappings.
@@ -322,25 +196,37 @@ pub(crate) fn handle_address_bar_submit_intents(
 /// Call before removing nodes from the graph to ensure the actual
 /// Servo webviews are properly closed.
 pub(crate) fn close_webviews_for_nodes(
-    app: &mut GraphBrowserApp,
+    app: &GraphBrowserApp,
     nodes: &[NodeKey],
     window: &ServoShellWindow,
-) {
+) -> Vec<GraphIntent> {
+    let mut intents = Vec::new();
     for &node_key in nodes {
         if let Some(wv_id) = app.get_webview_for_node(node_key) {
             window.close_webview(wv_id);
+            intents.push(GraphIntent::UnmapWebview { webview_id: wv_id });
         }
+        intents.push(GraphIntent::DemoteNodeToCold { key: node_key });
     }
+    intents
 }
 
 /// Close all current webviews and clear their app mappings.
-pub(crate) fn close_all_webviews(app: &mut GraphBrowserApp, window: &ServoShellWindow) {
+pub(crate) fn close_all_webviews(
+    app: &GraphBrowserApp,
+    window: &ServoShellWindow,
+) -> Vec<GraphIntent> {
+    let mut intents = Vec::new();
     let webviews_to_close: Vec<WebViewId> =
         window.webviews().into_iter().map(|(id, _)| id).collect();
     for wv_id in webviews_to_close {
         window.close_webview(wv_id);
-        app.apply_intents([GraphIntent::UnmapWebview { webview_id: wv_id }]);
+        intents.push(GraphIntent::UnmapWebview { webview_id: wv_id });
+        if let Some(node_key) = app.get_node_for_webview(wv_id) {
+            intents.push(GraphIntent::DemoteNodeToCold { key: node_key });
+        }
     }
+    intents
 }
 
 #[cfg(test)]
