@@ -1,0 +1,11 @@
+﻿<!doctype html>
+<html><head><meta charset="utf-8"><title>bf-seed</title>
+<script>
+history.replaceState({step:0}, '', location.pathname + '?step=0');
+history.pushState({step:1}, '', location.pathname + '?step=1');
+history.pushState({step:2}, '', location.pathname + '?step=2');
+history.back();
+history.forward();
+document.title = 'bf-done';
+</script>
+</head><body>back/forward burst</body></html>

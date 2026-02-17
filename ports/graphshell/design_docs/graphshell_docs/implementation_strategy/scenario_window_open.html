@@ -1,0 +1,10 @@
+﻿<!doctype html>
+<html><head><meta charset="utf-8"><title>open-seed</title>
+<script>
+const child = window.open('about:blank', '_blank');
+if (child) {
+  child.location.href = location.origin + '/scenario_window_child.html';
+}
+document.title = child ? 'open-ok' : 'open-blocked';
+</script>
+</head><body>window.open test</body></html>
