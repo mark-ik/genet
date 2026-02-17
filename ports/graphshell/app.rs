@@ -1263,6 +1263,35 @@ mod tests {
     }
 
     #[test]
+    fn test_intent_webview_history_changed_adds_history_edge_on_forward_same_list() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let from = app
+            .graph
+            .add_node("https://a.com".into(), Point2D::new(0.0, 0.0));
+        let to = app
+            .graph
+            .add_node("https://b.com".into(), Point2D::new(100.0, 0.0));
+        let wv = test_webview_id();
+        app.map_webview_to_node(wv, from);
+        if let Some(node) = app.graph.get_node_mut(from) {
+            node.history_entries = vec!["https://a.com".into(), "https://b.com".into()];
+            node.history_index = 0;
+        }
+
+        app.apply_intents([GraphIntent::WebViewHistoryChanged {
+            webview_id: wv,
+            entries: vec!["https://a.com".into(), "https://b.com".into()],
+            current: 1,
+        }]);
+
+        let has_edge = app
+            .graph
+            .edges()
+            .any(|e| e.edge_type == EdgeType::History && e.from == from && e.to == to);
+        assert!(has_edge);
+    }
+
+    #[test]
     fn test_history_changed_is_authoritative_when_url_callback_stays_latest() {
         let mut app = GraphBrowserApp::new_for_testing();
         let step1 = app

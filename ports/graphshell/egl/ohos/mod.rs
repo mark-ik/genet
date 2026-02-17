@@ -423,10 +423,15 @@ impl ServoAction {
                 if let Some(native_webview_components) =
                     NATIVE_WEBVIEWS.lock().unwrap().get(*arkts_id as usize)
                 {
-                    let webview = servo
-                        .active_or_newest_webview()
-                        .expect("Should always start with at least one WebView");
-                    if webview.id() != native_webview_components.id {
+                    let window = servo.window();
+                    let previous_webview_id =
+                        window.platform_window().preferred_input_webview_id(&window);
+                    if previous_webview_id != Some(native_webview_components.id) {
+                        let previous_url = previous_webview_id
+                            .and_then(|id| window.webview_by_id(id))
+                            .and_then(|webview| webview.url())
+                            .map(|u| u.to_string())
+                            .unwrap_or(String::from("about:blank"));
                         servo.activate_webview(native_webview_components.id);
                         servo.pause_painting();
                         let (window_handle, viewport_rect) = get_raw_window_handle(
@@ -434,13 +439,9 @@ impl ServoAction {
                             native_webview_components.window.0,
                         );
                         servo.resume_painting(window_handle, viewport_rect);
-                        let url = webview
-                            .url()
-                            .map(|u| u.to_string())
-                            .unwrap_or(String::from("about:blank"));
                         SET_URL_BAR_CB
                             .get()
-                            .map(|f| f.call(url, ThreadsafeFunctionCallMode::Blocking));
+                            .map(|f| f.call(previous_url, ThreadsafeFunctionCallMode::Blocking));
                     }
                 } else {
                     error!("Could not find webview to activate");

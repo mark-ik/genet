@@ -167,7 +167,14 @@ impl ServoShellWindow {
 
     /// Repaint the focused [`WebView`].
     pub(crate) fn repaint_webviews(&self) {
-        let Some(webview) = self.active_webview() else {
+        let preferred_webview_id = self.platform_window().preferred_input_webview_id(self);
+        let webview_id = preferred_webview_id.or_else(|| {
+            self.webview_collection
+                .borrow()
+                .newest()
+                .map(|webview| webview.id())
+        });
+        let Some(webview) = webview_id.and_then(|id| self.webview_by_id(id)) else {
             return;
         };
 
@@ -374,18 +381,6 @@ impl ServoShellWindow {
 
     pub(crate) fn active_webview(&self) -> Option<WebView> {
         self.webview_collection.borrow().active().cloned()
-    }
-
-    #[cfg_attr(
-        not(any(target_os = "android", target_env = "ohos")),
-        expect(dead_code)
-    )]
-    pub(crate) fn active_or_newest_webview(&self) -> Option<WebView> {
-        let webview_collection = self.webview_collection.borrow();
-        webview_collection
-            .active()
-            .or(webview_collection.newest())
-            .cloned()
     }
 
     /// Return a list of all webviews that have favicons that have not yet been loaded by egui.
@@ -613,6 +608,12 @@ pub(crate) trait PlatformWindow {
     fn notify_media_session_event(&self, _: MediaSessionEvent) {}
     fn notify_crashed(&self, _: WebView, _reason: String, _backtrace: Option<String>) {}
     fn show_console_message(&self, _level: ConsoleLogLevel, _message: &str) {}
+    /// Preferred webview target for user-input-like routing on this platform window.
+    /// Defaults to the window-global active id; headed graphshell overrides this to use
+    /// tile-focused targeting.
+    fn preferred_input_webview_id(&self, window: &ServoShellWindow) -> Option<WebViewId> {
+        window.webview_collection.borrow().active_id()
+    }
 
     #[cfg(not(any(target_os = "android", target_env = "ohos")))]
     /// If this window is a headed window, access the concrete type.

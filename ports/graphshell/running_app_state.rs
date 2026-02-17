@@ -65,6 +65,7 @@ pub struct WebViewCollection {
 impl WebViewCollection {
     pub fn add(&mut self, webview: WebView) {
         let id = webview.id();
+        webview.show();
         self.creation_order.push(id);
         self.webviews.insert(id, webview);
     }
@@ -123,14 +124,9 @@ impl WebViewCollection {
         assert!(self.creation_order.contains(&id_to_activate));
 
         self.active_webview_id = Some(id_to_activate);
-        for (webview_id, webview) in self.all_in_creation_order() {
-            if id_to_activate == webview_id {
-                webview.show();
-                webview.focus();
-            } else {
-                webview.hide();
-                webview.blur();
-            }
+        if let Some(webview) = self.webviews.get(&id_to_activate) {
+            webview.show();
+            webview.focus();
         }
     }
 
@@ -614,9 +610,10 @@ impl RunningAppState {
         let Some(gamepad_provider) = self.gamepad_provider.as_ref() else {
             return;
         };
-        let Some(active_webview) = self
-            .focused_window()
-            .and_then(|window| window.active_webview())
+        let Some(active_webview) = self.focused_window().and_then(|window| {
+            let webview_id = window.platform_window().preferred_input_webview_id(&window)?;
+            window.webview_by_id(webview_id)
+        })
         else {
             return;
         };

@@ -214,10 +214,16 @@ impl GraphNodeShape {
         radius: f32,
         color: Color32,
     ) -> std::sync::Arc<egui::Galley> {
+        // Guard against pathological zoom/scale values that can request enormous glyph atlases.
+        let font_size = if radius.is_finite() {
+            radius.clamp(6.0, 96.0)
+        } else {
+            12.0
+        };
         ctx.ctx.fonts_mut(|f| {
             f.layout_no_wrap(
                 self.label_text.clone(),
-                FontId::new(radius, FontFamily::Monospace),
+                FontId::new(font_size, FontFamily::Monospace),
                 color,
             )
         })

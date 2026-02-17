@@ -163,8 +163,13 @@ impl RunningAppState {
                             Some(create_platform_window),
                         ) => {
                             let window = self.open_window(create_platform_window(url.clone()), url);
-                            window
-                                .active_webview()
+                            let preferred_webview_id =
+                                window.platform_window().preferred_input_webview_id(&window);
+                            let webview_id = preferred_webview_id.or_else(|| {
+                                window.webview_collection.borrow().newest().map(|wv| wv.id())
+                            });
+                            webview_id
+                                .and_then(|id| window.webview_by_id(id))
                                 .expect("Should have at last one WebView in new window")
                         },
                         _ => self
@@ -257,8 +262,11 @@ impl RunningAppState {
                 WebDriverCommandMsg::GetFocusedWebView(sender) => {
                     let focused_webview = self
                         .focused_window()
-                        .and_then(|window| window.active_webview())
-                        .map(|webview| webview.id());
+                        .and_then(|window| {
+                            let webview_id =
+                                window.platform_window().preferred_input_webview_id(&window)?;
+                            window.webview_by_id(webview_id).map(|webview| webview.id())
+                        });
                     if let Err(error) = sender.send(focused_webview) {
                         warn!("Failed to send response of GetFocusedWebView: {error}");
                     };

@@ -86,7 +86,10 @@ impl PlatformWindow for EmbeddedPlatformWindow {
         state: &RunningAppState,
         window: &ServoShellWindow,
     ) -> bool {
-        let Some(active_webview) = window.active_webview() else {
+        let Some(active_webview) = self
+            .preferred_input_webview_id(window)
+            .and_then(|webview_id| window.webview_by_id(webview_id))
+        else {
             return false;
         };
 
@@ -352,8 +355,15 @@ impl App {
             .clone()
     }
 
-    pub(crate) fn active_or_newest_webview(&self) -> Option<WebView> {
-        self.window().active_or_newest_webview()
+    fn input_target_webview(&self) -> Option<WebView> {
+        let window = self.window();
+        let preferred_id = window.platform_window().preferred_input_webview_id(&window);
+        let webview_id = if let Some(webview_id) = preferred_id {
+            webview_id
+        } else {
+            window.webview_collection.borrow().newest().map(|wv| wv.id())?
+        };
+        window.webview_by_id(webview_id)
     }
 
     pub(crate) fn initial_url(&self) -> Url {
@@ -365,7 +375,7 @@ impl App {
             .create_and_activate_toplevel_webview(self.state.clone(), url)
     }
 
-    /// The active webview will be immediately valid via `active_or_newest_webview()`
+    /// The active webview will be immediately valid via `input_target_webview()`
     pub(crate) fn activate_webview(&self, id: WebViewId) {
         self.state.window_for_webview_id(id).activate_webview(id);
     }
@@ -389,7 +399,7 @@ impl App {
             warn!("failed to parse location");
             return;
         };
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             self.window().set_needs_update();
             webview.load(url.into_url());
         }
@@ -398,7 +408,7 @@ impl App {
 
     /// Reload the page.
     pub fn reload(&self) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             self.window().set_needs_update();
             webview.reload();
         }
@@ -414,7 +424,7 @@ impl App {
 
     /// Go back in history.
     pub fn go_back(&self) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             webview.go_back(1);
         }
         self.spin_event_loop();
@@ -422,7 +432,7 @@ impl App {
 
     /// Go forward in history.
     pub fn go_forward(&self) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             webview.go_forward(1);
         }
         self.spin_event_loop();
@@ -430,7 +440,7 @@ impl App {
 
     /// Let Servo know that the window has been resized.
     pub fn resize(&self, viewport_rect: Rect<i32, DevicePixel>) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             info!("Setting viewport to {viewport_rect:?}");
             let size = viewport_rect.size;
             webview.resize(PhysicalSize::new(size.width as u32, size.height as u32));
@@ -446,7 +456,7 @@ impl App {
     /// x/y are scroll coordinates.
     /// dx/dy are scroll deltas.
     pub fn scroll(&self, dx: f32, dy: f32, x: f32, y: f32) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             let scroll = Scroll::Delta(DeviceVector2D::new(dx, dy).into());
             let point = DevicePoint::new(x, y).into();
             webview.notify_scroll_event(scroll, point);
@@ -456,7 +466,7 @@ impl App {
 
     /// Touch event: press down
     pub fn touch_down(&self, x: f32, y: f32, pointer_id: i32) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             webview.notify_input_event(InputEvent::Touch(TouchEvent::new(
                 TouchEventType::Down,
                 TouchId(pointer_id),
@@ -468,7 +478,7 @@ impl App {
 
     /// Touch event: move touching finger
     pub fn touch_move(&self, x: f32, y: f32, pointer_id: i32) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             webview.notify_input_event(InputEvent::Touch(TouchEvent::new(
                 TouchEventType::Move,
                 TouchId(pointer_id),
@@ -480,7 +490,7 @@ impl App {
 
     /// Touch event: Lift touching finger
     pub fn touch_up(&self, x: f32, y: f32, pointer_id: i32) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             webview.notify_input_event(InputEvent::Touch(TouchEvent::new(
                 TouchEventType::Up,
                 TouchId(pointer_id),
@@ -492,7 +502,7 @@ impl App {
 
     /// Cancel touch event
     pub fn touch_cancel(&self, x: f32, y: f32, pointer_id: i32) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             webview.notify_input_event(InputEvent::Touch(TouchEvent::new(
                 TouchEventType::Cancel,
                 TouchId(pointer_id),
@@ -504,7 +514,7 @@ impl App {
 
     /// Register a mouse movement.
     pub fn mouse_move(&self, x: f32, y: f32) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             webview.notify_input_event(InputEvent::MouseMove(MouseMoveEvent::new(
                 DevicePoint::new(x, y).into(),
             )));
@@ -514,7 +524,7 @@ impl App {
 
     /// Register a mouse button press.
     pub fn mouse_down(&self, x: f32, y: f32, button: MouseButton) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             webview.notify_input_event(InputEvent::MouseButton(MouseButtonEvent::new(
                 MouseButtonAction::Down,
                 button,
@@ -526,7 +536,7 @@ impl App {
 
     /// Register a mouse button release.
     pub fn mouse_up(&self, x: f32, y: f32, button: MouseButton) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             webview.notify_input_event(InputEvent::MouseButton(MouseButtonEvent::new(
                 MouseButtonAction::Up,
                 button,
@@ -539,7 +549,7 @@ impl App {
     /// Start pinchzoom.
     /// x/y are pinch origin coordinates.
     pub fn pinchzoom_start(&self, factor: f32, x: f32, y: f32) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             webview.pinch_zoom(factor, DevicePoint::new(x, y));
             self.spin_event_loop();
         }
@@ -548,7 +558,7 @@ impl App {
     /// Pinchzoom.
     /// x/y are pinch origin coordinates.
     pub fn pinchzoom(&self, factor: f32, x: f32, y: f32) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             webview.pinch_zoom(factor, DevicePoint::new(x, y));
             self.spin_event_loop();
         }
@@ -557,14 +567,14 @@ impl App {
     /// End pinchzoom.
     /// x/y are pinch origin coordinates.
     pub fn pinchzoom_end(&self, factor: f32, x: f32, y: f32) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             webview.pinch_zoom(factor, DevicePoint::new(x, y));
             self.spin_event_loop();
         }
     }
 
     pub fn key_down(&self, key: Key) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             webview.notify_input_event(InputEvent::Keyboard(KeyboardEvent::from_state_and_key(
                 KeyState::Down,
                 key,
@@ -574,7 +584,7 @@ impl App {
     }
 
     pub fn key_up(&self, key: Key) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             webview.notify_input_event(InputEvent::Keyboard(KeyboardEvent::from_state_and_key(
                 KeyState::Up,
                 key,
@@ -589,7 +599,7 @@ impl App {
             return;
         }
 
-        let Some(webview) = self.active_or_newest_webview() else {
+        let Some(webview) = self.input_target_webview() else {
             return;
         };
 
@@ -609,21 +619,21 @@ impl App {
     }
 
     pub fn media_session_action(&self, action: MediaSessionActionType) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             webview.notify_media_session_action_event(action);
             self.spin_event_loop();
         }
     }
 
     pub fn set_throttled(&self, throttled: bool) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             webview.set_throttled(throttled);
             self.spin_event_loop();
         }
     }
 
     pub fn ime_dismissed(&self) {
-        if let Some(webview) = self.active_or_newest_webview() {
+        if let Some(webview) = self.input_target_webview() {
             webview.notify_input_event(InputEvent::Ime(ImeEvent::Dismissed));
             self.spin_event_loop();
         }

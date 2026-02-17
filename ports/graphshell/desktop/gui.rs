@@ -487,6 +487,17 @@ impl Gui {
             .and_then(|node_key| self.graph_app.get_webview_for_node(node_key))
     }
 
+    pub(crate) fn location_has_focus(&self) -> bool {
+        self.context.egui_ctx.memory(|m| {
+            m.focused()
+                .is_some_and(|focused| focused == egui::Id::new("location_input"))
+        })
+    }
+
+    pub(crate) fn request_location_submit(&mut self) {
+        self.location_submitted = true;
+    }
+
     pub(crate) fn egui_wants_keyboard_input(&self) -> bool {
         self.context.egui_ctx.wants_keyboard_input()
     }
@@ -718,8 +729,8 @@ impl Gui {
                             });
                             if back_button.clicked() {
                                 *location_dirty = false;
-                                if let Some(node_key) = active_webview_node
-                                    && let Some(webview_id) = graph_app.get_webview_for_node(node_key)
+                                if let Some(webview_id) =
+                                    Self::nav_target_webview_id(graph_app, active_webview_node)
                                     && let Some(webview) = window.webview_by_id(webview_id)
                                 {
                                     webview.go_back(1);
@@ -736,8 +747,8 @@ impl Gui {
                             });
                             if forward_button.clicked() {
                                 *location_dirty = false;
-                                if let Some(node_key) = active_webview_node
-                                    && let Some(webview_id) = graph_app.get_webview_for_node(node_key)
+                                if let Some(webview_id) =
+                                    Self::nav_target_webview_id(graph_app, active_webview_node)
                                     && let Some(webview) = window.webview_by_id(webview_id)
                                 {
                                     webview.go_forward(1);
@@ -753,8 +764,8 @@ impl Gui {
                             });
                             if reload_button.clicked() {
                                 *location_dirty = false;
-                                if let Some(node_key) = active_webview_node
-                                    && let Some(webview_id) = graph_app.get_webview_for_node(node_key)
+                                if let Some(webview_id) =
+                                    Self::nav_target_webview_id(graph_app, active_webview_node)
                                     && let Some(webview) = window.webview_by_id(webview_id)
                                 {
                                     webview.reload();
@@ -922,7 +933,9 @@ impl Gui {
                                         *location_submitted = true;
                                     }
                                     let should_submit_now = enter_while_focused
-                                        || (*location_submitted && location_field.lost_focus());
+                                        || *location_submitted
+                                        || (location_field.lost_focus()
+                                            && ui.input(|i| i.key_pressed(Key::Enter)));
                                     if should_submit_now {
                                         *location_submitted = false;
                                         let focused_webview_id = active_webview_node
@@ -1178,6 +1191,9 @@ impl Gui {
                 && let Some(node_key) = graph_app.get_single_selected_node()
             {
                 Self::open_or_focus_webview_tile(tiles_tree, node_key);
+                // A node created from omnibar submit in detail-mode fallback starts as Cold.
+                // Promote it so lifecycle reconciliation can instantiate its webview.
+                frame_intents.push(GraphIntent::PromoteNodeToActive { key: node_key });
             }
             for child_webview_id in pending_open_child_webviews {
                 if let Some(node_key) = graph_app.get_node_for_webview(child_webview_id) {
@@ -1418,6 +1434,13 @@ impl Gui {
             .tiles
             .iter()
             .any(|(_, tile)| matches!(tile, Tile::Pane(TileKind::WebView(_))))
+    }
+
+    fn nav_target_webview_id(
+        graph_app: &GraphBrowserApp,
+        active_webview_node: Option<crate::graph::NodeKey>,
+    ) -> Option<WebViewId> {
+        active_webview_node.and_then(|node_key| graph_app.get_webview_for_node(node_key))
     }
 
     fn preferred_detail_node(graph_app: &GraphBrowserApp) -> Option<crate::graph::NodeKey> {
@@ -1882,7 +1905,12 @@ impl Gui {
     }
 
     pub(crate) fn set_zoom_factor(&self, factor: f32) {
-        self.context.egui_ctx.set_zoom_factor(factor);
+        let clamped = if factor.is_finite() {
+            factor.clamp(0.25, 4.0)
+        } else {
+            1.0
+        };
+        self.context.egui_ctx.set_zoom_factor(clamped);
     }
 
     pub(crate) fn notify_accessibility_tree_update(
@@ -1991,6 +2019,58 @@ mod tests {
         let nodes = Gui::all_webview_tile_nodes(&tree);
         assert_eq!(nodes.len(), 2);
         assert!(nodes.contains(&a));
+        assert!(nodes.contains(&b));
+    }
+
+    #[test]
+    fn test_nav_target_webview_id_uses_active_tile_node_mapping() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let active_node = app.add_node_and_sync("https://active.example".into(), Point2D::new(0.0, 0.0));
+        let other_node = app.add_node_and_sync("https://other.example".into(), Point2D::new(10.0, 0.0));
+        let active_webview = test_webview_id();
+        let other_webview = test_webview_id();
+        app.map_webview_to_node(active_webview, active_node);
+        app.map_webview_to_node(other_webview, other_node);
+
+        let target = Gui::nav_target_webview_id(&app, Some(active_node));
+        assert_eq!(target, Some(active_webview));
+    }
+
+    #[test]
+    fn test_nav_target_webview_id_none_without_mapping() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let node = app.add_node_and_sync("https://unmapped.example".into(), Point2D::new(0.0, 0.0));
+        assert_eq!(Gui::nav_target_webview_id(&app, Some(node)), None);
+        assert_eq!(Gui::nav_target_webview_id(&app, None), None);
+    }
+
+    #[test]
+    fn test_open_or_focus_sets_active_tile_to_target_node() {
+        let mut tree = tree_with_graph_root();
+        let a = NodeKey::new(10);
+        let b = NodeKey::new(11);
+        Gui::open_or_focus_webview_tile(&mut tree, a);
+        Gui::open_or_focus_webview_tile(&mut tree, b);
+
+        assert_eq!(Gui::active_webview_tile_node(&tree), Some(b));
+
+        Gui::open_or_focus_webview_tile(&mut tree, a);
+        assert_eq!(Gui::active_webview_tile_node(&tree), Some(a));
+        assert_eq!(webview_tile_count(&tree, a), 1);
+        assert_eq!(webview_tile_count(&tree, b), 1);
+    }
+
+    #[test]
+    fn test_remove_webview_tile_for_node_preserves_other_tiles() {
+        let mut tree = tree_with_graph_root();
+        let a = NodeKey::new(20);
+        let b = NodeKey::new(21);
+        Gui::open_or_focus_webview_tile(&mut tree, a);
+        Gui::open_or_focus_webview_tile(&mut tree, b);
+
+        Gui::remove_webview_tile_for_node(&mut tree, a);
+        let nodes = Gui::all_webview_tile_nodes(&tree);
+        assert!(!nodes.contains(&a));
         assert!(nodes.contains(&b));
     }
 

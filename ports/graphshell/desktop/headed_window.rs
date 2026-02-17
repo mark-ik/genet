@@ -231,6 +231,15 @@ impl HeadedWindow {
         &self.winit_window
     }
 
+    fn focused_webview_id(&self) -> Option<WebViewId> {
+        self.gui.borrow().focused_webview_id()
+    }
+
+    fn focused_webview(&self, window: &ServoShellWindow) -> Option<WebView> {
+        self.focused_webview_id()
+            .and_then(|id| window.webview_by_id(id))
+    }
+
     fn handle_keyboard_input(
         &self,
         state: Rc<RunningAppState>,
@@ -243,8 +252,8 @@ impl HeadedWindow {
             return;
         }
 
-        // Then we deliver character and keyboard events to the page in the active webview.
-        let Some(webview) = window.active_webview() else {
+        // Then we deliver character and keyboard events to the focused webview tile target.
+        let Some(webview) = self.focused_webview(window) else {
             return;
         };
 
@@ -350,7 +359,7 @@ impl HeadedWindow {
         window: &ServoShellWindow,
         key_event: &KeyboardEvent,
     ) -> bool {
-        let Some(active_webview) = window.active_webview() else {
+        let Some(active_webview) = self.focused_webview(window) else {
             return false;
         };
 
@@ -502,11 +511,11 @@ impl HeadedWindow {
         window: &ServoShellWindow,
         callback: impl Fn(&mut Dialog) -> bool,
     ) {
-        let Some(active_webview) = window.active_webview() else {
+        let Some(active_webview_id) = self.focused_webview_id() else {
             return;
         };
         let mut dialogs = self.dialogs.borrow_mut();
-        let Some(dialogs) = dialogs.get_mut(&active_webview.id()) else {
+        let Some(dialogs) = dialogs.get_mut(&active_webview_id) else {
             return;
         };
         if dialogs.is_empty() {
@@ -630,9 +639,9 @@ impl HeadedWindow {
             if self.gui.borrow().is_graph_view() {
                 return true;
             }
-            if window
-                .active_webview()
-                .is_some_and(|webview| self.has_active_dialog_for_webview(webview.id()))
+            if self
+                .focused_webview_id()
+                .is_some_and(|webview_id| self.has_active_dialog_for_webview(webview_id))
             {
                 return true;
             }
@@ -754,6 +763,16 @@ impl HeadedWindow {
                 }
 
                 consumed = response.consumed;
+                if !consumed
+                    && let WindowEvent::KeyboardInput { event: key_event, .. } = event
+                    && key_event.state == ElementState::Pressed
+                    && matches!(key_event.physical_key, PhysicalKey::Code(KeyCode::Enter))
+                    && self.gui.borrow().location_has_focus()
+                {
+                    self.gui.borrow_mut().request_location_submit();
+                    self.winit_window.request_redraw();
+                    consumed = true;
+                }
                 if consumed
                     && let WindowEvent::KeyboardInput { event: key_event, .. } = event
                     && key_event.state == ElementState::Pressed
@@ -908,7 +927,7 @@ impl HeadedWindow {
                     window.schedule_close();
                 },
                 WindowEvent::ThemeChanged(theme) => {
-                    if let Some(webview) = window.active_webview() {
+                    if let Some(webview) = self.focused_webview(&window) {
                         webview.notify_theme_change(match theme {
                             winit::window::Theme::Light => Theme::Light,
                             winit::window::Theme::Dark => Theme::Dark,
@@ -916,10 +935,7 @@ impl HeadedWindow {
                     }
                 },
                 WindowEvent::Ime(ime) => {
-                    if let Some(webview_id) = self.gui.borrow().focused_webview_id() {
-                        window.activate_webview(webview_id);
-                    }
-                    if let Some(webview) = window.active_webview() {
+                    if let Some(webview) = self.focused_webview(&window) {
                         match ime {
                             Ime::Enabled => {
                                 webview.notify_input_event(InputEvent::Ime(ImeEvent::Composition(
@@ -976,6 +992,10 @@ impl PlatformWindow for HeadedWindow {
         Some(self)
     }
 
+    fn preferred_input_webview_id(&self, _window: &ServoShellWindow) -> Option<WebViewId> {
+        self.focused_webview_id()
+    }
+
     fn screen_geometry(&self) -> ScreenGeometry {
         let hidpi_factor = self.hidpi_scale_factor();
         let toolbar_size = Size2D::new(0.0, (self.toolbar_height() * self.hidpi_scale_factor()).0);
@@ -1013,8 +1033,8 @@ impl PlatformWindow for HeadedWindow {
     }
 
     fn update_user_interface_state(&self, _: &RunningAppState, window: &ServoShellWindow) -> bool {
-        let title = window
-            .active_webview()
+        let title = self
+            .focused_webview(window)
             .and_then(|webview| {
                 webview
                     .page_title()

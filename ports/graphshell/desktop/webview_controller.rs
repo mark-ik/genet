@@ -165,6 +165,7 @@ pub(crate) fn handle_address_bar_submit_intents(
         if let Some(webview_id) = focused_webview
             && let Some(webview) = window.webview_by_id(webview_id)
         {
+            window.activate_webview(webview_id);
             webview.load(parsed_url.into_url());
             window.set_needs_update();
             return AddressBarIntentOutcome {

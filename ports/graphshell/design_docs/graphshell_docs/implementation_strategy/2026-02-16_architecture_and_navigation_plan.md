@@ -283,6 +283,7 @@ The Servo delegate -> `GraphIntent` path already works (`window.rs` -> `pending_
 
 1. Delete legacy fullscreen-detail fallback path (`gui.rs:1282-1328` else branch).
 2. Delete `UserInterfaceCommand::{Go, Back, Forward, Reload}` variants from the desktop path -- toolbar already routes directly to per-webview calls (`gui.rs:707-767`). **EGL/embedded impact**: `egl/app.rs:386-416` uses these variants for `load_uri()`, `reload()`, `go_back()`, `go_forward()`. These must be refactored to direct webview calls at the same time, or the EGL path breaks. Phase D is **not desktop-only** — it requires equivalent refactoring in `egl/app.rs`.
+   - **Scope decision checkpoint**: If a given iteration is explicitly "desktop tile architecture only," document EGL/WebDriver targeting semantics as out-of-scope for that iteration. If full-stack consistency is in scope, refactor both `egl/app.rs` and `webdriver.rs` to explicit webview IDs (no window-global active dispatch).
 3. Keep `ReloadAll` for multi-window coordination (`gui.rs:792`).
 4. Remove stop button (`gui.rs:744`). Servo's `WebView` API has no `stop()` method (verified Feb 16). Remove the button entirely rather than leaving a stub. If Servo adds `stop()` later, the button can be re-added.
 5. Remove `UserInterfaceCommand::Back/Forward` from mouse button handlers (`headed_window.rs:626,634`) -- replace with direct webview calls via active tile.
@@ -474,3 +475,14 @@ These provide Servo engine lifecycle, cross-platform windowing (winit), input ev
 - Prefer event-driven Servo callbacks over polling when the model says they are the authority.
 - Check tile/lifecycle interactions before concluding a single-path fix is sufficient.
 - Timebox diagnostics: one round of logging, then move to a testable change.
+
+## Potential Feature (Diagnostic)
+
+### Headed event-loop/window integration test scaffolding
+
+- **Potential feature**: Add OS-window/event-loop integration test scaffolding to drive headed `winit` events and assert end-to-end target routing (Back/Forward/Reload to focused tile webview).
+- **Diagnostic value**: **Yes** (high confidence for focus/input regressions that unit tests cannot fully cover).
+- **In current phase scope**: **No**.
+- **Reason for "No"**: Requires new harness architecture (test window host abstraction + deterministic event playback + CI stability handling), estimated at multi-day to multi-week effort, and is not required to complete Phases A-D acceptance criteria.
+- **Current substitute**: Keep unit-level routing harness/tests in `desktop/gui.rs` and resolver-level assertions; use targeted manual validation for headed runtime behavior.
+- **Activation trigger**: Promote this to active scope if repeated focus/input regressions occur that pass unit tests but fail in headed runtime.
