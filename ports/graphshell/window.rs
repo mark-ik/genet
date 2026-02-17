@@ -4,9 +4,10 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::Instant;
 
 use euclid::Scale;
-use log::warn;
+use log::debug;
 use servo::{
     AuthenticationRequest, ConsoleLogLevel, Cursor, DeviceIndependentIntRect,
     DeviceIndependentPixel, DeviceIntPoint, DeviceIntSize, DevicePixel, EmbedderControl,
@@ -15,7 +16,6 @@ use servo::{
 };
 use url::Url;
 
-use crate::parser::location_bar_input_to_url;
 use crate::running_app_state::{RunningAppState, UserInterfaceCommand, WebViewCollection};
 
 // This should vary by zoom level and maybe actual text size (focused or under cursor)
@@ -59,6 +59,11 @@ pub(crate) enum GraphSemanticEvent {
         child_webview_id: WebViewId,
         initial_url: Option<String>,
     },
+    WebViewCrashed {
+        webview_id: WebViewId,
+        reason: String,
+        has_backtrace: bool,
+    },
 }
 
 pub(crate) struct ServoShellWindow {
@@ -81,6 +86,14 @@ pub(crate) struct ServoShellWindow {
     pending_thumbnail_capture_requests: RefCell<Vec<WebViewId>>,
     /// Pending graph semantic events emitted from delegate callbacks.
     pending_graph_events: RefCell<Vec<GraphSemanticEvent>>,
+    /// Optional runtime tracing for delegate/event ordering diagnostics.
+    trace_graph_events: bool,
+    /// Monotonic startup timestamp used for trace log deltas.
+    trace_graph_events_started_at: Instant,
+    /// Sequence number for graph semantic events in this window.
+    trace_graph_events_seq: Cell<u64>,
+    /// Sequence number for graph event queue drains.
+    trace_graph_event_drains: Cell<u64>,
     /// Pending [`UserInterfaceCommand`] that have yet to be processed by the main loop.
     pending_commands: RefCell<Vec<UserInterfaceCommand>>,
 }
@@ -96,6 +109,10 @@ impl ServoShellWindow {
             pending_favicon_loads: Default::default(),
             pending_thumbnail_capture_requests: Default::default(),
             pending_graph_events: Default::default(),
+            trace_graph_events: std::env::var_os("GRAPHSHELL_TRACE_DELEGATE_EVENTS").is_some(),
+            trace_graph_events_started_at: Instant::now(),
+            trace_graph_events_seq: Cell::new(0),
+            trace_graph_event_drains: Cell::new(0),
             pending_commands: Default::default(),
         }
     }
@@ -281,12 +298,12 @@ impl ServoShellWindow {
     }
 
     pub(crate) fn notify_url_changed(&self, webview: WebView, new_url: Url) {
-        self.pending_graph_events
-            .borrow_mut()
-            .push(GraphSemanticEvent::UrlChanged {
-                webview_id: webview.id(),
-                new_url: new_url.to_string(),
-            });
+        let event = GraphSemanticEvent::UrlChanged {
+            webview_id: webview.id(),
+            new_url: new_url.to_string(),
+        };
+        self.trace_graph_semantic_event(&event);
+        self.pending_graph_events.borrow_mut().push(event);
         self.set_needs_update();
     }
 
@@ -296,23 +313,23 @@ impl ServoShellWindow {
         entries: Vec<Url>,
         current: usize,
     ) {
-        self.pending_graph_events
-            .borrow_mut()
-            .push(GraphSemanticEvent::HistoryChanged {
-                webview_id: webview.id(),
-                entries: entries.into_iter().map(|u| u.to_string()).collect(),
-                current,
-            });
+        let event = GraphSemanticEvent::HistoryChanged {
+            webview_id: webview.id(),
+            entries: entries.into_iter().map(|u| u.to_string()).collect(),
+            current,
+        };
+        self.trace_graph_semantic_event(&event);
+        self.pending_graph_events.borrow_mut().push(event);
         self.set_needs_update();
     }
 
     pub(crate) fn notify_page_title_changed(&self, webview: WebView, title: Option<String>) {
-        self.pending_graph_events
-            .borrow_mut()
-            .push(GraphSemanticEvent::PageTitleChanged {
-                webview_id: webview.id(),
-                title,
-            });
+        let event = GraphSemanticEvent::PageTitleChanged {
+            webview_id: webview.id(),
+            title,
+        };
+        self.trace_graph_semantic_event(&event);
+        self.pending_graph_events.borrow_mut().push(event);
         self.set_needs_update();
     }
 
@@ -321,13 +338,29 @@ impl ServoShellWindow {
         parent_webview: WebView,
         child_webview: WebView,
     ) {
-        self.pending_graph_events
-            .borrow_mut()
-            .push(GraphSemanticEvent::CreateNewWebView {
-                parent_webview_id: parent_webview.id(),
-                child_webview_id: child_webview.id(),
-                initial_url: child_webview.url().map(|u| u.to_string()),
-            });
+        let event = GraphSemanticEvent::CreateNewWebView {
+            parent_webview_id: parent_webview.id(),
+            child_webview_id: child_webview.id(),
+            initial_url: child_webview.url().map(|u| u.to_string()),
+        };
+        self.trace_graph_semantic_event(&event);
+        self.pending_graph_events.borrow_mut().push(event);
+        self.set_needs_update();
+    }
+
+    pub(crate) fn notify_webview_crashed(
+        &self,
+        webview: WebView,
+        reason: String,
+        backtrace: Option<String>,
+    ) {
+        let event = GraphSemanticEvent::WebViewCrashed {
+            webview_id: webview.id(),
+            reason,
+            has_backtrace: backtrace.as_deref().is_some_and(|b| !b.is_empty()),
+        };
+        self.trace_graph_semantic_event(&event);
+        self.pending_graph_events.borrow_mut().push(event);
         self.set_needs_update();
     }
 
@@ -369,7 +402,90 @@ impl ServoShellWindow {
 
     /// Return all pending graph semantic events.
     pub(crate) fn take_pending_graph_events(&self) -> Vec<GraphSemanticEvent> {
-        std::mem::take(&mut *self.pending_graph_events.borrow_mut())
+        let events = std::mem::take(&mut *self.pending_graph_events.borrow_mut());
+        if self.trace_graph_events {
+            let drain_id = self.trace_graph_event_drains.get() + 1;
+            self.trace_graph_event_drains.set(drain_id);
+            let elapsed_ms = self.trace_graph_events_started_at.elapsed().as_millis();
+            debug!(
+                "graph_event_trace drain={} t_ms={} count={}",
+                drain_id,
+                elapsed_ms,
+                events.len()
+            );
+        }
+        events
+    }
+
+    fn trace_graph_semantic_event(&self, event: &GraphSemanticEvent) {
+        if !self.trace_graph_events {
+            return;
+        }
+        let seq = self.trace_graph_events_seq.get() + 1;
+        self.trace_graph_events_seq.set(seq);
+        let elapsed_ms = self.trace_graph_events_started_at.elapsed().as_millis();
+        match event {
+            GraphSemanticEvent::UrlChanged {
+                webview_id,
+                new_url,
+            } => {
+                debug!(
+                    "graph_event_trace seq={} t_ms={} kind=url_changed webview={:?} url={}",
+                    seq, elapsed_ms, webview_id, new_url
+                );
+            },
+            GraphSemanticEvent::HistoryChanged {
+                webview_id,
+                entries,
+                current,
+            } => {
+                debug!(
+                    "graph_event_trace seq={} t_ms={} kind=history_changed webview={:?} entries_len={} current={}",
+                    seq,
+                    elapsed_ms,
+                    webview_id,
+                    entries.len(),
+                    current
+                );
+            },
+            GraphSemanticEvent::PageTitleChanged { webview_id, title } => {
+                debug!(
+                    "graph_event_trace seq={} t_ms={} kind=title_changed webview={:?} title_present={}",
+                    seq,
+                    elapsed_ms,
+                    webview_id,
+                    title.as_deref().is_some_and(|t| !t.is_empty())
+                );
+            },
+            GraphSemanticEvent::CreateNewWebView {
+                parent_webview_id,
+                child_webview_id,
+                initial_url,
+            } => {
+                debug!(
+                    "graph_event_trace seq={} t_ms={} kind=create_new parent={:?} child={:?} initial_url_present={}",
+                    seq,
+                    elapsed_ms,
+                    parent_webview_id,
+                    child_webview_id,
+                    initial_url.as_deref().is_some_and(|u| !u.is_empty())
+                );
+            },
+            GraphSemanticEvent::WebViewCrashed {
+                webview_id,
+                reason,
+                has_backtrace,
+            } => {
+                debug!(
+                    "graph_event_trace seq={} t_ms={} kind=webview_crashed webview={:?} reason_len={} has_backtrace={}",
+                    seq,
+                    elapsed_ms,
+                    webview_id,
+                    reason.len(),
+                    has_backtrace
+                );
+            },
+        }
     }
 
     pub(crate) fn show_embedder_control(
@@ -407,35 +523,6 @@ impl ServoShellWindow {
         let commands = std::mem::take(&mut *self.pending_commands.borrow_mut());
         for event in commands {
             match event {
-                UserInterfaceCommand::Go(location) => {
-                    self.set_needs_update();
-                    let Some(url) = location_bar_input_to_url(
-                        &location.clone(),
-                        &state.servoshell_preferences.searchpage,
-                    ) else {
-                        warn!("failed to parse location");
-                        break;
-                    };
-                    if let Some(active_webview) = self.active_webview() {
-                        active_webview.load(url.into_url());
-                    }
-                },
-                UserInterfaceCommand::Back => {
-                    if let Some(active_webview) = self.active_webview() {
-                        active_webview.go_back(1);
-                    }
-                },
-                UserInterfaceCommand::Forward => {
-                    if let Some(active_webview) = self.active_webview() {
-                        active_webview.go_forward(1);
-                    }
-                },
-                UserInterfaceCommand::Reload => {
-                    self.set_needs_update();
-                    if let Some(active_webview) = self.active_webview() {
-                        active_webview.reload();
-                    }
-                },
                 UserInterfaceCommand::ReloadAll => {
                     for window in state.windows().values() {
                         window.set_needs_update();

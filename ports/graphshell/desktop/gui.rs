@@ -8,13 +8,13 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::{Duration, Instant};
 
 use dpi::PhysicalSize;
 use egui::text::{CCursor, CCursorRange};
 use egui::text_edit::TextEditState;
 use egui::{
-    Key, Label, LayerId, Modifiers, PaintCallback, TopBottomPanel, Vec2, WidgetInfo, WidgetType,
-    pos2,
+    Key, LayerId, Modifiers, PaintCallback, TopBottomPanel, Vec2, WidgetInfo, WidgetType, pos2,
 };
 use egui_glow::{CallbackFn, EguiGlow};
 use egui_tiles::{Container, Tile, Tiles, Tree};
@@ -38,7 +38,7 @@ use super::webview_controller;
 use crate::app::{GraphBrowserApp, GraphIntent};
 use crate::desktop::event_loop::AppEvent;
 use crate::desktop::headed_window;
-use crate::graph::NodeKey;
+use crate::graph::{NodeKey, NodeLifecycle};
 use crate::input;
 use crate::render;
 use crate::running_app_state::{RunningAppState, UserInterfaceCommand};
@@ -134,8 +134,58 @@ pub struct Gui {
     /// Active result index in `graph_search_matches`.
     graph_search_active_match_index: Option<usize>,
 
+    /// Runtime backpressure state for tile-driven webview creation retries.
+    webview_creation_backpressure: HashMap<NodeKey, WebviewCreationBackpressureState>,
+
+    /// Count of webview accessibility tree updates that could not be bridged.
+    webview_accessibility_updates_dropped: u64,
+
+    /// Whether we've already warned about dropped webview accessibility updates.
+    webview_accessibility_warned: bool,
+
     /// Cached reference to RunningAppState for webview creation
     state: Option<Rc<RunningAppState>>,
+}
+
+// Pragmatic Phase A backpressure:
+// Servo webview creation is not fallible in the embedder API, so we infer failure
+// from "no semantic signal + no stable live webview" within a timeout window.
+const WEBVIEW_CREATION_CONFIRMATION_WINDOW: Duration = Duration::from_secs(2);
+const WEBVIEW_CREATION_TIMEOUT: Duration = Duration::from_secs(8);
+const WEBVIEW_CREATION_MAX_RETRIES: u8 = 3;
+
+#[derive(Clone, Copy, Debug)]
+struct WebviewCreationProbe {
+    webview_id: WebViewId,
+    started_at: Instant,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WebviewCreationProbeOutcome {
+    Confirmed,
+    Pending,
+    TimedOut,
+}
+
+#[derive(Default, Debug)]
+struct WebviewCreationBackpressureState {
+    retry_count: u8,
+    pending: Option<WebviewCreationProbe>,
+}
+
+fn classify_webview_creation_probe(
+    elapsed: Duration,
+    contains_webview: bool,
+    has_responsive_signal: bool,
+) -> WebviewCreationProbeOutcome {
+    if has_responsive_signal || (contains_webview && elapsed >= WEBVIEW_CREATION_CONFIRMATION_WINDOW)
+    {
+        WebviewCreationProbeOutcome::Confirmed
+    } else if elapsed >= WEBVIEW_CREATION_TIMEOUT {
+        WebviewCreationProbeOutcome::TimedOut
+    } else {
+        WebviewCreationProbeOutcome::Pending
+    }
 }
 
 impl Drop for Gui {
@@ -254,6 +304,9 @@ impl Gui {
             graph_search_filter_mode: false,
             graph_search_matches: Vec::new(),
             graph_search_active_match_index: None,
+            webview_creation_backpressure: HashMap::new(),
+            webview_accessibility_updates_dropped: 0,
+            webview_accessibility_warned: false,
             state: None,
         }
     }
@@ -280,13 +333,14 @@ impl Gui {
         tile_rendering_contexts: &mut HashMap<NodeKey, Rc<OffscreenRenderingContext>>,
         tile_favicon_textures: &mut HashMap<NodeKey, (u64, egui::TextureHandle)>,
         favicon_textures: &mut HashMap<WebViewId, (egui::TextureHandle, egui::load::SizedTexture)>,
+        lifecycle_intents: &mut Vec<GraphIntent>,
         data_dir: PathBuf,
     ) -> Result<(), String> {
         // Preflight the new directory first so failed switches are non-destructive.
         crate::persistence::GraphStore::open(data_dir.clone()).map_err(|e| e.to_string())?;
         let snapshot_interval_secs = graph_app.snapshot_interval_secs();
 
-        webview_controller::close_all_webviews(graph_app, window);
+        lifecycle_intents.extend(webview_controller::close_all_webviews(graph_app, window));
         Self::reset_runtime_webview_state(
             tiles_tree,
             tile_rendering_contexts,
@@ -433,6 +487,10 @@ impl Gui {
             .and_then(|node_key| self.graph_app.get_webview_for_node(node_key))
     }
 
+    pub(crate) fn egui_wants_keyboard_input(&self) -> bool {
+        self.context.egui_ctx.wants_keyboard_input()
+    }
+
     /// Create a frameless button with square sizing, as used in the toolbar.
     fn toolbar_button(text: &str) -> egui::Button<'_> {
         egui::Button::new(text)
@@ -454,6 +512,10 @@ impl Gui {
             .make_current()
             .expect("Could not make RenderingContext current");
         self.ensure_tiles_tree_root();
+        debug_assert!(
+            self.tiles_tree.root().is_some(),
+            "tile tree root must exist before rendering"
+        );
         let Self {
             rendering_context,
             window_rendering_context,
@@ -482,6 +544,7 @@ impl Gui {
             graph_search_filter_mode,
             graph_search_matches,
             graph_search_active_match_index,
+            webview_creation_backpressure,
             state: app_state,
             ..
         } = self;
@@ -499,7 +562,7 @@ impl Gui {
                 thumbnail_capture_rx,
                 thumbnail_capture_in_flight,
             ));
-            let (semantic_intents, created_children) =
+            let (semantic_intents, created_children, responsive_webviews) =
                 graph_intents_from_pending_semantic_events(window);
             frame_intents.extend(semantic_intents);
             pending_open_child_webviews.extend(created_children);
@@ -607,15 +670,22 @@ impl Gui {
                     rendering_context,
                     window_rendering_context,
                     tile_rendering_contexts,
+                    &responsive_webviews,
+                    webview_creation_backpressure,
+                    &mut frame_intents,
                 );
                 keyboard_actions.toggle_view = false;
             }
             if keyboard_actions.delete_selected {
                 let nodes_to_close: Vec<_> = graph_app.selected_nodes.iter().copied().collect();
-                webview_controller::close_webviews_for_nodes(graph_app, &nodes_to_close, window);
+                frame_intents.extend(webview_controller::close_webviews_for_nodes(
+                    graph_app,
+                    &nodes_to_close,
+                    window,
+                ));
             }
             if keyboard_actions.clear_graph {
-                webview_controller::close_all_webviews(graph_app, window);
+                frame_intents.extend(webview_controller::close_all_webviews(graph_app, window));
                 Self::reset_runtime_webview_state(
                     tiles_tree,
                     tile_rendering_contexts,
@@ -629,8 +699,7 @@ impl Gui {
             let active_webview_node = Self::active_webview_tile_node(tiles_tree);
             let has_webview_tiles = Self::has_any_webview_tiles_in(tiles_tree);
             let is_graph_view = !has_webview_tiles;
-            // TODO: While in fullscreen add some way to mitigate the increased phishing risk
-            // when not displaying the URL bar: https://github.com/servo/servo/issues/32443
+            // Fullscreen mitigation: a persistent origin strip is rendered below.
             if winit_window.fullscreen().is_none() {
                 let frame = egui::Frame::default()
                     .fill(ctx.style().visuals.window_fill)
@@ -744,6 +813,9 @@ impl Gui {
                                             rendering_context,
                                             window_rendering_context,
                                             tile_rendering_contexts,
+                                            &responsive_webviews,
+                                            webview_creation_backpressure,
+                                            &mut frame_intents,
                                         );
                                     }
 
@@ -928,8 +1000,28 @@ impl Gui {
                                 graph_search_matches.len(),
                                 active_display
                             ));
+                });
+            } else {
+                // Fullscreen anti-phishing mitigation: keep a minimal always-visible
+                // origin strip so users can verify current page context.
+                let fullscreen_url = active_webview_node
+                    .and_then(|key| graph_app.graph.get_node(key).map(|node| node.url.clone()))
+                    .unwrap_or_else(|| "about:blank".to_string());
+                let frame = egui::Frame::default()
+                    .fill(egui::Color32::from_rgba_unmultiplied(20, 20, 25, 220))
+                    .inner_margin(4.0);
+                TopBottomPanel::top("fullscreen_origin_strip")
+                    .frame(frame)
+                    .show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Fullscreen");
+                            ui.separator();
+                            ui.label(fullscreen_url);
+                            ui.separator();
+                            ui.label("Press Esc to exit");
                         });
-                }
+                    });
+            }
 
             };
 
@@ -946,7 +1038,9 @@ impl Gui {
                                 *show_clear_data_confirm = false;
                             }
                             if ui.button("Clear Data").clicked() {
-                                webview_controller::close_all_webviews(graph_app, window);
+                                frame_intents.extend(webview_controller::close_all_webviews(
+                                    graph_app, window,
+                                ));
                                 Self::reset_runtime_webview_state(
                                     tiles_tree,
                                     tile_rendering_contexts,
@@ -998,6 +1092,7 @@ impl Gui {
                                     tile_rendering_contexts,
                                     tile_favicon_textures,
                                     favicon_textures,
+                                    &mut frame_intents,
                                     target_dir.clone(),
                                 ) {
                                     Ok(()) => {
@@ -1074,6 +1169,7 @@ impl Gui {
                     });
             }
 
+            // Phase 1: apply semantic/UI intents before lifecycle reconciliation.
             if !frame_intents.is_empty() {
                 graph_app.apply_intents(std::mem::take(&mut frame_intents));
             }
@@ -1090,6 +1186,7 @@ impl Gui {
             }
             if graph_app.graph.node_count() == 0 {
                 graph_app.active_webview_nodes.clear();
+                webview_creation_backpressure.clear();
                 Self::reset_runtime_webview_state(
                     tiles_tree,
                     tile_rendering_contexts,
@@ -1098,13 +1195,26 @@ impl Gui {
                 );
             }
 
-            Self::prune_stale_webview_tiles(tiles_tree, graph_app, window, tile_rendering_contexts);
+            Self::prune_stale_webview_tiles(
+                tiles_tree,
+                graph_app,
+                window,
+                tile_rendering_contexts,
+                &mut frame_intents,
+            );
             tile_favicon_textures
                 .retain(|node_key, _| graph_app.graph.get_node(*node_key).is_some());
 
             let has_webview_tiles = Self::has_any_webview_tiles_in(tiles_tree);
             if has_webview_tiles {
                 frame_intents.extend(webview_controller::sync_to_graph_intents(graph_app, window));
+                Self::reconcile_webview_creation_backpressure(
+                    graph_app,
+                    window,
+                    &responsive_webviews,
+                    webview_creation_backpressure,
+                    &mut frame_intents,
+                );
 
                 // Keep WebView/context mappings complete for all tile nodes (not only visible ones).
                 for node_key in Self::all_webview_tile_nodes(tiles_tree) {
@@ -1116,9 +1226,17 @@ impl Gui {
                         window_rendering_context,
                         tile_rendering_contexts,
                         node_key,
+                        &responsive_webviews,
+                        webview_creation_backpressure,
+                        &mut frame_intents,
                     );
                 }
+            } else {
+                webview_creation_backpressure.clear();
             }
+
+            // Phase 2: apply lifecycle/mapping intents emitted during reconciliation.
+            // No rendering should occur between this apply and the subsequent render path.
             if !frame_intents.is_empty() {
                 graph_app.apply_intents(std::mem::take(&mut frame_intents));
             }
@@ -1142,7 +1260,10 @@ impl Gui {
             // Check periodic persistence snapshot
             graph_app.check_periodic_snapshot();
 
-            // Tile-driven rendering path (graph-only and mixed graph/webview panes).
+            // Keep embedder dialogs active regardless of tile/view mode.
+            headed_window.for_each_active_dialog(window, |dialog| dialog.update(ctx));
+
+            // Tile-driven rendering path (single active render path).
             if is_graph_view || has_webview_tiles {
                 // === TILE VIEW: render graph pane and any open webview panes ===
                 let mut pending_open_nodes = Vec::new();
@@ -1179,6 +1300,7 @@ impl Gui {
                         window,
                         tile_rendering_contexts,
                         node_key,
+                        &mut post_render_intents,
                     );
                 }
 
@@ -1195,6 +1317,7 @@ impl Gui {
                             window,
                             tile_rendering_contexts,
                             node_key,
+                            &mut post_render_intents,
                         );
                     }
                 }
@@ -1209,6 +1332,9 @@ impl Gui {
                         window_rendering_context,
                         tile_rendering_contexts,
                         node_key,
+                        &responsive_webviews,
+                        webview_creation_backpressure,
+                        &mut post_render_intents,
                     );
                 }
                 if let Some((node_key, _)) = active_tile_rects.first().copied()
@@ -1268,52 +1394,6 @@ impl Gui {
                         });
                     }
                 }
-            } else {
-                // Legacy fullscreen-detail fallback (expected to be unused with tile runtime).
-                let scale =
-                    Scale::<_, DeviceIndependentPixel, DevicePixel>::new(ctx.pixels_per_point());
-
-                headed_window.for_each_active_dialog(window, |dialog| dialog.update(ctx));
-
-                // If the top parts of the GUI changed size, then update the size of the WebView and also
-                // the size of its RenderingContext.
-                let rect = ctx.available_rect();
-                let size = Size2D::new(rect.width(), rect.height()) * scale;
-                if let Some(webview) = window.active_webview()
-                    && size != webview.size()
-                {
-                    // `rect` is sized to just the WebView viewport, which is required by
-                    // `OffscreenRenderingContext` See:
-                    // <https://github.com/servo/servo/issues/38369#issuecomment-3138378527>
-                    webview.resize(PhysicalSize::new(size.width as u32, size.height as u32))
-                }
-
-                if let Some(status_text) = &self.status_text {
-                    egui::Tooltip::always_open(
-                        ctx.clone(),
-                        LayerId::background(),
-                        "tooltip layer".into(),
-                        pos2(0.0, ctx.available_rect().max.y),
-                    )
-                    .show(|ui| ui.add(Label::new(status_text.clone()).extend()));
-                }
-
-                // Repaint all webviews and render to parent window
-                window.repaint_webviews();
-
-                if let Some(render_to_parent) = rendering_context.render_to_parent_callback() {
-                    ctx.layer_painter(LayerId::background()).add(PaintCallback {
-                        rect: ctx.available_rect(),
-                        callback: Arc::new(CallbackFn::new(move |info, painter| {
-                            let clip = info.viewport_in_pixels();
-                            let rect_in_parent = Rect::new(
-                                Point2D::new(clip.left_px, clip.from_bottom_px),
-                                Size2D::new(clip.width_px, clip.height_px),
-                            );
-                            render_to_parent(painter.gl(), rect_in_parent)
-                        })),
-                    });
-                }
             }
 
             if !post_render_intents.is_empty() {
@@ -1354,6 +1434,9 @@ impl Gui {
         base_rendering_context: &Rc<OffscreenRenderingContext>,
         window_rendering_context: &Rc<WindowRenderingContext>,
         tile_rendering_contexts: &mut HashMap<NodeKey, Rc<OffscreenRenderingContext>>,
+        responsive_webviews: &HashSet<WebViewId>,
+        webview_creation_backpressure: &mut HashMap<NodeKey, WebviewCreationBackpressureState>,
+        lifecycle_intents: &mut Vec<GraphIntent>,
     ) {
         if Self::has_any_webview_tiles_in(tiles_tree) {
             let webview_nodes = Self::all_webview_tile_nodes(tiles_tree);
@@ -1369,7 +1452,13 @@ impl Gui {
                 tiles_tree.remove_recursively(tile_id);
             }
             for node_key in webview_nodes {
-                Self::close_webview_for_node(graph_app, window, tile_rendering_contexts, node_key);
+                Self::close_webview_for_node(
+                    graph_app,
+                    window,
+                    tile_rendering_contexts,
+                    node_key,
+                    lifecycle_intents,
+                );
             }
         } else if let Some(node_key) = Self::preferred_detail_node(graph_app) {
             Self::open_or_focus_webview_tile(tiles_tree, node_key);
@@ -1381,6 +1470,9 @@ impl Gui {
                 window_rendering_context,
                 tile_rendering_contexts,
                 node_key,
+                responsive_webviews,
+                webview_creation_backpressure,
+                lifecycle_intents,
             );
         }
     }
@@ -1477,6 +1569,7 @@ impl Gui {
         graph_app: &mut GraphBrowserApp,
         window: &ServoShellWindow,
         tile_rendering_contexts: &mut HashMap<NodeKey, Rc<OffscreenRenderingContext>>,
+        lifecycle_intents: &mut Vec<GraphIntent>,
     ) {
         let stale_nodes: Vec<_> = Self::all_webview_tile_nodes(tiles_tree)
             .into_iter()
@@ -1485,7 +1578,13 @@ impl Gui {
 
         for node_key in stale_nodes {
             Self::remove_webview_tile_for_node(tiles_tree, node_key);
-            Self::close_webview_for_node(graph_app, window, tile_rendering_contexts, node_key);
+            Self::close_webview_for_node(
+                graph_app,
+                window,
+                tile_rendering_contexts,
+                node_key,
+                lifecycle_intents,
+            );
         }
     }
 
@@ -1497,24 +1596,60 @@ impl Gui {
         window_rendering_context: &Rc<WindowRenderingContext>,
         tile_rendering_contexts: &mut HashMap<NodeKey, Rc<OffscreenRenderingContext>>,
         node_key: crate::graph::NodeKey,
+        responsive_webviews: &HashSet<WebViewId>,
+        webview_creation_backpressure: &mut HashMap<NodeKey, WebviewCreationBackpressureState>,
+        lifecycle_intents: &mut Vec<GraphIntent>,
     ) {
-        if graph_app.get_webview_for_node(node_key).is_some() {
-            return;
-        }
-        let (Some(node), Some(state)) = (graph_app.graph.get_node(node_key), app_state.as_ref())
+        let (Some(node), Some(running_state)) = (graph_app.graph.get_node(node_key), app_state.as_ref())
         else {
+            webview_creation_backpressure.remove(&node_key);
             return;
         };
+        if node.lifecycle != NodeLifecycle::Active {
+            webview_creation_backpressure.remove(&node_key);
+            return;
+        }
+        let node_url = node.url.clone();
+
+        if let Some(existing_webview_id) = graph_app.get_webview_for_node(node_key) {
+            if window.contains_webview(existing_webview_id) {
+                if responsive_webviews.contains(&existing_webview_id)
+                    && let Some(state) = webview_creation_backpressure.get_mut(&node_key)
+                {
+                    state.pending = None;
+                    state.retry_count = 0;
+                }
+                return;
+            }
+            lifecycle_intents.push(GraphIntent::UnmapWebview {
+                webview_id: existing_webview_id,
+            });
+        }
+
+        let state = webview_creation_backpressure.entry(node_key).or_default();
+        if state.pending.is_some() {
+            return;
+        }
+        if state.retry_count >= WEBVIEW_CREATION_MAX_RETRIES {
+            lifecycle_intents.push(GraphIntent::DemoteNodeToCold { key: node_key });
+            return;
+        }
+
         let render_context = tile_rendering_contexts
             .entry(node_key)
             .or_insert_with(|| {
                 Rc::new(window_rendering_context.offscreen_context(base_rendering_context.size()))
             })
             .clone();
-        let url = Url::parse(&node.url).unwrap_or_else(|_| Url::parse("about:blank").unwrap());
+        let url = Url::parse(&node_url).unwrap_or_else(|_| Url::parse("about:blank").unwrap());
         let webview =
-            window.create_toplevel_webview_with_context(state.clone(), url, render_context);
-        graph_app.apply_intents([
+            window.create_toplevel_webview_with_context(running_state.clone(), url, render_context);
+        state.retry_count = state.retry_count.saturating_add(1);
+        state.pending = Some(WebviewCreationProbe {
+            webview_id: webview.id(),
+            started_at: Instant::now(),
+        });
+        lifecycle_intents.extend([
             GraphIntent::MapWebviewToNode {
                 webview_id: webview.id(),
                 key: node_key,
@@ -1523,18 +1658,79 @@ impl Gui {
         ]);
     }
 
+    fn reconcile_webview_creation_backpressure(
+        graph_app: &GraphBrowserApp,
+        window: &ServoShellWindow,
+        responsive_webviews: &HashSet<WebViewId>,
+        webview_creation_backpressure: &mut HashMap<NodeKey, WebviewCreationBackpressureState>,
+        lifecycle_intents: &mut Vec<GraphIntent>,
+    ) {
+        let tracked_nodes: Vec<NodeKey> = webview_creation_backpressure.keys().copied().collect();
+        for node_key in tracked_nodes {
+            let Some(node) = graph_app.graph.get_node(node_key) else {
+                webview_creation_backpressure.remove(&node_key);
+                continue;
+            };
+            if node.lifecycle != NodeLifecycle::Active {
+                webview_creation_backpressure.remove(&node_key);
+                continue;
+            }
+
+            let mut remove_state = false;
+            if let Some(state) = webview_creation_backpressure.get_mut(&node_key)
+                && let Some(probe) = state.pending
+            {
+                let contains_webview = window.contains_webview(probe.webview_id);
+                let has_responsive_signal = responsive_webviews.contains(&probe.webview_id);
+                match classify_webview_creation_probe(
+                    probe.started_at.elapsed(),
+                    contains_webview,
+                    has_responsive_signal,
+                ) {
+                    WebviewCreationProbeOutcome::Confirmed => {
+                        state.pending = None;
+                        state.retry_count = 0;
+                    },
+                    WebviewCreationProbeOutcome::Pending => {},
+                    WebviewCreationProbeOutcome::TimedOut => {
+                        if contains_webview {
+                            window.close_webview(probe.webview_id);
+                        }
+                        lifecycle_intents.push(GraphIntent::UnmapWebview {
+                            webview_id: probe.webview_id,
+                        });
+                        state.pending = None;
+                        if state.retry_count >= WEBVIEW_CREATION_MAX_RETRIES {
+                            warn!(
+                                "Demoting node {:?} after {} webview creation retries without confirmation",
+                                node_key,
+                                state.retry_count
+                            );
+                            lifecycle_intents.push(GraphIntent::DemoteNodeToCold { key: node_key });
+                            remove_state = true;
+                        }
+                    },
+                }
+            }
+            if remove_state {
+                webview_creation_backpressure.remove(&node_key);
+            }
+        }
+    }
+
     fn close_webview_for_node(
         graph_app: &mut GraphBrowserApp,
         window: &ServoShellWindow,
         tile_rendering_contexts: &mut HashMap<NodeKey, Rc<OffscreenRenderingContext>>,
         node_key: crate::graph::NodeKey,
+        lifecycle_intents: &mut Vec<GraphIntent>,
     ) {
         if let Some(wv_id) = graph_app.get_webview_for_node(node_key) {
             window.close_webview(wv_id);
-            graph_app.apply_intents([GraphIntent::UnmapWebview { webview_id: wv_id }]);
+            lifecycle_intents.push(GraphIntent::UnmapWebview { webview_id: wv_id });
         }
         tile_rendering_contexts.remove(&node_key);
-        graph_app.apply_intents([GraphIntent::DemoteNodeToCold { key: node_key }]);
+        lifecycle_intents.push(GraphIntent::DemoteNodeToCold { key: node_key });
     }
 
     fn open_or_focus_webview_tile(
@@ -1689,8 +1885,19 @@ impl Gui {
         self.context.egui_ctx.set_zoom_factor(factor);
     }
 
-    pub(crate) fn notify_accessibility_tree_update(&mut self, _tree_update: accesskit::TreeUpdate) {
-        // TODO(#41930): Forward this update to `self.context.egui_winit.accesskit`
+    pub(crate) fn notify_accessibility_tree_update(
+        &mut self,
+        webview_id: WebViewId,
+        _tree_update: accesskit::TreeUpdate,
+    ) {
+        self.webview_accessibility_updates_dropped += 1;
+        if !self.webview_accessibility_warned {
+            self.webview_accessibility_warned = true;
+            warn!(
+                "WebView accessibility update dropped for {:?}: no embedder bridge available yet (issue #41930)",
+                webview_id
+            );
+        }
     }
 }
 
@@ -1953,6 +2160,123 @@ mod tests {
     }
 
     #[test]
+    fn test_graph_intents_from_semantic_events_maps_webview_crashed() {
+        let wv = test_webview_id();
+        let events = vec![GraphSemanticEvent::WebViewCrashed {
+            webview_id: wv,
+            reason: "renderer panic".to_string(),
+            has_backtrace: true,
+        }];
+
+        let intents = graph_intents_from_semantic_events(events);
+        assert_eq!(intents.len(), 1);
+        assert!(matches!(
+            &intents[0],
+            GraphIntent::WebViewCrashed {
+                webview_id,
+                reason,
+                has_backtrace
+            } if *webview_id == wv && reason == "renderer panic" && *has_backtrace
+        ));
+    }
+
+    #[test]
+    fn test_graph_intents_and_responsive_from_events_redirect_like_sequence_preserves_order() {
+        let wv = test_webview_id();
+        let events = vec![
+            GraphSemanticEvent::UrlChanged {
+                webview_id: wv,
+                new_url: "https://redirect-a.example".into(),
+            },
+            GraphSemanticEvent::UrlChanged {
+                webview_id: wv,
+                new_url: "https://redirect-b.example".into(),
+            },
+            GraphSemanticEvent::PageTitleChanged {
+                webview_id: wv,
+                title: Some("Final".into()),
+            },
+            GraphSemanticEvent::HistoryChanged {
+                webview_id: wv,
+                entries: vec![
+                    "https://start.example".into(),
+                    "https://redirect-b.example".into(),
+                ],
+                current: 1,
+            },
+        ];
+
+        let (intents, created_children, responsive_webviews) =
+            graph_intents_and_responsive_from_events(events);
+
+        assert!(created_children.is_empty());
+        assert!(responsive_webviews.contains(&wv));
+        assert_eq!(intents.len(), 4);
+        assert!(matches!(
+            &intents[0],
+            GraphIntent::WebViewUrlChanged { webview_id, new_url }
+                if *webview_id == wv && new_url == "https://redirect-a.example"
+        ));
+        assert!(matches!(
+            &intents[1],
+            GraphIntent::WebViewUrlChanged { webview_id, new_url }
+                if *webview_id == wv && new_url == "https://redirect-b.example"
+        ));
+        assert!(matches!(
+            &intents[2],
+            GraphIntent::WebViewTitleChanged { webview_id, title }
+                if *webview_id == wv && title.as_deref() == Some("Final")
+        ));
+        assert!(matches!(
+            &intents[3],
+            GraphIntent::WebViewHistoryChanged { webview_id, current, .. }
+                if *webview_id == wv && *current == 1
+        ));
+    }
+
+    #[test]
+    fn test_graph_intents_and_responsive_from_events_create_new_is_prioritized() {
+        let parent = test_webview_id();
+        let child = test_webview_id();
+        let events = vec![
+            GraphSemanticEvent::UrlChanged {
+                webview_id: parent,
+                new_url: "https://parent.example".into(),
+            },
+            GraphSemanticEvent::CreateNewWebView {
+                parent_webview_id: parent,
+                child_webview_id: child,
+                initial_url: Some("https://child.example".into()),
+            },
+            GraphSemanticEvent::PageTitleChanged {
+                webview_id: parent,
+                title: Some("Parent".into()),
+            },
+        ];
+
+        let (intents, created_children, responsive_webviews) =
+            graph_intents_and_responsive_from_events(events);
+
+        assert_eq!(created_children, vec![child]);
+        assert!(responsive_webviews.contains(&parent));
+        assert!(responsive_webviews.contains(&child));
+        assert_eq!(intents.len(), 3);
+        assert!(matches!(
+            &intents[0],
+            GraphIntent::WebViewCreated { parent_webview_id, child_webview_id, .. }
+                if *parent_webview_id == parent && *child_webview_id == child
+        ));
+        assert!(matches!(
+            &intents[1],
+            GraphIntent::WebViewUrlChanged { webview_id, .. } if *webview_id == parent
+        ));
+        assert!(matches!(
+            &intents[2],
+            GraphIntent::WebViewTitleChanged { webview_id, .. } if *webview_id == parent
+        ));
+    }
+
+    #[test]
     fn test_semantic_events_to_intents_apply_to_graph_state() {
         let mut app = GraphBrowserApp::new_for_testing();
         let parent = app.add_node_and_sync("https://parent.com".into(), Point2D::new(10.0, 20.0));
@@ -2078,6 +2402,38 @@ mod tests {
         assert!(tile_favicon_textures.is_empty());
         assert!(favicon_textures.is_empty());
     }
+
+    #[test]
+    fn test_classify_webview_creation_probe_confirms_on_responsive_signal() {
+        let outcome = classify_webview_creation_probe(Duration::from_millis(10), false, true);
+        assert_eq!(outcome, WebviewCreationProbeOutcome::Confirmed);
+    }
+
+    #[test]
+    fn test_classify_webview_creation_probe_confirms_on_stable_live_webview() {
+        let outcome = classify_webview_creation_probe(
+            WEBVIEW_CREATION_CONFIRMATION_WINDOW + Duration::from_millis(1),
+            true,
+            false,
+        );
+        assert_eq!(outcome, WebviewCreationProbeOutcome::Confirmed);
+    }
+
+    #[test]
+    fn test_classify_webview_creation_probe_times_out_without_confirmation() {
+        let outcome = classify_webview_creation_probe(
+            WEBVIEW_CREATION_TIMEOUT + Duration::from_millis(1),
+            false,
+            false,
+        );
+        assert_eq!(outcome, WebviewCreationProbeOutcome::TimedOut);
+    }
+
+    #[test]
+    fn test_classify_webview_creation_probe_pending_before_timeout() {
+        let outcome = classify_webview_creation_probe(Duration::from_millis(500), false, false);
+        assert_eq!(outcome, WebviewCreationProbeOutcome::Pending);
+    }
 }
 
 fn graph_intents_from_semantic_events(events: Vec<GraphSemanticEvent>) -> Vec<GraphIntent> {
@@ -2112,6 +2468,15 @@ fn graph_intents_from_semantic_events(events: Vec<GraphSemanticEvent>) -> Vec<Gr
                 child_webview_id,
                 initial_url,
             }),
+            GraphSemanticEvent::WebViewCrashed {
+                webview_id,
+                reason,
+                has_backtrace,
+            } => intents.push(GraphIntent::WebViewCrashed {
+                webview_id,
+                reason,
+                has_backtrace,
+            }),
         }
     }
     intents
@@ -2119,25 +2484,45 @@ fn graph_intents_from_semantic_events(events: Vec<GraphSemanticEvent>) -> Vec<Gr
 
 fn graph_intents_from_pending_semantic_events(
     window: &ServoShellWindow,
-) -> (Vec<GraphIntent>, Vec<WebViewId>) {
-    let events = window.take_pending_graph_events();
+) -> (Vec<GraphIntent>, Vec<WebViewId>, HashSet<WebViewId>) {
+    graph_intents_and_responsive_from_events(window.take_pending_graph_events())
+}
+
+fn graph_intents_and_responsive_from_events(
+    events: Vec<GraphSemanticEvent>,
+) -> (Vec<GraphIntent>, Vec<WebViewId>, HashSet<WebViewId>) {
     let mut create_events = Vec::new();
     let mut other_events = Vec::new();
     let mut created_child_webviews = Vec::new();
+    let mut responsive_webviews = HashSet::new();
 
     for event in events {
         match &event {
-            GraphSemanticEvent::CreateNewWebView { child_webview_id, .. } => {
+            GraphSemanticEvent::CreateNewWebView {
+                parent_webview_id,
+                child_webview_id,
+                ..
+            } => {
+                responsive_webviews.insert(*parent_webview_id);
+                responsive_webviews.insert(*child_webview_id);
                 created_child_webviews.push(*child_webview_id);
                 create_events.push(event);
-            }
-            _ => other_events.push(event),
+            },
+            GraphSemanticEvent::UrlChanged { webview_id, .. } |
+            GraphSemanticEvent::HistoryChanged { webview_id, .. } |
+            GraphSemanticEvent::PageTitleChanged { webview_id, .. } => {
+                responsive_webviews.insert(*webview_id);
+                other_events.push(event);
+            },
+            GraphSemanticEvent::WebViewCrashed { .. } => {
+                other_events.push(event);
+            },
         }
     }
 
     let mut intents = graph_intents_from_semantic_events(create_events);
     intents.extend(graph_intents_from_semantic_events(other_events));
-    (intents, created_child_webviews)
+    (intents, created_child_webviews, responsive_webviews)
 }
 
 fn refresh_graph_search_matches(

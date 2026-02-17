@@ -13,11 +13,14 @@ use std::io::BufReader;
 use std::pin::Pin;
 
 use headers::{ContentType, HeaderMapExt};
+use log::warn;
 use servo::protocol_handler::{
     DoneChannel, FILE_CHUNK_SIZE, FetchContext, NetworkError, ProtocolHandler, RelativePos,
     Request, ResourceFetchTiming, Response, ResponseBody,
 };
 use tokio::sync::mpsc::unbounded_channel;
+
+const REFERER_HEADER: &str = "referer";
 
 #[derive(Default)]
 pub struct ResourceProtocolHandler {}
@@ -98,9 +101,24 @@ impl ProtocolHandler for ResourceProtocolHandler {
         context: &FetchContext,
     ) -> Pin<Box<dyn Future<Output = Response> + Send>> {
         let url = request.current_url();
-
-        // TODO: Check referrer.
-        //       We unexpectedly get `NoReferrer` for all requests from the newtab page.
+        let referrer_allowed = request
+            .headers
+            .get(REFERER_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| url::Url::parse(value).ok())
+            .is_none_or(|referrer_url| matches!(referrer_url.scheme(), "resource" | "servo"));
+        if !referrer_allowed {
+            warn!(
+                "Blocked resource:// load from disallowed Referer header: {:?} -> {}",
+                request.headers.get(REFERER_HEADER),
+                request.current_url()
+            );
+            return Box::pin(std::future::ready(Response::network_error(
+                NetworkError::ResourceLoadError(
+                    "Disallowed referrer for resource protocol".to_owned(),
+                ),
+            )));
+        }
 
         Self::response_for_path(request, done_chan, context, url.path())
     }

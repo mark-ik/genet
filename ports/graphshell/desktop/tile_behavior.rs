@@ -164,7 +164,36 @@ impl<'a> Behavior<TileKind> for GraphshellTileBehavior<'a> {
                 render::render_graph_info_in_ui(ui, self.graph_app);
             },
             TileKind::WebView(node_key) => {
-                ui.label(format!("WebView tile: node {:?}", node_key));
+                let Some(node) = self.graph_app.graph.get_node(*node_key) else {
+                    ui.label("Missing node for this tile.");
+                    return UiResponse::None;
+                };
+                if let Some(crash) = self.graph_app.get_node_crash_state(*node_key) {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 120, 120),
+                        format!("Tab crashed: {}", crash.reason),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button("Reload").clicked() {
+                            self.pending_graph_intents
+                                .push(GraphIntent::PromoteNodeToActive { key: *node_key });
+                        }
+                        if ui.button("Close Tile").clicked() {
+                            self.pending_closed_nodes.push(*node_key);
+                        }
+                    });
+                    if crash.has_backtrace {
+                        ui.small("Crash reported a backtrace.");
+                    }
+                    if let Ok(elapsed) = std::time::SystemTime::now().duration_since(crash.crashed_at)
+                    {
+                        ui.small(format!("Crashed {}s ago", elapsed.as_secs()));
+                    }
+                    return UiResponse::None;
+                }
+                if self.graph_app.get_webview_for_node(*node_key).is_none() {
+                    ui.label(format!("No active WebView for {}", node.url));
+                }
             },
         }
         UiResponse::None

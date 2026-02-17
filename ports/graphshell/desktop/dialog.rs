@@ -61,6 +61,24 @@ pub enum Dialog {
 }
 
 impl Dialog {
+    pub fn set_toolbar_offset(&mut self, toolbar_offset: Length<f32, DeviceIndependentPixel>) {
+        match self {
+            Dialog::SelectElement {
+                toolbar_offset: offset,
+                ..
+            } => *offset = toolbar_offset,
+            Dialog::ColorPicker {
+                toolbar_offset: offset,
+                ..
+            } => *offset = toolbar_offset,
+            Dialog::ContextMenu {
+                toolbar_offset: offset,
+                ..
+            } => *offset = toolbar_offset,
+            _ => {},
+        }
+    }
+
     pub fn new_file_dialog(file_picker: FilePicker) -> Self {
         let mut dialog = EguiFileDialog::new();
         if !file_picker.filter_patterns().is_empty() {
@@ -552,9 +570,11 @@ impl Dialog {
                     })
                     .backdrop_response;
 
-                // FIXME: Doesn't update until you move your mouse or press a key - why?
                 if backdrop_response.clicked() {
                     is_open = false;
+                }
+                if is_open {
+                    ctx.request_repaint();
                 }
 
                 prompt.select(selected_option);
@@ -611,9 +631,11 @@ impl Dialog {
                     })
                     .backdrop_response;
 
-                // FIXME: Doesn't update until you move your mouse or press a key - why?
                 if backdrop_response.clicked() {
                     is_open = false;
+                }
+                if is_open {
+                    ctx.request_repaint();
                 }
 
                 is_open
@@ -690,6 +712,9 @@ impl Dialog {
                             return false;
                         }
                     }
+                }
+                if is_open {
+                    ctx.request_repaint();
                 }
                 is_open
             },

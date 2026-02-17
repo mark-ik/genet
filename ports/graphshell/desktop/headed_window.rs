@@ -54,7 +54,7 @@ use crate::desktop::event_loop::AppEvent;
 use crate::desktop::gui::Gui;
 use crate::desktop::keyutils::CMD_OR_CONTROL;
 use crate::prefs::ServoShellPreferences;
-use crate::running_app_state::{RunningAppState, UserInterfaceCommand};
+use crate::running_app_state::RunningAppState;
 use crate::window::{
     LINE_HEIGHT, LINE_WIDTH, MIN_WINDOW_INNER_SIZE, PlatformWindow, ServoShellWindow,
     ServoShellWindowId,
@@ -103,6 +103,10 @@ pub struct HeadedWindow {
     visible_input_methods: RefCell<Vec<EmbedderControlId>>,
     /// The position of the mouse cursor after the most recent `MouseMove` event.
     last_mouse_position: Cell<Option<Point2D<f32, DeviceIndependentPixel>>>,
+    /// Most recent cursor requested by Servo while no dialog override is active.
+    last_servo_cursor: Cell<Cursor>,
+    /// True while dialogs force the cursor to default.
+    dialog_cursor_override_active: Cell<bool>,
 }
 
 impl HeadedWindow {
@@ -218,6 +222,8 @@ impl HeadedWindow {
             dialogs: Default::default(),
             visible_input_methods: Default::default(),
             last_mouse_position: Default::default(),
+            last_servo_cursor: Cell::new(Cursor::Default),
+            dialog_cursor_override_active: Cell::new(false),
         })
     }
 
@@ -504,19 +510,77 @@ impl HeadedWindow {
             return;
         };
         if dialogs.is_empty() {
+            if self.dialog_cursor_override_active.replace(false) {
+                self.apply_platform_cursor(self.last_servo_cursor.get());
+            }
             return;
         }
 
-        // If a dialog is open, clear any Servo cursor. TODO: This should restore the
-        // cursor too, when all dialogs close. In general, we need a better cursor
-        // management strategy.
-        self.set_cursor(Cursor::Default);
+        // Force default cursor while dialog is open and restore the last Servo cursor once all
+        // dialogs close.
+        if !self.dialog_cursor_override_active.replace(true) {
+            self.apply_platform_cursor(Cursor::Default);
+        }
 
         let length = dialogs.len();
-        dialogs.retain_mut(callback);
+        let toolbar_offset = self.toolbar_height();
+        dialogs.retain_mut(|dialog| {
+            dialog.set_toolbar_offset(toolbar_offset);
+            callback(dialog)
+        });
+        if dialogs.is_empty() && self.dialog_cursor_override_active.replace(false) {
+            self.apply_platform_cursor(self.last_servo_cursor.get());
+        }
         if length != dialogs.len() {
             window.set_needs_repaint();
         }
+    }
+
+    fn apply_platform_cursor(&self, cursor: Cursor) {
+        use winit::window::CursorIcon;
+
+        let winit_cursor = match cursor {
+            Cursor::Default => CursorIcon::Default,
+            Cursor::Pointer => CursorIcon::Pointer,
+            Cursor::ContextMenu => CursorIcon::ContextMenu,
+            Cursor::Help => CursorIcon::Help,
+            Cursor::Progress => CursorIcon::Progress,
+            Cursor::Wait => CursorIcon::Wait,
+            Cursor::Cell => CursorIcon::Cell,
+            Cursor::Crosshair => CursorIcon::Crosshair,
+            Cursor::Text => CursorIcon::Text,
+            Cursor::VerticalText => CursorIcon::VerticalText,
+            Cursor::Alias => CursorIcon::Alias,
+            Cursor::Copy => CursorIcon::Copy,
+            Cursor::Move => CursorIcon::Move,
+            Cursor::NoDrop => CursorIcon::NoDrop,
+            Cursor::NotAllowed => CursorIcon::NotAllowed,
+            Cursor::Grab => CursorIcon::Grab,
+            Cursor::Grabbing => CursorIcon::Grabbing,
+            Cursor::EResize => CursorIcon::EResize,
+            Cursor::NResize => CursorIcon::NResize,
+            Cursor::NeResize => CursorIcon::NeResize,
+            Cursor::NwResize => CursorIcon::NwResize,
+            Cursor::SResize => CursorIcon::SResize,
+            Cursor::SeResize => CursorIcon::SeResize,
+            Cursor::SwResize => CursorIcon::SwResize,
+            Cursor::WResize => CursorIcon::WResize,
+            Cursor::EwResize => CursorIcon::EwResize,
+            Cursor::NsResize => CursorIcon::NsResize,
+            Cursor::NeswResize => CursorIcon::NeswResize,
+            Cursor::NwseResize => CursorIcon::NwseResize,
+            Cursor::ColResize => CursorIcon::ColResize,
+            Cursor::RowResize => CursorIcon::RowResize,
+            Cursor::AllScroll => CursorIcon::AllScroll,
+            Cursor::ZoomIn => CursorIcon::ZoomIn,
+            Cursor::ZoomOut => CursorIcon::ZoomOut,
+            Cursor::None => {
+                self.winit_window.set_cursor_visible(false);
+                return;
+            },
+        };
+        self.winit_window.set_cursor(winit_cursor);
+        self.winit_window.set_cursor_visible(true);
     }
 
     fn add_dialog(&self, webview_id: WebViewId, dialog: Dialog) {
@@ -623,7 +687,13 @@ impl HeadedWindow {
                 button: MouseButton::Forward,
                 ..
             } => {
-                window.queue_user_interface_command(UserInterfaceCommand::Forward);
+                if let Some(webview_id) = self.gui.borrow().focused_webview_id()
+                    && let Some(webview) = window.webview_by_id(webview_id)
+                {
+                    window.activate_webview(webview_id);
+                    webview.go_forward(1);
+                    window.set_needs_update();
+                }
                 consumed = true;
             },
             WindowEvent::MouseInput {
@@ -631,7 +701,13 @@ impl HeadedWindow {
                 button: MouseButton::Back,
                 ..
             } => {
-                window.queue_user_interface_command(UserInterfaceCommand::Back);
+                if let Some(webview_id) = self.gui.borrow().focused_webview_id()
+                    && let Some(webview) = window.webview_by_id(webview_id)
+                {
+                    window.activate_webview(webview_id);
+                    webview.go_back(1);
+                    window.set_needs_update();
+                }
                 consumed = true;
             },
             WindowEvent::MouseWheel { .. } | WindowEvent::MouseInput { .. }
@@ -677,9 +753,22 @@ impl HeadedWindow {
                     self.winit_window.request_redraw();
                 }
 
-                // TODO how do we handle the tab key? (see doc for consumed)
-                // Note that servo doesn’t yet support tabbing through links and inputs
                 consumed = response.consumed;
+                if consumed
+                    && let WindowEvent::KeyboardInput { event: key_event, .. } = event
+                    && key_event.state == ElementState::Pressed
+                    && matches!(key_event.physical_key, PhysicalKey::Code(KeyCode::Tab))
+                {
+                    // Focus-ownership routing for Tab:
+                    // - if egui currently owns keyboard focus, keep Tab in egui;
+                    // - if a webview tile is focused and egui does not want keyboard input,
+                    //   pass Tab through to Servo.
+                    let gui = self.gui.borrow();
+                    let tab_target_is_webview = gui.focused_webview_id().is_some();
+                    if tab_target_is_webview && !gui.egui_wants_keyboard_input() {
+                        consumed = false;
+                    }
+                }
             },
         }
 
@@ -942,17 +1031,8 @@ impl PlatformWindow for HeadedWindow {
         self.gui.borrow_mut().update_webview_data(window)
     }
 
-    fn request_repaint(&self, window: &ServoShellWindow) {
+    fn request_repaint(&self, _window: &ServoShellWindow) {
         self.winit_window.request_redraw();
-
-        // FIXME: This is a workaround for dialogs, which do not seem to animate, unless we
-        // constantly repaint the egui scene.
-        if window
-            .active_webview()
-            .is_some_and(|webview| self.has_active_dialog_for_webview(webview.id()))
-        {
-            window.set_needs_repaint();
-        }
     }
 
     fn request_resize(&self, _: &WebView, new_outer_size: DeviceIntSize) -> Option<DeviceIntSize> {
@@ -1030,50 +1110,12 @@ impl PlatformWindow for HeadedWindow {
     }
 
     fn set_cursor(&self, cursor: Cursor) {
-        use winit::window::CursorIcon;
-
-        let winit_cursor = match cursor {
-            Cursor::Default => CursorIcon::Default,
-            Cursor::Pointer => CursorIcon::Pointer,
-            Cursor::ContextMenu => CursorIcon::ContextMenu,
-            Cursor::Help => CursorIcon::Help,
-            Cursor::Progress => CursorIcon::Progress,
-            Cursor::Wait => CursorIcon::Wait,
-            Cursor::Cell => CursorIcon::Cell,
-            Cursor::Crosshair => CursorIcon::Crosshair,
-            Cursor::Text => CursorIcon::Text,
-            Cursor::VerticalText => CursorIcon::VerticalText,
-            Cursor::Alias => CursorIcon::Alias,
-            Cursor::Copy => CursorIcon::Copy,
-            Cursor::Move => CursorIcon::Move,
-            Cursor::NoDrop => CursorIcon::NoDrop,
-            Cursor::NotAllowed => CursorIcon::NotAllowed,
-            Cursor::Grab => CursorIcon::Grab,
-            Cursor::Grabbing => CursorIcon::Grabbing,
-            Cursor::EResize => CursorIcon::EResize,
-            Cursor::NResize => CursorIcon::NResize,
-            Cursor::NeResize => CursorIcon::NeResize,
-            Cursor::NwResize => CursorIcon::NwResize,
-            Cursor::SResize => CursorIcon::SResize,
-            Cursor::SeResize => CursorIcon::SeResize,
-            Cursor::SwResize => CursorIcon::SwResize,
-            Cursor::WResize => CursorIcon::WResize,
-            Cursor::EwResize => CursorIcon::EwResize,
-            Cursor::NsResize => CursorIcon::NsResize,
-            Cursor::NeswResize => CursorIcon::NeswResize,
-            Cursor::NwseResize => CursorIcon::NwseResize,
-            Cursor::ColResize => CursorIcon::ColResize,
-            Cursor::RowResize => CursorIcon::RowResize,
-            Cursor::AllScroll => CursorIcon::AllScroll,
-            Cursor::ZoomIn => CursorIcon::ZoomIn,
-            Cursor::ZoomOut => CursorIcon::ZoomOut,
-            Cursor::None => {
-                self.winit_window.set_cursor_visible(false);
-                return;
-            },
-        };
-        self.winit_window.set_cursor(winit_cursor);
-        self.winit_window.set_cursor_visible(true);
+        self.last_servo_cursor.set(cursor);
+        if self.dialog_cursor_override_active.get() {
+            self.apply_platform_cursor(Cursor::Default);
+            return;
+        }
+        self.apply_platform_cursor(cursor);
     }
 
     fn id(&self) -> ServoShellWindowId {
@@ -1158,8 +1200,6 @@ impl PlatformWindow for HeadedWindow {
         let control_id = embedder_control.id();
         match embedder_control {
             EmbedderControl::SelectElement(prompt) => {
-                // FIXME: Reading the toolbar height is needed here to properly position the select dialog.
-                // But if the toolbar height changes while the dialog is open then the position won't be updated
                 let offset = self.gui.borrow().toolbar_height();
                 self.add_dialog(
                     webview_id,
@@ -1167,8 +1207,6 @@ impl PlatformWindow for HeadedWindow {
                 );
             },
             EmbedderControl::ColorPicker(color_picker) => {
-                // FIXME: Reading the toolbar height is needed here to properly position the select dialog.
-                // But if the toolbar height changes while the dialog is open then the position won't be updated
                 let offset = self.gui.borrow().toolbar_height();
                 self.add_dialog(
                     webview_id,
@@ -1247,12 +1285,12 @@ impl PlatformWindow for HeadedWindow {
 
     fn notify_accessibility_tree_update(
         &self,
-        _webview: WebView,
+        webview: WebView,
         tree_update: accesskit::TreeUpdate,
     ) {
         self.gui
             .borrow_mut()
-            .notify_accessibility_tree_update(tree_update);
+            .notify_accessibility_tree_update(webview.id(), tree_update);
     }
 }
 

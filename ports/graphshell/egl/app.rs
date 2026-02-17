@@ -22,8 +22,9 @@ use servo::{
 use url::Url;
 
 use crate::egl::host_trait::HostTrait;
+use crate::parser::location_bar_input_to_url;
 use crate::prefs::ServoShellPreferences;
-use crate::running_app_state::{RunningAppState, UserInterfaceCommand};
+use crate::running_app_state::RunningAppState;
 use crate::window::{PlatformWindow, ServoShellWindow, ServoShellWindowId};
 
 pub(crate) struct EmbeddedPlatformWindow {
@@ -259,9 +260,8 @@ pub(crate) struct AppInitOptions {
 
 pub struct App {
     state: Rc<RunningAppState>,
-    // TODO: multi-window support, like desktop version.
-    // This is just an intermediate state, to split refactoring into
-    // multiple PRs.
+    // Known limitation: EGL embedder currently operates as a single-window app.
+    // Desktop supports multiple windows; EGL can be extended similarly later.
     host: Rc<dyn HostTrait>,
     initial_url: Url,
 }
@@ -384,34 +384,47 @@ impl App {
 
     /// Load an URL.
     pub fn load_uri(&self, location: &str) {
-        self.window()
-            .queue_user_interface_command(UserInterfaceCommand::Go(location.into()));
+        let Some(url) = location_bar_input_to_url(location, &self.servoshell_preferences().searchpage)
+        else {
+            warn!("failed to parse location");
+            return;
+        };
+        if let Some(webview) = self.active_or_newest_webview() {
+            self.window().set_needs_update();
+            webview.load(url.into_url());
+        }
         self.spin_event_loop();
     }
 
     /// Reload the page.
     pub fn reload(&self) {
-        self.window()
-            .queue_user_interface_command(UserInterfaceCommand::Reload);
+        if let Some(webview) = self.active_or_newest_webview() {
+            self.window().set_needs_update();
+            webview.reload();
+        }
         self.spin_event_loop();
     }
 
     /// Stop loading the page.
     pub fn stop(&self) {
-        warn!("TODO can't stop won't stop");
+        // Servo's embedder API currently has no `WebView::stop()`.
+        // Keep this as a no-op entrypoint for platform callers.
+        self.spin_event_loop();
     }
 
     /// Go back in history.
     pub fn go_back(&self) {
-        self.window()
-            .queue_user_interface_command(UserInterfaceCommand::Back);
+        if let Some(webview) = self.active_or_newest_webview() {
+            webview.go_back(1);
+        }
         self.spin_event_loop();
     }
 
     /// Go forward in history.
     pub fn go_forward(&self) {
-        self.window()
-            .queue_user_interface_command(UserInterfaceCommand::Forward);
+        if let Some(webview) = self.active_or_newest_webview() {
+            webview.go_forward(1);
+        }
         self.spin_event_loop();
     }
 
@@ -616,8 +629,8 @@ impl App {
         }
     }
 
-    // TODO: Instead of letting the embedder drive the RefreshDriver we should move the vsync
-    // notification directly into the VsyncRefreshDriver.
+    // Current design keeps vsync ownership in the platform embedder, which forwards
+    // ticks into the refresh driver.
     pub fn notify_vsync(&self) {
         let platform_window = self.window().platform_window();
         let embedded_platform_window = platform_window

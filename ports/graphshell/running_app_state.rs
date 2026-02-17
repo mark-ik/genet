@@ -147,10 +147,6 @@ impl WebViewCollection {
 /// A command received via the user interacting with the user interface.
 #[cfg_attr(any(target_os = "android", target_env = "ohos"), expect(dead_code))]
 pub(crate) enum UserInterfaceCommand {
-    Go(String),
-    Back,
-    Forward,
-    Reload,
     ReloadAll,
 }
 
@@ -844,6 +840,8 @@ impl WebViewDelegate for RunningAppState {
     }
 
     fn notify_crashed(&self, webview: WebView, reason: String, backtrace: Option<String>) {
+        let window = self.window_for_webview_id(webview.id());
+        window.notify_webview_crashed(webview.clone(), reason.clone(), backtrace.clone());
         self.platform_window_for_webview_id(webview.id())
             .notify_crashed(webview, reason, backtrace);
     }
