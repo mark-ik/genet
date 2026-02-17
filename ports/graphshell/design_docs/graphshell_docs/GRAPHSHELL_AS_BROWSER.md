@@ -10,13 +10,17 @@
 
 ## Design Principle: Unified Spatial Tab Manager
 
-Graphshell is a spatial tab manager. The graph, tile tree, and tab bars are all projections of the same underlying state: the set of webviews (active or inactive). Mutations from any context propagate to all others.
+Graphshell is a spatial tab manager with three authority domains:
 
-- **Graph view**: Overview and organizational control surface. Drag nodes between clusters, create edges, delete nodes — all affect the tile tree and webviews.
+- **Graph**: semantic state (node identity, lifecycle, edges).
+- **Tile tree**: layout/focus/visibility state.
+- **Webviews**: runtime rendering instances reconciled from graph lifecycle.
+
+- **Graph view**: Overview and organizational control surface. Drag nodes between clusters, create edges, delete nodes - all affect the tile tree and webviews.
 - **Tile panes**: Focused working contexts. Each pane's tab bar shows the nodes in that pane's cluster. Closing a tab closes the webview and removes the node.
 - **Tab bars**: Per-pane projections of graph clusters. Active tabs (with webview) are highlighted; inactive tabs (no webview) are dimmed and reactivatable.
 
-**Key invariant**: There is one source of truth — the webview set. Graph, tile tree, and tab bars are derived views that can each initiate mutations.
+**Key invariant**: semantic truth lives in graph/intents; tile and webview runtime state are coordinated through explicit intent/reconciliation boundaries.
 
 ---
 
@@ -88,7 +92,7 @@ Sources of intents:
 - **Keyboard**: N (new node), Del (remove), T (physics toggle), etc.
 - **Servo callbacks**: `request_create_new`, `notify_url_changed`, `notify_title_changed`
 
-All intents are collected, then applied to graph + tile tree + webview set together at one point in the frame loop. This prevents the contradictory-update bugs that arise from bidirectional mutation.
+All intents are collected, then applied at a single frame boundary, followed by runtime reconciliation. This prevents contradictory updates from fragmented mutation paths.
 
 ---
 
@@ -184,3 +188,4 @@ Servo provides the full back/forward list via `notify_history_changed(webview, e
 
 - Architecture and navigation plan: [implementation_strategy/2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md)
 - Architecture and code status: [ARCHITECTURAL_OVERVIEW.md](ARCHITECTURAL_OVERVIEW.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)
+

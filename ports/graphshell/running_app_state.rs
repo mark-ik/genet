@@ -94,10 +94,6 @@ impl WebViewCollection {
         self.webviews.contains_key(&id)
     }
 
-    pub fn active(&self) -> Option<&WebView> {
-        self.active_webview_id.and_then(|id| self.webviews.get(&id))
-    }
-
     pub fn active_id(&self) -> Option<WebViewId> {
         self.active_webview_id
     }

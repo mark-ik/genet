@@ -1,0 +1,174 @@
+# Feature Priority and Dependency Plan (2026-02-17)
+
+## Purpose
+
+This replaces day-by-day sequencing with feature-priority sequencing.
+Each feature is gated by explicit dependencies and exit criteria.
+
+## Priority Model
+
+- **P0**: Highest user-visible value and architecture-risk reduction.
+- **P1**: Important correctness/spec-alignment work that depends on P0 or can run in parallel.
+- **P2**: Medium-term cleanup and extensibility.
+
+## Dependency Graph
+
+1. **F2 Remove Global-Active Authority Leakage** -> prerequisite for clean F1 routing.
+2. **F1 Multi-WebView Visible Panes** -> validated by F2 routing fixes.
+3. **F3 Crash Docs Status Alignment** -> independent (can run anytime).
+4. **F4 Source-of-Truth Spec Alignment** -> independent (can run anytime).
+5. **F5 UserGrouped Edge Semantics** -> depends on F1 interaction model clarity.
+6. **F6 EGL/WebDriver Explicit Targeting** -> important but out of focus this cycle; scope note required.
+7. **F7 GUI Decomposition** -> depends on F1/F2 behavior being stable to avoid moving targets.
+
+---
+
+## P0 Features
+
+### F2: Remove Remaining Global-Active Authority Leakage
+
+- **Goal**: Ensure global active webview is input hint only, not routing/render authority.
+- **Status**: In progress (desktop routing now tile-focused in primary paths).
+- **Depends on**: None (implementation can proceed with single-pane model).
+- **Gates**:
+  - Focus switch between tiles does not hide or de-prioritize non-focused visible webviews.
+  - Back/forward/reload target focused tile webview only, resolving target via `egui_tiles` tree state.
+  - Dialog association no longer depends on window-global active where tile focus is available.
+- **Implementation shape**:
+  - **Add**: `focused_tile_webview_id()` to `Gui` struct.
+  - **Refactor**: update `HeadedWindow` to delegate `preferred_input_webview_id` to `gui.focused_tile_webview_id()` when running in graphshell mode.
+  - **Refactor**: dialog and routing lookups in `headed_window.rs` to use focused tile webview ID where possible.
+  - **Delete**: non-input decisions keyed from `active_id()` in desktop tile flow.
+- **Primary files**:
+  - `ports/graphshell/desktop/headed_window.rs`
+  - `ports/graphshell/desktop/gui.rs`
+  - `ports/graphshell/window.rs`
+
+### F1: Multi-WebView Simultaneous Visibility
+
+- **Goal**: Make opening/viewing webviews support split-pane visibility (`Linear` containers), not only tabs.
+- **Status**: In progress (split-open action and split container insertion landed; broader interaction plumbing pending).
+- **Depends on**: F2 (soft dependency for routing correctness, hard dependency for clean implementation).
+- **Gates (must pass before next dependent features)**:
+  - Two webview panes can be visible and painted in one frame.
+  - Opening a node can choose tab-focus vs split-open semantics.
+  - Existing tab behavior remains intact.
+- **Implementation shape**:
+  - **Refactor**: extend tile open helpers in `desktop/gui.rs` to support both `Container::Tabs` and `Container::Linear`.
+  - **Refactor**: verify and align `repaint_webviews()` in `window.rs` with multi-pane repaint expectations, while preserving tile-driven compositing in `gui.rs`.
+  - **Add**: explicit split-open actions (toolbar + graph action plumbing).
+  - **Delete**: implicit assumption that every open action should focus a tabs container.
+- **Primary files**:
+  - `ports/graphshell/desktop/gui.rs`
+  - `ports/graphshell/desktop/tile_behavior.rs`
+  - `ports/graphshell/window.rs`
+
+---
+
+## P1 Features
+
+### F3: Crash Handling Status Alignment in Docs
+
+- **Goal**: Align documentation with current desktop implementation status.
+- **Status**: Planned.
+- **Depends on**: None.
+- **Gates**:
+  - No contradictory "pending" crash-handling status remains for desktop path.
+  - Crash policy doc and concerns doc agree on current state plus known limits.
+- **Implementation shape**:
+  - **Refactor**: status language only.
+  - **Add**: explicit note separating desktop implementation from upstream accessibility/API blockers.
+  - **Delete**: stale "implementation pending" text for already-landed pieces.
+- **Primary files**:
+  - `ports/graphshell/design_docs/graphshell_docs/ARCHITECTURAL_CONCERNS.md`
+  - `ports/graphshell/design_docs/graphshell_docs/implementation_strategy/2026-02-16_architecture_and_navigation_plan.md`
+
+### F4: Source-of-Truth Spec Alignment
+
+- **Goal**: Remove contradiction between browser behavior spec, architectural overview, and architecture plan.
+- **Status**: Planned.
+- **Depends on**: None.
+- **Gates**:
+  - Browser spec uses three-domain authority model (graph/tile/webview runtime).
+  - Architectural overview vision language uses the same three-domain model.
+  - Terminology matches architecture plan across all docs.
+- **Implementation shape**:
+  - **Refactor**: "single source of truth = webview set" language in browser spec and architectural overview.
+  - **Add**: explicit authority-table language aligned to current architecture.
+  - **Delete**: contradictory invariants.
+- **Primary files**:
+  - `ports/graphshell/design_docs/graphshell_docs/GRAPHSHELL_AS_BROWSER.md`
+  - `ports/graphshell/design_docs/graphshell_docs/ARCHITECTURAL_OVERVIEW.md`
+
+### F5: UserGrouped Edge Semantics (Planned -> Implemented)
+
+- **Goal**: Define and implement when `UserGrouped` edges are created.
+- **Status**: Planned.
+- **Depends on**: F1 (pane/group interaction behavior clarity).
+- **Gates**:
+  - Edge creation triggers are deterministic and documented.
+  - Moving/grouping actions create expected `UserGrouped` edges exactly once.
+  - Tests cover edge creation and non-creation paths.
+- **Implementation shape**:
+  - **Refactor**: tab/group move actions into explicit intents.
+  - **Add**: `UserGrouped` variant to `EdgeType` in `graph/mod.rs` and persistence types.
+  - **Add**: reducer behavior for `UserGrouped` edges in `app.rs`.
+  - **Delete**: ambiguous "planned/not yet implemented" behavior where implementation is complete.
+- **Primary files**:
+  - `ports/graphshell/app.rs`
+  - `ports/graphshell/graph/mod.rs`
+  - `ports/graphshell/desktop/tile_behavior.rs`
+  - `ports/graphshell/desktop/gui.rs`
+
+---
+
+## P2 Features
+
+### F6: EGL/WebDriver Explicit Targeting Semantics
+
+- **Goal**: Keep EGL/WebDriver targeting work explicitly tracked while deferring implementation focus this cycle.
+- **Status**: Deferred for this cycle (important follow-up).
+- **Depends on**: Scope decision checkpoint.
+- **Gate 0 (decision gate)**:
+  - **Decision Made**: Desktop-only scope for this cycle.
+- **Gates**:
+  - Architecture plan clearly documents that EGL/WebDriver semantics are important but out of focus this cycle.
+  - Architecture plan records current EGL navigation as legacy window-global semantics pending explicit-target follow-up.
+- **Implementation shape**:
+  - **Add**: scope note in architecture plan explaining why embedded targets are intentionally using legacy behavior pending graph UI extension.
+  - **Delete**: ambiguous scope wording.
+- **Primary file**:
+  - `ports/graphshell/design_docs/graphshell_docs/implementation_strategy/2026-02-16_architecture_and_navigation_plan.md`
+
+### F7: GUI Decomposition for Maintainability
+
+- **Goal**: Reduce monolithic complexity in `gui.rs` (~2,840 lines as of Feb 17) without behavior change.
+- **Status**: Planned.
+- **Depends on**: F1/F2 stabilized.
+- **Gates**:
+  - Lifecycle reconciliation, toolbar/nav submit, and compositing are extracted into focused modules.
+  - Existing behavior/test outcomes remain unchanged.
+- **Implementation shape**:
+  - **Refactor**: move cohesive sections out of `gui.rs`.
+  - **Add**: module-level tests for extracted logic.
+  - **Delete**: duplicated cross-cutting logic in the monolith.
+- **Primary files**:
+  - `ports/graphshell/desktop/gui.rs`
+  - new modules under `ports/graphshell/desktop/`
+
+---
+
+## Recommended Execution Order
+
+1. F2 (smaller scope, eliminates global-active fallback before split panes exist)
+2. F1 (split panes land on a clean tile-focused routing foundation)
+3. F3 + F4 (parallel, can overlap with F1/F2 engineering)
+4. F5
+5. F6 (tracked as important follow-up, out of focus this cycle)
+6. F7
+
+## Notes
+
+- This plan is intentionally feature-gated, not calendar-gated.
+- A dependent feature should not start until dependency gates are satisfied.
+- **F2-first rationale**: F2 (~80 lines) removes the global-active fallback that F1 would otherwise inherit. Doing F2 first means F1's split-pane code must use tile-focused routing from the start, catching integration mistakes earlier. The F2->F1 dependency noted above is soft; `focused_tile_webview_id()` is already meaningful with the existing tab model and does not require split panes.

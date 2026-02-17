@@ -7,7 +7,7 @@
 
 ## Project Vision
 
-Graphshell is a **spatial tab manager** where webpages are nodes in a force-directed graph instead of tabs in a bar. The graph, tile tree, and per-pane tab bars are all projections of the same source of truth: the set of webviews (active or inactive). Mutations from any context propagate to all others.
+Graphshell is a **spatial tab manager** where webpages are nodes in a force-directed graph instead of tabs in a bar. The architecture uses three authority domains: graph/intents for semantic state, tile tree for layout and focus, and webviews for runtime rendering state reconciled from lifecycle intents.
 
 **Core Idea**: Replace linear history with spatial memory. Instead of "Back/Forward," you see where you came from and where pages link to.
 
@@ -144,11 +144,12 @@ Graphshell is a **spatial tab manager** where webpages are nodes in a force-dire
 
 ### Graph-Tile-Webview Unified Model
 
-**Why one source of truth (the webview set)?**
-- Graph, tile tree, and tab bars are all projections of the same state: the set of webviews (active or inactive)
-- Mutations from any context (graph drag, tab close, keyboard shortcut, Servo callback) produce intents processed at a single sync point per frame
-- Prevents contradictory-update bugs that arise from bidirectional mutation between graph and tile tree
-- See [GRAPHSHELL_AS_BROWSER.md](GRAPHSHELL_AS_BROWSER.md) for the full behavioral specification
+**Why three authority domains instead of one mutable source?**
+- Graph/intents own semantic truth (identity, lifecycle, edges).
+- Tile tree owns spatial layout, pane focus, and visibility.
+- Webviews are runtime side effects reconciled from graph lifecycle.
+- This split prevents contradictory update loops while keeping rendering/runtime concerns explicit.
+- See [GRAPHSHELL_AS_BROWSER.md](GRAPHSHELL_AS_BROWSER.md) for behavioral specification.
 
 **Why intent-based mutation?**
 - Extends existing `GraphAction`/`KeyboardActions` pattern to cover tile operations
@@ -303,3 +304,4 @@ Scope: Readme/docs and selected files from GraphRAG, Midori Desktop, egui_node_g
 **Checkpoint Analyses**:
 - `archive_docs/checkpoint_2026-02-10/2026-02-10_crate_refactor_plan.md` — egui_graphs + petgraph + kiddo integration history
 - `archive_docs/checkpoint_2026-02-09/Claude ANALYSIS 2.9.26.md` — Codebase audit & recommendations
+

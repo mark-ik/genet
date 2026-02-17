@@ -509,9 +509,13 @@ impl HeadedWindow {
     pub(crate) fn for_each_active_dialog(
         &self,
         window: &ServoShellWindow,
+        focused_webview_id: Option<WebViewId>,
+        toolbar_offset: Length<f32, DeviceIndependentPixel>,
         callback: impl Fn(&mut Dialog) -> bool,
     ) {
-        let Some(active_webview_id) = self.focused_webview_id() else {
+        // Important: this path must not borrow `self.gui`. It can be called while
+        // `Gui::update` holds a mutable borrow of the same RefCell during redraw.
+        let Some(active_webview_id) = focused_webview_id else {
             return;
         };
         let mut dialogs = self.dialogs.borrow_mut();
@@ -532,7 +536,6 @@ impl HeadedWindow {
         }
 
         let length = dialogs.len();
-        let toolbar_offset = self.toolbar_height();
         dialogs.retain_mut(|dialog| {
             dialog.set_toolbar_offset(toolbar_offset);
             callback(dialog)
@@ -821,6 +824,7 @@ impl HeadedWindow {
                     if let Some((webview_id, local_point)) = pointer_target
                         && let Some(webview) = window.webview_by_id(webview_id)
                     {
+                        self.gui.borrow_mut().set_focused_webview_id(webview_id);
                         window.activate_webview(webview_id);
                         self.set_webview_relative_mouse_point(local_point);
                         self.handle_mouse_button_event(&webview, button, state);
@@ -834,6 +838,7 @@ impl HeadedWindow {
                     if let Some((webview_id, local_point)) = pointer_target
                         && let Some(webview) = window.webview_by_id(webview_id)
                     {
+                        self.gui.borrow_mut().set_focused_webview_id(webview_id);
                         window.activate_webview(webview_id);
                         self.set_webview_relative_mouse_point(local_point);
                         self.handle_mouse_move_event_with_webview_relative_point(
@@ -850,6 +855,7 @@ impl HeadedWindow {
                     if let Some((webview_id, local_point)) = pointer_target
                         && let Some(webview) = window.webview_by_id(webview_id)
                     {
+                        self.gui.borrow_mut().set_focused_webview_id(webview_id);
                         window.activate_webview(webview_id);
                         self.set_webview_relative_mouse_point(local_point);
                         let webview_rect: Rect<_, _> = webview.size().into();
@@ -868,6 +874,7 @@ impl HeadedWindow {
                     if let Some((webview_id, local_point)) = pointer_target
                         && let Some(webview) = window.webview_by_id(webview_id)
                     {
+                        self.gui.borrow_mut().set_focused_webview_id(webview_id);
                         window.activate_webview(webview_id);
                         self.set_webview_relative_mouse_point(local_point);
                         let (delta_x, delta_y, mode) = match delta {
@@ -915,6 +922,7 @@ impl HeadedWindow {
                     if let Some((webview_id, local_point)) = pointer_target
                         && let Some(webview) = window.webview_by_id(webview_id)
                     {
+                        self.gui.borrow_mut().set_focused_webview_id(webview_id);
                         window.activate_webview(webview_id);
                         self.set_webview_relative_mouse_point(local_point);
                         webview.pinch_zoom(
@@ -992,8 +1000,9 @@ impl PlatformWindow for HeadedWindow {
         Some(self)
     }
 
-    fn preferred_input_webview_id(&self, _window: &ServoShellWindow) -> Option<WebViewId> {
-        self.focused_webview_id()
+    fn preferred_input_webview_id(&self, window: &ServoShellWindow) -> Option<WebViewId> {
+        let _ = window;
+        self.gui.borrow().focused_tile_webview_id()
     }
 
     fn screen_geometry(&self) -> ScreenGeometry {

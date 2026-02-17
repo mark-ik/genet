@@ -145,6 +145,15 @@ pub struct Gui {
 
     /// Cached reference to RunningAppState for webview creation
     state: Option<Rc<RunningAppState>>,
+
+    /// Last explicitly focused webview target in tile mode.
+    focused_webview_hint: Option<WebViewId>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenWebviewTileMode {
+    Tab,
+    SplitHorizontal,
 }
 
 // Pragmatic Phase A backpressure:
@@ -308,6 +317,7 @@ impl Gui {
             webview_accessibility_updates_dropped: 0,
             webview_accessibility_warned: false,
             state: None,
+            focused_webview_hint: None,
         }
     }
 
@@ -483,8 +493,19 @@ impl Gui {
     }
 
     pub(crate) fn focused_webview_id(&self) -> Option<WebViewId> {
-        Self::active_webview_tile_node(&self.tiles_tree)
-            .and_then(|node_key| self.graph_app.get_webview_for_node(node_key))
+        Self::focused_webview_id_for_tree(
+            &self.tiles_tree,
+            &self.graph_app,
+            self.focused_webview_hint,
+        )
+    }
+
+    pub(crate) fn focused_tile_webview_id(&self) -> Option<WebViewId> {
+        self.focused_webview_id()
+    }
+
+    pub(crate) fn set_focused_webview_id(&mut self, webview_id: WebViewId) {
+        self.focused_webview_hint = Some(webview_id);
     }
 
     pub(crate) fn location_has_focus(&self) -> bool {
@@ -557,6 +578,7 @@ impl Gui {
             graph_search_active_match_index,
             webview_creation_backpressure,
             state: app_state,
+            focused_webview_hint,
             ..
         } = self;
 
@@ -565,7 +587,7 @@ impl Gui {
             let mut frame_intents = Vec::new();
             let mut post_render_intents = Vec::new();
             let mut pending_open_child_webviews = Vec::new();
-            let mut open_selected_tile_after_intents = false;
+            let mut open_selected_tile_after_intents: Option<OpenWebviewTileMode> = None;
 
             frame_intents.extend(load_pending_thumbnail_results(
                 graph_app,
@@ -885,7 +907,18 @@ impl Gui {
                                         );
                                     if new_tab_button.clicked() {
                                         frame_intents.push(GraphIntent::CreateNodeNearCenter);
-                                        open_selected_tile_after_intents = true;
+                                        open_selected_tile_after_intents =
+                                            Some(OpenWebviewTileMode::Tab);
+                                    }
+                                    let split_button = ui
+                                        .add(Gui::toolbar_button("Split+"))
+                                        .on_hover_text(
+                                            "Create a new node and open it in a split pane",
+                                        );
+                                    if split_button.clicked() {
+                                        frame_intents.push(GraphIntent::CreateNodeNearCenter);
+                                        open_selected_tile_after_intents =
+                                            Some(OpenWebviewTileMode::SplitHorizontal);
                                     }
 
                                     let location_id = egui::Id::new("location_input");
@@ -953,8 +986,10 @@ impl Gui {
                                         let submit_outcome = submit_result.outcome;
                                         if submit_outcome.mark_clean {
                                             *location_dirty = false;
-                                            open_selected_tile_after_intents =
-                                                submit_outcome.open_selected_tile;
+                                            if submit_outcome.open_selected_tile {
+                                                open_selected_tile_after_intents =
+                                                    Some(OpenWebviewTileMode::Tab);
+                                            }
                                         }
                                     }
                                 },
@@ -1187,10 +1222,10 @@ impl Gui {
                 graph_app.apply_intents(std::mem::take(&mut frame_intents));
             }
 
-            if open_selected_tile_after_intents
+            if let Some(open_mode) = open_selected_tile_after_intents
                 && let Some(node_key) = graph_app.get_single_selected_node()
             {
-                Self::open_or_focus_webview_tile(tiles_tree, node_key);
+                Self::open_or_focus_webview_tile_with_mode(tiles_tree, node_key, open_mode);
                 // A node created from omnibar submit in detail-mode fallback starts as Cold.
                 // Promote it so lifecycle reconciliation can instantiate its webview.
                 frame_intents.push(GraphIntent::PromoteNodeToActive { key: node_key });
@@ -1277,7 +1312,16 @@ impl Gui {
             graph_app.check_periodic_snapshot();
 
             // Keep embedder dialogs active regardless of tile/view mode.
-            headed_window.for_each_active_dialog(window, |dialog| dialog.update(ctx));
+            // Pass precomputed toolbar height to avoid re-borrowing `headed_window.gui`
+            // while this update holds a mutable borrow.
+            let focused_dialog_webview =
+                Self::focused_webview_id_for_tree(tiles_tree, graph_app, *focused_webview_hint);
+            headed_window.for_each_active_dialog(
+                window,
+                focused_dialog_webview,
+                *toolbar_height,
+                |dialog| dialog.update(ctx),
+            );
 
             // Tile-driven rendering path (single active render path).
             if is_graph_view || has_webview_tiles {
@@ -1356,6 +1400,7 @@ impl Gui {
                 if let Some((node_key, _)) = active_tile_rects.first().copied()
                     && let Some(wv_id) = graph_app.get_webview_for_node(node_key)
                 {
+                    *focused_webview_hint = Some(wv_id);
                     window.activate_webview(wv_id);
                 }
 
@@ -1516,6 +1561,28 @@ impl Gui {
                 _ => None,
             }
         })
+    }
+
+    fn focused_webview_id_for_tree(
+        tiles_tree: &Tree<TileKind>,
+        graph_app: &GraphBrowserApp,
+        focused_hint: Option<WebViewId>,
+    ) -> Option<WebViewId> {
+        if let Some(hint) = focused_hint {
+            let hint_is_active = tiles_tree.active_tiles().into_iter().any(|tile_id| {
+                matches!(
+                    tiles_tree.tiles.get(tile_id),
+                    Some(Tile::Pane(TileKind::WebView(node_key)))
+                        if graph_app.get_webview_for_node(*node_key) == Some(hint)
+                )
+            });
+            if hint_is_active {
+                return Some(hint);
+            }
+        }
+
+        Self::active_webview_tile_node(tiles_tree)
+            .and_then(|node_key| graph_app.get_webview_for_node(node_key))
     }
 
     fn active_webview_tile_rects(
@@ -1760,6 +1827,14 @@ impl Gui {
         tiles_tree: &mut Tree<TileKind>,
         node_key: crate::graph::NodeKey,
     ) {
+        Self::open_or_focus_webview_tile_with_mode(tiles_tree, node_key, OpenWebviewTileMode::Tab);
+    }
+
+    fn open_or_focus_webview_tile_with_mode(
+        tiles_tree: &mut Tree<TileKind>,
+        node_key: crate::graph::NodeKey,
+        mode: OpenWebviewTileMode,
+    ) {
         if tiles_tree.make_active(
             |_, tile| matches!(tile, Tile::Pane(TileKind::WebView(key)) if *key == node_key),
         ) {
@@ -1772,16 +1847,28 @@ impl Gui {
             return;
         };
 
-        if let Some(Tile::Container(Container::Tabs(tabs))) = tiles_tree.tiles.get_mut(root_id) {
-            tabs.add_child(webview_tile_id);
-            tabs.set_active(webview_tile_id);
-            return;
-        }
+        match mode {
+            OpenWebviewTileMode::Tab => {
+                if let Some(Tile::Container(Container::Tabs(tabs))) =
+                    tiles_tree.tiles.get_mut(root_id)
+                {
+                    tabs.add_child(webview_tile_id);
+                    tabs.set_active(webview_tile_id);
+                    return;
+                }
 
-        let tabs_root = tiles_tree
-            .tiles
-            .insert_tab_tile(vec![root_id, webview_tile_id]);
-        tiles_tree.root = Some(tabs_root);
+                let tabs_root = tiles_tree
+                    .tiles
+                    .insert_tab_tile(vec![root_id, webview_tile_id]);
+                tiles_tree.root = Some(tabs_root);
+            },
+            OpenWebviewTileMode::SplitHorizontal => {
+                let split_root = tiles_tree
+                    .tiles
+                    .insert_horizontal_tile(vec![root_id, webview_tile_id]);
+                tiles_tree.root = Some(split_root);
+            },
+        }
     }
 
     /// Paint the GUI, as of the last update.
@@ -1993,6 +2080,26 @@ mod tests {
     }
 
     #[test]
+    fn test_open_webview_tile_split_creates_horizontal_root() {
+        let mut tree = tree_with_graph_root();
+        let node_key = NodeKey::new(42);
+
+        Gui::open_or_focus_webview_tile_with_mode(
+            &mut tree,
+            node_key,
+            OpenWebviewTileMode::SplitHorizontal,
+        );
+
+        let root_id = tree.root().expect("root tile should exist");
+        match tree.tiles.get(root_id) {
+            Some(Tile::Container(Container::Linear(linear))) => {
+                assert_eq!(linear.children.len(), 2);
+            },
+            _ => panic!("expected horizontal split container root"),
+        }
+    }
+
+    #[test]
     fn test_close_last_webview_tile_leaves_graph_only() {
         let mut tree = tree_with_graph_root();
         let node_key = NodeKey::new(3);
@@ -2042,6 +2149,26 @@ mod tests {
         let node = app.add_node_and_sync("https://unmapped.example".into(), Point2D::new(0.0, 0.0));
         assert_eq!(Gui::nav_target_webview_id(&app, Some(node)), None);
         assert_eq!(Gui::nav_target_webview_id(&app, None), None);
+    }
+
+    #[test]
+    fn test_focused_webview_id_for_tree_prefers_active_hint() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let a = app.add_node_and_sync("https://a.example".into(), Point2D::new(0.0, 0.0));
+        let b = app.add_node_and_sync("https://b.example".into(), Point2D::new(10.0, 0.0));
+        let a_id = test_webview_id();
+        let b_id = test_webview_id();
+        app.map_webview_to_node(a_id, a);
+        app.map_webview_to_node(b_id, b);
+
+        let mut tiles = Tiles::default();
+        let a_tile = tiles.insert_pane(TileKind::WebView(a));
+        let b_tile = tiles.insert_pane(TileKind::WebView(b));
+        let root = tiles.insert_horizontal_tile(vec![a_tile, b_tile]);
+        let tree = Tree::new("focus_hint_test", root, tiles);
+
+        let focused = Gui::focused_webview_id_for_tree(&tree, &app, Some(b_id));
+        assert_eq!(focused, Some(b_id));
     }
 
     #[test]

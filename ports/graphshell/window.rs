@@ -379,10 +379,6 @@ impl ServoShellWindow {
         }
     }
 
-    pub(crate) fn active_webview(&self) -> Option<WebView> {
-        self.webview_collection.borrow().active().cloned()
-    }
-
     /// Return a list of all webviews that have favicons that have not yet been loaded by egui.
     #[cfg_attr(any(target_os = "android", target_env = "ohos"), expect(dead_code))]
     pub(crate) fn take_pending_favicon_loads(&self) -> Vec<WebViewId> {

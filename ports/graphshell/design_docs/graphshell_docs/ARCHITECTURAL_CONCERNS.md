@@ -9,8 +9,8 @@
 
 There is a foundational ambiguity regarding the primary source of application state.
 
-- **Conflict**: [ARCHITECTURAL_OVERVIEW.md](ARCHITECTURAL_OVERVIEW.md) describes the `petgraph` `StableGraph` as the "primary store," while [GRAPHSHELL_AS_BROWSER.md](GRAPHSHELL_AS_BROWSER.md) specifies that the true "source of truth" should be the set of webviews managed by `egui_tiles`, with the graph being a derived projection.
-- **Impact**: This conflict is a likely source of synchronization bugs between the graph representation and the webview/tile state. The successful implementation of the delegate-driven navigation model hinges on resolving this and committing to a single source of truth.
+- **Conflict**: [ARCHITECTURAL_OVERVIEW.md](ARCHITECTURAL_OVERVIEW.md) and [GRAPHSHELL_AS_BROWSER.md](GRAPHSHELL_AS_BROWSER.md) previously diverged on source-of-truth language.
+- **Impact**: This conflict was a source of synchronization bugs between graph representation and webview/tile runtime state. The current strategy resolves this via explicit authority domains.
 - **Status (Feb 17)**: Largely reduced in runtime paths. Current architecture and implementation strategy converge on graph/intents as the control-plane source of truth, with webviews treated as effectful runtime state reconciled from graph/lifecycle intents.
 
 ---
@@ -70,7 +70,7 @@ The architectural documents do not specify how the application should behave whe
 
 - **Gap**: A robust browser architecture must be resilient to crashes in content processes. It is unclear from the documents whether such a crash would be gracefully handled (e.g., by displaying a "crashed tab" message) or if it would risk taking down the entire Graphshell application.
 - **Impact**: Without a clear strategy, the application's stability is at risk from misbehaving web content.
-- **Status (Feb 17)**: Specified in [implementation_strategy/2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md) under "Crash Handling Policy (Specified 2026-02-17)". Implementation is still pending.
+- **Status (Feb 17)**: Implemented for desktop graphshell paths (semantic event -> reducer demote/unmap -> tile crash banner/actions), as documented in [implementation_strategy/2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md) under "Crash Handling Policy (Specified 2026-02-17)". Remaining limitations are upstream API surface concerns (for example web-content accessibility), not missing crash policy wiring in graphshell desktop.
 
 ---
 
@@ -78,5 +78,6 @@ The architectural documents do not specify how the application should behave whe
 
 The primary UI component remains large and may have too many responsibilities, despite recent refactoring.
 
-- **Concern**: The `DEVELOPER_GUIDE.md` and `CODEBASE_MAP.md` both highlight that `desktop/gui.rs` is a very large file (nearly 800-1000 lines).
+- **Concern**: `desktop/gui.rs` has grown to ~2,840 lines (as of Feb 17), well beyond the ~800-1000 lines noted in `DEVELOPER_GUIDE.md` and `CODEBASE_MAP.md`.
 - **Impact**: Large, monolithic components are difficult to understand, maintain, and test. This file's size suggests it may be a "god object" for the UI layer, and further decomposition might be necessary to improve the health of the UI architecture.
+
