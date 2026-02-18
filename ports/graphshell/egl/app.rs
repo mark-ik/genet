@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use base::generic_channel::GenericCallback;
 use dpi::PhysicalSize;
@@ -26,6 +27,18 @@ use crate::parser::location_bar_input_to_url;
 use crate::prefs::ServoShellPreferences;
 use crate::running_app_state::RunningAppState;
 use crate::window::{PlatformWindow, ServoShellWindow, ServoShellWindowId};
+
+const INPUT_TARGET_FALLBACK_WARN_INTERVAL: Duration = Duration::from_secs(60);
+
+fn resolve_input_target_webview_id(
+    preferred: Option<WebViewId>,
+    newest: Option<WebViewId>,
+) -> (Option<WebViewId>, bool) {
+    match preferred {
+        Some(webview_id) => (Some(webview_id), false),
+        None => (newest, newest.is_some()),
+    }
+}
 
 pub(crate) struct EmbeddedPlatformWindow {
     host: Rc<dyn HostTrait>,
@@ -86,10 +99,10 @@ impl PlatformWindow for EmbeddedPlatformWindow {
         state: &RunningAppState,
         window: &ServoShellWindow,
     ) -> bool {
-        let Some(active_webview) = self
-            .preferred_input_webview_id(window)
-            .and_then(|webview_id| window.webview_by_id(webview_id))
-        else {
+        let Some(webview_id) = self.preferred_input_webview_id(window) else {
+            return false;
+        };
+        let Some(active_webview) = window.webview_by_id(webview_id) else {
             return false;
         };
 
@@ -267,6 +280,8 @@ pub struct App {
     // Desktop supports multiple windows; EGL can be extended similarly later.
     host: Rc<dyn HostTrait>,
     initial_url: Url,
+    input_target_fallback_last_warned_at: Cell<Option<Instant>>,
+    input_target_fallback_suppressed: Cell<u64>,
 }
 
 #[expect(unused)]
@@ -300,6 +315,8 @@ impl App {
             state,
             host: init.host,
             initial_url,
+            input_target_fallback_last_warned_at: Cell::new(None),
+            input_target_fallback_suppressed: Cell::new(0),
         })
     }
 
@@ -355,15 +372,38 @@ impl App {
             .clone()
     }
 
-    fn input_target_webview(&self) -> Option<WebView> {
-        let window = self.window();
-        let preferred_id = window.platform_window().preferred_input_webview_id(&window);
-        let webview_id = if let Some(webview_id) = preferred_id {
-            webview_id
-        } else {
-            window.webview_collection.borrow().newest().map(|wv| wv.id())?
+    fn warn_input_target_fallback_once_per_interval(&self) {
+        let now = Instant::now();
+        let should_warn = match self.input_target_fallback_last_warned_at.get() {
+            None => true,
+            Some(last) => now.duration_since(last) >= INPUT_TARGET_FALLBACK_WARN_INTERVAL,
         };
-        window.webview_by_id(webview_id)
+        if should_warn {
+            let suppressed = self.input_target_fallback_suppressed.replace(0);
+            warn!(
+                "input_target_webview: preferred_input returned None, falling back to newest() (suppressed_repeats={suppressed})"
+            );
+            self.input_target_fallback_last_warned_at.set(Some(now));
+        } else {
+            self.input_target_fallback_suppressed
+                .set(self.input_target_fallback_suppressed.get().saturating_add(1));
+        }
+    }
+
+    fn input_target_webview_id(&self) -> Option<WebViewId> {
+        let window = self.window();
+        let preferred = window.platform_window().preferred_input_webview_id(&window);
+        let newest = window.webview_collection.borrow().newest().map(|wv| wv.id());
+        let (resolved, used_fallback) = resolve_input_target_webview_id(preferred, newest);
+        if used_fallback {
+            self.warn_input_target_fallback_once_per_interval();
+        }
+        resolved
+    }
+
+    fn input_target_webview(&self) -> Option<WebView> {
+        let webview_id = self.input_target_webview_id()?;
+        self.window().webview_by_id(webview_id)
     }
 
     pub(crate) fn initial_url(&self) -> Url {
@@ -394,12 +434,22 @@ impl App {
 
     /// Load an URL.
     pub fn load_uri(&self, location: &str) {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.load_uri_for_webview(webview_id, location);
+    }
+
+    // NOTE: `_for_webview` entrypoints are intentionally public host-facing APIs.
+    // Wrapper methods above preserve compatibility for callers that do not pass IDs.
+    /// Load an URL in a specific WebView.
+    pub fn load_uri_for_webview(&self, webview_id: WebViewId, location: &str) {
         let Some(url) = location_bar_input_to_url(location, &self.servoshell_preferences().searchpage)
         else {
             warn!("failed to parse location");
             return;
         };
-        if let Some(webview) = self.input_target_webview() {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             self.window().set_needs_update();
             webview.load(url.into_url());
         }
@@ -408,39 +458,73 @@ impl App {
 
     /// Reload the page.
     pub fn reload(&self) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.reload_for_webview(webview_id);
+    }
+
+    /// Reload a specific WebView.
+    pub fn reload_for_webview(&self, webview_id: WebViewId) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             self.window().set_needs_update();
             webview.reload();
+            self.spin_event_loop();
         }
-        self.spin_event_loop();
     }
 
     /// Stop loading the page.
     pub fn stop(&self) {
-        // Servo's embedder API currently has no `WebView::stop()`.
+        // Hard gap: Servo's public WebView API does not expose stop_loading().
+        // The DOM has Window::stop_loading() (components/script/dom/window.rs)
+        // but there is no public embedder API equivalent on WebView today.
         // Keep this as a no-op entrypoint for platform callers.
         self.spin_event_loop();
     }
 
     /// Go back in history.
     pub fn go_back(&self) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.go_back_for_webview(webview_id);
+    }
+
+    /// Go back in history for a specific WebView.
+    pub fn go_back_for_webview(&self, webview_id: WebViewId) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.go_back(1);
+            self.spin_event_loop();
         }
-        self.spin_event_loop();
     }
 
     /// Go forward in history.
     pub fn go_forward(&self) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.go_forward_for_webview(webview_id);
+    }
+
+    /// Go forward in history for a specific WebView.
+    pub fn go_forward_for_webview(&self, webview_id: WebViewId) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.go_forward(1);
+            self.spin_event_loop();
         }
-        self.spin_event_loop();
     }
 
     /// Let Servo know that the window has been resized.
     pub fn resize(&self, viewport_rect: Rect<i32, DevicePixel>) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.resize_for_webview(webview_id, viewport_rect);
+    }
+
+    /// Let Servo know that the window has been resized for a specific WebView.
+    pub fn resize_for_webview(&self, webview_id: WebViewId, viewport_rect: Rect<i32, DevicePixel>) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             info!("Setting viewport to {viewport_rect:?}");
             let size = viewport_rect.size;
             webview.resize(PhysicalSize::new(size.width as u32, size.height as u32));
@@ -456,7 +540,15 @@ impl App {
     /// x/y are scroll coordinates.
     /// dx/dy are scroll deltas.
     pub fn scroll(&self, dx: f32, dy: f32, x: f32, y: f32) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.scroll_for_webview(webview_id, dx, dy, x, y);
+    }
+
+    /// Scroll a specific WebView.
+    pub fn scroll_for_webview(&self, webview_id: WebViewId, dx: f32, dy: f32, x: f32, y: f32) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             let scroll = Scroll::Delta(DeviceVector2D::new(dx, dy).into());
             let point = DevicePoint::new(x, y).into();
             webview.notify_scroll_event(scroll, point);
@@ -466,7 +558,15 @@ impl App {
 
     /// Touch event: press down
     pub fn touch_down(&self, x: f32, y: f32, pointer_id: i32) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.touch_down_for_webview(webview_id, x, y, pointer_id);
+    }
+
+    /// Touch event: press down for a specific WebView.
+    pub fn touch_down_for_webview(&self, webview_id: WebViewId, x: f32, y: f32, pointer_id: i32) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.notify_input_event(InputEvent::Touch(TouchEvent::new(
                 TouchEventType::Down,
                 TouchId(pointer_id),
@@ -478,7 +578,15 @@ impl App {
 
     /// Touch event: move touching finger
     pub fn touch_move(&self, x: f32, y: f32, pointer_id: i32) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.touch_move_for_webview(webview_id, x, y, pointer_id);
+    }
+
+    /// Touch event: move touching finger for a specific WebView.
+    pub fn touch_move_for_webview(&self, webview_id: WebViewId, x: f32, y: f32, pointer_id: i32) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.notify_input_event(InputEvent::Touch(TouchEvent::new(
                 TouchEventType::Move,
                 TouchId(pointer_id),
@@ -490,7 +598,15 @@ impl App {
 
     /// Touch event: Lift touching finger
     pub fn touch_up(&self, x: f32, y: f32, pointer_id: i32) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.touch_up_for_webview(webview_id, x, y, pointer_id);
+    }
+
+    /// Touch event: Lift touching finger for a specific WebView.
+    pub fn touch_up_for_webview(&self, webview_id: WebViewId, x: f32, y: f32, pointer_id: i32) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.notify_input_event(InputEvent::Touch(TouchEvent::new(
                 TouchEventType::Up,
                 TouchId(pointer_id),
@@ -502,7 +618,21 @@ impl App {
 
     /// Cancel touch event
     pub fn touch_cancel(&self, x: f32, y: f32, pointer_id: i32) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.touch_cancel_for_webview(webview_id, x, y, pointer_id);
+    }
+
+    /// Cancel touch event for a specific WebView.
+    pub fn touch_cancel_for_webview(
+        &self,
+        webview_id: WebViewId,
+        x: f32,
+        y: f32,
+        pointer_id: i32,
+    ) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.notify_input_event(InputEvent::Touch(TouchEvent::new(
                 TouchEventType::Cancel,
                 TouchId(pointer_id),
@@ -514,7 +644,15 @@ impl App {
 
     /// Register a mouse movement.
     pub fn mouse_move(&self, x: f32, y: f32) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.mouse_move_for_webview(webview_id, x, y);
+    }
+
+    /// Register a mouse movement for a specific WebView.
+    pub fn mouse_move_for_webview(&self, webview_id: WebViewId, x: f32, y: f32) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.notify_input_event(InputEvent::MouseMove(MouseMoveEvent::new(
                 DevicePoint::new(x, y).into(),
             )));
@@ -524,7 +662,15 @@ impl App {
 
     /// Register a mouse button press.
     pub fn mouse_down(&self, x: f32, y: f32, button: MouseButton) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.mouse_down_for_webview(webview_id, x, y, button);
+    }
+
+    /// Register a mouse button press for a specific WebView.
+    pub fn mouse_down_for_webview(&self, webview_id: WebViewId, x: f32, y: f32, button: MouseButton) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.notify_input_event(InputEvent::MouseButton(MouseButtonEvent::new(
                 MouseButtonAction::Down,
                 button,
@@ -536,7 +682,15 @@ impl App {
 
     /// Register a mouse button release.
     pub fn mouse_up(&self, x: f32, y: f32, button: MouseButton) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.mouse_up_for_webview(webview_id, x, y, button);
+    }
+
+    /// Register a mouse button release for a specific WebView.
+    pub fn mouse_up_for_webview(&self, webview_id: WebViewId, x: f32, y: f32, button: MouseButton) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.notify_input_event(InputEvent::MouseButton(MouseButtonEvent::new(
                 MouseButtonAction::Up,
                 button,
@@ -549,7 +703,15 @@ impl App {
     /// Start pinchzoom.
     /// x/y are pinch origin coordinates.
     pub fn pinchzoom_start(&self, factor: f32, x: f32, y: f32) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.pinchzoom_start_for_webview(webview_id, factor, x, y);
+    }
+
+    /// Start pinchzoom for a specific WebView.
+    pub fn pinchzoom_start_for_webview(&self, webview_id: WebViewId, factor: f32, x: f32, y: f32) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.pinch_zoom(factor, DevicePoint::new(x, y));
             self.spin_event_loop();
         }
@@ -558,7 +720,15 @@ impl App {
     /// Pinchzoom.
     /// x/y are pinch origin coordinates.
     pub fn pinchzoom(&self, factor: f32, x: f32, y: f32) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.pinchzoom_for_webview(webview_id, factor, x, y);
+    }
+
+    /// Pinchzoom for a specific WebView.
+    pub fn pinchzoom_for_webview(&self, webview_id: WebViewId, factor: f32, x: f32, y: f32) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.pinch_zoom(factor, DevicePoint::new(x, y));
             self.spin_event_loop();
         }
@@ -567,14 +737,29 @@ impl App {
     /// End pinchzoom.
     /// x/y are pinch origin coordinates.
     pub fn pinchzoom_end(&self, factor: f32, x: f32, y: f32) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.pinchzoom_end_for_webview(webview_id, factor, x, y);
+    }
+
+    /// End pinchzoom for a specific WebView.
+    pub fn pinchzoom_end_for_webview(&self, webview_id: WebViewId, factor: f32, x: f32, y: f32) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.pinch_zoom(factor, DevicePoint::new(x, y));
             self.spin_event_loop();
         }
     }
 
     pub fn key_down(&self, key: Key) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.key_down_for_webview(webview_id, key);
+    }
+
+    pub fn key_down_for_webview(&self, webview_id: WebViewId, key: Key) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.notify_input_event(InputEvent::Keyboard(KeyboardEvent::from_state_and_key(
                 KeyState::Down,
                 key,
@@ -584,7 +769,14 @@ impl App {
     }
 
     pub fn key_up(&self, key: Key) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.key_up_for_webview(webview_id, key);
+    }
+
+    pub fn key_up_for_webview(&self, webview_id: WebViewId, key: Key) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.notify_input_event(InputEvent::Keyboard(KeyboardEvent::from_state_and_key(
                 KeyState::Up,
                 key,
@@ -594,12 +786,19 @@ impl App {
     }
 
     pub fn ime_insert_text(&self, text: String) {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.ime_insert_text_for_webview(webview_id, text);
+    }
+
+    pub fn ime_insert_text_for_webview(&self, webview_id: WebViewId, text: String) {
         // In OHOS, we get empty text after the intended text.
         if text.is_empty() {
             return;
         }
 
-        let Some(webview) = self.input_target_webview() else {
+        let Some(webview) = self.window().webview_by_id(webview_id) else {
             return;
         };
 
@@ -619,21 +818,46 @@ impl App {
     }
 
     pub fn media_session_action(&self, action: MediaSessionActionType) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.media_session_action_for_webview(webview_id, action);
+    }
+
+    pub fn media_session_action_for_webview(
+        &self,
+        webview_id: WebViewId,
+        action: MediaSessionActionType,
+    ) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.notify_media_session_action_event(action);
             self.spin_event_loop();
         }
     }
 
     pub fn set_throttled(&self, throttled: bool) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.set_throttled_for_webview(webview_id, throttled);
+    }
+
+    pub fn set_throttled_for_webview(&self, webview_id: WebViewId, throttled: bool) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.set_throttled(throttled);
             self.spin_event_loop();
         }
     }
 
     pub fn ime_dismissed(&self) {
-        if let Some(webview) = self.input_target_webview() {
+        let Some(webview_id) = self.input_target_webview_id() else {
+            return;
+        };
+        self.ime_dismissed_for_webview(webview_id);
+    }
+
+    pub fn ime_dismissed_for_webview(&self, webview_id: WebViewId) {
+        if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.notify_input_event(InputEvent::Ime(ImeEvent::Dismissed));
             self.spin_event_loop();
         }
@@ -703,5 +927,41 @@ impl servo::webxr::WebXrRegistry for XrDiscoveryWebXrRegistry {
         if let Some(discovery) = self.xr_discovery.take() {
             registry.register(discovery);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_input_target_webview_id;
+    use base::id::PainterId;
+    use servo::WebViewId;
+
+    fn test_webview_id() -> WebViewId {
+        WebViewId::new(PainterId::next())
+    }
+
+    #[test]
+    fn test_resolve_input_target_webview_id_prefers_preferred() {
+        let preferred = test_webview_id();
+        let newest = test_webview_id();
+        let (resolved, used_fallback) =
+            resolve_input_target_webview_id(Some(preferred), Some(newest));
+        assert_eq!(resolved, Some(preferred));
+        assert!(!used_fallback);
+    }
+
+    #[test]
+    fn test_resolve_input_target_webview_id_falls_back_to_newest() {
+        let newest = test_webview_id();
+        let (resolved, used_fallback) = resolve_input_target_webview_id(None, Some(newest));
+        assert_eq!(resolved, Some(newest));
+        assert!(used_fallback);
+    }
+
+    #[test]
+    fn test_resolve_input_target_webview_id_none_when_no_targets() {
+        let (resolved, used_fallback) = resolve_input_target_webview_id(None, None);
+        assert_eq!(resolved, None);
+        assert!(!used_fallback);
     }
 }

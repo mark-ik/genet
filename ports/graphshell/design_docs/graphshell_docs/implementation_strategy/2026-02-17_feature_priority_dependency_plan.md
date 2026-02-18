@@ -134,19 +134,22 @@ Each feature is gated by explicit dependencies and exit criteria.
 
 ### F6: EGL/WebDriver Explicit Targeting Semantics
 
-- **Goal**: Keep EGL/WebDriver targeting work explicitly tracked while deferring implementation focus this cycle.
-- **Status**: Deferred for this cycle (important follow-up).
+- **Goal**: Converge EGL/WebDriver routing on explicit webview targeting while preserving Servo/servoshell compatibility.
+- **Status**: In progress (explicit EGL `_for_webview` overloads and centralized fallback warning landed; remaining follow-up is extended validation depth).
 - **Depends on**: Scope decision checkpoint.
 - **Gate 0 (decision gate)**:
   - **Decision Made**: Desktop-only scope for this cycle.
 - **Gates**:
-  - Architecture plan clearly documents that EGL/WebDriver semantics are important but out of focus this cycle.
-  - Architecture plan records current EGL navigation as legacy window-global semantics pending explicit-target follow-up.
+  - Local-first implementation path is exhausted before proposing upstream changes.
+  - Any upstream ask is backed by reproduced hard gaps and minimal additive API proposals.
+  - Fallback-to-active/newest semantics are isolated to explicit compatibility boundaries.
 - **Implementation shape**:
-  - **Add**: scope note in architecture plan explaining why embedded targets are intentionally using legacy behavior pending graph UI extension.
-  - **Delete**: ambiguous scope wording.
-- **Primary file**:
+  - **Add**: dedicated F6 phased plan with explicit critique checklist and escalation gate.
+  - **Refactor**: EGL/WebDriver routing toward explicit ID-targeted helpers behind compatibility wrappers.
+  - **Delete**: distributed ad hoc fallback targeting where graphshell owns call paths.
+- **Primary files**:
   - `ports/graphshell/design_docs/graphshell_docs/implementation_strategy/2026-02-16_architecture_and_navigation_plan.md`
+  - `ports/graphshell/design_docs/graphshell_docs/implementation_strategy/2026-02-18_f6_explicit_targeting_plan.md`
 
 ### F7: GUI Decomposition for Maintainability
 

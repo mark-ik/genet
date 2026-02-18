@@ -1092,6 +1092,28 @@ mod tests {
     }
 
     #[test]
+    fn test_get_focused_webview_semantics_use_tile_focused_hint() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let a = app.add_node_and_sync("https://a.example".into(), Point2D::new(0.0, 0.0));
+        let b = app.add_node_and_sync("https://b.example".into(), Point2D::new(10.0, 0.0));
+        let a_id = test_webview_id();
+        let b_id = test_webview_id();
+        app.map_webview_to_node(a_id, a);
+        app.map_webview_to_node(b_id, b);
+
+        let mut tiles = Tiles::default();
+        let a_tile = tiles.insert_pane(TileKind::WebView(a));
+        let b_tile = tiles.insert_pane(TileKind::WebView(b));
+        let root = tiles.insert_horizontal_tile(vec![a_tile, b_tile]);
+        let tree = Tree::new("webdriver_get_focused_semantics", root, tiles);
+
+        // Mirrors WebDriver GetFocusedWebView semantics in desktop graphshell:
+        // preferred input target should resolve to the tile-focused webview.
+        let focused = focused_webview_id_for_tree(&tree, &app, Some(b_id));
+        assert_eq!(focused, Some(b_id));
+    }
+
+    #[test]
     fn test_focused_webview_id_for_tree_graph_only_returns_none() {
         let app = GraphBrowserApp::new_for_testing();
         let tree = tree_with_graph_root();
