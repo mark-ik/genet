@@ -1001,8 +1001,13 @@ impl PlatformWindow for HeadedWindow {
     }
 
     fn preferred_input_webview_id(&self, window: &ServoShellWindow) -> Option<WebViewId> {
-        let _ = window;
-        self.gui.borrow().focused_tile_webview_id()
+        if let Ok(gui) = self.gui.try_borrow() {
+            return gui.focused_tile_webview_id();
+        }
+
+        // Avoid nested RefCell borrows when this is queried during gui.update().
+        // Fallback to Servo's active webview in that narrow re-entrant path.
+        window.webview_collection.borrow().active_id()
     }
 
     fn screen_geometry(&self) -> ScreenGeometry {

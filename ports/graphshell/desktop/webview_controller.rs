@@ -106,7 +106,7 @@ pub(crate) fn sync_to_graph_intents(
     for (wv_id, _) in window.webviews().into_iter() {
         seen_webviews.insert(wv_id);
     }
-    let active = window.webview_collection.borrow().active_id();
+    let active = window.platform_window().preferred_input_webview_id(window);
     reconcile_mappings_and_selection(app, &seen_webviews, active)
 }
 
@@ -124,6 +124,7 @@ pub(crate) fn handle_address_bar_submit_intents(
     app: &GraphBrowserApp,
     url: &str,
     is_graph_view: bool,
+    focused_node: Option<NodeKey>,
     focused_webview: Option<WebViewId>,
     window: &ServoShellWindow,
     searchpage: &str,
@@ -177,8 +178,25 @@ pub(crate) fn handle_address_bar_submit_intents(
             };
         }
 
-        // No focused live webview in detail mode: create a new graph node at the URL and
-        // let tile/runtime lifecycle open it via the normal intent path.
+        // No focused live webview in detail mode:
+        // if we still have a focused node/pane target, update/reactivate it;
+        // otherwise create a new node as a fallback.
+        if let Some(node_key) = focused_node {
+            return AddressBarIntentOutcome {
+                outcome: AddressBarSubmitOutcome {
+                    mark_clean: true,
+                    open_selected_tile: false,
+                },
+                intents: vec![
+                    GraphIntent::SetNodeUrl {
+                        key: node_key,
+                        new_url: parsed_url.as_str().to_string(),
+                    },
+                    GraphIntent::PromoteNodeToActive { key: node_key },
+                ],
+            };
+        }
+
         AddressBarIntentOutcome {
             outcome: AddressBarSubmitOutcome {
                 mark_clean: true,

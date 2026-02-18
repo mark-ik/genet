@@ -167,14 +167,10 @@ impl ServoShellWindow {
 
     /// Repaint the focused [`WebView`].
     pub(crate) fn repaint_webviews(&self) {
-        let preferred_webview_id = self.platform_window().preferred_input_webview_id(self);
-        let webview_id = preferred_webview_id.or_else(|| {
-            self.webview_collection
-                .borrow()
-                .newest()
-                .map(|webview| webview.id())
-        });
-        let Some(webview) = webview_id.and_then(|id| self.webview_by_id(id)) else {
+        let Some(webview_id) = self.platform_window().preferred_input_webview_id(self) else {
+            return;
+        };
+        let Some(webview) = self.webview_by_id(webview_id) else {
             return;
         };
 
