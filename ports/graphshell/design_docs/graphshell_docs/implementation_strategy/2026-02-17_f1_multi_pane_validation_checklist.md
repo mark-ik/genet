@@ -5,7 +5,8 @@
 Focused validation for F1 exit criteria:
 - multiple webview panes visible in one frame,
 - focused-target routing correctness,
-- no non-focused-pane teardown from focus changes.
+- no non-focused-pane teardown from focus changes,
+- explicit focused-pane affordance and cold-node reactivation behavior.
 
 ## Automated Coverage (Unit)
 
@@ -13,9 +14,16 @@ Focused validation for F1 exit criteria:
 - [x] Focus hint drives frame activation target (`webview_for_frame_activation`).
 - [x] Fallback activation uses active tile when hint is stale/inactive.
 - [x] Split layout retains both webview tiles when focus target changes.
+- [x] Toolbar target resolution falls back to selected node when no live focused webview exists (`desktop::nav_targeting::tests::test_focused_toolbar_node_falls_back_to_selected_node_when_no_live_focus`).
+- [x] Pointer focus-retarget rule is deterministic (retarget on mouse press only) (`desktop::headed_window::tests::test_should_retarget_webview_focus_only_on_press`).
 
 Key test file:
 - `ports/graphshell/desktop/gui.rs` (`desktop::gui::tests::*split*`, `*focused*`, `*frame_activation*`)
+- `ports/graphshell/desktop/nav_targeting.rs`
+- `ports/graphshell/desktop/headed_window.rs`
+
+Automated status (2026-02-18):
+- `cargo test -p graphshell --lib`: Passed.
 
 ## Headed Manual Checklist
 
@@ -55,6 +63,33 @@ Result (2026-02-17, baseline run): Passed (controls affected focused pane only).
 - Confirm pane B remains active.
 - Confirm node A remains in graph as `Cold` (reactivatable) unless explicitly deleted.
 Result (2026-02-17, baseline run): Passed.
+
+## Headed Manual Re-Run (2026-02-18, Post-Hardening)
+
+Run this pass after desktop UX hardening (focused-pane ring, deterministic click focus, cold-node Reactivate action):
+
+1. Focus affordance:
+- Open two panes.
+- Click pane A, then pane B.
+- Confirm focused pane shows visible focus ring and ring moves on click.
+Result (2026-02-18): Confirmed.
+
+2. Focus switching does not hide other pane:
+- With both panes visible, click/scroll/type in each pane.
+- Confirm non-focused pane remains visible and interactive.
+Result (2026-02-18): Confirmed.
+
+3. Omnibar targeting with cold-pane fallback:
+- Close pane A tile, leaving node A as `Cold`.
+- Re-open node A tile so it has no active webview.
+- With pane A selected, submit URL in omnibar.
+- Confirm node A is promoted/reactivated and navigates in pane A (not a random/new pane).
+Result (2026-02-18): Confirmed.
+
+4. In-pane Reactivate action:
+- For a pane showing "No active WebView", click `Reactivate`.
+- Confirm node lifecycle promotes to `Active` and webview appears without requiring a new tab.
+Result (2026-02-18): Confirmed.
 
 ## Known Limits
 

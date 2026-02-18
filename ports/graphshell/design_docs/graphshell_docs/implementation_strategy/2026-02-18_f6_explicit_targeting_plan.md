@@ -350,6 +350,7 @@ Use this checklist during review:
 - 2026-02-18: Step 2 implemented with centralized, rate-limited fallback warning in input target resolution.
 - 2026-02-18: Step 3 implemented by updating `stop()` hard-gap documentation in code.
 - 2026-02-18: Step 4 partially implemented with focused unit tests for EGL target-resolution helper behavior and desktop focused-webview semantics.
+- 2026-02-18: Follow-on structural plan created for full single-window/single-active obviation: `2026-02-18_single_window_active_obviation_plan.md`.
 - Next: optional follow-up tests for full end-to-end EGL wrapper dispatch under host-driven integration harness.
 
 ---

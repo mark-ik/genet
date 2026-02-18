@@ -135,7 +135,7 @@ Each feature is gated by explicit dependencies and exit criteria.
 ### F6: EGL/WebDriver Explicit Targeting Semantics
 
 - **Goal**: Converge EGL/WebDriver routing on explicit webview targeting while preserving Servo/servoshell compatibility.
-- **Status**: In progress (explicit EGL `_for_webview` overloads and centralized fallback warning landed; remaining follow-up is extended validation depth).
+- **Status**: Implemented for scoped cycle (explicit EGL `_for_webview` overloads + centralized fallback warning landed); structural single-window/single-active obviation is deferred to follow-on plan.
 - **Depends on**: Scope decision checkpoint.
 - **Gate 0 (decision gate)**:
   - **Decision Made**: Desktop-only scope for this cycle.
@@ -150,6 +150,7 @@ Each feature is gated by explicit dependencies and exit criteria.
 - **Primary files**:
   - `ports/graphshell/design_docs/graphshell_docs/implementation_strategy/2026-02-16_architecture_and_navigation_plan.md`
   - `ports/graphshell/design_docs/graphshell_docs/implementation_strategy/2026-02-18_f6_explicit_targeting_plan.md`
+  - `ports/graphshell/design_docs/graphshell_docs/implementation_strategy/2026-02-18_single_window_active_obviation_plan.md` (deferred follow-on inventory)
 
 ### F7: GUI Decomposition for Maintainability
 
