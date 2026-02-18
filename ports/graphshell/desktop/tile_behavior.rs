@@ -18,6 +18,18 @@ use crate::util::truncate_with_ellipsis;
 
 use super::tile_kind::TileKind;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PendingOpenMode {
+    Tab,
+    SplitHorizontal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PendingOpenNode {
+    pub key: NodeKey,
+    pub mode: PendingOpenMode,
+}
+
 pub(crate) struct GraphshellTileBehavior<'a> {
     pub graph_app: &'a mut GraphBrowserApp,
     tile_favicon_textures: &'a mut HashMap<NodeKey, (u64, egui::TextureHandle)>,
@@ -25,7 +37,7 @@ pub(crate) struct GraphshellTileBehavior<'a> {
     active_search_match: Option<NodeKey>,
     search_filter_mode: bool,
     search_query_active: bool,
-    pending_open_nodes: Vec<NodeKey>,
+    pending_open_nodes: Vec<PendingOpenNode>,
     pending_closed_nodes: Vec<NodeKey>,
     pending_graph_intents: Vec<GraphIntent>,
 }
@@ -52,7 +64,7 @@ impl<'a> GraphshellTileBehavior<'a> {
         }
     }
 
-    pub fn take_pending_open_nodes(&mut self) -> Vec<NodeKey> {
+    pub fn take_pending_open_nodes(&mut self) -> Vec<PendingOpenNode> {
         std::mem::take(&mut self.pending_open_nodes)
     }
 
@@ -152,7 +164,28 @@ impl<'a> Behavior<TileKind> for GraphshellTileBehavior<'a> {
                                 key,
                                 multi_select: false,
                             });
-                            self.pending_open_nodes.push(key);
+                            self.pending_open_nodes.push(PendingOpenNode {
+                                key,
+                                mode: PendingOpenMode::Tab,
+                            });
+                        },
+                        GraphAction::FocusNodeSplit(key) => {
+                            if let Some(primary) = self.graph_app.selected_nodes.primary()
+                                && primary != key
+                            {
+                                self.pending_graph_intents.push(GraphIntent::CreateUserGroupedEdge {
+                                    from: primary,
+                                    to: key,
+                                });
+                            }
+                            self.pending_graph_intents.push(GraphIntent::SelectNode {
+                                key,
+                                multi_select: false,
+                            });
+                            self.pending_open_nodes.push(PendingOpenNode {
+                                key,
+                                mode: PendingOpenMode::SplitHorizontal,
+                            });
                         },
                         other => passthrough_actions.push(other),
                     }

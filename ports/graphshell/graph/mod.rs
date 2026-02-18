@@ -7,7 +7,7 @@
 //! Core structures:
 //! - `Graph`: Main graph container backed by petgraph::StableGraph
 //! - `Node`: Webpage node with position, velocity, and metadata
-//! - `EdgeType`: Connection type between nodes (hyperlink, history)
+//! - `EdgeType`: Connection type between nodes (hyperlink, history, user-grouped)
 
 use euclid::default::{Point2D, Vector2D};
 use petgraph::stable_graph::{EdgeIndex, NodeIndex, StableGraph};
@@ -96,6 +96,9 @@ pub enum EdgeType {
 
     /// Browser history traversal
     History,
+
+    /// Explicit user grouping association
+    UserGrouped,
 }
 
 /// Read-only view of an edge (built from petgraph edge references)
@@ -302,6 +305,7 @@ impl Graph {
                     edge_type: match edge.edge_type {
                         EdgeType::Hyperlink => PersistedEdgeType::Hyperlink,
                         EdgeType::History => PersistedEdgeType::History,
+                        EdgeType::UserGrouped => PersistedEdgeType::UserGrouped,
                     },
                 }
             })
@@ -359,6 +363,7 @@ impl Graph {
                 let edge_type = match pedge.edge_type {
                     PersistedEdgeType::Hyperlink => EdgeType::Hyperlink,
                     PersistedEdgeType::History => EdgeType::History,
+                    PersistedEdgeType::UserGrouped => EdgeType::UserGrouped,
                 };
                 graph.add_edge(from, to, edge_type);
             }
@@ -665,19 +670,23 @@ mod tests {
         let mut graph = Graph::new();
         let n1 = graph.add_node("https://a.com".to_string(), Point2D::new(0.0, 0.0));
         let n2 = graph.add_node("https://b.com".to_string(), Point2D::new(100.0, 0.0));
+        let n3 = graph.add_node("https://c.com".to_string(), Point2D::new(200.0, 0.0));
         graph.add_edge(n1, n2, EdgeType::Hyperlink);
         graph.add_edge(n2, n1, EdgeType::History);
+        graph.add_edge(n1, n3, EdgeType::UserGrouped);
 
         let snapshot = graph.to_snapshot();
         let restored = Graph::from_snapshot(&snapshot);
 
-        assert_eq!(restored.edge_count(), 2);
+        assert_eq!(restored.edge_count(), 3);
 
         let edges: Vec<_> = restored.edges().collect();
         let has_hyperlink = edges.iter().any(|e| e.edge_type == EdgeType::Hyperlink);
         let has_history = edges.iter().any(|e| e.edge_type == EdgeType::History);
+        let has_user_grouped = edges.iter().any(|e| e.edge_type == EdgeType::UserGrouped);
         assert!(has_hyperlink);
         assert!(has_history);
+        assert!(has_user_grouped);
     }
 
     #[test]

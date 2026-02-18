@@ -295,6 +295,9 @@ impl GraphStore {
                             types::ArchivedPersistedEdgeType::History => {
                                 crate::graph::EdgeType::History
                             },
+                            types::ArchivedPersistedEdgeType::UserGrouped => {
+                                crate::graph::EdgeType::UserGrouped
+                            },
                         };
                         graph.add_edge(from_key, to_key, et);
                     }
@@ -452,6 +455,44 @@ mod tests {
             let (_, a) = graph.get_node_by_url("https://a.com").unwrap();
             assert_eq!(a.position.x, 10.0);
             assert_eq!(a.position.y, 20.0);
+        }
+    }
+
+    #[test]
+    fn test_log_and_recover_user_grouped_edge() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+        let id_a = Uuid::new_v4();
+        let id_b = Uuid::new_v4();
+
+        {
+            let mut store = GraphStore::open(path.clone()).unwrap();
+            store.log_mutation(&LogEntry::AddNode {
+                node_id: id_a.to_string(),
+                url: "https://a.com".to_string(),
+                position_x: 10.0,
+                position_y: 20.0,
+            });
+            store.log_mutation(&LogEntry::AddNode {
+                node_id: id_b.to_string(),
+                url: "https://b.com".to_string(),
+                position_x: 30.0,
+                position_y: 40.0,
+            });
+            store.log_mutation(&LogEntry::AddEdge {
+                from_node_id: id_a.to_string(),
+                to_node_id: id_b.to_string(),
+                edge_type: types::PersistedEdgeType::UserGrouped,
+            });
+        }
+
+        {
+            let store = GraphStore::open(path).unwrap();
+            let graph = store.recover().unwrap();
+            let has_user_grouped = graph
+                .edges()
+                .any(|e| e.edge_type == EdgeType::UserGrouped);
+            assert!(has_user_grouped);
         }
     }
 

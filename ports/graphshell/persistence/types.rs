@@ -32,6 +32,7 @@ pub struct PersistedNode {
 pub enum PersistedEdgeType {
     Hyperlink,
     History,
+    UserGrouped,
 }
 
 /// Persisted edge.
@@ -137,6 +138,19 @@ mod tests {
         assert!(!archived.from_node_id.as_str().is_empty());
         assert!(!archived.to_node_id.as_str().is_empty());
         assert_eq!(archived.edge_type, ArchivedPersistedEdgeType::Hyperlink);
+    }
+
+    #[test]
+    fn test_persisted_edge_roundtrip_user_grouped() {
+        let edge = PersistedEdge {
+            from_node_id: Uuid::new_v4().to_string(),
+            to_node_id: Uuid::new_v4().to_string(),
+            edge_type: PersistedEdgeType::UserGrouped,
+        };
+
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&edge).unwrap();
+        let archived = rkyv::access::<ArchivedPersistedEdge, rkyv::rancor::Error>(&bytes).unwrap();
+        assert_eq!(archived.edge_type, ArchivedPersistedEdgeType::UserGrouped);
     }
 
     #[test]

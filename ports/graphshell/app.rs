@@ -148,6 +148,10 @@ pub enum GraphIntent {
         key: NodeKey,
         new_url: String,
     },
+    CreateUserGroupedEdge {
+        from: NodeKey,
+        to: NodeKey,
+    },
     PromoteNodeToActive {
         key: NodeKey,
     },
@@ -407,6 +411,9 @@ impl GraphBrowserApp {
             GraphIntent::SetNodeUrl { key, new_url } => {
                 let _ = self.update_node_url_and_log(key, new_url);
             },
+            GraphIntent::CreateUserGroupedEdge { from, to } => {
+                self.add_user_grouped_edge_if_missing(from, to);
+            },
             GraphIntent::PromoteNodeToActive { key } => {
                 self.promote_node_to_active(key);
             },
@@ -628,6 +635,7 @@ impl GraphBrowserApp {
             let persisted_type = match edge_type {
                 crate::graph::EdgeType::Hyperlink => PersistedEdgeType::Hyperlink,
                 crate::graph::EdgeType::History => PersistedEdgeType::History,
+                crate::graph::EdgeType::UserGrouped => PersistedEdgeType::UserGrouped,
             };
             store.log_mutation(&LogEntry::AddEdge {
                 from_node_id,
@@ -868,6 +876,22 @@ impl GraphBrowserApp {
         });
         if !has_history_edge {
             let _ = self.add_edge_and_sync(from_key, to_key, EdgeType::History);
+        }
+    }
+
+    fn add_user_grouped_edge_if_missing(&mut self, from: NodeKey, to: NodeKey) {
+        if from == to {
+            return;
+        }
+        if self.graph.get_node(from).is_none() || self.graph.get_node(to).is_none() {
+            return;
+        }
+        let already_grouped = self
+            .graph
+            .edges()
+            .any(|edge| edge.edge_type == EdgeType::UserGrouped && edge.from == from && edge.to == to);
+        if !already_grouped {
+            let _ = self.add_edge_and_sync(from, to, EdgeType::UserGrouped);
         }
     }
 
@@ -1289,6 +1313,49 @@ mod tests {
             .edges()
             .any(|e| e.edge_type == EdgeType::History && e.from == from && e.to == to);
         assert!(has_edge);
+    }
+
+    #[test]
+    fn test_intent_create_user_grouped_edge_adds_single_edge() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let from = app
+            .graph
+            .add_node("https://from.com".into(), Point2D::new(0.0, 0.0));
+        let to = app
+            .graph
+            .add_node("https://to.com".into(), Point2D::new(10.0, 0.0));
+
+        app.apply_intents([GraphIntent::CreateUserGroupedEdge { from, to }]);
+
+        let count = app
+            .graph
+            .edges()
+            .filter(|e| e.edge_type == EdgeType::UserGrouped && e.from == from && e.to == to)
+            .count();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_intent_create_user_grouped_edge_is_idempotent() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let from = app
+            .graph
+            .add_node("https://from.com".into(), Point2D::new(0.0, 0.0));
+        let to = app
+            .graph
+            .add_node("https://to.com".into(), Point2D::new(10.0, 0.0));
+
+        app.apply_intents([
+            GraphIntent::CreateUserGroupedEdge { from, to },
+            GraphIntent::CreateUserGroupedEdge { from, to },
+        ]);
+
+        let count = app
+            .graph
+            .edges()
+            .filter(|e| e.edge_type == EdgeType::UserGrouped && e.from == from && e.to == to)
+            .count();
+        assert_eq!(count, 1);
     }
 
     #[test]

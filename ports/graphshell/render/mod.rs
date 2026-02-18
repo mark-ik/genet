@@ -30,6 +30,7 @@ use std::rc::Rc;
 /// graph interactions testable without an egui rendering context.
 pub enum GraphAction {
     FocusNode(NodeKey),
+    FocusNodeSplit(NodeKey),
     DragStart,
     DragEnd(NodeKey, Point2D<f32>),
     MoveNode(NodeKey, Point2D<f32>),
@@ -132,7 +133,8 @@ pub fn render_graph_in_ui_collect_actions(
     // Post-frame zoom clamp: enforce min/max bounds on egui_graphs zoom
     clamp_zoom(ui.ctx(), app);
 
-    collect_graph_actions(app, &events)
+    let split_open_modifier = ui.input(|i| i.modifiers.shift);
+    collect_graph_actions(app, &events, split_open_modifier)
 }
 
 fn filtered_graph_for_search(
@@ -213,6 +215,7 @@ fn clamp_zoom(ctx: &egui::Context, app: &mut GraphBrowserApp) {
 fn collect_graph_actions(
     app: &GraphBrowserApp,
     events: &Rc<RefCell<Vec<Event>>>,
+    split_open_modifier: bool,
 ) -> Vec<GraphAction> {
     let mut actions = Vec::new();
 
@@ -222,7 +225,11 @@ fn collect_graph_actions(
                 if let Some(state) = app.egui_state.as_ref() {
                     let idx = NodeIndex::new(p.id);
                     if let Some(key) = state.get_key(idx) {
-                        actions.push(GraphAction::FocusNode(key));
+                        if split_open_modifier {
+                            actions.push(GraphAction::FocusNodeSplit(key));
+                        } else {
+                            actions.push(GraphAction::FocusNode(key));
+                        }
                     }
                 }
             },
@@ -281,6 +288,12 @@ pub fn intents_from_graph_actions(actions: Vec<GraphAction>) -> Vec<GraphIntent>
     for action in actions {
         match action {
             GraphAction::FocusNode(key) => {
+                intents.push(GraphIntent::SelectNode {
+                    key,
+                    multi_select: false,
+                });
+            },
+            GraphAction::FocusNodeSplit(key) => {
                 intents.push(GraphIntent::SelectNode {
                     key,
                     multi_select: false,
@@ -373,7 +386,7 @@ fn draw_graph_info(ui: &mut egui::Ui, app: &GraphBrowserApp) {
     );
 
     // Draw controls hint
-    let controls_text = "Shortcuts: Double-click Select/Open | N New Node | Del Remove | T Physics | C Fit | Ctrl+F Search | Home/Esc Toggle View | F1/? Help";
+    let controls_text = "Shortcuts: Double-click Open | Shift+Double-click Split Open | N New Node | Del Remove | T Physics | C Fit | Ctrl+F Search | Home/Esc Toggle View | F1/? Help";
     ui.painter().text(
         ui.available_rect_before_wrap().left_bottom() + Vec2::new(10.0, -10.0),
         egui::Align2::LEFT_BOTTOM,
@@ -534,6 +547,7 @@ pub fn render_help_panel(ctx: &egui::Context, app: &mut GraphBrowserApp) {
                         ("F1 / ?", "This help panel"),
                         ("Ctrl+L / Alt+D", "Focus address bar"),
                         ("Double-click node", "Open node in detail view"),
+                        ("Shift + Double-click node", "Open node in split pane"),
                         ("Click + drag", "Move a node"),
                         ("Scroll wheel", "Zoom in / out"),
                     ];
