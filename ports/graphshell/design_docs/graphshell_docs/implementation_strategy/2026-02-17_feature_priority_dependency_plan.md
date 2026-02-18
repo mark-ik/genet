@@ -127,6 +127,9 @@ Each feature is gated by explicit dependencies and exit criteria.
   - `ports/graphshell/graph/mod.rs`
   - `ports/graphshell/desktop/tile_behavior.rs`
   - `ports/graphshell/desktop/gui.rs`
+- **Follow-on UX/operations plan**:
+  - `ports/graphshell/design_docs/graphshell_docs/implementation_strategy/2026-02-18_edge_operations_and_radial_palette_plan.md`
+  - Covers explicit edge create/remove command surface, radial command model, and multi-select-based simplification.
 
 ---
 
@@ -194,3 +197,32 @@ Each feature is gated by explicit dependencies and exit criteria.
 - This plan is intentionally feature-gated, not calendar-gated.
 - A dependent feature should not start until dependency gates are satisfied.
 - **F2-first rationale**: F2 (~80 lines) removes the global-active fallback that F1 would otherwise inherit. Doing F2 first means F1's split-pane code must use tile-focused routing from the start, catching integration mistakes earlier. The F2->F1 dependency noted above is soft; `focused_tile_webview_id()` is already meaningful with the existing tab model and does not require split panes.
+
+## Commit Slicing Guidance
+
+When batching commits by plan phase, prefer this order and file grouping:
+
+1. `F1/F2 desktop routing and pane behavior`
+- `ports/graphshell/desktop/*`
+- `ports/graphshell/window.rs`
+- `ports/graphshell/running_app_state.rs`
+
+2. `F5 edge semantics and persistence`
+- `ports/graphshell/app.rs`
+- `ports/graphshell/graph/mod.rs`
+- `ports/graphshell/persistence/mod.rs`
+- `ports/graphshell/persistence/types.rs`
+
+3. `F6 explicit targeting (EGL/WebDriver scoped)`
+- `ports/graphshell/egl/app.rs`
+- `ports/graphshell/webdriver.rs`
+- related F6 plan docs
+
+4. `F7 GUI decomposition`
+- `ports/graphshell/desktop/gui.rs`
+- extracted modules under `ports/graphshell/desktop/`
+
+5. `Doc alignment and validation artifacts`
+- `ports/graphshell/design_docs/graphshell_docs/implementation_strategy/*`
+- `ports/graphshell/design_docs/graphshell_docs/INDEX.md`
+- `ports/graphshell/design_docs/DOC_POLICY.md`

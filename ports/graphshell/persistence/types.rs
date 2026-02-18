@@ -65,6 +65,11 @@ pub enum LogEntry {
         to_node_id: String,
         edge_type: PersistedEdgeType,
     },
+    RemoveEdge {
+        from_node_id: String,
+        to_node_id: String,
+        edge_type: PersistedEdgeType,
+    },
     UpdateNodeTitle {
         node_id: String,
         title: String,
@@ -225,6 +230,30 @@ mod tests {
                 assert_eq!(new_url.as_str(), "https://new.com");
             },
             _ => panic!("Expected UpdateNodeUrl variant"),
+        }
+    }
+
+    #[test]
+    fn test_log_entry_remove_edge_roundtrip() {
+        let entry = LogEntry::RemoveEdge {
+            from_node_id: Uuid::new_v4().to_string(),
+            to_node_id: Uuid::new_v4().to_string(),
+            edge_type: PersistedEdgeType::UserGrouped,
+        };
+
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&entry).unwrap();
+        let archived = rkyv::access::<ArchivedLogEntry, rkyv::rancor::Error>(&bytes).unwrap();
+        match archived {
+            ArchivedLogEntry::RemoveEdge {
+                from_node_id,
+                to_node_id,
+                edge_type,
+            } => {
+                assert!(!from_node_id.as_str().is_empty());
+                assert!(!to_node_id.as_str().is_empty());
+                assert_eq!(*edge_type, ArchivedPersistedEdgeType::UserGrouped);
+            },
+            _ => panic!("Expected RemoveEdge variant"),
         }
     }
 }

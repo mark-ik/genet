@@ -1,7 +1,7 @@
 # Graphshell Design Documentation Index
 
-**Last Updated**: February 16, 2026
-**Status**: M1 complete; active: navigation control-plane, selection consolidation follow-up
+**Last Updated**: February 18, 2026
+**Status**: M1 complete; active: desktop architecture hardening, explicit targeting follow-up, edge/radial UX planning
 
 ---
 
@@ -31,6 +31,10 @@
 | Document | Scope |
 | -------- | ----- |
 | **[2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md)** | Consolidated architecture: semantic parity model, Servo delegate wiring, intent boundary, legacy cleanup |
+| **[2026-02-17_feature_priority_dependency_plan.md](implementation_strategy/2026-02-17_feature_priority_dependency_plan.md)** | Feature-priority sequencing with dependency gating (F1-F7) |
+| **[2026-02-18_f6_explicit_targeting_plan.md](implementation_strategy/2026-02-18_f6_explicit_targeting_plan.md)** | Explicit EGL/WebDriver targeting audit and local-first implementation strategy |
+| **[2026-02-18_single_window_active_obviation_plan.md](implementation_strategy/2026-02-18_single_window_active_obviation_plan.md)** | Deferred follow-on inventory for structural single-window/single-active obviation |
+| **[2026-02-18_edge_operations_and_radial_palette_plan.md](implementation_strategy/2026-02-18_edge_operations_and_radial_palette_plan.md)** | Edge create/remove UX, radial command model, and multi-select workflow plan |
 | **[2026-02-17_egl_embedder_extension_plan.md](implementation_strategy/2026-02-17_egl_embedder_extension_plan.md)** | EGL extension phases: single-window hardening, semantic convergence, host/vsync contract, optional multi-window |
 | **[2026-02-14_physics_migration_plan.md](implementation_strategy/2026-02-14_physics_migration_plan.md)** | Physics migration record (implemented) |
 | **[2026-02-14_selection_semantics_plan.md](implementation_strategy/2026-02-14_selection_semantics_plan.md)** | Single-source selection state |

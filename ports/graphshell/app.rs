@@ -152,6 +152,11 @@ pub enum GraphIntent {
         from: NodeKey,
         to: NodeKey,
     },
+    RemoveEdge {
+        from: NodeKey,
+        to: NodeKey,
+        edge_type: EdgeType,
+    },
     PromoteNodeToActive {
         key: NodeKey,
     },
@@ -414,6 +419,13 @@ impl GraphBrowserApp {
             GraphIntent::CreateUserGroupedEdge { from, to } => {
                 self.add_user_grouped_edge_if_missing(from, to);
             },
+            GraphIntent::RemoveEdge {
+                from,
+                to,
+                edge_type,
+            } => {
+                let _ = self.remove_edges_and_log(from, to, edge_type);
+            },
             GraphIntent::PromoteNodeToActive { key } => {
                 self.promote_node_to_active(key);
             },
@@ -619,6 +631,22 @@ impl GraphBrowserApp {
         edge_key
     }
 
+    /// Remove directed edges of a specific type and log the mutation.
+    /// Returns number of removed edges.
+    pub fn remove_edges_and_log(
+        &mut self,
+        from_key: NodeKey,
+        to_key: NodeKey,
+        edge_type: crate::graph::EdgeType,
+    ) -> usize {
+        let removed = self.graph.remove_edges(from_key, to_key, edge_type);
+        if removed > 0 {
+            self.log_edge_removal_mutation(from_key, to_key, edge_type);
+            self.egui_state_dirty = true;
+        }
+        removed
+    }
+
     /// Log an edge addition to persistence
     pub fn log_edge_mutation(
         &mut self,
@@ -638,6 +666,32 @@ impl GraphBrowserApp {
                 crate::graph::EdgeType::UserGrouped => PersistedEdgeType::UserGrouped,
             };
             store.log_mutation(&LogEntry::AddEdge {
+                from_node_id,
+                to_node_id,
+                edge_type: persisted_type,
+            });
+        }
+    }
+
+    /// Log an edge removal to persistence.
+    pub fn log_edge_removal_mutation(
+        &mut self,
+        from_key: NodeKey,
+        to_key: NodeKey,
+        edge_type: crate::graph::EdgeType,
+    ) {
+        if let Some(store) = &mut self.persistence {
+            let from_id = self.graph.get_node(from_key).map(|n| n.id.to_string());
+            let to_id = self.graph.get_node(to_key).map(|n| n.id.to_string());
+            let (Some(from_node_id), Some(to_node_id)) = (from_id, to_id) else {
+                return;
+            };
+            let persisted_type = match edge_type {
+                crate::graph::EdgeType::Hyperlink => PersistedEdgeType::Hyperlink,
+                crate::graph::EdgeType::History => PersistedEdgeType::History,
+                crate::graph::EdgeType::UserGrouped => PersistedEdgeType::UserGrouped,
+            };
+            store.log_mutation(&LogEntry::RemoveEdge {
                 from_node_id,
                 to_node_id,
                 edge_type: persisted_type,
@@ -886,10 +940,9 @@ impl GraphBrowserApp {
         if self.graph.get_node(from).is_none() || self.graph.get_node(to).is_none() {
             return;
         }
-        let already_grouped = self
-            .graph
-            .edges()
-            .any(|edge| edge.edge_type == EdgeType::UserGrouped && edge.from == from && edge.to == to);
+        let already_grouped = self.graph.edges().any(|edge| {
+            edge.edge_type == EdgeType::UserGrouped && edge.from == from && edge.to == to
+        });
         if !already_grouped {
             let _ = self.add_edge_and_sync(from, to, EdgeType::UserGrouped);
         }
@@ -1359,14 +1412,63 @@ mod tests {
     }
 
     #[test]
+    fn test_intent_remove_edge_removes_matching_type_only() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let from = app.add_node_and_sync("https://from.com".into(), Point2D::new(0.0, 0.0));
+        let to = app.add_node_and_sync("https://to.com".into(), Point2D::new(100.0, 0.0));
+
+        let _ = app.add_edge_and_sync(from, to, EdgeType::Hyperlink);
+        let _ = app.add_edge_and_sync(from, to, EdgeType::UserGrouped);
+
+        app.apply_intents([GraphIntent::RemoveEdge {
+            from,
+            to,
+            edge_type: EdgeType::UserGrouped,
+        }]);
+
+        let has_user_grouped = app
+            .graph
+            .edges()
+            .any(|e| e.edge_type == EdgeType::UserGrouped && e.from == from && e.to == to);
+        let has_hyperlink = app
+            .graph
+            .edges()
+            .any(|e| e.edge_type == EdgeType::Hyperlink && e.from == from && e.to == to);
+        assert!(!has_user_grouped);
+        assert!(has_hyperlink);
+    }
+
+    #[test]
+    fn test_remove_edges_and_log_reports_removed_count() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let from = app.add_node_and_sync("https://from.com".into(), Point2D::new(0.0, 0.0));
+        let to = app.add_node_and_sync("https://to.com".into(), Point2D::new(100.0, 0.0));
+
+        let _ = app.add_edge_and_sync(from, to, EdgeType::UserGrouped);
+        let _ = app.add_edge_and_sync(from, to, EdgeType::UserGrouped);
+
+        let removed = app.remove_edges_and_log(from, to, EdgeType::UserGrouped);
+        assert_eq!(removed, 2);
+        assert_eq!(
+            app.graph
+                .edges()
+                .filter(|e| e.edge_type == EdgeType::UserGrouped)
+                .count(),
+            0
+        );
+    }
+
+    #[test]
     fn test_history_changed_is_authoritative_when_url_callback_stays_latest() {
         let mut app = GraphBrowserApp::new_for_testing();
-        let step1 = app
-            .graph
-            .add_node("https://site.example/?step=1".into(), Point2D::new(0.0, 0.0));
-        let step2 = app
-            .graph
-            .add_node("https://site.example/?step=2".into(), Point2D::new(10.0, 0.0));
+        let step1 = app.graph.add_node(
+            "https://site.example/?step=1".into(),
+            Point2D::new(0.0, 0.0),
+        );
+        let step2 = app.graph.add_node(
+            "https://site.example/?step=2".into(),
+            Point2D::new(10.0, 0.0),
+        );
         let wv = test_webview_id();
         app.map_webview_to_node(wv, step2);
         if let Some(node) = app.graph.get_node_mut(step2) {
@@ -1399,9 +1501,10 @@ mod tests {
         let node = app.graph.get_node(step2).unwrap();
         assert_eq!(node.history_index, 1);
 
-        let has_edge = app.graph.edges().any(|e| {
-            e.edge_type == EdgeType::History && e.from == step2 && e.to == step1
-        });
+        let has_edge = app
+            .graph
+            .edges()
+            .any(|e| e.edge_type == EdgeType::History && e.from == step2 && e.to == step1);
         assert!(has_edge);
     }
 
@@ -1842,7 +1945,8 @@ mod tests {
             NodeLifecycle::Cold
         ));
         assert_eq!(
-            app.get_node_crash_state(key).map(|state| state.reason.as_str()),
+            app.get_node_crash_state(key)
+                .map(|state| state.reason.as_str()),
             Some("gpu reset")
         );
         assert!(app.get_node_for_webview(wv_id).is_none());
@@ -1859,7 +1963,9 @@ mod tests {
     #[test]
     fn test_clear_graph_clears_runtime_crash_state() {
         let mut app = GraphBrowserApp::new_for_testing();
-        let key = app.graph.add_node("https://a.com".to_string(), Point2D::new(0.0, 0.0));
+        let key = app
+            .graph
+            .add_node("https://a.com".to_string(), Point2D::new(0.0, 0.0));
         let wv_id = test_webview_id();
         app.map_webview_to_node(wv_id, key);
         app.apply_intents([GraphIntent::WebViewCrashed {

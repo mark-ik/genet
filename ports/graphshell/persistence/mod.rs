@@ -302,6 +302,34 @@ impl GraphStore {
                         graph.add_edge(from_key, to_key, et);
                     }
                 },
+                ArchivedLogEntry::RemoveEdge {
+                    from_node_id,
+                    to_node_id,
+                    edge_type,
+                } => {
+                    let Ok(from_node_id) = Uuid::parse_str(from_node_id.as_str()) else {
+                        continue;
+                    };
+                    let Ok(to_node_id) = Uuid::parse_str(to_node_id.as_str()) else {
+                        continue;
+                    };
+                    let from = graph.get_node_key_by_id(from_node_id);
+                    let to = graph.get_node_key_by_id(to_node_id);
+                    if let (Some(from_key), Some(to_key)) = (from, to) {
+                        let et = match edge_type {
+                            types::ArchivedPersistedEdgeType::Hyperlink => {
+                                crate::graph::EdgeType::Hyperlink
+                            },
+                            types::ArchivedPersistedEdgeType::History => {
+                                crate::graph::EdgeType::History
+                            },
+                            types::ArchivedPersistedEdgeType::UserGrouped => {
+                                crate::graph::EdgeType::UserGrouped
+                            },
+                        };
+                        let _ = graph.remove_edges(from_key, to_key, et);
+                    }
+                },
                 ArchivedLogEntry::UpdateNodeTitle { node_id, title } => {
                     let Ok(node_id) = Uuid::parse_str(node_id.as_str()) else {
                         continue;
@@ -489,10 +517,49 @@ mod tests {
         {
             let store = GraphStore::open(path).unwrap();
             let graph = store.recover().unwrap();
-            let has_user_grouped = graph
-                .edges()
-                .any(|e| e.edge_type == EdgeType::UserGrouped);
+            let has_user_grouped = graph.edges().any(|e| e.edge_type == EdgeType::UserGrouped);
             assert!(has_user_grouped);
+        }
+    }
+
+    #[test]
+    fn test_log_remove_edge_recover() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+        let id_a = Uuid::new_v4();
+        let id_b = Uuid::new_v4();
+
+        {
+            let mut store = GraphStore::open(path.clone()).unwrap();
+            store.log_mutation(&LogEntry::AddNode {
+                node_id: id_a.to_string(),
+                url: "https://a.com".to_string(),
+                position_x: 10.0,
+                position_y: 20.0,
+            });
+            store.log_mutation(&LogEntry::AddNode {
+                node_id: id_b.to_string(),
+                url: "https://b.com".to_string(),
+                position_x: 30.0,
+                position_y: 40.0,
+            });
+            store.log_mutation(&LogEntry::AddEdge {
+                from_node_id: id_a.to_string(),
+                to_node_id: id_b.to_string(),
+                edge_type: types::PersistedEdgeType::UserGrouped,
+            });
+            store.log_mutation(&LogEntry::RemoveEdge {
+                from_node_id: id_a.to_string(),
+                to_node_id: id_b.to_string(),
+                edge_type: types::PersistedEdgeType::UserGrouped,
+            });
+        }
+
+        {
+            let store = GraphStore::open(path).unwrap();
+            let graph = store.recover().unwrap();
+            let has_user_grouped = graph.edges().any(|e| e.edge_type == EdgeType::UserGrouped);
+            assert!(!has_user_grouped);
         }
     }
 

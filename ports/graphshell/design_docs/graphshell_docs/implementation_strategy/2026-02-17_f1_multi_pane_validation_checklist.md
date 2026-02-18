@@ -91,6 +91,28 @@ Result (2026-02-18): Confirmed.
 - Confirm node lifecycle promotes to `Active` and webview appears without requiring a new tab.
 Result (2026-02-18): Confirmed.
 
+## Headed Grouping Behavior Addendum (Next Slice)
+
+Use this short pass for deterministic `UserGrouped` trigger validation:
+
+1. Split trigger creates edge:
+- Select node A, then `Shift + Double-click` node B.
+- Confirm exactly one `UserGrouped` edge A->B is created.
+
+2. Drag-into-same-tab-group trigger:
+- Open nodes A and B in separate detail panes.
+- Drag one pane into the same tabs container as the other.
+- Confirm expected `UserGrouped` edge behavior (create once, no duplicates).
+
+3. Explicit group-with-focused action:
+- Focus node A/pane A.
+- Run explicit "group with focused" command on node B.
+- Confirm exactly one `UserGrouped` edge A->B is created.
+
+4. No-trigger paths:
+- Switch pane focus, switch tabs, and navigate URLs.
+- Confirm no new `UserGrouped` edges are created from those actions alone.
+
 ## Known Limits
 
 - Unit tests cannot assert actual GPU compositing in one frame; headed manual validation is required for that final gate.

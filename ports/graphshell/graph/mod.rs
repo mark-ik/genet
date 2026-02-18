@@ -193,6 +193,27 @@ impl Graph {
         Some(self.inner.add_edge(from, to, edge_type))
     }
 
+    /// Remove all directed edges from `from` to `to` with the given type.
+    /// Returns how many edges were removed.
+    pub fn remove_edges(&mut self, from: NodeKey, to: NodeKey, edge_type: EdgeType) -> usize {
+        let edge_ids: Vec<EdgeKey> = self
+            .inner
+            .edge_references()
+            .filter(|edge| {
+                edge.source() == from && edge.target() == to && *edge.weight() == edge_type
+            })
+            .map(|edge| edge.id())
+            .collect();
+
+        let mut removed = 0;
+        for edge_id in edge_ids {
+            if self.inner.remove_edge(edge_id).is_some() {
+                removed += 1;
+            }
+        }
+        removed
+    }
+
     /// Get a node by key
     pub fn get_node(&self, key: NodeKey) -> Option<&Node> {
         self.inner.node_weight(key)
@@ -522,6 +543,26 @@ mod tests {
 
         // Check node3 has 2 incoming neighbors
         assert_eq!(graph.in_neighbors(node3).count(), 2);
+    }
+
+    #[test]
+    fn test_remove_edges_by_type_between_nodes() {
+        let mut graph = Graph::new();
+        let a = graph.add_node("https://a.com".to_string(), Point2D::new(0.0, 0.0));
+        let b = graph.add_node("https://b.com".to_string(), Point2D::new(1.0, 1.0));
+
+        graph.add_edge(a, b, EdgeType::Hyperlink).unwrap();
+        graph.add_edge(a, b, EdgeType::UserGrouped).unwrap();
+        graph.add_edge(a, b, EdgeType::UserGrouped).unwrap();
+
+        let removed = graph.remove_edges(a, b, EdgeType::UserGrouped);
+        assert_eq!(removed, 2);
+        assert_eq!(graph.edge_count(), 1);
+        assert!(
+            graph
+                .edges()
+                .all(|edge| edge.edge_type == EdgeType::Hyperlink)
+        );
     }
 
     #[test]
