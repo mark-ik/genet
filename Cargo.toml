@@ -42,7 +42,7 @@ backtrace = "0.3"
 base = { path = "components/shared/base" }
 base64 = "0.22.1"
 base64ct = { version = "1.8", features = ["alloc"] }
-bitflags = "2.10"
+bitflags = "2.11"
 bluetooth_traits = { path = "components/shared/bluetooth" }
 brotli = "8.0.2"
 bytemuck = "1"
@@ -75,6 +75,9 @@ euclid = "0.22"
 flate2 = "1.1"
 fonts_traits = { path = "components/shared/fonts" }
 freetype-sys = "0.20"
+futures = { version = "0.3", default-features = false }
+futures-core = { version = "0.3", default-features = false }
+futures-util = { version = "0.3", default-features = false }
 gleam = "0.15"
 glib = "0.21"
 glib-sys = "0.21"
@@ -121,7 +124,7 @@ mach2 = "0.6"
 malloc_size_of = { package = "servo_malloc_size_of", path = "components/malloc_size_of" }
 malloc_size_of_derive = "0.1"
 markup5ever = "0.38"
-memmap2 = "0.9.9"
+memmap2 = "0.9.10"
 mime = "0.3.13"
 mime-multipart-hyper1 = "0.10.0"
 mime_guess = "2.0.5"
