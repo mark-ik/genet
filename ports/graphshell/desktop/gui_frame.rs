@@ -6,12 +6,10 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender};
 
-use euclid::Length;
 use egui_tiles::Tree;
+use euclid::Length;
 use log::warn;
-use servo::{
-    DeviceIndependentPixel, OffscreenRenderingContext, WebViewId, WindowRenderingContext,
-};
+use servo::{DeviceIndependentPixel, OffscreenRenderingContext, WebViewId, WindowRenderingContext};
 use winit::window::Window;
 
 use super::dialog_panels::{self, DialogPanelsArgs};
@@ -19,11 +17,11 @@ use super::headed_window::HeadedWindow;
 use super::lifecycle_reconcile::{self, RuntimeReconcileArgs};
 use super::nav_targeting;
 use super::semantic_event_pipeline;
-use super::thumbnail_pipeline::ThumbnailCaptureResult;
 use super::thumbnail_pipeline;
-use super::tile_kind::TileKind;
+use super::thumbnail_pipeline::ThumbnailCaptureResult;
 use super::tile_compositor;
 use super::tile_invariants;
+use super::tile_kind::TileKind;
 use super::tile_render_pass::{self, TileRenderPassArgs};
 use super::tile_runtime;
 use super::toolbar_ui::{self, ToolbarUiArgs, ToolbarUiOutput};
@@ -96,7 +94,10 @@ pub(crate) fn ingest_pre_frame(
     }
 }
 
-pub(crate) fn apply_intents_if_any(graph_app: &mut GraphBrowserApp, intents: &mut Vec<GraphIntent>) {
+pub(crate) fn apply_intents_if_any(
+    graph_app: &mut GraphBrowserApp,
+    intents: &mut Vec<GraphIntent>,
+) {
     if !intents.is_empty() {
         graph_app.apply_intents(std::mem::take(intents));
     }
@@ -215,12 +216,13 @@ pub(crate) fn handle_keyboard_phase<F1, F2>(
 }
 
 fn active_webview_tile_node(tiles_tree: &Tree<TileKind>) -> Option<NodeKey> {
-    tiles_tree.active_tiles().into_iter().find_map(|tile_id| {
-        match tiles_tree.tiles.get(tile_id) {
+    tiles_tree
+        .active_tiles()
+        .into_iter()
+        .find_map(|tile_id| match tiles_tree.tiles.get(tile_id) {
             Some(egui_tiles::Tile::Pane(TileKind::WebView(node_key))) => Some(*node_key),
             _ => None,
-        }
-    })
+        })
 }
 
 pub(crate) struct ToolbarDialogPhaseArgs<'a> {
@@ -292,6 +294,7 @@ pub(crate) fn handle_toolbar_dialog_phase(
         graph_app,
         active_webview_node,
         focused_toolbar_webview,
+        graph_app.get_single_selected_node(),
     );
     let has_webview_tiles = tile_runtime::has_any_webview_tiles(tiles_tree);
     let is_graph_view = !has_webview_tiles;
@@ -446,9 +449,11 @@ pub(crate) fn run_post_render_phase<FActive>(
 
     #[cfg(debug_assertions)]
     {
-        for violation in
-            tile_invariants::collect_tile_invariant_violations(tiles_tree, graph_app, tile_rendering_contexts)
-        {
+        for violation in tile_invariants::collect_tile_invariant_violations(
+            tiles_tree,
+            graph_app,
+            tile_rendering_contexts,
+        ) {
             warn!("{violation}");
         }
     }
@@ -473,26 +478,24 @@ pub(crate) fn run_post_render_phase<FActive>(
         let search_matches: HashSet<NodeKey> = graph_search_matches.iter().copied().collect();
         let active_search_match =
             active_graph_search_match(graph_search_matches, graph_search_active_match_index);
-        post_render_intents.extend(tile_render_pass::run_tile_render_pass(
-            TileRenderPassArgs {
-                ctx,
-                graph_app,
-                window,
-                tiles_tree,
-                tile_rendering_contexts,
-                tile_favicon_textures,
-                graph_search_matches: &search_matches,
-                active_search_match,
-                graph_search_filter_mode,
-                search_query_active,
-                app_state,
-                rendering_context,
-                window_rendering_context,
-                responsive_webviews,
-                webview_creation_backpressure,
-                focused_webview_hint,
-            },
-        ));
+        post_render_intents.extend(tile_render_pass::run_tile_render_pass(TileRenderPassArgs {
+            ctx,
+            graph_app,
+            window,
+            tiles_tree,
+            tile_rendering_contexts,
+            tile_favicon_textures,
+            graph_search_matches: &search_matches,
+            active_search_match,
+            graph_search_filter_mode,
+            search_query_active,
+            app_state,
+            rendering_context,
+            window_rendering_context,
+            responsive_webviews,
+            webview_creation_backpressure,
+            focused_webview_hint,
+        }));
     }
     if !post_render_intents.is_empty() {
         graph_app.apply_intents(post_render_intents);

@@ -240,6 +240,10 @@ impl HeadedWindow {
             .and_then(|id| window.webview_by_id(id))
     }
 
+    fn should_retarget_webview_focus(state: ElementState) -> bool {
+        state == ElementState::Pressed
+    }
+
     fn handle_keyboard_input(
         &self,
         state: Rc<RunningAppState>,
@@ -767,7 +771,9 @@ impl HeadedWindow {
 
                 consumed = response.consumed;
                 if !consumed
-                    && let WindowEvent::KeyboardInput { event: key_event, .. } = event
+                    && let WindowEvent::KeyboardInput {
+                        event: key_event, ..
+                    } = event
                     && key_event.state == ElementState::Pressed
                     && matches!(key_event.physical_key, PhysicalKey::Code(KeyCode::Enter))
                     && self.gui.borrow().location_has_focus()
@@ -777,7 +783,9 @@ impl HeadedWindow {
                     consumed = true;
                 }
                 if consumed
-                    && let WindowEvent::KeyboardInput { event: key_event, .. } = event
+                    && let WindowEvent::KeyboardInput {
+                        event: key_event, ..
+                    } = event
                     && key_event.state == ElementState::Pressed
                     && matches!(key_event.physical_key, PhysicalKey::Code(KeyCode::Tab))
                 {
@@ -824,8 +832,10 @@ impl HeadedWindow {
                     if let Some((webview_id, local_point)) = pointer_target
                         && let Some(webview) = window.webview_by_id(webview_id)
                     {
-                        self.gui.borrow_mut().set_focused_webview_id(webview_id);
-                        window.activate_webview(webview_id);
+                        if Self::should_retarget_webview_focus(state) {
+                            self.gui.borrow_mut().set_focused_webview_id(webview_id);
+                            window.activate_webview(webview_id);
+                        }
                         self.set_webview_relative_mouse_point(local_point);
                         self.handle_mouse_button_event(&webview, button, state);
                     }
@@ -838,8 +848,6 @@ impl HeadedWindow {
                     if let Some((webview_id, local_point)) = pointer_target
                         && let Some(webview) = window.webview_by_id(webview_id)
                     {
-                        self.gui.borrow_mut().set_focused_webview_id(webview_id);
-                        window.activate_webview(webview_id);
                         self.set_webview_relative_mouse_point(local_point);
                         self.handle_mouse_move_event_with_webview_relative_point(
                             &webview,
@@ -855,8 +863,6 @@ impl HeadedWindow {
                     if let Some((webview_id, local_point)) = pointer_target
                         && let Some(webview) = window.webview_by_id(webview_id)
                     {
-                        self.gui.borrow_mut().set_focused_webview_id(webview_id);
-                        window.activate_webview(webview_id);
                         self.set_webview_relative_mouse_point(local_point);
                         let webview_rect: Rect<_, _> = webview.size().into();
                         if webview_rect.contains(self.webview_relative_mouse_point.get()) {
@@ -874,8 +880,6 @@ impl HeadedWindow {
                     if let Some((webview_id, local_point)) = pointer_target
                         && let Some(webview) = window.webview_by_id(webview_id)
                     {
-                        self.gui.borrow_mut().set_focused_webview_id(webview_id);
-                        window.activate_webview(webview_id);
                         self.set_webview_relative_mouse_point(local_point);
                         let (delta_x, delta_y, mode) = match delta {
                             MouseScrollDelta::LineDelta(delta_x, delta_y) => (
@@ -922,8 +926,6 @@ impl HeadedWindow {
                     if let Some((webview_id, local_point)) = pointer_target
                         && let Some(webview) = window.webview_by_id(webview_id)
                     {
-                        self.gui.borrow_mut().set_focused_webview_id(webview_id);
-                        window.activate_webview(webview_id);
                         self.set_webview_relative_mouse_point(local_point);
                         webview.pinch_zoom(
                             delta as f32 + 1.0,
@@ -1517,5 +1519,20 @@ impl TouchEventSimulator {
             point.into(),
         )));
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_retarget_webview_focus_only_on_press() {
+        assert!(HeadedWindow::should_retarget_webview_focus(
+            ElementState::Pressed
+        ));
+        assert!(!HeadedWindow::should_retarget_webview_focus(
+            ElementState::Released
+        ));
     }
 }

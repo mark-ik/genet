@@ -11,7 +11,7 @@ use egui::{Id, Response, Sense, Stroke, TextStyle, Ui, Vec2, WidgetText, vec2};
 use egui_tiles::{Behavior, TabState, Tile, TileId, Tiles, UiResponse};
 
 use crate::app::{GraphBrowserApp, GraphIntent};
-use crate::graph::NodeKey;
+use crate::graph::{NodeKey, NodeLifecycle};
 use crate::render;
 use crate::render::GraphAction;
 use crate::util::truncate_with_ellipsis;
@@ -173,10 +173,12 @@ impl<'a> Behavior<TileKind> for GraphshellTileBehavior<'a> {
                             if let Some(primary) = self.graph_app.selected_nodes.primary()
                                 && primary != key
                             {
-                                self.pending_graph_intents.push(GraphIntent::CreateUserGroupedEdge {
-                                    from: primary,
-                                    to: key,
-                                });
+                                self.pending_graph_intents.push(
+                                    GraphIntent::CreateUserGroupedEdge {
+                                        from: primary,
+                                        to: key,
+                                    },
+                                );
                             }
                             self.pending_graph_intents.push(GraphIntent::SelectNode {
                                 key,
@@ -218,14 +220,34 @@ impl<'a> Behavior<TileKind> for GraphshellTileBehavior<'a> {
                     if crash.has_backtrace {
                         ui.small("Crash reported a backtrace.");
                     }
-                    if let Ok(elapsed) = std::time::SystemTime::now().duration_since(crash.crashed_at)
+                    if let Ok(elapsed) =
+                        std::time::SystemTime::now().duration_since(crash.crashed_at)
                     {
                         ui.small(format!("Crashed {}s ago", elapsed.as_secs()));
                     }
                     return UiResponse::None;
                 }
                 if self.graph_app.get_webview_for_node(*node_key).is_none() {
+                    let lifecycle_hint = match node.lifecycle {
+                        NodeLifecycle::Cold => {
+                            "Node is cold. Reactivate to resume browsing in this pane."
+                        },
+                        NodeLifecycle::Active => {
+                            "Node is active but no runtime WebView is mapped yet."
+                        },
+                    };
                     ui.label(format!("No active WebView for {}", node.url));
+                    ui.small(lifecycle_hint);
+                    ui.horizontal(|ui| {
+                        if ui.button("Reactivate").clicked() {
+                            self.pending_graph_intents.push(GraphIntent::SelectNode {
+                                key: *node_key,
+                                multi_select: false,
+                            });
+                            self.pending_graph_intents
+                                .push(GraphIntent::PromoteNodeToActive { key: *node_key });
+                        }
+                    });
                 }
             },
         }

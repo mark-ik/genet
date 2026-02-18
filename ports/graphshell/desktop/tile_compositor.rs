@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use dpi::PhysicalSize;
-use egui::{LayerId, PaintCallback};
+use egui::{Id, LayerId, PaintCallback, Stroke, StrokeKind};
 use egui_glow::CallbackFn;
 use egui_tiles::{Tile, Tree};
 use euclid::{Point2D, Rect, Scale, Size2D};
@@ -51,7 +51,8 @@ pub(crate) fn focused_webview_id_for_tree(
         }
     }
 
-    active_webview_tile_node(tiles_tree).and_then(|node_key| graph_app.get_webview_for_node(node_key))
+    active_webview_tile_node(tiles_tree)
+        .and_then(|node_key| graph_app.get_webview_for_node(node_key))
 }
 
 pub(crate) fn webview_for_frame_activation(
@@ -72,7 +73,8 @@ pub(crate) fn activate_focused_webview_for_frame(
     graph_app: &GraphBrowserApp,
     focused_webview_hint: &mut Option<WebViewId>,
 ) {
-    if let Some(wv_id) = webview_for_frame_activation(tiles_tree, graph_app, *focused_webview_hint) {
+    if let Some(wv_id) = webview_for_frame_activation(tiles_tree, graph_app, *focused_webview_hint)
+    {
         *focused_webview_hint = Some(wv_id);
         window.activate_webview(wv_id);
     }
@@ -84,7 +86,9 @@ pub(crate) fn composite_active_webview_tiles(
     graph_app: &GraphBrowserApp,
     tile_rendering_contexts: &mut HashMap<NodeKey, Rc<OffscreenRenderingContext>>,
     active_tile_rects: Vec<(NodeKey, egui::Rect)>,
+    focused_webview_id: Option<WebViewId>,
 ) {
+    let focus_ring_layer = LayerId::new(egui::Order::Foreground, Id::new("graphshell_focus_ring"));
     let scale = Scale::<_, DeviceIndependentPixel, DevicePixel>::new(ctx.pixels_per_point());
     for (node_key, tile_rect) in active_tile_rects {
         let size = Size2D::new(tile_rect.width(), tile_rect.height()) * scale;
@@ -132,12 +136,24 @@ pub(crate) fn composite_active_webview_tiles(
                 })),
             });
         }
+
+        if focused_webview_id == Some(webview_id) {
+            ctx.layer_painter(focus_ring_layer).rect_stroke(
+                tile_rect.shrink(1.0),
+                4.0,
+                Stroke::new(2.0, egui::Color32::from_rgb(120, 200, 255)),
+                StrokeKind::Inside,
+            );
+        }
     }
 }
 
 fn active_webview_tile_node(tiles_tree: &Tree<TileKind>) -> Option<NodeKey> {
-    tiles_tree.active_tiles().into_iter().find_map(|tile_id| match tiles_tree.tiles.get(tile_id) {
-        Some(Tile::Pane(TileKind::WebView(node_key))) => Some(*node_key),
-        _ => None,
-    })
+    tiles_tree
+        .active_tiles()
+        .into_iter()
+        .find_map(|tile_id| match tiles_tree.tiles.get(tile_id) {
+            Some(Tile::Pane(TileKind::WebView(node_key))) => Some(*node_key),
+            _ => None,
+        })
 }

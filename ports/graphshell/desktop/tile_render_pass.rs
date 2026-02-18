@@ -35,8 +35,7 @@ pub(crate) struct TileRenderPassArgs<'a> {
     pub rendering_context: &'a Rc<OffscreenRenderingContext>,
     pub window_rendering_context: &'a Rc<WindowRenderingContext>,
     pub responsive_webviews: &'a HashSet<WebViewId>,
-    pub webview_creation_backpressure:
-        &'a mut HashMap<NodeKey, WebviewCreationBackpressureState>,
+    pub webview_creation_backpressure: &'a mut HashMap<NodeKey, WebviewCreationBackpressureState>,
     pub focused_webview_hint: &'a mut Option<WebViewId>,
 }
 
@@ -136,6 +135,9 @@ pub(crate) fn run_tile_render_pass(args: TileRenderPassArgs<'_>) -> Vec<GraphInt
         graph_app,
         focused_webview_hint,
     );
+    let focused_webview_id =
+        tile_compositor::focused_webview_id_for_tree(tiles_tree, graph_app, *focused_webview_hint);
+    *focused_webview_hint = focused_webview_id;
 
     tile_compositor::composite_active_webview_tiles(
         ctx,
@@ -143,6 +145,7 @@ pub(crate) fn run_tile_render_pass(args: TileRenderPassArgs<'_>) -> Vec<GraphInt
         graph_app,
         tile_rendering_contexts,
         active_tile_rects,
+        focused_webview_id,
     );
 
     post_render_intents

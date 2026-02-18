@@ -16,10 +16,12 @@ pub(crate) fn focused_toolbar_node(
     graph_app: &GraphBrowserApp,
     active_webview_node: Option<NodeKey>,
     focused_webview_id: Option<WebViewId>,
+    selected_node: Option<NodeKey>,
 ) -> Option<NodeKey> {
     focused_webview_id
         .and_then(|webview_id| graph_app.get_node_for_webview(webview_id))
         .or(active_webview_node)
+        .or(selected_node)
 }
 
 /// Resolve the explicit target webview for navigation commands.
@@ -59,7 +61,7 @@ mod tests {
         app.map_webview_to_node(a_id, a);
         app.map_webview_to_node(b_id, b);
 
-        let chosen = focused_toolbar_node(&app, Some(a), Some(b_id));
+        let chosen = focused_toolbar_node(&app, Some(a), Some(b_id), Some(a));
         assert_eq!(chosen, Some(b));
     }
 
@@ -70,8 +72,21 @@ mod tests {
         let a_id = test_webview_id();
         app.map_webview_to_node(a_id, a);
 
-        let chosen = focused_toolbar_node(&app, Some(a), None);
+        let chosen = focused_toolbar_node(&app, Some(a), None, None);
         assert_eq!(chosen, Some(a));
+    }
+
+    #[test]
+    fn test_focused_toolbar_node_falls_back_to_selected_node_when_no_live_focus() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let selected =
+            app.add_node_and_sync("https://selected.example".into(), Point2D::new(0.0, 0.0));
+        let other = app.add_node_and_sync("https://other.example".into(), Point2D::new(10.0, 0.0));
+        let other_wv = test_webview_id();
+        app.map_webview_to_node(other_wv, other);
+
+        let chosen = focused_toolbar_node(&app, None, None, Some(selected));
+        assert_eq!(chosen, Some(selected));
     }
 
     #[test]
