@@ -1,6 +1,6 @@
 # Graphshell Architectural Overview
 
-**Last Updated**: February 16, 2026
+**Last Updated**: February 17, 2026
 **Status**: Core browsing graph functional — Servo integration, egui_tiles multi-pane, persistence, thumbnails/favicons, search/filter all working
 
 ---
@@ -22,9 +22,9 @@ Graphshell is a **spatial tab manager** where webpages are nodes in a force-dire
 **Graph Core** (`graph/mod.rs`, 461 lines)
 - `Graph`: petgraph `StableGraph<Node, EdgeType, Directed>` as primary store
 - `Node`: URL, title, position, velocity, pinned, lifecycle (Active/Cold), favicon data, thumbnail data, history entries
-- `EdgeType`: Hyperlink (new tab from parent), History (back/forward). `UserGrouped` planned but not yet implemented.
+- `EdgeType`: Hyperlink (new tab from parent), History (back/forward), UserGrouped (explicit split-open grouping gesture).
 - `NodeKey = NodeIndex`, `EdgeKey = EdgeIndex` — stable handles surviving deletions
-- `url_to_node: HashMap<String, NodeKey>` for O(1) URL lookup
+- `url_to_nodes: HashMap<String, Vec<NodeKey>>` for URL lookup with duplicate URL support
 - `out_neighbors()`, `in_neighbors()`, `has_edge_between()` for traversal
 - Snapshot serialization: `to_snapshot()` / `from_snapshot()` for persistence
 
@@ -38,7 +38,7 @@ Graphshell is a **spatial tab manager** where webpages are nodes in a force-dire
 - egui_tiles multi-pane runtime: tile tree, per-pane rendering contexts, tile layout persistence
 - Each tile pane has a tab bar showing its cluster's nodes (connected by edges)
 - Tile-derived view state (legacy `View` enum retired)
-- Tab bars are projections of graph clusters; closing a tab removes the node everywhere
+- Tab bars are projections of graph clusters; closing a tab tile demotes node lifecycle to `Cold` (node remains until explicit delete)
 
 **Physics Runtime** (`app.rs` + `render/mod.rs`) — **Implemented via egui_graphs**
 - Force-directed layout uses egui_graphs `FruchtermanReingoldState`
@@ -81,7 +81,7 @@ Graphshell is a **spatial tab manager** where webpages are nodes in a force-dire
 - Full webview lifecycle: create/destroy webviews based on tile tree state
 - Graph view: destroy all webviews (prevent framebuffer bleed), save node list for restoration
 - Detail view: recreate webviews for saved nodes, create for newly focused nodes
-- Navigation tracking: `sync_webviews_to_graph()` detects URL changes, creates edges
+- Delegate-driven semantic events flow into the intent reducer for URL/title/history updates
 - Servo signals: `request_create_new` (new tab), `notify_url_changed` (within-tab nav), `notify_title_changed`
 - Edge creation: Hyperlink for new tab from parent, History for back/forward (existing reverse edge)
 
@@ -89,7 +89,7 @@ Graphshell is a **spatial tab manager** where webpages are nodes in a force-dire
 
 **In active development:**
 
-1. **Navigation control-plane cleanup** — Wire Servo delegate callbacks, remove polling-based node creation ([plan](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md))
+1. **Navigation control-plane follow-up** — desktop delegate-driven routing is implemented; remaining parity work is EGL/WebDriver explicit targeting ([plan](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md))
 2. **Selection consolidation** — Remove duplicated selection state ([plan](implementation_strategy/2026-02-14_selection_semantics_plan.md))
 3. **Physics follow-up** — Keep FR tuning/profile work visible after migration ([plan](implementation_strategy/2026-02-14_physics_migration_plan.md))
 
@@ -113,15 +113,15 @@ Graphshell is a **spatial tab manager** where webpages are nodes in a force-dire
 - `pub(crate) inner` gives egui_adapter direct access for `to_graph_custom()`
 - Eliminates the SlotMap + manual adjacency list approach (simpler, fewer data structures)
 
-**Why URL-to-NodeKey HashMap?**
-- Fast duplicate detection: "Does this URL already have a node?"
-- O(1) lookup for persistence recovery (log replay uses URLs as stable identity)
-- **Note**: The unified model allows duplicate URLs (same URL in multiple tabs). Node identity will migrate from URL-based to UUID-based. See [2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md).
+**Why `url_to_nodes` HashMap?**
+- Fast URL lookup while preserving duplicate tab semantics.
+- Supports non-identity URL search/recovery helpers.
+- Node identity is UUID-based; URL is mutable metadata, not identity.
 
-**Why NodeIndex keys not stable across sessions?**
-- petgraph NodeIndex values change when graph is rebuilt from persistence
-- URL-based identity used for persistence (snapshot + log use URLs, not indices)
-- Planned: UUID-based stable identity that survives across sessions and allows duplicate URLs
+**Why NodeIndex keys are not stable across sessions?**
+- petgraph NodeIndex values change when graph is rebuilt from persistence.
+- Persistence and identity use UUID (`node_id`) rather than NodeIndex.
+- URL remains mutable metadata and may be duplicated.
 
 ### Rendering & UI
 
@@ -171,13 +171,13 @@ Graphshell is a **spatial tab manager** where webpages are nodes in a force-dire
 
 **Why the frame execution order matters (gui.rs):**
 1. Handle keyboard (may change view or clear graph)
-2. Webview lifecycle (destroy/create based on current view)
-3. Sync webviews to graph (only in detail view — detects URL changes, creates edges)
+2. Collect/apply semantic intents (UI + delegate events)
+3. Reconcile webview lifecycle (destroy/create based on tile + lifecycle state)
 4. Toolbar + tab bar rendering
 5. Physics update
 6. View rendering (graph OR detail, exclusive)
 
-If sync runs before lifecycle or in graph view, it sees stale webviews and creates phantom nodes. This ordering was the root cause of two bugs (clear_graph not working, edges not being created properly).
+If intent apply/reconcile ordering drifts, runtime state can diverge from graph intent state. Keep apply and reconcile adjacent at frame boundary.
 
 ### Persistence
 

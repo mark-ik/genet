@@ -28,7 +28,7 @@ Each feature is gated by explicit dependencies and exit criteria.
 ### F2: Remove Remaining Global-Active Authority Leakage
 
 - **Goal**: Ensure global active webview is input hint only, not routing/render authority.
-- **Status**: In progress (desktop routing now tile-focused in primary paths).
+- **Status**: Implemented for current desktop scope (Feb 17).
 - **Depends on**: None (implementation can proceed with single-pane model).
 - **Gates**:
   - Focus switch between tiles does not hide or de-prioritize non-focused visible webviews.
@@ -43,11 +43,16 @@ Each feature is gated by explicit dependencies and exit criteria.
   - `ports/graphshell/desktop/headed_window.rs`
   - `ports/graphshell/desktop/gui.rs`
   - `ports/graphshell/window.rs`
+- **Implemented notes**:
+  - Desktop preferred-input routing resolves from tile-focused webview ID.
+  - Dialog update path uses focused tile webview targeting in GUI-driven flow.
+  - Global active ID is no longer used as desktop tile-flow authority for navigation/reconciliation targeting.
+  - Remaining fallback/global-active usage is retained only for non-desktop or generic scaffold behavior outside this cycle's desktop scope.
 
 ### F1: Multi-WebView Simultaneous Visibility
 
 - **Goal**: Make opening/viewing webviews support split-pane visibility (`Linear` containers), not only tabs.
-- **Status**: In progress (split-open action and split container insertion landed; broader interaction plumbing pending).
+- **Status**: Implemented for current desktop scope (Feb 17): split panes, focused-pane routing (omnibar + toolbar), frame activation focus retention, close-to-cold semantics, and baseline headed validation pass.
 - **Depends on**: F2 (soft dependency for routing correctness, hard dependency for clean implementation).
 - **Gates (must pass before next dependent features)**:
   - Two webview panes can be visible and painted in one frame.
@@ -62,6 +67,8 @@ Each feature is gated by explicit dependencies and exit criteria.
   - `ports/graphshell/desktop/gui.rs`
   - `ports/graphshell/desktop/tile_behavior.rs`
   - `ports/graphshell/window.rs`
+- **Validation checklist**:
+  - `ports/graphshell/design_docs/graphshell_docs/implementation_strategy/2026-02-17_f1_multi_pane_validation_checklist.md`
 
 ---
 
@@ -70,7 +77,7 @@ Each feature is gated by explicit dependencies and exit criteria.
 ### F3: Crash Handling Status Alignment in Docs
 
 - **Goal**: Align documentation with current desktop implementation status.
-- **Status**: Planned.
+- **Status**: Implemented (doc alignment pass complete).
 - **Depends on**: None.
 - **Gates**:
   - No contradictory "pending" crash-handling status remains for desktop path.
@@ -86,7 +93,7 @@ Each feature is gated by explicit dependencies and exit criteria.
 ### F4: Source-of-Truth Spec Alignment
 
 - **Goal**: Remove contradiction between browser behavior spec, architectural overview, and architecture plan.
-- **Status**: Planned.
+- **Status**: Implemented (doc alignment pass complete).
 - **Depends on**: None.
 - **Gates**:
   - Browser spec uses three-domain authority model (graph/tile/webview runtime).
@@ -100,20 +107,21 @@ Each feature is gated by explicit dependencies and exit criteria.
   - `ports/graphshell/design_docs/graphshell_docs/GRAPHSHELL_AS_BROWSER.md`
   - `ports/graphshell/design_docs/graphshell_docs/ARCHITECTURAL_OVERVIEW.md`
 
-### F5: UserGrouped Edge Semantics (Planned -> Implemented)
+### F5: UserGrouped Edge Semantics (Implemented for explicit split-open gesture)
 
 - **Goal**: Define and implement when `UserGrouped` edges are created.
-- **Status**: Planned.
+- **Status**: Implemented (initial deterministic trigger).
 - **Depends on**: F1 (pane/group interaction behavior clarity).
 - **Gates**:
   - Edge creation triggers are deterministic and documented.
-  - Moving/grouping actions create expected `UserGrouped` edges exactly once.
+  - Explicit grouping action creates expected `UserGrouped` edges exactly once.
   - Tests cover edge creation and non-creation paths.
 - **Implementation shape**:
-  - **Refactor**: tab/group move actions into explicit intents.
+  - **Refactor**: split-open grouping action into explicit intent.
   - **Add**: `UserGrouped` variant to `EdgeType` in `graph/mod.rs` and persistence types.
   - **Add**: reducer behavior for `UserGrouped` edges in `app.rs`.
-  - **Delete**: ambiguous "planned/not yet implemented" behavior where implementation is complete.
+  - **Add**: deterministic first trigger: `Shift + Double-click` graph action (`FocusNodeSplit`) emits `CreateUserGroupedEdge { from: previous_selection, to: target }`.
+  - **Delete**: ambiguous "planned/not yet implemented" behavior where implementation is complete for the explicit split-open path.
 - **Primary files**:
   - `ports/graphshell/app.rs`
   - `ports/graphshell/graph/mod.rs`
@@ -143,7 +151,7 @@ Each feature is gated by explicit dependencies and exit criteria.
 ### F7: GUI Decomposition for Maintainability
 
 - **Goal**: Reduce monolithic complexity in `gui.rs` (~2,840 lines as of Feb 17) without behavior change.
-- **Status**: Planned.
+- **Status**: Implemented for current desktop scope (Feb 18): frame pre-ingest/apply + keyboard action + toolbar/dialog + lifecycle/post-render orchestration in `desktop/gui_frame.rs`, tile-group move detection in `desktop/tile_grouping.rs`, navigation target resolution in `desktop/nav_targeting.rs`, semantic-event to intent pipeline in `desktop/semantic_event_pipeline.rs`, thumbnail/favicon pipeline in `desktop/thumbnail_pipeline.rs`, webview status/toolbar sync in `desktop/webview_status_sync.rs`, webview creation backpressure/probe logic in `desktop/webview_backpressure.rs`, toolbar navigation/submit routing in `desktop/toolbar_routing.rs`, tile/webview runtime lifecycle utilities in `desktop/tile_runtime.rs`, pre-render runtime reconciliation in `desktop/lifecycle_reconcile.rs`, tile activation/compositing helpers in `desktop/tile_compositor.rs`, tile post-render behavior/reconciliation helpers in `desktop/tile_post_render.rs`, tile render/composite pass orchestration in `desktop/tile_render_pass.rs`, tile view toggle/open-mode operations in `desktop/tile_view_ops.rs`, invariant validation helpers in `desktop/tile_invariants.rs`, persistence/layout helpers in `desktop/persistence_ops.rs`, management dialog panel rendering in `desktop/dialog_panels.rs`, top toolbar/fullscreen origin strip rendering in `desktop/toolbar_ui.rs`, graph search keyboard/shortcut flow in `desktop/graph_search_flow.rs`, and graph search window rendering in `desktop/graph_search_ui.rs`, all with unchanged behavior/tests.
 - **Depends on**: F1/F2 stabilized.
 - **Gates**:
   - Lifecycle reconciliation, toolbar/nav submit, and compositing are extracted into focused modules.
@@ -155,6 +163,16 @@ Each feature is gated by explicit dependencies and exit criteria.
 - **Primary files**:
   - `ports/graphshell/desktop/gui.rs`
   - new modules under `ports/graphshell/desktop/`
+- **F7 Closeout (Before/After)**:
+  - **Before**:
+    - `desktop/gui.rs` contained most frame-phase orchestration inline (semantic ingest, keyboard routing, toolbar/dialog handling, lifecycle reconciliation, tile render/composite, and post-render intent application).
+    - Core flows depended on monolithic local helpers, making targeted debugging and ownership boundaries harder.
+  - **After**:
+    - Frame orchestration is decomposed into focused modules with clear boundaries:
+      - `desktop/gui_frame.rs`: phase coordination and apply boundaries.
+      - `desktop/*` support modules: targeting, toolbar routing/UI, graph search flow/UI, lifecycle reconcile, tile render/composite, persistence ops, semantic event pipeline, thumbnail/favicons, and status sync.
+    - `gui.rs` is now a thin orchestrator and state owner rather than the implementation locus for all subflows.
+    - Behavior/test outcomes are preserved (`cargo test -p graphshell --lib` remained green throughout extraction steps).
 
 ---
 

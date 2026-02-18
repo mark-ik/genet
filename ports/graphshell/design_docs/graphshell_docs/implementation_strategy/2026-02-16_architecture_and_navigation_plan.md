@@ -328,8 +328,9 @@ The Servo delegate -> `GraphIntent` path already works (`window.rs` -> `pending_
 ### Current state
 
 - `RunningAppState::notify_crashed(...)` forwards to platform window.
-- `PlatformWindow::notify_crashed(...)` default implementation is currently a no-op in graphshell.
-- Result: crash behavior is underspecified and effectively silent in current graphshell paths.
+- Graphshell desktop path converts crash events into semantic intents and reducer transitions (`WebViewCrashed` -> demote/unmap + runtime crash metadata).
+- Open crashed tiles show a non-blocking crash banner with recovery actions (`Reload`, `Close Tile`).
+- Remaining limitation is upstream API surface (for example web-content accessibility bridge), not missing desktop crash-policy wiring.
 
 ### Policy goals
 

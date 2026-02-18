@@ -25,23 +25,23 @@ The plan to move to a delegate-driven model is a critical improvement, but revea
 
 ---
 
-## 3. Over-Engineering and Bugs in Physics Engine
+## 3. Physics Complexity (Historical Concern)
 
-The current custom physics engine is identified as a source of issues.
+The former custom physics engine was identified as a source of issues.
 
 - **Over-Engineering**: [ARCHITECTURAL_OVERVIEW.md](ARCHITECTURAL_OVERVIEW.md) notes that the custom, multi-threaded physics worker is "unnecessary for browsing-scale graphs."
 - **Known Bugs**: The same document identifies a bug in the force calculation ("doubling effective attraction").
-- **Resolution**: This is well-understood, and the planned migration to the simpler, built-in layout from `egui_graphs` as per [implementation_strategy/2026-02-14_physics_migration_plan.md](implementation_strategy/2026-02-14_physics_migration_plan.md) is the correct path forward. The current implementation is a recognized weak point.
-- **Status (Feb 17)**: Keep as an implementation concern if migration is incomplete; otherwise downgrade to historical context and archive this item.
+- **Resolution**: Migration to `egui_graphs` force-directed layout is the adopted path and active runtime direction.
+- **Status (Feb 17)**: Treat this as historical context plus tuning follow-up, not as a core architectural contradiction.
 
 ---
 
-## 4. Incomplete "Intent-Based" Architecture
+## 4. Intent Boundary Completeness
 
 The desired architecture for managing state is not yet fully implemented.
 
 - **The Ideal**: [GRAPHSHELL_AS_BROWSER.md](GRAPHSHELL_AS_BROWSER.md) describes a clean "intent-based" model where all state mutations are funneled through a single, predictable processing point.
-- **The Reality**: The description of the current implementation shows a more direct and fragmented "wiring," with polling mechanisms and multiple direct callbacks. This gap between the ideal and the reality contributes to the system's fragility.
+- **The Historical Gap**: Earlier implementations mixed polling/direct wiring with partial intent flow, increasing fragility.
 - **Status (Feb 17)**: Significantly addressed. Lifecycle helper-local apply paths were removed, legacy lifecycle path deleted, and frame boundary comments/tests updated. Residual direct runtime APIs are in effect/reconciliation layers by design.
 
 ---

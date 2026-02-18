@@ -3,7 +3,7 @@
 **Purpose**: Detailed specification for how Graphshell operates as a functional web browser.
 
 **Document Type**: Behavior specification (not implementation status)
-**Status**: Core browsing graph functional (~4,500 LOC), Servo integration complete
+**Status**: Core browsing graph functional, delegate-driven desktop navigation/control-plane implemented
 **See**: [ARCHITECTURAL_OVERVIEW.md](ARCHITECTURAL_OVERVIEW.md) for actual code status
 
 ---
@@ -17,7 +17,7 @@ Graphshell is a spatial tab manager with three authority domains:
 - **Webviews**: runtime rendering instances reconciled from graph lifecycle.
 
 - **Graph view**: Overview and organizational control surface. Drag nodes between clusters, create edges, delete nodes - all affect the tile tree and webviews.
-- **Tile panes**: Focused working contexts. Each pane's tab bar shows the nodes in that pane's cluster. Closing a tab closes the webview and removes the node.
+- **Tile panes**: Focused working contexts. Each pane's tab bar shows the nodes in that pane's cluster. Closing a tab tile closes the webview and demotes the node to `Cold` (node remains in graph unless explicitly deleted).
 - **Tab bars**: Per-pane projections of graph clusters. Active tabs (with webview) are highlighted; inactive tabs (no webview) are dimmed and reactivatable.
 
 **Key invariant**: semantic truth lives in graph/intents; tile and webview runtime state are coordinated through explicit intent/reconciliation boundaries.
@@ -51,7 +51,7 @@ Servo provides two distinct signals that drive the graph (no Servo modifications
 
 ## Research Conclusions (2026-02-15)
 
-Recent fixes confirmed a gap between this model and current runtime behavior. The implementation still relies on URL polling in `sync_to_graph` and does not treat `notify_url_changed` as the primary driver for same-tab navigation. This leads to node creation at the wrong times and makes navigation target selection fragile when window-global routing is used. The conclusion is to move navigation to the delegate-driven path, remove polling-based node creation, and enforce an explicit intent boundary for multi-source mutations. See [2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md) for the consolidated plan.
+The architecture plan identified a previous mismatch (URL-polling assumptions and fragmented routing). For desktop tile flow, this has been addressed: navigation semantics are delegate-driven, structural node creation is not polling-driven, and mutations route through intent/reconciliation boundaries. Remaining deferred scope is EGL/WebDriver explicit-target parity. See [2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md).
 
 ### Edge Types
 
@@ -59,14 +59,14 @@ Recent fixes confirmed a gap between this model and current runtime behavior. Th
 |-----------|-----------|---------|
 | `Hyperlink` | `request_create_new` (new tab from parent) | User opened a new tab from this page |
 | `History` | Back/forward detection (existing reverse edge) | Navigation reversal |
-| `UserGrouped` (planned) | Dragging a tab/node to a different pane in graph or tile view | User deliberately associated these tabs (not yet implemented) |
+| `UserGrouped` | Explicit split-open grouping gesture (`Shift + Double-click` in graph) | User deliberately associated two nodes |
 
 ### Pane Membership
 
 - **Tile tree is the authority** on which node lives in which pane.
 - **Navigation routing**: New nodes from `request_create_new` are added to the parent node's tab container.
 - **New root node** (N key, no parent): Creates a new tab container in the tile tree.
-- **Tab move** (drag between panes): Moves the tile. Creates a `UserGrouped` edge to the destination cluster's root. Old navigation edges remain as history.
+- **Tab move** (drag between panes): Moves the tile. `UserGrouped` creation for drag-move is follow-up work; current explicit grouping trigger is split-open.
 
 ### Node Lifecycle
 
@@ -80,7 +80,9 @@ Recent fixes confirmed a gap between this model and current runtime behavior. Th
 
 - Navigate away from a tab: old node becomes **Cold** (no webview, still in graph and tab bar).
 - Click cold tab: **reactivates** it (creates webview, navigates to its current URL).
-- Close tab (from tab bar, graph, or keyboard): node is removed. A distinct `Closed` lifecycle state is planned but not yet implemented.
+- Close tab tile (from tab bar): node is demoted to `Cold` and can be reactivated.
+- Delete node (graph action/keyboard delete): node is removed from graph.
+- A distinct `Closed` lifecycle state remains planned but is not yet a separate runtime state.
 
 ### Intent-Based Mutation
 
