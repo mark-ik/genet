@@ -2,7 +2,137 @@
 
 ## Status
 
-Draft (critiqued Feb 18; see Code Audit and Revised Recommendations below).
+Draft (critiqued Feb 18; see Code Audit and canonical execution plan below).
+
+Implementation progress (2026-02-18):
+
+- Step 1 complete: `Ctrl+Click` multi-select is wired through render -> intent (`SelectNode { multi_select }`).
+- Step 2 complete: explicit group command path added via keyboard (`G`) using shared edge-command dispatch.
+- Step 3 in progress: enum+match dispatch is implemented in reducer (`ExecuteEdgeCommand` + `EdgeCommand`), with keyboard parity for pair connect/remove and pin/unpin shortcuts.
+- Step 4 partial: palette UI invocation exists as a keyboard-invoked panel (`F2`) reusing the same command dispatch path; radial presentation remains pending.
+- Context routing now uses deterministic precedence in palette targeting: `selected pair` > `selected primary + hovered node` > `selected primary + focused pane node`.
+- Step 4b started: `Open Connected as Tabs` is available in the command palette and expands neighbors deterministically via `in_neighbors + out_neighbors`.
+- Step 5b progress: split-connected layout engine uses compact 2-up/2x2 packing (max `MAX_CONNECTED_SPLIT_PANES`) with overflow grouped into tabs.
+- Step 5b scope: connected-open is intentionally one-hop (`in_neighbors + out_neighbors`) for this cycle.
+- Omnibar `@` search now supports iterative Enter-cycling with match counter and detail-mode focus/open behavior for matched nodes.
+- Omnibar `@` search currently supports mode targeting and tab-first mixed ranking in detail/workbench.
+- Scope expansion update: explicit `@` scopes are implemented end-to-end:
+  - `@n <query>` = nodes in active graph context,
+  - `@N <query>` = nodes across active + saved graphs,
+  - `@e <query>` = edges with searchable payload in active graph context,
+  - `@E <query>` = edges with searchable payload across active + saved graphs,
+  - `@t <query>` = tabs in active workspace context,
+  - `@T <query>` = tabs across active + saved workspaces,
+  - `@<query>` = mixed mode with context-priority ordering.
+- Palette close reliability improved (Escape support, explicit Close button, auto-close on command execution).
+- Step 4c started: toolbar graph-edit buttons are reduced in favor of a single `Cmd` palette entrypoint; toolbar remains nav-first.
+- Step 4c progress: removed toolbar graph-edit controls now have palette parity (`Toggle Physics Panel`, `Create Node`, `Create Node as Tab`).
+- Step 4c progress: graph runtime controls are also surfaced in palette (`Toggle Physics Simulation`, `Fit Graph to Screen`) to reduce dependence on scattered shortcuts.
+- Step 4d progress: `@` omnibar behavior is implemented (iterative Enter cycling, counter, detail-mode target open/focus); full headed-manual focus-transition validation remains required.
+- Step 4d progress: automated matching coverage now includes `@t` tab-only filtering and mixed tab-priority ordering; headed focus-transition validation remains required.
+- Step 6 started: command-palette workspace snapshot action is implemented (`Pin Workspace Snapshot`) using existing tile-layout persistence.
+- Step 6 progress: named workspace management is implemented in palette UI (save/list/restore/delete).
+- Persistence parity update: named graph snapshot management is implemented in palette UI (save/list/load/delete) with runtime-safe restore (close old webviews, reset tile runtime, preserve graph integrity on restore failure).
+- Workspace persistence update: reserved session workspace key (`workspace:session-latest`) is now auto-restored on startup (before `latest` fallback) and auto-saved on layout change.
+- Persistence UX update: command palette now opens a dedicated Persistence Hub panel for workspace/graph save-load-delete flows; autosaved entries are shown in the same load lists (no separate autosave buttons).
+- Workspace pruning update: explicit `Prune Session Workspace` control is available in Persistence Hub.
+- Current `@n` behavior: in detail/workbench mode, `@n` resolves local workspace nodes only (context-local by default); graph mode remains broad until `@N`/`@T` scope split is completed.
+- Focus UX update: pane focus ring is now transient (short fade pulse on focus switch) rather than a persistent overlay.
+- Persistence UX update: toolbar now has a direct `Persist` entrypoint, and Persistence Hub exposes workspace autosave cadence/retention controls.
+- Workspace autosave update: session autosave now respects configurable cadence and keeps configurable rolling `session-prev-N` retained revisions.
+- Tab/pane management progress: `Detach Focused to Split` is implemented as an explicit per-pane action in the command palette.
+- Tab/pane management progress: dragging a tab outside the tab-strip band now requests detach-to-split (command-based detach remains as fallback).
+- Split leaf parity update: split-created detail leaves now use single-tab `Tabs` containers so each pane exposes a tab bar/drag handle.
+- Workspace-routing handoff: workspace-first open policy and multi-membership routing are tracked in `2026-02-19_workspace_routing_and_membership_plan.md`.
+
+## Resolved vs Remaining (Conversation Audit)
+
+Resolved:
+
+1. Palette close reliability improved (Escape, explicit Close, close-on-command).
+2. Connected-open primary path is tabs-first.
+3. Split-connected expansion is capped and overflows to tabs.
+4. Omnibar `@` search supports iterative Enter-cycling with counter.
+5. Detail-mode `@` search requests tab/pane focus/open for matched node.
+6. Nucleo fuzzy matching now uses direct case-insensitive matching without manual lowercase preprocessing.
+7. Graph hover cue is explicit (hover-highlighted node for command-target disambiguation).
+8. Pair edge commands now use deterministic first-selected -> second-selected ordering for selected-pair context.
+9. Connected-open behavior is explicitly one-hop for now (no transitive expansion).
+10. Split-connected layout engine uses compact 2-up/2x2 packing before overflow-to-tabs.
+11. Workspace snapshot save is exposed as an explicit palette action.
+12. Named workspace management is implemented (`save/list/restore/delete`).
+13. Focused pane can be detached into split layout via explicit palette action.
+14. Session-persistent-by-default workspace behavior is implemented (startup restore + change-detected autosave + reserved-key protections).
+
+Remaining / Follow-up:
+
+1. Complete headed manual validation for `@` mode focus-transition paths (Step 4d checklist below).
+2. Extend workspace pruning/retention beyond session prune (batch named-workspace maintenance + retention policy).
+3. Expand Persistence Hub scope to include: Bookmarks, Node Versioning/History, and Maintenance.
+4. Workspace-first node-open routing and membership UX are tracked in `2026-02-19_workspace_routing_and_membership_plan.md` (deferred from this plan).
+5. Validate and tune uppercase/lowercase scope ergonomics (`@N/@T` vs `@n/@t`) based on headed usage.
+6. Edge search scopes (`@e/@E`) are implemented; follow-on is UX polish for highlight readability and result affordances.
+
+## Post-Step4d Follow-On: Workspace Routing Handoff
+
+### Handoff Status
+
+1. Session-persistence work in this plan is implemented (`workspace:session-latest`, autosave cadence, retention).
+2. Workspace-first routing and multi-membership resolution remain open and are moved to `2026-02-19_workspace_routing_and_membership_plan.md`.
+3. This plan keeps `@n` local-by-default in detail/workbench; expanded scopes (`@N`/`@T`) are implemented and now in tuning/polish phase.
+
+### Scope Boundary
+
+1. Keep graph semantics unchanged (node/edge/lifecycle remain as-is).
+2. Keep this plan focused on edge/command/workbench UX, not workspace routing policy.
+3. Maintain existing explicit workspace commands (save/list/restore/delete) as shared infrastructure.
+
+### Routing Contract (Current Code Truth)
+
+1. In detail/workbench mode, `@n` resolves in local workspace/workbench context by default.
+2. No implicit cross-workspace switching in this plan.
+3. Graph/saved expansion (`@N`, `@T`) is implemented; remaining scope is behavior tuning and UX consistency.
+
+### Robustness / Best-Practice Sanity Check
+
+1. Single targeting authority:
+- Keep `@` targeting decisions in one function/path (avoid split logic across toolbar/render/gui layers).
+
+2. Single persistence authority:
+- Use existing `GraphStore` tile-layout APIs via `GraphBrowserApp` wrappers only.
+- Do not create parallel in-memory workspace registries that duplicate redb state.
+
+3. Deterministic behavior:
+- Keep local-vs-global `@` scope rules explicit and tested.
+- Keep all fallback order documented and tested.
+
+4. No duplicated schema:
+- Reuse `TILE_LAYOUT_TABLE` keys; avoid introducing separate metadata tables unless required.
+- Reserve key naming conventions (`workspace:*`) and validate collisions.
+
+5. Failure isolation:
+- Workspace restore failures must not mutate graph state.
+- `@` behavior must remain usable even when workspace restore fails.
+
+### Validation Addendum (Follow-On)
+
+1. Session restore:
+- Open multiple panes/tabs, restart app, confirm session workspace restores automatically.
+
+2. `@n` local detail behavior:
+- Save workspace A/B with different tab sets.
+- In detail mode on A, run `@n` for node only present in B.
+- Confirm no implicit workspace switch occurs.
+- In graph mode, confirm the `@n`/`@N` split behaves as documented once implemented.
+
+3. Autosave list access:
+- In Persistence Hub, confirm `latest` and `session-latest` workspaces appear in workspace load list.
+- Confirm `latest` graph autosave appears in graph load list.
+- Confirm autosave entries are loadable and non-deletable from list actions.
+
+4. Fallback integrity:
+- Delete saved workspace entries and rerun `@` searches.
+- Confirm behavior remains deterministic and panic-free.
 
 ## Purpose
 
@@ -34,7 +164,7 @@ Current deterministic `UserGrouped` behavior is implemented for explicit split-o
 
 1. explicit drag-into-same-tab-group trigger semantics,
 2. explicit "group with focused" command,
-3. multi-select command flows and bulk operations.
+3. multi-select command flows and deferred bulk-operation design.
 
 ## Problem Statement
 
@@ -115,9 +245,13 @@ Rules:
 5. Existing-group no-op:
 - Reordering tabs or dragging within the same existing tabs container must not create edges.
 
+6. Physics Wake:
+- Edge creation/removal intents should wake physics (`is_running = true`) so layout can adapt, except when user is explicitly in Frozen/manual layout mode.
+
+
 ## Radial Command Model
 
-## Command Context
+### Command Context
 
 Resolve command context each frame from:
 
@@ -128,9 +262,11 @@ Resolve command context each frame from:
 
 No command falls back to global-active authority.
 
-## Command Registry
+### Command Dispatch (Current and Future)
 
-Use a single command registry (shared by radial UI and keyboard command palette):
+Current-cycle implementation should use enum + match dispatch for simplicity and debuggability.
+
+A future registry (deferred) can be added when command count/extension needs justify it:
 
 - `id`,
 - `label`,
@@ -138,14 +274,67 @@ Use a single command registry (shared by radial UI and keyboard command palette)
 - `is_enabled(context)`,
 - `execute(context) -> Vec<GraphIntent>`.
 
-## Initial Radial Commands (Edge-focused)
+### Initial Radial Commands (Edge-focused & Layout)
 
 1. `Connect Selected Pair` (exactly 2 selected nodes) -> `CreateUserGroupedEdge { from, to }`.
 2. `Connect Both Directions` (exactly 2 selected nodes) -> two intents.
 3. `Connect Source -> Hovered` (1 selected + hovered) -> one intent.
 4. `Remove User Edge` (2 selected/edge hovered) -> `RemoveEdge { edge_type: UserGrouped }`.
-5. `Remove History Edge` (advanced/debug gated) -> `RemoveEdge { edge_type: History }`.
-6. `Remove Hyperlink Edge` (advanced/debug gated) -> `RemoveEdge { edge_type: Hyperlink }`.
+5. `Pin/Unpin Selected` (1+ selected) -> Toggle `node.is_pinned`.
+6. `Remove History Edge` (advanced/debug gated) -> `RemoveEdge { edge_type: History }`.
+7. `Remove Hyperlink Edge` (advanced/debug gated) -> `RemoveEdge { edge_type: Hyperlink }`.
+
+### Global Undo/Redo Boundary
+
+Undo/redo is global and shared across graph, workspace, and persistence-facing user commands.
+
+Included in undo/redo history:
+
+1. Graph intents that mutate model state:
+- node create/delete/url change/position pinning/selection-affecting structural actions,
+- edge create/remove (`UserGrouped`, and explicit advanced edge removals),
+- explicit command-triggered graph transforms.
+
+2. Workspace/layout intents that mutate user-visible organization:
+- open tab/split/move-to-pane actions,
+- detach-to-split and grouping operations,
+- workspace restore/switch actions that change current layout context.
+
+3. Persistence-surface commands that mutate named state:
+- save/delete named workspace snapshots,
+- save/delete named graph snapshots,
+- explicit prune/maintenance mutations.
+
+Excluded from undo/redo history:
+
+1. Non-deterministic runtime callbacks/events:
+- raw webview lifecycle callbacks (`created/url/title/history changed/crashed`),
+- transient network/runtime errors.
+
+2. Purely transient UI state:
+- hover/focus ring visuals, panel open/close state, temporary selection hover targets,
+- non-mutating search session state (`@` query index/counter).
+
+3. Continuous simulation updates:
+- physics frame-by-frame position integration.
+- Only explicit user-triggered layout commands (for example `Fit`) are undoable.
+
+Command grouping rules:
+
+1. Multi-intent command actions execute as one undo step:
+- examples: `ConnectBothDirections`, split-open + explicit grouping side effect.
+
+2. Batch operations are grouped by originating command:
+- one user command = one undo entry, even if multiple node/edge mutations occur.
+
+3. Restore/load actions are atomic:
+- graph/workspace restore is recorded as a single reversible transaction.
+
+Failure/consistency requirements:
+
+1. If part of a grouped undoable command fails, the command should roll back or no-op as a unit.
+2. Undo/redo replay must remain deterministic against persisted snapshots/logs.
+3. Undo/redo stack entries must survive routine UI mode switches (graph/detail/workbench).
 
 ## Multi-Select Simplification
 
@@ -156,9 +345,10 @@ Recommended semantics:
 1. Primary select: click node.
 2. Add/remove select: `Ctrl+Click` (or platform equivalent).
 3. Range add (optional later): `Shift+Click` nearest path/radius policy.
-4. Clear selection: click empty graph space.
+4. Lasso select (optional later): `Alt+Drag` (Background drag must remain **Pan**).
+5. Clear selection: click empty graph space.
 
-Bulk edge actions:
+Bulk edge actions (deferred this cycle):
 
 1. If `N == 2`, edge commands operate directly on pair.
 2. If `N > 2`, provide:
@@ -172,80 +362,13 @@ Guardrails:
 - idempotent creation (skip existing),
 - removal reports count for confirmation/logging.
 
-## Implementation Plan
+## Immediate Touchpoints
 
-### Phase A: Command Surface Plumbing
-
-1. Add command context resolver in desktop UI layer.
-2. Add edge command registry entries.
-3. Wire radial invocation to emit intents only.
-
-Exit criteria:
-
-- command enable/disable matches context for 0/1/2/N selected nodes,
-- no direct graph mutation in radial handlers.
-
-### Phase B: Multi-Select Core
-
-1. Normalize multi-select state ownership in graph view model.
-2. Add deterministic selection gestures and visual affordance.
-3. Expose selected-node list to command context.
-
-Exit criteria:
-
-- selected node set is stable across pane focus changes,
-- toolbar/radial can read same selection state.
-
-### Phase B1: Grouping Trigger Implementation
-
-1. Implement missing trigger(s) in tile/grouping pipeline for "drag into same tab group".
-2. Add explicit `Group with focused` command path and intent emission.
-3. Enforce matrix no-trigger paths in UI plumbing.
-
-Exit criteria:
-
-- each trigger in the matrix maps to one clear intent path,
-- non-trigger interactions cannot create `UserGrouped` edges.
-
-### Phase C: Bulk Edge Operations
-
-1. Implement pair and bulk edge intents emission helpers.
-2. Reuse existing reducer idempotency rules.
-3. Add operation feedback (counts/errors) in UI status area/log.
-
-Exit criteria:
-
-- create/remove commands are deterministic and persisted,
-- replay reproduces final edge state.
-
-### Phase D: Validation and Hardening
-
-1. Unit tests for command context and enabled-state matrix.
-2. Reducer + persistence tests for each trigger and no-trigger path.
-3. Manual UX checklist for radial + keyboard parity.
-
-Exit criteria:
-
-- no regression to focused-pane navigation behavior,
-- edge operations work with multiple visible detail panes.
-
-## Immediate Next Slice
-
-This is the concrete next implementation slice:
-
-1. Define and lock the deterministic trigger matrix (split, drag-into-same-tab-group, explicit group-with-focused, no-trigger cases).
-2. Implement missing trigger(s) in tile/grouping pipeline.
-3. Add reducer + persistence tests per trigger/no-trigger path.
-4. Add a short headed-window manual checklist section for grouping behavior validation.
-
-Primary likely touchpoints:
-
-1. `ports/graphshell/desktop/tile_grouping.rs`
-2. `ports/graphshell/desktop/gui.rs`
-3. `ports/graphshell/desktop/tile_post_render.rs`
-4. `ports/graphshell/app.rs`
-5. `ports/graphshell/persistence/mod.rs`
-
+1. ports/graphshell/desktop/tile_grouping.rs
+2. ports/graphshell/desktop/gui.rs
+3. ports/graphshell/desktop/tile_post_render.rs
+4. ports/graphshell/app.rs
+5. ports/graphshell/persistence/mod.rs
 ## Test Matrix (Required)
 
 | Case | Expected | Suggested Test Location |
@@ -274,7 +397,7 @@ Primary likely touchpoints:
 1. Select two nodes, run `Connect Selected Pair`, confirm one `UserGrouped` edge added.
 2. Repeat command, confirm idempotent result.
 3. Run `Remove User Edge`, confirm edge removed and persisted.
-4. Select three nodes, run `Fully Connect Selection`, confirm expected pair count.
+4. Deferred in this cycle: bulk-selection operations validated in follow-on plan.
 5. Reload from persistence, confirm created/removed edges replay correctly.
 
 ## Critique Resolution Note
@@ -293,116 +416,9 @@ Use this section to close open questions before implementation starts.
 
 ---
 
-## Code Audit (Feb 18)
-
-Full codebase audit of edge operations, selection, grouping triggers, and command patterns.
-
-### Implementation Inventory
-
-| Capability | Status | Location |
-| --- | --- | --- |
-| `SelectionState` with `multi_select: bool` parameter | Struct implemented; `multi_select: true` **never used** in any production call site | `app.rs:54-117` |
-| `Ctrl+Click` toggle-select in graph view | **Not implemented** — all 6 call sites pass `multi_select: false` | `tile_behavior.rs:165,185,245`; `render/mod.rs:293,299,315`; `webview_controller.rs:33,88`; `graph_search_flow.rs:106` |
-| `CreateUserGroupedEdge` intent + reducer | **Implemented** and tested (idempotent, no self-edge) | `app.rs:419,936-949` |
-| Split-open trigger (`Shift+Double-click`) | **Implemented** — reads `selected_nodes.primary()` as `from`, target as `to` | `tile_behavior.rs:172-191` |
-| Drag-into-same-tab-group trigger | **Implemented** — compares tab-group membership before/after tile render, emits edge for moved nodes | `tile_grouping.rs:55-79`, orchestrated by `tile_post_render.rs:47-49` |
-| "Group with focused" explicit command | **Not implemented** | — |
-| `RemoveEdge` intent + reducer | **Implemented** and tested (type-specific, returns removed count) | `app.rs:422-428,636-648` |
-| Radial command palette UI | **Not implemented** (design only) | — |
-| Command registry pattern | **Not implemented** — inline match dispatch | `tile_behavior.rs`, `render/mod.rs:286`, `input/mod.rs:95` |
-| Bulk edge operations (N > 2) | **Not implemented** | — |
-| Persistence replay for edge create/remove | **Implemented** — `LogEntry::AddEdge`, `LogEntry::RemoveEdge` with `PersistedEdgeType` | `app.rs:651-700`, `persistence/mod.rs`, `persistence/types.rs` |
-
-### Trigger Matrix vs Code Truth
-
-| Trigger | Plan Description | Code Reality | Discrepancy |
-| --- | --- | --- | --- |
-| Split-open | `from = previous selected node, to = target` | `from = selected_nodes.primary(), to = key` from `FocusNodeSplit(key)` | **Match** |
-| Drag-into-same-tab-group | `from = dragged pane node, to = destination focused tab node` | `from = moved_node, to = first peer in new group` (arbitrary anchor, not focused tab) | **Mismatch** — code picks first node in destination group, not focused tab |
-| Existing-group no-op (reorder within tabs) | No edge | `user_grouped_intents_for_tab_group_moves` only fires when group TileId changes, not on reorder | **Match** |
-| Focus/tab switch/navigation | No edge | No `CreateUserGroupedEdge` emitted from these paths | **Match** |
-
-### Selection State Architecture
-
-`SelectionState` uses `HashSet<NodeKey>` for the node set and `Option<NodeKey>` for primary. Key observations:
-
-1. **No insertion order tracking.** `HashSet` is unordered. The plan's `Chain Selection` (line 161) is "selection order dependent" but the data structure cannot provide order. Would need `IndexSet` or `Vec<NodeKey>` with dedup to support this.
-
-2. **`primary()` tracks most-recently-selected only.** Useful for pair operations (`from = primary, to = new_selection`) but not for ordered chains.
-
-3. **`Deref<Target = HashSet<NodeKey>>`** exposes read-only set access — command context can read `.len()`, `.contains()`, `.iter()` without mutation.
-
-4. **Revision counter** (`u64`) enables cheap change detection for UI refresh.
-
-### Existing Action/Intent Patterns
-
-The codebase has three action-to-intent conversion layers, none using a registry:
-
-1. **`GraphAction` enum** (7 variants in `render/mod.rs`) — graph-view UI events. Converted to intents via `intents_from_graph_actions()`.
-2. **`KeyboardActions` struct** (boolean flags in `input/mod.rs`) — keyboard state. Converted via `intents_from_actions()`.
-3. **Inline match in `tile_behavior.rs:pane_ui()`** — intercepts `FocusNode`/`FocusNodeSplit` before they reach generic conversion, adding tile-specific logic (pending opens, edge creation).
-
-All three ultimately produce `Vec<GraphIntent>` applied through `app.apply_intents()`.
-
-### Upstream Impact
-
-None. This plan is entirely graphshell-local. Edge types, selection, command dispatch, and UI rendering are all in graphshell-owned code. No servo core API changes needed. No compatibility concerns with servoshell.
-
----
-
-## Revised Recommendations (Feb 18)
-
-### Phase Restructuring
-
-The original plan's phase ordering (A -> B -> B1 -> C -> D) front-loads abstraction (command registry) before the prerequisite it depends on (multi-select). The triggers it identifies as Phase B1 are already ~90% implemented. Recommended restructuring:
-
-**Step 1: Wire `Ctrl+Click` multi-select** (trivial — ~5 lines in `render/mod.rs` to read `ui.input(|i| i.modifiers.ctrl)` and pass through to `GraphAction::SelectNode`). Unblocks all pair and bulk commands.
-
-**Step 2: Add "Group with focused" command** (the one missing trigger from the matrix). Single intent emission, same pattern as split-open in `tile_behavior.rs`.
-
-**Step 3: Add edge commands with simple match dispatch** — `Connect Selected Pair`, `Remove User Edge`, `Connect Both Directions`. Use an `enum EdgeCommand` with match-based dispatch, not a trait-based registry. 6 commands in a match statement is simpler and more debuggable than 6 commands in a registry with dynamic dispatch. The registry pattern can be introduced later when command count exceeds ~15.
-
-**Step 4: Add radial/palette UI** to invoke commands from Step 3. Ship keyboard shortcuts first (cheaper — wire into existing input handler), radial UI second. Both invoke the same match dispatch.
-
-**Step 5 (deferred): Bulk N > 2 operations** — `Fully Connect Selection` creates N*(N-1)/2 edges (quadratic). Needs real UX guardrails (confirmation dialog, max-N threshold). Defer to separate plan when pair operations have validated the interaction model.
-
-### Trigger Semantics Correction
-
-The drag-into-same-tab-group trigger description (line 102) says `to = destination focused tab node`. The code (`tile_grouping.rs:72`) uses `to = first peer in new group` (arbitrary anchor from the destination group). Either:
-
-- Update the plan to match code: `to = first existing node in destination tabs container`.
-- Or change the code to resolve the focused/active tab in the destination container.
-
-The current code behavior is deterministic and correct — it just doesn't match the plan's language.
-
-### `SelectionState` Data Structure Note
-
-If `Chain Selection` (ordered multi-select) is a planned feature, `SelectionState.nodes` must change from `HashSet<NodeKey>` to an ordered set (`IndexSet<NodeKey>` from the `indexmap` crate, or `Vec<NodeKey>` with dedup). This is a breaking change to the `Deref<Target = HashSet<NodeKey>>` impl. Flag this as a known prerequisite before implementing chain semantics — don't discover it during implementation.
-
-### Command Registry Deferral Rationale
-
-The plan proposes `id, label, category, is_enabled(context), execute(context) -> Vec<GraphIntent>`. This is a trait-based abstraction for 6 commands. The current codebase manages 26 `GraphIntent` variants, 7 `GraphAction` variants, and ~10 keyboard actions all through enum+match dispatch without a registry. Adding a registry now would:
-
-- Create a second dispatch layer alongside the existing `GraphIntent` reducer.
-- Require dynamic dispatch or trait objects for `is_enabled`/`execute`.
-- Add indirection that makes debugging harder for no current benefit.
-
-The registry becomes justified when: (a) command count exceeds ~15, (b) a searchable keyboard command palette ships, or (c) commands need runtime registration (plugins/extensions). None of these apply to the current prototype scope.
-
-### Answered Open Questions
-
-**Q1: Should `Fully Connect Selection` be shipped now or deferred?**
-Defer. Quadratic edge creation needs UX guardrails not worth designing for prototype. Ship pair operations first, validate the interaction model, then plan bulk operations.
-
-**Q2: Should selection order be explicitly tracked for `Chain Selection`?**
-Not in this phase. `SelectionState` uses `HashSet` — adding order tracking requires changing the data structure and breaking `Deref` impl. Only invest when chain selection is confirmed as needed UX.
-
-**Q3: Radial-only first, or simultaneous keyboard command palette parity?**
-Keyboard shortcuts first (cheaper to wire into existing `input/mod.rs` handler). Radial UI second. Both invoke the same command dispatch, so parity is structural, not additional work.
-
 ## Execution Plan (Canonical)
 
-This section supersedes the original phased draft for implementation order.
+This is the authoritative implementation order for this cycle.
 
 ### Step 1: Wire `Ctrl+Click` Multi-Select
 
@@ -436,18 +452,17 @@ Done criteria:
 
 Work:
 
-1. Add `EdgeCommand` enum for initial pair operations:
-   - `ConnectSelectedPair`
-   - `ConnectBothDirections`
-   - `RemoveUserEdge`
-2. Wire command handlers to emit `GraphIntent` only.
-3. Reuse same dispatch path for keyboard and later radial UI.
+1. Add `ConnectSelectedPair`, `ConnectBothDirections`, `RemoveUserEdge`, `PinSelected`/`UnpinSelected` as enum variants with match-based dispatch.
+2. Wire command handlers to emit `GraphIntent` only; no direct graph mutation.
+3. Reuse same dispatch path for keyboard shortcuts and later radial UI.
+4. Ensure all edge create/remove commands wake physics (`is_running = true`).
 
 Done criteria:
 
 1. All pair commands execute through intent pipeline only.
 2. No direct graph mutation from UI handlers.
 3. Reducer and persistence tests pass for create/remove paths.
+4. Physics simulation wakes (`is_running = true`) after any edge create or remove command.
 
 ### Step 4: Add Radial/Palette UI Invocation
 
@@ -475,63 +490,168 @@ Done criteria:
 1. Bulk operations are explicitly deferred in plan and decision log.
 2. No accidental bulk behavior exposed in this cycle.
 
+### Step 4b: Palette Expansion (User-Visible ROI)
+
+Work:
+
+1. Add command(s) for opening connected nodes as tabs from current context.
+2. Add command(s) for opening connected nodes in split layout (optional follow-up).
+3. Keep execution routed through existing command dispatch path.
+
+Done criteria:
+
+1. User can open neighbors of selected/focused node in tabbed detail view via command palette.
+2. Behavior is deterministic (stable open set and ordering policy documented).
+3. No toolbar-only dependency for this workflow.
+
+### Step 4c: Toolbar Decomposition (Nav-First)
+
+Work:
+
+1. Move graph-edit/layout commands from top toolbar into palette/radial command surfaces.
+2. Keep toolbar focused on browser primitives (back/forward/reload + omnibar + minimal settings).
+
+Done criteria:
+
+1. Graph controls are discoverable in palette/radial surface.
+2. Toolbar density is reduced without loss of functionality.
+
+### Step 4d: `@` Omnibar Behavior Polish and Validation
+
+Work:
+
+1. Keep `@query` path deterministic: Enter advances to next match, wraps at end, and shows `current/total` counter in the bar.
+2. Support explicit query scopes:
+  - `@n <query>` for nodes in active graph context,
+  - `@N <query>` for nodes across active + saved graphs,
+  - `@e <query>` for searchable edges in active graph context,
+  - `@E <query>` for searchable edges across active + saved graphs,
+  - `@t <query>` for tabs in active workspace context,
+  - `@T <query>` for tabs across active + saved workspaces,
+  - default `@<query>` mixed mode.
+3. In detail mode mixed mode should prioritize active-workspace tab matches before non-tab node matches.
+4. In detail mode, selecting a match should open/focus the matched node tab/pane (without creating duplicate node entries).
+5. Ensure `@` mode exits cleanly when query is cleared or no matches exist.
+6. Validate focus transitions across graph/detail modes and multi-pane layouts.
+
+Done criteria:
+
+1. Enter cycling is stable and repeatable for the same query.
+2. Counter always matches internal match list length/index.
+3. `@t` returns only active-workspace tab matches; `@T` can return saved-workspace tab matches.
+4. `@n` returns only active-graph-context node matches; `@N` can return saved-graph node matches.
+5. `@e` returns only active-graph-context edge matches with searchable payload; `@E` can return saved-graph edge matches.
+6. In detail/workbench, default mixed mode returns active tab matches before non-tab node matches.
+7. Detail-mode selection always targets the matched node/tab, not unrelated focused panes.
+8. In graph mode, selecting an edge search result selects/highlights that edge deterministically.
+9. No stale search-session state after clearing query or switching mode.
+
+Headed validation checklist (required):
+
+1. In graph mode, type `@term` and press Enter repeatedly: active match cycles through all results and wraps.
+2. In detail mode with multiple panes, type `@term` and press Enter: each press focuses/opens the matched node in the correct pane/tab context.
+3. In detail mode, run `@t term`: only currently open tab/pane-backed nodes are cycled.
+4. In detail mode, run `@T term`: active and saved workspace tab matches are cycled deterministically.
+5. In graph mode, run `@n term`: only active-graph-context matches are cycled.
+6. In graph mode, run `@N term`: active + saved graph matches are cycled deterministically.
+7. In graph mode, run `@e term`: only active-graph searchable edge matches are cycled and selected.
+8. In graph mode, run `@E term`: active + saved-graph searchable edge matches are cycled deterministically.
+9. Clear query after cycling: counter/session reset and normal URL submit behavior resumes.
+10. Switch graph <-> detail while query is active: no panic, no stale focus target, no incorrect pane navigation.
+
+### Step 5a: Layout Stability Tuning
+
+Work:
+
+1. Bias new-node spawn near source/focused context instead of hardcoded center.
+2. Keep short-range separation while reducing long-range runaway spread.
+3. Preserve anti-overlap behavior and deterministic positioning.
+
+Done criteria:
+
+1. New nodes appear near relevant context in normal navigation flows.
+2. Layout no longer explodes outward immediately on common node creation flows.
+3. Existing physics controls/tests remain valid.
+
+### Step 5b: Multi-Node Open Workflows
+
+Work:
+
+1. Use graph neighbors (`in_neighbors` + `out_neighbors`) to support open-connected workflows.
+2. Default to opening connected nodes as tabs in detail view.
+
+Done criteria:
+
+1. Connected-node expansion is available as explicit command.
+2. Opened panes/tabs map cleanly to existing tile runtime semantics.
+
+### Step 6: Workspace Pinning (Tile Snapshot Track)
+
+Work:
+
+1. Add optional persistence for tile/workspace layout keyed by stable node identity.
+2. Keep workspace snapshot storage separate from core graph log semantics.
+
+Done criteria:
+
+1. User can pin and restore workspace layout independently of graph data.
+2. Failure to restore workspace does not affect graph integrity.
+
 ---
 
-## Appendix: Original Implementation Plan (Pre-Audit)
+## Code Audit (Feb 18)
 
-The phases below are the original plan as drafted. See Revised Recommendations above for the restructured approach.
+Full codebase audit of edge operations, selection, grouping triggers, and command patterns.
 
-### Original Phase A: Command Surface Plumbing
+### Implementation Inventory
 
-1. Add command context resolver in desktop UI layer.
-2. Add edge command registry entries.
-3. Wire radial invocation to emit intents only.
+| Capability | Status | Location |
+| --- | --- | --- |
+| `SelectionState` with `multi_select: bool` parameter | Struct implemented; `multi_select: true` **never used** in any production call site | `app.rs:54-117` |
+| `Ctrl+Click` toggle-select in graph view | **Not implemented** — all 6 call sites pass `multi_select: false` | `tile_behavior.rs:165,185,245`; `render/mod.rs:293,299,315`; `webview_controller.rs:33,88`; `graph_search_flow.rs:106` |
+| `CreateUserGroupedEdge` intent + reducer | **Implemented** and tested (idempotent, no self-edge) | `app.rs:419,936-949` |
+| Split-open trigger (`Shift+Double-click`) | **Implemented** — reads `selected_nodes.primary()` as `from`, target as `to` | `tile_behavior.rs:172-191` |
+| Drag-into-same-tab-group trigger | **Implemented** — compares tab-group membership before/after tile render, emits edge for moved nodes | `tile_grouping.rs:55-79`, orchestrated by `tile_post_render.rs:47-49` |
+| "Group with focused" explicit command | **Not implemented** | — |
+| `RemoveEdge` intent + reducer | **Implemented** and tested (type-specific, returns removed count) | `app.rs:422-428,636-648` |
+| Radial command palette UI | **Not implemented** (design only) | — |
+| Command registry pattern | **Not implemented** — inline match dispatch | `tile_behavior.rs`, `render/mod.rs:286`, `input/mod.rs:95` |
+| Bulk edge operations (N > 2) | **Not implemented** | — |
+| Persistence replay for edge create/remove | **Implemented** — `LogEntry::AddEdge`, `LogEntry::RemoveEdge` with `PersistedEdgeType` | `app.rs:651-700`, `persistence/mod.rs`, `persistence/types.rs` |
 
-Exit criteria:
+### Trigger Matrix vs Code Truth
 
-- command enable/disable matches context for 0/1/2/N selected nodes,
-- no direct graph mutation in radial handlers.
+| Trigger | Plan Description | Code Reality | Discrepancy |
+| --- | --- | --- | --- |
+| Split-open | `from = previous selected node, to = target` | `from = selected_nodes.primary(), to = key` from `FocusNodeSplit(key)` | **Match** |
+| Drag-into-same-tab-group | `from = dragged pane node, to = first existing node in destination tabs container` | `from = moved_node, to = first peer in new group` | **Match** |
+| Existing-group no-op (reorder within tabs) | No edge | `user_grouped_intents_for_tab_group_moves` only fires when group TileId changes, not on reorder | **Match** |
+| Focus/tab switch/navigation | No edge | No `CreateUserGroupedEdge` emitted from these paths | **Match** |
 
-### Original Phase B: Multi-Select Core
+### Selection State Architecture
 
-1. Normalize multi-select state ownership in graph view model.
-2. Add deterministic selection gestures and visual affordance.
-3. Expose selected-node list to command context.
+`SelectionState` uses `HashSet<NodeKey>` for the node set and `Option<NodeKey>` for primary. Key observations:
 
-Exit criteria:
+1. **No insertion order tracking.** `HashSet` is unordered. The plan's `Chain Selection` (line 161) is "selection order dependent" but the data structure cannot provide order. Would need `IndexSet` or `Vec<NodeKey>` with dedup to support this.
 
-- selected node set is stable across pane focus changes,
-- toolbar/radial can read same selection state.
+2. **`primary()` tracks most-recently-selected only.** Useful for pair operations (`from = primary, to = new_selection`) but not for ordered chains.
 
-### Original Phase B1: Grouping Trigger Implementation
+3. **`Deref<Target = HashSet<NodeKey>>`** exposes read-only set access — command context can read `.len()`, `.contains()`, `.iter()` without mutation.
 
-1. Implement missing trigger(s) in tile/grouping pipeline for "drag into same tab group".
-2. Add explicit `Group with focused` command path and intent emission.
-3. Enforce matrix no-trigger paths in UI plumbing.
+4. **Revision counter** (`u64`) enables cheap change detection for UI refresh.
 
-Exit criteria:
+### Existing Action/Intent Patterns
 
-- each trigger in the matrix maps to one clear intent path,
-- non-trigger interactions cannot create `UserGrouped` edges.
+The codebase has three action-to-intent conversion layers, none using a registry:
 
-### Original Phase C: Bulk Edge Operations
+1. **`GraphAction` enum** (7 variants in `render/mod.rs`) — graph-view UI events. Converted to intents via `intents_from_graph_actions()`.
+2. **`KeyboardActions` struct** (boolean flags in `input/mod.rs`) — keyboard state. Converted via `intents_from_actions()`.
+3. **Inline match in `tile_behavior.rs:pane_ui()`** — intercepts `FocusNode`/`FocusNodeSplit` before they reach generic conversion, adding tile-specific logic (pending opens, edge creation).
 
-1. Implement pair and bulk edge intents emission helpers.
-2. Reuse existing reducer idempotency rules.
-3. Add operation feedback (counts/errors) in UI status area/log.
+All three ultimately produce `Vec<GraphIntent>` applied through `app.apply_intents()`.
 
-Exit criteria:
+### Upstream Impact
 
-- create/remove commands are deterministic and persisted,
-- replay reproduces final edge state.
+None. This plan is entirely graphshell-local. Edge types, selection, command dispatch, and UI rendering are all in graphshell-owned code. No servo core API changes needed. No compatibility concerns with servoshell.
 
-### Original Phase D: Validation and Hardening
-
-1. Unit tests for command context and enabled-state matrix.
-2. Reducer + persistence tests for each trigger and no-trigger path.
-3. Manual UX checklist for radial + keyboard parity.
-
-Exit criteria:
-
-- no regression to focused-pane navigation behavior,
-- edge operations work with multiple visible detail panes.
+---
