@@ -20,6 +20,24 @@ impl AsRef<str> for SearchCandidate {
     }
 }
 
+/// Fuzzy-match arbitrary candidates and return them ranked by relevance.
+pub(crate) fn fuzzy_match_items<T>(candidates: Vec<T>, query: &str) -> Vec<T>
+where
+    T: AsRef<str> + Clone,
+{
+    let query = query.trim();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Never);
+    let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
+    pattern
+        .match_list(candidates, &mut matcher)
+        .into_iter()
+        .map(|(candidate, _score)| candidate)
+        .collect()
+}
+
 /// Return node keys ranked by fuzzy match quality for `query`.
 pub(crate) fn fuzzy_match_node_keys(graph: &Graph, query: &str) -> Vec<NodeKey> {
     let query = query.trim();
@@ -27,26 +45,16 @@ pub(crate) fn fuzzy_match_node_keys(graph: &Graph, query: &str) -> Vec<NodeKey> 
         return Vec::new();
     }
 
-    let normalized_query = query.to_lowercase();
-    let pattern = Pattern::parse(
-        &normalized_query,
-        CaseMatching::Respect,
-        Normalization::Never,
-    );
-    let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
-
     let candidates: Vec<SearchCandidate> = graph
         .nodes()
         .map(|(key, node)| SearchCandidate {
             key,
-            text: format!("{} {}", node.title.to_lowercase(), node.url.to_lowercase()),
+            text: format!("{} {}", node.title, node.url),
         })
         .collect();
-
-    pattern
-        .match_list(candidates, &mut matcher)
+    fuzzy_match_items(candidates, query)
         .into_iter()
-        .map(|(candidate, _score)| candidate.key)
+        .map(|candidate| candidate.key)
         .collect()
 }
 
@@ -94,5 +102,17 @@ mod tests {
         let graph = Graph::new();
         assert!(fuzzy_match_node_keys(&graph, "").is_empty());
         assert!(fuzzy_match_node_keys(&graph, "   ").is_empty());
+    }
+
+    #[test]
+    fn test_fuzzy_match_items_ranks_by_match_quality() {
+        let candidates = vec![
+            "alpha beta".to_string(),
+            "gamma delta".to_string(),
+            "alpha gamma".to_string(),
+        ];
+        let matches = fuzzy_match_items(candidates, "alpa");
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0], "alpha beta");
     }
 }
