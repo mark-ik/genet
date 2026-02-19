@@ -7,23 +7,27 @@
 //! Delegates graph visualization and interaction to the egui_graphs crate,
 //! which provides built-in navigation (zoom/pan), node dragging, and selection.
 
-use crate::app::{EdgeCommand, GraphBrowserApp, GraphIntent, PendingTileOpenMode};
+use crate::app::{
+    ChooseWorkspacePickerMode, EdgeCommand, EphemeralWorkspacePromptAction,
+    EphemeralWorkspacePromptRequest, GraphBrowserApp, GraphIntent, PendingConnectedOpenScope,
+    PendingTileOpenMode,
+};
 use crate::graph::egui_adapter::{EguiGraphState, GraphNodeShape};
 use crate::graph::{NodeKey, NodeLifecycle};
 use egui::{Color32, Key, Stroke, Ui, Vec2, Window};
 use egui_graphs::events::Event;
 use egui_graphs::{
     DefaultEdgeShape, FruchtermanReingoldWithCenterGravity,
-    FruchtermanReingoldWithCenterGravityState, GraphView,
-    LayoutForceDirected, MetadataFrame, SettingsInteraction, SettingsNavigation, SettingsStyle,
-    get_layout_state, set_layout_state,
+    FruchtermanReingoldWithCenterGravityState, GraphView, LayoutForceDirected, MetadataFrame,
+    SettingsInteraction, SettingsNavigation, SettingsStyle, get_layout_state, set_layout_state,
 };
 use euclid::default::Point2D;
 use petgraph::stable_graph::NodeIndex;
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
 /// Graph interaction action (resolved from egui_graphs events).
 ///
@@ -58,6 +62,7 @@ pub fn render_graph_in_ui_collect_actions(
     search_query_active: bool,
 ) -> Vec<GraphAction> {
     let ctrl_pressed = ui.input(|i| i.modifiers.ctrl);
+    let radial_open = app.show_radial_menu;
     let filtered_graph = if search_filter_mode && search_query_active {
         Some(filtered_graph_for_search(app, search_matches))
     } else {
@@ -67,9 +72,22 @@ pub fn render_graph_in_ui_collect_actions(
 
     // Build or reuse egui_graphs state (rebuild always when filtering is active).
     if app.egui_state.is_none() || app.egui_state_dirty || filtered_graph.is_some() {
-        app.egui_state = Some(EguiGraphState::from_graph(
+        let memberships_by_uuid: HashMap<Uuid, Vec<String>> = graph_for_render
+            .nodes()
+            .map(|(_, node)| {
+                (
+                    node.id,
+                    app.membership_for_node(node.id)
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        app.egui_state = Some(EguiGraphState::from_graph_with_memberships(
             graph_for_render,
             &app.selected_nodes,
+            &memberships_by_uuid,
         ));
         app.egui_state_dirty = false;
     }
@@ -87,14 +105,14 @@ pub fn render_graph_in_ui_collect_actions(
     // Navigation: use egui_graphs built-in zoom/pan
     let nav = SettingsNavigation::new()
         .with_fit_to_screen_enabled(app.fit_to_screen_requested)
-        .with_zoom_and_pan_enabled(true)
+        .with_zoom_and_pan_enabled(!radial_open)
         .with_zoom_speed(0.05);
 
     // Interaction: dragging, selection, clicking
     let interaction = SettingsInteraction::new()
-        .with_dragging_enabled(true)
-        .with_node_selection_enabled(true)
-        .with_node_clicking_enabled(true);
+        .with_dragging_enabled(!radial_open)
+        .with_node_selection_enabled(!radial_open)
+        .with_node_clicking_enabled(!radial_open);
 
     // Style: always show labels
     let style = SettingsStyle::new().with_labels_always(true);
@@ -135,6 +153,44 @@ pub fn render_graph_in_ui_collect_actions(
             .hovered_node()
             .and_then(|idx| state.get_key(idx))
     });
+    if ui.input(|i| i.pointer.secondary_clicked())
+        && let Some(target) = app.hovered_graph_node
+    {
+        app.set_pending_node_context_target(Some(target));
+        app.show_radial_menu = true;
+        if let Some(pointer) = ui.input(|i| i.pointer.latest_pos()) {
+            ui.ctx().data_mut(|d| {
+                d.insert_persisted(egui::Id::new("radial_menu_center"), pointer);
+            });
+        }
+    }
+    if ui.input(|i| i.pointer.primary_clicked())
+        && let Some(target) = app.hovered_graph_node
+        && let Some(pointer) = ui.input(|i| i.pointer.latest_pos())
+        && let Some(state) = app.egui_state.as_ref()
+        && let Some(node) = state.graph.node(target)
+        && node.display().workspace_membership_count() > 0
+    {
+        let meta_id = egui::Id::new("egui_graphs_metadata_");
+        let (circle_center, circle_radius) = if let Some(meta) = ui
+            .ctx()
+            .data_mut(|d| d.get_persisted::<MetadataFrame>(meta_id))
+        {
+            (
+                meta.canvas_to_screen_pos(node.location()),
+                meta.canvas_to_screen_size(node.display().radius()),
+            )
+        } else {
+            (node.location(), node.display().radius())
+        };
+        if node
+            .display()
+            .workspace_badge_hit_rect_screen(circle_center, circle_radius)
+            .is_some_and(|rect| rect.contains(pointer))
+        {
+            app.request_choose_workspace_picker(target);
+        }
+    }
     draw_highlighted_edge_overlay(ui, app);
 
     // Reset fit_to_screen flag (one-shot behavior for 'C' key)
@@ -353,9 +409,9 @@ pub fn intents_from_graph_actions(actions: Vec<GraphAction>) -> Vec<GraphIntent>
     for action in actions {
         match action {
             GraphAction::FocusNode(key) => {
-                intents.push(GraphIntent::SelectNode {
+                intents.push(GraphIntent::OpenNodeWorkspaceRouted {
                     key,
-                    multi_select: false,
+                    prefer_workspace: None,
                 });
             },
             GraphAction::FocusNodeSplit(key) => {
@@ -624,7 +680,7 @@ pub fn render_help_panel(ctx: &egui::Context, app: &mut GraphBrowserApp) {
                         ("Search Enter", "Select active search match"),
                         ("F1 / ?", "This help panel"),
                         ("Ctrl+L / Alt+D", "Focus address bar"),
-                        ("Double-click node", "Open node in detail view"),
+                        ("Double-click node", "Open node via workspace routing"),
                         ("Drag tab out", "Detach tab into split pane"),
                         ("Shift + Double-click node", "Fallback split-open gesture"),
                         ("Click + drag", "Move a node"),
@@ -771,17 +827,50 @@ pub fn render_command_palette_panel(
                 should_close = true;
             }
             ui.separator();
-            if ui
-                .add_enabled(
-                    source_context.is_some(),
-                    egui::Button::new("Open Connected as Tabs"),
-                )
-                .clicked()
-                && let Some(source) = source_context
-            {
-                app.request_open_connected_from(source, PendingTileOpenMode::Tab);
-                should_close = true;
-            }
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        source_context
+                            .is_some_and(|key| !app.workspaces_for_node_key(key).is_empty()),
+                        egui::Button::new("Choose Workspace..."),
+                    )
+                    .clicked()
+                    && let Some(source) = source_context
+                {
+                    app.request_choose_workspace_picker(source);
+                    should_close = true;
+                }
+                if ui
+                    .add_enabled(
+                        source_context.is_some(),
+                        egui::Button::new("Open with Neighbors"),
+                    )
+                    .clicked()
+                    && let Some(source) = source_context
+                {
+                    app.request_open_connected_from(
+                        source,
+                        PendingTileOpenMode::Tab,
+                        PendingConnectedOpenScope::Neighbors,
+                    );
+                    should_close = true;
+                }
+                if ui
+                    .add_enabled(
+                        source_context.is_some(),
+                        egui::Button::new("Open with Connected"),
+                    )
+                    .clicked()
+                    && let Some(source) = source_context
+                {
+                    app.request_open_connected_from(
+                        source,
+                        PendingTileOpenMode::Tab,
+                        PendingConnectedOpenScope::Connected,
+                    );
+                    should_close = true;
+                }
+            });
             ui.separator();
             if ui.button("Close").clicked() {
                 should_close = true;
@@ -810,6 +899,8 @@ pub fn render_radial_command_menu(
     let mut intents = Vec::new();
     let mut should_close = false;
     let center_id = egui::Id::new("radial_menu_center");
+    let node_context_group_state_id = egui::Id::new("node_context_kbd_group");
+    let node_context_command_state_id = egui::Id::new("node_context_kbd_command");
     let pointer = ctx.input(|i| i.pointer.latest_pos());
     let center = ctx
         .data_mut(|d| d.get_persisted::<egui::Pos2>(center_id))
@@ -817,114 +908,295 @@ pub fn render_radial_command_menu(
         .unwrap_or(egui::pos2(320.0, 220.0));
     ctx.data_mut(|d| d.insert_persisted(center_id, center));
 
-    let mut hovered_domain = None;
-    let mut hovered_command = None;
-    if let Some(pos) = pointer {
-        let delta = pos - center;
-        let r = delta.length();
-        if r > 40.0 {
-            let angle = delta.y.atan2(delta.x);
-            hovered_domain = Some(domain_from_angle(angle));
-            if r > 120.0 && let Some(domain) = hovered_domain {
-                hovered_command = nearest_command_for_pointer(
-                    domain,
-                    center,
-                    pos,
-                    pair_context,
-                    any_selected,
-                    source_context,
-                );
+    if app.pending_node_context_target().is_some() {
+        let mut group_idx = ctx
+            .data_mut(|d| d.get_persisted::<usize>(node_context_group_state_id))
+            .unwrap_or(0);
+        let mut command_idx = ctx
+            .data_mut(|d| d.get_persisted::<usize>(node_context_command_state_id))
+            .unwrap_or(0);
+        group_idx %= NodeContextGroup::ALL.len();
+
+        let mut group_changed = false;
+        if ctx.input(|i| i.key_pressed(Key::ArrowLeft)) {
+            group_idx = (group_idx + NodeContextGroup::ALL.len() - 1) % NodeContextGroup::ALL.len();
+            group_changed = true;
+        }
+        if ctx.input(|i| i.key_pressed(Key::ArrowRight)) {
+            group_idx = (group_idx + 1) % NodeContextGroup::ALL.len();
+            group_changed = true;
+        }
+        if ctx.input(|i| i.key_pressed(Key::Num1)) {
+            group_idx = 0;
+            group_changed = true;
+        }
+        if ctx.input(|i| i.key_pressed(Key::Num2)) && NodeContextGroup::ALL.len() > 1 {
+            group_idx = 1;
+            group_changed = true;
+        }
+        if ctx.input(|i| i.key_pressed(Key::Num3)) && NodeContextGroup::ALL.len() > 2 {
+            group_idx = 2;
+            group_changed = true;
+        }
+
+        let keyboard_group = NodeContextGroup::ALL[group_idx];
+        let keyboard_commands = node_context_commands(keyboard_group);
+        if keyboard_commands.is_empty() {
+            command_idx = 0;
+        } else {
+            if group_changed {
+                command_idx = 0;
+            }
+            command_idx %= keyboard_commands.len();
+            if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
+                command_idx = (command_idx + keyboard_commands.len() - 1) % keyboard_commands.len();
+            }
+            if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
+                command_idx = (command_idx + 1) % keyboard_commands.len();
+            }
+            if ctx.input(|i| i.key_pressed(Key::Enter)) {
+                let cmd = keyboard_commands[command_idx];
+                if is_command_enabled(cmd, pair_context, any_selected, source_context) {
+                    execute_radial_command(
+                        app,
+                        cmd,
+                        pair_context,
+                        any_selected,
+                        source_context,
+                        &mut intents,
+                    );
+                    should_close = true;
+                }
             }
         }
-    }
+        ctx.data_mut(|d| {
+            d.insert_persisted(node_context_group_state_id, group_idx);
+            d.insert_persisted(node_context_command_state_id, command_idx);
+        });
 
-    let mut clicked_command = None;
-    if ctx.input(|i| i.pointer.button_released(egui::PointerButton::Primary)) {
-        clicked_command = hovered_command;
-        should_close = true;
-    }
-    if ctx.input(|i| i.key_pressed(Key::Escape) || i.pointer.button_released(egui::PointerButton::Secondary)) {
-        should_close = true;
-    }
-
-    egui::Area::new("radial_command_menu".into())
-        .fixed_pos(center - egui::vec2(220.0, 220.0))
-        .interactable(false)
-        .show(ctx, |ui| {
-            ui.set_min_size(egui::vec2(440.0, 440.0));
-            let painter = ui.painter();
-            painter.circle_filled(center, 36.0, Color32::from_rgb(28, 32, 36));
-            painter.circle_stroke(center, 36.0, Stroke::new(2.0, Color32::from_rgb(90, 110, 125)));
-            painter.text(
-                center,
-                egui::Align2::CENTER_CENTER,
-                "Cmd",
-                egui::FontId::proportional(16.0),
-                Color32::from_rgb(210, 230, 245),
-            );
-
-            for domain in RadialDomain::ALL {
-                let base = domain_anchor(center, domain, 92.0);
-                let color = if Some(domain) == hovered_domain {
-                    Color32::from_rgb(70, 130, 170)
-                } else {
-                    Color32::from_rgb(50, 66, 80)
-                };
-                painter.circle_filled(base, 26.0, color);
-                painter.text(
-                    base,
-                    egui::Align2::CENTER_CENTER,
-                    domain.label(),
-                    egui::FontId::proportional(12.0),
-                    Color32::WHITE,
-                );
-            }
-
-            if let Some(domain) = hovered_domain {
-                let cmds = commands_for_domain(domain);
-                for (idx, cmd) in cmds.iter().enumerate() {
+        Window::new("Node Context")
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
+            .fixed_pos(center + egui::vec2(12.0, 12.0))
+            .default_width(260.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    for (idx, group) in NodeContextGroup::ALL.iter().enumerate() {
+                        let heading = if idx == group_idx {
+                            format!("[{}]", group.label())
+                        } else {
+                            group.label().to_string()
+                        };
+                        ui.menu_button(heading, |ui| {
+                            for cmd in node_context_commands(*group) {
+                                let enabled = is_command_enabled(
+                                    *cmd,
+                                    pair_context,
+                                    any_selected,
+                                    source_context,
+                                );
+                                if ui
+                                    .add_enabled(
+                                        enabled,
+                                        egui::Button::new(context_menu_label(*cmd)),
+                                    )
+                                    .clicked()
+                                {
+                                    execute_radial_command(
+                                        app,
+                                        *cmd,
+                                        pair_context,
+                                        any_selected,
+                                        source_context,
+                                        &mut intents,
+                                    );
+                                    should_close = true;
+                                    ui.close();
+                                }
+                            }
+                        });
+                    }
+                });
+                ui.separator();
+                ui.small("Keyboard: 1/2/3 or <- -> groups, Up/Down actions, Enter run");
+                let keyboard_group = NodeContextGroup::ALL[group_idx];
+                let keyboard_commands = node_context_commands(keyboard_group);
+                if let Some(current_cmd) = keyboard_commands.get(command_idx).copied() {
+                    ui.small(format!(
+                        "Focus: {} / {}",
+                        keyboard_group.label(),
+                        context_menu_label(current_cmd)
+                    ));
+                }
+                for (idx, cmd) in keyboard_commands.iter().enumerate() {
                     let enabled =
                         is_command_enabled(*cmd, pair_context, any_selected, source_context);
-                    let anchor = command_anchor(center, domain, idx, cmds.len());
-                    let color = if Some(*cmd) == hovered_command {
-                        Color32::from_rgb(80, 170, 215)
-                    } else if enabled {
-                        Color32::from_rgb(64, 82, 98)
+                    let label = if idx == command_idx {
+                        format!("> {}", context_menu_label(*cmd))
                     } else {
-                        Color32::from_rgb(42, 48, 54)
+                        context_menu_label(*cmd).to_string()
                     };
-                    painter.circle_filled(anchor, 22.0, color);
-                    painter.text(
-                        anchor,
-                        egui::Align2::CENTER_CENTER,
-                        cmd.label(),
-                        egui::FontId::proportional(10.0),
-                        if enabled {
-                            Color32::from_rgb(230, 240, 248)
-                        } else {
-                            Color32::from_rgb(120, 125, 130)
-                        },
+                    if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                        command_idx = idx;
+                        execute_radial_command(
+                            app,
+                            *cmd,
+                            pair_context,
+                            any_selected,
+                            source_context,
+                            &mut intents,
+                        );
+                        should_close = true;
+                    }
+                }
+                ctx.data_mut(|d| d.insert_persisted(node_context_command_state_id, command_idx));
+                ui.separator();
+                if ui.button("Close").clicked() {
+                    should_close = true;
+                }
+            });
+        if ctx.input(|i| i.key_pressed(Key::Escape)) {
+            should_close = true;
+        }
+    } else {
+        let mut hovered_domain = None;
+        let mut hovered_command = None;
+        if let Some(pos) = pointer {
+            let delta = pos - center;
+            let r = delta.length();
+            if r > 40.0 {
+                let angle = delta.y.atan2(delta.x);
+                hovered_domain = Some(domain_from_angle(angle));
+                if r > 120.0
+                    && let Some(domain) = hovered_domain
+                {
+                    hovered_command = nearest_command_for_pointer(
+                        domain,
+                        center,
+                        pos,
+                        pair_context,
+                        any_selected,
+                        source_context,
                     );
                 }
             }
-        });
+        }
 
-    if let Some(cmd) = clicked_command {
-        execute_radial_command(
-            app,
-            cmd,
-            pair_context,
-            any_selected,
-            source_context,
-            &mut intents,
-        );
+        let mut clicked_command = None;
+        if ctx.input(|i| i.pointer.button_released(egui::PointerButton::Primary)) {
+            clicked_command = hovered_command;
+            should_close = true;
+        }
+        if ctx.input(|i| i.key_pressed(Key::Escape)) {
+            should_close = true;
+        }
+
+        egui::Area::new("radial_command_menu".into())
+            .fixed_pos(center - egui::vec2(220.0, 220.0))
+            .interactable(false)
+            .show(ctx, |ui| {
+                ui.set_min_size(egui::vec2(440.0, 440.0));
+                let painter = ui.painter();
+                painter.circle_filled(center, 36.0, Color32::from_rgb(28, 32, 36));
+                painter.circle_stroke(
+                    center,
+                    36.0,
+                    Stroke::new(2.0, Color32::from_rgb(90, 110, 125)),
+                );
+                painter.text(
+                    center,
+                    egui::Align2::CENTER_CENTER,
+                    "Cmd",
+                    egui::FontId::proportional(16.0),
+                    Color32::from_rgb(210, 230, 245),
+                );
+
+                for domain in RadialDomain::ALL {
+                    let base = domain_anchor(center, domain, 92.0);
+                    let color = if Some(domain) == hovered_domain {
+                        Color32::from_rgb(70, 130, 170)
+                    } else {
+                        Color32::from_rgb(50, 66, 80)
+                    };
+                    painter.circle_filled(base, 26.0, color);
+                    painter.text(
+                        base,
+                        egui::Align2::CENTER_CENTER,
+                        domain.label(),
+                        egui::FontId::proportional(12.0),
+                        Color32::WHITE,
+                    );
+                }
+
+                if let Some(domain) = hovered_domain {
+                    let cmds = commands_for_domain(domain);
+                    for (idx, cmd) in cmds.iter().enumerate() {
+                        let enabled =
+                            is_command_enabled(*cmd, pair_context, any_selected, source_context);
+                        let anchor = command_anchor(center, domain, idx, cmds.len());
+                        let color = if Some(*cmd) == hovered_command {
+                            Color32::from_rgb(80, 170, 215)
+                        } else if enabled {
+                            Color32::from_rgb(64, 82, 98)
+                        } else {
+                            Color32::from_rgb(42, 48, 54)
+                        };
+                        painter.circle_filled(anchor, 22.0, color);
+                        painter.text(
+                            anchor,
+                            egui::Align2::CENTER_CENTER,
+                            cmd.label(),
+                            egui::FontId::proportional(10.0),
+                            if enabled {
+                                Color32::from_rgb(230, 240, 248)
+                            } else {
+                                Color32::from_rgb(120, 125, 130)
+                            },
+                        );
+                    }
+                }
+            });
+
+        if let Some(cmd) = clicked_command {
+            execute_radial_command(
+                app,
+                cmd,
+                pair_context,
+                any_selected,
+                source_context,
+                &mut intents,
+            );
+        }
     }
 
     app.show_radial_menu = !should_close;
     if !app.show_radial_menu {
-        ctx.data_mut(|d| d.remove::<egui::Pos2>(center_id));
+        app.set_pending_node_context_target(None);
+        ctx.data_mut(|d| {
+            d.remove::<egui::Pos2>(center_id);
+            d.remove::<usize>(node_context_group_state_id);
+            d.remove::<usize>(node_context_command_state_id);
+        });
     }
     apply_ui_intents_with_checkpoint(app, intents);
+}
+
+fn context_menu_label(command: RadialCommand) -> &'static str {
+    match command {
+        RadialCommand::NodeOpenWorkspace => "Open Workspace Route",
+        RadialCommand::NodeChooseWorkspace => "Choose Workspace...",
+        RadialCommand::NodeAddToWorkspace => "Add To Workspace...",
+        RadialCommand::NodeOpenNeighbors => "Open with Neighbors",
+        RadialCommand::NodeOpenConnected => "Open with Connected",
+        RadialCommand::NodeOpenSplit => "Open Split",
+        RadialCommand::NodePinToggle => "Toggle Pin",
+        RadialCommand::NodeDelete => "Delete Selected",
+        RadialCommand::EdgeConnectPair => "Connect Pair",
+        RadialCommand::EdgeConnectBoth => "Connect Both Directions",
+        RadialCommand::EdgeRemoveUser => "Remove User Edge",
+        _ => command.label(),
+    }
 }
 
 fn apply_ui_intents_with_checkpoint(app: &mut GraphBrowserApp, intents: Vec<GraphIntent>) {
@@ -965,12 +1237,7 @@ enum RadialDomain {
 }
 
 impl RadialDomain {
-    const ALL: [Self; 4] = [
-        Self::Node,
-        Self::Edge,
-        Self::Graph,
-        Self::Persistence,
-    ];
+    const ALL: [Self; 4] = [Self::Node, Self::Edge, Self::Graph, Self::Persistence];
 
     fn label(self) -> &'static str {
         match self {
@@ -983,11 +1250,34 @@ impl RadialDomain {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+enum NodeContextGroup {
+    Workspace,
+    Edge,
+    Node,
+}
+
+impl NodeContextGroup {
+    const ALL: [Self; 3] = [Self::Workspace, Self::Edge, Self::Node];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Workspace => "Workspace",
+            Self::Edge => "Edge",
+            Self::Node => "Node",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum RadialCommand {
     NodeNew,
     NodePinToggle,
     NodeDelete,
-    NodeOpenTab,
+    NodeChooseWorkspace,
+    NodeAddToWorkspace,
+    NodeOpenWorkspace,
+    NodeOpenNeighbors,
+    NodeOpenConnected,
     NodeOpenSplit,
     NodeMoveToActivePane,
     EdgeConnectPair,
@@ -1012,7 +1302,11 @@ impl RadialCommand {
             Self::NodeNew => "New",
             Self::NodePinToggle => "Pin",
             Self::NodeDelete => "Delete",
-            Self::NodeOpenTab => "Tab",
+            Self::NodeChooseWorkspace => "Choose WS",
+            Self::NodeAddToWorkspace => "Add WS",
+            Self::NodeOpenWorkspace => "Workspace",
+            Self::NodeOpenNeighbors => "Neighbors",
+            Self::NodeOpenConnected => "Connected",
             Self::NodeOpenSplit => "Split",
             Self::NodeMoveToActivePane => "Move",
             Self::EdgeConnectPair => "Pair",
@@ -1033,13 +1327,39 @@ impl RadialCommand {
     }
 }
 
+fn node_context_commands(group: NodeContextGroup) -> &'static [RadialCommand] {
+    match group {
+        NodeContextGroup::Workspace => &[
+            RadialCommand::NodeOpenWorkspace,
+            RadialCommand::NodeChooseWorkspace,
+            RadialCommand::NodeAddToWorkspace,
+            RadialCommand::NodeOpenNeighbors,
+            RadialCommand::NodeOpenConnected,
+        ],
+        NodeContextGroup::Edge => &[
+            RadialCommand::EdgeConnectPair,
+            RadialCommand::EdgeConnectBoth,
+            RadialCommand::EdgeRemoveUser,
+        ],
+        NodeContextGroup::Node => &[
+            RadialCommand::NodeOpenSplit,
+            RadialCommand::NodePinToggle,
+            RadialCommand::NodeDelete,
+        ],
+    }
+}
+
 fn commands_for_domain(domain: RadialDomain) -> &'static [RadialCommand] {
     match domain {
         RadialDomain::Node => &[
             RadialCommand::NodeNew,
             RadialCommand::NodePinToggle,
             RadialCommand::NodeDelete,
-            RadialCommand::NodeOpenTab,
+            RadialCommand::NodeChooseWorkspace,
+            RadialCommand::NodeAddToWorkspace,
+            RadialCommand::NodeOpenWorkspace,
+            RadialCommand::NodeOpenNeighbors,
+            RadialCommand::NodeOpenConnected,
             RadialCommand::NodeOpenSplit,
             RadialCommand::NodeMoveToActivePane,
         ],
@@ -1075,7 +1395,11 @@ fn is_command_enabled(
     match command {
         RadialCommand::NodePinToggle
         | RadialCommand::NodeDelete
-        | RadialCommand::NodeOpenTab
+        | RadialCommand::NodeChooseWorkspace
+        | RadialCommand::NodeAddToWorkspace
+        | RadialCommand::NodeOpenWorkspace
+        | RadialCommand::NodeOpenNeighbors
+        | RadialCommand::NodeOpenConnected
         | RadialCommand::NodeOpenSplit
         | RadialCommand::NodeMoveToActivePane => any_selected || source_context.is_some(),
         RadialCommand::EdgeConnectPair
@@ -1097,14 +1421,17 @@ fn execute_radial_command(
         return;
     }
 
+    let open_target = source_context.or_else(|| app.selected_nodes.primary());
+
     match command {
         RadialCommand::NodeNew => intents.push(GraphIntent::CreateNodeNearCenter),
         RadialCommand::NodePinToggle => {
-            if app.selected_nodes.iter().copied().all(|key| {
-                app.graph
-                    .get_node(key)
-                    .is_some_and(|node| node.is_pinned)
-            }) {
+            if app
+                .selected_nodes
+                .iter()
+                .copied()
+                .all(|key| app.graph.get_node(key).is_some_and(|node| node.is_pinned))
+            {
                 intents.push(GraphIntent::ExecuteEdgeCommand {
                     command: EdgeCommand::UnpinSelected,
                 });
@@ -1115,14 +1442,60 @@ fn execute_radial_command(
             }
         },
         RadialCommand::NodeDelete => intents.push(GraphIntent::RemoveSelectedNodes),
-        RadialCommand::NodeOpenTab => {
-            app.request_open_selected_tile_mode(PendingTileOpenMode::Tab);
+        RadialCommand::NodeChooseWorkspace => {
+            if let Some(key) = open_target
+                && !app.workspaces_for_node_key(key).is_empty()
+            {
+                app.request_choose_workspace_picker(key);
+            }
+        },
+        RadialCommand::NodeAddToWorkspace => {
+            if let Some(key) = open_target {
+                app.request_add_node_to_workspace_picker(key);
+            }
+        },
+        RadialCommand::NodeOpenWorkspace => {
+            if let Some(key) = open_target {
+                intents.push(GraphIntent::OpenNodeWorkspaceRouted {
+                    key,
+                    prefer_workspace: None,
+                });
+            }
+        },
+        RadialCommand::NodeOpenNeighbors => {
+            if let Some(key) = open_target {
+                app.request_open_connected_from(
+                    key,
+                    PendingTileOpenMode::Tab,
+                    PendingConnectedOpenScope::Neighbors,
+                );
+            }
+        },
+        RadialCommand::NodeOpenConnected => {
+            if let Some(key) = open_target {
+                app.request_open_connected_from(
+                    key,
+                    PendingTileOpenMode::Tab,
+                    PendingConnectedOpenScope::Connected,
+                );
+            }
         },
         RadialCommand::NodeOpenSplit => {
+            if let Some(key) = open_target {
+                intents.push(GraphIntent::SelectNode {
+                    key,
+                    multi_select: false,
+                });
+            }
             app.request_open_selected_tile_mode(PendingTileOpenMode::SplitHorizontal);
         },
         RadialCommand::NodeMoveToActivePane => {
-            app.request_open_selected_tile_mode(PendingTileOpenMode::Tab);
+            if let Some(key) = open_target {
+                intents.push(GraphIntent::OpenNodeWorkspaceRouted {
+                    key,
+                    prefer_workspace: None,
+                });
+            }
         },
         RadialCommand::EdgeConnectPair => {
             if let Some((from, to)) = pair_context {
@@ -1200,12 +1573,7 @@ fn domain_anchor(center: egui::Pos2, domain: RadialDomain, radius: f32) -> egui:
     center + egui::vec2(a.cos() * radius, a.sin() * radius)
 }
 
-fn command_anchor(
-    center: egui::Pos2,
-    domain: RadialDomain,
-    idx: usize,
-    len: usize,
-) -> egui::Pos2 {
+fn command_anchor(center: egui::Pos2, domain: RadialDomain, idx: usize, len: usize) -> egui::Pos2 {
     let base = domain_angle(domain);
     let spread = 0.8_f32;
     let t = if len <= 1 {
@@ -1241,11 +1609,48 @@ fn nearest_command_for_pointer(
     best.map(|(_, cmd)| cmd)
 }
 
-pub fn render_persistence_panel(ctx: &egui::Context, app: &mut GraphBrowserApp) {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ContextPinScope {
+    Workspace,
+    Pane,
+}
+
+fn context_pin_scope_for(focused_pane_node: Option<NodeKey>) -> ContextPinScope {
+    if focused_pane_node.is_some() {
+        ContextPinScope::Pane
+    } else {
+        ContextPinScope::Workspace
+    }
+}
+
+fn context_pin_workspace_name(scope: ContextPinScope) -> &'static str {
+    match scope {
+        ContextPinScope::Workspace => GraphBrowserApp::WORKSPACE_PIN_WORKSPACE_NAME,
+        ContextPinScope::Pane => GraphBrowserApp::WORKSPACE_PIN_PANE_NAME,
+    }
+}
+
+fn context_pin_label(scope: ContextPinScope) -> &'static str {
+    match scope {
+        ContextPinScope::Workspace => "Pin Workspace",
+        ContextPinScope::Pane => "Pin Pane",
+    }
+}
+
+pub fn render_persistence_panel(
+    ctx: &egui::Context,
+    app: &mut GraphBrowserApp,
+    focused_pane_node: Option<NodeKey>,
+    current_layout_json: Option<&str>,
+) {
     if !app.show_persistence_panel {
         return;
     }
 
+    let pin_load_picker_state_id = egui::Id::new("persistence_pin_load_picker_open");
+    let mut show_pin_load_picker = ctx
+        .data_mut(|d| d.get_persisted::<bool>(pin_load_picker_state_id))
+        .unwrap_or(false);
     let mut open = app.show_persistence_panel;
     Window::new("Persistence Hub")
         .open(&mut open)
@@ -1254,7 +1659,8 @@ pub fn render_persistence_panel(ctx: &egui::Context, app: &mut GraphBrowserApp) 
             ui.label("Workspaces");
             ui.horizontal(|ui| {
                 ui.label("Autosave every (sec):");
-                let autosave_interval_id = ui.make_persistent_id("workspace_autosave_interval_input");
+                let autosave_interval_id =
+                    ui.make_persistent_id("workspace_autosave_interval_input");
                 let mut autosave_interval = ui
                     .data_mut(|d| d.get_persisted::<String>(autosave_interval_id))
                     .unwrap_or_else(|| app.workspace_autosave_interval_secs().to_string());
@@ -1262,7 +1668,9 @@ pub fn render_persistence_panel(ctx: &egui::Context, app: &mut GraphBrowserApp) 
                     .add(egui::TextEdit::singleline(&mut autosave_interval).desired_width(72.0))
                     .changed()
                 {
-                    ui.data_mut(|d| d.insert_persisted(autosave_interval_id, autosave_interval.clone()));
+                    ui.data_mut(|d| {
+                        d.insert_persisted(autosave_interval_id, autosave_interval.clone())
+                    });
                 }
                 if ui.button("Apply").clicked()
                     && let Ok(secs) = autosave_interval.trim().parse::<u64>()
@@ -1280,12 +1688,66 @@ pub fn render_persistence_panel(ctx: &egui::Context, app: &mut GraphBrowserApp) 
                     let _ = app.set_workspace_autosave_retention(retention as u8);
                 }
             });
-            if ui.button("Pin Workspace Snapshot").clicked() {
-                app.request_save_workspace_snapshot();
+            if app.should_prompt_ephemeral_workspace_save() {
+                ui.colored_label(
+                    Color32::from_rgb(255, 180, 70),
+                    "Ephemeral workspace has unsaved graph changes; save named before switching.",
+                );
             }
+            let pin_scope = context_pin_scope_for(focused_pane_node);
+            let pin_workspace_name = context_pin_workspace_name(pin_scope);
+            let pin_active = current_layout_json.is_some_and(|current| {
+                app.load_workspace_layout_json(pin_workspace_name)
+                    .as_deref()
+                    .is_some_and(|saved| saved == current)
+            });
+            let has_any_saved_pin = app
+                .load_workspace_layout_json(GraphBrowserApp::WORKSPACE_PIN_WORKSPACE_NAME)
+                .is_some()
+                || app
+                    .load_workspace_layout_json(GraphBrowserApp::WORKSPACE_PIN_PANE_NAME)
+                    .is_some();
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(pin_active, context_pin_label(pin_scope))
+                    .clicked()
+                    && current_layout_json.is_some()
+                {
+                    app.request_save_workspace_snapshot_named(pin_workspace_name.to_string());
+                }
+                if ui
+                    .add_enabled(has_any_saved_pin, egui::Button::new("Load Pin..."))
+                    .clicked()
+                {
+                    show_pin_load_picker = true;
+                }
+            });
             if ui.button("Prune Session Workspace").clicked() {
                 let _ = app.clear_session_workspace_layout();
             }
+            ui.separator();
+            ui.label("Retention");
+            if ui.button("Prune Empty Named Workspaces").clicked() {
+                app.request_prune_empty_workspaces();
+            }
+            ui.horizontal(|ui| {
+                let keep_latest_id = ui.make_persistent_id("workspace_keep_latest_named_input");
+                let mut keep_latest = ui
+                    .data_mut(|d| d.get_persisted::<String>(keep_latest_id))
+                    .unwrap_or_else(|| "10".to_string());
+                if ui
+                    .add(egui::TextEdit::singleline(&mut keep_latest).desired_width(56.0))
+                    .changed()
+                {
+                    ui.data_mut(|d| d.insert_persisted(keep_latest_id, keep_latest.clone()));
+                }
+                if ui.button("Keep Latest N Named").clicked()
+                    && let Ok(keep) = keep_latest.trim().parse::<usize>()
+                {
+                    app.request_keep_latest_named_workspaces(keep);
+                }
+            });
+            ui.small("Reserved autosave workspaces are excluded from batch retention.");
             ui.separator();
             let workspace_name_id = ui.make_persistent_id("workspace_name_input");
             let mut workspace_name = ui
@@ -1302,6 +1764,13 @@ pub fn render_persistence_panel(ctx: &egui::Context, app: &mut GraphBrowserApp) 
             }
             let workspace_name = workspace_name.trim().to_string();
             ui.horizontal(|ui| {
+                if ui.button("Save Auto").clicked() {
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    app.request_save_workspace_snapshot_named(format!("workspace:auto-{now}"));
+                }
                 if ui
                     .add_enabled(!workspace_name.is_empty(), egui::Button::new("Save Named"))
                     .clicked()
@@ -1309,13 +1778,19 @@ pub fn render_persistence_panel(ctx: &egui::Context, app: &mut GraphBrowserApp) 
                     app.request_save_workspace_snapshot_named(workspace_name.clone());
                 }
                 if ui
-                    .add_enabled(!workspace_name.is_empty(), egui::Button::new("Restore Named"))
+                    .add_enabled(
+                        !workspace_name.is_empty(),
+                        egui::Button::new("Restore Named"),
+                    )
                     .clicked()
                 {
                     app.request_restore_workspace_snapshot_named(workspace_name.clone());
                 }
                 if ui
-                    .add_enabled(!workspace_name.is_empty(), egui::Button::new("Delete Named"))
+                    .add_enabled(
+                        !workspace_name.is_empty(),
+                        egui::Button::new("Delete Named"),
+                    )
                     .clicked()
                 {
                     if !GraphBrowserApp::is_reserved_workspace_layout_name(&workspace_name) {
@@ -1325,6 +1800,10 @@ pub fn render_persistence_panel(ctx: &egui::Context, app: &mut GraphBrowserApp) 
             });
             let mut workspace_names = app.list_workspace_layout_names();
             workspace_names.sort();
+            workspace_names.retain(|name| {
+                name != GraphBrowserApp::WORKSPACE_PIN_WORKSPACE_NAME
+                    && name != GraphBrowserApp::WORKSPACE_PIN_PANE_NAME
+            });
             if workspace_names.is_empty() {
                 ui.small("No workspaces saved.");
             } else {
@@ -1350,6 +1829,19 @@ pub fn render_persistence_panel(ctx: &egui::Context, app: &mut GraphBrowserApp) 
                         }
                         if ui.small_button("Load").clicked() {
                             app.request_restore_workspace_snapshot_named(name.clone());
+                        }
+                        if ui
+                            .add_enabled(
+                                app.get_single_selected_node().is_some(),
+                                egui::Button::new("Open Sel").small(),
+                            )
+                            .clicked()
+                            && let Some(key) = app.get_single_selected_node()
+                        {
+                            app.apply_intents([GraphIntent::OpenNodeWorkspaceRouted {
+                                key,
+                                prefer_workspace: Some(name.clone()),
+                            }]);
                         }
                         if ui
                             .add_enabled(!is_reserved, egui::Button::new("Del").small())
@@ -1430,11 +1922,192 @@ pub fn render_persistence_panel(ctx: &egui::Context, app: &mut GraphBrowserApp) 
                 }
             }
         });
+    if open && show_pin_load_picker {
+        let mut close_picker = false;
+        Window::new("Load Pin Snapshot")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .default_width(300.0)
+            .show(ctx, |ui| {
+                let options = [
+                    (
+                        GraphBrowserApp::WORKSPACE_PIN_WORKSPACE_NAME,
+                        "Workspace Pin",
+                    ),
+                    (GraphBrowserApp::WORKSPACE_PIN_PANE_NAME, "Pane Pin"),
+                ];
+                let mut any = false;
+                for (workspace_name, label) in options {
+                    let Some(saved_layout) = app.load_workspace_layout_json(workspace_name) else {
+                        continue;
+                    };
+                    any = true;
+                    let active =
+                        current_layout_json.is_some_and(|current| current == saved_layout.as_str());
+                    ui.horizontal(|ui| {
+                        let text = if active {
+                            format!("{label} (active)")
+                        } else {
+                            label.to_string()
+                        };
+                        if ui.button(text).clicked() {
+                            app.request_restore_workspace_snapshot_named(
+                                workspace_name.to_string(),
+                            );
+                            close_picker = true;
+                        }
+                    });
+                }
+                if !any {
+                    ui.small("No pin snapshots saved.");
+                }
+                ui.separator();
+                if ui.button("Close").clicked() {
+                    close_picker = true;
+                }
+            });
+        if ctx.input(|i| i.key_pressed(Key::Escape)) {
+            close_picker = true;
+        }
+        if close_picker {
+            show_pin_load_picker = false;
+        }
+    }
+    if !open {
+        show_pin_load_picker = false;
+    }
+    ctx.data_mut(|d| d.insert_persisted(pin_load_picker_state_id, show_pin_load_picker));
     app.show_persistence_panel = open;
 }
 
+pub fn render_choose_workspace_picker(ctx: &egui::Context, app: &mut GraphBrowserApp) {
+    let Some(request) = app.choose_workspace_picker_request() else {
+        return;
+    };
+    let target = request.node;
+    if app.graph.get_node(target).is_none() {
+        app.clear_choose_workspace_picker();
+        return;
+    }
+    let mut selected_workspace: Option<String> = None;
+    let mut close = false;
+    let mut memberships = match request.mode {
+        ChooseWorkspacePickerMode::OpenNodeInWorkspace => {
+            app.sorted_workspaces_for_node_key(target)
+        },
+        ChooseWorkspacePickerMode::AddNodeToWorkspace => {
+            let mut all = app
+                .list_workspace_layout_names()
+                .into_iter()
+                .filter(|name| !GraphBrowserApp::is_reserved_workspace_layout_name(name))
+                .collect::<Vec<_>>();
+            all.sort();
+            all
+        },
+    };
+    let title = app
+        .graph
+        .get_node(target)
+        .map(|node| format!("Choose Workspace: {}", node.title))
+        .unwrap_or_else(|| "Choose Workspace".to_string());
+    Window::new(title)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .default_width(300.0)
+        .show(ctx, |ui| {
+            if memberships.is_empty() {
+                let msg = match request.mode {
+                    ChooseWorkspacePickerMode::OpenNodeInWorkspace => {
+                        "No workspace memberships for this node."
+                    },
+                    ChooseWorkspacePickerMode::AddNodeToWorkspace => {
+                        "No named workspaces available. Save one first."
+                    },
+                };
+                ui.small(msg);
+            } else {
+                memberships.dedup();
+                let header = match request.mode {
+                    ChooseWorkspacePickerMode::OpenNodeInWorkspace => "Open in workspace:",
+                    ChooseWorkspacePickerMode::AddNodeToWorkspace => "Add node to workspace:",
+                };
+                ui.small(header);
+                for name in &memberships {
+                    if ui.button(name).clicked() {
+                        selected_workspace = Some(name.clone());
+                        close = true;
+                    }
+                }
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("Open Persistence Hub").clicked() {
+                    app.show_persistence_panel = true;
+                }
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
+            });
+        });
+    if let Some(name) = selected_workspace {
+        match request.mode {
+            ChooseWorkspacePickerMode::OpenNodeInWorkspace => {
+                app.apply_intents([GraphIntent::OpenNodeWorkspaceRouted {
+                    key: target,
+                    prefer_workspace: Some(name),
+                }]);
+            },
+            ChooseWorkspacePickerMode::AddNodeToWorkspace => {
+                app.request_add_node_to_workspace(target, name);
+            },
+        }
+    }
+    if close {
+        app.clear_choose_workspace_picker();
+    }
+}
+
+pub fn render_ephemeral_workspace_prompt(ctx: &egui::Context, app: &mut GraphBrowserApp) {
+    let Some(request) = app.ephemeral_workspace_prompt_request().cloned() else {
+        return;
+    };
+    let mut action: Option<EphemeralWorkspacePromptAction> = None;
+    Window::new("Unsaved Ephemeral Workspace")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .default_width(380.0)
+        .show(ctx, |ui| {
+            match &request {
+                EphemeralWorkspacePromptRequest::WorkspaceSwitch { name, .. } => {
+                    ui.label(format!(
+                        "This ephemeral workspace has unsaved graph changes.\nSwitch to '{name}' without saving?"
+                    ));
+                },
+            }
+            ui.separator();
+            if ui.button("Open Persistence Hub").clicked() {
+                app.show_persistence_panel = true;
+            }
+            ui.horizontal(|ui| {
+                if ui.button("Proceed Without Saving").clicked() {
+                    action = Some(EphemeralWorkspacePromptAction::ProceedWithoutSaving);
+                }
+                if ui.button("Cancel").clicked() {
+                    action = Some(EphemeralWorkspacePromptAction::Cancel);
+                }
+            });
+        });
+    if let Some(action) = action {
+        app.set_ephemeral_workspace_prompt_action(action);
+    }
+}
+
 /// Resolve pair edge command context using precedence:
-/// selected pair > (selected primary + hovered node) > (selected primary + focused pane node).
+/// selected pair > (selected primary + explicit context target) > (selected primary + hovered node)
+/// > (selected primary + focused pane node).
 fn resolve_pair_command_context(
     app: &GraphBrowserApp,
     hovered_node: Option<NodeKey>,
@@ -1446,6 +2119,9 @@ fn resolve_pair_command_context(
 
     if app.selected_nodes.len() == 1 {
         let from = app.selected_nodes.primary()?;
+        if let Some(to) = app.pending_node_context_target().filter(|to| *to != from) {
+            return Some((from, to));
+        }
         if let Some(to) = hovered_node.filter(|to| *to != from) {
             return Some((from, to));
         }
@@ -1462,8 +2138,8 @@ fn resolve_source_node_context(
     hovered_node: Option<NodeKey>,
     focused_pane_node: Option<NodeKey>,
 ) -> Option<NodeKey> {
-    app.selected_nodes
-        .primary()
+    app.pending_node_context_target()
+        .or(app.selected_nodes.primary())
         .or(hovered_node)
         .or(focused_pane_node)
 }
@@ -1623,13 +2299,34 @@ mod tests {
     }
 
     #[test]
-    fn test_source_context_prefers_selected_then_hover_then_focused() {
+    fn test_pair_command_context_prefers_pending_target_over_hover_and_focused() {
         let mut app = test_app();
+        let a = app.add_node_and_sync("a".into(), Point2D::new(0.0, 0.0));
+        let pending = app.add_node_and_sync("pending".into(), Point2D::new(50.0, 0.0));
+        let hovered = app.add_node_and_sync("hovered".into(), Point2D::new(100.0, 0.0));
+        let focused = app.add_node_and_sync("focused".into(), Point2D::new(200.0, 0.0));
+        app.select_node(a, false);
+        app.set_pending_node_context_target(Some(pending));
+
+        let resolved = resolve_pair_command_context(&app, Some(hovered), Some(focused));
+        assert_eq!(resolved, Some((a, pending)));
+    }
+
+    #[test]
+    fn test_source_context_prefers_pending_then_selected_then_hover_then_focused() {
+        let mut app = test_app();
+        let pending = app.add_node_and_sync("pending".into(), Point2D::new(-10.0, 0.0));
         let selected = app.add_node_and_sync("selected".into(), Point2D::new(0.0, 0.0));
         let hovered = app.add_node_and_sync("hovered".into(), Point2D::new(10.0, 0.0));
         let focused = app.add_node_and_sync("focused".into(), Point2D::new(20.0, 0.0));
 
+        app.set_pending_node_context_target(Some(pending));
         app.select_node(selected, false);
+        assert_eq!(
+            resolve_source_node_context(&app, Some(hovered), Some(focused)),
+            Some(pending)
+        );
+        app.set_pending_node_context_target(None);
         assert_eq!(
             resolve_source_node_context(&app, Some(hovered), Some(focused)),
             Some(selected)

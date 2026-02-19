@@ -69,25 +69,30 @@ pub(crate) fn open_or_focus_webview_tile_with_mode(
 
     match mode {
         TileOpenMode::Tab => {
-            if let Some(Tile::Container(Container::Tabs(tabs))) = tiles_tree.tiles.get_mut(root_id) {
+            if let Some(Tile::Container(Container::Tabs(tabs))) = tiles_tree.tiles.get_mut(root_id)
+            {
                 tabs.add_child(webview_tile_id);
                 tabs.set_active(webview_tile_id);
                 return;
             }
 
-            let tabs_root = tiles_tree.tiles.insert_tab_tile(vec![root_id, webview_tile_id]);
+            let tabs_root = tiles_tree
+                .tiles
+                .insert_tab_tile(vec![root_id, webview_tile_id]);
             tiles_tree.root = Some(tabs_root);
         },
         TileOpenMode::SplitHorizontal => {
             // Never split directly against a raw leaf pane: wrap it in tabs first.
-            let split_lhs_id =
-                if matches!(tiles_tree.tiles.get(root_id), Some(Tile::Pane(TileKind::WebView(_)))) {
-                    let wrapped = tiles_tree.tiles.insert_tab_tile(vec![root_id]);
-                    tiles_tree.root = Some(wrapped);
-                    wrapped
-                } else {
-                    root_id
-                };
+            let split_lhs_id = if matches!(
+                tiles_tree.tiles.get(root_id),
+                Some(Tile::Pane(TileKind::WebView(_)))
+            ) {
+                let wrapped = tiles_tree.tiles.insert_tab_tile(vec![root_id]);
+                tiles_tree.root = Some(wrapped);
+                wrapped
+            } else {
+                root_id
+            };
 
             if let Some(Tile::Container(Container::Linear(linear))) =
                 tiles_tree.tiles.get_mut(split_lhs_id)
@@ -104,10 +109,13 @@ pub(crate) fn open_or_focus_webview_tile_with_mode(
 }
 
 pub(crate) fn detach_webview_tile_to_split(tiles_tree: &mut Tree<TileKind>, node_key: NodeKey) {
-    let existing_tile_id = tiles_tree.tiles.iter().find_map(|(tile_id, tile)| match tile {
-        Tile::Pane(TileKind::WebView(key)) if *key == node_key => Some(*tile_id),
-        _ => None,
-    });
+    let existing_tile_id = tiles_tree
+        .tiles
+        .iter()
+        .find_map(|(tile_id, tile)| match tile {
+            Tile::Pane(TileKind::WebView(key)) if *key == node_key => Some(*tile_id),
+            _ => None,
+        });
 
     if let Some(tile_id) = existing_tile_id {
         tiles_tree.remove_recursively(tile_id);

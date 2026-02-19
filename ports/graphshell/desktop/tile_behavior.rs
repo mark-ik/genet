@@ -20,7 +20,6 @@ use super::tile_kind::TileKind;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PendingOpenMode {
-    Tab,
     SplitHorizontal,
 }
 
@@ -187,14 +186,11 @@ impl<'a> Behavior<TileKind> for GraphshellTileBehavior<'a> {
                 for action in actions {
                     match action {
                         GraphAction::FocusNode(key) => {
-                            self.pending_graph_intents.push(GraphIntent::SelectNode {
-                                key,
-                                multi_select: multi_select_modifier,
-                            });
-                            self.pending_open_nodes.push(PendingOpenNode {
-                                key,
-                                mode: PendingOpenMode::Tab,
-                            });
+                            self.pending_graph_intents
+                                .push(GraphIntent::OpenNodeWorkspaceRouted {
+                                    key,
+                                    prefer_workspace: None,
+                                });
                         },
                         GraphAction::FocusNodeSplit(key) => {
                             if let Some(primary) = self.graph_app.selected_nodes.primary()

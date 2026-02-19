@@ -52,10 +52,11 @@ pub(crate) fn render_dialog_panels(args: DialogPanelsArgs<'_>) {
                         *args.show_clear_data_confirm = false;
                     }
                     if ui.button("Clear Data").clicked() {
-                        args.frame_intents.extend(webview_controller::close_all_webviews(
-                            args.graph_app,
-                            args.window,
-                        ));
+                        args.frame_intents
+                            .extend(webview_controller::close_all_webviews(
+                                args.graph_app,
+                                args.window,
+                            ));
                         tile_runtime::reset_runtime_webview_state(
                             args.tiles_tree,
                             args.tile_rendering_contexts,
@@ -94,7 +95,8 @@ pub(crate) fn render_dialog_panels(args: DialogPanelsArgs<'_>) {
                         *args.data_dir_status = None;
                     }
                     if ui.button("Switch").clicked() {
-                        let Some(target_dir) = persistence_ops::parse_data_dir_input(args.data_dir_input)
+                        let Some(target_dir) =
+                            persistence_ops::parse_data_dir_input(args.data_dir_input)
                         else {
                             *args.data_dir_status =
                                 Some("Enter a non-empty directory path.".to_string());

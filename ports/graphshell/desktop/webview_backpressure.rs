@@ -46,7 +46,8 @@ fn classify_webview_creation_probe(
     contains_webview: bool,
     has_responsive_signal: bool,
 ) -> WebviewCreationProbeOutcome {
-    if has_responsive_signal || (contains_webview && elapsed >= WEBVIEW_CREATION_CONFIRMATION_WINDOW)
+    if has_responsive_signal
+        || (contains_webview && elapsed >= WEBVIEW_CREATION_CONFIRMATION_WINDOW)
     {
         WebviewCreationProbeOutcome::Confirmed
     } else if elapsed >= WEBVIEW_CREATION_TIMEOUT {
@@ -68,7 +69,8 @@ pub(crate) fn ensure_webview_for_node(
     webview_creation_backpressure: &mut HashMap<NodeKey, WebviewCreationBackpressureState>,
     lifecycle_intents: &mut Vec<GraphIntent>,
 ) {
-    let (Some(node), Some(running_state)) = (graph_app.graph.get_node(node_key), app_state.as_ref())
+    let (Some(node), Some(running_state)) =
+        (graph_app.graph.get_node(node_key), app_state.as_ref())
     else {
         webview_creation_backpressure.remove(&node_key);
         return;
@@ -105,7 +107,9 @@ pub(crate) fn ensure_webview_for_node(
 
     let render_context = tile_rendering_contexts
         .entry(node_key)
-        .or_insert_with(|| Rc::new(window_rendering_context.offscreen_context(base_rendering_context.size())))
+        .or_insert_with(|| {
+            Rc::new(window_rendering_context.offscreen_context(base_rendering_context.size()))
+        })
         .clone();
     let url = Url::parse(&node_url).unwrap_or_else(|_| Url::parse("about:blank").unwrap());
     let webview =
@@ -169,8 +173,7 @@ pub(crate) fn reconcile_webview_creation_backpressure(
                     if state.retry_count >= WEBVIEW_CREATION_MAX_RETRIES {
                         warn!(
                             "Demoting node {:?} after {} webview creation retries without confirmation",
-                            node_key,
-                            state.retry_count
+                            node_key, state.retry_count
                         );
                         lifecycle_intents.push(GraphIntent::DemoteNodeToCold { key: node_key });
                         remove_state = true;

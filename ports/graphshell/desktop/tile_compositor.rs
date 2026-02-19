@@ -158,7 +158,10 @@ pub(crate) fn composite_active_webview_tiles(
             ctx.layer_painter(focus_ring_layer).rect_stroke(
                 tile_rect.shrink(1.0),
                 4.0,
-                Stroke::new(2.0, egui::Color32::from_rgba_unmultiplied(120, 200, 255, alpha)),
+                Stroke::new(
+                    2.0,
+                    egui::Color32::from_rgba_unmultiplied(120, 200, 255, alpha),
+                ),
                 StrokeKind::Inside,
             );
         } else if hovered_webview_id == Some(webview_id) {
@@ -166,7 +169,10 @@ pub(crate) fn composite_active_webview_tiles(
             ctx.layer_painter(hover_ring_layer).rect_stroke(
                 tile_rect.shrink(1.0),
                 4.0,
-                Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(180, 180, 190, 180)),
+                Stroke::new(
+                    1.5,
+                    egui::Color32::from_rgba_unmultiplied(180, 180, 190, 180),
+                ),
                 StrokeKind::Inside,
             );
         }

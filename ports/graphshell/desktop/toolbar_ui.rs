@@ -150,8 +150,10 @@ pub(crate) fn render_toolbar_ui(args: ToolbarUiArgs<'_>) -> ToolbarUiOutput {
     let mut toggle_tile_view_requested = false;
     let mut open_selected_mode_after_submit = None;
     let is_graph_view = !has_webview_tiles;
-    let persisted_workspace_names: HashSet<String> =
-        graph_app.list_workspace_layout_names().into_iter().collect();
+    let persisted_workspace_names: HashSet<String> = graph_app
+        .list_workspace_layout_names()
+        .into_iter()
+        .collect();
     let focused_pane_pin_name =
         focused_toolbar_node.and_then(|node| workspace_pin_name_for_node(node, graph_app));
 
@@ -692,29 +694,40 @@ fn apply_omnibar_match(
     match active_match {
         OmnibarMatch::Node(key) => {
             frame_intents.push(GraphIntent::ClearHighlightedEdge);
-            frame_intents.push(GraphIntent::SelectNode {
-                key,
-                multi_select: false,
-            });
             if has_webview_tiles {
-                *open_selected_mode_after_submit = Some(ToolbarOpenMode::Tab);
+                frame_intents.push(GraphIntent::OpenNodeWorkspaceRouted {
+                    key,
+                    prefer_workspace: None,
+                });
+            } else {
+                frame_intents.push(GraphIntent::SelectNode {
+                    key,
+                    multi_select: false,
+                });
             }
         },
         OmnibarMatch::NodeUrl(url) => {
             frame_intents.push(GraphIntent::ClearHighlightedEdge);
             if let Some((key, _)) = graph_app.graph.get_node_by_url(&url) {
-                frame_intents.push(GraphIntent::SelectNode {
-                    key,
-                    multi_select: false,
-                });
+                if has_webview_tiles {
+                    frame_intents.push(GraphIntent::OpenNodeWorkspaceRouted {
+                        key,
+                        prefer_workspace: None,
+                    });
+                } else {
+                    frame_intents.push(GraphIntent::SelectNode {
+                        key,
+                        multi_select: false,
+                    });
+                }
             } else {
                 frame_intents.push(GraphIntent::CreateNodeAtUrl {
                     url,
                     position: graph_center_for_new_node(graph_app),
                 });
-            }
-            if has_webview_tiles {
-                *open_selected_mode_after_submit = Some(ToolbarOpenMode::Tab);
+                if has_webview_tiles {
+                    *open_selected_mode_after_submit = Some(ToolbarOpenMode::Tab);
+                }
             }
         },
         OmnibarMatch::Edge { from, to } => {
@@ -761,11 +774,8 @@ fn omnibar_matches_for_query(
         .nodes()
         .map(|(_, node)| node.url.clone())
         .collect();
-    let mut mapped_edge_keys_seen: HashSet<(NodeKey, NodeKey)> = graph_app
-        .graph
-        .edges()
-        .map(|e| (e.from, e.to))
-        .collect();
+    let mut mapped_edge_keys_seen: HashSet<(NodeKey, NodeKey)> =
+        graph_app.graph.edges().map(|e| (e.from, e.to)).collect();
 
     if let Some(snapshot) = graph_app.peek_latest_graph_snapshot() {
         for (_, node) in snapshot.nodes() {
@@ -787,7 +797,10 @@ fn omnibar_matches_for_query(
                 .graph
                 .get_node_by_url(&from_node.url)
                 .map(|(k, _)| k);
-            let current_to = graph_app.graph.get_node_by_url(&to_node.url).map(|(k, _)| k);
+            let current_to = graph_app
+                .graph
+                .get_node_by_url(&to_node.url)
+                .map(|(k, _)| k);
             if let (Some(from_key), Some(to_key)) = (current_from, current_to)
                 && mapped_edge_keys_seen.insert((from_key, to_key))
             {
@@ -830,7 +843,10 @@ fn omnibar_matches_for_query(
                     .graph
                     .get_node_by_url(&from_node.url)
                     .map(|(k, _)| k);
-                let current_to = graph_app.graph.get_node_by_url(&to_node.url).map(|(k, _)| k);
+                let current_to = graph_app
+                    .graph
+                    .get_node_by_url(&to_node.url)
+                    .map(|(k, _)| k);
                 if let (Some(from_key), Some(to_key)) = (current_from, current_to)
                     && mapped_edge_keys_seen.insert((from_key, to_key))
                 {
@@ -949,13 +965,8 @@ mod tests {
         let tabs = tiles.insert_tab_tile(vec![tab_tile]);
         let tree = Tree::new("tabs_mode_test", tabs, tiles);
 
-        let matches = omnibar_matches_for_query(
-            &app,
-            &tree,
-            OmnibarSearchMode::TabsLocal,
-            "alpha",
-            true,
-        );
+        let matches =
+            omnibar_matches_for_query(&app, &tree, OmnibarSearchMode::TabsLocal, "alpha", true);
         assert_eq!(matches, vec![OmnibarMatch::Node(tab_key)]);
         assert!(!matches.contains(&OmnibarMatch::Node(non_tab_key)));
     }
@@ -964,7 +975,8 @@ mod tests {
     fn test_omnibar_mixed_mode_prioritizes_tab_nodes_in_detail_mode() {
         let mut app = GraphBrowserApp::new_for_testing();
         let tab_key = app.add_node_and_sync("https://beta-tab.example".into(), Point2D::zero());
-        let node_key = app.add_node_and_sync("https://beta-node.example".into(), Point2D::new(20.0, 0.0));
+        let node_key =
+            app.add_node_and_sync("https://beta-node.example".into(), Point2D::new(20.0, 0.0));
 
         let mut tiles = egui_tiles::Tiles::default();
         let tab_tile = tiles.insert_pane(TileKind::WebView(tab_key));
@@ -982,12 +994,16 @@ mod tests {
     fn test_omnibar_nodes_all_includes_saved_graph_nodes() {
         let temp = TempDir::new().expect("temp dir");
         let mut app = GraphBrowserApp::new_from_dir(temp.path().to_path_buf());
-        let _saved_key = app.add_node_and_sync("https://saved-node.example".into(), Point2D::zero());
+        let _saved_key =
+            app.add_node_and_sync("https://saved-node.example".into(), Point2D::zero());
         app.save_named_graph_snapshot("saved-graph")
             .expect("save named graph snapshot");
 
         app.clear_graph();
-        let _active_key = app.add_node_and_sync("https://active-node.example".into(), Point2D::new(10.0, 10.0));
+        let _active_key = app.add_node_and_sync(
+            "https://active-node.example".into(),
+            Point2D::new(10.0, 10.0),
+        );
 
         let mut tiles = egui_tiles::Tiles::default();
         let root = tiles.insert_pane(TileKind::Graph);
@@ -1048,13 +1064,8 @@ mod tests {
         let root = tiles.insert_pane(TileKind::Graph);
         let tree = Tree::new("edges_all_test", root, tiles);
 
-        let matches = omnibar_matches_for_query(
-            &app,
-            &tree,
-            OmnibarSearchMode::EdgesAll,
-            "edge-a",
-            false,
-        );
+        let matches =
+            omnibar_matches_for_query(&app, &tree, OmnibarSearchMode::EdgesAll, "edge-a", false);
         assert_eq!(matches, vec![OmnibarMatch::Edge { from, to }]);
     }
 
@@ -1078,5 +1089,91 @@ mod tests {
         assert_eq!(app.highlighted_graph_edge, Some((from, to)));
         assert!(app.selected_nodes.contains(&from));
         assert!(app.selected_nodes.contains(&to));
+    }
+
+    #[test]
+    fn test_apply_omnibar_node_match_routes_workspace_open_in_detail_mode() {
+        let app = GraphBrowserApp::new_for_testing();
+        let key = NodeKey::new(7);
+        let mut intents = Vec::new();
+        let mut open_mode = None;
+
+        apply_omnibar_match(
+            &app,
+            OmnibarMatch::Node(key),
+            true,
+            &mut intents,
+            &mut open_mode,
+        );
+
+        assert!(intents.iter().any(|intent| {
+            matches!(
+                intent,
+                GraphIntent::OpenNodeWorkspaceRouted {
+                    key: routed_key,
+                    prefer_workspace: None
+                } if *routed_key == key
+            )
+        }));
+        assert!(!intents.iter().any(|intent| {
+            matches!(
+                intent,
+                GraphIntent::SelectNode {
+                    key: selected_key,
+                    multi_select: false
+                } if *selected_key == key
+            )
+        }));
+        assert!(open_mode.is_none());
+    }
+
+    #[test]
+    fn test_apply_omnibar_node_url_existing_routes_workspace_open_in_detail_mode() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app.add_node_and_sync("https://node-url.example".into(), Point2D::zero());
+        let mut intents = Vec::new();
+        let mut open_mode = None;
+
+        apply_omnibar_match(
+            &app,
+            OmnibarMatch::NodeUrl("https://node-url.example".into()),
+            true,
+            &mut intents,
+            &mut open_mode,
+        );
+
+        assert!(intents.iter().any(|intent| {
+            matches!(
+                intent,
+                GraphIntent::OpenNodeWorkspaceRouted {
+                    key: routed_key,
+                    prefer_workspace: None
+                } if *routed_key == key
+            )
+        }));
+        assert!(open_mode.is_none());
+    }
+
+    #[test]
+    fn test_apply_omnibar_node_url_new_keeps_open_selected_mode_for_new_node() {
+        let app = GraphBrowserApp::new_for_testing();
+        let mut intents = Vec::new();
+        let mut open_mode = None;
+
+        apply_omnibar_match(
+            &app,
+            OmnibarMatch::NodeUrl("https://new-node-url.example".into()),
+            true,
+            &mut intents,
+            &mut open_mode,
+        );
+
+        assert!(intents.iter().any(|intent| {
+            matches!(
+                intent,
+                GraphIntent::CreateNodeAtUrl { url, .. } if url == "https://new-node-url.example"
+            )
+        }));
+        assert!(matches!(open_mode, Some(ToolbarOpenMode::Tab)));
     }
 }

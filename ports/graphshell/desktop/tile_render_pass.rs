@@ -46,7 +46,6 @@ pub(crate) struct TileRenderPassArgs<'a> {
 
 fn open_mode_from_pending(mode: PendingOpenMode) -> TileOpenMode {
     match mode {
-        PendingOpenMode::Tab => TileOpenMode::Tab,
         PendingOpenMode::SplitHorizontal => TileOpenMode::SplitHorizontal,
     }
 }

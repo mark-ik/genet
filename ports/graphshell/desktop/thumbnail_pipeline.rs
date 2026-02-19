@@ -66,14 +66,15 @@ pub(crate) fn request_pending_thumbnail_captures(
                         .to_rgba8();
                     let (width, height) = resized.dimensions();
                     let mut cursor = Cursor::new(Vec::new());
-                    let png_bytes =
-                        match DynamicImage::ImageRgba8(resized).write_to(&mut cursor, ImageFormat::Png) {
-                            Ok(()) => Some(cursor.into_inner()),
-                            Err(error) => {
-                                warn!("Could not encode thumbnail PNG for {id:?}: {error}");
-                                None
-                            },
-                        };
+                    let png_bytes = match DynamicImage::ImageRgba8(resized)
+                        .write_to(&mut cursor, ImageFormat::Png)
+                    {
+                        Ok(()) => Some(cursor.into_inner()),
+                        Err(error) => {
+                            warn!("Could not encode thumbnail PNG for {id:?}: {error}");
+                            None
+                        },
+                    };
                     (png_bytes, width, height)
                 },
                 Err(error) => {

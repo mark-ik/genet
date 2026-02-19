@@ -19,8 +19,9 @@ use image::load_from_memory;
 use petgraph::Directed;
 use petgraph::graph::DefaultIx;
 use petgraph::stable_graph::NodeIndex;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use uuid::Uuid;
 
 /// Type alias for the egui_graphs graph with our node/edge types
 pub type EguiGraph =
@@ -48,6 +49,10 @@ pub struct GraphNodeShape {
     favicon_hash: u64,
     #[serde(skip, default)]
     favicon_handle: Option<TextureHandle>,
+    #[serde(default)]
+    workspace_membership_count: usize,
+    #[serde(default)]
+    workspace_membership_names: Vec<String>,
 }
 
 impl From<NodeProps<Node>> for GraphNodeShape {
@@ -70,6 +75,8 @@ impl From<NodeProps<Node>> for GraphNodeShape {
             favicon_height: node_props.payload.favicon_height,
             favicon_hash: 0,
             favicon_handle: None,
+            workspace_membership_count: 0,
+            workspace_membership_names: Vec::new(),
         };
         shape.thumbnail_hash = Self::hash_bytes(&shape.thumbnail_png);
         shape.favicon_hash = Self::hash_favicon(&shape.favicon_rgba);
@@ -114,6 +121,7 @@ impl DisplayNode<Node, EdgeType, Directed, DefaultIx> for GraphNodeShape {
             let uv = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
             res.push(Shape::image(texture_id, rect, uv, Color32::WHITE));
         }
+        self.push_workspace_membership_badge(ctx, circle_center, circle_radius, &mut res);
 
         if !(self.selected || self.dragged || self.hovered) {
             return res;
@@ -165,6 +173,98 @@ impl DisplayNode<Node, EdgeType, Directed, DefaultIx> for GraphNodeShape {
 }
 
 impl GraphNodeShape {
+    pub fn radius(&self) -> f32 {
+        self.radius
+    }
+
+    pub fn workspace_membership_count(&self) -> usize {
+        self.workspace_membership_count
+    }
+
+    pub fn workspace_badge_hit_rect_screen(
+        &self,
+        circle_center_screen: Pos2,
+        circle_radius_screen: f32,
+    ) -> Option<Rect> {
+        if self.workspace_membership_count == 0 {
+            return None;
+        }
+        let scale = (circle_radius_screen / 15.0).clamp(0.7, 1.8);
+        let text = self.workspace_membership_count.to_string();
+        let text_width = text.chars().count() as f32 * (6.0 * scale);
+        let badge_size = Vec2::new(text_width + 8.0 * scale, 14.0 * scale);
+        let badge_center = Pos2::new(
+            circle_center_screen.x + circle_radius_screen * 0.95,
+            circle_center_screen.y - circle_radius_screen * 0.95,
+        );
+        Some(Rect::from_center_size(badge_center, badge_size))
+    }
+
+    fn set_workspace_memberships(&mut self, names: Vec<String>) {
+        self.workspace_membership_count = names.len();
+        self.workspace_membership_names = names;
+    }
+
+    fn push_workspace_membership_badge(
+        &self,
+        ctx: &DrawContext,
+        circle_center: Pos2,
+        circle_radius: f32,
+        shapes: &mut Vec<Shape>,
+    ) {
+        if self.workspace_membership_count == 0 {
+            return;
+        }
+
+        let scale = (circle_radius / 15.0).clamp(0.7, 1.8);
+        let badge_text = self.workspace_membership_count.to_string();
+        let badge_font = FontId::new((9.5 * scale).clamp(8.0, 18.0), FontFamily::Monospace);
+        let badge_galley = ctx
+            .ctx
+            .fonts_mut(|f| f.layout_no_wrap(badge_text, badge_font, Color32::from_gray(245)));
+        let padding = Vec2::new(4.0 * scale, 2.0 * scale);
+        let badge_size = badge_galley.size() + padding * 2.0;
+        // Top-right keeps clear of top-center pin affordances.
+        let badge_center = Pos2::new(
+            circle_center.x + circle_radius * 0.95,
+            circle_center.y - circle_radius * 0.95,
+        );
+        let badge_rect = Rect::from_center_size(badge_center, badge_size);
+        shapes.push(Shape::rect_filled(
+            badge_rect,
+            4.0 * scale,
+            Color32::from_rgba_unmultiplied(20, 30, 46, 224),
+        ));
+        let badge_pos = Pos2::new(badge_rect.min.x + padding.x, badge_rect.min.y + padding.y);
+        shapes.push(TextShape::new(badge_pos, badge_galley, Color32::from_gray(245)).into());
+
+        if !self.hovered || self.workspace_membership_names.is_empty() {
+            return;
+        }
+        let tooltip_text = format!("Workspaces\n{}", self.workspace_membership_names.join("\n"));
+        let tooltip_font = FontId::new((9.0 * scale).clamp(8.0, 14.0), FontFamily::Monospace);
+        let tooltip_galley = ctx.ctx.fonts_mut(|f| {
+            f.layout_no_wrap(tooltip_text, tooltip_font, Color32::from_rgb(244, 246, 250))
+        });
+        let tooltip_padding = Vec2::new(6.0 * scale, 4.0 * scale);
+        let tooltip_size = tooltip_galley.size() + tooltip_padding * 2.0;
+        let tooltip_min = Pos2::new(
+            badge_rect.max.x + 6.0 * scale,
+            badge_rect.min.y - 2.0 * scale,
+        );
+        let tooltip_rect = Rect::from_min_size(tooltip_min, tooltip_size);
+        shapes.push(Shape::rect_filled(
+            tooltip_rect,
+            5.0 * scale,
+            Color32::from_rgba_unmultiplied(18, 24, 34, 228),
+        ));
+        let tooltip_pos = Pos2::new(
+            tooltip_rect.min.x + tooltip_padding.x,
+            tooltip_rect.min.y + tooltip_padding.y,
+        );
+        shapes.push(TextShape::new(tooltip_pos, tooltip_galley, Color32::from_gray(245)).into());
+    }
+
     fn ensure_thumbnail_texture(&mut self, ctx: &DrawContext) -> Option<TextureId> {
         if self.thumbnail_handle.is_none() {
             let thumbnail_png = self.thumbnail_png.as_ref()?;
@@ -342,6 +442,26 @@ impl EguiGraphState {
         Self { graph: egui_graph }
     }
 
+    /// Build graph adapter state with optional workspace membership metadata.
+    pub fn from_graph_with_memberships(
+        graph: &Graph,
+        selected_nodes: &HashSet<NodeKey>,
+        memberships_by_uuid: &HashMap<Uuid, Vec<String>>,
+    ) -> Self {
+        let mut state = Self::from_graph(graph, selected_nodes);
+        for (key, node) in graph.nodes() {
+            if let Some(egui_node) = state.graph.node_mut(key) {
+                egui_node.display_mut().set_workspace_memberships(
+                    memberships_by_uuid
+                        .get(&node.id)
+                        .cloned()
+                        .unwrap_or_default(),
+                );
+            }
+        }
+        state
+    }
+
     /// Get NodeKey from a petgraph NodeIndex.
     /// Since our NodeKey IS NodeIndex, this just validates the index exists.
     pub fn get_key(&self, idx: NodeIndex) -> Option<NodeKey> {
@@ -450,5 +570,50 @@ mod tests {
             truncate_with_ellipsis("this is a very long title that should be truncated", 20);
         assert_eq!(result.chars().count(), 20);
         assert!(result.ends_with('\u{2026}'));
+    }
+
+    #[test]
+    fn test_membership_badge_metadata_injected_by_uuid() {
+        let mut graph = Graph::new();
+        let key = graph.add_node(
+            "https://example.com".to_string(),
+            Point2D::new(100.0, 200.0),
+        );
+        let node_id = graph.get_node(key).unwrap().id;
+        let selected_nodes = HashSet::new();
+        let memberships = HashMap::from([(
+            node_id,
+            vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()],
+        )]);
+
+        let state =
+            EguiGraphState::from_graph_with_memberships(&graph, &selected_nodes, &memberships);
+        let node = state.graph.node(key).unwrap();
+        let shape = node.display();
+
+        assert_eq!(shape.workspace_membership_count, 3);
+        assert_eq!(
+            shape.workspace_membership_names,
+            vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_membership_badge_metadata_empty_without_mapping() {
+        let mut graph = Graph::new();
+        let key = graph.add_node(
+            "https://example.com".to_string(),
+            Point2D::new(100.0, 200.0),
+        );
+        let selected_nodes = HashSet::new();
+        let memberships: HashMap<Uuid, Vec<String>> = HashMap::new();
+
+        let state =
+            EguiGraphState::from_graph_with_memberships(&graph, &selected_nodes, &memberships);
+        let node = state.graph.node(key).unwrap();
+        let shape = node.display();
+
+        assert_eq!(shape.workspace_membership_count, 0);
+        assert!(shape.workspace_membership_names.is_empty());
     }
 }

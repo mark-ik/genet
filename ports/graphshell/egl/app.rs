@@ -385,15 +385,22 @@ impl App {
             );
             self.input_target_fallback_last_warned_at.set(Some(now));
         } else {
-            self.input_target_fallback_suppressed
-                .set(self.input_target_fallback_suppressed.get().saturating_add(1));
+            self.input_target_fallback_suppressed.set(
+                self.input_target_fallback_suppressed
+                    .get()
+                    .saturating_add(1),
+            );
         }
     }
 
     fn input_target_webview_id(&self) -> Option<WebViewId> {
         let window = self.window();
         let preferred = window.platform_window().preferred_input_webview_id(&window);
-        let newest = window.webview_collection.borrow().newest().map(|wv| wv.id());
+        let newest = window
+            .webview_collection
+            .borrow()
+            .newest()
+            .map(|wv| wv.id());
         let (resolved, used_fallback) = resolve_input_target_webview_id(preferred, newest);
         if used_fallback {
             self.warn_input_target_fallback_once_per_interval();
@@ -444,7 +451,8 @@ impl App {
     // Wrapper methods above preserve compatibility for callers that do not pass IDs.
     /// Load an URL in a specific WebView.
     pub fn load_uri_for_webview(&self, webview_id: WebViewId, location: &str) {
-        let Some(url) = location_bar_input_to_url(location, &self.servoshell_preferences().searchpage)
+        let Some(url) =
+            location_bar_input_to_url(location, &self.servoshell_preferences().searchpage)
         else {
             warn!("failed to parse location");
             return;
@@ -625,13 +633,7 @@ impl App {
     }
 
     /// Cancel touch event for a specific WebView.
-    pub fn touch_cancel_for_webview(
-        &self,
-        webview_id: WebViewId,
-        x: f32,
-        y: f32,
-        pointer_id: i32,
-    ) {
+    pub fn touch_cancel_for_webview(&self, webview_id: WebViewId, x: f32, y: f32, pointer_id: i32) {
         if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.notify_input_event(InputEvent::Touch(TouchEvent::new(
                 TouchEventType::Cancel,
@@ -669,7 +671,13 @@ impl App {
     }
 
     /// Register a mouse button press for a specific WebView.
-    pub fn mouse_down_for_webview(&self, webview_id: WebViewId, x: f32, y: f32, button: MouseButton) {
+    pub fn mouse_down_for_webview(
+        &self,
+        webview_id: WebViewId,
+        x: f32,
+        y: f32,
+        button: MouseButton,
+    ) {
         if let Some(webview) = self.window().webview_by_id(webview_id) {
             webview.notify_input_event(InputEvent::MouseButton(MouseButtonEvent::new(
                 MouseButtonAction::Down,

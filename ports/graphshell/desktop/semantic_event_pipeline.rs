@@ -9,7 +9,9 @@ use servo::WebViewId;
 use crate::app::GraphIntent;
 use crate::window::GraphSemanticEvent;
 
-pub(crate) fn graph_intents_from_semantic_events(events: Vec<GraphSemanticEvent>) -> Vec<GraphIntent> {
+pub(crate) fn graph_intents_from_semantic_events(
+    events: Vec<GraphSemanticEvent>,
+) -> Vec<GraphIntent> {
     let mut intents = Vec::with_capacity(events.len());
     for event in events {
         match event {

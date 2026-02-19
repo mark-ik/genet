@@ -92,10 +92,18 @@ where
         );
 
         if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
-            step_graph_search_active_match(graph_search_matches, graph_search_active_match_index, 1);
+            step_graph_search_active_match(
+                graph_search_matches,
+                graph_search_active_match_index,
+                1,
+            );
         }
         if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
-            step_graph_search_active_match(graph_search_matches, graph_search_active_match_index, -1);
+            step_graph_search_active_match(
+                graph_search_matches,
+                graph_search_active_match_index,
+                -1,
+            );
         }
         if ctx.input(|i| i.key_pressed(Key::Enter))
             && let Some(node_key) =

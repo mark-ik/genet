@@ -607,10 +607,11 @@ impl RunningAppState {
             return;
         };
         let Some(active_webview) = self.focused_window().and_then(|window| {
-            let webview_id = window.platform_window().preferred_input_webview_id(&window)?;
+            let webview_id = window
+                .platform_window()
+                .preferred_input_webview_id(&window)?;
             window.webview_by_id(webview_id)
-        })
-        else {
+        }) else {
             return;
         };
         gamepad_provider.handle_gamepad_events(active_webview);

@@ -4,10 +4,11 @@
 
 //! Application state management for the graph browser.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::graph::egui_adapter::EguiGraphState;
@@ -18,6 +19,7 @@ use egui_graphs::FruchtermanReingoldWithCenterGravityState;
 use euclid::default::Point2D;
 use log::warn;
 use servo::WebViewId;
+use uuid::Uuid;
 
 /// Camera state for zoom bounds enforcement
 pub struct Camera {
@@ -126,7 +128,11 @@ impl SelectionState {
         if self.nodes.len() != 2 {
             return None;
         }
-        let mut iter = self.order.iter().copied().filter(|key| self.nodes.contains(key));
+        let mut iter = self
+            .order
+            .iter()
+            .copied()
+            .filter(|key| self.nodes.contains(key));
         let first = iter.next()?;
         let second = iter.next()?;
         Some((first, second))
@@ -158,6 +164,46 @@ pub enum EdgeCommand {
 pub enum PendingTileOpenMode {
     Tab,
     SplitHorizontal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingConnectedOpenScope {
+    Neighbors,
+    Connected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceOpenAction {
+    /// Restore an existing workspace and focus the target node.
+    RestoreWorkspace { name: String, node: NodeKey },
+    /// No workspace membership exists: open in the current workspace context.
+    OpenInCurrentWorkspace { node: NodeKey },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EphemeralWorkspacePromptRequest {
+    WorkspaceSwitch {
+        name: String,
+        focus_node: Option<NodeKey>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EphemeralWorkspacePromptAction {
+    ProceedWithoutSaving,
+    Cancel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChooseWorkspacePickerMode {
+    OpenNodeInWorkspace,
+    AddNodeToWorkspace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChooseWorkspacePickerRequest {
+    pub node: NodeKey,
+    pub mode: ChooseWorkspacePickerMode,
 }
 
 #[derive(Debug, Clone)]
@@ -195,6 +241,10 @@ pub enum GraphIntent {
     SetNodeUrl {
         key: NodeKey,
         new_url: String,
+    },
+    OpenNodeWorkspaceRouted {
+        key: NodeKey,
+        prefer_workspace: Option<String>,
     },
     CreateUserGroupedEdge {
         from: NodeKey,
@@ -318,11 +368,13 @@ pub struct GraphBrowserApp {
 
     /// Last hovered node in graph view (updated by graph render pass).
     pub hovered_graph_node: Option<NodeKey>,
+    /// Explicit node context target (e.g. right-click) for open commands.
+    pending_node_context_target: Option<NodeKey>,
     /// Explicit highlighted edge in graph view (for edge-search targeting).
     pub highlighted_graph_edge: Option<(NodeKey, NodeKey)>,
 
-    /// Pending UI command: open connected nodes for this source and tile mode.
-    pending_open_connected_from: Option<(NodeKey, PendingTileOpenMode)>,
+    /// Pending UI command: open connected nodes for this source, tile mode, and scope.
+    pending_open_connected_from: Option<(NodeKey, PendingTileOpenMode, PendingConnectedOpenScope)>,
 
     /// Pending UI command: open the selected/newly-created node in a tile mode.
     pending_open_selected_tile_mode: Option<PendingTileOpenMode>,
@@ -335,6 +387,21 @@ pub struct GraphBrowserApp {
 
     /// Pending UI command: restore named workspace snapshot.
     pending_restore_workspace_snapshot_named: Option<String>,
+
+    /// One-shot node focus request applied after a routed workspace restore.
+    pending_workspace_restore_focus_node: Option<NodeKey>,
+
+    /// Pending modal prompt context for unsaved ephemeral workspace transitions.
+    pending_ephemeral_workspace_prompt: Option<EphemeralWorkspacePromptRequest>,
+
+    /// User decision captured from ephemeral workspace modal prompt.
+    pending_ephemeral_workspace_prompt_action: Option<EphemeralWorkspacePromptAction>,
+
+    /// Node target and mode for "Choose Workspace..." picker window.
+    pending_choose_workspace_picker_request: Option<ChooseWorkspacePickerRequest>,
+
+    /// Pending UI command: add a node tab to an existing named workspace snapshot.
+    pending_add_node_to_workspace: Option<(NodeKey, String)>,
 
     /// Pending UI command: persist named full-graph snapshot.
     pending_save_graph_snapshot_named: Option<String>,
@@ -350,6 +417,12 @@ pub struct GraphBrowserApp {
 
     /// Pending UI command: detach focused webview pane into split layout.
     pending_detach_node_to_split: Option<NodeKey>,
+
+    /// Pending UI command: prune empty named workspaces.
+    pending_prune_empty_workspaces: bool,
+
+    /// Pending UI command: keep only latest N named workspaces.
+    pending_keep_latest_named_workspaces: Option<usize>,
 
     /// One-shot flag: fit graph to screen on next frame (triggered by 'C' key)
     pub fit_to_screen_requested: bool,
@@ -385,6 +458,18 @@ pub struct GraphBrowserApp {
     /// Per-node most-recent named workspace activation metadata.
     node_last_active_workspace: HashMap<NodeKey, (u64, String)>,
 
+    /// UUID-keyed workspace membership index (runtime-derived from persisted layouts).
+    node_workspace_membership: HashMap<Uuid, BTreeSet<String>>,
+
+    /// True while current tile tree is synthesized without a named workspace save.
+    current_workspace_is_ephemeral: bool,
+
+    /// True if graph-mutating action happened while workspace is ephemeral.
+    ephemeral_workspace_modified: bool,
+
+    /// True after we've emitted a warning for the current unsaved-ephemeral state.
+    ephemeral_workspace_prompt_warned: bool,
+
     /// Cached egui_graphs state (persists across frames for drag/interaction)
     pub egui_state: Option<EguiGraphState>,
 
@@ -395,6 +480,8 @@ pub struct GraphBrowserApp {
 impl GraphBrowserApp {
     pub const SESSION_WORKSPACE_LAYOUT_NAME: &'static str = "workspace:session-latest";
     const SESSION_WORKSPACE_PREV_PREFIX: &'static str = "workspace:session-prev-";
+    pub const WORKSPACE_PIN_WORKSPACE_NAME: &'static str = "workspace:pin-workspace-current";
+    pub const WORKSPACE_PIN_PANE_NAME: &'static str = "workspace:pin-pane-current";
     pub const DEFAULT_WORKSPACE_AUTOSAVE_INTERVAL_SECS: u64 = 60;
     pub const DEFAULT_WORKSPACE_AUTOSAVE_RETENTION: u8 = 1;
 
@@ -455,17 +542,25 @@ impl GraphBrowserApp {
             show_radial_menu: false,
             show_persistence_panel: false,
             hovered_graph_node: None,
+            pending_node_context_target: None,
             highlighted_graph_edge: None,
             pending_open_connected_from: None,
             pending_open_selected_tile_mode: None,
             pending_save_workspace_snapshot: false,
             pending_save_workspace_snapshot_named: None,
             pending_restore_workspace_snapshot_named: None,
+            pending_workspace_restore_focus_node: None,
+            pending_ephemeral_workspace_prompt: None,
+            pending_ephemeral_workspace_prompt_action: None,
+            pending_choose_workspace_picker_request: None,
+            pending_add_node_to_workspace: None,
             pending_save_graph_snapshot_named: None,
             pending_restore_graph_snapshot_named: None,
             pending_restore_graph_snapshot_latest: false,
             pending_delete_graph_snapshot_named: None,
             pending_detach_node_to_split: None,
+            pending_prune_empty_workspaces: false,
+            pending_keep_latest_named_workspaces: None,
             fit_to_screen_requested: false,
             camera: Camera::new(),
             persistence,
@@ -480,6 +575,10 @@ impl GraphBrowserApp {
             last_workspace_autosave_at: None,
             workspace_activation_seq: 0,
             node_last_active_workspace: HashMap::new(),
+            node_workspace_membership: HashMap::new(),
+            current_workspace_is_ephemeral: false,
+            ephemeral_workspace_modified: false,
+            ephemeral_workspace_prompt_warned: false,
             egui_state: None,
             egui_state_dirty: true,
         }
@@ -506,17 +605,25 @@ impl GraphBrowserApp {
             show_radial_menu: false,
             show_persistence_panel: false,
             hovered_graph_node: None,
+            pending_node_context_target: None,
             highlighted_graph_edge: None,
             pending_open_connected_from: None,
             pending_open_selected_tile_mode: None,
             pending_save_workspace_snapshot: false,
             pending_save_workspace_snapshot_named: None,
             pending_restore_workspace_snapshot_named: None,
+            pending_workspace_restore_focus_node: None,
+            pending_ephemeral_workspace_prompt: None,
+            pending_ephemeral_workspace_prompt_action: None,
+            pending_choose_workspace_picker_request: None,
+            pending_add_node_to_workspace: None,
             pending_save_graph_snapshot_named: None,
             pending_restore_graph_snapshot_named: None,
             pending_restore_graph_snapshot_latest: false,
             pending_delete_graph_snapshot_named: None,
             pending_detach_node_to_split: None,
+            pending_prune_empty_workspaces: false,
+            pending_keep_latest_named_workspaces: None,
             fit_to_screen_requested: false,
             camera: Camera::new(),
             persistence: None,
@@ -531,6 +638,10 @@ impl GraphBrowserApp {
             last_workspace_autosave_at: None,
             workspace_activation_seq: 0,
             node_last_active_workspace: HashMap::new(),
+            node_workspace_membership: HashMap::new(),
+            current_workspace_is_ephemeral: false,
+            ephemeral_workspace_modified: false,
+            ephemeral_workspace_prompt_warned: false,
             egui_state: None,
             egui_state_dirty: true,
         }
@@ -604,6 +715,27 @@ impl GraphBrowserApp {
     }
 
     fn apply_intent(&mut self, intent: GraphIntent) {
+        if self.current_workspace_is_ephemeral
+            && matches!(
+                intent,
+                GraphIntent::CreateNodeNearCenter
+                    | GraphIntent::CreateNodeAtUrl { .. }
+                    | GraphIntent::RemoveSelectedNodes
+                    | GraphIntent::ClearGraph
+                    | GraphIntent::CreateUserGroupedEdge { .. }
+                    | GraphIntent::CreateUserGroupedEdgeFromPrimarySelection
+                    | GraphIntent::RemoveEdge { .. }
+                    | GraphIntent::SetNodePinned { .. }
+                    | GraphIntent::SetNodeUrl { .. }
+                    | GraphIntent::ExecuteEdgeCommand { .. }
+            )
+        {
+            // Any new graph mutation in an ephemeral workspace starts a fresh
+            // unsaved-change episode for prompt gating.
+            self.ephemeral_workspace_prompt_warned = false;
+            self.ephemeral_workspace_modified = true;
+        }
+
         match intent {
             GraphIntent::TogglePhysics => self.toggle_physics(),
             GraphIntent::RequestFitToScreen => self.request_fit_to_screen(),
@@ -643,6 +775,23 @@ impl GraphBrowserApp {
             },
             GraphIntent::SetNodeUrl { key, new_url } => {
                 let _ = self.update_node_url_and_log(key, new_url);
+            },
+            GraphIntent::OpenNodeWorkspaceRouted {
+                key,
+                prefer_workspace,
+            } => {
+                self.select_node(key, false);
+                match self.resolve_workspace_open(key, prefer_workspace.as_deref()) {
+                    WorkspaceOpenAction::RestoreWorkspace { name, .. } => {
+                        self.pending_workspace_restore_focus_node = Some(key);
+                        self.request_restore_workspace_snapshot_named(name);
+                    },
+                    WorkspaceOpenAction::OpenInCurrentWorkspace { .. } => {
+                        self.current_workspace_is_ephemeral = true;
+                        self.pending_workspace_restore_focus_node = None;
+                        self.request_open_selected_tile_mode(PendingTileOpenMode::Tab);
+                    },
+                }
             },
             GraphIntent::CreateUserGroupedEdge { from, to } => {
                 self.add_user_grouped_edge_if_missing(from, to);
@@ -871,8 +1020,8 @@ impl GraphBrowserApp {
         if edge_key.is_some() {
             self.log_edge_mutation(from_key, to_key, edge_type);
             self.egui_state_dirty = true; // Graph structure changed
-                self.physics.base.is_running = true;
-                self.drag_release_frames_remaining = 0;
+            self.physics.base.is_running = true;
+            self.drag_release_frames_remaining = 0;
         }
         edge_key
     }
@@ -889,8 +1038,8 @@ impl GraphBrowserApp {
         if removed > 0 {
             self.log_edge_removal_mutation(from_key, to_key, edge_type);
             self.egui_state_dirty = true;
-                self.physics.base.is_running = true;
-                self.drag_release_frames_remaining = 0;
+            self.physics.base.is_running = true;
+            self.drag_release_frames_remaining = 0;
         }
         removed
     }
@@ -1014,6 +1163,11 @@ impl GraphBrowserApp {
         {
             warn!("Failed to save workspace layout '{name}': {e}");
         }
+        if !Self::is_reserved_workspace_layout_name(name) {
+            self.current_workspace_is_ephemeral = false;
+            self.ephemeral_workspace_modified = false;
+            self.ephemeral_workspace_prompt_warned = false;
+        }
     }
 
     fn layout_json_hash(layout_json: &str) -> u64 {
@@ -1087,6 +1241,8 @@ impl GraphBrowserApp {
     pub fn is_reserved_workspace_layout_name(name: &str) -> bool {
         name == "latest"
             || name == Self::SESSION_WORKSPACE_LAYOUT_NAME
+            || name == Self::WORKSPACE_PIN_WORKSPACE_NAME
+            || name == Self::WORKSPACE_PIN_PANE_NAME
             || name.starts_with(Self::SESSION_WORKSPACE_PREV_PREFIX)
     }
 
@@ -1102,6 +1258,12 @@ impl GraphBrowserApp {
             .map_err(|e| e.to_string())?;
         self.node_last_active_workspace
             .retain(|_, (_, workspace_name)| workspace_name != name);
+        for memberships in self.node_workspace_membership.values_mut() {
+            memberships.remove(name);
+        }
+        self.node_workspace_membership
+            .retain(|_, memberships| !memberships.is_empty());
+        self.egui_state_dirty = true;
         Ok(())
     }
 
@@ -1154,6 +1316,89 @@ impl GraphBrowserApp {
         Ok(())
     }
 
+    /// Whether ephemeral workspace graph changes should trigger a save prompt.
+    pub fn should_prompt_ephemeral_workspace_save(&self) -> bool {
+        self.current_workspace_is_ephemeral && self.ephemeral_workspace_modified
+    }
+
+    /// Returns true once per unsaved-ephemeral episode to enable one-shot warnings.
+    pub fn consume_ephemeral_workspace_prompt_warning(&mut self) -> bool {
+        if !self.should_prompt_ephemeral_workspace_save() || self.ephemeral_workspace_prompt_warned
+        {
+            return false;
+        }
+        self.ephemeral_workspace_prompt_warned = true;
+        true
+    }
+
+    /// Queue/replace an ephemeral workspace prompt request.
+    pub fn request_ephemeral_workspace_prompt(&mut self, request: EphemeralWorkspacePromptRequest) {
+        self.pending_ephemeral_workspace_prompt = Some(request);
+        self.pending_ephemeral_workspace_prompt_action = None;
+    }
+
+    /// Inspect active ephemeral workspace prompt request.
+    pub fn ephemeral_workspace_prompt_request(&self) -> Option<&EphemeralWorkspacePromptRequest> {
+        self.pending_ephemeral_workspace_prompt.as_ref()
+    }
+
+    /// Capture user action from ephemeral workspace prompt UI.
+    pub fn set_ephemeral_workspace_prompt_action(
+        &mut self,
+        action: EphemeralWorkspacePromptAction,
+    ) {
+        self.pending_ephemeral_workspace_prompt_action = Some(action);
+    }
+
+    /// Resolve and clear active ephemeral prompt when an action was chosen.
+    pub fn take_ephemeral_workspace_prompt_resolution(
+        &mut self,
+    ) -> Option<(
+        EphemeralWorkspacePromptRequest,
+        EphemeralWorkspacePromptAction,
+    )> {
+        let action = self.pending_ephemeral_workspace_prompt_action?;
+        let request = self.pending_ephemeral_workspace_prompt.take()?;
+        self.pending_ephemeral_workspace_prompt_action = None;
+        Some((request, action))
+    }
+
+    /// Mark the current tile tree as synthesized (unnamed) workspace context.
+    pub fn mark_current_workspace_ephemeral(&mut self) {
+        self.current_workspace_is_ephemeral = true;
+        self.ephemeral_workspace_modified = false;
+        self.ephemeral_workspace_prompt_warned = false;
+    }
+
+    /// Workspace-activation recency sequence for a node (higher = more recent).
+    pub fn workspace_recency_seq_for_node(&self, key: NodeKey) -> u64 {
+        self.node_last_active_workspace
+            .get(&key)
+            .map(|(seq, _)| *seq)
+            .unwrap_or(0)
+    }
+
+    /// Workspace memberships for a node sorted by recency (most recent first), then name.
+    pub fn sorted_workspaces_for_node_key(&self, key: NodeKey) -> Vec<String> {
+        let mut names: Vec<String> = self.workspaces_for_node_key(key).iter().cloned().collect();
+        if let Some((_, recent)) = self.node_last_active_workspace.get(&key)
+            && let Some(idx) = names.iter().position(|name| name == recent)
+        {
+            let recent = names.remove(idx);
+            names.insert(0, recent);
+        }
+        names
+    }
+
+    /// Last activation sequence associated with a workspace name.
+    pub fn workspace_recency_seq_for_name(&self, workspace_name: &str) -> u64 {
+        self.node_last_active_workspace
+            .values()
+            .filter_map(|(seq, name)| (name == workspace_name).then_some(*seq))
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Mark a named workspace as activated, updating per-node recency.
     pub fn note_workspace_activated(
         &mut self,
@@ -1164,9 +1409,86 @@ impl GraphBrowserApp {
         let seq = self.workspace_activation_seq;
         let workspace_name = workspace_name.to_string();
         for key in nodes {
+            let Some(node) = self.graph.get_node(key) else {
+                continue;
+            };
             self.node_last_active_workspace
                 .insert(key, (seq, workspace_name.clone()));
+            self.node_workspace_membership
+                .entry(node.id)
+                .or_default()
+                .insert(workspace_name.clone());
         }
+        self.current_workspace_is_ephemeral = false;
+        self.ephemeral_workspace_modified = false;
+        self.ephemeral_workspace_prompt_warned = false;
+        self.egui_state_dirty = true;
+    }
+
+    /// Initialize membership index from desktop-layer workspace scan.
+    pub fn init_membership_index(&mut self, index: HashMap<Uuid, BTreeSet<String>>) {
+        self.node_workspace_membership = index;
+        self.egui_state_dirty = true;
+    }
+
+    fn empty_workspace_membership() -> &'static BTreeSet<String> {
+        static EMPTY: OnceLock<BTreeSet<String>> = OnceLock::new();
+        EMPTY.get_or_init(BTreeSet::new)
+    }
+
+    /// Workspace membership set for a stable node UUID.
+    pub fn membership_for_node(&self, uuid: Uuid) -> &BTreeSet<String> {
+        self.node_workspace_membership
+            .get(&uuid)
+            .unwrap_or_else(|| Self::empty_workspace_membership())
+    }
+
+    /// Workspace membership set for a NodeKey in the current graph.
+    pub fn workspaces_for_node_key(&self, key: NodeKey) -> &BTreeSet<String> {
+        let Some(node) = self.graph.get_node(key) else {
+            return Self::empty_workspace_membership();
+        };
+        self.membership_for_node(node.id)
+    }
+
+    /// Resolve workspace-aware node-open behavior with deterministic fallback.
+    pub fn resolve_workspace_open(
+        &self,
+        node: NodeKey,
+        prefer_workspace: Option<&str>,
+    ) -> WorkspaceOpenAction {
+        if self.graph.get_node(node).is_none() {
+            return WorkspaceOpenAction::OpenInCurrentWorkspace { node };
+        }
+        let memberships = self.workspaces_for_node_key(node);
+
+        if let Some(preferred_name) = prefer_workspace
+            && memberships.contains(preferred_name)
+        {
+            return WorkspaceOpenAction::RestoreWorkspace {
+                name: preferred_name.to_string(),
+                node,
+            };
+        }
+
+        if !memberships.is_empty() {
+            if let Some((_, recent_workspace)) = self.node_last_active_workspace.get(&node)
+                && memberships.contains(recent_workspace)
+            {
+                return WorkspaceOpenAction::RestoreWorkspace {
+                    name: recent_workspace.clone(),
+                    node,
+                };
+            }
+            if let Some(name) = memberships.iter().next() {
+                return WorkspaceOpenAction::RestoreWorkspace {
+                    name: name.clone(),
+                    node,
+                };
+            }
+        }
+
+        WorkspaceOpenAction::OpenInCurrentWorkspace { node }
     }
 
     /// Persist a named full-graph snapshot.
@@ -1231,6 +1553,18 @@ impl GraphBrowserApp {
         self.node_to_webview.clear();
         self.node_crash_state.clear();
         self.active_webview_nodes.clear();
+        self.pending_node_context_target = None;
+        self.pending_workspace_restore_focus_node = None;
+        self.pending_ephemeral_workspace_prompt = None;
+        self.pending_ephemeral_workspace_prompt_action = None;
+        self.pending_choose_workspace_picker_request = None;
+        self.pending_add_node_to_workspace = None;
+        self.pending_prune_empty_workspaces = false;
+        self.pending_keep_latest_named_workspaces = None;
+        self.node_workspace_membership.clear();
+        self.current_workspace_is_ephemeral = false;
+        self.ephemeral_workspace_modified = false;
+        self.ephemeral_workspace_prompt_warned = false;
         self.next_placeholder_id = Self::scan_max_placeholder_id(&self.graph);
         self.egui_state = None;
         self.egui_state_dirty = true;
@@ -1267,6 +1601,14 @@ impl GraphBrowserApp {
         self.node_to_webview.clear();
         self.node_crash_state.clear();
         self.active_webview_nodes.clear();
+        self.pending_node_context_target = None;
+        self.pending_workspace_restore_focus_node = None;
+        self.pending_ephemeral_workspace_prompt = None;
+        self.pending_ephemeral_workspace_prompt_action = None;
+        self.pending_choose_workspace_picker_request = None;
+        self.pending_add_node_to_workspace = None;
+        self.pending_prune_empty_workspaces = false;
+        self.pending_keep_latest_named_workspaces = None;
         self.next_placeholder_id = next_placeholder_id;
         self.egui_state = None;
         self.egui_state_dirty = true;
@@ -1274,6 +1616,10 @@ impl GraphBrowserApp {
         self.last_workspace_autosave_at = None;
         self.workspace_activation_seq = 0;
         self.node_last_active_workspace.clear();
+        self.node_workspace_membership.clear();
+        self.current_workspace_is_ephemeral = false;
+        self.ephemeral_workspace_modified = false;
+        self.ephemeral_workspace_prompt_warned = false;
         self.is_interacting = false;
         self.physics_running_before_interaction = None;
         Ok(())
@@ -1351,6 +1697,9 @@ impl GraphBrowserApp {
     /// Toggle radial command menu visibility.
     pub fn toggle_radial_menu(&mut self) {
         self.show_radial_menu = !self.show_radial_menu;
+        if !self.show_radial_menu {
+            self.pending_node_context_target = None;
+        }
     }
 
     /// Toggle persistence hub visibility.
@@ -1415,13 +1764,80 @@ impl GraphBrowserApp {
         self.pending_history_workspace_layout_json.take()
     }
 
-    /// Request opening connected nodes for a given source node and tile mode.
-    pub fn request_open_connected_from(&mut self, source: NodeKey, mode: PendingTileOpenMode) {
-        self.pending_open_connected_from = Some((source, mode));
+    /// Current explicit node context target for command-surface actions.
+    pub fn pending_node_context_target(&self) -> Option<NodeKey> {
+        self.pending_node_context_target
+    }
+
+    /// Set/clear explicit node context target for command-surface actions.
+    pub fn set_pending_node_context_target(&mut self, target: Option<NodeKey>) {
+        self.pending_node_context_target = target;
+    }
+
+    /// Request opening the "Choose Workspace..." picker for a node and mode.
+    pub fn request_choose_workspace_picker_for_mode(
+        &mut self,
+        key: NodeKey,
+        mode: ChooseWorkspacePickerMode,
+    ) {
+        self.pending_choose_workspace_picker_request =
+            Some(ChooseWorkspacePickerRequest { node: key, mode });
+    }
+
+    /// Request opening the "Choose Workspace..." picker to open a node in a workspace.
+    pub fn request_choose_workspace_picker(&mut self, key: NodeKey) {
+        self.request_choose_workspace_picker_for_mode(
+            key,
+            ChooseWorkspacePickerMode::OpenNodeInWorkspace,
+        );
+    }
+
+    /// Request opening the "Choose Workspace..." picker to add node tab membership.
+    pub fn request_add_node_to_workspace_picker(&mut self, key: NodeKey) {
+        self.request_choose_workspace_picker_for_mode(
+            key,
+            ChooseWorkspacePickerMode::AddNodeToWorkspace,
+        );
+    }
+
+    /// Active request for "Choose Workspace..." picker.
+    pub fn choose_workspace_picker_request(&self) -> Option<ChooseWorkspacePickerRequest> {
+        self.pending_choose_workspace_picker_request
+    }
+
+    /// Close "Choose Workspace..." picker.
+    pub fn clear_choose_workspace_picker(&mut self) {
+        self.pending_choose_workspace_picker_request = None;
+    }
+
+    /// Request adding `node` to named workspace snapshot `workspace_name`.
+    pub fn request_add_node_to_workspace(
+        &mut self,
+        node: NodeKey,
+        workspace_name: impl Into<String>,
+    ) {
+        self.pending_add_node_to_workspace = Some((node, workspace_name.into()));
+    }
+
+    /// Take and clear pending add-node-to-workspace request.
+    pub fn take_pending_add_node_to_workspace(&mut self) -> Option<(NodeKey, String)> {
+        self.pending_add_node_to_workspace.take()
+    }
+
+    /// Request opening connected nodes for a given source node, tile mode, and scope.
+    pub fn request_open_connected_from(
+        &mut self,
+        source: NodeKey,
+        mode: PendingTileOpenMode,
+        scope: PendingConnectedOpenScope,
+    ) {
+        self.pending_open_connected_from = Some((source, mode, scope));
     }
 
     /// Take and clear pending connected-open request.
-    pub fn take_pending_open_connected_from(&mut self) -> Option<(NodeKey, PendingTileOpenMode)> {
+    pub fn take_pending_open_connected_from(
+        &mut self,
+    ) -> Option<(NodeKey, PendingTileOpenMode, PendingConnectedOpenScope)> {
         self.pending_open_connected_from.take()
     }
 
@@ -1463,6 +1879,11 @@ impl GraphBrowserApp {
     /// Take and clear pending named workspace restore request.
     pub fn take_pending_restore_workspace_snapshot_named(&mut self) -> Option<String> {
         self.pending_restore_workspace_snapshot_named.take()
+    }
+
+    /// Take and clear one-shot focus target for routed workspace restore.
+    pub fn take_pending_workspace_restore_focus_node(&mut self) -> Option<NodeKey> {
+        self.pending_workspace_restore_focus_node.take()
     }
 
     /// Request saving a named graph snapshot.
@@ -1513,6 +1934,26 @@ impl GraphBrowserApp {
     /// Take and clear pending detach-to-split request.
     pub fn take_pending_detach_node_to_split(&mut self) -> Option<NodeKey> {
         self.pending_detach_node_to_split.take()
+    }
+
+    /// Request batch prune of empty named workspaces.
+    pub fn request_prune_empty_workspaces(&mut self) {
+        self.pending_prune_empty_workspaces = true;
+    }
+
+    /// Take pending empty-workspace prune request.
+    pub fn take_pending_prune_empty_workspaces(&mut self) -> bool {
+        std::mem::take(&mut self.pending_prune_empty_workspaces)
+    }
+
+    /// Request keeping latest N named workspaces.
+    pub fn request_keep_latest_named_workspaces(&mut self, keep: usize) {
+        self.pending_keep_latest_named_workspaces = Some(keep);
+    }
+
+    /// Take pending keep-latest-N named workspaces request.
+    pub fn take_pending_keep_latest_named_workspaces(&mut self) -> Option<usize> {
+        self.pending_keep_latest_named_workspaces.take()
     }
 
     /// Promote a node to Active lifecycle (mark as needing webview)
@@ -1773,11 +2214,13 @@ impl GraphBrowserApp {
         let nodes_to_remove: Vec<NodeKey> = self.selected_nodes.iter().copied().collect();
 
         for node_key in nodes_to_remove {
+            let node_id = self.graph.get_node(node_key).map(|node| node.id);
+
             // Log removal to persistence before removing from graph
             if let Some(store) = &mut self.persistence {
-                if let Some(node) = self.graph.get_node(node_key) {
+                if let Some(node_id) = node_id {
                     store.log_mutation(&LogEntry::RemoveNode {
-                        node_id: node.id.to_string(),
+                        node_id: node_id.to_string(),
                     });
                 }
             }
@@ -1788,6 +2231,10 @@ impl GraphBrowserApp {
                 self.node_to_webview.remove(&node_key);
             }
             self.node_crash_state.remove(&node_key);
+            self.node_last_active_workspace.remove(&node_key);
+            if let Some(node_id) = node_id {
+                self.node_workspace_membership.remove(&node_id);
+            }
 
             // Remove from graph
             self.graph.remove_node(node_key);
@@ -1797,6 +2244,16 @@ impl GraphBrowserApp {
         // Clear selection
         self.selected_nodes.clear();
         self.highlighted_graph_edge = None;
+        self.pending_node_context_target = self
+            .pending_node_context_target
+            .filter(|key| self.graph.get_node(*key).is_some());
+        self.pending_choose_workspace_picker_request = self
+            .pending_choose_workspace_picker_request
+            .filter(|req| self.graph.get_node(req.node).is_some());
+        self.pending_add_node_to_workspace = self
+            .pending_add_node_to_workspace
+            .take()
+            .filter(|(key, _)| self.graph.get_node(*key).is_some());
     }
 
     /// Get the currently selected node (if exactly one is selected)
@@ -1818,9 +2275,21 @@ impl GraphBrowserApp {
         self.graph = Graph::new();
         self.selected_nodes.clear();
         self.highlighted_graph_edge = None;
+        self.pending_node_context_target = None;
+        self.pending_choose_workspace_picker_request = None;
+        self.pending_add_node_to_workspace = None;
+        self.pending_ephemeral_workspace_prompt = None;
+        self.pending_ephemeral_workspace_prompt_action = None;
+        self.pending_prune_empty_workspaces = false;
+        self.pending_keep_latest_named_workspaces = None;
         self.webview_to_node.clear();
         self.node_to_webview.clear();
         self.node_crash_state.clear();
+        self.node_last_active_workspace.clear();
+        self.node_workspace_membership.clear();
+        self.current_workspace_is_ephemeral = false;
+        self.ephemeral_workspace_modified = false;
+        self.ephemeral_workspace_prompt_warned = false;
         self.egui_state_dirty = true;
     }
 
@@ -1834,9 +2303,21 @@ impl GraphBrowserApp {
         self.graph = Graph::new();
         self.selected_nodes.clear();
         self.highlighted_graph_edge = None;
+        self.pending_node_context_target = None;
+        self.pending_choose_workspace_picker_request = None;
+        self.pending_add_node_to_workspace = None;
+        self.pending_ephemeral_workspace_prompt = None;
+        self.pending_ephemeral_workspace_prompt_action = None;
+        self.pending_prune_empty_workspaces = false;
+        self.pending_keep_latest_named_workspaces = None;
         self.webview_to_node.clear();
         self.node_to_webview.clear();
         self.node_crash_state.clear();
+        self.node_last_active_workspace.clear();
+        self.node_workspace_membership.clear();
+        self.current_workspace_is_ephemeral = false;
+        self.ephemeral_workspace_modified = false;
+        self.ephemeral_workspace_prompt_warned = false;
         self.active_webview_nodes.clear();
         self.next_placeholder_id = 0;
         self.egui_state_dirty = true;
@@ -3088,6 +3569,309 @@ mod tests {
         let recovered = GraphBrowserApp::new_from_dir(path);
         assert!(!recovered.has_recovered_graph());
         assert_eq!(recovered.graph.node_count(), 0);
+    }
+
+    #[test]
+    fn test_resolve_workspace_open_prefers_recent_membership() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app
+            .graph
+            .add_node("https://example.com".to_string(), Point2D::new(0.0, 0.0));
+        let node_id = app.graph.get_node(key).unwrap().id;
+
+        let mut index = HashMap::new();
+        index.insert(
+            node_id,
+            BTreeSet::from(["alpha".to_string(), "beta".to_string()]),
+        );
+        app.init_membership_index(index);
+        app.note_workspace_activated("beta", [key]);
+
+        assert_eq!(
+            app.resolve_workspace_open(key, None),
+            WorkspaceOpenAction::RestoreWorkspace {
+                name: "beta".to_string(),
+                node: key
+            }
+        );
+    }
+
+    #[test]
+    fn test_resolve_workspace_open_honors_preferred_workspace() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app
+            .graph
+            .add_node("https://example.com".to_string(), Point2D::new(0.0, 0.0));
+        let node_id = app.graph.get_node(key).unwrap().id;
+
+        let mut index = HashMap::new();
+        index.insert(
+            node_id,
+            BTreeSet::from(["alpha".to_string(), "beta".to_string()]),
+        );
+        app.init_membership_index(index);
+        app.note_workspace_activated("beta", [key]);
+
+        assert_eq!(
+            app.resolve_workspace_open(key, Some("alpha")),
+            WorkspaceOpenAction::RestoreWorkspace {
+                name: "alpha".to_string(),
+                node: key
+            }
+        );
+    }
+
+    #[test]
+    fn test_resolve_workspace_open_deterministic_fallback_without_recency_match() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app
+            .graph
+            .add_node("https://example.com".to_string(), Point2D::new(0.0, 0.0));
+        let node_id = app.graph.get_node(key).unwrap().id;
+
+        let mut index = HashMap::new();
+        index.insert(
+            node_id,
+            BTreeSet::from([
+                "workspace-z".to_string(),
+                "workspace-a".to_string(),
+                "workspace-m".to_string(),
+            ]),
+        );
+        app.init_membership_index(index);
+        app.node_last_active_workspace
+            .insert(key, (99, "workspace-missing".to_string()));
+
+        for _ in 0..5 {
+            assert_eq!(
+                app.resolve_workspace_open(key, None),
+                WorkspaceOpenAction::RestoreWorkspace {
+                    name: "workspace-a".to_string(),
+                    node: key
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn test_open_node_workspace_routed_with_preferred_workspace_requests_restore() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app
+            .graph
+            .add_node("https://example.com".to_string(), Point2D::new(0.0, 0.0));
+        let node_id = app.graph.get_node(key).unwrap().id;
+        let mut index = HashMap::new();
+        index.insert(
+            node_id,
+            BTreeSet::from(["alpha".to_string(), "beta".to_string()]),
+        );
+        app.init_membership_index(index);
+        app.note_workspace_activated("beta", [key]);
+
+        app.apply_intents([GraphIntent::OpenNodeWorkspaceRouted {
+            key,
+            prefer_workspace: Some("alpha".to_string()),
+        }]);
+
+        assert_eq!(
+            app.take_pending_restore_workspace_snapshot_named(),
+            Some("alpha".to_string())
+        );
+        assert_eq!(app.take_pending_workspace_restore_focus_node(), Some(key));
+    }
+
+    #[test]
+    fn test_open_node_workspace_routed_falls_back_to_current_workspace_for_zero_membership() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app
+            .graph
+            .add_node("https://example.com".to_string(), Point2D::new(0.0, 0.0));
+
+        app.apply_intents([GraphIntent::OpenNodeWorkspaceRouted {
+            key,
+            prefer_workspace: None,
+        }]);
+
+        assert_eq!(app.get_single_selected_node(), Some(key));
+        assert_eq!(
+            app.take_pending_open_selected_tile_mode(),
+            Some(PendingTileOpenMode::Tab)
+        );
+        assert!(app.current_workspace_is_ephemeral);
+        assert!(
+            app.take_pending_restore_workspace_snapshot_named()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_open_node_workspace_routed_preserves_ephemeral_prompt_state_until_restore() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app
+            .graph
+            .add_node("https://example.com".to_string(), Point2D::new(0.0, 0.0));
+        let node_id = app.graph.get_node(key).unwrap().id;
+
+        let mut index = HashMap::new();
+        index.insert(node_id, BTreeSet::from(["workspace-alpha".to_string()]));
+        app.init_membership_index(index);
+        app.current_workspace_is_ephemeral = true;
+        app.ephemeral_workspace_modified = true;
+        app.ephemeral_workspace_prompt_warned = false;
+
+        app.apply_intents([GraphIntent::OpenNodeWorkspaceRouted {
+            key,
+            prefer_workspace: None,
+        }]);
+
+        assert_eq!(
+            app.take_pending_restore_workspace_snapshot_named(),
+            Some("workspace-alpha".to_string())
+        );
+        assert!(app.should_prompt_ephemeral_workspace_save());
+    }
+
+    #[test]
+    fn test_remove_selected_nodes_clears_workspace_membership_entry() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app
+            .graph
+            .add_node("https://example.com".to_string(), Point2D::new(0.0, 0.0));
+        let node_id = app.graph.get_node(key).unwrap().id;
+
+        let mut index = HashMap::new();
+        index.insert(node_id, BTreeSet::from(["saved-workspace".to_string()]));
+        app.init_membership_index(index);
+
+        app.select_node(key, false);
+        app.remove_selected_nodes();
+
+        assert!(app.membership_for_node(node_id).is_empty());
+    }
+
+    #[test]
+    fn test_set_node_url_preserves_workspace_membership() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app
+            .graph
+            .add_node("https://before.example".to_string(), Point2D::new(0.0, 0.0));
+        let node_id = app.graph.get_node(key).unwrap().id;
+        let mut index = HashMap::new();
+        index.insert(
+            node_id,
+            BTreeSet::from(["workspace-alpha".to_string(), "workspace-beta".to_string()]),
+        );
+        app.init_membership_index(index);
+
+        app.apply_intents([GraphIntent::SetNodeUrl {
+            key,
+            new_url: "https://after.example".to_string(),
+        }]);
+
+        assert_eq!(
+            app.graph.get_node(key).unwrap().url,
+            "https://after.example"
+        );
+        assert_eq!(
+            app.membership_for_node(node_id),
+            &BTreeSet::from(["workspace-alpha".to_string(), "workspace-beta".to_string(),])
+        );
+    }
+
+    #[test]
+    fn test_ephemeral_workspace_modified_for_graph_mutations() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        app.current_workspace_is_ephemeral = true;
+        app.ephemeral_workspace_modified = false;
+
+        app.apply_intents([GraphIntent::CreateNodeNearCenter]);
+
+        assert!(app.ephemeral_workspace_modified);
+        assert!(app.should_prompt_ephemeral_workspace_save());
+    }
+
+    #[test]
+    fn test_ephemeral_workspace_not_modified_for_non_graph_mutations() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app
+            .graph
+            .add_node("https://example.com".to_string(), Point2D::new(0.0, 0.0));
+        app.current_workspace_is_ephemeral = true;
+        app.ephemeral_workspace_modified = false;
+
+        app.apply_intents([GraphIntent::SelectNode {
+            key,
+            multi_select: false,
+        }]);
+
+        assert!(!app.ephemeral_workspace_modified);
+        assert!(!app.should_prompt_ephemeral_workspace_save());
+    }
+
+    #[test]
+    fn test_ephemeral_prompt_warning_resets_on_additional_graph_mutation() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        app.current_workspace_is_ephemeral = true;
+        app.ephemeral_workspace_modified = true;
+        app.ephemeral_workspace_prompt_warned = true;
+
+        app.apply_intents([GraphIntent::CreateNodeNearCenter]);
+
+        assert!(app.ephemeral_workspace_modified);
+        assert!(!app.ephemeral_workspace_prompt_warned);
+    }
+
+    #[test]
+    fn test_ephemeral_workspace_not_modified_for_set_node_position() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app
+            .graph
+            .add_node("https://example.com".to_string(), Point2D::new(0.0, 0.0));
+        app.current_workspace_is_ephemeral = true;
+        app.ephemeral_workspace_modified = false;
+
+        app.apply_intents([GraphIntent::SetNodePosition {
+            key,
+            position: Point2D::new(42.0, 24.0),
+        }]);
+
+        assert!(!app.ephemeral_workspace_modified);
+        assert!(!app.should_prompt_ephemeral_workspace_save());
+    }
+
+    #[test]
+    fn test_ephemeral_workspace_modified_for_set_node_pinned() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app
+            .graph
+            .add_node("https://example.com".to_string(), Point2D::new(0.0, 0.0));
+        app.current_workspace_is_ephemeral = true;
+        app.ephemeral_workspace_modified = false;
+
+        app.apply_intents([GraphIntent::SetNodePinned {
+            key,
+            is_pinned: true,
+        }]);
+
+        assert!(app.ephemeral_workspace_modified);
+        assert!(app.should_prompt_ephemeral_workspace_save());
+    }
+
+    #[test]
+    fn test_save_named_workspace_clears_ephemeral_prompt_state() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+        let mut app = GraphBrowserApp::new_from_dir(path);
+        app.current_workspace_is_ephemeral = true;
+        app.ephemeral_workspace_modified = true;
+        app.ephemeral_workspace_prompt_warned = true;
+
+        app.save_workspace_layout_json("workspace:user-saved", "{\"root\":null}");
+
+        assert!(!app.current_workspace_is_ephemeral);
+        assert!(!app.ephemeral_workspace_modified);
+        assert!(!app.ephemeral_workspace_prompt_warned);
+        assert!(!app.should_prompt_ephemeral_workspace_save());
     }
 
     #[test]

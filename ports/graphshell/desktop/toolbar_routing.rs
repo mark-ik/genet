@@ -60,7 +60,8 @@ pub(crate) fn submit_address_bar_intents(
     window: &ServoShellWindow,
     searchpage: &str,
 ) -> ToolbarSubmitResult {
-    let focused_webview_id = focused_toolbar_node.and_then(|key| graph_app.get_webview_for_node(key));
+    let focused_webview_id =
+        focused_toolbar_node.and_then(|key| graph_app.get_webview_for_node(key));
     let submit_result = webview_controller::handle_address_bar_submit_intents(
         graph_app,
         location,
@@ -73,7 +74,10 @@ pub(crate) fn submit_address_bar_intents(
     ToolbarSubmitResult {
         intents: submit_result.intents,
         mark_clean: submit_result.outcome.mark_clean,
-        open_mode: requested_open_mode(submit_result.outcome.open_selected_tile, split_open_requested),
+        open_mode: requested_open_mode(
+            submit_result.outcome.open_selected_tile,
+            split_open_requested,
+        ),
     }
 }
 

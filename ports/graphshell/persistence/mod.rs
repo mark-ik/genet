@@ -1081,8 +1081,12 @@ mod tests {
         let mut graph_b = Graph::new();
         graph_b.add_node("https://b.example".to_string(), Point2D::new(3.0, 4.0));
 
-        store.save_named_graph_snapshot("graph-a", &graph_a).unwrap();
-        store.save_named_graph_snapshot("graph-b", &graph_b).unwrap();
+        store
+            .save_named_graph_snapshot("graph-a", &graph_a)
+            .unwrap();
+        store
+            .save_named_graph_snapshot("graph-b", &graph_b)
+            .unwrap();
 
         let loaded_a = store.load_named_graph_snapshot("graph-a").unwrap();
         let loaded_b = store.load_named_graph_snapshot("graph-b").unwrap();

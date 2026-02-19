@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -17,6 +17,7 @@ use super::dialog_panels::{self, DialogPanelsArgs};
 use super::headed_window::HeadedWindow;
 use super::lifecycle_reconcile::{self, RuntimeReconcileArgs};
 use super::nav_targeting;
+use super::persistence_ops;
 use super::semantic_event_pipeline;
 use super::thumbnail_pipeline;
 use super::thumbnail_pipeline::ThumbnailCaptureResult;
@@ -29,7 +30,10 @@ use super::tile_view_ops;
 use super::toolbar_ui::{self, OmnibarSearchSession, ToolbarUiArgs, ToolbarUiOutput};
 use super::webview_backpressure::WebviewCreationBackpressureState;
 use super::webview_controller;
-use crate::app::{GraphBrowserApp, GraphIntent};
+use crate::app::{
+    EphemeralWorkspacePromptAction, EphemeralWorkspacePromptRequest, GraphBrowserApp, GraphIntent,
+    PendingConnectedOpenScope, PendingTileOpenMode,
+};
 use crate::graph::NodeKey;
 use crate::input;
 use crate::render;
@@ -41,11 +45,14 @@ fn tile_open_mode_from_pending(
 ) -> tile_view_ops::TileOpenMode {
     match mode {
         crate::app::PendingTileOpenMode::Tab => tile_view_ops::TileOpenMode::Tab,
-        crate::app::PendingTileOpenMode::SplitHorizontal => tile_view_ops::TileOpenMode::SplitHorizontal,
+        crate::app::PendingTileOpenMode::SplitHorizontal => {
+            tile_view_ops::TileOpenMode::SplitHorizontal
+        },
     }
 }
 
 const MAX_CONNECTED_SPLIT_PANES: usize = 4;
+const MAX_CONNECTED_OPEN_NODES: usize = 12;
 
 fn find_webview_tile_id(tree: &Tree<TileKind>, node_key: NodeKey) -> Option<TileId> {
     tree.tiles.iter().find_map(|(tile_id, tile)| match tile {
@@ -78,6 +85,105 @@ fn workspace_nodes_from_tree(tree: &Tree<TileKind>) -> Vec<NodeKey> {
             _ => None,
         })
         .collect()
+}
+
+fn restore_named_workspace_snapshot(
+    graph_app: &mut GraphBrowserApp,
+    tiles_tree: &mut Tree<TileKind>,
+    name: &str,
+    mut routed_focus_node: Option<NodeKey>,
+) {
+    if let Some(layout_json) = graph_app.load_workspace_layout_json(name) {
+        match serde_json::from_str::<Tree<TileKind>>(&layout_json) {
+            Ok(mut restored_tree) => {
+                if let Ok(current_layout_json) = serde_json::to_string(tiles_tree) {
+                    graph_app.capture_undo_checkpoint(Some(current_layout_json));
+                }
+                tile_runtime::prune_stale_webview_tile_keys_only(&mut restored_tree, graph_app);
+                if restored_tree.root().is_some() {
+                    if let Some(node_key) = routed_focus_node.take()
+                        && graph_app.graph.get_node(node_key).is_some()
+                    {
+                        tile_view_ops::open_or_focus_webview_tile_with_mode(
+                            &mut restored_tree,
+                            node_key,
+                            tile_view_ops::TileOpenMode::Tab,
+                        );
+                        graph_app
+                            .apply_intents([GraphIntent::PromoteNodeToActive { key: node_key }]);
+                    }
+                    graph_app
+                        .note_workspace_activated(name, workspace_nodes_from_tree(&restored_tree));
+                    graph_app.mark_session_workspace_layout_json(&layout_json);
+                    *tiles_tree = restored_tree;
+                } else if let Some(node_key) = routed_focus_node.take() {
+                    warn!(
+                        "Workspace snapshot '{name}' is empty after stale-key prune; falling back to current workspace open"
+                    );
+                    graph_app.select_node(node_key, false);
+                    graph_app.request_open_selected_tile_mode(PendingTileOpenMode::Tab);
+                }
+            },
+            Err(e) => {
+                warn!("Failed to deserialize workspace snapshot '{name}': {e}");
+                if let Some(node_key) = routed_focus_node.take() {
+                    graph_app.select_node(node_key, false);
+                    graph_app.request_open_selected_tile_mode(PendingTileOpenMode::Tab);
+                }
+            },
+        }
+    } else if let Some(node_key) = routed_focus_node.take() {
+        warn!("Workspace snapshot '{name}' not found; falling back to current workspace open");
+        graph_app.select_node(node_key, false);
+        graph_app.request_open_selected_tile_mode(PendingTileOpenMode::Tab);
+    }
+}
+
+fn workspace_tree_with_single_node(node_key: NodeKey) -> Tree<TileKind> {
+    let mut tiles = Tiles::default();
+    let pane_id = tiles.insert_pane(TileKind::WebView(node_key));
+    let root = tiles.insert_tab_tile(vec![pane_id]);
+    Tree::new("graphshell_workspace_layout", root, tiles)
+}
+
+fn add_node_to_named_workspace_snapshot(
+    graph_app: &mut GraphBrowserApp,
+    name: &str,
+    node_key: NodeKey,
+) {
+    if graph_app.graph.get_node(node_key).is_none() {
+        warn!("Cannot add missing node {node_key:?} to workspace '{name}'");
+        return;
+    }
+    if GraphBrowserApp::is_reserved_workspace_layout_name(name) {
+        warn!("Cannot add node to reserved workspace '{name}'");
+        return;
+    }
+
+    let mut workspace_tree = graph_app
+        .load_workspace_layout_json(name)
+        .and_then(|layout| serde_json::from_str::<Tree<TileKind>>(&layout).ok())
+        .unwrap_or_else(|| workspace_tree_with_single_node(node_key));
+    tile_runtime::prune_stale_webview_tile_keys_only(&mut workspace_tree, graph_app);
+    if workspace_tree.root().is_none() {
+        workspace_tree = workspace_tree_with_single_node(node_key);
+    }
+
+    tile_view_ops::open_or_focus_webview_tile_with_mode(
+        &mut workspace_tree,
+        node_key,
+        tile_view_ops::TileOpenMode::Tab,
+    );
+    match serde_json::to_string(&workspace_tree) {
+        Ok(layout_json) => {
+            graph_app.save_workspace_layout_json(name, &layout_json);
+            let membership_index = persistence_ops::build_membership_index_from_layouts(graph_app);
+            graph_app.init_membership_index(membership_index);
+        },
+        Err(e) => {
+            warn!("Failed to serialize workspace snapshot '{name}' after add-tab operation: {e}")
+        },
+    }
 }
 
 fn apply_connected_split_layout(tree: &mut Tree<TileKind>, nodes: &[NodeKey]) {
@@ -119,8 +225,92 @@ fn apply_connected_split_layout(tree: &mut Tree<TileKind>, nodes: &[NodeKey]) {
         Some(grid_root)
     } else {
         let overflow_tabs = tree.tiles.insert_tab_tile(overflow_tile_ids);
-        Some(tree.tiles.insert_vertical_tile(vec![grid_root, overflow_tabs]))
+        Some(
+            tree.tiles
+                .insert_vertical_tile(vec![grid_root, overflow_tabs]),
+        )
     };
+}
+
+fn undirected_neighbors_sorted(graph_app: &GraphBrowserApp, node_key: NodeKey) -> Vec<NodeKey> {
+    let mut neighbors: Vec<NodeKey> = graph_app
+        .graph
+        .out_neighbors(node_key)
+        .chain(graph_app.graph.in_neighbors(node_key))
+        .filter(|key| *key != node_key && graph_app.graph.get_node(*key).is_some())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    neighbors.sort_by_key(|key| key.index());
+    neighbors
+}
+
+fn connected_candidates_with_depth(
+    graph_app: &GraphBrowserApp,
+    source: NodeKey,
+    scope: PendingConnectedOpenScope,
+) -> Vec<(NodeKey, u8)> {
+    match scope {
+        PendingConnectedOpenScope::Neighbors => undirected_neighbors_sorted(graph_app, source)
+            .into_iter()
+            .map(|key| (key, 1))
+            .collect(),
+        PendingConnectedOpenScope::Connected => {
+            let mut out = Vec::new();
+            let mut visited = HashSet::from([source]);
+            let mut queue = VecDeque::from([(source, 0_u8)]);
+
+            while let Some((current, depth)) = queue.pop_front() {
+                if depth >= 2 {
+                    continue;
+                }
+                for neighbor in undirected_neighbors_sorted(graph_app, current) {
+                    if !visited.insert(neighbor) {
+                        continue;
+                    }
+                    let next_depth = depth + 1;
+                    out.push((neighbor, next_depth));
+                    if next_depth < 2 {
+                        queue.push_back((neighbor, next_depth));
+                    }
+                }
+            }
+
+            out
+        },
+    }
+}
+
+fn connected_targets_for_open(
+    graph_app: &GraphBrowserApp,
+    source: NodeKey,
+    scope: PendingConnectedOpenScope,
+) -> Vec<NodeKey> {
+    let mut candidates = connected_candidates_with_depth(graph_app, source, scope);
+    let cap = MAX_CONNECTED_OPEN_NODES.saturating_sub(1);
+
+    if candidates.len() > cap {
+        candidates.sort_by(|(a, depth_a), (b, depth_b)| {
+            graph_app
+                .workspace_recency_seq_for_node(*b)
+                .cmp(&graph_app.workspace_recency_seq_for_node(*a))
+                .then_with(|| depth_a.cmp(depth_b))
+                .then_with(|| a.index().cmp(&b.index()))
+        });
+        candidates.truncate(cap);
+    }
+
+    candidates.sort_by(|(a, depth_a), (b, depth_b)| {
+        depth_a
+            .cmp(depth_b)
+            .then_with(|| {
+                graph_app
+                    .workspace_recency_seq_for_node(*b)
+                    .cmp(&graph_app.workspace_recency_seq_for_node(*a))
+            })
+            .then_with(|| a.index().cmp(&b.index()))
+    });
+    candidates.into_iter().map(|(key, _)| key).collect()
 }
 
 pub(crate) struct PreFrameIngestArgs<'a> {
@@ -677,7 +867,30 @@ pub(crate) fn run_post_render_phase<FActive>(
         graph_app.hovered_graph_node,
         focused_pane_node,
     );
-    render::render_persistence_panel(ctx, graph_app);
+    let persistence_panel_layout_json = serde_json::to_string(tiles_tree).ok();
+    render::render_persistence_panel(
+        ctx,
+        graph_app,
+        focused_pane_node,
+        persistence_panel_layout_json.as_deref(),
+    );
+    render::render_choose_workspace_picker(ctx, graph_app);
+    render::render_ephemeral_workspace_prompt(ctx, graph_app);
+
+    if let Some((request, action)) = graph_app.take_ephemeral_workspace_prompt_resolution() {
+        match (request, action) {
+            (
+                EphemeralWorkspacePromptRequest::WorkspaceSwitch { name, focus_node },
+                EphemeralWorkspacePromptAction::ProceedWithoutSaving,
+            ) => {
+                restore_named_workspace_snapshot(graph_app, tiles_tree, &name, focus_node);
+            },
+            (
+                EphemeralWorkspacePromptRequest::WorkspaceSwitch { .. },
+                EphemeralWorkspacePromptAction::Cancel,
+            ) => {},
+        }
+    }
 
     if graph_app.take_pending_save_workspace_snapshot() {
         match serde_json::to_string(tiles_tree) {
@@ -688,33 +901,42 @@ pub(crate) fn run_post_render_phase<FActive>(
 
     if let Some(name) = graph_app.take_pending_save_workspace_snapshot_named() {
         match serde_json::to_string(tiles_tree) {
-            Ok(layout_json) => graph_app.save_workspace_layout_json(&name, &layout_json),
-            Err(e) => warn!(
-                "Failed to serialize tile layout for workspace snapshot '{name}': {e}"
-            ),
+            Ok(layout_json) => {
+                graph_app.save_workspace_layout_json(&name, &layout_json);
+                let membership_index =
+                    persistence_ops::build_membership_index_from_layouts(graph_app);
+                graph_app.init_membership_index(membership_index);
+            },
+            Err(e) => warn!("Failed to serialize tile layout for workspace snapshot '{name}': {e}"),
         }
     }
 
+    if graph_app.take_pending_prune_empty_workspaces() {
+        let deleted = persistence_ops::prune_empty_named_workspaces(graph_app);
+        warn!("Pruned {deleted} empty named workspaces");
+    }
+
+    if let Some(keep) = graph_app.take_pending_keep_latest_named_workspaces() {
+        let deleted = persistence_ops::keep_latest_named_workspaces(graph_app, keep);
+        warn!("Removed {deleted} named workspaces beyond latest {keep}");
+    }
+
     if let Some(name) = graph_app.take_pending_restore_workspace_snapshot_named() {
-        if let Some(layout_json) = graph_app.load_workspace_layout_json(&name) {
-            match serde_json::from_str::<Tree<TileKind>>(&layout_json) {
-                Ok(mut restored_tree) => {
-                    if let Ok(current_layout_json) = serde_json::to_string(tiles_tree) {
-                        graph_app.capture_undo_checkpoint(Some(current_layout_json));
-                    }
-                    tile_runtime::prune_stale_webview_tile_keys_only(&mut restored_tree, graph_app);
-                    if restored_tree.root().is_some() {
-                        graph_app.note_workspace_activated(
-                            &name,
-                            workspace_nodes_from_tree(&restored_tree),
-                        );
-                        graph_app.mark_session_workspace_layout_json(&layout_json);
-                        *tiles_tree = restored_tree;
-                    }
-                },
-                Err(e) => warn!("Failed to deserialize workspace snapshot '{name}': {e}"),
+        let focus_node = graph_app.take_pending_workspace_restore_focus_node();
+        if graph_app.should_prompt_ephemeral_workspace_save() {
+            if graph_app.consume_ephemeral_workspace_prompt_warning() {
+                warn!("Ephemeral workspace has unsaved graph changes before switching to '{name}'");
             }
+            graph_app.request_ephemeral_workspace_prompt(
+                EphemeralWorkspacePromptRequest::WorkspaceSwitch { name, focus_node },
+            );
+        } else {
+            restore_named_workspace_snapshot(graph_app, tiles_tree, &name, focus_node);
         }
+    }
+
+    if let Some((node_key, workspace_name)) = graph_app.take_pending_add_node_to_workspace() {
+        add_node_to_named_workspace_snapshot(graph_app, &workspace_name, node_key);
     }
 
     if let Some(name) = graph_app.take_pending_save_graph_snapshot_named()
@@ -780,21 +1002,13 @@ pub(crate) fn run_post_render_phase<FActive>(
         tile_view_ops::detach_webview_tile_to_split(tiles_tree, node_key);
     }
 
-    if let Some((source, open_mode)) = graph_app.take_pending_open_connected_from()
+    if let Some((source, open_mode, scope)) = graph_app.take_pending_open_connected_from()
         && graph_app.graph.get_node(source).is_some()
     {
         if let Ok(layout_json) = serde_json::to_string(tiles_tree) {
             graph_app.capture_undo_checkpoint(Some(layout_json));
         }
-        let mut connected: Vec<NodeKey> = graph_app
-            .graph
-            .out_neighbors(source)
-            .chain(graph_app.graph.in_neighbors(source))
-            .filter(|key| *key != source)
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
-        connected.sort_by_key(|key| key.index());
+        let connected = connected_targets_for_open(graph_app, source, scope);
 
         let mut intents = Vec::with_capacity(connected.len() + 2);
         intents.push(GraphIntent::SelectNode {
@@ -811,6 +1025,7 @@ pub(crate) fn run_post_render_phase<FActive>(
         ordered.push(source);
         ordered.extend(connected);
 
+        graph_app.mark_current_workspace_ephemeral();
         let tile_mode = tile_open_mode_from_pending(open_mode);
         match tile_mode {
             tile_view_ops::TileOpenMode::Tab => {
@@ -843,8 +1058,15 @@ pub(crate) fn run_post_render_phase<FActive>(
         }
     }
 
-    match serde_json::to_string(tiles_tree) {
-        Ok(layout_json) => graph_app.save_session_workspace_layout_json_if_changed(&layout_json),
-        Err(e) => warn!("Failed to serialize session workspace layout: {e}"),
+    let prompt_pending = graph_app.ephemeral_workspace_prompt_request().is_some();
+    // Session autosave should not block on ephemeral-save prompts. Prompting
+    // is reserved for explicit workspace-switch actions.
+    if !prompt_pending {
+        match serde_json::to_string(tiles_tree) {
+            Ok(layout_json) => {
+                graph_app.save_session_workspace_layout_json_if_changed(&layout_json)
+            },
+            Err(e) => warn!("Failed to serialize session workspace layout: {e}"),
+        }
     }
 }

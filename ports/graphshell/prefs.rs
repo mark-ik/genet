@@ -585,7 +585,7 @@ fn update_preferences_from_command_line_arguemnts(
 ) {
     if let Some(port) = cmd_args.devtools {
         preferences.devtools_server_enabled = true;
-        preferences.devtools_server_port = port as i64;
+        preferences.devtools_server_listen_address = port.to_string();
     }
 
     if cmd_args.enable_experimental_web_platform_features {

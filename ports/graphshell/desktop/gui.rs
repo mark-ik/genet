@@ -20,7 +20,6 @@ use servo::{
 };
 use url::Url;
 use winit::event::WindowEvent;
-use winit::event::{ElementState, MouseButton};
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::window::Window;
 
@@ -168,10 +167,6 @@ pub struct Gui {
 
     /// One-shot command palette toggle requested by window event routing.
     command_palette_toggle_requested: bool,
-    /// Last pointer position in window coordinates.
-    last_pointer_pos: Option<Point2D<f32, DeviceIndependentPixel>>,
-    /// True while radial menu was opened by right-click hold.
-    radial_menu_hold_active: bool,
 }
 
 impl Drop for Gui {
@@ -275,6 +270,8 @@ impl Gui {
             let _initial_node =
                 graph_app.add_node_and_sync(initial_url.to_string(), Point2D::new(400.0, 300.0));
         }
+        let membership_index = persistence_ops::build_membership_index_from_layouts(&graph_app);
+        graph_app.init_membership_index(membership_index);
         let (thumbnail_capture_tx, thumbnail_capture_rx) = channel();
 
         Self {
@@ -323,8 +320,6 @@ impl Gui {
             focus_ring_duration: Duration::from_millis(500),
             omnibar_search_session: None,
             command_palette_toggle_requested: false,
-            last_pointer_pos: None,
-            radial_menu_hold_active: false,
         }
     }
 
@@ -369,39 +364,6 @@ impl Gui {
         event: &WindowEvent,
     ) -> EventResponse {
         let mut response = self.context.on_window_event(winit_window, event);
-
-        match event {
-            WindowEvent::CursorMoved { position, .. } => {
-                self.last_pointer_pos = Some(Point2D::new(position.x as f32, position.y as f32));
-            },
-            WindowEvent::MouseInput {
-                state: ElementState::Pressed,
-                button: MouseButton::Right,
-                ..
-            } => {
-                if !self.ui_overlay_active()
-                    && self
-                        .last_pointer_pos
-                        .is_some_and(|p| self.graph_at_point(p))
-                {
-                    self.graph_app.show_radial_menu = true;
-                    self.radial_menu_hold_active = true;
-                    response.consumed = true;
-                }
-            },
-            WindowEvent::MouseInput {
-                state: ElementState::Released,
-                button: MouseButton::Right,
-                ..
-            } => {
-                if self.radial_menu_hold_active {
-                    self.graph_app.show_radial_menu = false;
-                    self.radial_menu_hold_active = false;
-                    response.consumed = true;
-                }
-            },
-            _ => {},
-        }
 
         // When no WebView tile is active, consume user input events so they
         // never reach an inactive/hidden WebView.
@@ -458,12 +420,14 @@ impl Gui {
     pub(crate) fn graph_at_point(&self, point: Point2D<f32, DeviceIndependentPixel>) -> bool {
         let cursor = pos2(point.x, point.y);
         self.tiles_tree.active_tiles().into_iter().any(|tile_id| {
-            matches!(self.tiles_tree.tiles.get(tile_id), Some(Tile::Pane(TileKind::Graph)))
-                && self
-                    .tiles_tree
-                    .tiles
-                    .rect(tile_id)
-                    .is_some_and(|rect| rect.contains(cursor))
+            matches!(
+                self.tiles_tree.tiles.get(tile_id),
+                Some(Tile::Pane(TileKind::Graph))
+            ) && self
+                .tiles_tree
+                .tiles
+                .rect(tile_id)
+                .is_some_and(|rect| rect.contains(cursor))
         })
     }
 
@@ -1383,13 +1347,12 @@ mod tests {
         after_nodes.insert(new_group, vec![anchor, moved]);
         let moved_nodes = HashSet::from([moved]);
 
-        let intents =
-            tile_grouping::user_grouped_intents_for_tab_group_moves(
-                &before,
-                &after,
-                &after_nodes,
-                &moved_nodes,
-            );
+        let intents = tile_grouping::user_grouped_intents_for_tab_group_moves(
+            &before,
+            &after,
+            &after_nodes,
+            &moved_nodes,
+        );
         assert_eq!(intents.len(), 1);
         match intents[0] {
             GraphIntent::CreateUserGroupedEdge { from, to } => {
@@ -1415,25 +1378,23 @@ mod tests {
         after_nodes.insert(group, vec![node]);
         let moved_nodes = HashSet::from([node]);
 
-        let intents =
-            tile_grouping::user_grouped_intents_for_tab_group_moves(
-                &before,
-                &after,
-                &after_nodes,
-                &moved_nodes,
-            );
+        let intents = tile_grouping::user_grouped_intents_for_tab_group_moves(
+            &before,
+            &after,
+            &after_nodes,
+            &moved_nodes,
+        );
         assert!(intents.is_empty());
 
         let moved_group = TileId::from_u64(4);
         after.insert(node, moved_group);
         after_nodes.insert(moved_group, vec![node]);
-        let intents =
-            tile_grouping::user_grouped_intents_for_tab_group_moves(
-                &before,
-                &after,
-                &after_nodes,
-                &moved_nodes,
-            );
+        let intents = tile_grouping::user_grouped_intents_for_tab_group_moves(
+            &before,
+            &after,
+            &after_nodes,
+            &moved_nodes,
+        );
         assert!(intents.is_empty());
     }
 

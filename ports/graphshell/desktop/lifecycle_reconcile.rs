@@ -59,7 +59,10 @@ pub(crate) fn reconcile_runtime(args: RuntimeReconcileArgs<'_>) {
     let has_webview_tiles = tile_runtime::has_any_webview_tiles(args.tiles_tree);
     if has_webview_tiles {
         args.frame_intents
-            .extend(webview_controller::sync_to_graph_intents(args.graph_app, args.window));
+            .extend(webview_controller::sync_to_graph_intents(
+                args.graph_app,
+                args.window,
+            ));
         webview_backpressure::reconcile_webview_creation_backpressure(
             args.graph_app,
             args.window,

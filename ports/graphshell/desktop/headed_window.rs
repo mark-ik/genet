@@ -880,8 +880,8 @@ impl HeadedWindow {
                         if let Some(point) = pointer_position {
                             self.last_mouse_position.set(Some(point));
                         }
-                        let pointer_target =
-                            pointer_position.and_then(|point| self.gui.borrow().webview_at_point(point));
+                        let pointer_target = pointer_position
+                            .and_then(|point| self.gui.borrow().webview_at_point(point));
                         if Self::should_retarget_webview_focus(state) {
                             if let Some(webview_id) = pointer_target.map(|(id, _)| id) {
                                 self.gui.borrow_mut().set_focused_webview_id(webview_id);
@@ -901,8 +901,8 @@ impl HeadedWindow {
                     }
                 },
                 WindowEvent::CursorMoved { position, .. } => {
-                    let point =
-                        winit_position_to_euclid_point(position).to_f32() / self.hidpi_scale_factor();
+                    let point = winit_position_to_euclid_point(position).to_f32()
+                        / self.hidpi_scale_factor();
                     // Keep hit-test position fresh even when egui owns pointer this frame.
                     self.last_mouse_position.set(Some(point));
                     if !self.gui.borrow().ui_overlay_active()

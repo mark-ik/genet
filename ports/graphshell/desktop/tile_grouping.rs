@@ -9,7 +9,10 @@ use egui_tiles::{Container, Tile, TileId, Tree};
 use crate::app::GraphIntent;
 use crate::graph::NodeKey;
 
-fn nearest_tabs_container_for_tile(tiles_tree: &Tree<super::tile_kind::TileKind>, mut tile_id: TileId) -> Option<TileId> {
+fn nearest_tabs_container_for_tile(
+    tiles_tree: &Tree<super::tile_kind::TileKind>,
+    mut tile_id: TileId,
+) -> Option<TileId> {
     while let Some(parent_id) = tiles_tree.tiles.parent_of(tile_id) {
         if matches!(
             tiles_tree.tiles.get(parent_id),
