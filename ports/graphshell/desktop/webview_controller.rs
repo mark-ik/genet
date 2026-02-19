@@ -17,6 +17,7 @@ use crate::graph::NodeKey;
 use crate::parser::location_bar_input_to_url;
 use crate::search::fuzzy_match_node_keys;
 use crate::window::ServoShellWindow;
+use euclid::default::Point2D;
 
 fn reconcile_mappings_and_selection(
     app: &mut GraphBrowserApp,
@@ -65,14 +66,40 @@ fn intents_for_graph_view_address_submit(
             }],
         )
     } else {
+        let position = new_node_position_for_context(app, app.selected_nodes.primary());
         (
             true,
             vec![GraphIntent::CreateNodeAtUrl {
                 url: input.to_string(),
-                position: euclid::default::Point2D::new(400.0, 300.0),
+                position,
             }],
         )
     }
+}
+
+fn graph_centroid_or_default(app: &GraphBrowserApp) -> Point2D<f32> {
+    if app.graph.node_count() == 0 {
+        return Point2D::new(400.0, 300.0);
+    }
+    let mut sum_x = 0.0;
+    let mut sum_y = 0.0;
+    let mut count = 0.0f32;
+    for (_, node) in app.graph.nodes() {
+        sum_x += node.position.x;
+        sum_y += node.position.y;
+        count += 1.0;
+    }
+    Point2D::new(sum_x / count, sum_y / count)
+}
+
+fn new_node_position_for_context(app: &GraphBrowserApp, anchor: Option<NodeKey>) -> Point2D<f32> {
+    let base = anchor
+        .and_then(|key| app.graph.get_node(key).map(|node| node.position))
+        .unwrap_or_else(|| graph_centroid_or_default(app));
+    let n = app.graph.node_count() as f32;
+    let angle = n * 0.7853982; // ~pi/4 steps for simple deterministic spread.
+    let radius = 90.0;
+    Point2D::new(base.x + radius * angle.cos(), base.y + radius * angle.sin())
 }
 
 fn intents_for_omnibox_node_search(app: &GraphBrowserApp, query: &str) -> (bool, Vec<GraphIntent>) {
@@ -204,7 +231,7 @@ pub(crate) fn handle_address_bar_submit_intents(
             },
             intents: vec![GraphIntent::CreateNodeAtUrl {
                 url: parsed_url.into_url().to_string(),
-                position: euclid::default::Point2D::new(400.0, 300.0),
+                position: new_node_position_for_context(app, app.selected_nodes.primary()),
             }],
         }
     }
@@ -265,6 +292,26 @@ mod tests {
             }
         });
         servo::WebViewId::new(base::id::PainterId::next())
+    }
+
+    #[test]
+    fn test_new_node_position_for_context_defaults_to_center_when_empty() {
+        let app = GraphBrowserApp::new_for_testing();
+        let p = new_node_position_for_context(&app, None);
+        assert!(p.x.is_finite() && p.y.is_finite());
+    }
+
+    #[test]
+    fn test_new_node_position_for_context_biases_near_anchor() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let anchor = app
+            .graph
+            .add_node("https://anchor.com".into(), Point2D::new(100.0, 200.0));
+        let p = new_node_position_for_context(&app, Some(anchor));
+        let dx = p.x - 100.0;
+        let dy = p.y - 200.0;
+        assert!(dx.hypot(dy) > 20.0);
+        assert!(dx.hypot(dy) < 140.0);
     }
 
     #[test]

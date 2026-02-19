@@ -87,9 +87,25 @@ pub(crate) fn composite_active_webview_tiles(
     tile_rendering_contexts: &mut HashMap<NodeKey, Rc<OffscreenRenderingContext>>,
     active_tile_rects: Vec<(NodeKey, egui::Rect)>,
     focused_webview_id: Option<WebViewId>,
+    focus_ring_alpha: f32,
 ) {
-    let focus_ring_layer = LayerId::new(egui::Order::Foreground, Id::new("graphshell_focus_ring"));
+    // Keep focus ring below popup/panel overlays (palette, dialogs) so it never occludes UI.
+    let focus_ring_layer = LayerId::new(egui::Order::Background, Id::new("graphshell_focus_ring"));
+    let hover_ring_layer = LayerId::new(egui::Order::Background, Id::new("graphshell_hover_ring"));
     let scale = Scale::<_, DeviceIndependentPixel, DevicePixel>::new(ctx.pixels_per_point());
+    let hover_pos = ctx.input(|i| i.pointer.hover_pos());
+    let mut hovered_webview_id: Option<WebViewId> = None;
+    if let Some(pos) = hover_pos {
+        for (node_key, tile_rect) in active_tile_rects.iter().copied() {
+            if !tile_rect.contains(pos) {
+                continue;
+            }
+            hovered_webview_id = graph_app.get_webview_for_node(node_key);
+            if hovered_webview_id.is_some() {
+                break;
+            }
+        }
+    }
     for (node_key, tile_rect) in active_tile_rects {
         let size = Size2D::new(tile_rect.width(), tile_rect.height()) * scale;
         let target_size = PhysicalSize::new(
@@ -137,11 +153,20 @@ pub(crate) fn composite_active_webview_tiles(
             });
         }
 
-        if focused_webview_id == Some(webview_id) {
+        if focused_webview_id == Some(webview_id) && focus_ring_alpha > 0.0 {
+            let alpha = (focus_ring_alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
             ctx.layer_painter(focus_ring_layer).rect_stroke(
                 tile_rect.shrink(1.0),
                 4.0,
-                Stroke::new(2.0, egui::Color32::from_rgb(120, 200, 255)),
+                Stroke::new(2.0, egui::Color32::from_rgba_unmultiplied(120, 200, 255, alpha)),
+                StrokeKind::Inside,
+            );
+        } else if hovered_webview_id == Some(webview_id) {
+            // Temporary hover affordance (no input ownership change).
+            ctx.layer_painter(hover_ring_layer).rect_stroke(
+                tile_rect.shrink(1.0),
+                4.0,
+                Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(180, 180, 190, 180)),
                 StrokeKind::Inside,
             );
         }

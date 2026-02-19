@@ -58,8 +58,12 @@ pub(crate) fn open_or_focus_webview_tile_with_mode(
     }
 
     let webview_tile_id = tiles_tree.tiles.insert_pane(TileKind::WebView(node_key));
+    let split_leaf_tile_id = tiles_tree.tiles.insert_tab_tile(vec![webview_tile_id]);
     let Some(root_id) = tiles_tree.root() else {
-        tiles_tree.root = Some(webview_tile_id);
+        tiles_tree.root = Some(match mode {
+            TileOpenMode::Tab => webview_tile_id,
+            TileOpenMode::SplitHorizontal => split_leaf_tile_id,
+        });
         return;
     };
 
@@ -75,18 +79,40 @@ pub(crate) fn open_or_focus_webview_tile_with_mode(
             tiles_tree.root = Some(tabs_root);
         },
         TileOpenMode::SplitHorizontal => {
+            // Never split directly against a raw leaf pane: wrap it in tabs first.
+            let split_lhs_id =
+                if matches!(tiles_tree.tiles.get(root_id), Some(Tile::Pane(TileKind::WebView(_)))) {
+                    let wrapped = tiles_tree.tiles.insert_tab_tile(vec![root_id]);
+                    tiles_tree.root = Some(wrapped);
+                    wrapped
+                } else {
+                    root_id
+                };
+
             if let Some(Tile::Container(Container::Linear(linear))) =
-                tiles_tree.tiles.get_mut(root_id)
+                tiles_tree.tiles.get_mut(split_lhs_id)
             {
-                linear.add_child(webview_tile_id);
+                linear.add_child(split_leaf_tile_id);
                 return;
             }
             let split_root = tiles_tree
                 .tiles
-                .insert_horizontal_tile(vec![root_id, webview_tile_id]);
+                .insert_horizontal_tile(vec![split_lhs_id, split_leaf_tile_id]);
             tiles_tree.root = Some(split_root);
         },
     }
+}
+
+pub(crate) fn detach_webview_tile_to_split(tiles_tree: &mut Tree<TileKind>, node_key: NodeKey) {
+    let existing_tile_id = tiles_tree.tiles.iter().find_map(|(tile_id, tile)| match tile {
+        Tile::Pane(TileKind::WebView(key)) if *key == node_key => Some(*tile_id),
+        _ => None,
+    });
+
+    if let Some(tile_id) = existing_tile_id {
+        tiles_tree.remove_recursively(tile_id);
+    }
+    open_or_focus_webview_tile_with_mode(tiles_tree, node_key, TileOpenMode::SplitHorizontal);
 }
 
 pub(crate) fn toggle_tile_view(args: ToggleTileViewArgs<'_>) {

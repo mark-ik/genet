@@ -244,6 +244,18 @@ impl HeadedWindow {
         state == ElementState::Pressed
     }
 
+    fn resolve_pointer_position(
+        &self,
+        event_position: Option<PhysicalPosition<f64>>,
+    ) -> Option<Point2D<f32, DeviceIndependentPixel>> {
+        event_position
+            .map(|position| {
+                winit_position_to_euclid_point(position).to_f32() / self.hidpi_scale_factor()
+            })
+            .or_else(|| self.gui.borrow().pointer_hover_position())
+            .or(self.last_mouse_position.get())
+    }
+
     fn handle_keyboard_input(
         &self,
         state: Rc<RunningAppState>,
@@ -646,6 +658,10 @@ impl HeadedWindow {
             if self.gui.borrow().is_graph_view() {
                 return true;
             }
+            if self.gui.borrow().ui_overlay_active() || self.gui.borrow().egui_wants_pointer_input()
+            {
+                return true;
+            }
             if self
                 .focused_webview_id()
                 .is_some_and(|webview_id| self.has_active_dialog_for_webview(webview_id))
@@ -653,12 +669,7 @@ impl HeadedWindow {
                 return true;
             }
 
-            let Some(point) = point
-                .map(|point| {
-                    winit_position_to_euclid_point(point).to_f32() / self.hidpi_scale_factor()
-                })
-                .or(self.last_mouse_position.get())
-            else {
+            let Some(point) = self.resolve_pointer_position(point) else {
                 return true;
             };
 
@@ -741,18 +752,29 @@ impl HeadedWindow {
                 ..
             } if matches!(
                 key_code,
-                KeyCode::KeyT | KeyCode::KeyP | KeyCode::KeyC | KeyCode::Home | KeyCode::Escape
+                KeyCode::KeyT
+                    | KeyCode::KeyP
+                    | KeyCode::KeyC
+                    | KeyCode::Home
+                    | KeyCode::Escape
+                    | KeyCode::F2
             ) =>
             {
                 // Graph control shortcuts always go to GUI, even when webview has focus
-                let response = self
-                    .gui
-                    .borrow_mut()
-                    .on_window_event(&self.winit_window, &event);
-                if response.repaint {
+                if key_code == KeyCode::F2 {
+                    self.gui.borrow_mut().request_command_palette_toggle();
                     self.winit_window.request_redraw();
+                    consumed = true;
+                } else {
+                    let response = self
+                        .gui
+                        .borrow_mut()
+                        .on_window_event(&self.winit_window, &event);
+                    if response.repaint {
+                        self.winit_window.request_redraw();
+                    }
+                    consumed = response.consumed;
                 }
-                consumed = response.consumed;
             },
             ref event => {
                 let response = self
@@ -770,6 +792,30 @@ impl HeadedWindow {
                 }
 
                 consumed = response.consumed;
+                if let WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    ..
+                } = event
+                    && !self.gui.borrow().ui_overlay_active()
+                {
+                    let cursor_point = self.resolve_pointer_position(None);
+                    if let Some(point) = cursor_point {
+                        self.last_mouse_position.set(Some(point));
+                        let clicked_webview = self
+                            .gui
+                            .borrow()
+                            .webview_at_point(point)
+                            .map(|(webview_id, _)| webview_id);
+                        if let Some(webview_id) = clicked_webview {
+                            // Update pane focus on click even when egui consumes the event
+                            // (e.g. tab strip/workbench interactions).
+                            self.gui.borrow_mut().set_focused_webview_id(webview_id);
+                            window.activate_webview(webview_id);
+                        } else if self.gui.borrow().graph_at_point(point) {
+                            self.gui.borrow_mut().focus_graph_surface();
+                        }
+                    }
+                }
                 if !consumed
                     && let WindowEvent::KeyboardInput {
                         event: key_event, ..
@@ -816,121 +862,149 @@ impl HeadedWindow {
 
             match event {
                 WindowEvent::KeyboardInput { event, .. } => {
-                    if let Some(webview_id) = self.gui.borrow().focused_webview_id() {
-                        window.activate_webview(webview_id);
+                    if !self.gui.borrow().ui_overlay_active() {
+                        if let Some(webview_id) = self.gui.borrow().focused_webview_id() {
+                            window.activate_webview(webview_id);
+                        }
+                        self.handle_keyboard_input(state.clone(), &window, event)
                     }
-                    self.handle_keyboard_input(state.clone(), &window, event)
                 },
                 WindowEvent::ModifiersChanged(modifiers) => {
                     self.modifiers_state.set(modifiers.state())
                 },
                 WindowEvent::MouseInput { state, button, .. } => {
-                    let pointer_target = self
-                        .last_mouse_position
-                        .get()
-                        .and_then(|point| self.gui.borrow().webview_at_point(point));
-                    if let Some((webview_id, local_point)) = pointer_target
-                        && let Some(webview) = window.webview_by_id(webview_id)
+                    if !self.gui.borrow().ui_overlay_active()
+                        && !self.gui.borrow().egui_wants_pointer_input()
                     {
-                        if Self::should_retarget_webview_focus(state) {
-                            self.gui.borrow_mut().set_focused_webview_id(webview_id);
-                            window.activate_webview(webview_id);
+                        let pointer_position = self.resolve_pointer_position(None);
+                        if let Some(point) = pointer_position {
+                            self.last_mouse_position.set(Some(point));
                         }
-                        self.set_webview_relative_mouse_point(local_point);
-                        self.handle_mouse_button_event(&webview, button, state);
+                        let pointer_target =
+                            pointer_position.and_then(|point| self.gui.borrow().webview_at_point(point));
+                        if Self::should_retarget_webview_focus(state) {
+                            if let Some(webview_id) = pointer_target.map(|(id, _)| id) {
+                                self.gui.borrow_mut().set_focused_webview_id(webview_id);
+                                window.activate_webview(webview_id);
+                            } else if let Some(point) = pointer_position
+                                && self.gui.borrow().graph_at_point(point)
+                            {
+                                self.gui.borrow_mut().focus_graph_surface();
+                            }
+                        }
+                        if let Some((webview_id, local_point)) = pointer_target
+                            && let Some(webview) = window.webview_by_id(webview_id)
+                        {
+                            self.set_webview_relative_mouse_point(local_point);
+                            self.handle_mouse_button_event(&webview, button, state);
+                        }
                     }
                 },
                 WindowEvent::CursorMoved { position, .. } => {
-                    let point = winit_position_to_euclid_point(position).to_f32()
-                        / self.hidpi_scale_factor();
+                    let point =
+                        winit_position_to_euclid_point(position).to_f32() / self.hidpi_scale_factor();
+                    // Keep hit-test position fresh even when egui owns pointer this frame.
                     self.last_mouse_position.set(Some(point));
-                    let pointer_target = self.gui.borrow().webview_at_point(point);
-                    if let Some((webview_id, local_point)) = pointer_target
-                        && let Some(webview) = window.webview_by_id(webview_id)
+                    if !self.gui.borrow().ui_overlay_active()
+                        && !self.gui.borrow().egui_wants_pointer_input()
                     {
-                        self.set_webview_relative_mouse_point(local_point);
-                        self.handle_mouse_move_event_with_webview_relative_point(
-                            &webview,
-                            self.webview_relative_mouse_point.get(),
-                        );
+                        let pointer_target = self.gui.borrow().webview_at_point(point);
+                        if let Some((webview_id, local_point)) = pointer_target
+                            && let Some(webview) = window.webview_by_id(webview_id)
+                        {
+                            self.set_webview_relative_mouse_point(local_point);
+                            self.handle_mouse_move_event_with_webview_relative_point(
+                                &webview,
+                                self.webview_relative_mouse_point.get(),
+                            );
+                        }
                     }
                 },
                 WindowEvent::CursorLeft { .. } => {
-                    let pointer_target = self
-                        .last_mouse_position
-                        .get()
-                        .and_then(|point| self.gui.borrow().webview_at_point(point));
-                    if let Some((webview_id, local_point)) = pointer_target
-                        && let Some(webview) = window.webview_by_id(webview_id)
+                    if !self.gui.borrow().ui_overlay_active()
+                        && !self.gui.borrow().egui_wants_pointer_input()
                     {
-                        self.set_webview_relative_mouse_point(local_point);
-                        let webview_rect: Rect<_, _> = webview.size().into();
-                        if webview_rect.contains(self.webview_relative_mouse_point.get()) {
-                            webview.notify_input_event(InputEvent::MouseLeftViewport(
-                                MouseLeftViewportEvent::default(),
-                            ));
+                        let pointer_target = self
+                            .resolve_pointer_position(None)
+                            .and_then(|point| self.gui.borrow().webview_at_point(point));
+                        if let Some((webview_id, local_point)) = pointer_target
+                            && let Some(webview) = window.webview_by_id(webview_id)
+                        {
+                            self.set_webview_relative_mouse_point(local_point);
+                            let webview_rect: Rect<_, _> = webview.size().into();
+                            if webview_rect.contains(self.webview_relative_mouse_point.get()) {
+                                webview.notify_input_event(InputEvent::MouseLeftViewport(
+                                    MouseLeftViewportEvent::default(),
+                                ));
+                            }
                         }
                     }
                 },
                 WindowEvent::MouseWheel { delta, .. } => {
-                    let pointer_target = self
-                        .last_mouse_position
-                        .get()
-                        .and_then(|point| self.gui.borrow().webview_at_point(point));
-                    if let Some((webview_id, local_point)) = pointer_target
-                        && let Some(webview) = window.webview_by_id(webview_id)
+                    if !self.gui.borrow().ui_overlay_active()
+                        && !self.gui.borrow().egui_wants_pointer_input()
                     {
-                        self.set_webview_relative_mouse_point(local_point);
-                        let (delta_x, delta_y, mode) = match delta {
-                            MouseScrollDelta::LineDelta(delta_x, delta_y) => (
-                                (delta_x * LINE_WIDTH) as f64,
-                                (delta_y * LINE_HEIGHT) as f64,
-                                WheelMode::DeltaPixel,
-                            ),
-                            MouseScrollDelta::PixelDelta(delta) => {
-                                (delta.x, delta.y, WheelMode::DeltaPixel)
-                            },
-                        };
+                        let pointer_target = self
+                            .resolve_pointer_position(None)
+                            .and_then(|point| self.gui.borrow().webview_at_point(point));
+                        if let Some((webview_id, local_point)) = pointer_target
+                            && let Some(webview) = window.webview_by_id(webview_id)
+                        {
+                            self.set_webview_relative_mouse_point(local_point);
+                            let (delta_x, delta_y, mode) = match delta {
+                                MouseScrollDelta::LineDelta(delta_x, delta_y) => (
+                                    (delta_x * LINE_WIDTH) as f64,
+                                    (delta_y * LINE_HEIGHT) as f64,
+                                    WheelMode::DeltaPixel,
+                                ),
+                                MouseScrollDelta::PixelDelta(delta) => {
+                                    (delta.x, delta.y, WheelMode::DeltaPixel)
+                                },
+                            };
 
-                        let delta = WheelDelta {
-                            x: delta_x,
-                            y: delta_y,
-                            z: 0.0,
-                            mode,
-                        };
-                        let point = self.webview_relative_mouse_point.get();
-                        webview.notify_input_event(InputEvent::Wheel(WheelEvent::new(
-                            delta,
-                            point.into(),
-                        )));
+                            let delta = WheelDelta {
+                                x: delta_x,
+                                y: delta_y,
+                                z: 0.0,
+                                mode,
+                            };
+                            let point = self.webview_relative_mouse_point.get();
+                            webview.notify_input_event(InputEvent::Wheel(WheelEvent::new(
+                                delta,
+                                point.into(),
+                            )));
+                        }
                     }
                 },
                 WindowEvent::Touch(touch) => {
-                    if let Some(webview_id) = self.gui.borrow().focused_webview_id()
-                        && let Some(webview) = window.webview_by_id(webview_id)
-                    {
-                        window.activate_webview(webview_id);
-                        webview.notify_input_event(InputEvent::Touch(TouchEvent::new(
-                            winit_phase_to_touch_event_type(touch.phase),
-                            TouchId(touch.id as i32),
-                            DevicePoint::new(touch.location.x as f32, touch.location.y as f32)
-                                .into(),
-                        )));
+                    if !self.gui.borrow().ui_overlay_active() {
+                        if let Some(webview_id) = self.gui.borrow().focused_webview_id()
+                            && let Some(webview) = window.webview_by_id(webview_id)
+                        {
+                            window.activate_webview(webview_id);
+                            webview.notify_input_event(InputEvent::Touch(TouchEvent::new(
+                                winit_phase_to_touch_event_type(touch.phase),
+                                TouchId(touch.id as i32),
+                                DevicePoint::new(touch.location.x as f32, touch.location.y as f32)
+                                    .into(),
+                            )));
+                        }
                     }
                 },
                 WindowEvent::PinchGesture { delta, .. } => {
-                    let pointer_target = self
-                        .last_mouse_position
-                        .get()
-                        .and_then(|point| self.gui.borrow().webview_at_point(point));
-                    if let Some((webview_id, local_point)) = pointer_target
-                        && let Some(webview) = window.webview_by_id(webview_id)
-                    {
-                        self.set_webview_relative_mouse_point(local_point);
-                        webview.pinch_zoom(
-                            delta as f32 + 1.0,
-                            self.webview_relative_mouse_point.get(),
-                        );
+                    if !self.gui.borrow().ui_overlay_active() {
+                        let pointer_target = self
+                            .resolve_pointer_position(None)
+                            .and_then(|point| self.gui.borrow().webview_at_point(point));
+                        if let Some((webview_id, local_point)) = pointer_target
+                            && let Some(webview) = window.webview_by_id(webview_id)
+                        {
+                            self.set_webview_relative_mouse_point(local_point);
+                            webview.pinch_zoom(
+                                delta as f32 + 1.0,
+                                self.webview_relative_mouse_point.get(),
+                            );
+                        }
                     }
                 },
                 WindowEvent::CloseRequested => {

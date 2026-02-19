@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 use egui::{Id, Response, Sense, Stroke, TextStyle, Ui, Vec2, WidgetText, vec2};
-use egui_tiles::{Behavior, TabState, Tile, TileId, Tiles, UiResponse};
+use egui_tiles::{Behavior, SimplificationOptions, TabState, Tile, TileId, Tiles, UiResponse};
 
 use crate::app::{GraphBrowserApp, GraphIntent};
 use crate::graph::{NodeKey, NodeLifecycle};
@@ -40,6 +40,7 @@ pub(crate) struct GraphshellTileBehavior<'a> {
     pending_open_nodes: Vec<PendingOpenNode>,
     pending_closed_nodes: Vec<NodeKey>,
     pending_graph_intents: Vec<GraphIntent>,
+    pending_tab_drag_stopped_nodes: HashSet<NodeKey>,
 }
 
 impl<'a> GraphshellTileBehavior<'a> {
@@ -61,6 +62,7 @@ impl<'a> GraphshellTileBehavior<'a> {
             pending_open_nodes: Vec::new(),
             pending_closed_nodes: Vec::new(),
             pending_graph_intents: Vec::new(),
+            pending_tab_drag_stopped_nodes: HashSet::new(),
         }
     }
 
@@ -74,6 +76,10 @@ impl<'a> GraphshellTileBehavior<'a> {
 
     pub fn take_pending_graph_intents(&mut self) -> Vec<GraphIntent> {
         std::mem::take(&mut self.pending_graph_intents)
+    }
+
+    pub fn take_pending_tab_drag_stopped_nodes(&mut self) -> HashSet<NodeKey> {
+        std::mem::take(&mut self.pending_tab_drag_stopped_nodes)
     }
 
     fn hash_favicon(width: u32, height: u32, rgba: &[u8]) -> u64 {
@@ -141,9 +147,29 @@ impl<'a> GraphshellTileBehavior<'a> {
 
         Some(handle.id())
     }
+
+    fn should_detach_tab_on_drag_stop(ui: &Ui, tab_rect: egui::Rect) -> bool {
+        // Treat release clearly outside the tab strip band as "detach tab to split".
+        // Horizontal motion within the tab strip should keep normal tab reorder/group behavior.
+        let Some(pointer) = ui.ctx().pointer_interact_pos() else {
+            return false;
+        };
+        let detach_band_margin = 12.0;
+        pointer.y < tab_rect.top() - detach_band_margin
+            || pointer.y > tab_rect.bottom() + detach_band_margin
+    }
 }
 
 impl<'a> Behavior<TileKind> for GraphshellTileBehavior<'a> {
+    fn simplification_options(&self) -> SimplificationOptions {
+        // Keep a tab container around every pane so split panes always expose
+        // a local tab strip for move/merge flows.
+        SimplificationOptions {
+            all_panes_must_have_tabs: true,
+            ..SimplificationOptions::default()
+        }
+    }
+
     fn pane_ui(&mut self, ui: &mut egui::Ui, _tile_id: TileId, pane: &mut TileKind) -> UiResponse {
         match pane {
             TileKind::Graph => {
@@ -155,6 +181,7 @@ impl<'a> Behavior<TileKind> for GraphshellTileBehavior<'a> {
                     self.search_filter_mode,
                     self.search_query_active,
                 );
+                let multi_select_modifier = ui.input(|i| i.modifiers.ctrl);
                 let mut passthrough_actions = Vec::new();
 
                 for action in actions {
@@ -162,7 +189,7 @@ impl<'a> Behavior<TileKind> for GraphshellTileBehavior<'a> {
                         GraphAction::FocusNode(key) => {
                             self.pending_graph_intents.push(GraphIntent::SelectNode {
                                 key,
-                                multi_select: false,
+                                multi_select: multi_select_modifier,
                             });
                             self.pending_open_nodes.push(PendingOpenNode {
                                 key,
@@ -182,7 +209,7 @@ impl<'a> Behavior<TileKind> for GraphshellTileBehavior<'a> {
                             }
                             self.pending_graph_intents.push(GraphIntent::SelectNode {
                                 key,
-                                multi_select: false,
+                                multi_select: multi_select_modifier,
                             });
                             self.pending_open_nodes.push(PendingOpenNode {
                                 key,
@@ -319,6 +346,30 @@ impl<'a> Behavior<TileKind> for GraphshellTileBehavior<'a> {
         let tab_response = ui
             .interact(tab_rect, id, Sense::click_and_drag())
             .on_hover_cursor(self.tab_hover_cursor_icon());
+
+        if tab_response.clicked()
+            && let Some(Tile::Pane(TileKind::WebView(node_key))) = tiles.get(tile_id)
+        {
+            let multi_select = ui.input(|i| i.modifiers.ctrl);
+            self.pending_graph_intents.push(GraphIntent::SelectNode {
+                key: *node_key,
+                multi_select,
+            });
+        }
+
+        if tab_response.drag_stopped()
+            && Self::should_detach_tab_on_drag_stop(ui, tab_rect)
+            && let Some(Tile::Pane(TileKind::WebView(node_key))) = tiles.get(tile_id)
+        {
+            self.pending_tab_drag_stopped_nodes.insert(*node_key);
+            self.graph_app.request_detach_node_to_split(*node_key);
+        }
+
+        if tab_response.drag_stopped()
+            && let Some(Tile::Pane(TileKind::WebView(node_key))) = tiles.get(tile_id)
+        {
+            self.pending_tab_drag_stopped_nodes.insert(*node_key);
+        }
 
         if ui.is_rect_visible(tab_rect) && !state.is_being_dragged {
             let bg_color = self.tab_bg_color(ui.visuals(), tiles, tile_id, state);

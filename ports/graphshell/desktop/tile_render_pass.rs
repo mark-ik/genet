@@ -4,6 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use egui_tiles::Tree;
 use servo::{OffscreenRenderingContext, WebViewId, WindowRenderingContext};
@@ -37,6 +38,10 @@ pub(crate) struct TileRenderPassArgs<'a> {
     pub responsive_webviews: &'a HashSet<WebViewId>,
     pub webview_creation_backpressure: &'a mut HashMap<NodeKey, WebviewCreationBackpressureState>,
     pub focused_webview_hint: &'a mut Option<WebViewId>,
+    pub graph_surface_focused: bool,
+    pub focus_ring_webview_id: &'a mut Option<WebViewId>,
+    pub focus_ring_started_at: &'a mut Option<Instant>,
+    pub focus_ring_duration: Duration,
 }
 
 fn open_mode_from_pending(mode: PendingOpenMode) -> TileOpenMode {
@@ -64,6 +69,10 @@ pub(crate) fn run_tile_render_pass(args: TileRenderPassArgs<'_>) -> Vec<GraphInt
         responsive_webviews,
         webview_creation_backpressure,
         focused_webview_hint,
+        graph_surface_focused,
+        focus_ring_webview_id,
+        focus_ring_started_at,
+        focus_ring_duration,
     } = args;
 
     let mut post_render_intents = Vec::new();
@@ -129,15 +138,44 @@ pub(crate) fn run_tile_render_pass(args: TileRenderPassArgs<'_>) -> Vec<GraphInt
             &mut post_render_intents,
         );
     }
-    tile_compositor::activate_focused_webview_for_frame(
-        window,
-        tiles_tree,
-        graph_app,
-        focused_webview_hint,
-    );
-    let focused_webview_id =
-        tile_compositor::focused_webview_id_for_tree(tiles_tree, graph_app, *focused_webview_hint);
-    *focused_webview_hint = focused_webview_id;
+    let focused_webview_id = if graph_surface_focused {
+        *focused_webview_hint = None;
+        None
+    } else {
+        tile_compositor::activate_focused_webview_for_frame(
+            window,
+            tiles_tree,
+            graph_app,
+            focused_webview_hint,
+        );
+        let focused_webview_id = tile_compositor::focused_webview_id_for_tree(
+            tiles_tree,
+            graph_app,
+            *focused_webview_hint,
+        );
+        *focused_webview_hint = focused_webview_id;
+        focused_webview_id
+    };
+    if *focus_ring_webview_id != focused_webview_id {
+        *focus_ring_webview_id = focused_webview_id;
+        *focus_ring_started_at = focused_webview_id.map(|_| Instant::now());
+    }
+
+    let focus_ring_alpha = if *focus_ring_webview_id == focused_webview_id {
+        focus_ring_started_at
+            .as_ref()
+            .map(|started| {
+                let elapsed = started.elapsed();
+                if elapsed >= focus_ring_duration {
+                    0.0
+                } else {
+                    1.0 - (elapsed.as_secs_f32() / focus_ring_duration.as_secs_f32())
+                }
+            })
+            .unwrap_or(0.0)
+    } else {
+        0.0
+    };
 
     tile_compositor::composite_active_webview_tiles(
         ctx,
@@ -146,6 +184,7 @@ pub(crate) fn run_tile_render_pass(args: TileRenderPassArgs<'_>) -> Vec<GraphInt
         tile_rendering_contexts,
         active_tile_rects,
         focused_webview_id,
+        focus_ring_alpha,
     );
 
     post_render_intents

@@ -5,8 +5,9 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender};
+use std::time::{Duration, Instant};
 
-use egui_tiles::Tree;
+use egui_tiles::{Container, Tile, TileId, Tiles, Tree};
 use euclid::Length;
 use log::warn;
 use servo::{DeviceIndependentPixel, OffscreenRenderingContext, WebViewId, WindowRenderingContext};
@@ -24,7 +25,8 @@ use super::tile_invariants;
 use super::tile_kind::TileKind;
 use super::tile_render_pass::{self, TileRenderPassArgs};
 use super::tile_runtime;
-use super::toolbar_ui::{self, ToolbarUiArgs, ToolbarUiOutput};
+use super::tile_view_ops;
+use super::toolbar_ui::{self, OmnibarSearchSession, ToolbarUiArgs, ToolbarUiOutput};
 use super::webview_backpressure::WebviewCreationBackpressureState;
 use super::webview_controller;
 use crate::app::{GraphBrowserApp, GraphIntent};
@@ -33,6 +35,93 @@ use crate::input;
 use crate::render;
 use crate::running_app_state::RunningAppState;
 use crate::window::ServoShellWindow;
+
+fn tile_open_mode_from_pending(
+    mode: crate::app::PendingTileOpenMode,
+) -> tile_view_ops::TileOpenMode {
+    match mode {
+        crate::app::PendingTileOpenMode::Tab => tile_view_ops::TileOpenMode::Tab,
+        crate::app::PendingTileOpenMode::SplitHorizontal => tile_view_ops::TileOpenMode::SplitHorizontal,
+    }
+}
+
+const MAX_CONNECTED_SPLIT_PANES: usize = 4;
+
+fn find_webview_tile_id(tree: &Tree<TileKind>, node_key: NodeKey) -> Option<TileId> {
+    tree.tiles.iter().find_map(|(tile_id, tile)| match tile {
+        Tile::Pane(TileKind::WebView(key)) if *key == node_key => Some(*tile_id),
+        _ => None,
+    })
+}
+
+fn ensure_webview_tile_id(tree: &mut Tree<TileKind>, node_key: NodeKey) -> TileId {
+    if let Some(tile_id) = find_webview_tile_id(tree, node_key) {
+        if let Some(parent_id) = tree.tiles.parent_of(tile_id)
+            && matches!(
+                tree.tiles.get(parent_id),
+                Some(Tile::Container(Container::Tabs(_)))
+            )
+        {
+            return parent_id;
+        }
+        return tree.tiles.insert_tab_tile(vec![tile_id]);
+    }
+    let pane_id = tree.tiles.insert_pane(TileKind::WebView(node_key));
+    tree.tiles.insert_tab_tile(vec![pane_id])
+}
+
+fn workspace_nodes_from_tree(tree: &Tree<TileKind>) -> Vec<NodeKey> {
+    tree.tiles
+        .iter()
+        .filter_map(|(_, tile)| match tile {
+            Tile::Pane(TileKind::WebView(key)) => Some(*key),
+            _ => None,
+        })
+        .collect()
+}
+
+fn apply_connected_split_layout(tree: &mut Tree<TileKind>, nodes: &[NodeKey]) {
+    if nodes.is_empty() {
+        return;
+    }
+    let split_count = nodes.len().min(MAX_CONNECTED_SPLIT_PANES);
+    let split_tile_ids: Vec<TileId> = nodes
+        .iter()
+        .take(split_count)
+        .copied()
+        .map(|key| ensure_webview_tile_id(tree, key))
+        .collect();
+    let overflow_tile_ids: Vec<TileId> = nodes
+        .iter()
+        .skip(split_count)
+        .copied()
+        .map(|key| ensure_webview_tile_id(tree, key))
+        .collect();
+
+    let row1 = match split_tile_ids.as_slice() {
+        [a] => *a,
+        [a, b, ..] => tree.tiles.insert_horizontal_tile(vec![*a, *b]),
+        [] => return,
+    };
+
+    let grid_root = if split_tile_ids.len() > 2 {
+        let row2 = match split_tile_ids.as_slice() {
+            [_, _, c] => *c,
+            [_, _, c, d, ..] => tree.tiles.insert_horizontal_tile(vec![*c, *d]),
+            _ => return,
+        };
+        tree.tiles.insert_vertical_tile(vec![row1, row2])
+    } else {
+        row1
+    };
+
+    tree.root = if overflow_tile_ids.is_empty() {
+        Some(grid_root)
+    } else {
+        let overflow_tabs = tree.tiles.insert_tab_tile(overflow_tile_ids);
+        Some(tree.tiles.insert_vertical_tile(vec![grid_root, overflow_tabs]))
+    };
+}
 
 pub(crate) struct PreFrameIngestArgs<'a> {
     pub(crate) ctx: &'a egui::Context,
@@ -96,11 +185,56 @@ pub(crate) fn ingest_pre_frame(
 
 pub(crate) fn apply_intents_if_any(
     graph_app: &mut GraphBrowserApp,
+    tiles_tree: &Tree<TileKind>,
     intents: &mut Vec<GraphIntent>,
 ) {
-    if !intents.is_empty() {
-        graph_app.apply_intents(std::mem::take(intents));
+    if intents.is_empty() {
+        return;
     }
+
+    let mut undo_count = 0usize;
+    let mut redo_count = 0usize;
+    let mut apply_list = Vec::new();
+    for intent in std::mem::take(intents) {
+        match intent {
+            GraphIntent::Undo => undo_count += 1,
+            GraphIntent::Redo => redo_count += 1,
+            other => apply_list.push(other),
+        }
+    }
+
+    let layout_json = serde_json::to_string(tiles_tree).ok();
+    if !apply_list.is_empty() {
+        if apply_list.iter().any(is_user_undoable_intent) {
+            graph_app.capture_undo_checkpoint(layout_json.clone());
+        }
+        graph_app.apply_intents(apply_list);
+    }
+
+    for _ in 0..undo_count {
+        let _ = graph_app.perform_undo(layout_json.clone());
+    }
+    for _ in 0..redo_count {
+        let _ = graph_app.perform_redo(layout_json.clone());
+    }
+}
+
+fn is_user_undoable_intent(intent: &GraphIntent) -> bool {
+    matches!(
+        intent,
+        GraphIntent::CreateNodeNearCenter
+            | GraphIntent::CreateNodeAtUrl { .. }
+            | GraphIntent::RemoveSelectedNodes
+            | GraphIntent::ClearGraph
+            | GraphIntent::SetNodePosition { .. }
+            | GraphIntent::SetNodeUrl { .. }
+            | GraphIntent::CreateUserGroupedEdge { .. }
+            | GraphIntent::RemoveEdge { .. }
+            | GraphIntent::ExecuteEdgeCommand { .. }
+            | GraphIntent::SetNodePinned { .. }
+            | GraphIntent::PromoteNodeToActive { .. }
+            | GraphIntent::DemoteNodeToCold { .. }
+    )
 }
 
 pub(crate) fn open_pending_child_webviews_for_tiles<F>(
@@ -215,7 +349,7 @@ pub(crate) fn handle_keyboard_phase<F1, F2>(
     frame_intents.extend(input::intents_from_actions(&keyboard_actions));
 }
 
-fn active_webview_tile_node(tiles_tree: &Tree<TileKind>) -> Option<NodeKey> {
+pub(crate) fn active_webview_tile_node(tiles_tree: &Tree<TileKind>) -> Option<NodeKey> {
     tiles_tree
         .active_tiles()
         .into_iter()
@@ -233,6 +367,7 @@ pub(crate) struct ToolbarDialogPhaseArgs<'a> {
     pub(crate) window: &'a ServoShellWindow,
     pub(crate) tiles_tree: &'a mut Tree<TileKind>,
     pub(crate) focused_webview_hint: Option<WebViewId>,
+    pub(crate) graph_surface_focused: bool,
     pub(crate) can_go_back: bool,
     pub(crate) can_go_forward: bool,
     pub(crate) location: &'a mut String,
@@ -242,6 +377,7 @@ pub(crate) struct ToolbarDialogPhaseArgs<'a> {
     pub(crate) show_data_dir_dialog: &'a mut bool,
     pub(crate) show_persistence_settings_dialog: &'a mut bool,
     pub(crate) show_clear_data_confirm: &'a mut bool,
+    pub(crate) omnibar_search_session: &'a mut Option<OmnibarSearchSession>,
     pub(crate) data_dir_input: &'a mut String,
     pub(crate) data_dir_status: &'a mut Option<String>,
     pub(crate) snapshot_interval_input: &'a mut String,
@@ -269,6 +405,7 @@ pub(crate) fn handle_toolbar_dialog_phase(
         window,
         tiles_tree,
         focused_webview_hint,
+        graph_surface_focused,
         can_go_back,
         can_go_forward,
         location,
@@ -278,6 +415,7 @@ pub(crate) fn handle_toolbar_dialog_phase(
         show_data_dir_dialog,
         show_persistence_settings_dialog,
         show_clear_data_confirm,
+        omnibar_search_session,
         data_dir_input,
         data_dir_status,
         snapshot_interval_input,
@@ -288,8 +426,11 @@ pub(crate) fn handle_toolbar_dialog_phase(
     } = args;
 
     let active_webview_node = active_webview_tile_node(tiles_tree);
-    let focused_toolbar_webview =
-        tile_compositor::focused_webview_id_for_tree(tiles_tree, graph_app, focused_webview_hint);
+    let focused_toolbar_webview = if graph_surface_focused {
+        None
+    } else {
+        tile_compositor::focused_webview_id_for_tree(tiles_tree, graph_app, focused_webview_hint)
+    };
     let focused_toolbar_node = nav_targeting::focused_toolbar_node(
         graph_app,
         active_webview_node,
@@ -298,6 +439,9 @@ pub(crate) fn handle_toolbar_dialog_phase(
     );
     let has_webview_tiles = tile_runtime::has_any_webview_tiles(tiles_tree);
     let is_graph_view = !has_webview_tiles;
+    if !is_graph_view {
+        graph_app.hovered_graph_node = None;
+    }
 
     let toolbar_output = toolbar_ui::render_toolbar_ui(ToolbarUiArgs {
         ctx,
@@ -305,6 +449,7 @@ pub(crate) fn handle_toolbar_dialog_phase(
         state,
         graph_app,
         window,
+        tiles_tree,
         focused_toolbar_node,
         has_webview_tiles,
         can_go_back,
@@ -316,6 +461,7 @@ pub(crate) fn handle_toolbar_dialog_phase(
         show_data_dir_dialog,
         show_persistence_settings_dialog,
         show_clear_data_confirm,
+        omnibar_search_session,
         frame_intents,
     });
 
@@ -395,7 +541,7 @@ pub(crate) fn run_lifecycle_reconcile_and_apply(
         frame_intents,
     });
 
-    apply_intents_if_any(graph_app, frame_intents);
+    apply_intents_if_any(graph_app, tiles_tree, frame_intents);
 }
 
 pub(crate) struct PostRenderPhaseArgs<'a> {
@@ -418,6 +564,10 @@ pub(crate) struct PostRenderPhaseArgs<'a> {
     pub(crate) webview_creation_backpressure:
         &'a mut HashMap<NodeKey, WebviewCreationBackpressureState>,
     pub(crate) focused_webview_hint: &'a mut Option<WebViewId>,
+    pub(crate) graph_surface_focused: bool,
+    pub(crate) focus_ring_webview_id: &'a mut Option<WebViewId>,
+    pub(crate) focus_ring_started_at: &'a mut Option<Instant>,
+    pub(crate) focus_ring_duration: Duration,
 }
 
 pub(crate) fn run_post_render_phase<FActive>(
@@ -445,6 +595,10 @@ pub(crate) fn run_post_render_phase<FActive>(
         responsive_webviews,
         webview_creation_backpressure,
         focused_webview_hint,
+        graph_surface_focused,
+        focus_ring_webview_id,
+        focus_ring_started_at,
+        focus_ring_duration,
     } = args;
 
     #[cfg(debug_assertions)]
@@ -464,8 +618,11 @@ pub(crate) fn run_post_render_phase<FActive>(
     *toolbar_height = Length::new(ctx.available_rect().min.y);
     graph_app.check_periodic_snapshot();
 
-    let focused_dialog_webview =
-        tile_compositor::focused_webview_id_for_tree(tiles_tree, graph_app, *focused_webview_hint);
+    let focused_dialog_webview = if graph_surface_focused {
+        None
+    } else {
+        tile_compositor::focused_webview_id_for_tree(tiles_tree, graph_app, *focused_webview_hint)
+    };
     headed_window.for_each_active_dialog(
         window,
         focused_dialog_webview,
@@ -495,12 +652,199 @@ pub(crate) fn run_post_render_phase<FActive>(
             responsive_webviews,
             webview_creation_backpressure,
             focused_webview_hint,
+            graph_surface_focused,
+            focus_ring_webview_id,
+            focus_ring_started_at,
+            focus_ring_duration,
         }));
     }
-    if !post_render_intents.is_empty() {
-        graph_app.apply_intents(post_render_intents);
-    }
+    apply_intents_if_any(graph_app, tiles_tree, &mut post_render_intents);
 
     render::render_physics_panel(ctx, graph_app);
     render::render_help_panel(ctx, graph_app);
+    let focused_pane_node = focused_dialog_webview
+        .and_then(|webview_id| graph_app.get_node_for_webview(webview_id))
+        .or_else(|| active_webview_tile_node(tiles_tree));
+    render::render_command_palette_panel(
+        ctx,
+        graph_app,
+        graph_app.hovered_graph_node,
+        focused_pane_node,
+    );
+    render::render_radial_command_menu(
+        ctx,
+        graph_app,
+        graph_app.hovered_graph_node,
+        focused_pane_node,
+    );
+    render::render_persistence_panel(ctx, graph_app);
+
+    if graph_app.take_pending_save_workspace_snapshot() {
+        match serde_json::to_string(tiles_tree) {
+            Ok(layout_json) => graph_app.save_tile_layout_json(&layout_json),
+            Err(e) => warn!("Failed to serialize tile layout for workspace snapshot: {e}"),
+        }
+    }
+
+    if let Some(name) = graph_app.take_pending_save_workspace_snapshot_named() {
+        match serde_json::to_string(tiles_tree) {
+            Ok(layout_json) => graph_app.save_workspace_layout_json(&name, &layout_json),
+            Err(e) => warn!(
+                "Failed to serialize tile layout for workspace snapshot '{name}': {e}"
+            ),
+        }
+    }
+
+    if let Some(name) = graph_app.take_pending_restore_workspace_snapshot_named() {
+        if let Some(layout_json) = graph_app.load_workspace_layout_json(&name) {
+            match serde_json::from_str::<Tree<TileKind>>(&layout_json) {
+                Ok(mut restored_tree) => {
+                    if let Ok(current_layout_json) = serde_json::to_string(tiles_tree) {
+                        graph_app.capture_undo_checkpoint(Some(current_layout_json));
+                    }
+                    tile_runtime::prune_stale_webview_tile_keys_only(&mut restored_tree, graph_app);
+                    if restored_tree.root().is_some() {
+                        graph_app.note_workspace_activated(
+                            &name,
+                            workspace_nodes_from_tree(&restored_tree),
+                        );
+                        graph_app.mark_session_workspace_layout_json(&layout_json);
+                        *tiles_tree = restored_tree;
+                    }
+                },
+                Err(e) => warn!("Failed to deserialize workspace snapshot '{name}': {e}"),
+            }
+        }
+    }
+
+    if let Some(name) = graph_app.take_pending_save_graph_snapshot_named()
+        && let Err(e) = graph_app.save_named_graph_snapshot(&name)
+    {
+        warn!("Failed to save named graph snapshot '{name}': {e}");
+    }
+
+    if let Some(name) = graph_app.take_pending_delete_graph_snapshot_named()
+        && let Err(e) = graph_app.delete_named_graph_snapshot(&name)
+    {
+        warn!("Failed to delete named graph snapshot '{name}': {e}");
+    }
+
+    if let Some(name) = graph_app.take_pending_restore_graph_snapshot_named() {
+        if let Ok(layout_json) = serde_json::to_string(tiles_tree) {
+            graph_app.capture_undo_checkpoint(Some(layout_json));
+        }
+        let close_intents = webview_controller::close_all_webviews(graph_app, window);
+        if !close_intents.is_empty() {
+            graph_app.apply_intents(close_intents);
+        }
+        match graph_app.load_named_graph_snapshot(&name) {
+            Ok(()) => {
+                tile_rendering_contexts.clear();
+                tile_favicon_textures.clear();
+                webview_creation_backpressure.clear();
+                *focused_webview_hint = None;
+                let mut tiles = Tiles::default();
+                let graph_tile_id = tiles.insert_pane(TileKind::Graph);
+                *tiles_tree = Tree::new("graphshell_tiles", graph_tile_id, tiles);
+            },
+            Err(e) => warn!("Failed to load named graph snapshot '{name}': {e}"),
+        }
+    }
+
+    if graph_app.take_pending_restore_graph_snapshot_latest() {
+        if let Ok(layout_json) = serde_json::to_string(tiles_tree) {
+            graph_app.capture_undo_checkpoint(Some(layout_json));
+        }
+        let close_intents = webview_controller::close_all_webviews(graph_app, window);
+        if !close_intents.is_empty() {
+            graph_app.apply_intents(close_intents);
+        }
+        match graph_app.load_latest_graph_snapshot() {
+            Ok(()) => {
+                tile_rendering_contexts.clear();
+                tile_favicon_textures.clear();
+                webview_creation_backpressure.clear();
+                *focused_webview_hint = None;
+                let mut tiles = Tiles::default();
+                let graph_tile_id = tiles.insert_pane(TileKind::Graph);
+                *tiles_tree = Tree::new("graphshell_tiles", graph_tile_id, tiles);
+            },
+            Err(e) => warn!("Failed to load autosaved latest graph snapshot: {e}"),
+        }
+    }
+
+    if let Some(node_key) = graph_app.take_pending_detach_node_to_split() {
+        if let Ok(layout_json) = serde_json::to_string(tiles_tree) {
+            graph_app.capture_undo_checkpoint(Some(layout_json));
+        }
+        tile_view_ops::detach_webview_tile_to_split(tiles_tree, node_key);
+    }
+
+    if let Some((source, open_mode)) = graph_app.take_pending_open_connected_from()
+        && graph_app.graph.get_node(source).is_some()
+    {
+        if let Ok(layout_json) = serde_json::to_string(tiles_tree) {
+            graph_app.capture_undo_checkpoint(Some(layout_json));
+        }
+        let mut connected: Vec<NodeKey> = graph_app
+            .graph
+            .out_neighbors(source)
+            .chain(graph_app.graph.in_neighbors(source))
+            .filter(|key| *key != source)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        connected.sort_by_key(|key| key.index());
+
+        let mut intents = Vec::with_capacity(connected.len() + 2);
+        intents.push(GraphIntent::SelectNode {
+            key: source,
+            multi_select: false,
+        });
+        intents.push(GraphIntent::PromoteNodeToActive { key: source });
+        for node in &connected {
+            intents.push(GraphIntent::PromoteNodeToActive { key: *node });
+        }
+        graph_app.apply_intents(intents);
+
+        let mut ordered = Vec::with_capacity(connected.len() + 1);
+        ordered.push(source);
+        ordered.extend(connected);
+
+        let tile_mode = tile_open_mode_from_pending(open_mode);
+        match tile_mode {
+            tile_view_ops::TileOpenMode::Tab => {
+                for node in ordered {
+                    tile_view_ops::open_or_focus_webview_tile_with_mode(
+                        tiles_tree,
+                        node,
+                        tile_view_ops::TileOpenMode::Tab,
+                    );
+                }
+            },
+            tile_view_ops::TileOpenMode::SplitHorizontal => {
+                // One-shot connected-open uses a compact 2-up / 2x2 split policy (max 4),
+                // with overflow grouped into tabs below the split area.
+                apply_connected_split_layout(tiles_tree, &ordered);
+            },
+        }
+    }
+
+    if let Some(layout_json) = graph_app.take_pending_history_workspace_layout_json() {
+        match serde_json::from_str::<Tree<TileKind>>(&layout_json) {
+            Ok(mut restored_tree) => {
+                tile_runtime::prune_stale_webview_tile_keys_only(&mut restored_tree, graph_app);
+                if restored_tree.root().is_some() {
+                    *tiles_tree = restored_tree;
+                    graph_app.mark_session_workspace_layout_json(&layout_json);
+                }
+            },
+            Err(e) => warn!("Failed to deserialize undo/redo workspace snapshot: {e}"),
+        }
+    }
+
+    match serde_json::to_string(tiles_tree) {
+        Ok(layout_json) => graph_app.save_session_workspace_layout_json_if_changed(&layout_json),
+        Err(e) => warn!("Failed to serialize session workspace layout: {e}"),
+    }
 }

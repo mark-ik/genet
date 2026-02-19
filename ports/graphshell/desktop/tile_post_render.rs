@@ -42,6 +42,7 @@ pub(crate) fn render_tile_tree_and_collect_outputs(
 
     let pending_open_nodes = behavior.take_pending_open_nodes();
     let pending_closed_nodes = behavior.take_pending_closed_nodes();
+    let tab_drag_stopped_nodes = behavior.take_pending_tab_drag_stopped_nodes();
     let mut post_render_intents = behavior.take_pending_graph_intents();
 
     let tab_groups_after = tile_grouping::webview_tab_group_memberships(tiles_tree);
@@ -50,6 +51,7 @@ pub(crate) fn render_tile_tree_and_collect_outputs(
         &tab_groups_before,
         &tab_groups_after,
         &tab_group_nodes_after,
+        &tab_drag_stopped_nodes,
     ));
 
     TileRenderOutputs {

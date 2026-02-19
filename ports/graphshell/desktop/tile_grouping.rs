@@ -56,9 +56,13 @@ pub(crate) fn user_grouped_intents_for_tab_group_moves(
     tab_groups_before: &HashMap<NodeKey, TileId>,
     tab_groups_after: &HashMap<NodeKey, TileId>,
     tab_group_nodes_after: &HashMap<TileId, Vec<NodeKey>>,
+    moved_nodes: &std::collections::HashSet<NodeKey>,
 ) -> Vec<GraphIntent> {
     let mut intents = Vec::new();
     for (node_key, before_group) in tab_groups_before {
+        if !moved_nodes.contains(node_key) {
+            continue;
+        }
         let Some(after_group) = tab_groups_after.get(node_key) else {
             continue;
         };
