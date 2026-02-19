@@ -1,7 +1,7 @@
 # Graphshell Design Documentation Index
 
 **Last Updated**: February 18, 2026
-**Status**: M1 complete; active: desktop architecture hardening, explicit targeting follow-up, edge/radial UX planning
+**Status**: M1 complete; active: desktop architecture hardening, explicit targeting follow-up, edge/radial UX planning, graph UX research, universal node content model vision
 
 ---
 
@@ -35,9 +35,19 @@
 | **[2026-02-18_f6_explicit_targeting_plan.md](implementation_strategy/2026-02-18_f6_explicit_targeting_plan.md)** | Explicit EGL/WebDriver targeting audit and local-first implementation strategy |
 | **[2026-02-18_single_window_active_obviation_plan.md](implementation_strategy/2026-02-18_single_window_active_obviation_plan.md)** | Deferred follow-on inventory for structural single-window/single-active obviation |
 | **[2026-02-18_edge_operations_and_radial_palette_plan.md](implementation_strategy/2026-02-18_edge_operations_and_radial_palette_plan.md)** | Edge create/remove UX, radial command model, and multi-select workflow plan |
+| **[2026-02-18_layout_strategy_plan.md](implementation_strategy/2026-02-18_layout_strategy_plan.md)** | Layout presets (Peer/Community/Dense/Sparse/Timeline), Hierarchical (Sugiyama), Radial ego, Barnes-Hut at N>500 |
+| **[2026-02-19_workspace_routing_and_membership_plan.md](implementation_strategy/2026-02-19_workspace_routing_and_membership_plan.md)** | Workspace-first node-open routing, UUID-keyed membership index, resolver authority function, desktop-layer startup scan |
 | **[2026-02-17_egl_embedder_extension_plan.md](implementation_strategy/2026-02-17_egl_embedder_extension_plan.md)** | EGL extension phases: single-window hardening, semantic convergence, host/vsync contract, optional multi-window |
 | **[2026-02-14_physics_migration_plan.md](implementation_strategy/2026-02-14_physics_migration_plan.md)** | Physics migration record (implemented) |
 | **[2026-02-14_selection_semantics_plan.md](implementation_strategy/2026-02-14_selection_semantics_plan.md)** | Single-source selection state |
+
+## Architectural Vision (Long-Term)
+
+| Document | Purpose |
+| -------- | ------- |
+| **[2026-02-18_universal_node_content_model.md](2026-02-18_universal_node_content_model.md)** | Nodes as universal content containers: modular renderers, protocol resolver, Tor/IPFS/Gemini, platform webviews, version-controlled history |
+
+---
 
 ## Future Feature Plans
 
