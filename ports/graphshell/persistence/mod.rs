@@ -13,7 +13,7 @@ pub mod types;
 
 use crate::graph::Graph;
 use log::warn;
-use redb::ReadableDatabase;
+use redb::{ReadableDatabase, ReadableTable};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use types::{GraphSnapshot, LogEntry};
@@ -23,6 +23,7 @@ const SNAPSHOT_TABLE: redb::TableDefinition<&str, &[u8]> = redb::TableDefinition
 const TILE_LAYOUT_TABLE: redb::TableDefinition<&str, &[u8]> =
     redb::TableDefinition::new("tile_layout");
 pub const DEFAULT_SNAPSHOT_INTERVAL_SECS: u64 = 300;
+const NAMED_GRAPH_PREFIX: &str = "named:";
 
 /// Persistent graph store backed by fjall (log) + redb (snapshots)
 pub struct GraphStore {
@@ -36,6 +37,21 @@ pub struct GraphStore {
 }
 
 impl GraphStore {
+    fn named_graph_key(name: &str) -> Result<String, GraphStoreError> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(GraphStoreError::Io(
+                "Graph snapshot name must not be empty".to_string(),
+            ));
+        }
+        if trimmed == "latest" {
+            return Err(GraphStoreError::Io(
+                "Graph snapshot name 'latest' is reserved".to_string(),
+            ));
+        }
+        Ok(format!("{NAMED_GRAPH_PREFIX}{trimmed}"))
+    }
+
     /// Open or create a graph store at the given directory
     pub fn open(base_dir: PathBuf) -> Result<Self, GraphStoreError> {
         std::fs::create_dir_all(&base_dir)
@@ -182,9 +198,19 @@ impl GraphStore {
                 .remove("latest")
                 .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
             if let Ok(mut tile_table) = write_txn.open_table(TILE_LAYOUT_TABLE) {
-                tile_table
-                    .remove("latest")
+                let mut keys = Vec::new();
+                let iter = tile_table
+                    .iter()
                     .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+                for entry in iter {
+                    let (key, _) = entry.map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+                    keys.push(key.value().to_string());
+                }
+                for key in keys {
+                    tile_table
+                        .remove(key.as_str())
+                        .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+                }
             }
         }
         write_txn
@@ -224,6 +250,172 @@ impl GraphStore {
         std::str::from_utf8(entry.value())
             .ok()
             .map(|s| s.to_string())
+    }
+
+    /// Persist a named full-graph snapshot.
+    pub fn save_named_graph_snapshot(
+        &mut self,
+        name: &str,
+        graph: &Graph,
+    ) -> Result<(), GraphStoreError> {
+        let key = Self::named_graph_key(name)?;
+        let snapshot = graph.to_snapshot();
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&snapshot)
+            .map_err(|e| GraphStoreError::Io(format!("Failed to serialize graph snapshot: {e}")))?;
+        let write_txn = self
+            .snapshot_db
+            .begin_write()
+            .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+        {
+            let mut table = write_txn
+                .open_table(SNAPSHOT_TABLE)
+                .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+            table
+                .insert(key.as_str(), bytes.as_ref())
+                .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+        }
+        write_txn
+            .commit()
+            .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+        Ok(())
+    }
+
+    /// Load a named full-graph snapshot if present.
+    pub fn load_named_graph_snapshot(&self, name: &str) -> Option<Graph> {
+        let key = Self::named_graph_key(name).ok()?;
+        let read_txn = self.snapshot_db.begin_read().ok()?;
+        let table = read_txn.open_table(SNAPSHOT_TABLE).ok()?;
+        let entry = table.get(key.as_str()).ok()??;
+        let bytes = entry.value();
+        let mut aligned = rkyv::util::AlignedVec::<16>::new();
+        aligned.extend_from_slice(bytes);
+        let snapshot = rkyv::from_bytes::<GraphSnapshot, rkyv::rancor::Error>(&aligned).ok()?;
+        Some(Graph::from_snapshot(&snapshot))
+    }
+
+    /// List named graph snapshots in stable order.
+    pub fn list_named_graph_snapshot_names(&self) -> Vec<String> {
+        let Ok(read_txn) = self.snapshot_db.begin_read() else {
+            return Vec::new();
+        };
+        let Ok(table) = read_txn.open_table(SNAPSHOT_TABLE) else {
+            return Vec::new();
+        };
+        let Ok(iter) = table.iter() else {
+            return Vec::new();
+        };
+        let mut names = Vec::new();
+        for entry in iter {
+            if let Ok((key, _)) = entry {
+                let key = key.value();
+                if let Some(stripped) = key.strip_prefix(NAMED_GRAPH_PREFIX) {
+                    names.push(stripped.to_string());
+                }
+            }
+        }
+        names.sort();
+        names
+    }
+
+    /// Delete a named full-graph snapshot.
+    pub fn delete_named_graph_snapshot(&mut self, name: &str) -> Result<(), GraphStoreError> {
+        let key = Self::named_graph_key(name)?;
+        let write_txn = self
+            .snapshot_db
+            .begin_write()
+            .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+        {
+            let mut table = write_txn
+                .open_table(SNAPSHOT_TABLE)
+                .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+            let _ = table
+                .remove(key.as_str())
+                .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+        }
+        write_txn
+            .commit()
+            .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+        Ok(())
+    }
+
+    /// Persist serialized tile layout JSON under a workspace name.
+    pub fn save_workspace_layout_json(
+        &mut self,
+        name: &str,
+        layout_json: &str,
+    ) -> Result<(), GraphStoreError> {
+        if name.trim().is_empty() {
+            return Err(GraphStoreError::Io(
+                "Workspace name must not be empty".to_string(),
+            ));
+        }
+        let write_txn = self
+            .snapshot_db
+            .begin_write()
+            .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+        {
+            let mut table = write_txn
+                .open_table(TILE_LAYOUT_TABLE)
+                .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+            table
+                .insert(name, layout_json.as_bytes())
+                .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+        }
+        write_txn
+            .commit()
+            .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+        Ok(())
+    }
+
+    /// Load serialized tile layout JSON by workspace name.
+    pub fn load_workspace_layout_json(&self, name: &str) -> Option<String> {
+        let read_txn = self.snapshot_db.begin_read().ok()?;
+        let table = read_txn.open_table(TILE_LAYOUT_TABLE).ok()?;
+        let entry = table.get(name).ok()??;
+        std::str::from_utf8(entry.value())
+            .ok()
+            .map(|s| s.to_string())
+    }
+
+    /// List saved workspace layout names in stable order.
+    pub fn list_workspace_layout_names(&self) -> Vec<String> {
+        let Ok(read_txn) = self.snapshot_db.begin_read() else {
+            return Vec::new();
+        };
+        let Ok(table) = read_txn.open_table(TILE_LAYOUT_TABLE) else {
+            return Vec::new();
+        };
+        let Ok(iter) = table.iter() else {
+            return Vec::new();
+        };
+        let mut names = Vec::new();
+        for entry in iter {
+            if let Ok((key, _)) = entry {
+                names.push(key.value().to_string());
+            }
+        }
+        names.sort();
+        names
+    }
+
+    /// Delete a workspace layout by name.
+    pub fn delete_workspace_layout(&mut self, name: &str) -> Result<(), GraphStoreError> {
+        let write_txn = self
+            .snapshot_db
+            .begin_write()
+            .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+        {
+            let mut table = write_txn
+                .open_table(TILE_LAYOUT_TABLE)
+                .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+            let _ = table
+                .remove(name)
+                .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+        }
+        write_txn
+            .commit()
+            .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+        Ok(())
     }
 
     fn load_snapshot(&self) -> Option<GraphSnapshot> {
@@ -851,6 +1043,58 @@ mod tests {
         assert!(store.load_tile_layout_json().is_some());
         store.clear_all().unwrap();
         assert!(store.load_tile_layout_json().is_none());
+    }
+
+    #[test]
+    fn test_named_workspace_layout_roundtrip_and_list_delete() {
+        let (mut store, _dir) = create_test_store();
+        store
+            .save_workspace_layout_json("workspace-a", r#"{"root":"a"}"#)
+            .unwrap();
+        store
+            .save_workspace_layout_json("workspace-b", r#"{"root":"b"}"#)
+            .unwrap();
+
+        assert_eq!(
+            store.load_workspace_layout_json("workspace-a").as_deref(),
+            Some(r#"{"root":"a"}"#)
+        );
+        assert_eq!(
+            store.load_workspace_layout_json("workspace-b").as_deref(),
+            Some(r#"{"root":"b"}"#)
+        );
+
+        let names = store.list_workspace_layout_names();
+        assert!(names.contains(&"workspace-a".to_string()));
+        assert!(names.contains(&"workspace-b".to_string()));
+
+        store.delete_workspace_layout("workspace-a").unwrap();
+        assert!(store.load_workspace_layout_json("workspace-a").is_none());
+        assert!(store.load_workspace_layout_json("workspace-b").is_some());
+    }
+
+    #[test]
+    fn test_named_graph_snapshot_roundtrip_and_list_delete() {
+        let (mut store, _dir) = create_test_store();
+        let mut graph_a = Graph::new();
+        graph_a.add_node("https://a.example".to_string(), Point2D::new(1.0, 2.0));
+        let mut graph_b = Graph::new();
+        graph_b.add_node("https://b.example".to_string(), Point2D::new(3.0, 4.0));
+
+        store.save_named_graph_snapshot("graph-a", &graph_a).unwrap();
+        store.save_named_graph_snapshot("graph-b", &graph_b).unwrap();
+
+        let loaded_a = store.load_named_graph_snapshot("graph-a").unwrap();
+        let loaded_b = store.load_named_graph_snapshot("graph-b").unwrap();
+        assert!(loaded_a.get_node_by_url("https://a.example").is_some());
+        assert!(loaded_b.get_node_by_url("https://b.example").is_some());
+
+        let names = store.list_named_graph_snapshot_names();
+        assert_eq!(names, vec!["graph-a".to_string(), "graph-b".to_string()]);
+
+        store.delete_named_graph_snapshot("graph-a").unwrap();
+        assert!(store.load_named_graph_snapshot("graph-a").is_none());
+        assert!(store.load_named_graph_snapshot("graph-b").is_some());
     }
 
     #[test]

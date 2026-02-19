@@ -205,7 +205,16 @@ impl GraphNodeShape {
 
     fn effective_stroke(&self, ctx: &DrawContext) -> Stroke {
         let _ = ctx;
-        Stroke::default()
+        if self.dragged {
+            return Stroke::new(2.5, Color32::from_rgb(255, 220, 120));
+        }
+        if self.hovered {
+            return Stroke::new(2.0, Color32::from_rgb(255, 170, 90));
+        }
+        if self.selected {
+            return Stroke::new(1.8, Color32::from_rgb(255, 200, 120));
+        }
+        Stroke::new(1.0, Color32::from_gray(90))
     }
 
     fn label_galley(

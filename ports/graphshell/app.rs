@@ -5,15 +5,16 @@
 //! Application state management for the graph browser.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::graph::egui_adapter::EguiGraphState;
 use crate::graph::{EdgeType, Graph, NodeKey};
 use crate::persistence::GraphStore;
 use crate::persistence::types::{LogEntry, PersistedEdgeType};
-use egui_graphs::FruchtermanReingoldState;
+use egui_graphs::FruchtermanReingoldWithCenterGravityState;
 use euclid::default::Point2D;
 use log::warn;
 use servo::WebViewId;
@@ -53,6 +54,7 @@ impl Default for Camera {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SelectionState {
     nodes: HashSet<NodeKey>,
+    order: Vec<NodeKey>,
     primary: Option<NodeKey>,
     revision: u64,
 }
@@ -62,6 +64,14 @@ pub struct NodeCrashState {
     pub reason: String,
     pub has_backtrace: bool,
     pub crashed_at: SystemTime,
+}
+
+#[derive(Clone)]
+struct UndoRedoSnapshot {
+    graph: Graph,
+    selected_nodes: SelectionState,
+    highlighted_graph_edge: Option<(NodeKey, NodeKey)>,
+    workspace_layout_json: Option<String>,
 }
 
 impl SelectionState {
@@ -82,6 +92,7 @@ impl SelectionState {
     pub fn select(&mut self, key: NodeKey, multi_select: bool) {
         if multi_select {
             if self.nodes.insert(key) {
+                self.order.push(key);
                 self.primary = Some(key);
                 self.revision = self.revision.saturating_add(1);
             }
@@ -93,7 +104,9 @@ impl SelectionState {
         }
 
         self.nodes.clear();
+        self.order.clear();
         self.nodes.insert(key);
+        self.order.push(key);
         self.primary = Some(key);
         self.revision = self.revision.saturating_add(1);
     }
@@ -103,8 +116,20 @@ impl SelectionState {
             return;
         }
         self.nodes.clear();
+        self.order.clear();
         self.primary = None;
         self.revision = self.revision.saturating_add(1);
+    }
+
+    /// Ordered pair of selected nodes when exactly two nodes are selected.
+    pub fn ordered_pair(&self) -> Option<(NodeKey, NodeKey)> {
+        if self.nodes.len() != 2 {
+            return None;
+        }
+        let mut iter = self.order.iter().copied().filter(|key| self.nodes.contains(key));
+        let first = iter.next()?;
+        let second = iter.next()?;
+        Some((first, second))
     }
 }
 
@@ -118,11 +143,34 @@ impl Deref for SelectionState {
 
 /// Deterministic mutation intent boundary for graph state updates.
 #[derive(Debug, Clone)]
+pub enum EdgeCommand {
+    ConnectSelectedPair,
+    ConnectPair { from: NodeKey, to: NodeKey },
+    ConnectBothDirections,
+    ConnectBothDirectionsPair { a: NodeKey, b: NodeKey },
+    RemoveUserEdge,
+    RemoveUserEdgePair { a: NodeKey, b: NodeKey },
+    PinSelected,
+    UnpinSelected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingTileOpenMode {
+    Tab,
+    SplitHorizontal,
+}
+
+#[derive(Debug, Clone)]
 pub enum GraphIntent {
     TogglePhysics,
     RequestFitToScreen,
     TogglePhysicsPanel,
     ToggleHelpPanel,
+    ToggleCommandPalette,
+    ToggleRadialMenu,
+    TogglePersistencePanel,
+    Undo,
+    Redo,
     CreateNodeNearCenter,
     CreateNodeAtUrl {
         url: String,
@@ -156,6 +204,19 @@ pub enum GraphIntent {
         from: NodeKey,
         to: NodeKey,
         edge_type: EdgeType,
+    },
+    CreateUserGroupedEdgeFromPrimarySelection,
+    ExecuteEdgeCommand {
+        command: EdgeCommand,
+    },
+    SetHighlightedEdge {
+        from: NodeKey,
+        to: NodeKey,
+    },
+    ClearHighlightedEdge,
+    SetNodePinned {
+        key: NodeKey,
+        is_pinned: bool,
     },
     PromoteNodeToActive {
         key: NodeKey,
@@ -213,7 +274,7 @@ pub struct GraphBrowserApp {
     pub graph: Graph,
 
     /// Force-directed layout state owned by app/runtime UI controls.
-    pub physics: FruchtermanReingoldState,
+    pub physics: FruchtermanReingoldWithCenterGravityState,
 
     /// Physics running state before user drag/pan interaction began.
     physics_running_before_interaction: Option<bool>,
@@ -238,11 +299,57 @@ pub struct GraphBrowserApp {
     /// True while the user is actively interacting (drag/pan) with the graph
     pub(crate) is_interacting: bool,
 
+    /// Short post-drag decay window to preserve "weight" when physics was paused.
+    drag_release_frames_remaining: u8,
+
     /// Whether the physics config panel is open
     pub show_physics_panel: bool,
 
     /// Whether the keyboard shortcut help panel is open
     pub show_help_panel: bool,
+
+    /// Whether the edge command palette is open
+    pub show_command_palette: bool,
+    /// Whether the radial command UI is open.
+    pub show_radial_menu: bool,
+
+    /// Whether the persistence hub panel is open.
+    pub show_persistence_panel: bool,
+
+    /// Last hovered node in graph view (updated by graph render pass).
+    pub hovered_graph_node: Option<NodeKey>,
+    /// Explicit highlighted edge in graph view (for edge-search targeting).
+    pub highlighted_graph_edge: Option<(NodeKey, NodeKey)>,
+
+    /// Pending UI command: open connected nodes for this source and tile mode.
+    pending_open_connected_from: Option<(NodeKey, PendingTileOpenMode)>,
+
+    /// Pending UI command: open the selected/newly-created node in a tile mode.
+    pending_open_selected_tile_mode: Option<PendingTileOpenMode>,
+
+    /// Pending UI command: persist current workspace (tile tree) snapshot.
+    pending_save_workspace_snapshot: bool,
+
+    /// Pending UI command: persist named workspace snapshot.
+    pending_save_workspace_snapshot_named: Option<String>,
+
+    /// Pending UI command: restore named workspace snapshot.
+    pending_restore_workspace_snapshot_named: Option<String>,
+
+    /// Pending UI command: persist named full-graph snapshot.
+    pending_save_graph_snapshot_named: Option<String>,
+
+    /// Pending UI command: restore named full-graph snapshot.
+    pending_restore_graph_snapshot_named: Option<String>,
+
+    /// Pending UI command: restore autosaved latest graph snapshot/replay state.
+    pending_restore_graph_snapshot_latest: bool,
+
+    /// Pending UI command: delete named full-graph snapshot.
+    pending_delete_graph_snapshot_named: Option<String>,
+
+    /// Pending UI command: detach focused webview pane into split layout.
+    pending_detach_node_to_split: Option<NodeKey>,
 
     /// One-shot flag: fit graph to screen on next frame (triggered by 'C' key)
     pub fit_to_screen_requested: bool,
@@ -253,6 +360,31 @@ pub struct GraphBrowserApp {
     /// Persistent graph store (fjall log + redb snapshots)
     persistence: Option<GraphStore>,
 
+    /// Global undo history snapshots.
+    undo_stack: Vec<UndoRedoSnapshot>,
+    /// Global redo history snapshots.
+    redo_stack: Vec<UndoRedoSnapshot>,
+    /// Pending workspace layout restore emitted by undo/redo.
+    pending_history_workspace_layout_json: Option<String>,
+
+    /// Hash of last persisted session workspace layout json.
+    last_session_workspace_layout_hash: Option<u64>,
+
+    /// Minimum interval between autosaved session workspace writes.
+    workspace_autosave_interval: Duration,
+
+    /// Number of previous autosaved session workspace revisions to keep.
+    workspace_autosave_retention: u8,
+
+    /// Timestamp of last autosaved session workspace write.
+    last_workspace_autosave_at: Option<Instant>,
+
+    /// Monotonic activation counter for named workspace recency tracking.
+    workspace_activation_seq: u64,
+
+    /// Per-node most-recent named workspace activation metadata.
+    node_last_active_workspace: HashMap<NodeKey, (u64, String)>,
+
     /// Cached egui_graphs state (persists across frames for drag/interaction)
     pub egui_state: Option<EguiGraphState>,
 
@@ -261,15 +393,25 @@ pub struct GraphBrowserApp {
 }
 
 impl GraphBrowserApp {
-    pub fn default_physics_state() -> FruchtermanReingoldState {
-        let mut state = FruchtermanReingoldState::default();
-        // Tighter defaults: avoid explosive node drift on resume while
-        // preserving enough movement for layout convergence.
-        state.c_repulse = 0.75;
-        state.c_attract = 0.08;
-        state.k_scale = 0.65;
-        state.max_step = 10.0;
-        state.damping = 0.92;
+    pub const SESSION_WORKSPACE_LAYOUT_NAME: &'static str = "workspace:session-latest";
+    const SESSION_WORKSPACE_PREV_PREFIX: &'static str = "workspace:session-prev-";
+    pub const DEFAULT_WORKSPACE_AUTOSAVE_INTERVAL_SECS: u64 = 60;
+    pub const DEFAULT_WORKSPACE_AUTOSAVE_RETENTION: u8 = 1;
+
+    pub fn default_physics_state() -> FruchtermanReingoldWithCenterGravityState {
+        let mut state = FruchtermanReingoldWithCenterGravityState::default();
+        // Compact, less jittery default:
+        // - lower repulsion and ideal distance to avoid flyaway spread
+        // - higher attraction to pull distant components back together
+        // - lower step magnitude for more granular, predictable motion
+        state.base.c_repulse = 0.28;
+        state.base.c_attract = 0.22;
+        state.base.k_scale = 0.42;
+        state.base.dt = 0.03;
+        state.base.max_step = 3.0;
+        state.base.damping = 0.55;
+        // Keep the cluster attracted toward viewport center.
+        state.extras.0.params.c = 0.18;
         state
     }
 
@@ -306,11 +448,38 @@ impl GraphBrowserApp {
             active_webview_nodes: Vec::new(),
             next_placeholder_id,
             is_interacting: false,
+            drag_release_frames_remaining: 0,
             show_physics_panel: false,
             show_help_panel: false,
+            show_command_palette: false,
+            show_radial_menu: false,
+            show_persistence_panel: false,
+            hovered_graph_node: None,
+            highlighted_graph_edge: None,
+            pending_open_connected_from: None,
+            pending_open_selected_tile_mode: None,
+            pending_save_workspace_snapshot: false,
+            pending_save_workspace_snapshot_named: None,
+            pending_restore_workspace_snapshot_named: None,
+            pending_save_graph_snapshot_named: None,
+            pending_restore_graph_snapshot_named: None,
+            pending_restore_graph_snapshot_latest: false,
+            pending_delete_graph_snapshot_named: None,
+            pending_detach_node_to_split: None,
             fit_to_screen_requested: false,
             camera: Camera::new(),
             persistence,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            pending_history_workspace_layout_json: None,
+            last_session_workspace_layout_hash: None,
+            workspace_autosave_interval: Duration::from_secs(
+                Self::DEFAULT_WORKSPACE_AUTOSAVE_INTERVAL_SECS,
+            ),
+            workspace_autosave_retention: Self::DEFAULT_WORKSPACE_AUTOSAVE_RETENTION,
+            last_workspace_autosave_at: None,
+            workspace_activation_seq: 0,
+            node_last_active_workspace: HashMap::new(),
             egui_state: None,
             egui_state_dirty: true,
         }
@@ -330,11 +499,38 @@ impl GraphBrowserApp {
             active_webview_nodes: Vec::new(),
             next_placeholder_id: 0,
             is_interacting: false,
+            drag_release_frames_remaining: 0,
             show_physics_panel: false,
             show_help_panel: false,
+            show_command_palette: false,
+            show_radial_menu: false,
+            show_persistence_panel: false,
+            hovered_graph_node: None,
+            highlighted_graph_edge: None,
+            pending_open_connected_from: None,
+            pending_open_selected_tile_mode: None,
+            pending_save_workspace_snapshot: false,
+            pending_save_workspace_snapshot_named: None,
+            pending_restore_workspace_snapshot_named: None,
+            pending_save_graph_snapshot_named: None,
+            pending_restore_graph_snapshot_named: None,
+            pending_restore_graph_snapshot_latest: false,
+            pending_delete_graph_snapshot_named: None,
+            pending_detach_node_to_split: None,
             fit_to_screen_requested: false,
             camera: Camera::new(),
             persistence: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            pending_history_workspace_layout_json: None,
+            last_session_workspace_layout_hash: None,
+            workspace_autosave_interval: Duration::from_secs(
+                Self::DEFAULT_WORKSPACE_AUTOSAVE_INTERVAL_SECS,
+            ),
+            workspace_autosave_retention: Self::DEFAULT_WORKSPACE_AUTOSAVE_RETENTION,
+            last_workspace_autosave_at: None,
+            workspace_activation_seq: 0,
+            node_last_active_workspace: HashMap::new(),
             egui_state: None,
             egui_state_dirty: true,
         }
@@ -371,10 +567,29 @@ impl GraphBrowserApp {
         self.is_interacting = interacting;
 
         if interacting {
-            self.physics_running_before_interaction = Some(self.physics.is_running);
-            self.physics.is_running = false;
+            self.physics_running_before_interaction = Some(self.physics.base.is_running);
+            self.physics.base.is_running = false;
+            self.drag_release_frames_remaining = 0;
         } else if let Some(was_running) = self.physics_running_before_interaction.take() {
-            self.physics.is_running = was_running;
+            if was_running {
+                self.physics.base.is_running = true;
+                self.drag_release_frames_remaining = 0;
+            } else {
+                self.physics.base.is_running = true;
+                self.drag_release_frames_remaining = 10;
+            }
+        }
+    }
+
+    /// Advance frame-local physics housekeeping.
+    /// Handles short post-drag inertia decay when simulation was previously paused.
+    pub fn tick_frame(&mut self) {
+        if self.drag_release_frames_remaining == 0 || self.is_interacting {
+            return;
+        }
+        self.drag_release_frames_remaining -= 1;
+        if self.drag_release_frames_remaining == 0 {
+            self.physics.base.is_running = false;
         }
     }
 
@@ -394,6 +609,19 @@ impl GraphBrowserApp {
             GraphIntent::RequestFitToScreen => self.request_fit_to_screen(),
             GraphIntent::TogglePhysicsPanel => self.toggle_physics_panel(),
             GraphIntent::ToggleHelpPanel => self.toggle_help_panel(),
+            GraphIntent::ToggleCommandPalette => self.toggle_command_palette(),
+            GraphIntent::ToggleRadialMenu => self.toggle_radial_menu(),
+            GraphIntent::TogglePersistencePanel => self.toggle_persistence_panel(),
+            GraphIntent::Undo => {
+                let current_layout =
+                    self.load_workspace_layout_json(Self::SESSION_WORKSPACE_LAYOUT_NAME);
+                let _ = self.perform_undo(current_layout);
+            },
+            GraphIntent::Redo => {
+                let current_layout =
+                    self.load_workspace_layout_json(Self::SESSION_WORKSPACE_LAYOUT_NAME);
+                let _ = self.perform_redo(current_layout);
+            },
             GraphIntent::CreateNodeNearCenter => {
                 self.create_new_node_near_center();
             },
@@ -425,6 +653,22 @@ impl GraphBrowserApp {
                 edge_type,
             } => {
                 let _ = self.remove_edges_and_log(from, to, edge_type);
+            },
+            GraphIntent::CreateUserGroupedEdgeFromPrimarySelection => {
+                self.create_user_grouped_edge_from_primary_selection();
+            },
+            GraphIntent::ExecuteEdgeCommand { command } => {
+                let intents = self.intents_for_edge_command(command);
+                self.apply_intents(intents);
+            },
+            GraphIntent::SetHighlightedEdge { from, to } => {
+                self.highlighted_graph_edge = Some((from, to));
+            },
+            GraphIntent::ClearHighlightedEdge => {
+                self.highlighted_graph_edge = None;
+            },
+            GraphIntent::SetNodePinned { key, is_pinned } => {
+                self.set_node_pinned_and_log(key, is_pinned);
             },
             GraphIntent::PromoteNodeToActive { key } => {
                 self.promote_node_to_active(key);
@@ -627,6 +871,8 @@ impl GraphBrowserApp {
         if edge_key.is_some() {
             self.log_edge_mutation(from_key, to_key, edge_type);
             self.egui_state_dirty = true; // Graph structure changed
+                self.physics.base.is_running = true;
+                self.drag_release_frames_remaining = 0;
         }
         edge_key
     }
@@ -643,6 +889,8 @@ impl GraphBrowserApp {
         if removed > 0 {
             self.log_edge_removal_mutation(from_key, to_key, edge_type);
             self.egui_state_dirty = true;
+                self.physics.base.is_running = true;
+                self.drag_release_frames_remaining = 0;
         }
         removed
     }
@@ -759,6 +1007,253 @@ impl GraphBrowserApp {
             .and_then(|store| store.load_tile_layout_json())
     }
 
+    /// Persist serialized tile layout JSON under a workspace name.
+    pub fn save_workspace_layout_json(&mut self, name: &str, layout_json: &str) {
+        if let Some(store) = &mut self.persistence
+            && let Err(e) = store.save_workspace_layout_json(name, layout_json)
+        {
+            warn!("Failed to save workspace layout '{name}': {e}");
+        }
+    }
+
+    fn layout_json_hash(layout_json: &str) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        layout_json.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn session_workspace_history_key(index: u8) -> String {
+        format!("{}{index}", Self::SESSION_WORKSPACE_PREV_PREFIX)
+    }
+
+    fn rotate_session_workspace_history(&mut self, latest_layout_before_overwrite: &str) {
+        let retention = self.workspace_autosave_retention;
+        if retention == 0 {
+            return;
+        }
+
+        for idx in (1..retention).rev() {
+            let from_key = Self::session_workspace_history_key(idx);
+            let to_key = Self::session_workspace_history_key(idx + 1);
+            if let Some(layout) = self.load_workspace_layout_json(&from_key) {
+                self.save_workspace_layout_json(&to_key, &layout);
+            }
+        }
+        let first_key = Self::session_workspace_history_key(1);
+        self.save_workspace_layout_json(&first_key, latest_layout_before_overwrite);
+    }
+
+    /// Persist reserved session workspace layout only when changed.
+    pub fn save_session_workspace_layout_json_if_changed(&mut self, layout_json: &str) {
+        let next_hash = Self::layout_json_hash(layout_json);
+        if self.last_session_workspace_layout_hash == Some(next_hash) {
+            return;
+        }
+        if let Some(last_at) = self.last_workspace_autosave_at
+            && last_at.elapsed() < self.workspace_autosave_interval
+        {
+            return;
+        }
+        let previous_latest = self.load_workspace_layout_json(Self::SESSION_WORKSPACE_LAYOUT_NAME);
+        self.save_workspace_layout_json(Self::SESSION_WORKSPACE_LAYOUT_NAME, layout_json);
+        if let Some(previous_latest) = previous_latest {
+            self.rotate_session_workspace_history(&previous_latest);
+        }
+        self.last_session_workspace_layout_hash = Some(next_hash);
+        self.last_workspace_autosave_at = Some(Instant::now());
+    }
+
+    /// Mark currently loaded layout as session baseline to suppress redundant writes.
+    pub fn mark_session_workspace_layout_json(&mut self, layout_json: &str) {
+        self.last_session_workspace_layout_hash = Some(Self::layout_json_hash(layout_json));
+        self.last_workspace_autosave_at = Some(Instant::now());
+    }
+
+    /// Load serialized tile layout JSON by workspace name.
+    pub fn load_workspace_layout_json(&self, name: &str) -> Option<String> {
+        self.persistence
+            .as_ref()
+            .and_then(|store| store.load_workspace_layout_json(name))
+    }
+
+    /// List persisted workspace layout names in stable order.
+    pub fn list_workspace_layout_names(&self) -> Vec<String> {
+        self.persistence
+            .as_ref()
+            .map(|store| store.list_workspace_layout_names())
+            .unwrap_or_default()
+    }
+
+    pub fn is_reserved_workspace_layout_name(name: &str) -> bool {
+        name == "latest"
+            || name == Self::SESSION_WORKSPACE_LAYOUT_NAME
+            || name.starts_with(Self::SESSION_WORKSPACE_PREV_PREFIX)
+    }
+
+    /// Delete a persisted workspace layout by name.
+    pub fn delete_workspace_layout(&mut self, name: &str) -> Result<(), String> {
+        if Self::is_reserved_workspace_layout_name(name) {
+            return Err(format!("Cannot delete reserved workspace '{name}'"));
+        }
+        self.persistence
+            .as_mut()
+            .ok_or_else(|| "Persistence is not enabled".to_string())?
+            .delete_workspace_layout(name)
+            .map_err(|e| e.to_string())?;
+        self.node_last_active_workspace
+            .retain(|_, (_, workspace_name)| workspace_name != name);
+        Ok(())
+    }
+
+    /// Delete the reserved session workspace snapshot and reset hash baseline.
+    pub fn clear_session_workspace_layout(&mut self) -> Result<(), String> {
+        let mut names_to_delete = vec![Self::SESSION_WORKSPACE_LAYOUT_NAME.to_string()];
+        for idx in 1..=5 {
+            names_to_delete.push(Self::session_workspace_history_key(idx));
+        }
+        let store = self
+            .persistence
+            .as_mut()
+            .ok_or_else(|| "Persistence is not enabled".to_string())?;
+        for name in names_to_delete {
+            let _ = store.delete_workspace_layout(&name);
+        }
+        self.last_session_workspace_layout_hash = None;
+        self.last_workspace_autosave_at = None;
+        Ok(())
+    }
+
+    pub fn workspace_autosave_interval_secs(&self) -> u64 {
+        self.workspace_autosave_interval.as_secs()
+    }
+
+    pub fn set_workspace_autosave_interval_secs(&mut self, secs: u64) -> Result<(), String> {
+        if secs == 0 {
+            return Err("Workspace autosave interval must be greater than zero".to_string());
+        }
+        self.workspace_autosave_interval = Duration::from_secs(secs);
+        Ok(())
+    }
+
+    pub fn workspace_autosave_retention(&self) -> u8 {
+        self.workspace_autosave_retention
+    }
+
+    pub fn set_workspace_autosave_retention(&mut self, count: u8) -> Result<(), String> {
+        if count > 5 {
+            return Err("Workspace autosave retention must be between 0 and 5".to_string());
+        }
+        if count < self.workspace_autosave_retention
+            && let Some(store) = self.persistence.as_mut()
+        {
+            for idx in (count + 1)..=5 {
+                let _ = store.delete_workspace_layout(&Self::session_workspace_history_key(idx));
+            }
+        }
+        self.workspace_autosave_retention = count;
+        Ok(())
+    }
+
+    /// Mark a named workspace as activated, updating per-node recency.
+    pub fn note_workspace_activated(
+        &mut self,
+        workspace_name: &str,
+        nodes: impl IntoIterator<Item = NodeKey>,
+    ) {
+        self.workspace_activation_seq = self.workspace_activation_seq.saturating_add(1);
+        let seq = self.workspace_activation_seq;
+        let workspace_name = workspace_name.to_string();
+        for key in nodes {
+            self.node_last_active_workspace
+                .insert(key, (seq, workspace_name.clone()));
+        }
+    }
+
+    /// Persist a named full-graph snapshot.
+    pub fn save_named_graph_snapshot(&mut self, name: &str) -> Result<(), String> {
+        self.persistence
+            .as_mut()
+            .ok_or_else(|| "Persistence is not enabled".to_string())?
+            .save_named_graph_snapshot(name, &self.graph)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Load a named full-graph snapshot and reset runtime mappings.
+    pub fn load_named_graph_snapshot(&mut self, name: &str) -> Result<(), String> {
+        let graph = self
+            .persistence
+            .as_ref()
+            .ok_or_else(|| "Persistence is not enabled".to_string())?
+            .load_named_graph_snapshot(name)
+            .ok_or_else(|| format!("Named graph snapshot '{name}' not found"))?;
+
+        self.apply_loaded_graph(graph);
+        Ok(())
+    }
+
+    /// Load a named full-graph snapshot without mutating runtime state.
+    pub fn peek_named_graph_snapshot(&self, name: &str) -> Option<Graph> {
+        self.persistence
+            .as_ref()
+            .and_then(|store| store.load_named_graph_snapshot(name))
+    }
+
+    /// Load autosaved latest graph snapshot/replay state.
+    pub fn load_latest_graph_snapshot(&mut self) -> Result<(), String> {
+        let graph = self
+            .persistence
+            .as_ref()
+            .ok_or_else(|| "Persistence is not enabled".to_string())?
+            .recover()
+            .ok_or_else(|| "Latest graph snapshot is not available".to_string())?;
+
+        self.apply_loaded_graph(graph);
+        Ok(())
+    }
+
+    /// Load autosaved latest graph snapshot/replay state without mutating runtime state.
+    pub fn peek_latest_graph_snapshot(&self) -> Option<Graph> {
+        self.persistence.as_ref().and_then(|store| store.recover())
+    }
+
+    /// Whether an autosaved latest graph snapshot/replay state can be restored.
+    pub fn has_latest_graph_snapshot(&self) -> bool {
+        self.persistence
+            .as_ref()
+            .and_then(|store| store.recover())
+            .is_some()
+    }
+
+    fn apply_loaded_graph(&mut self, graph: Graph) {
+        self.graph = graph;
+        self.selected_nodes.clear();
+        self.webview_to_node.clear();
+        self.node_to_webview.clear();
+        self.node_crash_state.clear();
+        self.active_webview_nodes.clear();
+        self.next_placeholder_id = Self::scan_max_placeholder_id(&self.graph);
+        self.egui_state = None;
+        self.egui_state_dirty = true;
+        self.fit_to_screen_requested = true;
+    }
+
+    /// List named full-graph snapshots.
+    pub fn list_named_graph_snapshot_names(&self) -> Vec<String> {
+        self.persistence
+            .as_ref()
+            .map(|store| store.list_named_graph_snapshot_names())
+            .unwrap_or_default()
+    }
+
+    /// Delete a named full-graph snapshot.
+    pub fn delete_named_graph_snapshot(&mut self, name: &str) -> Result<(), String> {
+        self.persistence
+            .as_mut()
+            .ok_or_else(|| "Persistence is not enabled".to_string())?
+            .delete_named_graph_snapshot(name)
+            .map_err(|e| e.to_string())
+    }
+
     /// Switch persistence backing store at runtime and reload graph state from it.
     pub fn switch_persistence_dir(&mut self, data_dir: PathBuf) -> Result<(), String> {
         let store = GraphStore::open(data_dir).map_err(|e| e.to_string())?;
@@ -775,6 +1270,10 @@ impl GraphBrowserApp {
         self.next_placeholder_id = next_placeholder_id;
         self.egui_state = None;
         self.egui_state_dirty = true;
+        self.last_session_workspace_layout_hash = None;
+        self.last_workspace_autosave_at = None;
+        self.workspace_activation_seq = 0;
+        self.node_last_active_workspace.clear();
         self.is_interacting = false;
         self.physics_running_before_interaction = None;
         Ok(())
@@ -820,15 +1319,17 @@ impl GraphBrowserApp {
         if self.is_interacting {
             let next = !self
                 .physics_running_before_interaction
-                .unwrap_or(self.physics.is_running);
+                .unwrap_or(self.physics.base.is_running);
             self.physics_running_before_interaction = Some(next);
+            self.drag_release_frames_remaining = 0;
             return;
         }
-        self.physics.is_running = !self.physics.is_running;
+        self.physics.base.is_running = !self.physics.base.is_running;
+        self.drag_release_frames_remaining = 0;
     }
 
     /// Update force-directed layout configuration.
-    pub fn update_physics_config(&mut self, config: FruchtermanReingoldState) {
+    pub fn update_physics_config(&mut self, config: FruchtermanReingoldWithCenterGravityState) {
         self.physics = config;
     }
 
@@ -840,6 +1341,178 @@ impl GraphBrowserApp {
     /// Toggle keyboard shortcut help panel visibility
     pub fn toggle_help_panel(&mut self) {
         self.show_help_panel = !self.show_help_panel;
+    }
+
+    /// Toggle edge command palette visibility.
+    pub fn toggle_command_palette(&mut self) {
+        self.show_command_palette = !self.show_command_palette;
+    }
+
+    /// Toggle radial command menu visibility.
+    pub fn toggle_radial_menu(&mut self) {
+        self.show_radial_menu = !self.show_radial_menu;
+    }
+
+    /// Toggle persistence hub visibility.
+    pub fn toggle_persistence_panel(&mut self) {
+        self.show_persistence_panel = !self.show_persistence_panel;
+    }
+
+    /// Capture current global state as an undo checkpoint.
+    pub fn capture_undo_checkpoint(&mut self, workspace_layout_json: Option<String>) {
+        self.undo_stack.push(UndoRedoSnapshot {
+            graph: self.graph.clone(),
+            selected_nodes: self.selected_nodes.clone(),
+            highlighted_graph_edge: self.highlighted_graph_edge,
+            workspace_layout_json,
+        });
+        self.redo_stack.clear();
+        const MAX_UNDO_STEPS: usize = 128;
+        if self.undo_stack.len() > MAX_UNDO_STEPS {
+            let excess = self.undo_stack.len() - MAX_UNDO_STEPS;
+            self.undo_stack.drain(0..excess);
+        }
+    }
+
+    /// Perform one global undo step using current workspace layout as redo checkpoint.
+    pub fn perform_undo(&mut self, current_workspace_layout_json: Option<String>) -> bool {
+        let Some(prev) = self.undo_stack.pop() else {
+            return false;
+        };
+        self.redo_stack.push(UndoRedoSnapshot {
+            graph: self.graph.clone(),
+            selected_nodes: self.selected_nodes.clone(),
+            highlighted_graph_edge: self.highlighted_graph_edge,
+            workspace_layout_json: current_workspace_layout_json,
+        });
+        self.apply_loaded_graph(prev.graph);
+        self.selected_nodes = prev.selected_nodes;
+        self.highlighted_graph_edge = prev.highlighted_graph_edge;
+        self.pending_history_workspace_layout_json = prev.workspace_layout_json;
+        true
+    }
+
+    /// Perform one global redo step using current workspace layout as undo checkpoint.
+    pub fn perform_redo(&mut self, current_workspace_layout_json: Option<String>) -> bool {
+        let Some(next) = self.redo_stack.pop() else {
+            return false;
+        };
+        self.undo_stack.push(UndoRedoSnapshot {
+            graph: self.graph.clone(),
+            selected_nodes: self.selected_nodes.clone(),
+            highlighted_graph_edge: self.highlighted_graph_edge,
+            workspace_layout_json: current_workspace_layout_json,
+        });
+        self.apply_loaded_graph(next.graph);
+        self.selected_nodes = next.selected_nodes;
+        self.highlighted_graph_edge = next.highlighted_graph_edge;
+        self.pending_history_workspace_layout_json = next.workspace_layout_json;
+        true
+    }
+
+    /// Take pending workspace layout restore emitted by undo/redo.
+    pub fn take_pending_history_workspace_layout_json(&mut self) -> Option<String> {
+        self.pending_history_workspace_layout_json.take()
+    }
+
+    /// Request opening connected nodes for a given source node and tile mode.
+    pub fn request_open_connected_from(&mut self, source: NodeKey, mode: PendingTileOpenMode) {
+        self.pending_open_connected_from = Some((source, mode));
+    }
+
+    /// Take and clear pending connected-open request.
+    pub fn take_pending_open_connected_from(&mut self) -> Option<(NodeKey, PendingTileOpenMode)> {
+        self.pending_open_connected_from.take()
+    }
+
+    /// Request opening the selected/new node as a tile in the given mode.
+    pub fn request_open_selected_tile_mode(&mut self, mode: PendingTileOpenMode) {
+        self.pending_open_selected_tile_mode = Some(mode);
+    }
+
+    /// Take and clear pending selected-tile open-mode request.
+    pub fn take_pending_open_selected_tile_mode(&mut self) -> Option<PendingTileOpenMode> {
+        self.pending_open_selected_tile_mode.take()
+    }
+
+    /// Request saving current workspace (tile layout) snapshot.
+    pub fn request_save_workspace_snapshot(&mut self) {
+        self.pending_save_workspace_snapshot = true;
+    }
+
+    /// Take and clear pending workspace save request.
+    pub fn take_pending_save_workspace_snapshot(&mut self) -> bool {
+        std::mem::take(&mut self.pending_save_workspace_snapshot)
+    }
+
+    /// Request saving a named workspace snapshot.
+    pub fn request_save_workspace_snapshot_named(&mut self, name: impl Into<String>) {
+        self.pending_save_workspace_snapshot_named = Some(name.into());
+    }
+
+    /// Take and clear pending named workspace save request.
+    pub fn take_pending_save_workspace_snapshot_named(&mut self) -> Option<String> {
+        self.pending_save_workspace_snapshot_named.take()
+    }
+
+    /// Request restoring a named workspace snapshot.
+    pub fn request_restore_workspace_snapshot_named(&mut self, name: impl Into<String>) {
+        self.pending_restore_workspace_snapshot_named = Some(name.into());
+    }
+
+    /// Take and clear pending named workspace restore request.
+    pub fn take_pending_restore_workspace_snapshot_named(&mut self) -> Option<String> {
+        self.pending_restore_workspace_snapshot_named.take()
+    }
+
+    /// Request saving a named graph snapshot.
+    pub fn request_save_graph_snapshot_named(&mut self, name: impl Into<String>) {
+        self.pending_save_graph_snapshot_named = Some(name.into());
+    }
+
+    /// Take and clear pending named graph save request.
+    pub fn take_pending_save_graph_snapshot_named(&mut self) -> Option<String> {
+        self.pending_save_graph_snapshot_named.take()
+    }
+
+    /// Request restoring a named graph snapshot.
+    pub fn request_restore_graph_snapshot_named(&mut self, name: impl Into<String>) {
+        self.pending_restore_graph_snapshot_named = Some(name.into());
+    }
+
+    /// Take and clear pending named graph restore request.
+    pub fn take_pending_restore_graph_snapshot_named(&mut self) -> Option<String> {
+        self.pending_restore_graph_snapshot_named.take()
+    }
+
+    /// Request restoring autosaved latest graph snapshot/replay state.
+    pub fn request_restore_graph_snapshot_latest(&mut self) {
+        self.pending_restore_graph_snapshot_latest = true;
+    }
+
+    /// Take and clear pending autosaved graph restore request.
+    pub fn take_pending_restore_graph_snapshot_latest(&mut self) -> bool {
+        std::mem::take(&mut self.pending_restore_graph_snapshot_latest)
+    }
+
+    /// Request deleting a named graph snapshot.
+    pub fn request_delete_graph_snapshot_named(&mut self, name: impl Into<String>) {
+        self.pending_delete_graph_snapshot_named = Some(name.into());
+    }
+
+    /// Take and clear pending named graph delete request.
+    pub fn take_pending_delete_graph_snapshot_named(&mut self) -> Option<String> {
+        self.pending_delete_graph_snapshot_named.take()
+    }
+
+    /// Request detaching a node's pane into split layout.
+    pub fn request_detach_node_to_split(&mut self, key: NodeKey) {
+        self.pending_detach_node_to_split = Some(key);
+    }
+
+    /// Take and clear pending detach-to-split request.
+    pub fn take_pending_detach_node_to_split(&mut self) -> Option<NodeKey> {
+        self.pending_detach_node_to_split.take()
     }
 
     /// Promote a node to Active lifecycle (mark as needing webview)
@@ -948,6 +1621,113 @@ impl GraphBrowserApp {
         }
     }
 
+    fn create_user_grouped_edge_from_primary_selection(&mut self) {
+        let Some(from) = self.selected_nodes.primary() else {
+            return;
+        };
+        let to = self.selected_nodes.iter().copied().find(|key| *key != from);
+        if let Some(to) = to {
+            self.add_user_grouped_edge_if_missing(from, to);
+        }
+    }
+
+    fn selected_pair_in_order(&self) -> Option<(NodeKey, NodeKey)> {
+        self.selected_nodes.ordered_pair()
+    }
+
+    fn intents_for_edge_command(&self, command: EdgeCommand) -> Vec<GraphIntent> {
+        match command {
+            EdgeCommand::ConnectSelectedPair => self
+                .selected_pair_in_order()
+                .map(|(from, to)| vec![GraphIntent::CreateUserGroupedEdge { from, to }])
+                .unwrap_or_default(),
+            EdgeCommand::ConnectPair { from, to } => {
+                vec![GraphIntent::CreateUserGroupedEdge { from, to }]
+            },
+            EdgeCommand::ConnectBothDirections => self
+                .selected_pair_in_order()
+                .map(|(from, to)| {
+                    vec![
+                        GraphIntent::CreateUserGroupedEdge { from, to },
+                        GraphIntent::CreateUserGroupedEdge { from: to, to: from },
+                    ]
+                })
+                .unwrap_or_default(),
+            EdgeCommand::ConnectBothDirectionsPair { a, b } => {
+                vec![
+                    GraphIntent::CreateUserGroupedEdge { from: a, to: b },
+                    GraphIntent::CreateUserGroupedEdge { from: b, to: a },
+                ]
+            },
+            EdgeCommand::RemoveUserEdge => self
+                .selected_pair_in_order()
+                .map(|(from, to)| {
+                    vec![
+                        GraphIntent::RemoveEdge {
+                            from,
+                            to,
+                            edge_type: EdgeType::UserGrouped,
+                        },
+                        GraphIntent::RemoveEdge {
+                            from: to,
+                            to: from,
+                            edge_type: EdgeType::UserGrouped,
+                        },
+                    ]
+                })
+                .unwrap_or_default(),
+            EdgeCommand::RemoveUserEdgePair { a, b } => {
+                vec![
+                    GraphIntent::RemoveEdge {
+                        from: a,
+                        to: b,
+                        edge_type: EdgeType::UserGrouped,
+                    },
+                    GraphIntent::RemoveEdge {
+                        from: b,
+                        to: a,
+                        edge_type: EdgeType::UserGrouped,
+                    },
+                ]
+            },
+            EdgeCommand::PinSelected => self
+                .selected_nodes
+                .iter()
+                .copied()
+                .map(|key| GraphIntent::SetNodePinned {
+                    key,
+                    is_pinned: true,
+                })
+                .collect(),
+            EdgeCommand::UnpinSelected => self
+                .selected_nodes
+                .iter()
+                .copied()
+                .map(|key| GraphIntent::SetNodePinned {
+                    key,
+                    is_pinned: false,
+                })
+                .collect(),
+        }
+    }
+
+    fn set_node_pinned_and_log(&mut self, key: NodeKey, is_pinned: bool) {
+        let Some(node) = self.graph.get_node_mut(key) else {
+            return;
+        };
+        if node.is_pinned == is_pinned {
+            return;
+        }
+        node.is_pinned = is_pinned;
+        self.egui_state_dirty = true;
+        if let Some(store) = &mut self.persistence {
+            store.log_mutation(&LogEntry::PinNode {
+                node_id: node.id.to_string(),
+                is_pinned,
+            });
+        }
+    }
+
     /// Create a new node near the center of the graph (or at origin if graph is empty)
     pub fn create_new_node_near_center(&mut self) -> NodeKey {
         use euclid::default::Point2D;
@@ -1016,6 +1796,7 @@ impl GraphBrowserApp {
 
         // Clear selection
         self.selected_nodes.clear();
+        self.highlighted_graph_edge = None;
     }
 
     /// Get the currently selected node (if exactly one is selected)
@@ -1036,6 +1817,7 @@ impl GraphBrowserApp {
         }
         self.graph = Graph::new();
         self.selected_nodes.clear();
+        self.highlighted_graph_edge = None;
         self.webview_to_node.clear();
         self.node_to_webview.clear();
         self.node_crash_state.clear();
@@ -1051,6 +1833,7 @@ impl GraphBrowserApp {
         }
         self.graph = Graph::new();
         self.selected_nodes.clear();
+        self.highlighted_graph_edge = None;
         self.webview_to_node.clear();
         self.node_to_webview.clear();
         self.node_crash_state.clear();
@@ -1409,6 +2192,136 @@ mod tests {
             .filter(|e| e.edge_type == EdgeType::UserGrouped && e.from == from && e.to == to)
             .count();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_intent_create_user_grouped_edge_from_primary_selection() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let a = app
+            .graph
+            .add_node("https://a.com".into(), Point2D::new(0.0, 0.0));
+        let b = app
+            .graph
+            .add_node("https://b.com".into(), Point2D::new(10.0, 0.0));
+
+        app.select_node(b, false);
+        app.select_node(a, true);
+
+        app.apply_intents([GraphIntent::CreateUserGroupedEdgeFromPrimarySelection]);
+
+        let count = app
+            .graph
+            .edges()
+            .filter(|e| e.edge_type == EdgeType::UserGrouped && e.from == a && e.to == b)
+            .count();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_intent_create_user_grouped_edge_from_primary_selection_noop_for_single_select() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let a = app
+            .graph
+            .add_node("https://a.com".into(), Point2D::new(0.0, 0.0));
+        app.select_node(a, false);
+
+        app.apply_intents([GraphIntent::CreateUserGroupedEdgeFromPrimarySelection]);
+
+        let count = app
+            .graph
+            .edges()
+            .filter(|e| e.edge_type == EdgeType::UserGrouped)
+            .count();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_execute_edge_command_connect_selected_pair() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let from = app
+            .graph
+            .add_node("https://from.com".into(), Point2D::new(0.0, 0.0));
+        let to = app
+            .graph
+            .add_node("https://to.com".into(), Point2D::new(10.0, 0.0));
+
+        app.select_node(from, false);
+        app.select_node(to, true);
+        app.physics.base.is_running = false;
+
+        app.apply_intents([GraphIntent::ExecuteEdgeCommand {
+            command: EdgeCommand::ConnectSelectedPair,
+        }]);
+
+        assert!(
+            app.graph
+                .edges()
+                .any(|e| e.edge_type == EdgeType::UserGrouped && e.from == from && e.to == to)
+        );
+        assert!(app.physics.base.is_running);
+    }
+
+    #[test]
+    fn test_selection_ordered_pair_uses_first_selected_as_source() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let first = app
+            .graph
+            .add_node("https://first.com".into(), Point2D::new(0.0, 0.0));
+        let second = app
+            .graph
+            .add_node("https://second.com".into(), Point2D::new(10.0, 0.0));
+
+        app.select_node(first, false);
+        app.select_node(second, true);
+
+        assert_eq!(app.selected_nodes.ordered_pair(), Some((first, second)));
+    }
+
+    #[test]
+    fn test_execute_edge_command_remove_user_edge_removes_both_directions() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let from = app
+            .graph
+            .add_node("https://from.com".into(), Point2D::new(0.0, 0.0));
+        let to = app
+            .graph
+            .add_node("https://to.com".into(), Point2D::new(10.0, 0.0));
+
+        app.add_user_grouped_edge_if_missing(from, to);
+        app.add_user_grouped_edge_if_missing(to, from);
+        app.select_node(from, false);
+        app.select_node(to, true);
+        app.physics.base.is_running = false;
+
+        app.apply_intents([GraphIntent::ExecuteEdgeCommand {
+            command: EdgeCommand::RemoveUserEdge,
+        }]);
+
+        assert!(
+            !app.graph
+                .edges()
+                .any(|e| e.edge_type == EdgeType::UserGrouped)
+        );
+        assert!(app.physics.base.is_running);
+    }
+
+    #[test]
+    fn test_execute_edge_command_pin_and_unpin_selected() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app
+            .graph
+            .add_node("https://pin.com".into(), Point2D::new(0.0, 0.0));
+        app.select_node(key, false);
+
+        app.apply_intents([GraphIntent::ExecuteEdgeCommand {
+            command: EdgeCommand::PinSelected,
+        }]);
+        assert!(app.graph.get_node(key).is_some_and(|node| node.is_pinned));
+
+        app.apply_intents([GraphIntent::ExecuteEdgeCommand {
+            command: EdgeCommand::UnpinSelected,
+        }]);
+        assert!(app.graph.get_node(key).is_some_and(|node| !node.is_pinned));
     }
 
     #[test]
