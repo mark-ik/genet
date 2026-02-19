@@ -38,7 +38,7 @@ Avoid using highly dynamic sites (for example Google properties) for pass/fail o
 
 1. Create two detail panes:
 - Open one node in detail view.
-- Use `Split+` or `Shift + Double-click` on a second node.
+- Drag a tab out to split, or use `Split+` / `Shift + Double-click` as fallback.
 - Confirm both panes remain visible.
 Result (2026-02-17, baseline run): Passed (`example.com` + `Split+` kept both panes visible).
 
