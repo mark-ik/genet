@@ -2,8 +2,8 @@
 
 **Document Type**: Feature-driven implementation plan
 **Organization**: By feature targets with validation tests (not calendar time)
-**Last Updated**: February 16, 2026
-**Priority Focus**: M1 complete (FT1-6); active: navigation control-plane, selection consolidation
+**Last Updated**: February 19, 2026
+**Priority Focus**: M1 complete (FT1-6); F1-F7 architectural features complete; M2 active: workspace routing/membership, graph UX polish, edge/radial follow-on
 
 **Policy Note (2026-02-14)**: Graphshell has no production users and no legacy dataset obligations. Do not add backward-compat contingency branches unless explicitly requested.
 

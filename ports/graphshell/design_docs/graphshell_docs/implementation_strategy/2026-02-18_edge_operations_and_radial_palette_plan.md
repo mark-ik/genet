@@ -66,7 +66,7 @@ Resolved:
 
 Remaining / Follow-up:
 
-1. Complete headed manual validation for `@` mode focus-transition paths (Step 4d checklist below).
+1. Complete headed manual validation for `@` mode focus-transition paths. → Tracking in `tests/VALIDATION_TESTING.md` §Step 4d.
 2. Extend workspace pruning/retention beyond session prune (batch named-workspace maintenance + retention policy).
 3. Expand Persistence Hub scope to include: Bookmarks, Node Versioning/History, and Maintenance.
 4. Workspace-first node-open routing and membership UX are tracked in `2026-02-19_workspace_routing_and_membership_plan.md` (deferred from this plan).
@@ -517,6 +517,8 @@ Done criteria:
 2. Toolbar density is reduced without loss of functionality.
 
 ### Step 4d: `@` Omnibar Behavior Polish and Validation
+
+**Validation checklist moved to `tests/VALIDATION_TESTING.md` §Step 4d.**
 
 Work:
 

@@ -107,18 +107,18 @@ New methods on `GraphBrowserApp`:
 
 #### Phase 1 Task List
 
-- [ ] Add `node_workspace_membership`, `current_workspace_is_ephemeral`,
+- [x] Add `node_workspace_membership`, `current_workspace_is_ephemeral`,
   `ephemeral_workspace_modified` fields to `GraphBrowserApp` (app.rs).
-- [ ] Add `init_membership_index`, `membership_for_node`, `workspaces_for_node_key` methods to
+- [x] Add `init_membership_index`, `membership_for_node`, `workspaces_for_node_key` methods to
   `GraphBrowserApp`.
-- [ ] Extend `note_workspace_activated` to insert surviving node UUIDs into membership index and
+- [x] Extend `note_workspace_activated` to insert surviving node UUIDs into membership index and
   clear `current_workspace_is_ephemeral`.
-- [ ] Extend `delete_workspace_layout` to remove workspace name from all membership sets and drop
+- [x] Extend `delete_workspace_layout` to remove workspace name from all membership sets and drop
   empty UUID entries.
-- [ ] Handle `RemoveNode` in `apply_intent` to remove UUID entry from membership index.
-- [ ] New fn `build_membership_index_from_layouts(persistence, graph)` in
+- [x] Handle `RemoveNode` in `apply_intent` to remove UUID entry from membership index.
+- [x] New fn `build_membership_index_from_layouts(persistence, graph)` in
   `desktop/persistence_ops.rs`.
-- [ ] Call `build_membership_index_from_layouts` at startup (after graph is loaded but before first
+- [x] Call `build_membership_index_from_layouts` at startup (after graph is loaded but before first
   frame), call `init_membership_index` with result.
 
 ---
@@ -175,13 +175,13 @@ When `OpenInCurrentWorkspace` is the result, set `current_workspace_is_ephemeral
 
 #### Phase 2 Task List
 
-- [ ] Add `GraphIntent::OpenNodeWorkspaceRouted { key: NodeKey }` variant to the `GraphIntent`
+- [x] Add `GraphIntent::OpenNodeWorkspaceRouted { key: NodeKey }` variant to the `GraphIntent`
   enum in `app.rs`.
-- [ ] Wire the arm in `apply_intent()`: call `resolve_workspace_open`, enqueue the appropriate
+- [x] Wire the arm in `apply_intent()`: call `resolve_workspace_open`, enqueue the appropriate
   pending action, set `current_workspace_is_ephemeral` as needed.
-- [ ] Add `WorkspaceOpenAction` enum and `resolve_workspace_open` fn (new file
+- [x] Add `WorkspaceOpenAction` enum and `resolve_workspace_open` fn (new file
   `desktop/workspace_routing.rs` or inline in `app.rs` — prefer separate file for testability).
-- [ ] Change `GraphAction::FocusNode` handler in `render/mod.rs` to emit
+- [x] Change `GraphAction::FocusNode` handler in `render/mod.rs` to emit
   `GraphIntent::OpenNodeWorkspaceRouted` instead of `GraphIntent::SelectNode`.
 
 ---
@@ -226,22 +226,22 @@ Clicking a name calls `resolve_workspace_open(app, key, Some(name))`.
 
 #### Phase 3 Task List
 
-- [ ] Add `pending_node_context_target: Option<NodeKey>` field to `GraphBrowserApp`.
-- [ ] Add `NodeOpenWorkspace`, `NodeOpenNeighbors`, `NodeOpenConnected` variants to `RadialCommand`
+- [x] Add `pending_node_context_target: Option<NodeKey>` field to `GraphBrowserApp`.
+- [x] Add `NodeOpenWorkspace`, `NodeOpenNeighbors`, `NodeOpenConnected` variants to `RadialCommand`
   (render/mod.rs).
-- [ ] Implement synthesized workspace builder (node + N-hop undirected BFS, capped at
+- [x] Implement synthesized workspace builder (node + N-hop undirected BFS, capped at
   `MAX_CONNECTED_SPLIT_PANES`, excess truncated by `node_last_active_workspace` recency).
-- [ ] Wire ephemeral modification tracking: in `apply_intent`, if `current_workspace_is_ephemeral`
+- [x] Wire ephemeral modification tracking: in `apply_intent`, if `current_workspace_is_ephemeral`
   and intent is `AddNode | AddEdge | RemoveNode | ClearGraph`, set
   `ephemeral_workspace_modified = true`.
-- [ ] On workspace switch while `ephemeral_workspace_modified`, show save-prompt modal before
+- [x] On workspace switch while `ephemeral_workspace_modified`, show save-prompt modal before
   proceeding.
 
 ---
 
 ### Phase 4: Membership Visibility in Graph View
 
-- Add node label suffix `[W:N]` where N = `workspaces_for_node_key(key).len()`, shown only when N > 0.
+- Add node label suffix `[N]` where N = `workspaces_for_node_key(key).len()`, shown only when N > 0.
 - Alternatively: a small badge rendered alongside the node shape in `GraphNodeShape::ui()`.
 - Hover on badge: show tooltip listing workspace names.
 - Click on badge: open the "Choose Workspace..." picker.
@@ -284,6 +284,18 @@ Incremental update during batch delete would be complex; full rebuild is safe an
 11. **Resolver determinism**: identical inputs always produce the same `WorkspaceOpenAction`.
 12. **Ephemeral modification**: graph-mutating action while ephemeral sets
     `ephemeral_workspace_modified`; non-graph actions (zoom, tile reorder) do not.
+
+Automated coverage added (2026-02-19):
+- Item 7: `app::tests::test_set_node_url_preserves_workspace_membership`
+- Item 10: `desktop::persistence_ops::tests::test_prune_empty_named_workspaces_rebuilds_membership_index`
+  and `desktop::persistence_ops::tests::test_keep_latest_named_workspaces_rebuilds_membership_index`
+- Item 11: `app::tests::test_resolve_workspace_open_deterministic_fallback_without_recency_match`
+- Supporting index-scan behavior: `desktop::persistence_ops::tests::test_build_membership_index_from_layouts_skips_reserved_and_stale_nodes`
+
+Headed-manual execution tracking:
+- Remaining manual validations are tracked in
+  `ports/graphshell/design_docs/graphshell_docs/tests/VALIDATION_TESTING.md`
+  under `Workspace Routing and Membership (Headed Manual)`.
 
 ---
 
