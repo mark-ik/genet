@@ -20,7 +20,13 @@
       "Bash(grep:*)",
       "Bash(wc:*)",
       "Bash(python mach:*)",
-      "WebFetch(domain:firefox-source-docs.mozilla.org)"
+      "WebFetch(domain:firefox-source-docs.mozilla.org)",
+      "WebFetch(domain:cambridge-intelligence.com)",
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:cs.brown.edu)",
+      "WebFetch(domain:en.wikipedia.org)",
+      "WebFetch(domain:crates.io)",
+      "WebFetch(domain:lib.rs)"
     ]
   }
 }
