@@ -7,34 +7,6 @@
 - Local-first persistent browsing graph with crash-safe recovery
 - Event-driven navigation semantics from Servo delegate callbacks
 
-## AI Disclaimer
-
-First, a disclaimer: I use and have used AI to support this project.
-
-The idea itself is not the product of AI. I have years of notes in which I drafted the graph browser idea and the decentralized network component. I iterated my way into the insight that users should own their data, not be tracked, and we ourselves can capture much richer browsing insights than trackers. That's the second, prospective half of this project, the Verse bit.
-
-I'm not an experienced developer in the least but I've got opinions, a smidgen of coding experience, and honestly, I want to learn how to use these discursive tools and see how far I can get with them. I've also followed the Servo community for years, despite not being a real developer: please contribute if you are able!
-
-This is an open source, non-commercial effort. These ideas work much better open source forever as far as I'm concerned.
-
-## History
-
-My first inkling of this idea actually came from a mod for the game Rimworld, which added a relationship manager that arranged your colonists or factions spatially with links defining their relationships. It occurred to me that this UI, reminiscent of a mind map, would be a good fit for representing tabs spatially, and that there were a lot of rule-based options for how to arrange not just the browsing data, but tons of data patterns in computing.
-
-I learned there was a name for this sort of UI: a force-directed node graph. A repeating, branching pattern of nodes connected to nodes by lines (edges). The nodes are browser tabs (or any file, document, applet, application, etc.), edges represent the relationship between the two nodes (clicked hyperlink, historical previous-next association, user-associated), and all nodes have both attractive and repellant forces which orient the graph's elements.
-
-Depending on the behavior you want from the graph or the data you're trying to represent, you alter the canvas's physics and node/edge rules/types. You could filter, search, create new rules and implement graph topologies conducive to representing particular datasets: trees, buses, self-closing rings, etc.
-
-This leads to rich, opinionated web browsing datasets, and the opportunity to pool our resources to visualize the accessible web with collective browsing history that is anonymous, permissions- and reputation-based, peer-to-peer, and open source. The best implementation of both halves would be somewhere between federated googles combined with subreddits with an Obsidian-esque personal data management layer.
-
-Other inspirations:
-
-- The Internet Map <https://internet-map.net/>
-- YaCy (decentralized search index)
-- Syncthing (open source device sync)
-- Obsidian (canvas, plugins)
-- Anytype (IPFS, shared vaults)
-
 ## Currently Implemented
 
 ### Graph UI
@@ -68,13 +40,13 @@ Other inspirations:
 
 ## In Development
 
-### Navigation Control Plane
+### Navigation Control Plane - COMPLETE
 
 - Wire Servo delegate callbacks (notify_url_changed, notify_history_changed) as primary mutation source
 - Remove polling-based node creation from sync_to_graph
 - Unify intent-based mutation boundary across graph, tile, and webview layers
 
-### Physics Migration
+### Physics Migration - COMPLETE
 
 - Replace custom physics engine with egui_graphs built-in force-directed layout
 - Remove kiddo spatial index and background physics worker thread
@@ -135,12 +107,17 @@ The second half of the project: pooling browsing data into a decentralized, perm
 - Async mode: check in/check out with diffs
 - Live mode: version-controlled realtime edits with time-synchronized web processes
 
+## SPECULATION
+
 ### Tokenized Browsing Data
 
-- Selective tokenization enabling portability, management, encryption, and distribution
-- Portability: stored in crypto wallet, accessible everywhere the wallet is
+- Selective (you pick what) tokenization enabling portability, management, encryption, and distribution
+- Portability:
+- - store in crypto wallet, accessible everywhere the wallet is;
+- - synced from your local device via syncthing, ipfs, other protocols;
+- - store with and acceess from a storage provider, p2p, or vendor
 - Management: access, share, trade, transfer, process your data with cryptographic privacy guarantees
-- Encryption: guaranteed privacy, no trackers
+- Encryption: reliable, file-level, default key-based encryption.
 
 ### Network Infrastructure
 
@@ -157,3 +134,31 @@ The second half of the project: pooling browsing data into a decentralized, perm
 - Provide attestations and integrity checks leveraging reputation
 - Stake tokens to create and govern channels
 - Semantic browsing suggestions: communally sourced desire paths for the web
+
+## AI Disclaimer
+
+First, a disclaimer: I use and have used AI to support this project.
+
+The idea itself is not the product of AI. I have years of notes in which I drafted the graph browser idea and the decentralized network component. I iterated my way into the insight that users should own their data, not be tracked, and we ourselves can capture much richer browsing insights than trackers. That's the second, prospective half of this project, the Verse bit.
+
+I'm not an experienced developer in the least but I've got opinions, a smidgen of coding experience, and honestly, I want to learn how to use these discursive tools and see how far I can get with them. I've also followed the Servo community for years, despite not being a real developer: please contribute if you are able!
+
+This is an open source, non-commercial effort. These ideas work much better open source forever as far as I'm concerned.
+
+## History
+
+My first inkling of this idea actually came from a mod for the game Rimworld, which added a relationship manager that arranged your colonists or factions spatially with links defining their relationships. It occurred to me that this UI, reminiscent of a mind map, would be a good fit for representing tabs spatially, and that there were a lot of rule-based options for how to arrange not just the browsing data, but tons of data patterns in computing.
+
+I learned there was a name for this sort of UI: a force-directed node graph. A repeating, branching pattern of nodes connected to nodes by lines (edges). The nodes are browser tabs (or any file, document, applet, application, etc.), edges represent the relationship between the two nodes (clicked hyperlink, historical previous-next association, user-associated), and all nodes have both attractive and repellant forces which orient the graph's elements.
+
+Depending on the behavior you want from the graph or the data you're trying to represent, you alter the canvas's physics and node/edge rules/types. You could filter, search, create new rules and implement graph topologies conducive to representing particular datasets: trees, buses, self-closing rings, etc.
+
+This leads to rich, opinionated web browsing datasets, and the opportunity to pool our resources to visualize the accessible web with collective browsing history that is anonymous, permissions- and reputation-based, peer-to-peer, and open source. The best implementation of both halves would be somewhere between federated googles combined with subreddits with an Obsidian-esque personal data management layer.
+
+Other inspirations:
+
+- The Internet Map <https://internet-map.net/>
+- YaCy (decentralized search index)
+- Syncthing (open source device sync)
+- Obsidian (canvas, plugins)
+- Anytype (IPFS, shared vaults)
