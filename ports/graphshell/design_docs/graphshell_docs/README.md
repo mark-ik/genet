@@ -15,8 +15,14 @@ git checkout graphshell  # Fork by mark-ik
 # Build (requires Python 3.8+, Rust 1.91+)
 ./mach build -r graphshell
 
+or, (you can try release flag if you want, I just run it)
+
+./servo cargo build -p graphshell
+
 # Run
 ./mach run -r graphshell -- https://example.com
+
+./servo cargo run -p graphshell
 ```
 
 For detailed setup, see **[BUILD.md](BUILD.md)**. For implementation status, see **[ARCHITECTURAL_OVERVIEW.md](ARCHITECTURAL_OVERVIEW.md)**.
