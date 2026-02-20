@@ -61,7 +61,7 @@ cargo check          # Check compilation
 1. **UTF-8 Safety:** Always use `util::truncate_with_ellipsis()` for string truncation
 2. **Persistence Discipline:** Every mutation must call `log_mutation()` before applying
 3. **Test Coverage:** Every bug fix needs a regression test
-4. **URL Identity:** URLs are stable keys; NodeIndex is ephemeral handle
+4. **URL Identity:** URLs are stable keys; NodeIndex is a session-local handle
 5. **Tests in Same File:** Use `#[cfg(test)]` modules in implementation files
 
 ### Architecture Constraints

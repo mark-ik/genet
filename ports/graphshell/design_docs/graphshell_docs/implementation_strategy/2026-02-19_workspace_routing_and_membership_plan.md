@@ -23,9 +23,9 @@ workspaces) are first-class queryable state.
 1. Opening a node never creates fanout edges or modifies the graph.
 2. Routing is context-preserving: restore an existing workspace when possible.
 3. Workspace generation is an explicit fallback only for zero-membership nodes.
-4. Generated fallback workspaces are **ephemeral** (not auto-persisted); user must save explicitly.
+4. Generated fallback workspaces are **unsaved** (not auto-persisted); user must save explicitly.
    - *Refinement*: If the user applies a graph-mutating action (AddNode, AddEdge, RemoveNode,
-     ClearGraph) while the workspace is ephemeral, set `ephemeral_workspace_modified = true`.
+     ClearGraph) while the workspace is unsaved, set `unsaved_workspace_modified = true`.
      On the next workspace switch or session autosave, prompt to save if this flag is set.
      "Modified" is intentionally narrow: tile re-ordering and zoom do not count.
 5. Deleting a workspace removes it from the membership index and recency candidates immediately.
@@ -79,7 +79,7 @@ This is a one-time O(N workspaces × M nodes/workspace) scan. Acceptable at star
 **Incremental maintenance** (these operate within `app.rs` since they have NodeKeys in hand):
 
 - **Workspace restore** (`note_workspace_activated`): after pruning, add each surviving node's UUID
-  to the index under the restored workspace name; clear `current_workspace_is_ephemeral`.
+  to the index under the restored workspace name; clear `current_workspace_is_unsaved`.
 - **Workspace save**: scan saved tree for NodeKeys, map to UUIDs, update index.
 - **Workspace delete** (`delete_workspace_layout`): remove workspace name from all membership sets;
   drop any UUID entry whose set becomes empty. Already prunes `node_last_active_workspace`;
@@ -93,9 +93,9 @@ This is a one-time O(N workspaces × M nodes/workspace) scan. Acceptable at star
 /// UUID-keyed workspace membership index (runtime-derived from persisted layouts).
 node_workspace_membership: HashMap<Uuid, BTreeSet<String>>,
 /// True while the current tile tree was synthesized without a named workspace save.
-current_workspace_is_ephemeral: bool,
-/// True if a graph-mutating action occurred while the workspace was ephemeral.
-ephemeral_workspace_modified: bool,
+current_workspace_is_unsaved: bool,
+/// True if a graph-mutating action occurred while the workspace was unsaved.
+unsaved_workspace_modified: bool,
 ```
 
 New methods on `GraphBrowserApp`:
@@ -107,12 +107,12 @@ New methods on `GraphBrowserApp`:
 
 #### Phase 1 Task List
 
-- [x] Add `node_workspace_membership`, `current_workspace_is_ephemeral`,
-  `ephemeral_workspace_modified` fields to `GraphBrowserApp` (app.rs).
+- [x] Add `node_workspace_membership`, `current_workspace_is_unsaved`,
+  `unsaved_workspace_modified` fields to `GraphBrowserApp` (app.rs).
 - [x] Add `init_membership_index`, `membership_for_node`, `workspaces_for_node_key` methods to
   `GraphBrowserApp`.
 - [x] Extend `note_workspace_activated` to insert surviving node UUIDs into membership index and
-  clear `current_workspace_is_ephemeral`.
+  clear `current_workspace_is_unsaved`.
 - [x] Extend `delete_workspace_layout` to remove workspace name from all membership sets and drop
   empty UUID entries.
 - [x] Handle `RemoveNode` in `apply_intent` to remove UUID entry from membership index.
@@ -131,7 +131,7 @@ Single authority function consumed by all open-node paths.
 pub enum WorkspaceOpenAction {
     /// Restore an existing workspace and focus the node's tab.
     RestoreWorkspace { name: String, node: NodeKey },
-    /// Node has no membership: open node as tab in current workspace (ephemeral).
+    /// Node has no membership: open node as tab in current workspace (unsaved).
     OpenInCurrentWorkspace { node: NodeKey },
 }
 
@@ -169,7 +169,7 @@ New path: `GraphAction::FocusNode(key)` → `GraphIntent::OpenNodeWorkspaceRoute
 `apply_intent` calls `resolve_workspace_open` and enqueues either
 `pending_restore_workspace_snapshot_named` or `pending_open_selected_tile_mode`.
 
-When `OpenInCurrentWorkspace` is the result, set `current_workspace_is_ephemeral = true`.
+When `OpenInCurrentWorkspace` is the result, set `current_workspace_is_unsaved = true`.
 
 `GraphAction::FocusNodeSplit` retains existing split-open behavior (not workspace-routed).
 
@@ -178,7 +178,7 @@ When `OpenInCurrentWorkspace` is the result, set `current_workspace_is_ephemeral
 - [x] Add `GraphIntent::OpenNodeWorkspaceRouted { key: NodeKey }` variant to the `GraphIntent`
   enum in `app.rs`.
 - [x] Wire the arm in `apply_intent()`: call `resolve_workspace_open`, enqueue the appropriate
-  pending action, set `current_workspace_is_ephemeral` as needed.
+  pending action, set `current_workspace_is_unsaved` as needed.
 - [x] Add `WorkspaceOpenAction` enum and `resolve_workspace_open` fn (new file
   `desktop/workspace_routing.rs` or inline in `app.rs` — prefer separate file for testability).
 - [x] Change `GraphAction::FocusNode` handler in `render/mod.rs` to emit
@@ -193,13 +193,13 @@ Three open modes surfaced in both the radial menu and the command palette:
 | Mode | Behavior |
 | ---- | -------- |
 | Open in Workspace | Workspace-first routing (calls resolver) |
-| Open with Neighbors | Synthesize ephemeral workspace: node + 1-hop undirected neighbors (max 12 nodes, matching `MAX_CONNECTED_SPLIT_PANES`) |
+| Open with Neighbors | Synthesize unsaved workspace: node + 1-hop undirected neighbors (max 12 nodes, matching `MAX_CONNECTED_SPLIT_PANES`) |
 | Open with Connected | Same as above but includes 2-hop undirected neighbors; still capped at 12 nodes |
 
 "Open in Workspace" is the new default for double-click.
 "Open with Neighbors" replaces "Open Connected as Tabs" (same semantics, renamed for clarity).
 
-Both synthesized modes set `current_workspace_is_ephemeral = true` on the resulting workspace.
+Both synthesized modes set `current_workspace_is_unsaved = true` on the resulting workspace.
 
 #### Right-Click Detection
 
@@ -231,10 +231,10 @@ Clicking a name calls `resolve_workspace_open(app, key, Some(name))`.
   (render/mod.rs).
 - [x] Implement synthesized workspace builder (node + N-hop undirected BFS, capped at
   `MAX_CONNECTED_SPLIT_PANES`, excess truncated by `node_last_active_workspace` recency).
-- [x] Wire ephemeral modification tracking: in `apply_intent`, if `current_workspace_is_ephemeral`
+- [x] Wire unsaved modification tracking: in `apply_intent`, if `current_workspace_is_unsaved`
   and intent is `AddNode | AddEdge | RemoveNode | ClearGraph`, set
-  `ephemeral_workspace_modified = true`.
-- [x] On workspace switch while `ephemeral_workspace_modified`, show save-prompt modal before
+  `unsaved_workspace_modified = true`.
+- [x] On workspace switch while `unsaved_workspace_modified`, show save-prompt modal before
   proceeding.
 
 ---
@@ -282,8 +282,8 @@ Incremental update during batch delete would be complex; full rebuild is safe an
 9. **Startup scan**: membership index populated before first frame renders.
 10. **Batch prune**: membership index rebuilt after completion; no stale entries remain.
 11. **Resolver determinism**: identical inputs always produce the same `WorkspaceOpenAction`.
-12. **Ephemeral modification**: graph-mutating action while ephemeral sets
-    `ephemeral_workspace_modified`; non-graph actions (zoom, tile reorder) do not.
+12. **Unsaved modification**: graph-mutating action while unsaved sets
+    `unsaved_workspace_modified`; non-graph actions (zoom, tile reorder) do not.
 
 Automated coverage added (2026-02-19):
 - Item 7: `app::tests::test_set_node_url_preserves_workspace_membership`
@@ -368,7 +368,7 @@ ui.input(|i| i.pointer.secondary_clicked())
 
 combined with `app.hovered_graph_node` (authoritative per-frame hovered node from egui_state).
 
-### Ephemeral Workspace Semantics
+### Unsaved Workspace Semantics
 
 Synthesized workspaces (for zero-membership nodes) do not call
 `save_workspace_layout_json`. They switch the tile tree without persisting. The session autosave
@@ -390,7 +390,7 @@ over limit (most recently activated neighbors kept).
 
 - Initial draft written.
 - Critique performed: identified NodeKey instability, missing membership index spec, right-click
-  implementation basis, double-click UX fallback, ephemeral workspace semantics, Phase 4 scope,
+  implementation basis, double-click UX fallback, unsaved workspace semantics, Phase 4 scope,
   and traversal bound gaps.
 - Plan revised to address all critique points.
 - Phase 4 (Persistence Hub expansion, bookmarks, node history) extracted to a separate future doc.
@@ -400,8 +400,8 @@ over limit (most recently activated neighbors kept).
 
 - Second critique performed: identified `TileKind` layer constraint blocking `rebuild_membership_index`
   as an app method; recency map key type split; stale "URL-key" wording in Phase 5; wrong validation
-  items 7–8; unspecified ephemeral modification semantics; missing task-list entries for
-  `OpenNodeWorkspaceRouted`, `pending_node_context_target`, and `current_workspace_is_ephemeral`.
+  items 7–8; unspecified unsaved modification semantics; missing task-list entries for
+  `OpenNodeWorkspaceRouted`, `pending_node_context_target`, and `current_workspace_is_unsaved`.
 - Plan revised: startup scan moved to desktop layer (`build_membership_index_from_layouts`);
   `init_membership_index` setter added; UUID→NodeKey recency translation made explicit; Invariant 4
   refined with specific fields and narrow "modified" definition; task lists added to all phases;
