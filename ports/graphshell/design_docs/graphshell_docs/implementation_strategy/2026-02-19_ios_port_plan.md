@@ -1,12 +1,25 @@
-# GraphShell iOS Port Plan
+# GraphShell iOS Port Plan (Archived 2026-02-20)
 
-## Context
+## Status: Deferred
+
+**Rationale for deferral**: The Cross-Platform Sync and Extension Plan (2026-02-20) supersedes this with a lighter-weight approach: iOS users connect as sync clients (native list/edit UI), not full Graphshell ports. WKWebView preview functionality from Phase 1-2 is preserved as an optional enhancement layer in the sync architecture. This document remains useful as reference for:
+- RendererId abstraction pattern (Phase 0) — reusable if iOS native rendering is desired later
+- Cargo.toml cfg gates for platform-specific dependencies
+- Delegate callback patterns
+
+## Context (Original)
 
 GraphShell currently supports desktop (Windows/macOS/Linux) via Servo and EGL-based platforms (Android/OHOS) via the `egl/` module. iOS is blocked for Servo due to Apple's App Store rule prohibiting custom JIT-enabled JavaScript engines (SpiderMonkey). However, using Apple's own WKWebView satisfies the rule: you are delegating JS execution to the platform engine.
 
 The graph layer (petgraph, physics, persistence) is already platform-agnostic. The egui graph canvas renders via Metal through winit's iOS backend. The only Servo-specific surface is web content rendering in detail view. Replacing it with WKWebView (via the `wry` crate) is the iOS path.
 
 This plan follows the architecture sketched in `2026-02-18_universal_node_content_model.md` (§3.2, §10 step 10), and the prior Tao+Wry discussion from `checkpoint_2026-01-29/COMPREHENSIVE_SYNTHESIS.md`.
+
+---
+
+## Phase 0 Reuse in Sync Client Architecture
+
+The RendererId abstraction and iOS cfg gates from Phase 0 remain useful for the sync client approach if native content preview is desired. See 2026-02-20_cross_platform_sync_and_extension_plan.md §Platform-Specific Layering for context.
 
 ---
 

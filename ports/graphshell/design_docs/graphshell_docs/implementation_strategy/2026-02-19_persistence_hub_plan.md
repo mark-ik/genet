@@ -10,6 +10,21 @@ Node History, and Maintenance scopes remain planned. Extends the existing Persis
 
 ---
 
+**Settings architecture cross-reference (2026-02-20):**
+The UI delivery destination for each phase has been superseded by the settings architecture plan
+(`2026-02-20_settings_architecture_plan.md`). Settings pages, not floating panels, are the primary
+delivery surfaces going forward:
+
+| Phase | Delivery surface |
+| --- | --- |
+| Phase 1 (Tags) | `graphshell://settings/bookmarks` |
+| Phase 2 (Node History) | `graphshell://settings/history` |
+| Phase 3 (Maintenance) | `graphshell://settings/persistence` |
+| Phase 4 (Encryption) | Already implemented; config in `graphshell://settings/persistence` |
+| Phase 5 (Session Architecture) | `graphshell://settings/persistence` (diagnostics) |
+
+---
+
 ### Implemented Baseline (2026-02-20)
 
 The following cross-cutting runtime/sessioning pieces are now implemented and visible through the
@@ -62,7 +77,7 @@ The Persistence Hub panel (`Persist` toolbar entry) currently handles:
 - Session workspace prune.
 
 This plan adds three new scopes, outlined in
-`2026-02-18_edge_operations_and_radial_palette_plan.md §Remaining #3`:
+`2026-02-18_edge_operations_and_cmd_palette_plan.md §Remaining #3`:
 Bookmarks, Node History, and Maintenance.
 
 ### User Feedback Intake (2026-02-19)
@@ -91,59 +106,140 @@ as FT7 and is out of scope.
 
 ---
 
-### Phase 1: Bookmarks
+### Phase 1: Tags
 
-A lightweight tagging system: nodes can be "bookmarked" (starred) for easy retrieval. Bookmarks
-are a user-applied node attribute, not a graph relationship.
+A unified tagging system replacing the previous `is_bookmarked: bool` and `is_pinned: bool` scalar
+fields. Tags are user-applied node attributes, not graph relationships. Special built-in tags carry
+behavioral effects; user-defined tags are purely organizational.
+
+See `2026-02-20_node_badge_and_tagging_plan.md` for the badge visual system and tag assignment UI.
+
+#### Special Tags
+
+The `#` prefix is the reserved system namespace. Full table and namespace convention in
+`2026-02-20_node_badge_and_tagging_plan.md` (Tag Namespace Convention section).
+
+| Tag | Behavior |
+| --- | --- |
+| `#pin` | Physics anchor — node not displaced by the simulation. |
+| `#starred` | Soft bookmark. Surfaces via `@b` scope and `is:starred` predicate. |
+| `#archive` | Hidden from default graph view; node rendered at reduced opacity. Not deleted. |
+| `#resident` | Never cold-evicted regardless of workspace. Global complement to `tile.is_resident`. |
+| `#private` | URL and title redacted in overlays when screen-sharing mode active; excluded from JSON export. |
+| `#nohistory` | Navigating through this node does not push a traversal entry. |
+| `#monitor` | Periodically reload and compare DOM hash; badge/toast on content change. |
+| `#unread` | Auto-applied on node add or URL change; cleared on first activation. |
+| `#focus` | Boosts DOI score; floats node toward center in the layout. Short-term attention marker. |
+| `#clip` | Node is a clipped DOM element (web clip). Distinct node shape/border in graph view. Export includes HTML snippet and screenshot. Cross-ref: clipping DOM extraction plan. |
+
+User-defined tags without `#` (`work`, `research`, `todo`) carry no system behavior and are
+rendered as label chips on the node and in the tab header.
 
 #### Data Model
 
-- Add `is_bookmarked: bool` field to `Node` struct (default false).
-- Persist as a new `LogEntry::SetBookmark { url: String, is_bookmarked: bool }` variant.
-- `GraphBrowserApp` maintains a `bookmark_index: Vec<NodeKey>` (or URL-keyed set) updated on
-  `AddNode`, `RemoveNode`, and `SetBookmark` intents for O(1) bookmark iteration.
+- Replace `is_bookmarked: bool` and `is_pinned: bool` on `Node` with `tags: HashSet<String>`.
+- Persist via two new `LogEntry` variants:
+  - `LogEntry::TagNode { url: String, tag: String }` — add a tag to the node.
+  - `LogEntry::UntagNode { url: String, tag: String }` — remove a tag from the node.
+- The existing `LogEntry::PinNode { url, is_pinned }` is superseded. During startup log replay, old
+  `PinNode` entries are converted: `PinNode { is_pinned: true }` → `TagNode { tag: "#pin" }`,
+  `PinNode { is_pinned: false }` → `UntagNode { tag: "#pin" }`.
+- `GraphBrowserApp` maintains `tag_index: HashMap<String, Vec<NodeKey>>` — keyed by tag string,
+  value is the list of node keys carrying that tag. Updated on `TagNode`, `UntagNode`, `AddNode`,
+  and `RemoveNode` intents.
 
-#### Visual Indicator
+#### Keyboard Shortcuts
 
-- Small star or filled-diamond glyph at node top-right in `GraphNodeShape::ui()`.
-- Rendered only when `node.is_bookmarked`.
+| Key | Action |
+| --- | --- |
+| `B` | Toggle `#starred` on the selected node (backward-compatible with old bookmark shortcut) |
+| `T` | Open the tag assignment panel on the selected node |
+
+#### Tag Assignment UI
+
+Small non-modal floating panel anchored near the selected node (full design in
+`2026-02-20_node_badge_and_tagging_plan.md`):
+
+- Text field with nucleo fuzzy autocomplete against existing tags + emoji names.
+- `Enter` to add tag; click chip ✕ to remove; `Esc` to dismiss.
+- Icon picker accessible from the field (emoji grid + Lucide subset).
 
 #### Omnibar Integration
 
-- New scope `@b <query>` — cycles only bookmarked nodes matching the query.
-- Mixed mode (`@<query>`) does NOT include bookmarks in the default result mix; they surface only
-  with explicit `@b`.
+- `@b <query>` — cycles only `#starred` nodes matching the query (scope name backward-compatible).
+- `is:starred` / `is:pinned` / `is:archived` / `is:unread` — faceted predicates in `Ctrl+F` search.
+- `tag:<name>` — filter by any arbitrary user-defined tag.
 
-#### Persistence Hub Panel
+Note: `#archive` nodes are hidden from the default graph view; `is:archived` in `Ctrl+F` is the
+explicit way to surface them. `is:unread` surfaces nodes the user has not yet activated.
 
-- New "Bookmarks" section in the Persistence Hub panel.
-- Lists all bookmarked nodes (title or URL, last visited timestamp).
-- Per entry: focus/open button, unbookmark button.
-- "Bookmark active node" button (same as `B` keyboard shortcut).
+#### Delivery Surface
+
+`graphshell://settings/bookmarks` — lists all tagged nodes grouped by tag, with add/remove/export
+actions. Cross-reference: settings architecture plan §2.7.
 
 #### Tasks
 
-- [ ] Add `is_bookmarked: bool` to `Node`; add `SetBookmark` to `LogEntry`; update
+- [ ] Remove `is_bookmarked: bool` and `is_pinned: bool` from `Node`; add `tags: HashSet<String>`.
+- [ ] Add `LogEntry::TagNode { url, tag }` and `LogEntry::UntagNode { url, tag }` variants; update
   `apply_log_entry()`.
-- [ ] Add `GraphIntent::SetBookmark { key: NodeKey, is_bookmarked: bool }` variant; wire in
-  `apply_intent()` and add to `is_user_undoable_intent()`.
-- [ ] Add keyboard shortcut `B` (toggle bookmark on selected node); add to `KeyboardActions`,
+- [ ] Add backward-compat replay for old `LogEntry::PinNode` entries: convert to `TagNode` /
+  `UntagNode` with `#pin` during log replay in `apply_log_entry()`.
+- [ ] Add `GraphIntent::TagNode { key: NodeKey, tag: String }` and
+  `GraphIntent::UntagNode { key: NodeKey, tag: String }`; wire in `apply_intent()`.
+- [ ] Implement `tag_index: HashMap<String, Vec<NodeKey>>` in `GraphBrowserApp`; update on
+  `TagNode`, `UntagNode`, `AddNode`, `RemoveNode`.
+- [ ] Update all physics anchor code that reads `node.is_pinned` to read
+  `node.tags.contains("#pin")`.
+- [ ] Keyboard shortcut `B` toggles `#starred` on selected node; wire into `KeyboardActions`,
   `input/mod.rs`, `KEYBINDINGS.md`, and help panel string.
-- [ ] Implement `bookmark_index` in `app.rs`; update on `AddNode`, `RemoveNode`, `SetBookmark`.
-- [ ] In `GraphNodeShape::ui()`: render star glyph if `node.is_bookmarked`.
-- [ ] Add `@b` scope to omnibar scope dispatch; apply bookmarked-only filter pass.
-- [ ] Add "Bookmarks" section to Persistence Hub panel UI.
+- [ ] Keyboard shortcut `T` opens tag assignment panel; wire same locations.
+- [ ] Add `@b` scope to omnibar scope dispatch: filter on `node.tags.contains("#starred")`.
+- [ ] Define system tag name constants in `graph/node.rs` or a new `graph/tags.rs`:
+  `pub const TAG_PIN: &str = "#pin"`, `TAG_STARRED`, `TAG_ARCHIVE`, `TAG_RESIDENT`,
+  `TAG_PRIVATE`, `TAG_NOHISTORY`, `TAG_MONITOR`, `TAG_UNREAD`, `TAG_FOCUS`, `TAG_CLIP`. All system code
+  uses these constants — a typo on a constant is a compile error.
+- [ ] Auto-apply `#unread` on `AddNode`: in `apply_intent()` `AddNode` arm, insert
+  `TAG_UNREAD` into the new node's `tags`.
+- [ ] Auto-apply `#unread` on `UpdateNodeUrl`: in `apply_intent()` `UpdateNodeUrl` arm, if the
+  node already had a URL (i.e. it changed rather than being set for the first time), re-apply
+  `TAG_UNREAD`.
+- [ ] Clear `#unread` on first activation: in the lifecycle reconciler, when a node transitions
+  to `Active` for the first time in a session, emit `GraphIntent::UntagNode { tag: TAG_UNREAD }`.
+- [ ] In graph view rendering: exclude nodes with `TAG_ARCHIVE` from the default node set.
+  Add a "Show archived" toggle in the graph view toolbar (off by default). Archived nodes
+  render at reduced opacity when the toggle is on.
+- [ ] Wire `TagNode`/`UntagNode` intents through `is_user_undoable_intent()` (undoable actions).
+- [ ] Add `is:starred`, `is:pinned`, `is:archived`, `is:unread`, `tag:<name>` predicates to
+  `Ctrl+F` faceted search.
+- [ ] Update `GraphNodeShape::ui()`: render per-tag badges (see badge plan for priority and layout).
 
 #### Validation Tests
 
-- `test_set_bookmark_intent_updates_node` — `SetBookmark { is_bookmarked: true }` → node flag true.
-- `test_unset_bookmark_removes_flag` — `SetBookmark { is_bookmarked: false }` → node flag false.
-- `test_bookmark_log_entry_roundtrip` — serialize `SetBookmark` log entry; deserialize → correct
-  flag state applied on replay.
-- `test_bookmark_index_updates_on_add_remove` — add bookmarked node, remove it → index no longer
-  contains the node key.
-- `test_at_b_scope_returns_only_bookmarked` — graph with one bookmarked and one non-bookmarked
-  node; `@b term` → only bookmarked node in result set.
+- `test_tag_node_intent_adds_tag` — `TagNode { tag: "#starred" }` → `node.tags.contains("#starred")`.
+- `test_untag_node_intent_removes_tag` — `UntagNode { tag: "#starred" }` → tag no longer in set.
+- `test_tag_log_entry_roundtrip` — serialize `TagNode` entry; deserialize → tag applied on replay.
+- `test_tag_index_updates_on_add_remove` — add tagged node, remove node → `tag_index` no longer
+  contains the node key under that tag.
+- `test_at_b_scope_returns_only_starred` — graph with one `#starred` and one untagged node;
+  `@b term` → only starred node in result set.
+- `test_pin_tag_replaces_is_pinned` — node with `#pin` tag → physics simulation treats it as
+  anchored (existing pin physics code reads `tags.contains("#pin")`).
+- `test_old_pin_log_entry_replayed_as_tag` — `LogEntry::PinNode { is_pinned: true }` replayed →
+  `node.tags.contains("#pin")`.
+- `test_user_defined_tag_no_behavior` — add `tag: "work"` → no physics or bookmark effect; tag
+  appears in `tag_index["work"]`.
+- `test_add_node_auto_applies_unread` — `AddNode` intent → new node's `tags` contains `TAG_UNREAD`.
+- `test_update_url_reapplies_unread` — node with existing URL; `UpdateNodeUrl` → `TAG_UNREAD`
+  re-applied even if it was previously cleared.
+- `test_unread_cleared_on_first_activation` — node with `#unread`; lifecycle transition to
+  `Active` → `UntagNode { tag: TAG_UNREAD }` emitted; `node.tags` no longer contains `TAG_UNREAD`.
+- `test_archive_excluded_from_default_graph_render` — node with `#archive` tag →
+  `active_graph_nodes()` (or equivalent render filter) excludes it when "show archived" is off.
+- `test_tag_node_intent_is_undoable` — `is_user_undoable_intent(GraphIntent::TagNode { .. })` →
+  returns true.
+- `test_untag_node_intent_is_undoable` — `is_user_undoable_intent(GraphIntent::UntagNode { .. })`
+  → returns true.
 
 ---
 
@@ -307,7 +403,7 @@ receives.
 | Data | Sensitivity | Treatment |
 | --- | --- | --- |
 | Graph topology + node URLs | High | Encrypt at rest |
-| Node titles, bookmarks, `url_history` | High | Encrypt at rest |
+| Node titles, tags, `url_history` | High | Encrypt at rest |
 | Named workspace/graph snapshots | High | Encrypt at rest |
 | `NodeSessionState` payloads (nav history, scroll, form drafts) | High | Encrypt at rest |
 | Physics positions | Low — ephemeral layout | Included in snapshot; encrypted as a side effect |
@@ -382,6 +478,143 @@ The compress → hash → encrypt ordering ensures the CID covers the actual tra
 
 ---
 
+### Phase 5: Session Architecture
+
+App-level session state (UI layout, panel states, physics config, input bindings, zoom/pan, DOI
+weights) is currently scattered and mostly ephemeral. This phase introduces a dedicated
+`session.log` WAL alongside the existing browsing log, giving session state the same durability
+and replay-ability as graph state.
+
+#### Motivation
+
+The existing fjall WAL (`browsing.log`, renamed) records graph mutations (AddNode, AddEdge,
+UpdateNodeUrl, TagNode, etc.). Session state — which workspace is active, how the window is laid
+out, what the physics preset was — is not persisted across restarts. Losing this state makes the
+app feel "reset" on each launch even when graph content survives.
+
+Beyond durability, persisted session events are the prerequisite for the clipping algorithm: nodes
+that have been Cold for multiple consecutive sessions and never revisited are dissolution
+candidates. Without a session log to consult, DOI-based culling has no long-term signal.
+
+#### Directory Structure
+
+```text
+~/.local/share/graphshell/
+  sessions/
+    <uuid>/              # one directory per session (app launch)
+      session.log        # session state mutations (this phase)
+      snapshots/         # rkyv snapshots coordinated with browsing log
+  browsing.log           # renamed from current fjall WAL (graph mutations)
+  browsing.redb          # current redb snapshot store (unchanged path)
+```
+
+#### Two-WAL Model
+
+| WAL | Content | Append rate | Retention |
+| --- | --- | --- | --- |
+| `browsing.log` | Graph mutations: AddNode, AddEdge, TagNode, UpdateNodeUrl, etc. | Low (user actions) | Infinite default; compaction on demand (Phase 3.3) |
+| `session.log` | Session mutations: WorkspaceChanged, LayoutChanged, PhysicsPresetChanged, NodeActivated, NodeCooled, ZoomChanged, etc. | Medium (continuous) | Infinite default; per-session retention configurable |
+
+Both WALs append continuously. Since mutations are small binary records (tens of bytes each),
+infinite retention is feasible for typical use (years of active use ≈ low hundreds of MB).
+
+#### Session Log Entry Types
+
+```rust
+pub enum SessionLogEntry {
+    /// App session started (new UUID, timestamp, graphshell version).
+    SessionStart { session_id: Uuid, started_at: Timestamp, version: String },
+    /// Active workspace changed.
+    WorkspaceChanged { workspace_id: Uuid },
+    /// Window layout tile tree changed.
+    LayoutChanged { tiles_snapshot: TilesSnapshot },
+    /// Physics preset or parameters changed.
+    PhysicsStateChanged { preset: PhysicsPreset, params: PhysicsParams },
+    /// Input binding changed.
+    InputBindingChanged { command: String, binding: String },
+    /// Zoom/pan camera state changed.
+    CameraChanged { zoom: f32, pan_x: f32, pan_y: f32 },
+    /// Node lifecycle: transitioned from Cold/Warm to Active.
+    NodeActivated { url: String, activated_at: Timestamp },
+    /// Node lifecycle: transitioned from Active/Warm to Cold.
+    NodeCooled { url: String, cold_at: Timestamp, peak_pressure: MemoryPressure },
+    /// Snapshot taken — links both WALs to a redb snapshot by shared UUID.
+    SnapshotTaken { snapshot_id: Uuid, timestamp: Timestamp },
+    /// App session ended (graceful shutdown).
+    SessionEnd { session_id: Uuid, ended_at: Timestamp },
+}
+```
+
+#### NodeActivityRecord (Clipping Foundation)
+
+`NodeActivated` and `NodeCooled` events are the primary data source for the clipping algorithm.
+A `NodeActivityRecord` aggregates across all sessions:
+
+```rust
+pub struct NodeActivityRecord {
+    pub url: String,
+    pub sessions_active: usize,     // sessions in which this node was activated at least once
+    pub sessions_cold: usize,       // consecutive sessions ending with node cold
+    pub last_activated: Timestamp,
+    pub last_cooled: Timestamp,
+    pub peak_pressure: MemoryPressure, // pressure level when last cooled
+}
+```
+
+Nodes with `sessions_cold >= threshold` (configurable, default 5) and `last_activated` older than
+`hot_retention_days` (from edge traversal plan §2.1) are dissolution candidates for the clipping
+algorithm.
+
+#### Coordinated Snapshot Timestamps
+
+When a redb snapshot is written (periodic autosave or shutdown), a `SnapshotTaken` record is
+appended to both WALs with the same `snapshot_id: Uuid` and `timestamp`. This links the two
+timelines for recovery: given a redb snapshot, both WALs can be replayed from the matching
+timestamp forward.
+
+#### Save Buffer
+
+Default: infinite (no cap). Users who prefer bounded storage can set `max_log_size_mb` in
+preferences; when exceeded, automatic compaction (Phase 3.3) is triggered with a toast
+notification.
+
+#### Delivery Surface
+
+Runtime diagnostics (session count, oldest session, total log size) appear in
+`graphshell://settings/persistence`. Session log contents are browsable in
+`graphshell://settings/history` (timeline view, from edge traversal plan §2.3).
+
+#### Tasks
+
+- [ ] Rename current fjall WAL directory/path to `browsing.log`; add migration for existing
+  installs (old path still loads if new path absent).
+- [ ] Add `SessionLogEntry` enum to persistence layer; implement append-only `session.log` WAL
+  (fjall keyspace or plain file — TBD by performance measurement).
+- [ ] On app startup: write `SessionStart` entry with a new session UUID.
+- [ ] On graceful shutdown: write `SessionEnd` entry.
+- [ ] On workspace change: write `WorkspaceChanged` entry.
+- [ ] Wire `NodeActivated` / `NodeCooled` events from lifecycle reconciler to `session.log`.
+- [ ] Implement `NodeActivityRecord` aggregation: scan `session.log` on startup; build
+  `activity_records: HashMap<String, NodeActivityRecord>` keyed by URL.
+- [ ] Append `SnapshotTaken` coordination record to both WALs on each autosave.
+- [ ] Expose session diagnostics in `graphshell://settings/persistence` (session count, oldest
+  session, log size estimates).
+
+#### Validation Tests
+
+- `test_session_start_entry_written_on_init` — new session → `SessionStart` entry present in log.
+- `test_node_activated_written_on_lifecycle_transition` — node transitions Cold → Active →
+  `NodeActivated` record written with correct URL and timestamp.
+- `test_node_cooled_written_on_eviction` — node evicted from warm cache → `NodeCooled` written.
+- `test_activity_record_aggregates_across_sessions` — two `NodeActivated` records for same URL →
+  `sessions_active == 2`.
+- `test_consecutive_cold_sessions_counted` — node cold in 3 consecutive sessions →
+  `sessions_cold == 3`.
+- `test_snapshot_coordination_timestamp_consistent` — `SnapshotTaken` in both WALs shares same
+  `snapshot_id`.
+
+---
+
 ## Findings
 
 ### Graph Topology Sensitivity
@@ -414,12 +647,18 @@ export files and history SQLite databases. That feature (FT7 in IMPLEMENTATION_R
 orthogonal to this plan and remains in the future-features queue. The import wizard is not in
 scope here.
 
-### Bookmark vs. Edge Semantics
+### Tags vs. Edge Semantics
 
-Bookmarks (`is_bookmarked`) are a user-applied node attribute, not a graph relationship. Using a
+Tags (`tags: HashSet<String>`) are user-applied node attributes, not graph relationships. Using a
 `UserGrouped` edge for bookmarking was considered and rejected: it would pollute the graph
 topology, appear in the physics layout, and conflate "user-created connection" with "user
 preference tag."
+
+The earlier `is_bookmarked: bool` and `is_pinned: bool` scalar fields have been unified into the
+tag system (Phase 1, 2026-02-20). `#pin` carries the physics anchor effect; `#starred` is the
+soft bookmark. User-defined tags are purely organizational. Tab lifecycle pinning (preventing
+webview eviction) is a separate workspace-tile property (`tile.is_resident: bool`) and is not a
+node tag — the same node can be resident in one workspace and evictable in another.
 
 ### Node History and Universal Node Content Model
 
@@ -455,3 +694,19 @@ reconstruction for fields not stored in snapshots. Audit `load_snapshot()` and
 - Added Persistence Hub runtime diagnostics for lifecycle counts and memory pressure.
 - Added or updated unit tests for active/warm MRU eviction behavior.
 - Phase 1/2/3 feature scopes (Bookmarks, Node History UI, Maintenance batch tools) still pending.
+
+### 2026-02-20 - Session 3
+
+- Added settings architecture cross-reference table (Phase → delivery surface mapping).
+- Rewrote Phase 1: replaced `is_bookmarked: bool` + `SetBookmark` log entry with unified tag
+  model (`tags: HashSet<String>`, `TagNode`/`UntagNode` log entries, `tag_index`). `is_pinned`
+  also folded into `#pin` tag with backward-compat replay of old `PinNode` log entries.
+  Documented distinction between node `#pin` tag (physics anchor) and tab lifecycle pinning
+  (`tile.is_resident: bool`, not a node tag).
+- Updated Phase 4 data classification table: "bookmarks" → "tags".
+- Updated Findings: "Bookmark vs. Edge Semantics" → "Tags vs. Edge Semantics" with explanation
+  of the unification rationale.
+- Added Phase 5 (Session Architecture): two-WAL model (`session.log` + `browsing.log`),
+  `SessionLogEntry` types, `NodeActivityRecord` as clipping foundation, coordinated snapshot
+  timestamps, infinite save buffer default.
+- Implementation not started for any phase.

@@ -1,7 +1,7 @@
 # Graphshell Design Documentation Index
 
-**Last Updated**: February 19, 2026
-**Status**: M1 complete; F1-F7 architectural features complete; active: workspace routing/membership implementation, graph UX polish, edge/radial UX follow-on, universal node content model vision
+**Last Updated**: February 20, 2026
+**Status**: M1 complete; F1-F7 architectural features complete; active: workspace routing/membership implementation, graph UX polish, edge operations/command palette follow-on, cross-platform sync client and extension architecture, universal node content model vision
 
 ---
 
@@ -33,14 +33,26 @@
 | -------- | ----- |
 | **[2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md)** | Consolidated architecture: semantic parity model, Servo delegate wiring, intent boundary |
 | **[2026-02-17_feature_priority_dependency_plan.md](implementation_strategy/2026-02-17_feature_priority_dependency_plan.md)** | Feature-priority reference: F1-F7 dependency analysis and implementation record (all complete) |
-| **[2026-02-18_single_window_active_obviation_plan.md](implementation_strategy/2026-02-18_single_window_active_obviation_plan.md)** | Deferred: structural single-window/single-active obviation inventory (EGL-only, no desktop impact) |
-| **[2026-02-18_edge_operations_and_radial_palette_plan.md](implementation_strategy/2026-02-18_edge_operations_and_radial_palette_plan.md)** | Edge create/remove UX, radial command model, omnibar @ scope (Step 4d validation pending) |
+| **[2026-02-20_cross_platform_sync_and_extension_plan.md](implementation_strategy/2026-02-20_cross_platform_sync_and_extension_plan.md)** | Mobile sync clients (iOS/Android), browser extensions (Firefox/Chrome), server-less P2P protocol, platform-specific enhancements |
+| **[2026-02-18_edge_operations_and_cmd_palette_plan.md](implementation_strategy/2026-02-18_edge_operations_and_cmd_palette_plan.md)** | Edge create/remove UX, command palette/registry, omnibar @ scope (Step 4d validation pending) |
 | **[2026-02-19_workspace_routing_and_membership_plan.md](implementation_strategy/2026-02-19_workspace_routing_and_membership_plan.md)** | Workspace-first node-open routing, UUID-keyed membership index, resolver authority function |
-| **[2026-02-17_egl_embedder_extension_plan.md](implementation_strategy/2026-02-17_egl_embedder_extension_plan.md)** | EGL extension phases: single-window hardening, semantic convergence, host/vsync contract |
 | **[2026-02-19_graph_ux_polish_plan.md](implementation_strategy/2026-02-19_graph_ux_polish_plan.md)** | Keyboard shortcuts, hover/labels, visual differentiation (research §11 priority items) |
 | **[2026-02-19_layout_advanced_plan.md](implementation_strategy/2026-02-19_layout_advanced_plan.md)** | Physics micro-improvements (auto-pause, reheat, placement), advanced layout (degree repulsion, label culling, domain clustering) |
 | **[2026-02-19_undo_redo_plan.md](implementation_strategy/2026-02-19_undo_redo_plan.md)** | Undo/redo: implementation inventory, spec boundary clarification, unit test gaps |
 | **[2026-02-19_persistence_hub_plan.md](implementation_strategy/2026-02-19_persistence_hub_plan.md)** | Persistence Hub expansion: Bookmarks, Node History, Maintenance (batch delete, log compaction, export/import) |
+| **[2026-02-20_edge_traversal_impl_plan.md](implementation_strategy/2026-02-20_edge_traversal_impl_plan.md)** | Edge model migration: `EdgeType` → `EdgePayload` with `Vec<Traversal>`, Phase 1-2 roadmap, rebase impact analysis |
+| **[2026-02-20_settings_architecture_plan.md](implementation_strategy/2026-02-20_settings_architecture_plan.md)** | Settings delivery via `graphshell://settings/*` pages, page registry, host capability negotiation |
+| **[2026-02-20_node_badge_and_tagging_plan.md](implementation_strategy/2026-02-20_node_badge_and_tagging_plan.md)** | Node tagging, badge system for visual categorization |
+
+## Deferred Plans
+
+Deferred in favor of active plans with lower implementation cost and broader platform reach. Audit inventories preserved for future reference.
+
+| Document | Scope | Rationale |
+| -------- | ----- | --------- |
+| **[2026-02-18_single_window_active_obviation_plan.md](implementation_strategy/2026-02-18_single_window_active_obviation_plan.md)** | Structural single-window/single-active obviation (EGL-only) | EGL single-window model sufficient for thin sync clients; multi-window not required for current roadmap |
+| **[2026-02-19_ios_port_plan.md](implementation_strategy/2026-02-19_ios_port_plan.md)** | Full iOS port using WKWebView instead of Servo | Cross-platform sync client + optional WKWebView preview achieves same UX with 4x less effort; Phase 1-2 patterns in sync plan |
+| **[2026-02-17_egl_embedder_extension_plan.md](implementation_strategy/2026-02-17_egl_embedder_extension_plan.md)** | EGL semantic convergence, host/vsync contract, optional multi-window enablement | Sync client approach prioritizes thin EGL instances; semantic event convergence useful if Android native support desired later |
 
 ## Architectural Vision (Long-Term)
 

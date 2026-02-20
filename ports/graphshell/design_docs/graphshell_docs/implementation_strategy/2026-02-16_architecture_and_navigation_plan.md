@@ -1,6 +1,10 @@
 # Architecture and Navigation Plan (2026-02-16)
 
+**Last Updated**: 2026-02-20 (edge traversal model alignment)
+
 Consolidated from prior research and plans. Originals archived in `archive_docs/checkpoint_2026-02-16/`.
+
+**Cross-Reference**: Edge semantics updated to align with `2026-02-20_edge_traversal_model_research.md` — edges now accumulate `Vec<Traversal>` records instead of using `EdgeType` enum.
 
 ## Decided Model
 
@@ -8,7 +12,7 @@ Consolidated from prior research and plans. Originals archived in `archive_docs/
 
 | Domain | Authoritative For | Examples |
 | ------ | ----------------- | -------- |
-| **Graph** | Node identity (UUID), lifecycle, edge semantics | Add/remove node, URL change, Hyperlink/History edges |
+| **Graph** | Node identity (UUID), lifecycle, edge semantics | Add/remove node, URL change, traversal records, user-asserted edges |
 | **Tile Tree** | Pane layout, tab order, focus, visibility | Reorder tabs, resize panes, focus pane |
 | **Webviews** | Live runtime instances, rendering contexts | Create/destroy webview, bind rendering context |
 
@@ -211,8 +215,8 @@ The Servo delegate -> `GraphIntent` path already works (`window.rs` -> `pending_
 **Tasks:**
 
 1. Ensure `notify_url_changed` intent path handles same-tab URL updates without creating new nodes. (Already works -- `WebViewUrlChanged` handler at `app.rs:405-426` updates URL on existing node.)
-2. **History edge creation**: `WebViewHistoryChanged` now stores metadata and creates structural `History` edges on traversal transitions.
-3. Ensure `request_create_new` emits graph-meaningful intent (new node + Hyperlink edge). (Already works -- `WebViewCreated` handler at `app.rs:380-404` does this.)
+2. **Traversal record creation**: `WebViewHistoryChanged` now stores metadata and creates `Traversal` records on navigation transitions. **Per edge traversal model (2026-02-20)**: instead of `EdgeType::History` singletons, navigation events append to `Vec<Traversal>` with timestamp, trigger (Back/Forward/ClickedLink), and snapshot URLs. This is commutative (order-independent append) and eliminates the "when to create edge" complexity.
+3. Ensure `request_create_new` emits graph-meaningful intent (new node + initial traversal record). (Already works -- `WebViewCreated` handler at `app.rs:380-404` does this; will need update when traversal model is implemented.)
 4. Remove URL-change -> new-node creation path from `sync_to_graph` in `webview_controller.rs`. (Already done -- `sync_to_graph_intents` at line 210 is reconciliation-only.)
 5. **Decision**: keep `sync_to_graph_intents` as reconciliation-only (stale mapping cleanup + active selection), not structural node creation.
 6. Remove `PHASE 0 PROOF` comment and convert fallback `Go` command at `webview_controller.rs:263-290`. **Done** (detail-mode no-focused-webview path emits `CreateNodeAtUrl` intent).
@@ -220,14 +224,12 @@ The Servo delegate -> `GraphIntent` path already works (`window.rs` -> `pending_
 **Risks and mitigations:**
 
 - **Delegate ordering under redirects**: If `notify_url_changed` fires multiple times during a redirect chain, each fires a `WebViewUrlChanged` intent. Last URL wins (correct), but rapid fire causes unnecessary persistence log entries. *Mitigation*: debounce URL log writes (only log if URL differs from last logged).
-- **History edge semantics**: When does a history entry become an edge? If we create edges for every entry in the Servo history list, we generate O(n) edges per page. *Mitigation — state transition rules*: store two values per node: `prev_history_index` and `prev_history_url` (the URL at the previous index). On each `WebViewHistoryChanged`:
-  - Let `old_idx = node.history_index`, `new_idx = incoming index`, `old_url = node.history_entries[old_idx]`, `new_url = incoming entries[new_idx]`.
-  - **Back**: `new_idx < old_idx` → emit History edge from `old_url` to `new_url`.
-  - **Forward**: `new_idx > old_idx` AND `incoming entries.len() == node.history_entries.len()` (list didn't grow) → emit History edge from `old_url` to `new_url`.
-  - **Normal navigation**: `new_idx > old_idx` AND `incoming entries.len() > node.history_entries.len()` → do NOT emit edge (regular page load, not traversal).
-  - **Same index**: no edge.
-  - Then update stored `history_index` and `history_entries`. Refine empirically during Phase B.
-- **SPA transitions**: Single-page apps fire `notify_url_changed` for fragment/pushState changes without real navigation. *Mitigation*: compare old and new URL; skip edge creation for same-origin fragment-only changes.
+- **Traversal record semantics** (simplified by edge traversal model): **Old complexity eliminated**: The previous "when does a history entry become an edge" problem no longer exists. With `Vec<Traversal>`, every navigation that crosses node boundaries creates a traversal record (timestamp, from_url, to_url, trigger). Traversal records are **commutative** (order-independent append), so concurrent navigations from P2P sync merge automatically with no conflicts. **State transition detection** (retained from old logic): On `WebViewHistoryChanged`, compare `new_idx` vs `old_idx` to determine trigger:
+  - **Back**: `new_idx < old_idx` → `NavigationTrigger::HistoryBack`
+  - **Forward**: `new_idx > old_idx` AND list length unchanged → `NavigationTrigger::HistoryForward`
+  - **Normal navigation**: `new_idx > old_idx` AND list grew → `NavigationTrigger::ClickedLink` or `TypedUrl` (distinguish via other signals)
+  - Then resolve old/new URLs to `NodeKey`s and append traversal record to edge (or create edge + traversal if first navigation between that pair).
+- **SPA transitions**: Single-page apps fire `notify_url_changed` for fragment/pushState changes without real navigation. *Mitigation*: compare old and new URL; skip traversal creation for same-origin fragment-only changes (or tag as `NavigationTrigger::SpaTransition` for filtering in UI).
 - **`sync_to_graph` removal timing**: If we remove the reconciliation pass before all its duties are covered by events, we lose stale mapping cleanup. *Mitigation*: keep `sync_to_graph_intents` running during Phase B; only consider removal in Phase D after verifying no regressions.
 
 **Comparison**: Servoshell uses `UserInterfaceCommand::Go/Back/Forward` dispatched to `active_webview()` -- window-global targeting. Graphshell already routes to specific webviews via tile -> node -> webview mapping. Firefox routes to specific `BrowsingContext` via JSActors -- no global dispatch. Phase B aligns graphshell with Firefox's model (explicit targeting) over servoshell's (global dispatch).
@@ -235,15 +237,17 @@ The Servo delegate -> `GraphIntent` path already works (`window.rs` -> `pending_
 **Success criteria:**
 
 - Same-tab navigation updates node URL without creating a new node.
-- New-tab action creates exactly one node and one Hyperlink edge.
-- History callbacks create History edges on back/forward (not on every page load).
+- New-tab action creates exactly one node and one edge with initial traversal record (trigger: `NewTabFromParent` or equivalent).
+- History callbacks create traversal records on back/forward with correct triggers (`HistoryBack`/`HistoryForward`), not on every page load.
+- Traversal records are appended to existing edges (if edge exists between node pair) or create new edge + first traversal (if first navigation between that pair).
 - No node creation from polling path.
 - `PHASE 0 PROOF` comment and `UserInterfaceCommand::Go` fallback removed.
 
 **Testable invariants:**
 
 - `grep -rn 'add_node_and_sync' webview_controller.rs` returns zero hits (no URL-polling structural node creation).
-- Unit test: `WebViewHistoryChanged` with decreasing `history_index` creates a History edge; with increasing index and growing list, it does not.
+- Unit test: `WebViewHistoryChanged` with decreasing `history_index` appends a traversal record with `NavigationTrigger::HistoryBack`; with increasing index and growing list, it does not create a traversal (or creates one tagged as normal navigation).
+- After implementing traversal model: `EdgePayload.traversals.len() >= 0` for all edges (user-asserted edges may have zero traversals; navigation-created edges have at least one).
 - `grep -rn 'PHASE 0 PROOF' ports/graphshell/` returns zero hits.
 
 ### Phase C: Route lifecycle mutations through GraphIntent
@@ -318,7 +322,7 @@ The Servo delegate -> `GraphIntent` path already works (`window.rs` -> `pending_
 ## Open Blockers
 
 1. ~~Phase A is the blocker~~ -- **Core implementation complete** (lifecycle intents wired, legacy lifecycle path removed, frame boundary comments added, retry/demote backpressure heuristic added).
-2. ~~Delegate ordering~~ -- **Resolved for current model** via deterministic queue-transform tests (`gui.rs`) plus runtime traces (redirect, SPA pushState, hash-change, back/forward burst, `window.open`). Key rule captured in reducer/tests: traversal semantics use `history_changed` index/list as authoritative, not URL callback deltas alone.
+2. ~~Delegate ordering~~ -- **Resolved for current model** via deterministic queue-transform tests (`gui.rs`) plus runtime traces (redirect, SPA pushState, hash-change, back/forward burst, `window.open`). Key rule captured in reducer/tests: traversal semantics use `history_changed` index/list as authoritative, not URL callback deltas alone. **Edge traversal model (2026-02-20) further simplifies**: `Vec<Traversal>` records are commutative, eliminating ordering sensitivity for P2P sync.
 3. ~~Close-tab policy~~ -- **Resolved for current model**: closing a webview tile demotes its node to `Cold` (does not delete graph node). This is implemented in lifecycle close paths (`gui.rs`, `webview_controller.rs`) and lifecycle reducer behavior (`DemoteNodeToCold` in `app.rs`). Mode-pluggable delete-vs-hide remains a future enhancement.
 4. ~~Stop button API~~ -- **Resolved**: `webview.stop()` does not exist in Servo's `WebView` API (verified Feb 16). Decision: remove the stop button in Phase D.
 5. **AccessKit / webview accessibility**: Partially blocked on Servo/embedder bridge surface. Graphshell-side handling now records and warns on dropped webview accessibility updates (non-silent failure), but true web-content accessibility exposure still requires upstream API/bridge support.
@@ -393,7 +397,7 @@ Use this protocol to resolve Open Blocker #2 with reproducible evidence.
    - Expected: URL/title/history ordering may differ from full navigation; confirm reducer final state is correct.
 3. Hash-only navigation:
    - Trigger `#fragment` changes on same document.
-   - Expected: URL changes may occur without meaningful history edge transitions.
+   - Expected: URL changes may occur without meaningful traversal record creation (intra-node URL updates).
 4. Back/Forward traversal:
    - Perform back/forward repeatedly on a tab with known history.
    - Expected: `history_changed` reflects traversal direction and index movement.
@@ -430,7 +434,7 @@ Observed ordering in these runs:
 - Local file script cases: initial `url_changed` + `history_changed`, then title callbacks (`title_present=false` then `title_present=true`).
 - SPA pushState over HTTP: initial `url_changed/history_changed`, then same-frame `url_changed/history_changed` for `?step=0`, followed by `url_changed/history_changed` for `?step=1`, with title updates interleaved.
 - Hash-change over HTTP: initial `url_changed/history_changed`, then title updates only (no subsequent `url_changed`/`history_changed` for fragment change in this run).
-- Back/forward burst over HTTP: history index changed (`2 -> 1 -> 2`) while URL callback values remained at `?step=2`, so traversal semantics should rely on `history_changed` index/list callbacks, not URL changes alone.
+- Back/forward burst over HTTP: history index changed (`2 -> 1 -> 2`) while URL callback values remained at `?step=2`, so traversal record creation should rely on `history_changed` index/list callbacks (to determine `HistoryBack` vs `HistoryForward` trigger), not URL changes alone.
 - `window.open` over HTTP: `create_new` event emitted before child URL/history callbacks; child first appeared as `about:blank` (initial URL absent), followed by child `url_changed/history_changed` events.
 
 Interpretation:
@@ -438,6 +442,114 @@ Interpretation:
 - SPA/hash HTTP traces now confirm key runtime behavior patterns needed by reducer logic.
 - Back/forward and `window.open` scenarios are now captured with trace artifacts.
 - Important nuance from back/forward burst trace: callback payload may advance history index without carrying the expected traversed URL string; reducer logic should treat `history_changed` index/list as authoritative for traversal semantics and not infer direction solely from consecutive `url_changed` values.
+
+---
+
+## Edge Traversal Model Benefits for This Architecture (Added 2026-02-20)
+
+The **edge traversal model** (`2026-02-20_edge_traversal_model_research.md`) fundamentally simplifies Phase B implementation and future P2P sync (cross-reference: `2026-02-11_p2p_collaboration_plan.md`).
+
+### Key Change Summary
+
+**Old model (pre-2026-02-20)**:
+```rust
+pub enum EdgeType {
+    Hyperlink,    // new tab from parent
+    History,      // back/forward navigation
+    UserGrouped,  // explicit user connection
+}
+// Edge weight in petgraph: EdgeType (singleton enum value)
+```
+
+**New model (2026-02-20)**:
+```rust
+struct EdgePayload {
+    user_asserted: bool,              // true for explicit user connections
+    traversals: Vec<Traversal>,       // append-only, commutative
+}
+
+struct Traversal {
+    from_url: String,       // snapshot at navigation time
+    to_url: String,         // snapshot at navigation time
+    timestamp: u64,         // Unix milliseconds
+    trigger: NavigationTrigger,  // Back/Forward/ClickedLink/TypedUrl/...
+}
+```
+
+### Architectural Benefits
+
+1. **Eliminates "when to create edge" complexity**: The old model had to decide when a history entry becomes an edge vs. just updating an existing edge. With `Vec<Traversal>`, every navigation appends a new record. No state machine required.
+
+2. **Traversals are commutative**: Order-independent append means concurrent navigations from P2P sync merge automatically with no conflicts. Two peers can add different traversals to the same edge simultaneously — both survive. This is a **major win for P2P sync** (Phase 1-5 in the collaboration plan).
+
+3. **Preserves temporal frequency data**: The old model silently discarded repeat navigations (`!has_history_edge` guard). The new model captures every traversal with timestamp, enabling:
+   - "Show me most-traveled paths" queries
+   - Heatmap visualization (edge thickness = traversal count)
+   - Temporal filtering ("only show edges traversed this week")
+
+4. **Trigger metadata enables filtering**: `NavigationTrigger::HistoryBack` vs `ClickedLink` vs `TypedUrl` allows UI to show "only back/forward edges" or "only clicked links" without losing data.
+
+5. **Reducer complexity stays bounded**: Adding a traversal record is a simple append-to-vec operation. The reducer doesn't need complex "merge edge types" logic when the same node pair gets navigated via different triggers.
+
+### Implementation Mapping for Phase B
+
+**Old Phase B logic** (complex):
+- Read `history_index` delta to infer direction
+- Check if edge already exists with `EdgeType::History`
+- If exists, skip (data loss)
+- If not exists, create edge with `History` type
+- Separate code path for `EdgeType::Hyperlink` (new tab from parent)
+
+**New Phase B logic** (simplified):
+- Read `history_index` delta to determine `NavigationTrigger` (Back/Forward/Normal)
+- Resolve old/new URLs to `NodeKey`s
+- Check if edge exists between those keys (direction-agnostic)
+- If exists, append `Traversal` to `edge.payload.traversals`
+- If not exists, create edge with `user_asserted: false` and first `Traversal` record
+- **No type checking, no conditional skipping, no data loss**
+
+### Persistence Impact
+
+**Old `LogEntry`** (pre-traversal model):
+```rust
+AddEdge { from_node_id: Uuid, to_node_id: Uuid, edge_type: PersistedEdgeType }
+RemoveEdge { from_node_id: Uuid, to_node_id: Uuid, edge_type: PersistedEdgeType }
+```
+
+**New `LogEntry`** (traversal model):
+```rust
+AddTraversal {
+    from_node_id: Uuid,
+    to_node_id: Uuid,
+    timestamp: u64,
+    trigger: PersistedNavigationTrigger,
+    from_url_snapshot: String,  // URL at navigation time
+    to_url_snapshot: String,
+}
+AssertEdge { from_node_id: Uuid, to_node_id: Uuid }  // user-grouped edges
+```
+
+The `AddEdge` variant with `edge_type` becomes obsolete. Backward compatibility: old `AddEdge` logs deserialize as `AssertEdge` (user-grouped) or are converted to `AddTraversal` based on `edge_type` value during log replay.
+
+### Cross-References and Migration Path
+
+**Blocked on**: Edge traversal model implementation (tracked in `2026-02-20_edge_traversal_impl_plan.md`, not yet started).
+
+**Phase B can proceed with old model**: Phase B's delegate-driven semantics work with the current `EdgeType` enum. The traversal model is a **data model refactor**, not a navigation routing change. Phase B implementation can land first, then migrate to traversal records in a follow-up phase.
+
+**When to migrate Phase B to traversal model**:
+1. After edge traversal model is implemented (petgraph edge weights changed, persistence layer updated).
+2. Update `WebViewHistoryChanged` handler to call `add_traversal()` instead of `add_edge_if_not_exists()`.
+3. Update `WebViewCreated` handler (new tab from parent) to append traversal with `NavigationTrigger::NewTabFromParent`.
+4. Remove `has_history_edge` guard logic (no longer needed).
+
+**Testable invariants after migration**:
+- `EdgePayload.traversals.len() >= 0` for all edges.
+- User-asserted edges (`user_asserted: true`) may have zero traversals (created by explicit "group" command).
+- Navigation-created edges have at least one traversal.
+- Traversal timestamps are monotonic per edge (within local clock precision; P2P sync may have out-of-order timestamps from different peers).
+
+---
 
 ## Servoshell Scaffold Relationship
 

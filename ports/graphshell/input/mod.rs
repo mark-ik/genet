@@ -37,6 +37,7 @@ pub struct KeyboardActions {
     pub zoom_out: bool,
     pub zoom_reset: bool,
     pub zoom_to_selected: bool,
+    pub reheat_physics: bool,
     pub delete_selected: bool,
     pub clear_graph: bool,
     pub select_all: bool,
@@ -100,6 +101,17 @@ pub(crate) fn collect_actions(ctx: &egui::Context, graph_app: &GraphBrowserApp) 
         // Z: zoom to selected (without Ctrl modifier)
         if i.key_pressed(Key::Z) && !i.modifiers.ctrl {
             actions.zoom_to_selected = true;
+        }
+
+        // R: manual physics reheat (no modifiers).
+        if i.key_pressed(Key::R)
+            && !i.modifiers.ctrl
+            && !i.modifiers.shift
+            && !i.modifiers.alt
+            && !i.modifiers.command
+            && !matches!(graph_app.radial_menu_shortcut, RadialMenuShortcut::R)
+        {
+            actions.reheat_physics = true;
         }
 
         // G: connect selected pair, Shift+G: connect both directions, Alt+G: remove user edge
@@ -226,6 +238,9 @@ pub fn intents_from_actions(actions: &KeyboardActions) -> Vec<GraphIntent> {
     }
     if actions.zoom_to_selected {
         intents.push(GraphIntent::RequestZoomToSelected);
+    }
+    if actions.reheat_physics {
+        intents.push(GraphIntent::ReheatPhysics);
     }
     if actions.toggle_physics_panel {
         intents.push(GraphIntent::TogglePhysicsPanel);
@@ -392,6 +407,19 @@ mod tests {
             intents
                 .iter()
                 .any(|i| matches!(i, GraphIntent::RequestZoomToSelected))
+        );
+    }
+
+    #[test]
+    fn test_reheat_physics_action_maps_to_intent() {
+        let intents = intents_from_actions(&KeyboardActions {
+            reheat_physics: true,
+            ..Default::default()
+        });
+        assert!(
+            intents
+                .iter()
+                .any(|i| matches!(i, GraphIntent::ReheatPhysics))
         );
     }
 

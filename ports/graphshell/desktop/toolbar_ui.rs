@@ -5,21 +5,23 @@
 use crossbeam_channel::Receiver;
 use egui::text::{CCursor, CCursorRange};
 use egui::text_edit::TextEditState;
-use egui::{Key, Modifiers, TopBottomPanel, Vec2, WidgetInfo, WidgetType};
+use egui::{Key, Modifiers, Slider, TopBottomPanel, Vec2, WidgetInfo, WidgetType};
 use egui_tiles::Tree;
 use euclid::default::Point2D;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use winit::window::Window;
 
 use super::tile_grouping;
 use super::toolbar_routing::{self, ToolbarNavAction, ToolbarOpenMode};
 use crate::app::{
     CommandPaletteShortcut, GraphBrowserApp, GraphIntent, HelpPanelShortcut, LassoMouseBinding,
-    PendingTileOpenMode, RadialMenuShortcut, ToastAnchorPreference,
+    OmnibarNonAtOrderPreset, OmnibarPreferredScope, PendingTileOpenMode, RadialMenuShortcut,
+    ToastAnchorPreference,
 };
+use super::selection_range::inclusive_index_range;
 use crate::desktop::tile_kind::TileKind;
 use crate::graph::NodeKey;
 use crate::running_app_state::{RunningAppState, UserInterfaceCommand};
@@ -29,11 +31,22 @@ use crate::window::ServoShellWindow;
 const WORKSPACE_PIN_NAME: &str = "workspace:pin:space";
 const OMNIBAR_DROPDOWN_MAX_ROWS: usize = 8;
 const OMNIBAR_PROVIDER_MIN_QUERY_LEN: usize = 2;
+const OMNIBAR_CONNECTED_NON_AT_CAP: usize = 8;
+const OMNIBAR_GLOBAL_NODES_FALLBACK_CAP: usize = 3;
+const OMNIBAR_GLOBAL_TABS_FALLBACK_CAP: usize = 3;
+const OMNIBAR_PROVIDER_DEBOUNCE_MS: u64 = 140;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OmnibarSessionKind {
     Graph(OmnibarSearchMode),
-    SearchProvider,
+    SearchProvider(SearchProviderKind),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum SearchProviderKind {
+    DuckDuckGo,
+    Bing,
+    Google,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,8 +64,14 @@ enum OmnibarSearchMode {
 pub(crate) enum OmnibarMatch {
     Node(NodeKey),
     NodeUrl(String),
-    SearchQuery(String),
-    Edge { from: NodeKey, to: NodeKey },
+    SearchQuery {
+        query: String,
+        provider: SearchProviderKind,
+    },
+    Edge {
+        from: NodeKey,
+        to: NodeKey,
+    },
 }
 
 #[derive(Clone)]
@@ -72,7 +91,31 @@ pub(crate) struct OmnibarSearchSession {
     pub(crate) query: String,
     pub(crate) matches: Vec<OmnibarMatch>,
     pub(crate) active_index: usize,
-    provider_rx: Option<Receiver<Vec<OmnibarMatch>>>,
+    selected_indices: HashSet<usize>,
+    anchor_index: Option<usize>,
+    provider_rx: Option<Receiver<ProviderSuggestionFetchOutcome>>,
+    provider_debounce_deadline: Option<Instant>,
+    provider_status: ProviderSuggestionStatus,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderSuggestionStatus {
+    Idle,
+    Loading,
+    Ready,
+    Failed(ProviderSuggestionError),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderSuggestionError {
+    Network,
+    HttpStatus(u16),
+    Parse,
+}
+
+struct ProviderSuggestionFetchOutcome {
+    matches: Vec<OmnibarMatch>,
+    status: ProviderSuggestionStatus,
 }
 
 pub(crate) struct ToolbarUiArgs<'a> {
@@ -141,6 +184,45 @@ fn radial_shortcut_label(shortcut: RadialMenuShortcut) -> &'static str {
     match shortcut {
         RadialMenuShortcut::F3 => "F3 (Default)",
         RadialMenuShortcut::R => "R",
+    }
+}
+
+fn omnibar_preferred_scope_label(scope: OmnibarPreferredScope) -> &'static str {
+    match scope {
+        OmnibarPreferredScope::Auto => "Auto (Contextual)",
+        OmnibarPreferredScope::LocalTabs => "Local Tabs First",
+        OmnibarPreferredScope::ConnectedNodes => "Connected Nodes First",
+        OmnibarPreferredScope::ProviderDefault => "Provider First",
+        OmnibarPreferredScope::GlobalNodes => "Global Nodes First",
+        OmnibarPreferredScope::GlobalTabs => "Global Tabs First",
+    }
+}
+
+fn omnibar_non_at_order_label(order: OmnibarNonAtOrderPreset) -> &'static str {
+    match order {
+        OmnibarNonAtOrderPreset::ContextualThenProviderThenGlobal => {
+            "Contextual -> Provider -> Global (Default)"
+        },
+        OmnibarNonAtOrderPreset::ProviderThenContextualThenGlobal => {
+            "Provider -> Contextual -> Global"
+        },
+    }
+}
+
+fn provider_status_label(status: ProviderSuggestionStatus) -> Option<String> {
+    match status {
+        ProviderSuggestionStatus::Idle => None,
+        ProviderSuggestionStatus::Loading => Some("Suggestions: loading...".to_string()),
+        ProviderSuggestionStatus::Ready => None,
+        ProviderSuggestionStatus::Failed(ProviderSuggestionError::Network) => {
+            Some("Suggestions unavailable: network error".to_string())
+        },
+        ProviderSuggestionStatus::Failed(ProviderSuggestionError::HttpStatus(code)) => {
+            Some(format!("Suggestions unavailable: provider http {code}"))
+        },
+        ProviderSuggestionStatus::Failed(ProviderSuggestionError::Parse) => {
+            Some("Suggestions unavailable: response parse error".to_string())
+        },
     }
 }
 
@@ -329,6 +411,50 @@ pub(crate) fn render_toolbar_ui(args: ToolbarUiArgs<'_>) -> ToolbarUiOutput {
                                 }
                             }
                             ui.separator();
+                            ui.label("Graph Zoom");
+                            let mut zoom_impulse = graph_app.scroll_zoom_impulse_scale;
+                            if ui
+                                .add(
+                                    Slider::new(
+                                        &mut zoom_impulse,
+                                        GraphBrowserApp::MIN_SCROLL_ZOOM_IMPULSE_SCALE
+                                            ..=GraphBrowserApp::MAX_SCROLL_ZOOM_IMPULSE_SCALE,
+                                    )
+                                    .text("Inertia Impulse"),
+                                )
+                                .changed()
+                            {
+                                graph_app.set_scroll_zoom_impulse_scale(zoom_impulse);
+                            }
+                            let mut zoom_damping = graph_app.scroll_zoom_inertia_damping;
+                            if ui
+                                .add(
+                                    Slider::new(
+                                        &mut zoom_damping,
+                                        GraphBrowserApp::MIN_SCROLL_ZOOM_INERTIA_DAMPING
+                                            ..=GraphBrowserApp::MAX_SCROLL_ZOOM_INERTIA_DAMPING,
+                                    )
+                                    .text("Inertia Damping"),
+                                )
+                                .changed()
+                            {
+                                graph_app.set_scroll_zoom_inertia_damping(zoom_damping);
+                            }
+                            let mut zoom_min_abs = graph_app.scroll_zoom_inertia_min_abs;
+                            if ui
+                                .add(
+                                    Slider::new(
+                                        &mut zoom_min_abs,
+                                        GraphBrowserApp::MIN_SCROLL_ZOOM_INERTIA_MIN_ABS
+                                            ..=GraphBrowserApp::MAX_SCROLL_ZOOM_INERTIA_MIN_ABS,
+                                    )
+                                    .text("Inertia Stop Threshold"),
+                                )
+                                .changed()
+                            {
+                                graph_app.set_scroll_zoom_inertia_min_abs(zoom_min_abs);
+                            }
+                            ui.separator();
                             ui.label("Input");
                             ui.label(format!(
                                 "Lasso: {}",
@@ -394,6 +520,48 @@ pub(crate) fn render_toolbar_ui(args: ToolbarUiArgs<'_>) -> ToolbarUiOutput {
                                     .clicked()
                                 {
                                     graph_app.set_radial_menu_shortcut(shortcut);
+                                }
+                            }
+                            ui.separator();
+                            ui.label("Omnibar");
+                            ui.label(format!(
+                                "Preferred Scope: {}",
+                                omnibar_preferred_scope_label(graph_app.omnibar_preferred_scope)
+                            ));
+                            for scope in [
+                                OmnibarPreferredScope::Auto,
+                                OmnibarPreferredScope::LocalTabs,
+                                OmnibarPreferredScope::ConnectedNodes,
+                                OmnibarPreferredScope::ProviderDefault,
+                                OmnibarPreferredScope::GlobalNodes,
+                                OmnibarPreferredScope::GlobalTabs,
+                            ] {
+                                if ui
+                                    .selectable_label(
+                                        graph_app.omnibar_preferred_scope == scope,
+                                        omnibar_preferred_scope_label(scope),
+                                    )
+                                    .clicked()
+                                {
+                                    graph_app.set_omnibar_preferred_scope(scope);
+                                }
+                            }
+                            ui.label(format!(
+                                "Non-@ Order: {}",
+                                omnibar_non_at_order_label(graph_app.omnibar_non_at_order)
+                            ));
+                            for order in [
+                                OmnibarNonAtOrderPreset::ContextualThenProviderThenGlobal,
+                                OmnibarNonAtOrderPreset::ProviderThenContextualThenGlobal,
+                            ] {
+                                if ui
+                                    .selectable_label(
+                                        graph_app.omnibar_non_at_order == order,
+                                        omnibar_non_at_order_label(order),
+                                    )
+                                    .clicked()
+                                {
+                                    graph_app.set_omnibar_non_at_order(order);
                                 }
                             }
                             ui.separator();
@@ -574,89 +742,241 @@ pub(crate) fn render_toolbar_ui(args: ToolbarUiArgs<'_>) -> ToolbarUiOutput {
                         if location_field.has_focus() {
                             let trimmed_location = location.trim();
                             if let Some(query_raw) = trimmed_location.strip_prefix('@') {
-                                let (mode, query) = parse_omnibar_search_query(query_raw);
-                                if query.is_empty() {
-                                    *omnibar_search_session = None;
-                                } else {
-                                    let needs_refresh =
-                                        !omnibar_search_session.as_ref().is_some_and(|session| {
-                                            session.kind == OmnibarSessionKind::Graph(mode)
-                                                && session.query == query
-                                        });
-                                    if needs_refresh {
-                                        let matches = omnibar_matches_for_query(
-                                            graph_app,
-                                            tiles_tree,
-                                            mode,
-                                            query,
-                                            has_webview_tiles,
-                                        );
-                                        *omnibar_search_session = if matches.is_empty() {
-                                            None
-                                        } else {
-                                            Some(OmnibarSearchSession {
-                                                kind: OmnibarSessionKind::Graph(mode),
-                                                query: query.to_string(),
-                                                matches,
+                                if let Some((provider, provider_query)) =
+                                    parse_provider_search_query(query_raw)
+                                {
+                                    let query = provider_query.trim();
+                                    if query.is_empty() {
+                                        *omnibar_search_session = None;
+                                    } else {
+                                        let needs_refresh = !omnibar_search_session
+                                            .as_ref()
+                                            .is_some_and(|session| {
+                                                session.kind
+                                                    == OmnibarSessionKind::SearchProvider(provider)
+                                                    && session.query == trimmed_location
+                                            });
+                                        if needs_refresh {
+                                            *omnibar_search_session = Some(OmnibarSearchSession {
+                                                kind: OmnibarSessionKind::SearchProvider(provider),
+                                                query: trimmed_location.to_string(),
+                                                matches: vec![OmnibarMatch::SearchQuery {
+                                                    query: query.to_string(),
+                                                    provider,
+                                                }],
                                                 active_index: 0,
+                                                selected_indices: HashSet::new(),
+                                                anchor_index: None,
                                                 provider_rx: None,
-                                            })
-                                        };
+                                                provider_debounce_deadline: Some(
+                                                    Instant::now()
+                                                        + Duration::from_millis(
+                                                            OMNIBAR_PROVIDER_DEBOUNCE_MS,
+                                                        ),
+                                                ),
+                                                provider_status: ProviderSuggestionStatus::Loading,
+                                            });
+                                        }
+                                    }
+                                } else {
+                                    let (mode, query) = parse_omnibar_search_query(query_raw);
+                                    if query.is_empty() {
+                                        *omnibar_search_session = None;
+                                    } else {
+                                        let needs_refresh =
+                                            !omnibar_search_session.as_ref().is_some_and(
+                                                |session| {
+                                                    session.kind == OmnibarSessionKind::Graph(mode)
+                                                        && session.query == query
+                                                },
+                                            );
+                                        if needs_refresh {
+                                            let matches = omnibar_matches_for_query(
+                                                graph_app,
+                                                tiles_tree,
+                                                mode,
+                                                query,
+                                                has_webview_tiles,
+                                            );
+                                            *omnibar_search_session = if matches.is_empty() {
+                                                None
+                                            } else {
+                                                Some(OmnibarSearchSession {
+                                                    kind: OmnibarSessionKind::Graph(mode),
+                                                    query: query.to_string(),
+                                                    matches,
+                                                    active_index: 0,
+                                                    selected_indices: HashSet::new(),
+                                                    anchor_index: None,
+                                                    provider_rx: None,
+                                                    provider_debounce_deadline: None,
+                                                    provider_status: ProviderSuggestionStatus::Idle,
+                                                })
+                                            };
+                                        }
                                     }
                                 }
                             } else if trimmed_location.len() >= OMNIBAR_PROVIDER_MIN_QUERY_LEN {
+                                let provider = default_search_provider_from_searchpage(
+                                    &state.servoshell_preferences.searchpage,
+                                )
+                                .unwrap_or(SearchProviderKind::DuckDuckGo);
+                                let (initial_matches, should_fetch_provider) =
+                                    non_at_matches_for_settings(
+                                    graph_app,
+                                    tiles_tree,
+                                    trimmed_location,
+                                    has_webview_tiles,
+                                );
+                                let initial_status = if should_fetch_provider {
+                                    ProviderSuggestionStatus::Loading
+                                } else {
+                                    ProviderSuggestionStatus::Ready
+                                };
+                                let initial_deadline = if should_fetch_provider {
+                                    Some(
+                                        Instant::now()
+                                            + Duration::from_millis(OMNIBAR_PROVIDER_DEBOUNCE_MS),
+                                    )
+                                } else {
+                                    None
+                                };
                                 let needs_refresh =
                                     !omnibar_search_session.as_ref().is_some_and(|session| {
-                                        session.kind == OmnibarSessionKind::SearchProvider
+                                        session.kind == OmnibarSessionKind::SearchProvider(provider)
                                             && session.query == trimmed_location
                                     });
                                 if needs_refresh {
                                     *omnibar_search_session = Some(OmnibarSearchSession {
-                                        kind: OmnibarSessionKind::SearchProvider,
+                                        kind: OmnibarSessionKind::SearchProvider(provider),
                                         query: trimmed_location.to_string(),
-                                        matches: Vec::new(),
+                                        matches: initial_matches,
                                         active_index: 0,
-                                        provider_rx: Some(spawn_provider_suggestion_request(
-                                            &state.servoshell_preferences.searchpage,
-                                            trimmed_location,
-                                        )),
+                                        selected_indices: HashSet::new(),
+                                        anchor_index: None,
+                                        provider_rx: None,
+                                        provider_debounce_deadline: initial_deadline,
+                                        provider_status: initial_status,
                                     });
                                 }
+                            } else if trimmed_location.is_empty() {
+                                let local_workspace_tab_matches = omnibar_matches_for_query(
+                                    graph_app,
+                                    tiles_tree,
+                                    OmnibarSearchMode::TabsLocal,
+                                    "",
+                                    has_webview_tiles,
+                                );
+                                let provider = default_search_provider_from_searchpage(
+                                    &state.servoshell_preferences.searchpage,
+                                )
+                                .unwrap_or(SearchProviderKind::DuckDuckGo);
+                                *omnibar_search_session = Some(OmnibarSearchSession {
+                                    kind: OmnibarSessionKind::SearchProvider(provider),
+                                    query: String::new(),
+                                    matches: local_workspace_tab_matches,
+                                    active_index: 0,
+                                    selected_indices: HashSet::new(),
+                                    anchor_index: None,
+                                    provider_rx: None,
+                                    provider_debounce_deadline: None,
+                                    provider_status: ProviderSuggestionStatus::Idle,
+                                });
                             } else {
                                 *omnibar_search_session = None;
                             }
                         }
 
-                        let mut clear_provider_session = false;
                         if let Some(session) = omnibar_search_session.as_mut()
-                            && session.kind == OmnibarSessionKind::SearchProvider
+                            && matches!(session.kind, OmnibarSessionKind::SearchProvider(_))
                             && location_field.has_focus()
                             && session.query == location.trim()
                         {
-                            let mut fetched_matches = None;
+                            if let Some(deadline) = session.provider_debounce_deadline
+                                && session.provider_rx.is_none()
+                                && Instant::now() >= deadline
+                                && let OmnibarSessionKind::SearchProvider(provider) = session.kind
+                            {
+                                session.provider_debounce_deadline = None;
+                                session.provider_rx =
+                                    Some(spawn_provider_suggestion_request(provider, &session.query));
+                            }
+
+                            let mut fetched_outcome = None;
                             if let Some(rx) = &session.provider_rx {
                                 match rx.try_recv() {
-                                    Ok(matches) => fetched_matches = Some(matches),
+                                    Ok(outcome) => fetched_outcome = Some(outcome),
                                     Err(crossbeam_channel::TryRecvError::Empty) => {
                                         ctx.request_repaint_after(Duration::from_millis(75));
                                     },
                                     Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                                        fetched_matches = Some(Vec::new());
+                                        fetched_outcome = Some(ProviderSuggestionFetchOutcome {
+                                            matches: Vec::new(),
+                                            status: ProviderSuggestionStatus::Failed(
+                                                ProviderSuggestionError::Network,
+                                            ),
+                                        });
                                     },
                                 }
                             }
-                            if let Some(matches) = fetched_matches {
-                                session.provider_rx = None;
-                                if matches.is_empty() {
-                                    clear_provider_session = true;
-                                } else {
-                                    session.matches = matches;
-                                    session.active_index = 0;
-                                }
+                            if session.provider_debounce_deadline.is_some() {
+                                ctx.request_repaint_after(Duration::from_millis(75));
                             }
-                        }
-                        if clear_provider_session {
-                            *omnibar_search_session = None;
+                            if let Some(outcome) = fetched_outcome {
+                                session.provider_rx = None;
+                                session.provider_status = outcome.status;
+                                if !session.query.starts_with('@') {
+                                    let fallback_scope = if graph_app.omnibar_preferred_scope
+                                        == OmnibarPreferredScope::ProviderDefault
+                                    {
+                                        OmnibarPreferredScope::Auto
+                                    } else {
+                                        graph_app.omnibar_preferred_scope
+                                    };
+                                    let primary_matches = non_at_primary_matches_for_scope(
+                                        graph_app,
+                                        tiles_tree,
+                                        &session.query,
+                                        has_webview_tiles,
+                                        fallback_scope,
+                                    );
+                                    match graph_app.omnibar_non_at_order {
+                                        OmnibarNonAtOrderPreset::ContextualThenProviderThenGlobal => {
+                                            session.matches.extend(outcome.matches);
+                                        },
+                                        OmnibarNonAtOrderPreset::ProviderThenContextualThenGlobal => {
+                                            if outcome.matches.is_empty() {
+                                                session.matches = primary_matches;
+                                            } else {
+                                                session.matches = outcome.matches;
+                                                session.matches.extend(primary_matches);
+                                            }
+                                        },
+                                    }
+                                } else {
+                                    session.matches.extend(outcome.matches);
+                                }
+                                session.matches = dedupe_matches_in_order(session.matches.clone());
+                                if session.matches.is_empty() && !session.query.starts_with('@') {
+                                    session.matches = non_at_global_fallback_matches(
+                                        graph_app,
+                                        tiles_tree,
+                                        &session.query,
+                                        has_webview_tiles,
+                                    );
+                                }
+                                if !session.matches.is_empty()
+                                    && !matches!(
+                                        session.provider_status,
+                                        ProviderSuggestionStatus::Failed(_)
+                                    )
+                                {
+                                    session.provider_status = ProviderSuggestionStatus::Ready;
+                                }
+                                session.active_index = session
+                                    .active_index
+                                    .min(session.matches.len().saturating_sub(1));
+                            }
                         }
 
                         let mut overlay_meta: Option<(usize, usize, OmnibarMatch)> = None;
@@ -705,11 +1025,22 @@ pub(crate) fn render_toolbar_ui(args: ToolbarUiArgs<'_>) -> ToolbarUiOutput {
                         }
 
                         let mut clicked_omnibar_match: Option<OmnibarMatch> = None;
+                        let mut clicked_omnibar_index_with_modifiers: Option<(usize, Modifiers)> =
+                            None;
+                        let mut bulk_open_selected = false;
+                        let mut bulk_add_selected_to_workspace = false;
+                        let mut clicked_scope_prefix: Option<&'static str> = None;
                         if let Some(session) = omnibar_search_session.as_mut()
                             && location_field.has_focus()
                             && session.query == location.trim()
-                            && !session.matches.is_empty()
                         {
+                            session.selected_indices.retain(|idx| *idx < session.matches.len());
+                            if session
+                                .anchor_index
+                                .is_some_and(|idx| idx >= session.matches.len())
+                            {
+                                session.anchor_index = None;
+                            }
                             let dropdown_pos =
                                 location_field.rect.left_bottom() + Vec2::new(0.0, 2.0);
                             egui::Area::new(egui::Id::new("omnibar_dropdown"))
@@ -724,12 +1055,14 @@ pub(crate) fn render_toolbar_ui(args: ToolbarUiArgs<'_>) -> ToolbarUiOutput {
                                             .min(OMNIBAR_DROPDOWN_MAX_ROWS);
                                         for idx in 0..row_count {
                                             let active = idx == session.active_index;
+                                            let selected = session.selected_indices.contains(&idx);
                                             let m = session.matches[idx].clone();
                                             let label = omnibar_match_label(graph_app, &m);
                                             let signifier =
                                                 omnibar_match_signifier(graph_app, tiles_tree, &m);
                                             let row = ui.horizontal(|ui| {
-                                                let selected = ui.selectable_label(active, label);
+                                                let selected_label =
+                                                    ui.selectable_label(active || selected, label);
                                                 ui.with_layout(
                                                     egui::Layout::right_to_left(
                                                         egui::Align::Center,
@@ -738,26 +1071,147 @@ pub(crate) fn render_toolbar_ui(args: ToolbarUiArgs<'_>) -> ToolbarUiOutput {
                                                         ui.small(signifier);
                                                     },
                                                 );
-                                                selected
+                                                selected_label
                                             });
                                             let response = row.inner;
                                             if response.hovered() {
                                                 session.active_index = idx;
                                             }
                                             if response.clicked() {
-                                                clicked_omnibar_match = Some(m);
+                                                let modifiers = ui.input(|i| i.modifiers);
+                                                if modifiers.ctrl || modifiers.shift {
+                                                    clicked_omnibar_index_with_modifiers =
+                                                        Some((idx, modifiers));
+                                                } else {
+                                                    clicked_omnibar_match = Some(m);
+                                                }
                                             }
                                         }
+                                        if !session.selected_indices.is_empty() {
+                                            ui.separator();
+                                            ui.horizontal_wrapped(|ui| {
+                                                ui.small(format!(
+                                                    "{} selected",
+                                                    session.selected_indices.len()
+                                                ));
+                                                if ui.small_button("Open Selected").clicked() {
+                                                    bulk_open_selected = true;
+                                                }
+                                                if ui
+                                                    .small_button("Add Selected To Workspace...")
+                                                    .clicked()
+                                                {
+                                                    bulk_add_selected_to_workspace = true;
+                                                }
+                                            });
+                                        }
+                                        if row_count > 0 {
+                                            ui.separator();
+                                        }
+                                        if let Some(status) =
+                                            provider_status_label(session.provider_status)
+                                        {
+                                            ui.small(status);
+                                        }
+                                        ui.horizontal_wrapped(|ui| {
+                                            for (label, prefix) in [
+                                                ("@n", "@n "),
+                                                ("@N", "@N "),
+                                                ("@t", "@t "),
+                                                ("@T", "@T "),
+                                                ("@g", "@g "),
+                                                ("@b", "@b "),
+                                                ("@d", "@d "),
+                                            ] {
+                                                if ui.small_button(label).clicked() {
+                                                    clicked_scope_prefix = Some(prefix);
+                                                }
+                                            }
+                                        });
                                     });
                                 });
                         }
 
+                        if let Some((idx, modifiers)) = clicked_omnibar_index_with_modifiers
+                            && let Some(session) = omnibar_search_session.as_mut()
+                        {
+                            if modifiers.shift {
+                                let anchor = session.anchor_index.unwrap_or(idx);
+                                if !modifiers.ctrl {
+                                    session.selected_indices.clear();
+                                }
+                                if let Some(range) =
+                                    inclusive_index_range(anchor, idx, session.matches.len())
+                                {
+                                    for selected_idx in range {
+                                        session.selected_indices.insert(selected_idx);
+                                    }
+                                }
+                                session.anchor_index = Some(anchor);
+                            } else if modifiers.ctrl {
+                                if !session.selected_indices.insert(idx) {
+                                    session.selected_indices.remove(&idx);
+                                }
+                                session.anchor_index = Some(idx);
+                            }
+                            session.active_index = idx;
+                        }
+
+                        if bulk_open_selected
+                            && let Some(session) = omnibar_search_session.as_ref()
+                        {
+                            let mut ordered: Vec<usize> =
+                                session.selected_indices.iter().copied().collect();
+                            ordered.sort_unstable();
+                            for idx in ordered {
+                                if let Some(item) = session.matches.get(idx).cloned() {
+                                    apply_omnibar_match(
+                                        graph_app,
+                                        item,
+                                        has_webview_tiles,
+                                        false,
+                                        frame_intents,
+                                        &mut open_selected_mode_after_submit,
+                                    );
+                                }
+                            }
+                            *location_dirty = true;
+                        }
+
+                        if bulk_add_selected_to_workspace
+                            && let Some(session) = omnibar_search_session.as_ref()
+                        {
+                            let mut node_keys = Vec::new();
+                            let mut ordered: Vec<usize> =
+                                session.selected_indices.iter().copied().collect();
+                            ordered.sort_unstable();
+                            for idx in ordered {
+                                if let Some(OmnibarMatch::Node(key)) = session.matches.get(idx) {
+                                    node_keys.push(*key);
+                                }
+                            }
+                            node_keys.sort_by_key(|key| key.index());
+                            node_keys.dedup();
+                            if !node_keys.is_empty() {
+                                graph_app.request_add_exact_selection_to_workspace_picker(node_keys);
+                            }
+                        }
+
+                        if let Some(prefix) = clicked_scope_prefix {
+                            *location = prefix.to_string();
+                            *location_dirty = true;
+                            *omnibar_search_session = None;
+                        }
+
                         if let Some(active_match) = clicked_omnibar_match {
                             match active_match {
-                                OmnibarMatch::SearchQuery(query) => {
+                                OmnibarMatch::SearchQuery { query, provider } => {
                                     *location = query;
                                     *omnibar_search_session = None;
                                     let split_open_requested = ui.input(|i| i.modifiers.shift);
+                                    let provider_searchpage = searchpage_template_for_provider(
+                                        provider,
+                                    );
                                     let submit_result = toolbar_routing::submit_address_bar_intents(
                                         graph_app,
                                         location,
@@ -765,7 +1219,7 @@ pub(crate) fn render_toolbar_ui(args: ToolbarUiArgs<'_>) -> ToolbarUiOutput {
                                         focused_toolbar_node,
                                         split_open_requested,
                                         window,
-                                        &state.servoshell_preferences.searchpage,
+                                        provider_searchpage,
                                     );
                                     frame_intents.extend(submit_result.intents);
                                     if submit_result.mark_clean {
@@ -800,92 +1254,169 @@ pub(crate) fn render_toolbar_ui(args: ToolbarUiArgs<'_>) -> ToolbarUiOutput {
                         if should_submit_now {
                             *location_submitted = false;
                             let mut handled_omnibar_search = false;
-                            let trimmed_location = location.trim();
+                            let trimmed_location = location.trim().to_string();
                             if let Some(query) = trimmed_location.strip_prefix('@') {
-                                let (mode, query) = parse_omnibar_search_query(query);
-                                if query.is_empty() {
-                                    *omnibar_search_session = None;
-                                    *location_dirty = false;
-                                    handled_omnibar_search = true;
-                                }
-
-                                if !handled_omnibar_search {
-                                    let reuse_existing = omnibar_search_session
-                                        .as_ref()
-                                        .is_some_and(|session| {
-                                            session.kind == OmnibarSessionKind::Graph(mode)
-                                                && session.query == query
-                                                && !session.matches.is_empty()
-                                        });
-                                    if !reuse_existing {
-                                        let matches = omnibar_matches_for_query(
+                                if let Some((provider, provider_query)) =
+                                    parse_provider_search_query(query)
+                                {
+                                    let query = provider_query.trim();
+                                    if query.is_empty() {
+                                        *omnibar_search_session = None;
+                                        *location_dirty = false;
+                                        handled_omnibar_search = true;
+                                    } else {
+                                        *location = query.to_string();
+                                        *omnibar_search_session = None;
+                                        let split_open_requested = ui.input(|i| i.modifiers.shift);
+                                        let submit_result = toolbar_routing::submit_address_bar_intents(
                                             graph_app,
-                                            tiles_tree,
-                                            mode,
-                                            query,
-                                            has_webview_tiles,
+                                            location,
+                                            is_graph_view,
+                                            focused_toolbar_node,
+                                            split_open_requested,
+                                            window,
+                                            searchpage_template_for_provider(provider),
                                         );
-                                        if matches.is_empty() {
-                                            *omnibar_search_session = None;
-                                        } else {
-                                            *omnibar_search_session = Some(OmnibarSearchSession {
-                                                kind: OmnibarSessionKind::Graph(mode),
-                                                query: query.to_string(),
-                                                matches,
-                                                active_index: 0,
-                                                provider_rx: None,
-                                            });
+                                        frame_intents.extend(submit_result.intents);
+                                        if submit_result.mark_clean {
+                                            *location_dirty = false;
+                                            open_selected_mode_after_submit = submit_result.open_mode;
                                         }
+                                        handled_omnibar_search = true;
+                                    }
+                                } else {
+                                    let (mode, query) = parse_omnibar_search_query(query);
+                                    if query.is_empty() {
+                                        *omnibar_search_session = None;
+                                        *location_dirty = false;
+                                        handled_omnibar_search = true;
                                     }
 
-                                    if let Some(session) = omnibar_search_session.as_ref()
-                                        && !session.matches.is_empty()
-                                        && let Some(active_match) =
-                                            session.matches.get(session.active_index).cloned()
-                                    {
-                                        let shift_override_original =
-                                            ui.input(|i| i.modifiers.shift);
-                                        apply_omnibar_match(
-                                            graph_app,
-                                            active_match,
-                                            has_webview_tiles,
-                                            shift_override_original,
-                                            frame_intents,
-                                            &mut open_selected_mode_after_submit,
-                                        );
+                                    if !handled_omnibar_search {
+                                        let reuse_existing = omnibar_search_session
+                                            .as_ref()
+                                            .is_some_and(|session| {
+                                                session.kind == OmnibarSessionKind::Graph(mode)
+                                                    && session.query == query
+                                                    && !session.matches.is_empty()
+                                            });
+                                        if !reuse_existing {
+                                            let matches = omnibar_matches_for_query(
+                                                graph_app,
+                                                tiles_tree,
+                                                mode,
+                                                query,
+                                                has_webview_tiles,
+                                            );
+                                            if matches.is_empty() {
+                                                *omnibar_search_session = None;
+                                            } else {
+                                                *omnibar_search_session = Some(OmnibarSearchSession {
+                                                    kind: OmnibarSessionKind::Graph(mode),
+                                                    query: query.to_string(),
+                                                    matches,
+                                                    active_index: 0,
+                                                    selected_indices: HashSet::new(),
+                                                    anchor_index: None,
+                                                    provider_rx: None,
+                                                    provider_debounce_deadline: None,
+                                                    provider_status: ProviderSuggestionStatus::Idle,
+                                                });
+                                            }
+                                        }
+
+                                        if let Some(session) = omnibar_search_session.as_ref()
+                                            && !session.matches.is_empty()
+                                            && let Some(active_match) =
+                                                session.matches.get(session.active_index).cloned()
+                                        {
+                                            let shift_override_original =
+                                                ui.input(|i| i.modifiers.shift);
+                                            apply_omnibar_match(
+                                                graph_app,
+                                                active_match,
+                                                has_webview_tiles,
+                                                shift_override_original,
+                                                frame_intents,
+                                                &mut open_selected_mode_after_submit,
+                                            );
+                                        }
+                                        // Keep the @query text sticky while cycling in detail mode,
+                                        // otherwise toolbar sync may immediately overwrite it with URL.
+                                        *location_dirty = true;
+                                        handled_omnibar_search = true;
                                     }
-                                    // Keep the @query text sticky while cycling in detail mode,
-                                    // otherwise toolbar sync may immediately overwrite it with URL.
-                                    *location_dirty = true;
-                                    handled_omnibar_search = true;
                                 }
                             }
 
                             if !handled_omnibar_search {
+                                let mut handled_non_at_session = false;
                                 if let Some(session) = omnibar_search_session.as_ref()
-                                    && session.kind == OmnibarSessionKind::SearchProvider
-                                    && session.query == trimmed_location
+                                    && matches!(session.kind, OmnibarSessionKind::SearchProvider(_))
+                                    && session.query == trimmed_location.as_str()
                                     && !session.matches.is_empty()
-                                    && let Some(OmnibarMatch::SearchQuery(query)) =
+                                    && let Some(active_match) =
                                         session.matches.get(session.active_index).cloned()
                                 {
-                                    *location = query;
+                                    match active_match {
+                                        OmnibarMatch::SearchQuery { query, provider } => {
+                                            *location = query;
+                                            *omnibar_search_session = None;
+                                            let split_open_requested =
+                                                ui.input(|i| i.modifiers.shift);
+                                            let submit_result =
+                                                toolbar_routing::submit_address_bar_intents(
+                                                    graph_app,
+                                                    location,
+                                                    is_graph_view,
+                                                    focused_toolbar_node,
+                                                    split_open_requested,
+                                                    window,
+                                                    searchpage_template_for_provider(provider),
+                                                );
+                                            frame_intents.extend(submit_result.intents);
+                                            if submit_result.mark_clean {
+                                                *location_dirty = false;
+                                                open_selected_mode_after_submit =
+                                                    submit_result.open_mode;
+                                            }
+                                        },
+                                        other => {
+                                            *omnibar_search_session = None;
+                                            let shift_override_original =
+                                                ui.input(|i| i.modifiers.shift);
+                                            apply_omnibar_match(
+                                                graph_app,
+                                                other,
+                                                has_webview_tiles,
+                                                shift_override_original,
+                                                frame_intents,
+                                                &mut open_selected_mode_after_submit,
+                                            );
+                                            *location_dirty = true;
+                                        },
+                                    }
+                                    handled_non_at_session = true;
                                 }
-                                *omnibar_search_session = None;
-                                let split_open_requested = ui.input(|i| i.modifiers.shift);
-                                let submit_result = toolbar_routing::submit_address_bar_intents(
-                                    graph_app,
-                                    location,
-                                    is_graph_view,
-                                    focused_toolbar_node,
-                                    split_open_requested,
-                                    window,
-                                    &state.servoshell_preferences.searchpage,
-                                );
-                                frame_intents.extend(submit_result.intents);
-                                if submit_result.mark_clean {
-                                    *location_dirty = false;
-                                    open_selected_mode_after_submit = submit_result.open_mode;
+
+                                if !handled_non_at_session {
+                                    *omnibar_search_session = None;
+                                    let split_open_requested = ui.input(|i| i.modifiers.shift);
+                                    let submit_result =
+                                        toolbar_routing::submit_address_bar_intents(
+                                            graph_app,
+                                            location,
+                                            is_graph_view,
+                                            focused_toolbar_node,
+                                            split_open_requested,
+                                            window,
+                                            &state.servoshell_preferences.searchpage,
+                                        );
+                                    frame_intents.extend(submit_result.intents);
+                                    if submit_result.mark_clean {
+                                        *location_dirty = false;
+                                        open_selected_mode_after_submit = submit_result.open_mode;
+                                    }
                                 }
                             }
                         }
@@ -928,57 +1459,111 @@ fn parse_omnibar_search_query(raw: &str) -> (OmnibarSearchMode, &str) {
     (OmnibarSearchMode::Mixed, trimmed)
 }
 
-fn spawn_provider_suggestion_request(searchpage: &str, query: &str) -> Receiver<Vec<OmnibarMatch>> {
-    let (tx, rx) = crossbeam_channel::bounded(1);
-    let searchpage = searchpage.to_string();
-    let query = query.to_string();
-    thread::spawn(move || {
-        let suggestions = fetch_provider_search_suggestions(&searchpage, &query)
-            .into_iter()
-            .map(OmnibarMatch::SearchQuery)
-            .collect();
-        let _ = tx.send(suggestions);
-    });
-    rx
+fn parse_provider_search_query(raw: &str) -> Option<(SearchProviderKind, &str)> {
+    let trimmed = raw.trim();
+    let mut parts = trimmed.splitn(2, char::is_whitespace);
+    let head = parts.next().unwrap_or_default();
+    let tail = parts.next().unwrap_or_default().trim();
+    let provider = if head.eq_ignore_ascii_case("g") || head.eq_ignore_ascii_case("google") {
+        SearchProviderKind::Google
+    } else if head.eq_ignore_ascii_case("b") || head.eq_ignore_ascii_case("bing") {
+        SearchProviderKind::Bing
+    } else if head.eq_ignore_ascii_case("d")
+        || head.eq_ignore_ascii_case("ddg")
+        || head.eq_ignore_ascii_case("duckduckgo")
+    {
+        SearchProviderKind::DuckDuckGo
+    } else {
+        return None;
+    };
+    Some((provider, tail))
 }
 
-fn fetch_provider_search_suggestions(searchpage: &str, query: &str) -> Vec<String> {
-    let Some(suggest_url) = provider_suggest_url(searchpage, query) else {
-        return Vec::new();
-    };
-    let response = ureq::get(&suggest_url).call();
-    let Ok(response) = response else {
-        return Vec::new();
-    };
-    let Ok(body) = response.into_string() else {
-        return Vec::new();
-    };
-    parse_provider_suggestion_body(&body, query)
-}
-
-fn provider_suggest_url(searchpage: &str, query: &str) -> Option<String> {
+fn default_search_provider_from_searchpage(searchpage: &str) -> Option<SearchProviderKind> {
     let host = url::Url::parse(searchpage)
         .ok()?
         .host_str()?
         .to_ascii_lowercase();
-    let encoded: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
     if host.contains("duckduckgo.") {
-        return Some(format!("https://duckduckgo.com/ac/?q={encoded}&type=list"));
+        return Some(SearchProviderKind::DuckDuckGo);
     }
     if host.contains("bing.") {
-        return Some(format!("https://api.bing.com/osjson.aspx?query={encoded}"));
+        return Some(SearchProviderKind::Bing);
     }
     if host.contains("google.") {
-        return Some(format!(
-            "https://suggestqueries.google.com/complete/search?client=firefox&q={encoded}"
-        ));
+        return Some(SearchProviderKind::Google);
     }
     None
 }
 
-fn parse_provider_suggestion_body(body: &str, fallback_query: &str) -> Vec<String> {
+fn searchpage_template_for_provider(provider: SearchProviderKind) -> &'static str {
+    match provider {
+        SearchProviderKind::DuckDuckGo => "https://duckduckgo.com/html/?q=%s",
+        SearchProviderKind::Bing => "https://www.bing.com/search?q=%s",
+        SearchProviderKind::Google => "https://www.google.com/search?q=%s",
+    }
+}
+
+fn spawn_provider_suggestion_request(
+    provider: SearchProviderKind,
+    query: &str,
+) -> Receiver<ProviderSuggestionFetchOutcome> {
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    let query = query.to_string();
+    thread::spawn(move || {
+        let outcome = match fetch_provider_search_suggestions(provider, &query) {
+            Ok(suggestions) => ProviderSuggestionFetchOutcome {
+                matches: suggestions
+                    .into_iter()
+                    .map(|query| OmnibarMatch::SearchQuery { query, provider })
+                    .collect(),
+                status: ProviderSuggestionStatus::Ready,
+            },
+            Err(error) => ProviderSuggestionFetchOutcome {
+                matches: Vec::new(),
+                status: ProviderSuggestionStatus::Failed(error),
+            },
+        };
+        let _ = tx.send(outcome);
+    });
+    rx
+}
+
+fn fetch_provider_search_suggestions(
+    provider: SearchProviderKind,
+    query: &str,
+) -> Result<Vec<String>, ProviderSuggestionError> {
+    let suggest_url = provider_suggest_url(provider, query);
+    let response = ureq::get(&suggest_url).call();
+    let Ok(response) = response else {
+        return Err(ProviderSuggestionError::Network);
+    };
+    let status = response.status();
+    if status >= 400 {
+        return Err(ProviderSuggestionError::HttpStatus(status));
+    }
+    let Ok(body) = response.into_string() else {
+        return Err(ProviderSuggestionError::Parse);
+    };
+    parse_provider_suggestion_body(&body, query).ok_or(ProviderSuggestionError::Parse)
+}
+
+fn provider_suggest_url(provider: SearchProviderKind, query: &str) -> String {
+    let encoded: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
+    match provider {
+        SearchProviderKind::DuckDuckGo => {
+            format!("https://duckduckgo.com/ac/?q={encoded}&type=list")
+        },
+        SearchProviderKind::Bing => format!("https://api.bing.com/osjson.aspx?query={encoded}"),
+        SearchProviderKind::Google => {
+            format!("https://suggestqueries.google.com/complete/search?client=firefox&q={encoded}")
+        },
+    }
+}
+
+fn parse_provider_suggestion_body(body: &str, fallback_query: &str) -> Option<Vec<String>> {
     let Ok(value) = serde_json::from_str::<Value>(body) else {
-        return Vec::new();
+        return None;
     };
     let mut suggestions = Vec::new();
 
@@ -1012,7 +1597,176 @@ fn parse_provider_suggestion_body(body: &str, fallback_query: &str) -> Vec<Strin
             deduped.push(normalized.to_string());
         }
     }
-    deduped
+    Some(deduped)
+}
+
+fn connected_nodes_matches_for_query(
+    graph_app: &GraphBrowserApp,
+    query: &str,
+    exclude: &HashSet<NodeKey>,
+) -> Vec<OmnibarMatch> {
+    let Some(context) = graph_app.selected_nodes.primary() else {
+        return Vec::new();
+    };
+    let hop_distances = connected_hop_distances_for_context(graph_app, context);
+    let ranked = fuzzy_match_node_keys(&graph_app.graph, query);
+    let rank_index: HashMap<NodeKey, usize> = ranked
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(idx, key)| (key, idx))
+        .collect();
+
+    let mut connected: Vec<NodeKey> = ranked
+        .into_iter()
+        .filter(|key| !exclude.contains(key))
+        .filter(|key| hop_distances.contains_key(key))
+        .collect();
+    connected.sort_by_key(|key| {
+        (
+            hop_distances.get(key).copied().unwrap_or(usize::MAX),
+            rank_index.get(key).copied().unwrap_or(usize::MAX),
+        )
+    });
+    connected
+        .into_iter()
+        .take(OMNIBAR_CONNECTED_NON_AT_CAP)
+        .map(OmnibarMatch::Node)
+        .collect()
+}
+
+fn non_at_contextual_matches(
+    graph_app: &GraphBrowserApp,
+    tiles_tree: &Tree<TileKind>,
+    query: &str,
+    has_webview_tiles: bool,
+) -> Vec<OmnibarMatch> {
+    let local_tabs = omnibar_matches_for_query(
+        graph_app,
+        tiles_tree,
+        OmnibarSearchMode::TabsLocal,
+        query,
+        has_webview_tiles,
+    );
+    let local_tab_keys: HashSet<NodeKey> = local_tabs
+        .iter()
+        .filter_map(|m| match m {
+            OmnibarMatch::Node(key) => Some(*key),
+            _ => None,
+        })
+        .collect();
+    let mut out = local_tabs;
+    out.extend(connected_nodes_matches_for_query(
+        graph_app,
+        query,
+        &local_tab_keys,
+    ));
+    dedupe_matches_in_order(out)
+}
+
+fn non_at_primary_matches_for_scope(
+    graph_app: &GraphBrowserApp,
+    tiles_tree: &Tree<TileKind>,
+    query: &str,
+    has_webview_tiles: bool,
+    scope: OmnibarPreferredScope,
+) -> Vec<OmnibarMatch> {
+    match scope {
+        OmnibarPreferredScope::Auto => {
+            non_at_contextual_matches(graph_app, tiles_tree, query, has_webview_tiles)
+        },
+        OmnibarPreferredScope::LocalTabs => omnibar_matches_for_query(
+            graph_app,
+            tiles_tree,
+            OmnibarSearchMode::TabsLocal,
+            query,
+            has_webview_tiles,
+        ),
+        OmnibarPreferredScope::ConnectedNodes => {
+            connected_nodes_matches_for_query(graph_app, query, &HashSet::new())
+        },
+        OmnibarPreferredScope::ProviderDefault => Vec::new(),
+        OmnibarPreferredScope::GlobalNodes => omnibar_matches_for_query(
+            graph_app,
+            tiles_tree,
+            OmnibarSearchMode::NodesAll,
+            query,
+            has_webview_tiles,
+        )
+        .into_iter()
+        .take(OMNIBAR_GLOBAL_NODES_FALLBACK_CAP)
+        .collect(),
+        OmnibarPreferredScope::GlobalTabs => omnibar_matches_for_query(
+            graph_app,
+            tiles_tree,
+            OmnibarSearchMode::TabsAll,
+            query,
+            has_webview_tiles,
+        )
+        .into_iter()
+        .take(OMNIBAR_GLOBAL_TABS_FALLBACK_CAP)
+        .collect(),
+    }
+}
+
+fn non_at_matches_for_settings(
+    graph_app: &GraphBrowserApp,
+    tiles_tree: &Tree<TileKind>,
+    query: &str,
+    has_webview_tiles: bool,
+) -> (Vec<OmnibarMatch>, bool) {
+    let primary_matches = non_at_primary_matches_for_scope(
+        graph_app,
+        tiles_tree,
+        query,
+        has_webview_tiles,
+        graph_app.omnibar_preferred_scope,
+    );
+
+    match graph_app.omnibar_non_at_order {
+        OmnibarNonAtOrderPreset::ContextualThenProviderThenGlobal => {
+            if primary_matches.is_empty()
+                || graph_app.omnibar_preferred_scope == OmnibarPreferredScope::ProviderDefault
+            {
+                (primary_matches, true)
+            } else {
+                (primary_matches, false)
+            }
+        },
+        OmnibarNonAtOrderPreset::ProviderThenContextualThenGlobal => (Vec::new(), true),
+    }
+}
+
+fn non_at_global_fallback_matches(
+    graph_app: &GraphBrowserApp,
+    tiles_tree: &Tree<TileKind>,
+    query: &str,
+    has_webview_tiles: bool,
+) -> Vec<OmnibarMatch> {
+    let mut out = Vec::new();
+    out.extend(
+        omnibar_matches_for_query(
+            graph_app,
+            tiles_tree,
+            OmnibarSearchMode::NodesAll,
+            query,
+            has_webview_tiles,
+        )
+        .into_iter()
+        .take(OMNIBAR_GLOBAL_NODES_FALLBACK_CAP),
+    );
+    out.extend(
+        omnibar_matches_for_query(
+            graph_app,
+            tiles_tree,
+            OmnibarSearchMode::TabsAll,
+            query,
+            has_webview_tiles,
+        )
+        .into_iter()
+        .take(OMNIBAR_GLOBAL_TABS_FALLBACK_CAP),
+    );
+    dedupe_matches_in_order(out)
 }
 
 fn tab_node_keys_in_tree(tiles_tree: &Tree<TileKind>) -> HashSet<NodeKey> {
@@ -1191,7 +1945,11 @@ fn omnibar_match_signifier(
             }
         },
         OmnibarMatch::NodeUrl(_) => "historical",
-        OmnibarMatch::SearchQuery(_) => "search suggestion",
+        OmnibarMatch::SearchQuery { provider, .. } => match provider {
+            SearchProviderKind::DuckDuckGo => "duckduckgo suggestion",
+            SearchProviderKind::Bing => "bing suggestion",
+            SearchProviderKind::Google => "google suggestion",
+        },
         OmnibarMatch::Edge { .. } => "edge",
     }
 }
@@ -1204,7 +1962,7 @@ fn omnibar_match_label(graph_app: &GraphBrowserApp, m: &OmnibarMatch) -> String 
             .map(|node| format!("{}  {}", node.title, node.url))
             .unwrap_or_else(|| format!("node {}", key.index())),
         OmnibarMatch::NodeUrl(url) => url.clone(),
-        OmnibarMatch::SearchQuery(query) => query.clone(),
+        OmnibarMatch::SearchQuery { query, .. } => query.clone(),
         OmnibarMatch::Edge { from, to } => {
             let from_label = graph_app
                 .graph
@@ -1291,7 +2049,7 @@ fn apply_omnibar_match(
                 }
             }
         },
-        OmnibarMatch::SearchQuery(_) => {},
+        OmnibarMatch::SearchQuery { .. } => {},
         OmnibarMatch::Edge { from, to } => {
             frame_intents.push(GraphIntent::SetHighlightedEdge { from, to });
             frame_intents.push(GraphIntent::SelectNode {
@@ -1315,6 +2073,12 @@ fn omnibar_matches_for_query(
 ) -> Vec<OmnibarMatch> {
     let query = query.trim();
     if query.is_empty() {
+        if matches!(mode, OmnibarSearchMode::TabsLocal) {
+            let mut local_tabs: Vec<NodeKey> =
+                tab_node_keys_in_tree(tiles_tree).into_iter().collect();
+            local_tabs.sort_by_key(|key| key.index());
+            return local_tabs.into_iter().map(OmnibarMatch::Node).collect();
+        }
         return Vec::new();
     }
 
@@ -1529,7 +2293,7 @@ fn omnibar_matches_for_query(
             remaining_nodes.sort_by_key(|m| match m {
                 OmnibarMatch::Node(key) => hop_distances.get(key).copied().unwrap_or(usize::MAX),
                 OmnibarMatch::NodeUrl(_) => usize::MAX,
-                OmnibarMatch::SearchQuery(_) => usize::MAX,
+                OmnibarMatch::SearchQuery { .. } => usize::MAX,
                 OmnibarMatch::Edge { .. } => usize::MAX,
             });
             out.extend(remaining_nodes);
@@ -1550,8 +2314,7 @@ mod tests {
 
     #[test]
     fn test_provider_suggest_url_duckduckgo() {
-        let url = provider_suggest_url("https://duckduckgo.com/html/?q=%s", "rust graph")
-            .expect("duckduckgo suggest url");
+        let url = provider_suggest_url(SearchProviderKind::DuckDuckGo, "rust graph");
         assert!(
             url.starts_with("https://duckduckgo.com/ac/?q=rust+graph"),
             "unexpected duckduckgo suggest url: {url}"
@@ -1559,9 +2322,26 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_provider_search_query_modes() {
+        assert_eq!(
+            parse_provider_search_query("g rust"),
+            Some((SearchProviderKind::Google, "rust"))
+        );
+        assert_eq!(
+            parse_provider_search_query("b rust"),
+            Some((SearchProviderKind::Bing, "rust"))
+        );
+        assert_eq!(
+            parse_provider_search_query("d rust"),
+            Some((SearchProviderKind::DuckDuckGo, "rust"))
+        );
+        assert!(parse_provider_search_query("n rust").is_none());
+    }
+
+    #[test]
     fn test_parse_provider_suggestion_body_ddg_shape() {
         let body = r#"[{"phrase":"rust book"},{"phrase":"rust language"}]"#;
-        let suggestions = parse_provider_suggestion_body(body, "rust");
+        let suggestions = parse_provider_suggestion_body(body, "rust").expect("parse suggestions");
         assert_eq!(suggestions.first().map(String::as_str), Some("rust"));
         assert!(suggestions.iter().any(|s| s == "rust book"));
         assert!(suggestions.iter().any(|s| s == "rust language"));
@@ -1570,10 +2350,51 @@ mod tests {
     #[test]
     fn test_parse_provider_suggestion_body_osjson_shape() {
         let body = r#"["rust",["rust book","rust language"],[],[]]"#;
-        let suggestions = parse_provider_suggestion_body(body, "rust");
+        let suggestions = parse_provider_suggestion_body(body, "rust").expect("parse suggestions");
         assert_eq!(suggestions.first().map(String::as_str), Some("rust"));
         assert!(suggestions.iter().any(|s| s == "rust book"));
         assert!(suggestions.iter().any(|s| s == "rust language"));
+    }
+
+    #[test]
+    fn test_non_at_contextual_matches_prioritize_local_then_connected_capped() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let context = app.add_node_and_sync("https://context.example".into(), Point2D::zero());
+        let local_tab = app.add_node_and_sync(
+            "https://alpha-local.example".into(),
+            Point2D::new(10.0, 0.0),
+        );
+
+        let mut connected_nodes = Vec::new();
+        for idx in 0..12 {
+            let key = app.add_node_and_sync(
+                format!("https://alpha-connected-{idx}.example"),
+                Point2D::new(20.0 + idx as f32, 0.0),
+            );
+            let _ = app.graph.add_edge(context, key, EdgeType::Hyperlink);
+            connected_nodes.push(key);
+        }
+        app.apply_intents([GraphIntent::SelectNode {
+            key: context,
+            multi_select: false,
+        }]);
+
+        let mut tiles = egui_tiles::Tiles::default();
+        let local_leaf = tiles.insert_pane(TileKind::WebView(local_tab));
+        let root = tiles.insert_tab_tile(vec![local_leaf]);
+        let tree = Tree::new("non_at_contextual", root, tiles);
+
+        let matches = non_at_contextual_matches(&app, &tree, "alpha", true);
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0], OmnibarMatch::Node(local_tab));
+        let connected_count = matches
+            .iter()
+            .filter(|m| matches!(m, OmnibarMatch::Node(key) if connected_nodes.contains(key)))
+            .count();
+        assert!(
+            connected_count <= OMNIBAR_CONNECTED_NON_AT_CAP,
+            "connected matches should be capped"
+        );
     }
 
     #[test]

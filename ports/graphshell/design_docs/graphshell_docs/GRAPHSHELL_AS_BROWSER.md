@@ -3,7 +3,7 @@
 **Purpose**: Detailed specification for how Graphshell operates as a functional web browser.
 
 **Document Type**: Behavior specification (not implementation status)
-**Status**: Core browsing graph functional, delegate-driven desktop navigation/control-plane implemented
+**Status**: Core browsing graph functional; delegate-driven desktop navigation, three-tier lifecycle (Active/Warm/Cold), LRU eviction, workspace routing in development
 **See**: [ARCHITECTURAL_OVERVIEW.md](ARCHITECTURAL_OVERVIEW.md) for actual code status
 
 ---
@@ -55,46 +55,68 @@ The architecture plan identified a previous mismatch (URL-polling assumptions an
 
 ### Edge Types
 
+**Current implementation** uses `EdgeType` enum:
+
 | Edge type | Created by | Meaning |
 |-----------|-----------|---------|
 | `Hyperlink` | `request_create_new` (new tab from parent) | User opened a new tab from this page |
 | `History` | Back/forward detection (existing reverse edge) | Navigation reversal |
 | `UserGrouped` | Explicit split-open grouping gesture (`Shift + Double-click` in graph) | User deliberately associated two nodes |
 
-### Pane Membership
+**Edge Traversal Model** (planned replacement): `EdgeType` will be replaced by `EdgePayload` containing `Vec<Traversal>` records. Each traversal captures the full navigation event (from_url, to_url, timestamp, trigger). This model preserves repeat navigations, timing data, and enables commutative P2P sync. See [2026-02-20_edge_traversal_impl_plan.md](implementation_strategy/2026-02-20_edge_traversal_impl_plan.md) for implementation timeline.
+
+### Pane Membership and Workspaces
 
 - **Tile tree is the authority** on which node lives in which pane.
 - **Navigation routing**: New nodes from `request_create_new` are added to the parent node's tab container.
 - **New root node** (N key, no parent): Creates a new tab container in the tile tree.
 - **Tab move** (drag between panes): Moves the tile. `UserGrouped` creation for drag-move is follow-up work; current explicit grouping trigger is split-open.
 
+**Workspace routing** (in development): Opening a node predictably restores the expected workspace context. Nodes track workspace membership (UUID → set of workspace names). Routing resolver uses recency and membership index to decide whether to restore an existing workspace or open in current workspace. See [2026-02-19_workspace_routing_and_membership_plan.md](implementation_strategy/2026-02-19_workspace_routing_and_membership_plan.md).
+
 ### Node Lifecycle
 
-**Current code** implements `Active` and `Cold` (see `graph/mod.rs`). The target model below extends this:
+**Current code** implements a three-tier lifecycle model (see `graph/mod.rs` `NodeLifecycle` enum):
 
-| State | Has webview? | Shown in tab bar? | Shown in graph? | Code status |
+| State | Has webview? | Shown in tab bar? | Shown in graph? | LRU eviction |
 |-------|-------------|-------------------|-----------------|-------------|
-| **Active** | Yes | Yes (highlighted) | Yes (full color) | Implemented |
-| **Cold** (spec: Inactive) | No (suspended) | Yes (dimmed) | Yes (dimmed) | Implemented as `Cold` |
-| **Closed** | No (destroyed) | No | No | Not yet a distinct state; removal deletes the node |
+| **Active** | Yes (visible) | Yes (highlighted) | Yes (full color) | LRU cache (default: 4 slots) |
+| **Warm** | Yes (backgrounded) | Yes (dimmed) | Yes (medium color) | LRU cache (default: 12 slots) |
+| **Cold** | No (metadata only) | Yes (dimmed) | Yes (dimmed) | Unlimited |
 
-- Navigate away from a tab: old node becomes **Cold** (no webview, still in graph and tab bar).
-- Click cold tab: **reactivates** it (creates webview, navigates to its current URL).
-- Close tab tile (from tab bar): node is demoted to `Cold` and can be reactivated.
-- Delete node (graph action/keyboard delete): node is removed from graph.
-- A distinct `Closed` lifecycle state remains planned but is not yet a separate runtime state.
+**Lifecycle transitions:**
+- Focus a node → `PromoteToActive` intent → creates/reactivates webview
+- Navigate away from a tab → `DemoteToWarm` intent → webview persists but not visible
+- Active LRU overflow → `DemoteToWarm` intent (oldest non-pinned active node)
+- Warm LRU overflow → `EvictWarmToCold` intent → webview destroyed, metadata retained
+- Memory pressure (warning/critical) → stronger eviction cascade (Active → Warm → Cold)
+- Close tab tile → `DemoteToWarm` or `EvictWarmToCold` (depending on warm cache fullness)
+- Delete node → `RemoveNode` intent → node removed from graph entirely
+
+**Lifecycle Intent Vocabulary**: `PromoteToActive`, `DemoteToWarm`, `EvictWarmToCold`, `Reactivate`, `Destroy` drive webview creation/destruction through the reconciliation phase.
+
+See [2026-02-19_persistence_hub_plan.md](implementation_strategy/2026-02-19_persistence_hub_plan.md) for LRU budget policy details and [2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md) for lifecycle intent flow.
 
 ### Intent-Based Mutation
 
 All user interactions produce intents processed at a single sync point per frame. No system directly mutates another mid-frame.
 
+**Two-Phase Apply Model:**
+
+1. **Phase 1 — Pure Reducer** (state mutation): Processes `GraphIntent` enum, updates graph structure and node metadata, emits `WebViewReconciliationIntent` for runtime side effects.
+2. **Phase 2 — Reconciliation** (webview lifecycle): Creates/destroys webviews based on lifecycle intents, navigates webviews to updated URLs, updates tile tree focus/layout.
+
+**Phase gap invariant**: Sub-frame gap between phases prevents contradictory webview state (e.g., navigating a destroyed webview, creating duplicate webviews for the same node).
+
 Sources of intents:
 - **Graph view**: drag-to-cluster, delete node, create edge, select
 - **Tile/tab bar**: close tab, reorder tabs, drag tab to other pane
 - **Keyboard**: N (new node), Del (remove), T (physics toggle), etc.
-- **Servo callbacks**: `request_create_new`, `notify_url_changed`, `notify_title_changed`
+- **Servo callbacks**: `request_create_new`, `notify_url_changed`, `notify_title_changed` → converted to GraphIntent
 
-All intents are collected, then applied at a single frame boundary, followed by runtime reconciliation. This prevents contradictory updates from fragmented mutation paths.
+**Delegate-driven routing**: Servo callbacks → GraphIntent emission → reducer application → reconciliation effects. No polling, no fragmented mutation paths.
+
+See [2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md) for detailed phase specification and [ARCHITECTURAL_OVERVIEW.md](ARCHITECTURAL_OVERVIEW.md) for the architectural summary.
 
 ---
 
@@ -142,14 +164,17 @@ Servo provides the full back/forward list via `notify_history_changed(webview, e
 
 ## 3. Bookmarks Integration
 
-**Current**: Manual edge creation
+**Current status**: Manual edge creation; bookmarks as node metadata.
 
-**Expected**: Browser-like bookmark UI
+**Planned implementation** (Persistence Hub Plan Phase 1):
 
-- Ctrl+B toggles bookmark for current node
-- Bookmarks are metadata on nodes (tag/flag), not separate entities
-- Bookmark folders map to user-defined groupings
-- Import bookmarks.html from Firefox creates nodes + edges
+- **Bookmarks are tags**: `Node.tags: Vec<String>` field stores bookmark folder paths (e.g., `["bookmarks", "work", "research"]`).
+- **Settings page**: `graphshell://settings/bookmarks` provides bookmark management UI (add/remove tags, bulk import, export).
+- **Import/export**: Firefox `bookmarks.html` import creates nodes with tag metadata. Export generates standard bookmark HTML.
+- **Search integration**: Omnibar searches node tags (fuzzy match via nucleo).
+- **Visual indicator**: Bookmark icon overlay on tagged nodes in graph view.
+
+See [2026-02-19_persistence_hub_plan.md](implementation_strategy/2026-02-19_persistence_hub_plan.md) Phase 1 and [2026-02-20_settings_architecture_plan.md](implementation_strategy/2026-02-20_settings_architecture_plan.md) for UI delivery.
 
 ---
 
@@ -158,16 +183,28 @@ Servo provides the full back/forward list via `notify_history_changed(webview, e
 **Scenario**: User downloads a file from a webpage.
 
 - Download tracked with source node reference
-- Downloads sidebar (Phase 2) shows in-progress + completed
+- Downloads page (`graphshell://settings/downloads`) shows in-progress + completed downloads
 - Download metadata stored per-node for provenance
+
+**Implementation note**: Download tracking integrates with settings architecture (`graphshell://` internal URL scheme). See [2026-02-20_settings_architecture_plan.md](implementation_strategy/2026-02-20_settings_architecture_plan.md).
 
 ---
 
 ## 5. Search & Address Bar
 
-- Omnibar serves dual purpose: graph search + URL navigation
-- URL input (`http://...`) navigates the current tab (within-tab navigation)
-- Text input searches node titles/URLs (fuzzy, via nucleo in FT6)
+**Omnibar** serves dual purpose: graph search + URL navigation.
+
+- **URL input** (`http://...`): Navigates the current tab (within-tab navigation).
+- **Text search**: Fuzzy search via `nucleo` matcher (FT6 in roadmap, now implemented).
+  - Searches node titles, URLs, and tags (bookmark folders).
+  - Score-ranked results with keyboard navigation.
+
+**Graph search modes** (Ctrl+F panel):
+
+- **Highlight mode** (default): Matching nodes highlighted in gold, dimmed non-matches remain visible.
+- **Filter mode** (toggle in search panel): Hide non-matching nodes entirely, collapse edges to preserved nodes.
+
+**Faceted search** (planned): Filter by lifecycle state, edge type, traversal recency, tag, visit count. See [2026-02-19_graph_ux_polish_plan.md](implementation_strategy/2026-02-19_graph_ux_polish_plan.md) Phase 4 for DOI/relevance weighting integration.
 
 ---
 
@@ -178,16 +215,28 @@ Servo provides the full back/forward list via `notify_history_changed(webview, e
 | **Primary UI** | Tab bar | Force-directed graph + tiled panes |
 | **Tab management** | Linear tab strip | Spatial graph (drag, cluster, edge) |
 | **Navigation** | Click link → same tab or new tab | Same: within-tab nav or new tab |
-| **History** | Global linear history | Per-node history (from Servo) + graph edges |
+| **History** | Global linear history | Per-node history (from Servo) + graph edges + traversal log |
 | **Tab grouping** | Manual tab groups | Graph clusters = pane tab bars |
-| **Bookmarks** | Folder tree | Node metadata (tags/flags) |
+| **Bookmarks** | Folder tree | Node tags (folder paths as metadata) |
+| **Lifecycle** | Active/discarded binary | Active/Warm/Cold three-tier with LRU |
+| **Workspaces** | Window-based sessions | Named workspace snapshots with membership routing |
+| **Settings** | Preferences dialog | `graphshell://` internal pages as nodes |
 
-**Core difference**: The graph is the organizational layer. Tab bars are projections of graph clusters. What you do in the graph is what the tile tree becomes.
+**Core difference**: The graph is the organizational layer. Tab bars are projections of graph clusters. What you do in the graph is what the tile tree becomes. Nodes track workspace membership; opening a node restores expected context.
 
 ---
 
-## Related
+## Related Documentation
 
-- Architecture and navigation plan: [implementation_strategy/2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md)
-- Architecture and code status: [ARCHITECTURAL_OVERVIEW.md](ARCHITECTURAL_OVERVIEW.md), [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md)
+**Core architecture:**
+- [ARCHITECTURAL_OVERVIEW.md](ARCHITECTURAL_OVERVIEW.md) — implementation status, data structures, key decisions
+- [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md) — feature targets and validation tests
+
+**Implementation plans:**
+- [2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md) — two-phase apply model, lifecycle intents
+- [2026-02-20_edge_traversal_impl_plan.md](implementation_strategy/2026-02-20_edge_traversal_impl_plan.md) — EdgeType → EdgePayload migration
+- [2026-02-19_workspace_routing_and_membership_plan.md](implementation_strategy/2026-02-19_workspace_routing_and_membership_plan.md) — workspace membership index and routing resolver
+- [2026-02-20_settings_architecture_plan.md](implementation_strategy/2026-02-20_settings_architecture_plan.md) — `graphshell://` internal URL scheme
+- [2026-02-19_persistence_hub_plan.md](implementation_strategy/2026-02-19_persistence_hub_plan.md) — bookmarks (tags), node history, LRU lifecycle budgets
+- [2026-02-19_graph_ux_polish_plan.md](implementation_strategy/2026-02-19_graph_ux_polish_plan.md) — search modes (Highlight/Filter), DOI/relevance
 

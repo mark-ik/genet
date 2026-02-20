@@ -1,4 +1,4 @@
-# Edge Operations and Radial Command Plan (2026-02-18)
+# Edge Operations and Command Palette Plan (2026-02-18)
 
 ## Status
 
@@ -9,7 +9,7 @@ Implementation progress (2026-02-18):
 - Step 1 complete: `Ctrl+Click` multi-select is wired through render -> intent (`SelectNode { multi_select }`).
 - Step 2 complete: explicit group command path added via keyboard (`G`) using shared edge-command dispatch.
 - Step 3 in progress: enum+match dispatch is implemented in reducer (`ExecuteEdgeCommand` + `EdgeCommand`), with keyboard parity for pair connect/remove and pin/unpin shortcuts.
-- Step 4 partial: palette UI invocation exists as a keyboard-invoked panel (`F2`) reusing the same command dispatch path; radial presentation remains pending.
+- Step 4 partial: palette UI invocation exists as a keyboard-invoked panel (`F2`) reusing the same command dispatch path; visual context menu presentation remains pending.
 - Context routing now uses deterministic precedence in palette targeting: `selected pair` > `selected primary + hovered node` > `selected primary + focused pane node`.
 - Step 4b started: `Open Connected as Tabs` is available in the command palette and expands neighbors deterministically via `in_neighbors + out_neighbors`.
 - Step 5b progress: split-connected layout engine uses compact 2-up/2x2 packing (max `MAX_CONNECTED_SPLIT_PANES`) with overflow grouped into tabs.
@@ -68,78 +68,27 @@ Remaining / Follow-up:
 
 1. Complete headed manual validation for `@` mode focus-transition paths. → Tracking in `tests/VALIDATION_TESTING.md` §Step 4d.
 2. Extend workspace pruning/retention beyond session prune (batch named-workspace maintenance + retention policy).
-3. Expand Persistence Hub scope to include: Bookmarks, Node Versioning/History, and Maintenance.
+3. Bookmarks and Node History are delivered via Settings Architecture (`graphshell://settings/bookmarks`, `graphshell://settings/history`) per `2026-02-20_settings_architecture_plan.md`. Edge Traversal Plan Phase 2 will deliver history integration via `EdgePayload` traversal logs.
 4. Workspace-first node-open routing and membership UX are tracked in `2026-02-19_workspace_routing_and_membership_plan.md` (deferred from this plan).
 5. Validate and tune uppercase/lowercase scope ergonomics (`@N/@T` vs `@n/@t`) based on headed usage.
 6. Edge search scopes (`@e/@E`) are implemented; follow-on is UX polish for highlight readability and result affordances.
 
-## Post-Step4d Follow-On: Workspace Routing Handoff
+---
 
-### Handoff Status
+## Cross-References to Related Plans
 
-1. Session-persistence work in this plan is implemented (`workspace:session-latest`, autosave cadence, retention).
-2. Workspace-first routing and multi-membership resolution remain open and are moved to `2026-02-19_workspace_routing_and_membership_plan.md`.
-3. This plan keeps `@n` local-by-default in detail/workbench; expanded scopes (`@N`/`@T`) are implemented and now in tuning/polish phase.
+**Workspace routing**: Workspace-first node-open routing and multi-membership index are tracked in [2026-02-19_workspace_routing_and_membership_plan.md](2026-02-19_workspace_routing_and_membership_plan.md). Session-persistence work in this plan (`workspace:session-latest`, autosave cadence, retention) is complete; workspace membership routing remains in that plan.
 
-### Scope Boundary
+**Persistence UI architecture**: Workspace/graph persistence UI is delivered via the Persistence Hub panel. See [2026-02-19_persistence_hub_plan.md](2026-02-19_persistence_hub_plan.md) for bookmarks (tags), node history, maintenance controls, and LRU lifecycle budget configuration.
 
-1. Keep graph semantics unchanged (node/edge/lifecycle remain as-is).
-2. Keep this plan focused on edge/command/workbench UX, not workspace routing policy.
-3. Maintain existing explicit workspace commands (save/list/restore/delete) as shared infrastructure.
-
-### Routing Contract (Current Code Truth)
-
-1. In detail/workbench mode, `@n` resolves in local workspace/workbench context by default.
-2. No implicit cross-workspace switching in this plan.
-3. Graph/saved expansion (`@N`, `@T`) is implemented; remaining scope is behavior tuning and UX consistency.
-
-### Robustness / Best-Practice Sanity Check
-
-1. Single targeting authority:
-- Keep `@` targeting decisions in one function/path (avoid split logic across toolbar/render/gui layers).
-
-2. Single persistence authority:
-- Use existing `GraphStore` tile-layout APIs via `GraphBrowserApp` wrappers only.
-- Do not create parallel in-memory workspace registries that duplicate redb state.
-
-3. Deterministic behavior:
-- Keep local-vs-global `@` scope rules explicit and tested.
-- Keep all fallback order documented and tested.
-
-4. No duplicated schema:
-- Reuse `TILE_LAYOUT_TABLE` keys; avoid introducing separate metadata tables unless required.
-- Reserve key naming conventions (`workspace:*`) and validate collisions.
-
-5. Failure isolation:
-- Workspace restore failures must not mutate graph state.
-- `@` behavior must remain usable even when workspace restore fails.
-
-### Validation Addendum (Follow-On)
-
-1. Session restore:
-- Open multiple panes/tabs, restart app, confirm session workspace restores automatically.
-
-2. `@n` local detail behavior:
-- Save workspace A/B with different tab sets.
-- In detail mode on A, run `@n` for node only present in B.
-- Confirm no implicit workspace switch occurs.
-- In graph mode, confirm the `@n`/`@N` split behaves as documented once implemented.
-
-3. Autosave list access:
-- In Persistence Hub, confirm `latest` and `session-latest` workspaces appear in workspace load list.
-- Confirm `latest` graph autosave appears in graph load list.
-- Confirm autosave entries are loadable and non-deletable from list actions.
-
-4. Fallback integrity:
-- Delete saved workspace entries and rerun `@` searches.
-- Confirm behavior remains deterministic and panic-free.
+**Graph search architecture**: Faceted search dimensions (lifecycle state, edge type, traversal recency, tags, visit count) and DOI/relevance weighting are tracked in [2026-02-19_graph_ux_polish_plan.md](2026-02-19_graph_ux_polish_plan.md). Omnibar `@` scope implementation remains in this plan; integration with DOI-based ranking is follow-on work.
 
 ## Purpose
 
 Define a practical, architecture-aligned plan for:
 
 - explicit edge creation and deletion UX,
-- a radial command palette that routes through intents,
+- a command palette (context menu + command registry) that routes through intents,
 - multi-node selection semantics that simplify edge workflows.
 
 This is a desktop-focused plan for graphshell prototype iteration.
@@ -173,7 +122,7 @@ Edge operations are available in code but not yet exposed as a coherent user-fac
 ## Design Goals
 
 1. Keep all edge mutations intent-backed and deterministic.
-2. Provide a discoverable command surface (radial palette + keyboard parity).
+2. Provide a discoverable command surface (command palette + keyboard parity).
 3. Make multi-select first-class for bulk edge creation/deletion.
 4. Avoid reintroducing global-active targeting semantics.
 
@@ -205,6 +154,8 @@ These should not be created by arbitrary user gesture paths unless explicitly re
   - connect two selected nodes,
   - connect selection to target,
   - remove selected edge type between selected nodes.
+
+> **Note**: The Edge Traversal Model migration (tracked in `2026-02-20_edge_traversal_impl_plan.md`) will replace the `EdgeType` enum with `EdgePayload { traversals: Vec<Traversal>, user_asserted: bool }`. The `user_asserted` flag will replace the `UserGrouped` edge type, enabling user-created edges to coexist with navigation-derived traversals while preserving P2P sync commutativity.
 
 ## Deterministic Grouping Trigger Matrix
 
@@ -238,8 +189,8 @@ Rules:
 - `to = first existing node in destination tabs container` (deterministic anchor used by current implementation).
 - If either side has no resolvable node key, do not emit edge.
 
-4. Cold-node behavior:
-- Lifecycle (`Cold`/`Active`) does not block edge creation when node keys exist.
+4. Lifecycle behavior:
+- Node lifecycle state (`Active`/`Warm`/`Cold`) does not block edge creation when node keys exist.
 - Missing node key always blocks edge creation.
 
 5. Existing-group no-op:
@@ -249,7 +200,7 @@ Rules:
 - Edge creation/removal intents should wake physics (`is_running = true`) so layout can adapt, except when user is explicitly in Frozen/manual layout mode.
 
 
-## Radial Command Model
+## Command Palette Model
 
 ### Command Context
 
@@ -274,7 +225,7 @@ A future registry (deferred) can be added when command count/extension needs jus
 - `is_enabled(context)`,
 - `execute(context) -> Vec<GraphIntent>`.
 
-### Initial Radial Commands (Edge-focused & Layout)
+### Initial Palette Commands (Edge-focused & Layout)
 
 1. `Connect Selected Pair` (exactly 2 selected nodes) -> `CreateUserGroupedEdge { from, to }`.
 2. `Connect Both Directions` (exactly 2 selected nodes) -> two intents.
@@ -343,9 +294,9 @@ Multi-select reduces mode friction by removing "pending source" state for common
 Recommended semantics:
 
 1. Primary select: click node.
-2. Add/remove select: `Ctrl+Click` (or platform equivalent).
+2. Add/remove select: `Ctrl+Click` (or platform equivalent) — ✅ implemented.
 3. Range add (optional later): `Shift+Click` nearest path/radius policy.
-4. Lasso select (optional later): `Alt+Drag` (Background drag must remain **Pan**).
+4. Lasso select: `Right+Drag` rectangle selection with spatial index routing — ✅ implemented via `GraphAction::LassoSelect`.
 5. Clear selection: click empty graph space.
 
 Bulk edge actions (deferred this cycle):
@@ -454,7 +405,7 @@ Work:
 
 1. Add `ConnectSelectedPair`, `ConnectBothDirections`, `RemoveUserEdge`, `PinSelected`/`UnpinSelected` as enum variants with match-based dispatch.
 2. Wire command handlers to emit `GraphIntent` only; no direct graph mutation.
-3. Reuse same dispatch path for keyboard shortcuts and later radial UI.
+3. Reuse same dispatch path for keyboard shortcuts and later palette UI.
 4. Ensure all edge create/remove commands wake physics (`is_running = true`).
 
 Done criteria:
@@ -464,17 +415,17 @@ Done criteria:
 3. Reducer and persistence tests pass for create/remove paths.
 4. Physics simulation wakes (`is_running = true`) after any edge create or remove command.
 
-### Step 4: Add Radial/Palette UI Invocation
+### Step 4: Add Command Palette UI Invocation
 
 Work:
 
-1. Add radial/palette entrypoint using existing command dispatch.
+1. Add palette entrypoint using existing command dispatch.
 2. Gate command availability by context (`is_enabled` logic in match path).
 3. Keep keyboard parity by using same command execution function.
 
 Done criteria:
 
-1. Radial actions and keyboard actions produce identical intent outputs.
+1. Palette actions and keyboard actions produce identical intent outputs.
 2. Context-disabled commands are not invokable.
 3. No regressions to focused-pane navigation/focus behavior.
 
@@ -508,12 +459,12 @@ Done criteria:
 
 Work:
 
-1. Move graph-edit/layout commands from top toolbar into palette/radial command surfaces.
+1. Move graph-edit/layout commands from top toolbar into palette command surfaces.
 2. Keep toolbar focused on browser primitives (back/forward/reload + omnibar + minimal settings).
 
 Done criteria:
 
-1. Graph controls are discoverable in palette/radial surface.
+1. Graph controls are discoverable in palette surface.
 2. Toolbar density is reduced without loss of functionality.
 
 ### Step 4d: `@` Omnibar Behavior Polish and Validation
@@ -616,7 +567,7 @@ Full codebase audit of edge operations, selection, grouping triggers, and comman
 | Drag-into-same-tab-group trigger | **Implemented** — compares tab-group membership before/after tile render, emits edge for moved nodes | `tile_grouping.rs:55-79`, orchestrated by `tile_post_render.rs:47-49` |
 | "Group with focused" explicit command | **Not implemented** | — |
 | `RemoveEdge` intent + reducer | **Implemented** and tested (type-specific, returns removed count) | `app.rs:422-428,636-648` |
-| Radial command palette UI | **Not implemented** (design only) | — |
+| Command palette UI | **Not implemented** (design only) | — |
 | Command registry pattern | **Not implemented** — inline match dispatch | `tile_behavior.rs`, `render/mod.rs:286`, `input/mod.rs:95` |
 | Bulk edge operations (N > 2) | **Not implemented** | — |
 | Persistence replay for edge create/remove | **Implemented** — `LogEntry::AddEdge`, `LogEntry::RemoveEdge` with `PersistedEdgeType` | `app.rs:651-700`, `persistence/mod.rs`, `persistence/types.rs` |

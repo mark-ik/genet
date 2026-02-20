@@ -660,25 +660,37 @@ fn apply_scroll_zoom_without_ctrl(
         || (zoom_delta - 1.0).abs() > f32::EPSILON
         || !ui.rect_contains_pointer(graph_rect)
     {
+        let velocity_id = egui::Id::new("graph_scroll_zoom_velocity");
+        ui.ctx().data_mut(|d| d.insert_persisted(velocity_id, 0.0_f32));
         return None;
     }
 
+    let velocity_id = egui::Id::new("graph_scroll_zoom_velocity");
     let scroll_y = if smooth_scroll_y.abs() > f32::EPSILON {
         smooth_scroll_y
     } else {
         raw_scroll_y
     };
-    if scroll_y.abs() <= f32::EPSILON {
+    let mut velocity = ui
+        .ctx()
+        .data_mut(|d| d.get_persisted::<f32>(velocity_id))
+        .unwrap_or(0.0);
+
+    // Convert wheel/trackpad delta into a zoom velocity impulse.
+    if scroll_y.abs() > f32::EPSILON {
+        let impulse = app.scroll_zoom_impulse_scale * (scroll_y / 60.0).clamp(-1.0, 1.0);
+        velocity += impulse;
+    }
+    if velocity.abs() < app.scroll_zoom_inertia_min_abs {
+        ui.ctx()
+            .data_mut(|d| d.insert_persisted(velocity_id, 0.0_f32));
         return None;
     }
 
-    // Normalize wheel/trackpad delta to a small per-frame zoom amount.
-    let step = 0.01 * (scroll_y / 60.0).clamp(-1.0, 1.0);
-    if step.abs() <= f32::EPSILON {
-        return None;
-    }
-    let factor = 1.0 + step;
+    let factor = 1.0 + velocity;
     if factor <= 0.0 {
+        ui.ctx()
+            .data_mut(|d| d.insert_persisted(velocity_id, 0.0_f32));
         return None;
     }
 
@@ -702,6 +714,16 @@ fn apply_scroll_zoom_without_ctrl(
             updated_zoom = Some(new_zoom);
         }
     });
+
+    velocity *= app.scroll_zoom_inertia_damping;
+    if velocity.abs() < app.scroll_zoom_inertia_min_abs {
+        velocity = 0.0;
+    }
+    ui.ctx()
+        .data_mut(|d| d.insert_persisted(velocity_id, velocity));
+    if velocity != 0.0 {
+        ui.ctx().request_repaint_after(Duration::from_millis(16));
+    }
 
     updated_zoom
 }
@@ -727,7 +749,7 @@ fn collect_lasso_action(ui: &Ui, app: &GraphBrowserApp, enabled: bool) -> LassoG
     }
 
     let graph_rect = ui.max_rect();
-    let (pointer_pos, pressed, down, released, ctrl, alt) = ui.input(|i| {
+    let (pointer_pos, pressed, down, released, ctrl, shift, alt) = ui.input(|i| {
         let (pressed, down, released) = match app.lasso_mouse_binding {
             LassoMouseBinding::RightDrag => (
                 i.pointer.secondary_pressed(),
@@ -746,6 +768,7 @@ fn collect_lasso_action(ui: &Ui, app: &GraphBrowserApp, enabled: bool) -> LassoG
             down,
             released,
             i.modifiers.ctrl,
+            i.modifiers.shift,
             i.modifiers.alt,
         )
     });
@@ -810,9 +833,10 @@ fn collect_lasso_action(ui: &Ui, app: &GraphBrowserApp, enabled: bool) -> LassoG
     }
 
     let rect = egui::Rect::from_two_pos(a, b);
+    let add_mode = ctrl || (matches!(app.lasso_mouse_binding, LassoMouseBinding::RightDrag) && shift);
     let mode = if alt {
         SelectionUpdateMode::Toggle
-    } else if ctrl {
+    } else if add_mode {
         SelectionUpdateMode::Add
     } else {
         SelectionUpdateMode::Replace
@@ -1103,7 +1127,7 @@ fn draw_graph_info(ui: &mut egui::Ui, app: &GraphBrowserApp) {
         crate::app::HelpPanelShortcut::H => "H Help",
     };
     let controls_text = format!(
-        "Shortcuts: Ctrl+Click Multi-select | {lasso_hint} | Double-click Open | Drag tab out to split | N New Node | Del Remove | T Physics | +/-/0 Zoom | Z Smart Fit | L Toggle Pin | Ctrl+F Search | G Edge Ops | {command_hint} | {radial_hint} | Ctrl+Z/Y Undo/Redo | {help_hint}"
+        "Shortcuts: Ctrl+Click Multi-select | {lasso_hint} | Double-click Open | Drag tab out to split | N New Node | Del Remove | T Physics | R Reheat | +/-/0 Zoom | Z Smart Fit | L Toggle Pin | Ctrl+F Search | G Edge Ops | {command_hint} | {radial_hint} | Ctrl+Z/Y Undo/Redo | {help_hint}"
     );
     ui.painter().text(
         ui.available_rect_before_wrap().left_bottom() + Vec2::new(10.0, -10.0),
@@ -1265,7 +1289,7 @@ pub fn render_help_panel(ctx: &egui::Context, app: &mut GraphBrowserApp) {
                         LassoMouseBinding::ShiftLeftDrag => "Shift+LeftDrag",
                     };
                     let lasso_add = match app.lasso_mouse_binding {
-                        LassoMouseBinding::RightDrag => "Right+Ctrl+Drag",
+                        LassoMouseBinding::RightDrag => "Right+Shift/Ctrl+Drag",
                         LassoMouseBinding::ShiftLeftDrag => "Shift+Ctrl+LeftDrag",
                     };
                     let lasso_toggle = match app.lasso_mouse_binding {
@@ -1290,6 +1314,7 @@ pub fn render_help_panel(ctx: &egui::Context, app: &mut GraphBrowserApp) {
                         ("Delete", "Remove selected nodes"),
                         ("Ctrl+Shift+Delete", "Clear entire graph"),
                         ("T", "Toggle physics simulation"),
+                        ("R", "Reheat physics simulation"),
                         ("+ / - / 0", "Zoom in / out / reset"),
                         (
                             "Z",
@@ -2760,6 +2785,15 @@ pub fn render_choose_workspace_picker(ctx: &egui::Context, app: &mut GraphBrowse
             all.sort();
             all
         },
+        ChooseWorkspacePickerMode::AddExactSelectionToWorkspace => {
+            let mut all = app
+                .list_workspace_layout_names()
+                .into_iter()
+                .filter(|name| !GraphBrowserApp::is_reserved_workspace_layout_name(name))
+                .collect::<Vec<_>>();
+            all.sort();
+            all
+        },
     };
     let title = app
         .graph
@@ -2783,6 +2817,9 @@ pub fn render_choose_workspace_picker(ctx: &egui::Context, app: &mut GraphBrowse
                     ChooseWorkspacePickerMode::AddConnectedSelectionToWorkspace => {
                         "No named workspaces available. Save one first."
                     },
+                    ChooseWorkspacePickerMode::AddExactSelectionToWorkspace => {
+                        "No named workspaces available. Save one first."
+                    },
                 };
                 ui.small(msg);
             } else {
@@ -2792,6 +2829,9 @@ pub fn render_choose_workspace_picker(ctx: &egui::Context, app: &mut GraphBrowse
                     ChooseWorkspacePickerMode::AddNodeToWorkspace => "Add node to workspace:",
                     ChooseWorkspacePickerMode::AddConnectedSelectionToWorkspace => {
                         "Add connected nodes to workspace:"
+                    },
+                    ChooseWorkspacePickerMode::AddExactSelectionToWorkspace => {
+                        "Add selected nodes to workspace:"
                     },
                 };
                 ui.small(header);
@@ -2833,6 +2873,18 @@ pub fn render_choose_workspace_picker(ctx: &egui::Context, app: &mut GraphBrowse
                     seed_nodes.push(target);
                 }
                 app.request_add_connected_to_workspace(seed_nodes, name);
+            },
+            ChooseWorkspacePickerMode::AddExactSelectionToWorkspace => {
+                let mut nodes = app
+                    .choose_workspace_picker_exact_nodes()
+                    .map(|keys| keys.to_vec())
+                    .unwrap_or_else(|| vec![target]);
+                nodes.retain(|key| app.graph.get_node(*key).is_some());
+                nodes.sort_by_key(|key| key.index());
+                nodes.dedup();
+                if !nodes.is_empty() {
+                    app.request_add_exact_nodes_to_workspace(nodes, name);
+                }
             },
         }
     }

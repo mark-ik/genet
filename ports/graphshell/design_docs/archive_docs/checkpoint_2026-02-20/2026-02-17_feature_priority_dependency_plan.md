@@ -1,8 +1,12 @@
 # Feature Priority and Dependency Plan (2026-02-17)
 
+**Status (2026-02-20): All F1–F7 features are complete. This plan is a historical record.**
+Follow-on work lives in the 2026-02-18+ plans (edge operations, persistence hub, badge/tagging,
+edge traversal, settings architecture, etc.).
+
 ## Purpose
 
-This replaces day-by-day sequencing with feature-priority sequencing.
+This replaced day-by-day sequencing with feature-priority sequencing.
 Each feature is gated by explicit dependencies and exit criteria.
 
 ## Priority Model
@@ -119,6 +123,10 @@ Each feature is gated by explicit dependencies and exit criteria.
 - **Implementation shape**:
   - **Refactor**: split-open grouping action into explicit intent.
   - **Add**: `UserGrouped` variant to `EdgeType` in `graph/mod.rs` and persistence types.
+    *(Note 2026-02-20: `EdgeType` is being replaced by `EdgePayload` per the edge traversal
+    plan. The `UserGrouped` concept survives as `EdgePayload { user_asserted: true }`. The
+    F5 follow-on work in `2026-02-18_edge_operations_and_radial_palette_plan.md` owns the
+    migration.)*
   - **Add**: reducer behavior for `UserGrouped` edges in `app.rs`.
   - **Add**: deterministic first trigger: `Shift + Double-click` graph action (`FocusNodeSplit`) emits `CreateUserGroupedEdge { from: previous_selection, to: target }`.
   - **Delete**: ambiguous "planned/not yet implemented" behavior where implementation is complete for the explicit split-open path.

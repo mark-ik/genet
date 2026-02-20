@@ -979,6 +979,10 @@ pub(crate) fn run_post_render_phase<FActive>(
         add_nodes_to_named_workspace_snapshot(graph_app, &workspace_name, &nodes);
     }
 
+    if let Some((nodes, workspace_name)) = graph_app.take_pending_add_exact_to_workspace() {
+        add_nodes_to_named_workspace_snapshot(graph_app, &workspace_name, &nodes);
+    }
+
     if let Some(name) = graph_app.take_pending_save_graph_snapshot_named()
         && let Err(e) = graph_app.save_named_graph_snapshot(&name)
     {

@@ -1,6 +1,8 @@
 # Single-Window/Single-Active Obviation Plan (2026-02-18)
 
-## Status: Deferred
+## Status: Deferred (Archived 2026-02-20)
+
+**Rationale for deferral**: The Cross-Platform Sync and Extension Plan (2026-02-20) adopts a thin-client mobile architecture rather than native multi-window porting. EGL single-window model remains suitable for sync clients. This plan's audit inventory is preserved as reference material should EGL multi-window become a future requirement.
 
 **Recommendation (from code audit, Feb 18):** This plan should not be executed at this time. The audit found that every remaining single-window/single-active structural assumption lives in the EGL embedded path (`egl/app.rs`), which the desktop graphshell prototype does not use. The desktop path is already clean — `HeadedWindow` overrides input routing, `RunningAppState` supports multiple windows, all delegate callbacks route through `window_for_webview_id()`, and WebDriver commands use explicit IDs after F6.
 

@@ -134,6 +134,77 @@ required for end-to-end viewport behavior and interaction feel.
 
 ---
 
+## Graph UX Polish: Carry-Over Manual Checks (Current)
+
+**Source**: Active UX polish + follow-up implementation sessions
+
+**Context**: These checks were identified during rapid implementation and need explicit headed
+verification before closing the UX-polish tranche.
+
+1. [ ] **Wheel vs trackpad tuning target**
+   - Action: validate `Ctrl+wheel` and precision trackpad pinch/scroll on at least one wheel mouse and one trackpad.
+   - Expected: zoom feels controllable on both devices with no over/under-shoot bias.
+
+2. [ ] **Tab-click warm -> active routing**
+   - Action: from workspace tabs, click a warm node tab and then navigate.
+   - Expected: node reliably promotes to active and page loads in the expected pane context.
+
+3. [ ] **Lasso reliability under dense node overlap**
+   - Action: generate a dense graph cluster and perform repeated right-drag lasso sweeps.
+   - Expected: lasso selection set is deterministic and matches visual rectangle containment.
+
+4. [ ] **Omnibar non-`@` ordering policy**
+   - Action: test non-`@` query flow for: local tabs present, connected matches present, provider fallback, and global fallback.
+   - Expected: ordering follows configured settings (scope + non-`@` order preset) and non-local caps are respected.
+
+5. [ ] **Omnibar provider failure-state visibility**
+   - Action: disable network or force provider error responses while typing non-`@` and `@g/@b/@d` queries.
+   - Expected: dropdown surfaces clear provider status (loading / error) without blocking input or crashing.
+
+---
+
+## Warning/Stub Revival Watchlist
+
+**Source**: `cargo check -p graphshell --lib` warning sweep + code scan (2026-02-20)
+
+**Context**: Keep these visible so transitional code paths do not silently rot. Prioritize items
+that indicate dormant feature producers/consumers and integration seams that may need revival.
+
+1. [ ] **Test-only helpers leaking into non-test builds**
+   - Files: `ports/graphshell/desktop/gui.rs`, `ports/graphshell/desktop/persistence_ops.rs`
+   - Signal: unused import/function warnings for test wrappers and helpers.
+   - Validation expectation: move wrappers/imports behind `#[cfg(test)]` and confirm no behavior change.
+
+2. [ ] **Dormant intent producers vs handled intent variants**
+   - File: `ports/graphshell/app.rs`
+   - Variants: `CreateUserGroupedEdgeFromPrimarySelection`, `WebViewScrollChanged`, `SetNodeFormDraft`
+   - Signal: variants are handled but currently not constructed in lib build.
+   - Validation expectation: either wire active producers in runtime flows or explicitly mark as deferred bridge paths in plan/docs.
+
+3. [ ] **Potentially stale GUI bridge helpers**
+   - File: `ports/graphshell/desktop/gui.rs`
+   - Symbols: `active_tile_webview_id`, semantic-event conversion helper wrappers.
+   - Signal: dead-code warnings suggest old integration seams.
+   - Validation expectation: remove if obsolete, or reattach to intended flow and verify usage under headed run.
+
+4. [ ] **Scaffold marker still present in tile path**
+   - File: `ports/graphshell/desktop/tile_kind.rs`
+   - Signal: explicit scaffold/dead-code allowance comment.
+   - Validation expectation: confirm this is still intentional in current phase, or retire the allowance when tile flow is fully active.
+
+5. [ ] **Graph model dead fields/methods that may reflect deferred features**
+   - Files: `ports/graphshell/graph/mod.rs`, `ports/graphshell/graph/egui_adapter.rs`
+   - Symbols: `Node.velocity`, `get_node_by_id`, `has_edge_between`, `EguiGraphState::from_graph`.
+   - Signal: dead-code warnings; may indicate partially implemented or superseded paths.
+   - Validation expectation: decide revive/remove/annotate; if revive, add explicit validation scenarios tied to the owning plan.
+
+6. [ ] **Recovery TODO/FIXME that can impact UX and correctness**
+   - Files: `ports/graphshell/desktop/dialog.rs`, `ports/graphshell/desktop/headed_window.rs`, `ports/graphshell/panic_hook.rs`, `ports/graphshell/lib.rs`, `ports/graphshell/prefs.rs`
+   - Signal: active TODO/FIXME markers in runtime code.
+   - Validation expectation: each marker either receives a tracked owner/plan link or a scoped deferral note with revalidation trigger.
+
+---
+
 ## Navigation: Back/Forward Delegate Event Ordering
 
 **Source**: `delegate_trace_back_forward_burst_http.log` (captured 2026-02-17)
@@ -199,7 +270,7 @@ for back/forward transitions that emit `url_changed` for a URL that already exis
 
 ## Step 4d: @ Omnibar Scope Validation
 
-**Source**: `2026-02-18_edge_operations_and_radial_palette_plan.md` (active plan)
+**Source**: `2026-02-18_edge_operations_and_cmd_palette_plan.md` (active plan)
 
 **Context**: Scope implementation complete; headed validation not yet executed.
 
@@ -230,7 +301,7 @@ for back/forward transitions that emit `url_changed` for a URL that already exis
 
 ## Undo/Redo Validation
 
-**Source**: Spec in `2026-02-18_edge_operations_and_radial_palette_plan.md` §Global Undo/Redo Boundary
+**Source**: Spec in `2026-02-18_edge_operations_and_cmd_palette_plan.md` §Global Undo/Redo Boundary
 
 **Context**: Undo/redo is functional but has no dedicated plan doc, no feature entry in IMPLEMENTATION_ROADMAP, and no recorded validation against the grouping/exclusion rules in the spec. A feature entry and these tests should be added when the roadmap is next updated.
 

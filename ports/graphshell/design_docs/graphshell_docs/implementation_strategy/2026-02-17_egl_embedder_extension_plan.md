@@ -1,12 +1,8 @@
-# EGL Embedder Extension Plan (2026-02-17)
+# EGL Embedder Extension Plan (2026-02-17, Archived 2026-02-20)
 
-## Purpose
+## Status: Deferred
 
-Define a practical path to extend the EGL embedder while preserving current architecture guarantees:
-
-- graph/intents remain the control-plane source of truth,
-- lifecycle side effects remain in reconciliation,
-- no legacy parallel control paths are reintroduced.
+**Rationale for deferral**: The Cross-Platform Sync and Extension Plan (2026-02-20) prioritizes thin mobile clients and browser extensions over native EGL enhancements. Single-window EGL model is adequate for sync client use cases. This plan remains referenceable if Android native support is desired later, particularly for semantic event convergence (Phase 2) and host/vsync contract clarification (Phase 3).
 
 ## Scope
 

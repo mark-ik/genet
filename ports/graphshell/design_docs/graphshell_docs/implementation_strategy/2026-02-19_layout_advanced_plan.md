@@ -117,6 +117,31 @@ center behavior.
 
 ---
 
+#### 1.4 Canvas Gravity
+
+Standard FR has no centering force; nodes can drift off-screen with low graph density or after
+a high-repulsion preset is applied. A weak gravity force pulls all nodes toward the canvas center
+each frame, preventing the graph from disintegrating. Research §8.3.
+
+`FruchtermanReingoldWithCenterGravityState` (the state already in use) includes center gravity —
+verify whether its current strength is sufficient before adding a supplemental force. If the
+built-in gravity is too weak (nodes still escape to screen edges in practice), add a configurable
+strength parameter.
+
+**Tasks**
+
+- [ ] **Verify first**: at default settings, can nodes drift off-screen? Use a headed test with a
+  high-repulsion preset and ~10 isolated nodes; observe whether they stay on canvas.
+- [ ] If drift is observed: expose `gravity_strength: f32` (default 0.1) in the physics panel.
+- [ ] If the built-in gravity is sufficient: document the finding here; no code change needed.
+
+**Validation Tests**
+
+- Headed: apply Preset B (spread, high repulsion), let simulate 10 seconds → all nodes remain
+  visible within the canvas boundary.
+
+---
+
 ### Phase 2: Advanced Layout Algorithms
 
 #### 2.1 Greedy Label Occlusion Culling
@@ -237,6 +262,87 @@ leakage and keeps the approach strictly external to the graph model.
   no clustering force.
 - `test_different_domains_not_clustered_together` — nodes from two different domains do not
   attract each other.
+
+---
+
+### Phase 3: Magnetic Zones / Spatial Zoning
+
+**Goal:** Users can define named spatial regions with soft attractor forces. Nodes tagged to a zone
+are weakly pulled toward that zone's center each frame, producing regional organization without
+hard walls. Research §13.1, §14.7.
+
+#### 3.1 Soft Attractor Force
+
+Each zone has a `centroid: Vec2` and a `force_strength: f32 ≈ 0.05`. Per-frame, for every node
+whose `zone_id` matches the zone, apply a position delta toward the centroid. This is the
+attractor-point model from §14.7 — nodes can leave their zone when strongly pulled by topology,
+but they tend to cluster in the assigned region. Hard bounding boxes are explicitly rejected (jitter
+at boundaries, §13.1.1).
+
+The attractor force runs in the post-frame position-injection hook (Hook B from §2.3 prerequisite).
+
+**Tasks**
+
+- [ ] **Prerequisite**: Hook B (`apply_post_frame_layout_injection()`) must exist — see §2.3.
+- [ ] Add `Zone { id: ZoneId, name: String, centroid: Vec2, force_strength: f32 }` to app state
+  (not persisted to graph log — layout-only, like domain clustering forces).
+- [ ] Add `zone_id: Option<ZoneId>` to `Node` as a layout annotation (persisted to snapshot only,
+  not to the WAL log entries).
+- [ ] In `apply_post_frame_layout_injection()`: for each zone, apply weak attraction from each
+  member node toward the zone centroid.
+
+**Validation Tests**
+
+- `test_zone_attractor_pulls_toward_centroid` — node at (200, 200), centroid at (0, 0), strength
+  0.05: after one application, node position is closer to centroid.
+- `test_zone_force_noop_for_unassigned_nodes` — node with `zone_id = None` receives no zone force.
+- `test_zone_force_does_not_persist_to_log` — after assigning a node to a zone and serializing
+  graph, no `ZoneId` appears in `LogEntry` variants.
+
+---
+
+#### 3.2 Zone Creation UI
+
+**Tasks**
+
+- [ ] "Create zone from selection" context action: takes current `selected_nodes`, opens a name
+  prompt, creates a `Zone` with centroid = mean position of selected nodes, assigns all selected
+  nodes to it.
+- [ ] Zone manager panel (collapsible, in physics/layout panel): lists zones with name, node count,
+  force strength slider, and delete action.
+- [ ] Visual: render a faint, rounded rectangle behind zone member nodes. The rect tracks the
+  bounding box of member positions each frame. Use a non-interactable `egui::Area` layer below the
+  graph canvas (same approach as overlay positioning, research §13.1.2).
+- [ ] Dragging the zone rect background moves the centroid (and thus the attractor point).
+
+**Validation Tests**
+
+- `test_zone_centroid_is_mean_of_member_positions` — three nodes at known positions → zone centroid
+  = arithmetic mean.
+- `test_zone_delete_removes_member_assignments` — delete a zone → all previously-assigned nodes
+  have `zone_id = None`.
+- Headed: select nodes, create zone → zone rect appears; physics running → nodes drift toward zone.
+
+---
+
+#### 3.3 Rule-Based Auto-Maintenance
+
+Zones can optionally carry a filter rule (domain, search facet) so new nodes that match are
+auto-assigned. This makes the zone self-maintaining as the graph grows.
+
+**Tasks**
+
+- [ ] Add `Zone.rule: Option<ZoneRule>` where `ZoneRule` mirrors the facet syntax from UX polish
+  §5.3 (e.g., `ZoneRule::Domain("github.com")`).
+- [ ] In `apply_intent(AddNode)`: if `doi_enabled` or zone rules are active, check new node against
+  each zone rule; assign matching zone.
+- [ ] Expose rule input in the zone manager panel.
+
+**Validation Tests**
+
+- `test_zone_rule_auto_assigns_matching_node` — zone rule `domain:github.com`; add node with
+  GitHub URL → `zone_id` is set to that zone.
+- `test_zone_rule_does_not_assign_non_matching` — node with different domain → `zone_id` unchanged.
 
 ---
 

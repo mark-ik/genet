@@ -25,6 +25,7 @@ mod nav_targeting;
 mod persistence_ops;
 mod protocols;
 mod semantic_event_pipeline;
+mod selection_range;
 mod thumbnail_pipeline;
 mod tile_behavior;
 mod tile_compositor;

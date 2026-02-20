@@ -13,11 +13,13 @@ Default keybinds are configurable in `Settings -> Input`.
 - `Delete`: Remove selected node(s)
 - `Ctrl+Shift+Delete`: Clear graph
 - `T`: Toggle physics simulation
+- `R`: Reheat physics simulation from current layout state
 - `P`: Toggle physics settings panel
 - `+` / `-` / `0`: Zoom in / out / reset
 - `Z`: Smart fit (`2+` selected: fit selection, else fit graph)
 - `Ctrl+Click`: Multi-select nodes
 - `Right+Drag` (default): Lasso select (replace)
+- `Right+Shift+Drag` (default): Lasso add to selection
 - `Right+Ctrl+Drag` (default): Lasso add to selection
 - `Right+Alt+Drag` (default): Lasso toggle selection
 - `L`: Toggle pin on primary selected node

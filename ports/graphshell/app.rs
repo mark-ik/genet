@@ -307,6 +307,7 @@ pub enum ChooseWorkspacePickerMode {
     OpenNodeInWorkspace,
     AddNodeToWorkspace,
     AddConnectedSelectionToWorkspace,
+    AddExactSelectionToWorkspace,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -436,6 +437,64 @@ impl RadialMenuShortcut {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OmnibarPreferredScope {
+    Auto,
+    LocalTabs,
+    ConnectedNodes,
+    ProviderDefault,
+    GlobalNodes,
+    GlobalTabs,
+}
+
+impl OmnibarPreferredScope {
+    fn as_persisted_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::LocalTabs => "local-tabs",
+            Self::ConnectedNodes => "connected-nodes",
+            Self::ProviderDefault => "provider-default",
+            Self::GlobalNodes => "global-nodes",
+            Self::GlobalTabs => "global-tabs",
+        }
+    }
+
+    fn from_persisted_str(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "auto" => Some(Self::Auto),
+            "local-tabs" => Some(Self::LocalTabs),
+            "connected-nodes" => Some(Self::ConnectedNodes),
+            "provider-default" => Some(Self::ProviderDefault),
+            "global-nodes" => Some(Self::GlobalNodes),
+            "global-tabs" => Some(Self::GlobalTabs),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OmnibarNonAtOrderPreset {
+    ContextualThenProviderThenGlobal,
+    ProviderThenContextualThenGlobal,
+}
+
+impl OmnibarNonAtOrderPreset {
+    fn as_persisted_str(self) -> &'static str {
+        match self {
+            Self::ContextualThenProviderThenGlobal => "contextual-provider-global",
+            Self::ProviderThenContextualThenGlobal => "provider-contextual-global",
+        }
+    }
+
+    fn from_persisted_str(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "contextual-provider-global" => Some(Self::ContextualThenProviderThenGlobal),
+            "provider-contextual-global" => Some(Self::ProviderThenContextualThenGlobal),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum GraphIntent {
     TogglePhysics,
@@ -444,6 +503,7 @@ pub enum GraphIntent {
     RequestZoomOut,
     RequestZoomReset,
     RequestZoomToSelected,
+    ReheatPhysics,
     TogglePhysicsPanel,
     ToggleHelpPanel,
     ToggleCommandPalette,
@@ -639,6 +699,20 @@ pub struct GraphBrowserApp {
     pub help_panel_shortcut: HelpPanelShortcut,
     /// Shortcut binding for radial menu.
     pub radial_menu_shortcut: RadialMenuShortcut,
+    /// Preferred default non-`@` omnibar scope behavior.
+    pub omnibar_preferred_scope: OmnibarPreferredScope,
+    /// Non-`@` omnibar ordering preset.
+    pub omnibar_non_at_order: OmnibarNonAtOrderPreset,
+    /// Independent multi-selection for workspace tabs.
+    pub selected_tab_nodes: HashSet<NodeKey>,
+    /// Range-select anchor for workspace tab multi-selection.
+    pub tab_selection_anchor: Option<NodeKey>,
+    /// Scroll zoom inertia impulse scale (higher = more responsive/floaty).
+    pub scroll_zoom_impulse_scale: f32,
+    /// Scroll zoom inertia damping factor (lower = quicker stop).
+    pub scroll_zoom_inertia_damping: f32,
+    /// Minimum absolute inertia velocity before stopping.
+    pub scroll_zoom_inertia_min_abs: f32,
 
     /// Last hovered node in graph view (updated by graph render pass).
     pub hovered_graph_node: Option<NodeKey>,
@@ -680,6 +754,10 @@ pub struct GraphBrowserApp {
     pending_add_node_to_workspace: Option<(NodeKey, String)>,
     /// Pending UI command: add connected nodes (from seed selection) to a named workspace snapshot.
     pending_add_connected_to_workspace: Option<(Vec<NodeKey>, String)>,
+    /// Pending exact node set used by workspace picker for explicit import.
+    pending_choose_workspace_picker_exact_nodes: Option<Vec<NodeKey>>,
+    /// Pending UI command: add an explicit node set to a named workspace snapshot.
+    pending_add_exact_to_workspace: Option<(Vec<NodeKey>, String)>,
 
     /// Pending UI command: persist named full-graph snapshot.
     pending_save_graph_snapshot_named: Option<String>,
@@ -791,6 +869,25 @@ impl GraphBrowserApp {
         "workspace:settings-help-panel-shortcut";
     pub const SETTINGS_RADIAL_MENU_SHORTCUT_NAME: &'static str =
         "workspace:settings-radial-menu-shortcut";
+    pub const SETTINGS_OMNIBAR_PREFERRED_SCOPE_NAME: &'static str =
+        "workspace:settings-omnibar-preferred-scope";
+    pub const SETTINGS_OMNIBAR_NON_AT_ORDER_NAME: &'static str =
+        "workspace:settings-omnibar-non-at-order";
+    pub const SETTINGS_SCROLL_ZOOM_IMPULSE_SCALE_NAME: &'static str =
+        "workspace:settings-scroll-zoom-impulse-scale";
+    pub const SETTINGS_SCROLL_ZOOM_DAMPING_NAME: &'static str =
+        "workspace:settings-scroll-zoom-damping";
+    pub const SETTINGS_SCROLL_ZOOM_MIN_ABS_NAME: &'static str =
+        "workspace:settings-scroll-zoom-min-abs";
+    pub const DEFAULT_SCROLL_ZOOM_IMPULSE_SCALE: f32 = 0.01;
+    pub const DEFAULT_SCROLL_ZOOM_INERTIA_DAMPING: f32 = 0.86;
+    pub const DEFAULT_SCROLL_ZOOM_INERTIA_MIN_ABS: f32 = 0.00035;
+    pub const MIN_SCROLL_ZOOM_IMPULSE_SCALE: f32 = 0.001;
+    pub const MAX_SCROLL_ZOOM_IMPULSE_SCALE: f32 = 0.05;
+    pub const MIN_SCROLL_ZOOM_INERTIA_DAMPING: f32 = 0.5;
+    pub const MAX_SCROLL_ZOOM_INERTIA_DAMPING: f32 = 0.98;
+    pub const MIN_SCROLL_ZOOM_INERTIA_MIN_ABS: f32 = 0.00005;
+    pub const MAX_SCROLL_ZOOM_INERTIA_MIN_ABS: f32 = 0.005;
     pub const DEFAULT_WORKSPACE_AUTOSAVE_INTERVAL_SECS: u64 = 60;
     pub const DEFAULT_WORKSPACE_AUTOSAVE_RETENTION: u8 = 1;
     pub const DEFAULT_ACTIVE_WEBVIEW_LIMIT: usize = 4;
@@ -861,6 +958,13 @@ impl GraphBrowserApp {
             command_palette_shortcut: CommandPaletteShortcut::F2,
             help_panel_shortcut: HelpPanelShortcut::F1OrQuestion,
             radial_menu_shortcut: RadialMenuShortcut::F3,
+            omnibar_preferred_scope: OmnibarPreferredScope::Auto,
+            omnibar_non_at_order: OmnibarNonAtOrderPreset::ContextualThenProviderThenGlobal,
+            selected_tab_nodes: HashSet::new(),
+            tab_selection_anchor: None,
+            scroll_zoom_impulse_scale: Self::DEFAULT_SCROLL_ZOOM_IMPULSE_SCALE,
+            scroll_zoom_inertia_damping: Self::DEFAULT_SCROLL_ZOOM_INERTIA_DAMPING,
+            scroll_zoom_inertia_min_abs: Self::DEFAULT_SCROLL_ZOOM_INERTIA_MIN_ABS,
             hovered_graph_node: None,
             search_display_mode: SearchDisplayMode::Highlight,
             pending_node_context_target: None,
@@ -876,6 +980,8 @@ impl GraphBrowserApp {
             pending_choose_workspace_picker_request: None,
             pending_add_node_to_workspace: None,
             pending_add_connected_to_workspace: None,
+            pending_choose_workspace_picker_exact_nodes: None,
+            pending_add_exact_to_workspace: None,
             pending_save_graph_snapshot_named: None,
             pending_restore_graph_snapshot_named: None,
             pending_restore_graph_snapshot_latest: false,
@@ -945,6 +1051,13 @@ impl GraphBrowserApp {
             command_palette_shortcut: CommandPaletteShortcut::F2,
             help_panel_shortcut: HelpPanelShortcut::F1OrQuestion,
             radial_menu_shortcut: RadialMenuShortcut::F3,
+            omnibar_preferred_scope: OmnibarPreferredScope::Auto,
+            omnibar_non_at_order: OmnibarNonAtOrderPreset::ContextualThenProviderThenGlobal,
+            selected_tab_nodes: HashSet::new(),
+            tab_selection_anchor: None,
+            scroll_zoom_impulse_scale: Self::DEFAULT_SCROLL_ZOOM_IMPULSE_SCALE,
+            scroll_zoom_inertia_damping: Self::DEFAULT_SCROLL_ZOOM_INERTIA_DAMPING,
+            scroll_zoom_inertia_min_abs: Self::DEFAULT_SCROLL_ZOOM_INERTIA_MIN_ABS,
             hovered_graph_node: None,
             search_display_mode: SearchDisplayMode::Highlight,
             pending_node_context_target: None,
@@ -960,6 +1073,8 @@ impl GraphBrowserApp {
             pending_choose_workspace_picker_request: None,
             pending_add_node_to_workspace: None,
             pending_add_connected_to_workspace: None,
+            pending_choose_workspace_picker_exact_nodes: None,
+            pending_add_exact_to_workspace: None,
             pending_save_graph_snapshot_named: None,
             pending_restore_graph_snapshot_named: None,
             pending_restore_graph_snapshot_latest: false,
@@ -1014,6 +1129,39 @@ impl GraphBrowserApp {
 
         // Selection changes require egui_graphs state refresh.
         self.egui_state_dirty = true;
+    }
+
+    pub fn set_tab_selection_single(&mut self, key: NodeKey) {
+        if self.graph.get_node(key).is_none() {
+            return;
+        }
+        self.selected_tab_nodes.clear();
+        self.selected_tab_nodes.insert(key);
+        self.tab_selection_anchor = Some(key);
+    }
+
+    pub fn toggle_tab_selection(&mut self, key: NodeKey) {
+        if self.graph.get_node(key).is_none() {
+            return;
+        }
+        if !self.selected_tab_nodes.remove(&key) {
+            self.selected_tab_nodes.insert(key);
+        }
+        self.tab_selection_anchor = Some(key);
+    }
+
+    pub fn add_tab_selection_keys(&mut self, keys: impl IntoIterator<Item = NodeKey>) {
+        let mut last = None;
+        for key in keys {
+            if self.graph.get_node(key).is_none() {
+                continue;
+            }
+            self.selected_tab_nodes.insert(key);
+            last = Some(key);
+        }
+        if let Some(key) = last {
+            self.tab_selection_anchor = Some(key);
+        }
     }
 
     /// Request fit-to-screen on next render frame (one-shot)
@@ -1116,6 +1264,10 @@ impl GraphBrowserApp {
                 } else {
                     self.pending_zoom_to_selected_request = true;
                 }
+            },
+            GraphIntent::ReheatPhysics => {
+                self.physics.base.is_running = true;
+                self.drag_release_frames_remaining = 0;
             },
             GraphIntent::TogglePhysicsPanel => self.toggle_physics_panel(),
             GraphIntent::ToggleHelpPanel => self.toggle_help_panel(),
@@ -1684,6 +1836,11 @@ impl GraphBrowserApp {
             || name == Self::SETTINGS_COMMAND_PALETTE_SHORTCUT_NAME
             || name == Self::SETTINGS_HELP_PANEL_SHORTCUT_NAME
             || name == Self::SETTINGS_RADIAL_MENU_SHORTCUT_NAME
+            || name == Self::SETTINGS_OMNIBAR_PREFERRED_SCOPE_NAME
+            || name == Self::SETTINGS_OMNIBAR_NON_AT_ORDER_NAME
+            || name == Self::SETTINGS_SCROLL_ZOOM_IMPULSE_SCALE_NAME
+            || name == Self::SETTINGS_SCROLL_ZOOM_DAMPING_NAME
+            || name == Self::SETTINGS_SCROLL_ZOOM_MIN_ABS_NAME
             || name.starts_with(Self::SESSION_WORKSPACE_PREV_PREFIX)
     }
 
@@ -1747,6 +1904,75 @@ impl GraphBrowserApp {
         );
     }
 
+    pub fn set_omnibar_preferred_scope(&mut self, scope: OmnibarPreferredScope) {
+        self.omnibar_preferred_scope = scope;
+        self.save_omnibar_preferred_scope();
+    }
+
+    fn save_omnibar_preferred_scope(&mut self) {
+        self.save_workspace_layout_json(
+            Self::SETTINGS_OMNIBAR_PREFERRED_SCOPE_NAME,
+            self.omnibar_preferred_scope.as_persisted_str(),
+        );
+    }
+
+    pub fn set_omnibar_non_at_order(&mut self, order: OmnibarNonAtOrderPreset) {
+        self.omnibar_non_at_order = order;
+        self.save_omnibar_non_at_order();
+    }
+
+    fn save_omnibar_non_at_order(&mut self) {
+        self.save_workspace_layout_json(
+            Self::SETTINGS_OMNIBAR_NON_AT_ORDER_NAME,
+            self.omnibar_non_at_order.as_persisted_str(),
+        );
+    }
+
+    pub fn set_scroll_zoom_impulse_scale(&mut self, value: f32) {
+        self.scroll_zoom_impulse_scale = value.clamp(
+            Self::MIN_SCROLL_ZOOM_IMPULSE_SCALE,
+            Self::MAX_SCROLL_ZOOM_IMPULSE_SCALE,
+        );
+        self.save_scroll_zoom_impulse_scale();
+    }
+
+    fn save_scroll_zoom_impulse_scale(&mut self) {
+        self.save_workspace_layout_json(
+            Self::SETTINGS_SCROLL_ZOOM_IMPULSE_SCALE_NAME,
+            &self.scroll_zoom_impulse_scale.to_string(),
+        );
+    }
+
+    pub fn set_scroll_zoom_inertia_damping(&mut self, value: f32) {
+        self.scroll_zoom_inertia_damping = value.clamp(
+            Self::MIN_SCROLL_ZOOM_INERTIA_DAMPING,
+            Self::MAX_SCROLL_ZOOM_INERTIA_DAMPING,
+        );
+        self.save_scroll_zoom_inertia_damping();
+    }
+
+    fn save_scroll_zoom_inertia_damping(&mut self) {
+        self.save_workspace_layout_json(
+            Self::SETTINGS_SCROLL_ZOOM_DAMPING_NAME,
+            &self.scroll_zoom_inertia_damping.to_string(),
+        );
+    }
+
+    pub fn set_scroll_zoom_inertia_min_abs(&mut self, value: f32) {
+        self.scroll_zoom_inertia_min_abs = value.clamp(
+            Self::MIN_SCROLL_ZOOM_INERTIA_MIN_ABS,
+            Self::MAX_SCROLL_ZOOM_INERTIA_MIN_ABS,
+        );
+        self.save_scroll_zoom_inertia_min_abs();
+    }
+
+    fn save_scroll_zoom_inertia_min_abs(&mut self) {
+        self.save_workspace_layout_json(
+            Self::SETTINGS_SCROLL_ZOOM_MIN_ABS_NAME,
+            &self.scroll_zoom_inertia_min_abs.to_string(),
+        );
+    }
+
     fn load_persisted_ui_settings(&mut self) {
         let Some(raw) = self.load_workspace_layout_json(Self::SETTINGS_TOAST_ANCHOR_NAME) else {
             return self.load_additional_persisted_ui_settings();
@@ -1791,6 +2017,62 @@ impl GraphBrowserApp {
                 self.radial_menu_shortcut = shortcut;
             } else {
                 warn!("Ignoring invalid persisted radial-menu shortcut: '{raw}'");
+            }
+        }
+        if let Some(raw) =
+            self.load_workspace_layout_json(Self::SETTINGS_OMNIBAR_PREFERRED_SCOPE_NAME)
+        {
+            if let Some(scope) = OmnibarPreferredScope::from_persisted_str(&raw) {
+                self.omnibar_preferred_scope = scope;
+            } else {
+                warn!("Ignoring invalid persisted omnibar preferred scope: '{raw}'");
+            }
+        }
+        if let Some(raw) = self.load_workspace_layout_json(Self::SETTINGS_OMNIBAR_NON_AT_ORDER_NAME)
+        {
+            if let Some(order) = OmnibarNonAtOrderPreset::from_persisted_str(&raw) {
+                self.omnibar_non_at_order = order;
+            } else {
+                warn!("Ignoring invalid persisted omnibar non-@ order preset: '{raw}'");
+            }
+        }
+        if let Some(raw) =
+            self.load_workspace_layout_json(Self::SETTINGS_SCROLL_ZOOM_IMPULSE_SCALE_NAME)
+        {
+            match raw.trim().parse::<f32>() {
+                Ok(value) => {
+                    self.scroll_zoom_impulse_scale = value.clamp(
+                        Self::MIN_SCROLL_ZOOM_IMPULSE_SCALE,
+                        Self::MAX_SCROLL_ZOOM_IMPULSE_SCALE,
+                    );
+                },
+                Err(_) => warn!("Ignoring invalid persisted scroll zoom impulse scale: '{raw}'"),
+            }
+        }
+        if let Some(raw) = self.load_workspace_layout_json(Self::SETTINGS_SCROLL_ZOOM_DAMPING_NAME)
+        {
+            match raw.trim().parse::<f32>() {
+                Ok(value) => {
+                    self.scroll_zoom_inertia_damping = value.clamp(
+                        Self::MIN_SCROLL_ZOOM_INERTIA_DAMPING,
+                        Self::MAX_SCROLL_ZOOM_INERTIA_DAMPING,
+                    );
+                },
+                Err(_) => warn!("Ignoring invalid persisted scroll zoom damping: '{raw}'"),
+            }
+        }
+        if let Some(raw) = self.load_workspace_layout_json(Self::SETTINGS_SCROLL_ZOOM_MIN_ABS_NAME)
+        {
+            match raw.trim().parse::<f32>() {
+                Ok(value) => {
+                    self.scroll_zoom_inertia_min_abs = value.clamp(
+                        Self::MIN_SCROLL_ZOOM_INERTIA_MIN_ABS,
+                        Self::MAX_SCROLL_ZOOM_INERTIA_MIN_ABS,
+                    );
+                },
+                Err(_) => {
+                    warn!("Ignoring invalid persisted scroll zoom inertia minimum velocity: '{raw}'")
+                },
             }
         }
     }
@@ -2104,6 +2386,8 @@ impl GraphBrowserApp {
         self.pending_choose_workspace_picker_request = None;
         self.pending_add_node_to_workspace = None;
         self.pending_add_connected_to_workspace = None;
+        self.pending_choose_workspace_picker_exact_nodes = None;
+        self.pending_add_exact_to_workspace = None;
         self.pending_prune_empty_workspaces = false;
         self.pending_keep_latest_named_workspaces = None;
         self.pending_keyboard_zoom_request = None;
@@ -2157,6 +2441,8 @@ impl GraphBrowserApp {
         self.pending_choose_workspace_picker_request = None;
         self.pending_add_node_to_workspace = None;
         self.pending_add_connected_to_workspace = None;
+        self.pending_choose_workspace_picker_exact_nodes = None;
+        self.pending_add_exact_to_workspace = None;
         self.pending_prune_empty_workspaces = false;
         self.pending_keep_latest_named_workspaces = None;
         self.pending_keyboard_zoom_request = None;
@@ -2179,6 +2465,13 @@ impl GraphBrowserApp {
         self.command_palette_shortcut = CommandPaletteShortcut::F2;
         self.help_panel_shortcut = HelpPanelShortcut::F1OrQuestion;
         self.radial_menu_shortcut = RadialMenuShortcut::F3;
+        self.omnibar_preferred_scope = OmnibarPreferredScope::Auto;
+        self.omnibar_non_at_order = OmnibarNonAtOrderPreset::ContextualThenProviderThenGlobal;
+        self.selected_tab_nodes.clear();
+        self.tab_selection_anchor = None;
+        self.scroll_zoom_impulse_scale = Self::DEFAULT_SCROLL_ZOOM_IMPULSE_SCALE;
+        self.scroll_zoom_inertia_damping = Self::DEFAULT_SCROLL_ZOOM_INERTIA_DAMPING;
+        self.scroll_zoom_inertia_min_abs = Self::DEFAULT_SCROLL_ZOOM_INERTIA_MIN_ABS;
         self.load_persisted_ui_settings();
         Ok(())
     }
@@ -2382,6 +2675,21 @@ impl GraphBrowserApp {
         );
     }
 
+    /// Request opening the "Choose Workspace..." picker to add an exact node set.
+    pub fn request_add_exact_selection_to_workspace_picker(&mut self, mut keys: Vec<NodeKey>) {
+        keys.retain(|key| self.graph.get_node(*key).is_some());
+        keys.sort_by_key(|key| key.index());
+        keys.dedup();
+        let Some(anchor) = keys.first().copied() else {
+            return;
+        };
+        self.pending_choose_workspace_picker_exact_nodes = Some(keys);
+        self.request_choose_workspace_picker_for_mode(
+            anchor,
+            ChooseWorkspacePickerMode::AddExactSelectionToWorkspace,
+        );
+    }
+
     /// Active request for "Choose Workspace..." picker.
     pub fn choose_workspace_picker_request(&self) -> Option<ChooseWorkspacePickerRequest> {
         self.pending_choose_workspace_picker_request
@@ -2390,6 +2698,7 @@ impl GraphBrowserApp {
     /// Close "Choose Workspace..." picker.
     pub fn clear_choose_workspace_picker(&mut self) {
         self.pending_choose_workspace_picker_request = None;
+        self.pending_choose_workspace_picker_exact_nodes = None;
     }
 
     /// Request adding `node` to named workspace snapshot `workspace_name`.
@@ -2418,6 +2727,25 @@ impl GraphBrowserApp {
     /// Take and clear pending add-connected-to-workspace request.
     pub fn take_pending_add_connected_to_workspace(&mut self) -> Option<(Vec<NodeKey>, String)> {
         self.pending_add_connected_to_workspace.take()
+    }
+
+    /// Current explicit node set associated with active choose-workspace picker flow.
+    pub fn choose_workspace_picker_exact_nodes(&self) -> Option<&[NodeKey]> {
+        self.pending_choose_workspace_picker_exact_nodes.as_deref()
+    }
+
+    /// Request adding an exact node set into named workspace snapshot `workspace_name`.
+    pub fn request_add_exact_nodes_to_workspace(
+        &mut self,
+        nodes: Vec<NodeKey>,
+        workspace_name: impl Into<String>,
+    ) {
+        self.pending_add_exact_to_workspace = Some((nodes, workspace_name.into()));
+    }
+
+    /// Take and clear pending exact-add-to-workspace request.
+    pub fn take_pending_add_exact_to_workspace(&mut self) -> Option<(Vec<NodeKey>, String)> {
+        self.pending_add_exact_to_workspace.take()
     }
 
     /// Request opening connected nodes for a given source node, tile mode, and scope.
@@ -3044,12 +3372,33 @@ impl GraphBrowserApp {
         self.pending_choose_workspace_picker_request = self
             .pending_choose_workspace_picker_request
             .filter(|req| self.graph.get_node(req.node).is_some());
+        self.pending_choose_workspace_picker_exact_nodes = self
+            .pending_choose_workspace_picker_exact_nodes
+            .take()
+            .map(|keys| {
+                keys.into_iter()
+                    .filter(|key| self.graph.get_node(*key).is_some())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|keys| !keys.is_empty());
         self.pending_add_node_to_workspace = self
             .pending_add_node_to_workspace
             .take()
             .filter(|(key, _)| self.graph.get_node(*key).is_some());
         self.pending_add_connected_to_workspace = self
             .pending_add_connected_to_workspace
+            .take()
+            .map(|(keys, name)| {
+                (
+                    keys.into_iter()
+                        .filter(|key| self.graph.get_node(*key).is_some())
+                        .collect::<Vec<_>>(),
+                    name,
+                )
+            })
+            .filter(|(keys, _)| !keys.is_empty());
+        self.pending_add_exact_to_workspace = self
+            .pending_add_exact_to_workspace
             .take()
             .map(|(keys, name)| {
                 (
@@ -3085,6 +3434,8 @@ impl GraphBrowserApp {
         self.pending_choose_workspace_picker_request = None;
         self.pending_add_node_to_workspace = None;
         self.pending_add_connected_to_workspace = None;
+        self.pending_choose_workspace_picker_exact_nodes = None;
+        self.pending_add_exact_to_workspace = None;
         self.pending_unsaved_workspace_prompt = None;
         self.pending_unsaved_workspace_prompt_action = None;
         self.pending_prune_empty_workspaces = false;
@@ -3118,6 +3469,8 @@ impl GraphBrowserApp {
         self.pending_choose_workspace_picker_request = None;
         self.pending_add_node_to_workspace = None;
         self.pending_add_connected_to_workspace = None;
+        self.pending_choose_workspace_picker_exact_nodes = None;
+        self.pending_add_exact_to_workspace = None;
         self.pending_unsaved_workspace_prompt = None;
         self.pending_unsaved_workspace_prompt_action = None;
         self.pending_prune_empty_workspaces = false;
@@ -3954,6 +4307,18 @@ mod tests {
             command: EdgeCommand::UnpinSelected,
         }]);
         assert!(app.graph.get_node(key).is_some_and(|node| !node.is_pinned));
+    }
+
+    #[test]
+    fn test_reheat_physics_intent_enables_simulation() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        app.physics.base.is_running = false;
+        app.drag_release_frames_remaining = 5;
+
+        app.apply_intents([GraphIntent::ReheatPhysics]);
+
+        assert!(app.physics.base.is_running);
+        assert_eq!(app.drag_release_frames_remaining, 0);
     }
 
     #[test]
@@ -5296,6 +5661,44 @@ mod tests {
         );
         assert_eq!(reopened.help_panel_shortcut, HelpPanelShortcut::H);
         assert_eq!(reopened.radial_menu_shortcut, RadialMenuShortcut::R);
+    }
+
+    #[test]
+    fn test_set_omnibar_settings_persist_across_restart() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+
+        let mut app = GraphBrowserApp::new_from_dir(path.clone());
+        app.set_omnibar_preferred_scope(OmnibarPreferredScope::ProviderDefault);
+        app.set_omnibar_non_at_order(OmnibarNonAtOrderPreset::ProviderThenContextualThenGlobal);
+        drop(app);
+
+        let reopened = GraphBrowserApp::new_from_dir(path);
+        assert_eq!(
+            reopened.omnibar_preferred_scope,
+            OmnibarPreferredScope::ProviderDefault
+        );
+        assert_eq!(
+            reopened.omnibar_non_at_order,
+            OmnibarNonAtOrderPreset::ProviderThenContextualThenGlobal
+        );
+    }
+
+    #[test]
+    fn test_set_scroll_zoom_settings_persist_across_restart() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+
+        let mut app = GraphBrowserApp::new_from_dir(path.clone());
+        app.set_scroll_zoom_impulse_scale(0.014);
+        app.set_scroll_zoom_inertia_damping(0.81);
+        app.set_scroll_zoom_inertia_min_abs(0.00042);
+        drop(app);
+
+        let reopened = GraphBrowserApp::new_from_dir(path);
+        assert!((reopened.scroll_zoom_impulse_scale - 0.014).abs() < f32::EPSILON);
+        assert!((reopened.scroll_zoom_inertia_damping - 0.81).abs() < f32::EPSILON);
+        assert!((reopened.scroll_zoom_inertia_min_abs - 0.00042).abs() < f32::EPSILON);
     }
 
     #[test]

@@ -7,8 +7,8 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
-use egui::{Id, Response, Sense, Stroke, TextStyle, Ui, Vec2, WidgetText, vec2};
-use egui_tiles::{Behavior, SimplificationOptions, TabState, Tile, TileId, Tiles, UiResponse};
+use egui::{Color32, Id, Response, Sense, Stroke, TextStyle, Ui, Vec2, WidgetText, vec2};
+use egui_tiles::{Behavior, Container, SimplificationOptions, TabState, Tile, TileId, Tiles, UiResponse};
 
 use crate::app::{GraphBrowserApp, GraphIntent, SearchDisplayMode};
 use crate::graph::{NodeKey, NodeLifecycle};
@@ -16,6 +16,7 @@ use crate::render;
 use crate::render::GraphAction;
 use crate::util::truncate_with_ellipsis;
 
+use super::selection_range::inclusive_index_range;
 use super::tile_kind::TileKind;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,6 +157,25 @@ impl<'a> GraphshellTileBehavior<'a> {
         let detach_band_margin = 12.0;
         pointer.y < tab_rect.top() - detach_band_margin
             || pointer.y > tab_rect.bottom() + detach_band_margin
+    }
+
+    fn tab_group_node_order_for_tile(tiles: &Tiles<TileKind>, tile_id: TileId) -> Option<Vec<NodeKey>> {
+        for (_, tile) in tiles.iter() {
+            let Tile::Container(Container::Tabs(tabs)) = tile else {
+                continue;
+            };
+            if !tabs.children.contains(&tile_id) {
+                continue;
+            }
+            let mut out = Vec::new();
+            for child_id in &tabs.children {
+                if let Some(Tile::Pane(TileKind::WebView(key))) = tiles.get(*child_id) {
+                    out.push(*key);
+                }
+            }
+            return Some(out);
+        }
+        None
     }
 }
 
@@ -353,30 +373,60 @@ impl<'a> Behavior<TileKind> for GraphshellTileBehavior<'a> {
         if tab_response.clicked()
             && let Some(Tile::Pane(TileKind::WebView(node_key))) = tiles.get(tile_id)
         {
-            let multi_select = ui.input(|i| i.modifiers.ctrl);
-            self.pending_graph_intents.push(GraphIntent::SelectNode {
-                key: *node_key,
-                multi_select,
-            });
+            let modifiers = ui.input(|i| i.modifiers);
+            if modifiers.shift {
+                let ordered_nodes =
+                    Self::tab_group_node_order_for_tile(tiles, tile_id).unwrap_or_else(|| vec![*node_key]);
+                let target_index = ordered_nodes
+                    .iter()
+                    .position(|key| *key == *node_key)
+                    .unwrap_or(0);
+                let anchor_key = self.graph_app.tab_selection_anchor.unwrap_or(*node_key);
+                let anchor_index = ordered_nodes
+                    .iter()
+                    .position(|key| *key == anchor_key)
+                    .unwrap_or(target_index);
+                if !modifiers.ctrl {
+                    self.graph_app.selected_tab_nodes.clear();
+                }
+                if let Some(range) =
+                    inclusive_index_range(anchor_index, target_index, ordered_nodes.len())
+                {
+                    self.graph_app
+                        .add_tab_selection_keys(range.map(|idx| ordered_nodes[idx]));
+                }
+            } else if modifiers.ctrl {
+                self.graph_app.toggle_tab_selection(*node_key);
+            } else {
+                self.graph_app.set_tab_selection_single(*node_key);
+                self.pending_graph_intents.push(GraphIntent::SelectNode {
+                    key: *node_key,
+                    multi_select: false,
+                });
+            }
         }
 
         if tab_response.drag_stopped()
-            && Self::should_detach_tab_on_drag_stop(ui, tab_rect)
             && let Some(Tile::Pane(TileKind::WebView(node_key))) = tiles.get(tile_id)
         {
             self.pending_tab_drag_stopped_nodes.insert(*node_key);
-            self.graph_app.request_detach_node_to_split(*node_key);
-        }
-
-        if tab_response.drag_stopped()
-            && let Some(Tile::Pane(TileKind::WebView(node_key))) = tiles.get(tile_id)
-        {
-            self.pending_tab_drag_stopped_nodes.insert(*node_key);
+            if Self::should_detach_tab_on_drag_stop(ui, tab_rect) {
+                self.graph_app.request_detach_node_to_split(*node_key);
+            }
         }
 
         if ui.is_rect_visible(tab_rect) && !state.is_being_dragged {
-            let bg_color = self.tab_bg_color(ui.visuals(), tiles, tile_id, state);
-            let stroke = self.tab_outline_stroke(ui.visuals(), tiles, tile_id, state);
+            let mut bg_color = self.tab_bg_color(ui.visuals(), tiles, tile_id, state);
+            let mut stroke = self.tab_outline_stroke(ui.visuals(), tiles, tile_id, state);
+            let tab_multi_selected = matches!(
+                tiles.get(tile_id),
+                Some(Tile::Pane(TileKind::WebView(node_key)))
+                    if self.graph_app.selected_tab_nodes.contains(node_key)
+            );
+            if tab_multi_selected && !state.active {
+                bg_color = bg_color.linear_multiply(1.08);
+                stroke = Stroke::new(stroke.width.max(1.5), Color32::from_rgb(95, 170, 255));
+            }
             ui.painter().rect(
                 tab_rect.shrink(0.5),
                 0.0,
@@ -451,6 +501,10 @@ impl<'a> Behavior<TileKind> for GraphshellTileBehavior<'a> {
     fn on_tab_close(&mut self, tiles: &mut Tiles<TileKind>, tile_id: TileId) -> bool {
         if let Some(Tile::Pane(TileKind::WebView(node_key))) = tiles.get(tile_id) {
             self.pending_closed_nodes.push(*node_key);
+            self.graph_app.selected_tab_nodes.remove(node_key);
+            if self.graph_app.tab_selection_anchor == Some(*node_key) {
+                self.graph_app.tab_selection_anchor = None;
+            }
         }
         true
     }

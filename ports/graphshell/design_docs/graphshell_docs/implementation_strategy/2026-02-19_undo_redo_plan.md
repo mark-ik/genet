@@ -16,7 +16,7 @@ Undo/redo is functional. `GraphBrowserApp` holds `undo_stack: Vec<UndoRedoSnapsh
 `redo_stack: Vec<UndoRedoSnapshot>` (max 128 steps). `UndoRedoSnapshot` captures `graph: Graph`,
 `selected_nodes: SelectionState`, `highlighted_graph_edge`, and `workspace_layout_json: Option<String>`.
 
-The spec was written in `2026-02-18_edge_operations_and_radial_palette_plan.md §Global Undo/Redo
+The spec was written in `2026-02-18_edge_operations_and_cmd_palette_plan.md §Global Undo/Redo
 Boundary` as part of the command dispatch redesign. This plan extracts and formalizes that spec
 with implementation gaps identified and addressed.
 

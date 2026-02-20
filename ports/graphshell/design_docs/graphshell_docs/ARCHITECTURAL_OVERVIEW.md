@@ -156,6 +156,28 @@ Graphshell is a **spatial tab manager** where webpages are nodes in a force-dire
 - All interactions produce intents collected during the frame, applied together at one sync point
 - No system directly mutates another mid-frame — eliminates the class of bugs from the servoshell tab UI adaptation
 
+**Two-Phase Apply Model**
+
+All user interactions and lifecycle events flow through intent/reconciliation boundaries:
+
+**Phase 1 — Pure Reducer** (state mutation):
+- Processes `GraphIntent` enum (CreateNode, UpdateUrl, AddEdge, etc.)
+- Updates graph structure, node metadata
+- Emits `WebViewReconciliationIntent` for runtime effects
+
+**Phase 2 — Reconciliation** (webview side effects):
+- Creates/destroys webviews based on lifecycle intents
+- Navigates webviews to updated URLs
+- Updates tile tree focus/layout
+
+**Invariant**: Sub-frame gap between phases. No mid-frame mixed mutation prevents contradictory webview state (e.g., navigating a destroyed webview, creating duplicate webviews for the same node).
+
+**Lifecycle Intent Vocabulary**: `PromoteToActive`, `DemoteToWarm`, `EvictWarmToCold`, `Reactivate`, `Destroy` — explicit transitions between node lifecycle states drive webview creation/destruction.
+
+**Delegate-driven routing**: Servo callbacks → GraphIntent emission → reducer application → reconciliation effects. No polling, no fragmented mutation paths.
+
+See [2026-02-16_architecture_and_navigation_plan.md](implementation_strategy/2026-02-16_architecture_and_navigation_plan.md) for full specification and phase-by-phase implementation timeline.
+
 **Why nodes ARE tabs (not representations of tabs)?**
 - Node identity is the tab itself (stable UUID), not its URL
 - Within-tab navigation updates the node's URL; no new node created
