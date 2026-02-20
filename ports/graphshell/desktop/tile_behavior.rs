@@ -255,6 +255,9 @@ impl<'a> Behavior<TileKind> for GraphshellTileBehavior<'a> {
                         NodeLifecycle::Cold => {
                             "Node is cold. Reactivate to resume browsing in this pane."
                         },
+                        NodeLifecycle::Warm => {
+                            "Node is warm-cached. Reactivate to attach its cached webview."
+                        },
                         NodeLifecycle::Active => {
                             "Node is active but no runtime WebView is mapped yet."
                         },

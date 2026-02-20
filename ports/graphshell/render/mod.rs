@@ -8,9 +8,9 @@
 //! which provides built-in navigation (zoom/pan), node dragging, and selection.
 
 use crate::app::{
-    ChooseWorkspacePickerMode, EdgeCommand, EphemeralWorkspacePromptAction,
-    EphemeralWorkspacePromptRequest, GraphBrowserApp, GraphIntent, PendingConnectedOpenScope,
-    PendingTileOpenMode,
+    ChooseWorkspacePickerMode, EdgeCommand, GraphBrowserApp, GraphIntent, KeyboardZoomRequest,
+    MemoryPressureLevel, PendingConnectedOpenScope, PendingTileOpenMode,
+    UnsavedWorkspacePromptAction, UnsavedWorkspacePromptRequest,
 };
 use crate::graph::egui_adapter::{EguiGraphState, GraphNodeShape};
 use crate::graph::{NodeKey, NodeLifecycle};
@@ -26,12 +26,12 @@ use petgraph::stable_graph::NodeIndex;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 /// Graph interaction action (resolved from egui_graphs events).
 ///
-/// Decouples event conversion (needs `egui_state` for NodeIndex→NodeKey
+/// Decouples event conversion (needs `egui_state` for NodeIndexâ†’NodeKey
 /// lookups) from action application (pure state mutation), making
 /// graph interactions testable without an egui rendering context.
 pub enum GraphAction {
@@ -106,7 +106,7 @@ pub fn render_graph_in_ui_collect_actions(
     let nav = SettingsNavigation::new()
         .with_fit_to_screen_enabled(app.fit_to_screen_requested)
         .with_zoom_and_pan_enabled(!radial_open)
-        .with_zoom_speed(0.05);
+        .with_zoom_speed(0.015);
 
     // Interaction: dragging, selection, clicking
     let interaction = SettingsInteraction::new()
@@ -192,15 +192,29 @@ pub fn render_graph_in_ui_collect_actions(
         }
     }
     draw_highlighted_edge_overlay(ui, app);
+    draw_hovered_node_tooltip(ui, app);
 
     // Reset fit_to_screen flag (one-shot behavior for 'C' key)
     app.fit_to_screen_requested = false;
 
     // Post-frame zoom clamp: enforce min/max bounds on egui_graphs zoom
     clamp_zoom(ui.ctx(), app);
+    let keyboard_zoom = apply_pending_keyboard_zoom_request(ui, app, !radial_open);
+    let selected_zoom = apply_pending_zoom_to_selected_request(ui, app, !radial_open);
+    let wheel_zoom = apply_scroll_zoom_without_ctrl(ui, app, !radial_open);
 
     let split_open_modifier = ui.input(|i| i.modifiers.shift);
-    collect_graph_actions(app, &events, split_open_modifier, ctrl_pressed)
+    let mut actions = collect_graph_actions(app, &events, split_open_modifier, ctrl_pressed);
+    if let Some(zoom) = keyboard_zoom {
+        actions.push(GraphAction::Zoom(zoom));
+    }
+    if let Some(zoom) = selected_zoom {
+        actions.push(GraphAction::Zoom(zoom));
+    }
+    if let Some(zoom) = wheel_zoom {
+        actions.push(GraphAction::Zoom(zoom));
+    }
+    actions
 }
 
 fn draw_highlighted_edge_overlay(ui: &mut Ui, app: &GraphBrowserApp) {
@@ -243,6 +257,106 @@ fn draw_highlighted_edge_overlay(ui: &mut Ui, app: &GraphBrowserApp) {
         .circle_filled(to_screen, 6.0, Color32::from_rgb(80, 220, 255));
 }
 
+fn draw_hovered_node_tooltip(ui: &Ui, app: &GraphBrowserApp) {
+    let Some(key) = app.hovered_graph_node else {
+        return;
+    };
+    let Some(node) = app.graph.get_node(key) else {
+        return;
+    };
+    let pointer_pos = ui.input(|i| i.pointer.latest_pos());
+
+    let lifecycle_text = if app.get_node_crash_state(key).is_some() {
+        "Crashed".to_string()
+    } else {
+        match node.lifecycle {
+            NodeLifecycle::Active => "Active".to_string(),
+            NodeLifecycle::Warm => "Warm".to_string(),
+            NodeLifecycle::Cold => "Cold".to_string(),
+        }
+    };
+    let last_visited_text = format_last_visited(node.last_visited);
+    let workspace_memberships: Vec<String> = app
+        .membership_for_node(node.id)
+        .iter()
+        .cloned()
+        .collect();
+    let anchor = pointer_pos
+        .or_else(|| {
+            app.egui_state.as_ref().and_then(|state| {
+                state.graph.node(key).map(|n| {
+                    let meta_id = egui::Id::new("egui_graphs_metadata_");
+                    if let Some(meta) = ui.ctx().data_mut(|d| d.get_persisted::<MetadataFrame>(meta_id))
+                    {
+                        meta.canvas_to_screen_pos(n.location())
+                    } else {
+                        n.location()
+                    }
+                })
+            })
+        })
+        .unwrap_or_else(|| ui.max_rect().center());
+
+    egui::Area::new(egui::Id::new("graph_node_hover_tooltip"))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(anchor + egui::vec2(14.0, 14.0))
+        .interactable(false)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_min_width(240.0);
+                ui.strong(if node.title.is_empty() {
+                    &node.url
+                } else {
+                    &node.title
+                });
+                if !node.title.is_empty() && node.title != node.url {
+                    ui.label(&node.url);
+                }
+                ui.small(format!("Last visited: {last_visited_text}"));
+                ui.small(format!("Lifecycle: {lifecycle_text}"));
+                if !workspace_memberships.is_empty() {
+                    ui.separator();
+                    ui.small(format!("Workspaces ({})", workspace_memberships.len()));
+                    for workspace in &workspace_memberships {
+                        ui.small(format!("- {workspace}"));
+                    }
+                }
+            });
+        });
+}
+
+fn format_last_visited(last_visited: SystemTime) -> String {
+    let now = SystemTime::now();
+    format_last_visited_with_now(last_visited, now)
+}
+
+fn format_last_visited_with_now(last_visited: SystemTime, now: SystemTime) -> String {
+    let Ok(elapsed) = now.duration_since(last_visited) else {
+        return "just now".to_string();
+    };
+    format_elapsed_ago(elapsed)
+}
+
+fn format_elapsed_ago(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs();
+    if secs < 5 {
+        return "just now".to_string();
+    }
+    if secs < 60 {
+        return format!("{secs}s ago");
+    }
+    if secs < 60 * 60 {
+        return format!("{}m ago", secs / 60);
+    }
+    if secs < 60 * 60 * 24 {
+        return format!("{}h ago", secs / (60 * 60));
+    }
+    if secs < 60 * 60 * 24 * 7 {
+        return format!("{}d ago", secs / (60 * 60 * 24));
+    }
+    format!("{}w ago", secs / (60 * 60 * 24 * 7))
+}
+
 fn filtered_graph_for_search(
     app: &GraphBrowserApp,
     search_matches: &HashSet<NodeKey>,
@@ -262,6 +376,7 @@ fn filtered_graph_for_search(
 fn lifecycle_color(lifecycle: NodeLifecycle) -> Color32 {
     match lifecycle {
         NodeLifecycle::Active => Color32::from_rgb(100, 200, 255),
+        NodeLifecycle::Warm => Color32::from_rgb(120, 170, 205),
         NodeLifecycle::Cold => Color32::from_rgb(140, 140, 165),
     }
 }
@@ -326,6 +441,188 @@ fn clamp_zoom(ctx: &egui::Context, app: &mut GraphBrowserApp) {
             }
         }
     });
+}
+
+fn apply_pending_keyboard_zoom_request(
+    ui: &Ui,
+    app: &mut GraphBrowserApp,
+    enabled: bool,
+) -> Option<f32> {
+    if !enabled {
+        return None;
+    }
+
+    let Some(request) = app.take_pending_keyboard_zoom_request() else {
+        return None;
+    };
+
+    let factor = match request {
+        KeyboardZoomRequest::In => 1.1,
+        KeyboardZoomRequest::Out => 1.0 / 1.1,
+        KeyboardZoomRequest::Reset => 1.0,
+    };
+
+    let graph_rect = ui.max_rect();
+    let local_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, graph_rect.size());
+    let local_center = local_rect.center().to_vec2();
+    let meta_id = egui::Id::new("egui_graphs_metadata_");
+    let mut updated_zoom = None;
+
+    ui.ctx().data_mut(|data| {
+        if let Some(mut meta) = data.get_persisted::<MetadataFrame>(meta_id) {
+            let graph_center_pos = (local_center - meta.pan) / meta.zoom;
+            let new_zoom = app.camera.clamp(if matches!(request, KeyboardZoomRequest::Reset) {
+                factor
+            } else {
+                meta.zoom * factor
+            });
+            let pan_delta = graph_center_pos * meta.zoom - graph_center_pos * new_zoom;
+            meta.pan += pan_delta;
+            meta.zoom = new_zoom;
+            app.camera.current_zoom = new_zoom;
+            data.insert_persisted(meta_id, meta);
+            updated_zoom = Some(new_zoom);
+        }
+    });
+
+    updated_zoom
+}
+
+fn apply_pending_zoom_to_selected_request(
+    ui: &Ui,
+    app: &mut GraphBrowserApp,
+    enabled: bool,
+) -> Option<f32> {
+    if !enabled || !app.take_pending_zoom_to_selected_request() {
+        return None;
+    }
+
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+
+    for key in app.selected_nodes.iter().copied() {
+        if let Some(node) = app.graph.get_node(key) {
+            min_x = min_x.min(node.position.x);
+            max_x = max_x.max(node.position.x);
+            min_y = min_y.min(node.position.y);
+            max_y = max_y.max(node.position.y);
+        }
+    }
+
+    if !min_x.is_finite() || !max_x.is_finite() || !min_y.is_finite() || !max_y.is_finite() {
+        app.request_fit_to_screen();
+        return None;
+    }
+
+    let graph_rect = ui.max_rect();
+    let view_size = graph_rect.size();
+    if view_size.x <= f32::EPSILON || view_size.y <= f32::EPSILON {
+        return None;
+    }
+
+    let padding_factor = 1.2_f32;
+    let selected_width = (max_x - min_x).abs().max(1.0);
+    let selected_height = (max_y - min_y).abs().max(1.0);
+    let padded_width = selected_width * padding_factor;
+    let padded_height = selected_height * padding_factor;
+    let target_zoom = app
+        .camera
+        .clamp((view_size.x / padded_width).min(view_size.y / padded_height));
+
+    let selected_center = egui::pos2((min_x + max_x) * 0.5, (min_y + max_y) * 0.5);
+    let viewport_center = egui::Rect::from_min_size(egui::Pos2::ZERO, graph_rect.size())
+        .center()
+        .to_vec2();
+    let target_pan = viewport_center - selected_center.to_vec2() * target_zoom;
+
+    let meta_id = egui::Id::new("egui_graphs_metadata_");
+    let mut updated_zoom = None;
+    ui.ctx().data_mut(|data| {
+        if let Some(mut meta) = data.get_persisted::<MetadataFrame>(meta_id) {
+            meta.zoom = target_zoom;
+            meta.pan = target_pan;
+            app.camera.current_zoom = target_zoom;
+            data.insert_persisted(meta_id, meta);
+            updated_zoom = Some(target_zoom);
+        }
+    });
+
+    updated_zoom
+}
+
+/// Enable wheel-only zoom while the graph canvas is hovered (without Ctrl).
+///
+/// egui_graphs natively handles ctrl+wheel/pinch zoom; this supplements that path
+/// so mouse-wheel and trackpad scrolling zooms directly in graph view.
+fn apply_scroll_zoom_without_ctrl(
+    ui: &Ui,
+    app: &mut GraphBrowserApp,
+    enabled: bool,
+) -> Option<f32> {
+    if !enabled {
+        return None;
+    }
+
+    let graph_rect = ui.max_rect();
+    let (pointer_pos, ctrl_pressed, zoom_delta, smooth_scroll_y, raw_scroll_y) = ui.input(|i| {
+        (
+            i.pointer.latest_pos(),
+            i.modifiers.ctrl,
+            i.zoom_delta(),
+            i.smooth_scroll_delta.y,
+            i.raw_scroll_delta.y,
+        )
+    });
+    if ctrl_pressed
+        || (zoom_delta - 1.0).abs() > f32::EPSILON
+        || !ui.rect_contains_pointer(graph_rect)
+    {
+        return None;
+    }
+
+    let scroll_y = if smooth_scroll_y.abs() > f32::EPSILON {
+        smooth_scroll_y
+    } else {
+        raw_scroll_y
+    };
+    if scroll_y.abs() <= f32::EPSILON {
+        return None;
+    }
+
+    // Normalize wheel/trackpad delta to a small per-frame zoom amount.
+    let step = 0.01 * (scroll_y / 60.0).clamp(-1.0, 1.0);
+    if step.abs() <= f32::EPSILON {
+        return None;
+    }
+    let factor = 1.0 + step;
+    if factor <= 0.0 {
+        return None;
+    }
+
+    let local_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, graph_rect.size());
+    let local_center = pointer_pos
+        .map(|p| egui::pos2(p.x - graph_rect.min.x, p.y - graph_rect.min.y))
+        .unwrap_or(local_rect.center())
+        .to_vec2();
+
+    let meta_id = egui::Id::new("egui_graphs_metadata_");
+    let mut updated_zoom = None;
+    ui.ctx().data_mut(|data| {
+        if let Some(mut meta) = data.get_persisted::<MetadataFrame>(meta_id) {
+            let graph_center_pos = (local_center - meta.pan) / meta.zoom;
+            let new_zoom = app.camera.clamp(meta.zoom * factor);
+            let pan_delta = graph_center_pos * meta.zoom - graph_center_pos * new_zoom;
+            meta.pan += pan_delta;
+            meta.zoom = new_zoom;
+            app.camera.current_zoom = new_zoom;
+            data.insert_persisted(meta_id, meta);
+            updated_zoom = Some(new_zoom);
+        }
+    });
+
+    updated_zoom
 }
 
 /// Convert egui_graphs events to resolved GraphActions and apply them.
@@ -504,7 +801,7 @@ fn draw_graph_info(ui: &mut egui::Ui, app: &GraphBrowserApp) {
     );
 
     // Draw controls hint
-    let controls_text = "Shortcuts: Ctrl+Click Multi-select | Double-click Open | Drag tab out to split | N New Node | Del Remove | T Physics | C Fit | Ctrl+F Search | G Edge Ops | F2 Commands | F3 Radial | Ctrl+Z/Y Undo/Redo | F1/? Help";
+    let controls_text = "Shortcuts: Ctrl+Click Multi-select | Double-click Open | Drag tab out to split | N New Node | Del Remove | T Physics | +/-/0 Zoom | Z Smart Fit | L Toggle Pin | Ctrl+F Search | G Edge Ops | F2 Commands | F3 Radial | Ctrl+Z/Y Undo/Redo | F1/? Help";
     ui.painter().text(
         ui.available_rect_before_wrap().left_bottom() + Vec2::new(10.0, -10.0),
         egui::Align2::LEFT_BOTTOM,
@@ -666,7 +963,8 @@ pub fn render_help_panel(ctx: &egui::Context, app: &mut GraphBrowserApp) {
                         ("Delete", "Remove selected nodes"),
                         ("Ctrl+Shift+Delete", "Clear entire graph"),
                         ("T", "Toggle physics simulation"),
-                        ("C", "Fit graph to screen"),
+                        ("+ / - / 0", "Zoom in / out / reset"),
+                        ("Z", "Smart fit (2+ selected: fit selection; else fit graph)"),
                         ("P", "Physics settings panel"),
                         ("Ctrl+F", "Show graph search"),
                         ("F2", "Toggle edge command palette"),
@@ -676,6 +974,7 @@ pub fn render_help_panel(ctx: &egui::Context, app: &mut GraphBrowserApp) {
                         ("Shift+G", "Connect both directions"),
                         ("Alt+G", "Remove user edge"),
                         ("I / U", "Pin / Unpin selected node(s)"),
+                        ("L", "Toggle pin on primary selected node"),
                         ("Search Up/Down", "Cycle graph matches"),
                         ("Search Enter", "Select active search match"),
                         ("F1 / ?", "This help panel"),
@@ -926,47 +1225,38 @@ pub fn render_radial_command_menu(
             group_idx = (group_idx + 1) % NodeContextGroup::ALL.len();
             group_changed = true;
         }
-        if ctx.input(|i| i.key_pressed(Key::Num1)) {
-            group_idx = 0;
-            group_changed = true;
-        }
-        if ctx.input(|i| i.key_pressed(Key::Num2)) && NodeContextGroup::ALL.len() > 1 {
-            group_idx = 1;
-            group_changed = true;
-        }
-        if ctx.input(|i| i.key_pressed(Key::Num3)) && NodeContextGroup::ALL.len() > 2 {
-            group_idx = 2;
-            group_changed = true;
-        }
 
         let keyboard_group = NodeContextGroup::ALL[group_idx];
         let keyboard_commands = node_context_commands(keyboard_group);
-        if keyboard_commands.is_empty() {
+        let close_idx = keyboard_commands.len();
+        if group_changed {
             command_idx = 0;
-        } else {
-            if group_changed {
-                command_idx = 0;
-            }
-            command_idx %= keyboard_commands.len();
-            if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
-                command_idx = (command_idx + keyboard_commands.len() - 1) % keyboard_commands.len();
-            }
-            if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
-                command_idx = (command_idx + 1) % keyboard_commands.len();
-            }
-            if ctx.input(|i| i.key_pressed(Key::Enter)) {
-                let cmd = keyboard_commands[command_idx];
-                if is_command_enabled(cmd, pair_context, any_selected, source_context) {
-                    execute_radial_command(
-                        app,
-                        cmd,
-                        pair_context,
-                        any_selected,
-                        source_context,
-                        &mut intents,
-                    );
-                    should_close = true;
-                }
+        }
+        if command_idx > close_idx {
+            command_idx = 0;
+        }
+        let keyboard_slot_count = close_idx + 1;
+        if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
+            command_idx = (command_idx + keyboard_slot_count - 1) % keyboard_slot_count;
+        }
+        if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
+            command_idx = (command_idx + 1) % keyboard_slot_count;
+        }
+        if ctx.input(|i| i.key_pressed(Key::Enter)) {
+            if command_idx == close_idx {
+                should_close = true;
+            } else if let Some(cmd) = keyboard_commands.get(command_idx).copied()
+                && is_command_enabled(cmd, pair_context, any_selected, source_context)
+            {
+                execute_radial_command(
+                    app,
+                    cmd,
+                    pair_context,
+                    any_selected,
+                    source_context,
+                    &mut intents,
+                );
+                should_close = true;
             }
         }
         ctx.data_mut(|d| {
@@ -1019,10 +1309,12 @@ pub fn render_radial_command_menu(
                     }
                 });
                 ui.separator();
-                ui.small("Keyboard: 1/2/3 or <- -> groups, Up/Down actions, Enter run");
+                ui.small("Keyboard: <- -> groups, Up/Down actions, Enter run/close");
                 let keyboard_group = NodeContextGroup::ALL[group_idx];
                 let keyboard_commands = node_context_commands(keyboard_group);
-                if let Some(current_cmd) = keyboard_commands.get(command_idx).copied() {
+                if command_idx == keyboard_commands.len() {
+                    ui.small("Focus: Close");
+                } else if let Some(current_cmd) = keyboard_commands.get(command_idx).copied() {
                     ui.small(format!(
                         "Focus: {} / {}",
                         keyboard_group.label(),
@@ -1052,7 +1344,16 @@ pub fn render_radial_command_menu(
                 }
                 ctx.data_mut(|d| d.insert_persisted(node_context_command_state_id, command_idx));
                 ui.separator();
-                if ui.button("Close").clicked() {
+                let close_label = if command_idx == keyboard_commands.len() {
+                    "> Close".to_string()
+                } else {
+                    "Close".to_string()
+                };
+                if ui.button(close_label).clicked() {
+                    command_idx = keyboard_commands.len();
+                    ctx.data_mut(|d| {
+                        d.insert_persisted(node_context_command_state_id, command_idx)
+                    });
                     should_close = true;
                 }
             });
@@ -1184,7 +1485,7 @@ pub fn render_radial_command_menu(
 
 fn context_menu_label(command: RadialCommand) -> &'static str {
     match command {
-        RadialCommand::NodeOpenWorkspace => "Open Workspace Route",
+        RadialCommand::NodeOpenWorkspace => "Open via Workspace Route",
         RadialCommand::NodeChooseWorkspace => "Choose Workspace...",
         RadialCommand::NodeAddToWorkspace => "Add To Workspace...",
         RadialCommand::NodeOpenNeighbors => "Open with Neighbors",
@@ -1223,7 +1524,9 @@ fn is_user_undoable_intent(intent: &GraphIntent) -> bool {
             | GraphIntent::RemoveEdge { .. }
             | GraphIntent::ExecuteEdgeCommand { .. }
             | GraphIntent::SetNodePinned { .. }
+            | GraphIntent::TogglePrimaryNodePin
             | GraphIntent::PromoteNodeToActive { .. }
+            | GraphIntent::DemoteNodeToWarm { .. }
             | GraphIntent::DemoteNodeToCold { .. }
     )
 }
@@ -1688,12 +1991,43 @@ pub fn render_persistence_panel(
                     let _ = app.set_workspace_autosave_retention(retention as u8);
                 }
             });
-            if app.should_prompt_ephemeral_workspace_save() {
+            if app.should_prompt_unsaved_workspace_save() {
                 ui.colored_label(
                     Color32::from_rgb(255, 180, 70),
-                    "Ephemeral workspace has unsaved graph changes; save named before switching.",
+                    "Current workspace has unsaved graph changes; save before switching.",
                 );
             }
+            let (active_count, warm_count, cold_count) = app.lifecycle_counts();
+            let pressure_label = match app.memory_pressure_level() {
+                MemoryPressureLevel::Unknown => "Unknown",
+                MemoryPressureLevel::Normal => "Normal",
+                MemoryPressureLevel::Warning => "Warning",
+                MemoryPressureLevel::Critical => "Critical",
+            };
+            let pressure_color = match app.memory_pressure_level() {
+                MemoryPressureLevel::Unknown => Color32::from_rgb(180, 180, 190),
+                MemoryPressureLevel::Normal => Color32::from_rgb(140, 220, 160),
+                MemoryPressureLevel::Warning => Color32::from_rgb(255, 205, 120),
+                MemoryPressureLevel::Critical => Color32::from_rgb(255, 145, 145),
+            };
+            ui.small(format!(
+                "Lifecycle: Active {}/{} | Warm {}/{} | Cold {} | Mapped {}",
+                active_count,
+                app.active_webview_limit(),
+                warm_count,
+                app.warm_cache_limit(),
+                cold_count,
+                app.mapped_webview_count()
+            ));
+            ui.colored_label(
+                pressure_color,
+                format!(
+                    "Memory pressure: {} (avail {} MiB / total {} MiB)",
+                    pressure_label,
+                    app.memory_available_mib(),
+                    app.memory_total_mib()
+                ),
+            );
             let pin_scope = context_pin_scope_for(focused_pane_node);
             let pin_workspace_name = context_pin_workspace_name(pin_scope);
             let pin_active = current_layout_json.is_some_and(|current| {
@@ -2069,21 +2403,21 @@ pub fn render_choose_workspace_picker(ctx: &egui::Context, app: &mut GraphBrowse
     }
 }
 
-pub fn render_ephemeral_workspace_prompt(ctx: &egui::Context, app: &mut GraphBrowserApp) {
-    let Some(request) = app.ephemeral_workspace_prompt_request().cloned() else {
+pub fn render_unsaved_workspace_prompt(ctx: &egui::Context, app: &mut GraphBrowserApp) {
+    let Some(request) = app.unsaved_workspace_prompt_request().cloned() else {
         return;
     };
-    let mut action: Option<EphemeralWorkspacePromptAction> = None;
-    Window::new("Unsaved Ephemeral Workspace")
+    let mut action: Option<UnsavedWorkspacePromptAction> = None;
+    Window::new("Unsaved Workspace Changes")
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .default_width(380.0)
         .show(ctx, |ui| {
             match &request {
-                EphemeralWorkspacePromptRequest::WorkspaceSwitch { name, .. } => {
+                UnsavedWorkspacePromptRequest::WorkspaceSwitch { name, .. } => {
                     ui.label(format!(
-                        "This ephemeral workspace has unsaved graph changes.\nSwitch to '{name}' without saving?"
+                        "This workspace has unsaved graph changes.\nSwitch to '{name}' without saving?"
                     ));
                 },
             }
@@ -2093,15 +2427,15 @@ pub fn render_ephemeral_workspace_prompt(ctx: &egui::Context, app: &mut GraphBro
             }
             ui.horizontal(|ui| {
                 if ui.button("Proceed Without Saving").clicked() {
-                    action = Some(EphemeralWorkspacePromptAction::ProceedWithoutSaving);
+                    action = Some(UnsavedWorkspacePromptAction::ProceedWithoutSaving);
                 }
                 if ui.button("Cancel").clicked() {
-                    action = Some(EphemeralWorkspacePromptAction::Cancel);
+                    action = Some(UnsavedWorkspacePromptAction::Cancel);
                 }
             });
         });
     if let Some(action) = action {
-        app.set_ephemeral_workspace_prompt_action(action);
+        app.set_unsaved_workspace_prompt_action(action);
     }
 }
 
@@ -2340,5 +2674,21 @@ mod tests {
             resolve_source_node_context(&app, None, Some(focused)),
             Some(focused)
         );
+    }
+
+    #[test]
+    fn test_format_elapsed_ago_units() {
+        assert_eq!(format_elapsed_ago(Duration::from_secs(2)), "just now");
+        assert_eq!(format_elapsed_ago(Duration::from_secs(12)), "12s ago");
+        assert_eq!(format_elapsed_ago(Duration::from_secs(120)), "2m ago");
+        assert_eq!(format_elapsed_ago(Duration::from_secs(60 * 60 * 3)), "3h ago");
+        assert_eq!(format_elapsed_ago(Duration::from_secs(60 * 60 * 24 * 2)), "2d ago");
+    }
+
+    #[test]
+    fn test_format_last_visited_with_future_timestamp_is_just_now() {
+        let now = SystemTime::now();
+        let future = now + Duration::from_secs(10);
+        assert_eq!(format_last_visited_with_now(future, now), "just now");
     }
 }

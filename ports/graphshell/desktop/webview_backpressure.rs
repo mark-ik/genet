@@ -35,6 +35,20 @@ enum WebviewCreationProbeOutcome {
     TimedOut,
 }
 
+fn cold_restore_url_for_node(node: &crate::graph::Node) -> String {
+    if !node.history_entries.is_empty() {
+        let idx = node
+            .history_index
+            .min(node.history_entries.len().saturating_sub(1));
+        if let Some(url) = node.history_entries.get(idx)
+            && !url.is_empty()
+        {
+            return url.clone();
+        }
+    }
+    node.url.clone()
+}
+
 #[derive(Default, Debug)]
 pub(crate) struct WebviewCreationBackpressureState {
     retry_count: u8,
@@ -79,7 +93,7 @@ pub(crate) fn ensure_webview_for_node(
         webview_creation_backpressure.remove(&node_key);
         return;
     }
-    let node_url = node.url.clone();
+    let node_url = cold_restore_url_for_node(node);
 
     if let Some(existing_webview_id) = graph_app.get_webview_for_node(node_key) {
         if window.contains_webview(existing_webview_id) {
@@ -190,6 +204,9 @@ pub(crate) fn reconcile_webview_creation_backpressure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::{Node, NodeLifecycle};
+    use euclid::default::{Point2D, Vector2D};
+    use uuid::Uuid;
 
     #[test]
     fn test_classify_webview_creation_probe_confirms_on_responsive_signal() {
@@ -221,5 +238,51 @@ mod tests {
     fn test_classify_webview_creation_probe_pending_before_timeout() {
         let outcome = classify_webview_creation_probe(Duration::from_millis(500), false, false);
         assert_eq!(outcome, WebviewCreationProbeOutcome::Pending);
+    }
+
+    fn test_node(url: &str) -> Node {
+        Node {
+            id: Uuid::new_v4(),
+            url: url.to_string(),
+            title: url.to_string(),
+            position: Point2D::new(0.0, 0.0),
+            velocity: Vector2D::new(0.0, 0.0),
+            is_pinned: false,
+            last_visited: std::time::SystemTime::now(),
+            history_entries: Vec::new(),
+            history_index: 0,
+            thumbnail_png: None,
+            thumbnail_width: 0,
+            thumbnail_height: 0,
+            favicon_rgba: None,
+            favicon_width: 0,
+            favicon_height: 0,
+            session_scroll: None,
+            session_form_draft: None,
+            lifecycle: NodeLifecycle::Cold,
+        }
+    }
+
+    #[test]
+    fn test_cold_restore_url_for_node_prefers_history_index_entry() {
+        let mut node = test_node("https://fallback.example");
+        node.history_entries = vec![
+            "https://example.com/one".to_string(),
+            "https://example.com/two".to_string(),
+        ];
+        node.history_index = 1;
+        assert_eq!(
+            cold_restore_url_for_node(&node),
+            "https://example.com/two".to_string()
+        );
+    }
+
+    #[test]
+    fn test_cold_restore_url_for_node_falls_back_to_node_url_without_history() {
+        let node = test_node("https://fallback.example");
+        assert_eq!(
+            cold_restore_url_for_node(&node),
+            "https://fallback.example".to_string()
+        );
     }
 }

@@ -10,7 +10,7 @@ use servo::{OffscreenRenderingContext, WebViewId};
 
 use crate::app::{GraphBrowserApp, GraphIntent};
 use crate::desktop::tile_kind::TileKind;
-use crate::graph::NodeKey;
+use crate::graph::{NodeKey, NodeLifecycle};
 use crate::window::ServoShellWindow;
 
 pub(crate) fn reset_runtime_webview_state(
@@ -115,10 +115,26 @@ pub(crate) fn close_webview_for_node(
     node_key: NodeKey,
     lifecycle_intents: &mut Vec<GraphIntent>,
 ) {
-    if let Some(wv_id) = graph_app.get_webview_for_node(node_key) {
+    let node_exists = graph_app.graph.get_node(node_key).is_some();
+    let mapped_webview = graph_app.get_webview_for_node(node_key);
+
+    tile_rendering_contexts.remove(&node_key);
+
+    if node_exists && mapped_webview.is_some() {
+        let lifecycle = graph_app
+            .graph
+            .get_node(node_key)
+            .map(|node| node.lifecycle)
+            .unwrap_or(NodeLifecycle::Cold);
+        if lifecycle != NodeLifecycle::Warm {
+            lifecycle_intents.push(GraphIntent::DemoteNodeToWarm { key: node_key });
+        }
+        return;
+    }
+
+    if let Some(wv_id) = mapped_webview {
         window.close_webview(wv_id);
         lifecycle_intents.push(GraphIntent::UnmapWebview { webview_id: wv_id });
     }
-    tile_rendering_contexts.remove(&node_key);
     lifecycle_intents.push(GraphIntent::DemoteNodeToCold { key: node_key });
 }

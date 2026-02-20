@@ -6,6 +6,16 @@
 
 use rkyv::{Archive, Deserialize, Serialize};
 
+/// Persisted per-node session fidelity state.
+#[derive(Archive, Serialize, Deserialize, Clone, Debug)]
+pub struct PersistedNodeSessionState {
+    pub history_entries: Vec<String>,
+    pub history_index: usize,
+    pub scroll_x: Option<f32>,
+    pub scroll_y: Option<f32>,
+    pub form_draft: Option<String>,
+}
+
 /// Persisted node.
 #[derive(Archive, Serialize, Deserialize, Clone, Debug)]
 pub struct PersistedNode {
@@ -24,6 +34,7 @@ pub struct PersistedNode {
     pub favicon_rgba: Option<Vec<u8>>,
     pub favicon_width: u32,
     pub favicon_height: u32,
+    pub session_state: Option<PersistedNodeSessionState>,
 }
 
 /// Edge type for persistence.
@@ -110,6 +121,16 @@ mod tests {
             favicon_rgba: Some(vec![255, 0, 0, 255]),
             favicon_width: 1,
             favicon_height: 1,
+            session_state: Some(PersistedNodeSessionState {
+                history_entries: vec![
+                    "https://example.com".to_string(),
+                    "https://example.com/docs".to_string(),
+                ],
+                history_index: 1,
+                scroll_x: Some(12.0),
+                scroll_y: Some(345.0),
+                form_draft: Some("draft body".to_string()),
+            }),
         };
 
         let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&node).unwrap();
@@ -128,6 +149,12 @@ mod tests {
         assert_eq!(archived.favicon_rgba.as_ref().unwrap().len(), 4);
         assert_eq!(archived.favicon_width, 1);
         assert_eq!(archived.favicon_height, 1);
+        let session = archived.session_state.as_ref().unwrap();
+        assert_eq!(session.history_entries.len(), 2);
+        assert_eq!(session.history_index, 1);
+        assert_eq!(session.scroll_x, Some(12.0));
+        assert_eq!(session.scroll_y, Some(345.0));
+        assert_eq!(session.form_draft.as_ref().unwrap().as_str(), "draft body");
     }
 
     #[test]
@@ -176,6 +203,7 @@ mod tests {
                 favicon_rgba: None,
                 favicon_width: 0,
                 favicon_height: 0,
+                session_state: None,
             }],
             edges: vec![],
             timestamp_secs: 1234567890,

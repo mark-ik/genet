@@ -12,7 +12,10 @@
 pub mod types;
 
 use crate::graph::Graph;
+use aes_gcm::aead::Aead;
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use log::warn;
+use rand::RngCore;
 use redb::{ReadableDatabase, ReadableTable};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -24,6 +27,73 @@ const TILE_LAYOUT_TABLE: redb::TableDefinition<&str, &[u8]> =
     redb::TableDefinition::new("tile_layout");
 pub const DEFAULT_SNAPSHOT_INTERVAL_SECS: u64 = 300;
 const NAMED_GRAPH_PREFIX: &str = "named:";
+const ENCRYPTED_PAYLOAD_MAGIC: &[u8; 8] = b"GSEV0001";
+const AES_GCM_NONCE_LEN: usize = 12;
+
+struct PersistenceKey {
+    bytes: [u8; 32],
+}
+
+impl PersistenceKey {
+    #[cfg(test)]
+    fn load_or_generate_for_store(_base_dir: &std::path::Path) -> Result<Self, GraphStoreError> {
+        Ok(Self { bytes: [0xA5; 32] })
+    }
+
+    #[cfg(not(test))]
+    fn load_or_generate_for_store(base_dir: &std::path::Path) -> Result<Self, GraphStoreError> {
+        let service = "graphshell.persistence";
+        let account = base_dir.to_string_lossy().to_string();
+        let entry = keyring::Entry::new(service, &account)
+            .map_err(|e| GraphStoreError::Key(format!("Failed to access keyring: {e}")))?;
+
+        match entry.get_password() {
+            Ok(hex) => {
+                let bytes = decode_hex_32(&hex).ok_or_else(|| {
+                    GraphStoreError::Key("Stored key has invalid format".to_string())
+                })?;
+                Ok(Self { bytes })
+            },
+            Err(keyring::Error::NoEntry) => {
+                let mut key = [0u8; 32];
+                rand::rngs::OsRng.fill_bytes(&mut key);
+                let encoded = encode_hex(&key);
+                entry.set_password(&encoded).map_err(|e| {
+                    GraphStoreError::Key(format!("Failed to persist generated key: {e}"))
+                })?;
+                Ok(Self { bytes: key })
+            },
+            Err(e) => Err(GraphStoreError::Key(format!(
+                "Failed to read persistence key: {e}"
+            ))),
+        }
+    }
+}
+
+#[cfg(not(test))]
+fn encode_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
+#[cfg(not(test))]
+fn decode_hex_32(hex: &str) -> Option<[u8; 32]> {
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (idx, chunk) in hex.as_bytes().chunks_exact(2).enumerate() {
+        let hi = (chunk[0] as char).to_digit(16)? as u8;
+        let lo = (chunk[1] as char).to_digit(16)? as u8;
+        out[idx] = (hi << 4) | lo;
+    }
+    Some(out)
+}
 
 /// Persistent graph store backed by fjall (log) + redb (snapshots)
 pub struct GraphStore {
@@ -34,6 +104,7 @@ pub struct GraphStore {
     log_sequence: u64,
     last_snapshot: Instant,
     snapshot_interval: Duration,
+    persistence_key: PersistenceKey,
 }
 
 impl GraphStore {
@@ -57,6 +128,8 @@ impl GraphStore {
         std::fs::create_dir_all(&base_dir)
             .map_err(|e| GraphStoreError::Io(format!("Failed to create dir: {e}")))?;
 
+        let persistence_key = PersistenceKey::load_or_generate_for_store(&base_dir)?;
+
         let log_path = base_dir.join("log");
         let snapshot_path = base_dir.join("snapshots.redb");
 
@@ -74,28 +147,192 @@ impl GraphStore {
         // Find the next log sequence number
         let log_sequence = Self::find_max_sequence(&log_keyspace) + 1;
 
-        Ok(Self {
+        let mut store = Self {
             _db: db,
             log_keyspace,
             snapshot_db,
             log_sequence,
             last_snapshot: Instant::now(),
             snapshot_interval: Duration::from_secs(DEFAULT_SNAPSHOT_INTERVAL_SECS),
-        })
+            persistence_key,
+        };
+
+        if store.has_legacy_plaintext_data() {
+            warn!("Detected unencrypted legacy graph persistence; migrating in place.");
+            store.migrate_legacy_plaintext_data()?;
+        }
+
+        Ok(store)
+    }
+
+    fn encode_persisted_bytes(&self, plaintext: &[u8]) -> Result<Vec<u8>, GraphStoreError> {
+        let compressed = zstd::stream::encode_all(std::io::Cursor::new(plaintext), 3)
+            .map_err(|e| GraphStoreError::Compression(format!("zstd encode failed: {e}")))?;
+        let cipher = Aes256Gcm::new_from_slice(&self.persistence_key.bytes)
+            .map_err(|e| GraphStoreError::Crypto(format!("AES key init failed: {e}")))?;
+        let mut nonce = [0u8; AES_GCM_NONCE_LEN];
+        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        let ciphertext = cipher
+            .encrypt(Nonce::from_slice(&nonce), compressed.as_ref())
+            .map_err(|e| GraphStoreError::Crypto(format!("AES-GCM encrypt failed: {e}")))?;
+
+        let mut out =
+            Vec::with_capacity(ENCRYPTED_PAYLOAD_MAGIC.len() + AES_GCM_NONCE_LEN + ciphertext.len());
+        out.extend_from_slice(ENCRYPTED_PAYLOAD_MAGIC);
+        out.extend_from_slice(&nonce);
+        out.extend_from_slice(&ciphertext);
+        Ok(out)
+    }
+
+    fn decode_persisted_bytes(&self, stored: &[u8]) -> Result<Vec<u8>, GraphStoreError> {
+        if !stored.starts_with(ENCRYPTED_PAYLOAD_MAGIC) {
+            // Legacy plaintext payload (pre-encryption migration path).
+            return Ok(stored.to_vec());
+        }
+        if stored.len() < ENCRYPTED_PAYLOAD_MAGIC.len() + AES_GCM_NONCE_LEN {
+            return Err(GraphStoreError::Crypto(
+                "Encrypted payload too short".to_string(),
+            ));
+        }
+        let nonce_start = ENCRYPTED_PAYLOAD_MAGIC.len();
+        let nonce_end = nonce_start + AES_GCM_NONCE_LEN;
+        let nonce = &stored[nonce_start..nonce_end];
+        let ciphertext = &stored[nonce_end..];
+        let cipher = Aes256Gcm::new_from_slice(&self.persistence_key.bytes)
+            .map_err(|e| GraphStoreError::Crypto(format!("AES key init failed: {e}")))?;
+        let compressed = cipher
+            .decrypt(Nonce::from_slice(nonce), ciphertext)
+            .map_err(|e| GraphStoreError::Crypto(format!("AES-GCM decrypt failed: {e}")))?;
+        zstd::stream::decode_all(std::io::Cursor::new(compressed))
+            .map_err(|e| GraphStoreError::Compression(format!("zstd decode failed: {e}")))
+    }
+
+    fn has_legacy_plaintext_data(&self) -> bool {
+        let has_legacy_in_table = |table_def: redb::TableDefinition<&str, &[u8]>| {
+            let Ok(read_txn) = self.snapshot_db.begin_read() else {
+                return false;
+            };
+            let Ok(table) = read_txn.open_table(table_def) else {
+                return false;
+            };
+            let Ok(iter) = table.iter() else {
+                return false;
+            };
+            for entry in iter.flatten() {
+                let (_, value) = entry;
+                if !value.value().starts_with(ENCRYPTED_PAYLOAD_MAGIC) {
+                    return true;
+                }
+            }
+            false
+        };
+
+        if has_legacy_in_table(SNAPSHOT_TABLE) || has_legacy_in_table(TILE_LAYOUT_TABLE) {
+            return true;
+        }
+
+        for guard in self.log_keyspace.iter() {
+            let Ok((_, value)) = guard.into_inner() else {
+                continue;
+            };
+            if !value.as_ref().starts_with(ENCRYPTED_PAYLOAD_MAGIC) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn migrate_legacy_plaintext_data(&mut self) -> Result<(), GraphStoreError> {
+        self.migrate_legacy_plaintext_table(SNAPSHOT_TABLE)?;
+        self.migrate_legacy_plaintext_table(TILE_LAYOUT_TABLE)?;
+
+        let mut legacy_log_entries = Vec::<(Vec<u8>, Vec<u8>)>::new();
+        for guard in self.log_keyspace.iter() {
+            let (key, value) = guard
+                .into_inner()
+                .map_err(|e| GraphStoreError::Fjall(format!("{e}")))?;
+            if !value.as_ref().starts_with(ENCRYPTED_PAYLOAD_MAGIC) {
+                legacy_log_entries.push((key.to_vec(), value.to_vec()));
+            }
+        }
+
+        for (key, plaintext) in legacy_log_entries {
+            let encrypted = self.encode_persisted_bytes(&plaintext)?;
+            self.log_keyspace
+                .insert(key, encrypted.as_slice())
+                .map_err(|e| GraphStoreError::Fjall(format!("{e}")))?;
+        }
+        Ok(())
+    }
+
+    fn migrate_legacy_plaintext_table(
+        &mut self,
+        table_def: redb::TableDefinition<&str, &[u8]>,
+    ) -> Result<(), GraphStoreError> {
+        let mut legacy_values = Vec::<(String, Vec<u8>)>::new();
+        {
+            let read_txn = self
+                .snapshot_db
+                .begin_read()
+                .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+            let Ok(table) = read_txn.open_table(table_def) else {
+                return Ok(());
+            };
+            let iter = table
+                .iter()
+                .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+            for entry in iter {
+                let (key, value) = entry.map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+                if !value.value().starts_with(ENCRYPTED_PAYLOAD_MAGIC) {
+                    legacy_values.push((key.value().to_string(), value.value().to_vec()));
+                }
+            }
+        }
+
+        if legacy_values.is_empty() {
+            return Ok(());
+        }
+
+        let write_txn = self
+            .snapshot_db
+            .begin_write()
+            .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+        {
+            let mut table = write_txn
+                .open_table(table_def)
+                .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+            for (key, plaintext) in legacy_values {
+                let encrypted = self.encode_persisted_bytes(&plaintext)?;
+                table
+                    .insert(key.as_str(), encrypted.as_slice())
+                    .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+            }
+        }
+        write_txn
+            .commit()
+            .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
+        Ok(())
     }
 
     /// Append a mutation to the log
     pub fn log_mutation(&mut self, entry: &LogEntry) {
-        let bytes = match rkyv::to_bytes::<rkyv::rancor::Error>(entry) {
+        let plaintext = match rkyv::to_bytes::<rkyv::rancor::Error>(entry) {
             Ok(b) => b,
             Err(e) => {
                 warn!("Failed to serialize log entry: {e}");
                 return;
             },
         };
+        let bytes = match self.encode_persisted_bytes(plaintext.as_ref()) {
+            Ok(b) => b,
+            Err(e) => {
+                warn!("Failed to encrypt log entry: {e}");
+                return;
+            },
+        };
 
         let key = self.log_sequence.to_be_bytes();
-        if let Err(e) = self.log_keyspace.insert(key, bytes.as_ref()) {
+        if let Err(e) = self.log_keyspace.insert(key, bytes.as_slice()) {
             warn!("Failed to write log entry: {e}");
         }
         self.log_sequence += 1;
@@ -104,10 +341,17 @@ impl GraphStore {
     /// Take a full snapshot of the graph and compact the log
     pub fn take_snapshot(&mut self, graph: &Graph) {
         let snapshot = graph.to_snapshot();
-        let bytes = match rkyv::to_bytes::<rkyv::rancor::Error>(&snapshot) {
+        let plaintext = match rkyv::to_bytes::<rkyv::rancor::Error>(&snapshot) {
             Ok(b) => b,
             Err(e) => {
                 warn!("Failed to serialize snapshot: {e}");
+                return;
+            },
+        };
+        let bytes = match self.encode_persisted_bytes(plaintext.as_ref()) {
+            Ok(b) => b,
+            Err(e) => {
+                warn!("Failed to encrypt snapshot: {e}");
                 return;
             },
         };
@@ -123,7 +367,7 @@ impl GraphStore {
                     .open_table(SNAPSHOT_TABLE)
                     .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
                 table
-                    .insert("latest", bytes.as_ref())
+                    .insert("latest", bytes.as_slice())
                     .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
             }
             write_txn
@@ -224,6 +468,7 @@ impl GraphStore {
 
     /// Persist serialized tile layout JSON.
     pub fn save_tile_layout_json(&mut self, layout_json: &str) -> Result<(), GraphStoreError> {
+        let encrypted = self.encode_persisted_bytes(layout_json.as_bytes())?;
         let write_txn = self
             .snapshot_db
             .begin_write()
@@ -233,7 +478,7 @@ impl GraphStore {
                 .open_table(TILE_LAYOUT_TABLE)
                 .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
             table
-                .insert("latest", layout_json.as_bytes())
+                .insert("latest", encrypted.as_slice())
                 .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
         }
         write_txn
@@ -247,7 +492,8 @@ impl GraphStore {
         let read_txn = self.snapshot_db.begin_read().ok()?;
         let table = read_txn.open_table(TILE_LAYOUT_TABLE).ok()?;
         let entry = table.get("latest").ok()??;
-        std::str::from_utf8(entry.value())
+        let decrypted = self.decode_persisted_bytes(entry.value()).ok()?;
+        std::str::from_utf8(&decrypted)
             .ok()
             .map(|s| s.to_string())
     }
@@ -260,8 +506,9 @@ impl GraphStore {
     ) -> Result<(), GraphStoreError> {
         let key = Self::named_graph_key(name)?;
         let snapshot = graph.to_snapshot();
-        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&snapshot)
+        let plaintext = rkyv::to_bytes::<rkyv::rancor::Error>(&snapshot)
             .map_err(|e| GraphStoreError::Io(format!("Failed to serialize graph snapshot: {e}")))?;
+        let bytes = self.encode_persisted_bytes(plaintext.as_ref())?;
         let write_txn = self
             .snapshot_db
             .begin_write()
@@ -271,7 +518,7 @@ impl GraphStore {
                 .open_table(SNAPSHOT_TABLE)
                 .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
             table
-                .insert(key.as_str(), bytes.as_ref())
+                .insert(key.as_str(), bytes.as_slice())
                 .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
         }
         write_txn
@@ -286,9 +533,9 @@ impl GraphStore {
         let read_txn = self.snapshot_db.begin_read().ok()?;
         let table = read_txn.open_table(SNAPSHOT_TABLE).ok()?;
         let entry = table.get(key.as_str()).ok()??;
-        let bytes = entry.value();
+        let bytes = self.decode_persisted_bytes(entry.value()).ok()?;
         let mut aligned = rkyv::util::AlignedVec::<16>::new();
-        aligned.extend_from_slice(bytes);
+        aligned.extend_from_slice(&bytes);
         let snapshot = rkyv::from_bytes::<GraphSnapshot, rkyv::rancor::Error>(&aligned).ok()?;
         Some(Graph::from_snapshot(&snapshot))
     }
@@ -349,6 +596,7 @@ impl GraphStore {
                 "Workspace name must not be empty".to_string(),
             ));
         }
+        let encrypted = self.encode_persisted_bytes(layout_json.as_bytes())?;
         let write_txn = self
             .snapshot_db
             .begin_write()
@@ -358,7 +606,7 @@ impl GraphStore {
                 .open_table(TILE_LAYOUT_TABLE)
                 .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
             table
-                .insert(name, layout_json.as_bytes())
+                .insert(name, encrypted.as_slice())
                 .map_err(|e| GraphStoreError::Redb(format!("{e}")))?;
         }
         write_txn
@@ -372,7 +620,8 @@ impl GraphStore {
         let read_txn = self.snapshot_db.begin_read().ok()?;
         let table = read_txn.open_table(TILE_LAYOUT_TABLE).ok()?;
         let entry = table.get(name).ok()??;
-        std::str::from_utf8(entry.value())
+        let decrypted = self.decode_persisted_bytes(entry.value()).ok()?;
+        std::str::from_utf8(&decrypted)
             .ok()
             .map(|s| s.to_string())
     }
@@ -422,11 +671,11 @@ impl GraphStore {
         let read_txn = self.snapshot_db.begin_read().ok()?;
         let table = read_txn.open_table(SNAPSHOT_TABLE).ok()?;
         let entry = table.get("latest").ok()??;
-        let bytes = entry.value();
+        let bytes = self.decode_persisted_bytes(entry.value()).ok()?;
 
         // Copy to aligned buffer — redb bytes may not satisfy rkyv alignment
         let mut aligned = rkyv::util::AlignedVec::<16>::new();
-        aligned.extend_from_slice(bytes);
+        aligned.extend_from_slice(&bytes);
 
         rkyv::from_bytes::<GraphSnapshot, rkyv::rancor::Error>(&aligned).ok()
     }
@@ -439,9 +688,13 @@ impl GraphStore {
                 Ok(kv) => kv,
                 Err(_) => continue,
             };
+            let decoded = match self.decode_persisted_bytes(value.as_ref()) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
 
             let archived =
-                match rkyv::access::<ArchivedLogEntry, rkyv::rancor::Error>(value.as_ref()) {
+                match rkyv::access::<ArchivedLogEntry, rkyv::rancor::Error>(&decoded) {
                     Ok(a) => a,
                     Err(_) => continue,
                 };
@@ -601,10 +854,14 @@ impl GraphStore {
 
 /// Errors from the graph store
 #[derive(Debug)]
+#[cfg_attr(test, allow(dead_code))]
 pub enum GraphStoreError {
     Io(String),
     Fjall(String),
     Redb(String),
+    Key(String),
+    Crypto(String),
+    Compression(String),
 }
 
 impl std::fmt::Display for GraphStoreError {
@@ -613,6 +870,9 @@ impl std::fmt::Display for GraphStoreError {
             GraphStoreError::Io(e) => write!(f, "IO error: {e}"),
             GraphStoreError::Fjall(e) => write!(f, "Fjall error: {e}"),
             GraphStoreError::Redb(e) => write!(f, "Redb error: {e}"),
+            GraphStoreError::Key(e) => write!(f, "Key error: {e}"),
+            GraphStoreError::Crypto(e) => write!(f, "Crypto error: {e}"),
+            GraphStoreError::Compression(e) => write!(f, "Compression error: {e}"),
         }
     }
 }
@@ -622,6 +882,7 @@ mod tests {
     use super::*;
     use crate::graph::EdgeType;
     use euclid::default::Point2D;
+    use std::fs;
     use tempfile::TempDir;
     use uuid::Uuid;
 
@@ -1116,6 +1377,97 @@ mod tests {
             store.snapshot_interval_secs(),
             DEFAULT_SNAPSHOT_INTERVAL_SECS
         );
+    }
+
+    #[test]
+    fn test_roundtrip_encrypt_decrypt() {
+        let (store, _dir) = create_test_store();
+        let payload = b"hello graphshell encrypted world";
+        let encrypted = store.encode_persisted_bytes(payload).unwrap();
+        let decrypted = store.decode_persisted_bytes(&encrypted).unwrap();
+        assert_eq!(decrypted, payload);
+        assert!(encrypted.starts_with(ENCRYPTED_PAYLOAD_MAGIC));
+    }
+
+    #[test]
+    fn test_tampered_ciphertext_rejected() {
+        let (store, _dir) = create_test_store();
+        let payload = b"important payload";
+        let mut encrypted = store.encode_persisted_bytes(payload).unwrap();
+        let last = encrypted.len() - 1;
+        encrypted[last] ^= 0xFF;
+        assert!(store.decode_persisted_bytes(&encrypted).is_err());
+    }
+
+    #[test]
+    fn test_key_not_stored_in_data_dir() {
+        let (store, dir) = create_test_store();
+        drop(store);
+        let test_key = [0xA5; 32];
+        let mut stack = vec![dir.path().to_path_buf()];
+        while let Some(next) = stack.pop() {
+            for entry in fs::read_dir(next).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let bytes = fs::read(path).unwrap();
+                assert!(
+                    !bytes.windows(test_key.len()).any(|window| window == test_key),
+                    "Found raw key bytes in persisted file"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_migration_detects_unencrypted_db() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+
+        {
+            let store = GraphStore::open(path.clone()).unwrap();
+            let mut graph = Graph::new();
+            graph.add_node("https://legacy.example".to_string(), Point2D::new(0.0, 0.0));
+            let snapshot = graph.to_snapshot();
+            let plaintext = rkyv::to_bytes::<rkyv::rancor::Error>(&snapshot).unwrap();
+            let write_txn = store.snapshot_db.begin_write().unwrap();
+            {
+                let mut table = write_txn.open_table(SNAPSHOT_TABLE).unwrap();
+                table.insert("latest", plaintext.as_ref()).unwrap();
+            }
+            write_txn.commit().unwrap();
+
+            assert!(store.has_legacy_plaintext_data());
+        }
+
+        let store = GraphStore::open(path).unwrap();
+        assert!(!store.has_legacy_plaintext_data());
+        let snapshot = store.load_snapshot().unwrap();
+        assert_eq!(snapshot.nodes.len(), 1);
+    }
+
+    #[test]
+    fn test_log_output_is_not_plaintext() {
+        let (mut store, _dir) = create_test_store();
+        let entry = LogEntry::AddNode {
+            node_id: Uuid::new_v4().to_string(),
+            url: "https://plaintext-check.example".to_string(),
+            position_x: 1.0,
+            position_y: 2.0,
+        };
+        let plaintext = rkyv::to_bytes::<rkyv::rancor::Error>(&entry).unwrap();
+        store.log_mutation(&entry);
+
+        let mut found_any = false;
+        for guard in store.log_keyspace.iter() {
+            let (_, value) = guard.into_inner().unwrap();
+            found_any = true;
+            assert_ne!(value.as_ref(), plaintext.as_ref());
+            assert!(value.as_ref().starts_with(ENCRYPTED_PAYLOAD_MAGIC));
+        }
+        assert!(found_any);
     }
 
     #[test]

@@ -4,7 +4,7 @@
 
 # Graph UX Polish Plan (2026-02-19)
 
-**Status**: Draft — implementation not started
+**Status**: In Progress
 
 ---
 
@@ -60,9 +60,9 @@ Keyboard zoom for users without scroll wheels or trackpads. Also standard in all
 
 **Tasks**
 
-- [ ] Add `zoom_in: bool`, `zoom_out: bool`, `zoom_reset: bool` flags to `KeyboardActions`.
-- [ ] Detect `Key::Plus`/`Key::Equals`, `Key::Minus`, `Key::Num0` in `input/mod.rs`.
-- [ ] Apply zoom delta to `MetadataFrame` in post-render hook; clamp to existing `[0.1, 10.0]`
+- [x] Add `zoom_in: bool`, `zoom_out: bool`, `zoom_reset: bool` flags to `KeyboardActions`.
+- [x] Detect `Key::Plus`/`Key::Equals`, `Key::Minus`, `Key::Num0` in `input/mod.rs`.
+- [x] Apply zoom delta to `MetadataFrame` in post-render hook; clamp to existing `[0.1, 10.0]`
   bounds.
 
 **Validation Tests**
@@ -74,10 +74,11 @@ Keyboard zoom for users without scroll wheels or trackpads. Also standard in all
 
 ---
 
-#### 1.2 Zoom to Selected (`Z` key)
+#### 1.2 Smart Fit (`Z` key)
 
-When nodes are selected, `Z` fits the viewport to their bounding box. Falls back to `fit_to_screen`
-(`C` behavior) when nothing is selected. Standard in Gephi, Cytoscape, yEd.
+`Z` is the single keyboard fit control:
+- with 2+ selected nodes, fit the viewport to their bounding box.
+- with 0 or 1 selected node, fit the full graph (formerly the `C` key behavior).
 
 - Compute axis-aligned bounding box (AABB) of selected node positions from `app.graph`.
 - Add 20% padding.
@@ -85,23 +86,25 @@ When nodes are selected, `Z` fits the viewport to their bounding box. Falls back
 
 **Tasks**
 
-- [ ] Add `zoom_to_selected: bool` to `KeyboardActions`; detect `Key::Z`.
-- [ ] In apply/render phase: if `selected_nodes` is non-empty, compute AABB and write to
+- [x] Add `zoom_to_selected: bool` to `KeyboardActions`; detect `Key::Z`.
+- [x] In apply/render phase: if `selected_nodes` has 2+ nodes, compute AABB and write to
   `MetadataFrame`.
-- [ ] If `selected_nodes` is empty, fall through to `fit_to_screen` (same as `C`).
+- [x] If `selected_nodes` has 0 or 1 node, fall through to full-graph fit.
 
 **Validation Tests**
 
 - `test_zoom_to_selected_computes_correct_aabb` — two selected nodes at known positions → expected
   AABB with 20% padding.
-- `test_zoom_to_selected_fallsback_when_empty` — no selected nodes → fit_to_screen triggered.
+- `test_zoom_to_selected_falls_back_to_fit_when_selection_empty` — no selection → fit-to-screen.
+- `test_zoom_to_selected_falls_back_to_fit_when_single_selected` — single selection → fit-to-screen.
 
 ---
 
 #### 1.3 Pin Node Visual Indicator + Keyboard Toggle
 
 The data model (`node.is_pinned`, `PinNode` log entry, `sync_graph_positions_from_layout` honor
-logic) is complete. What's missing is a visible affordance and a keyboard shortcut.
+logic) is complete. The visual indicator and `L` keyboard shortcut are implemented (Session 3);
+only `KEYBINDINGS.md` update remains.
 
 - **Visual**: small white filled circle (5px radius) at node center-top in `GraphNodeShape::ui()`.
 - **Keyboard**: `L` key ("Lock") toggles pin on primary selected node. `P` stays as physics panel.
@@ -109,15 +112,15 @@ logic) is complete. What's missing is a visible affordance and a keyboard shortc
 
 **Tasks**
 
-- [ ] In `GraphNodeShape::ui()` (or `graph/egui_adapter.rs`): if `node.is_pinned`, paint indicator.
-- [ ] Add `toggle_pin: bool` to `KeyboardActions`; detect `Key::L` in `input/mod.rs`.
-- [ ] Emit `GraphIntent::PinNode { key, is_pinned: !current }` from keyboard actions handler.
-- [ ] Update `KEYBINDINGS.md` and help panel string with `L` entry.
+- [x] In `GraphNodeShape::ui()` (or `graph/egui_adapter.rs`): if `node.is_pinned`, paint indicator.
+- [x] Add `toggle_pin` keyboard action to `KeyboardActions`; detect `Key::L` in `input/mod.rs`.
+- [x] Emit `GraphIntent` for pin-toggle from keyboard actions handler (`TogglePrimaryNodePin`).
+- [ ] Update `KEYBINDINGS.md` with `L` entry (help panel and in-graph shortcut overlay updated).
 
 **Validation Tests**
 
-- `test_pin_node_keyboard_emits_intent` — `toggle_pin` flag with selected node → correct `PinNode`
-  intent emitted.
+- `test_toggle_pin_primary_action_maps_to_intent` — `toggle_pin` flag emits
+  `GraphIntent::TogglePrimaryNodePin`.
 - Headed: pinned node shows indicator in graph view; unpinned node shows none.
 
 ---
@@ -134,7 +137,7 @@ also improves the trackpad glide feel. The `[0.1, 10.0]` zoom clamp already prev
 
 **Tasks**
 
-- [ ] In `render/mod.rs`, change `.with_zoom_speed(0.05)` to `.with_zoom_speed(0.01)`.
+- [x] In `render/mod.rs`, change `.with_zoom_speed(0.05)` to `.with_zoom_speed(0.01)`.
 - [ ] Validate headed on both a scroll wheel and a trackpad; adjust if needed (target: 5–10% zoom
   change per distinct scroll notch).
 
@@ -160,11 +163,11 @@ state without opening the node. Research §7.4.
 
 **Tasks**
 
-- [ ] Locate correct attachment point for node hover UI in `render/mod.rs` or
+- [x] Locate correct attachment point for node hover UI in `render/mod.rs` or
   `graph/egui_adapter.rs`.
-- [ ] Format tooltip: full URL, title (omit if == URL), last-visited delta (e.g. "3 hours ago"),
+- [x] Format tooltip: full URL, title (omit if == URL), last-visited delta (e.g. "3 hours ago"),
   lifecycle.
-- [ ] Ensure tooltip does not block graph interaction.
+- [x] Ensure tooltip does not block graph interaction.
 
 **Validation Tests**
 
@@ -203,6 +206,15 @@ the label-hidden behavior. Favicon rendering is separate — see §2.4.
 - `test_label_tier_domain` — zoom 1.0 → domain-only or truncated title.
 - `test_label_tier_none` — zoom 0.4 → empty label string.
 - Headed: zoom out → labels progressively simplify without layout jank.
+
+---
+
+#### 2.3 Convergence Status Indicator Upgrade
+
+Extends the existing "Physics: Running / Paused" overlay to 4 states. This is the display side of
+auto-pause (implemented in `2026-02-19_layout_advanced_plan.md §1.1`). The 4-state extension
+("Running" / "Settling" / "Settled" / "Paused") is described and tested there; this section
+serves as a cross-reference.
 
 ---
 
@@ -257,15 +269,6 @@ if self.selected || self.dragged || self.hovered {
 - `test_thumbnail_renders_only_on_hover` — node with both favicon and thumbnail, not
   hovered/selected → only favicon shape; no thumbnail. On hover → both shapes present.
 - Headed: unfocused nodes show favicon; hover a node → thumbnail appears over the favicon.
-
----
-
-#### 2.3 Convergence Status Indicator Upgrade
-
-Extends the existing "Physics: Running / Paused" overlay to 4 states. This is the display side of
-auto-pause (implemented in `2026-02-19_layout_advanced_plan.md §1.1`). The 4-state extension
-("Running" / "Settling" / "Settled" / "Paused") is described and tested there; this section
-serves as a cross-reference.
 
 ---
 
@@ -407,7 +410,8 @@ Research §7.1: "Distinct border or halo on all selected nodes, not just primary
 
 ### Phase 4: Multi-Select Extensions (deferred)
 
-Defer until Phase 2 (pair-based edge operations) and workspace routing (Feb 19 plan) are validated.
+Workspace routing Phases 1–3 are complete. Edge operations plan Step 4d validation is still
+pending; unblock group-drag when Step 4d lands.
 
 - **`Ctrl+A` select all**: emit `SelectAll` intent → populate `selected_nodes` with all `NodeKey`s.
 - **Group drag**: when dragging a node that is in `selected_nodes`, apply same delta to all selected
@@ -433,8 +437,8 @@ Research §11 priority table items tracked:
 | Priority | Item | Location |
 |---|---|---|
 | #1 | `Ctrl+Click` multi-select | ✅ done (edge plan Step 1) |
-| #2 | Pin node UX | Phase 1.3 |
-| #3 | Physics presets | ✅ done (layout strategy plan) |
+| #2 | Pin node UX | Phase 1.3 (✅ partial — shortcut done, KEYBINDINGS.md pending) |
+| #3 | Physics presets | Not yet — no preset system exists (archived plan [x] marks are wrong) |
 | #4 | Auto-pause on convergence | Layout Advanced Plan §1.1 |
 | #5 | Reheat on structural change | Layout Advanced Plan §1.2 |
 | #6 | Hover tooltip | Phase 2.1 |
@@ -446,7 +450,9 @@ Research §11 priority table items tracked:
 | #12 | Convergence status indicator | Phase 2.3 (see Layout Advanced Plan §1.1) |
 | #13 | Neighbor highlight on hover | Phase 3.2 |
 | #14 | Highlight vs. filter search toggle | Phase 3.3 |
-| #15–18 | Lasso, group drag, edge hit targets, crashed indicator | Phase 4 / deferred |
+| #15 | Crashed node indicator | Phase 3.4 |
+| — | Multi-select halo (all selected nodes) | Phase 3.5 |
+| #16–18 | Lasso, group drag, edge hit targets | Phase 4 / deferred |
 
 Research §14 advanced recommendations (degree-dependent repulsion, greedy label culling, invisible
 layout constraints) are tracked in `2026-02-19_layout_advanced_plan.md §Phase 2`.
@@ -467,3 +473,32 @@ layout constraints) are tracked in `2026-02-19_layout_advanced_plan.md §Phase 2
 - Physics micro-improvements (original Phase 1: auto-pause, reheat, new-node placement) moved to
   `2026-02-19_layout_advanced_plan.md §Phase 1` to consolidate layout-system changes.
 - Remaining phases renumbered: old 2→1, old 3→2, old 4→3, old 5→4.
+
+### 2026-02-19 — Session 3
+
+- Implemented keyboard-grouped node context menu navigation (Left/Right group switch, Up/Down
+  action cycle, Enter execute) with persistent focus state.
+- Added Persistence Hub `Load Pin...` chooser popup with `Workspace Pin` and `Pane Pin` restore
+  actions.
+- Implemented pin UX polish items: `L` toggles primary-node pin state, help/overlay shortcut text
+  updated, and pinned nodes now render a top-center marker.
+- Reduced graph zoom speed to `0.01` for finer wheel/trackpad control.
+
+### 2026-02-19 â€” Session 4
+
+- Implemented Phase 1.1 keyboard zoom (`+`/`-`/`0`) end-to-end:
+  input flags, intent mapping, app request queueing, and post-render `MetadataFrame` updates.
+- Implemented Phase 1.2 `Z` zoom-to-selected:
+  selected-node AABB fit with 20% padding, plus no-selection fallback to fit-to-screen.
+- Updated graph overlay/help text with the new zoom shortcuts.
+- Added app-level tests for keyboard zoom request queueing and zoom-to-selected fallback behavior.
+- Follow-up adjustment: retired `C` keyboard fit shortcut; `Z` now owns smart-fit
+  (2+ selected → fit selection, 0/1 selected → fit graph).
+
+### 2026-02-19 â€” Session 5
+
+- Implemented Phase 2.1 hover tooltip in `render/mod.rs` using hovered-node context.
+- Tooltip now shows title/URL, relative last-visited time, and lifecycle state.
+- Tooltip is rendered on a non-interactable tooltip layer and suppresses itself while hovering
+  workspace-membership badges to avoid overlap.
+- Added render-layer unit tests for relative-time formatting helpers.

@@ -4,11 +4,51 @@
 
 # Persistence Hub Plan (2026-02-19)
 
-**Status**: Draft — implementation not started. Extends the existing Persistence Hub panel
+**Status**: In progress. Baseline runtime lifecycle diagnostics and policy landed; Bookmarks,
+Node History, and Maintenance scopes remain planned. Extends the existing Persistence Hub panel
 (workspace/graph save-load-delete) with Bookmarks, Node History, and Maintenance scopes.
 
 ---
 
+### Implemented Baseline (2026-02-20)
+
+The following cross-cutting runtime/sessioning pieces are now implemented and visible through the
+Persistence Hub:
+
+- Active webview budget policy (DEFAULT_ACTIVE_WEBVIEW_LIMIT = 4) with LRU overflow demotion
+  from `Active` to `Warm`.
+- Warm cache budget policy (DEFAULT_WARM_CACHE_LIMIT = 12) with LRU overflow eviction from
+  `Warm` to `Cold`.
+- Memory-pressure-aware lifecycle adjustment (normal/warning/critical), including stronger active
+  evictions under pressure.
+- Persistence Hub diagnostics rows for:
+  - lifecycle counts (`Active`, `Warm`, `Cold`),
+  - configured active/warm limits,
+  - mapped webview count,
+  - memory pressure status and available/total memory.
+
+These are baseline controls/telemetry only; user-configurable lifecycle budgets and advanced
+retention heuristics are still future work.
+
+### Newly Implemented Slices (2026-02-20)
+
+- **LRU terminology + behavior**: runtime active/warm lifecycle caches now use explicit LRU
+  ordering (`oldest -> newest`) and evict oldest non-protected entries.
+- **Session restore fidelity payload**:
+  - Added persisted `NodeSessionState` payload on each node snapshot
+    (history entries/index, scroll x/y, optional form draft).
+  - Snapshot restore now prefers `NodeSessionState` when present and backfills from legacy
+    history fields when absent.
+  - Cold reactivation URL selection now prefers the URL at restored history index.
+  - Form draft metadata writes are feature-guarded (`GRAPHSHELL_ENABLE_FORM_DRAFT`).
+- **Encryption at rest**:
+  - Added persistence write pipeline: `rkyv -> zstd -> AES-256-GCM`.
+  - Added read compatibility for both encrypted payloads and legacy plaintext payloads.
+  - Added key management via OS keyring (`keyring` crate; per-store account key).
+  - Added startup legacy detection + in-place migration to encrypted payloads.
+  - Applied encrypted storage to fjall log entries and redb snapshot/layout payloads.
+
+---
 ## Plan
 
 ### Context
@@ -156,6 +196,44 @@ vision (`2026-02-18_universal_node_content_model.md`).
 
 ---
 
+### Phase 2.5: Session Restore Fidelity (Cold Resume Quality)
+
+Improve cold-node restore so reopening a frozen/cold node feels closer to where the user left it,
+without attempting full process-level webview checkpointing.
+
+#### Scope
+
+- Persist per-node session metadata needed for higher-fidelity restore:
+  - navigation history entries + current index,
+  - scroll position (x/y),
+  - optional lightweight form draft snapshot (best-effort, opt-in).
+- On reopen of a cold node, restore this metadata after webview creation.
+- Keep warm-cache behavior separate: warm nodes still preserve full in-memory state while resident.
+
+#### Non-Goals
+
+- Full JS heap/DOM runtime snapshot and exact process resume.
+- Persisting opaque engine internals beyond supported embedder/state APIs.
+
+#### Tasks
+
+- [ ] Add persisted `NodeSessionState` model (history/index/scroll + optional form draft payload).
+- [ ] Capture/update session state from webview callbacks (history changes, scroll updates).
+- [ ] Restore session state on cold-node reactivation (order: URL/history -> viewport -> scroll ->
+  optional form draft replay).
+- [ ] Add feature flag for form draft capture/replay (off by default until validated).
+- [ ] Add Persistence Hub diagnostics row showing per-node restore fidelity status.
+
+#### Validation Tests
+
+- `test_cold_restore_reapplies_history_index` - node reopens at the correct history index.
+- `test_cold_restore_reapplies_scroll_offset` - scroll position is restored after reopen.
+- `test_form_draft_restore_feature_flag_guarded` - draft replay runs only when enabled.
+- `test_restore_fallback_without_session_state` - cold reopen still succeeds when no
+  session-state payload exists.
+
+---
+
 ### Phase 3: Maintenance
 
 Batch and retention operations for named persistence data.
@@ -216,7 +294,118 @@ Batch and retention operations for named persistence data.
 
 ---
 
+### Phase 4: Encryption at Rest
+
+The graph database contains qualitatively more sensitive data than ordinary browser history. A flat
+history list reveals which sites were visited; the graph also reveals *how those sites relate to
+each other* — research patterns, topic clusters, professional associations. The full persistence
+layer (fjall log + redb snapshots) deserves stronger protection than browser history typically
+receives.
+
+#### Data Classification
+
+| Data | Sensitivity | Treatment |
+| --- | --- | --- |
+| Graph topology + node URLs | High | Encrypt at rest |
+| Node titles, bookmarks, `url_history` | High | Encrypt at rest |
+| Named workspace/graph snapshots | High | Encrypt at rest |
+| `NodeSessionState` payloads (nav history, scroll, form drafts) | High | Encrypt at rest |
+| Physics positions | Low — ephemeral layout | Included in snapshot; encrypted as a side effect |
+| Thumbnails / favicons | Low — reconstructible from URL | Cache only; no encryption needed |
+
+#### Key Management
+
+Use OS-native secret storage to derive the encryption key — zero friction, no user prompt required
+by default. Key is bound to the OS account.
+
+- **Primary**: `keyring` crate (Windows DPAPI, macOS Keychain, Linux libsecret) — generate a
+  random 32-byte key on first run and store it there.
+- **Fallback/override**: Argon2-derived key from a user passphrase for portable vault use cases
+  (opt-in, not default).
+- **Principle**: the encryption key must never be stored adjacent to encrypted data. Key lives in
+  the OS keychain; data lives in the fjall/redb app data directory.
+
+#### Encryption Pipeline
+
+```text
+data → rkyv serialize → zstd compress → AES-256-GCM encrypt → fjall/redb write
+```
+
+Ordering rationale: compress before encrypt because encrypted bytes are high-entropy and
+compress poorly. zstd and AES-256-GCM are independent byte transforms — fully compatible.
+The `aes-gcm` crate (RustCrypto) provides authenticated encryption (AEAD), which gives both
+confidentiality and tamper detection in a single pass.
+
+#### Impact on Existing Phases
+
+- **Phase 3.4 Export**: plaintext JSON export must carry a visible warning that the file is
+  unencrypted. An optional encrypted export variant (e.g. CBOR + AES-256-GCM, or age-encrypted
+  JSON) should be offered alongside the plaintext format.
+- **Phase 3.3 Log Compaction**: the compaction operation reads and rewrites the log; it must read
+  encrypted and write encrypted — no plaintext intermediary on disk.
+- **Phase 2.5 Session Restore**: `NodeSessionState` payloads (navigation history, scroll, form
+  drafts) are sensitive and must flow through the encrypted path.
+
+#### Verse Forward-Compatibility
+
+When Verse P2P sharing is implemented, content shared over the network should already be encrypted
+at rest. The per-node encryption unit (compressed rkyv payload + AES-256-GCM tag) maps naturally
+to a content-addressed store: `BLAKE3::hash(compressed_bytes)` → CID, then encrypt for transit.
+The compress → hash → encrypt ordering ensures the CID covers the actual transfer unit.
+
+#### Tasks
+
+- [ ] On first run: generate a 32-byte random key; store in OS keychain via `keyring` crate.
+- [ ] Add `PersistenceKey` abstraction in `persistence/mod.rs`; load key from OS keychain on
+  startup; expose key-not-found error path.
+- [ ] Wrap fjall log write path: `rkyv_bytes → zstd → aes_gcm::encrypt` for all sensitive entries.
+- [ ] Wrap fjall log read path: `aes_gcm::decrypt → zstd → rkyv::from_bytes`.
+- [ ] Wrap redb snapshot write path (same pipeline).
+- [ ] Wrap redb snapshot read path.
+- [ ] Migration path: on startup, detect unencrypted legacy database; prompt user for one-time
+  in-place encryption migration before proceeding.
+- [ ] Update Phase 3.4 export: add plaintext warning; add encrypted export option.
+- [ ] Update Phase 3.3 compaction: verify compacted log is written through the encrypted path.
+
+#### Validation Tests
+
+- `test_roundtrip_encrypt_decrypt` — encrypt then decrypt a known byte payload → original bytes
+  recovered exactly.
+- `test_tampered_ciphertext_rejected` — flip one byte in ciphertext → AES-GCM returns
+  authentication error.
+- `test_key_not_stored_in_data_dir` — after init, no file in the fjall/redb directory contains
+  the raw key bytes.
+- `test_migration_detects_unencrypted_db` — a database written without encryption is detected as
+  a legacy format on startup.
+- `test_compaction_output_is_not_plaintext` — after log compaction, raw log bytes do not match
+  the original unencrypted rkyv output format.
+
+---
+
 ## Findings
+
+### Graph Topology Sensitivity
+
+GraphShell's persistence is qualitatively more sensitive than a browser history file. A history
+list reveals which URLs were visited; the graph also encodes *relationships* between those URLs —
+which research threads connect, which domains cluster together, which pages a user linked manually.
+This topology is richer and harder to reconstruct than raw history, which makes it both more
+valuable to an attacker and more deserving of protection.
+
+Phase 4 (Encryption at Rest) is the direct response. The `NodeSessionState` payloads from Phase
+2.5 (form drafts, navigation index) add another high-sensitivity data class beyond the graph model
+itself.
+
+### Export Security and FT7 Import Hardening
+
+Plaintext JSON export (Phase 3.4) is a deliberate escape hatch for interoperability and backup.
+It must be labeled clearly as unencrypted in the UI and file metadata. An encrypted export variant
+should be offered when Phase 4 is implemented.
+
+For the FT7 browser import feature (Firefox/Chrome bookmark/history files): treat all imported
+files as untrusted. Parse bookmark XML with a strict field allowlist; do not eval or navigate any
+embedded URLs during import. Open SQLite history databases (`rusqlite`) in read-only mode and
+iterate row-by-row — do not embed any file-derived data into SQL queries.
 
 ### Relationship to Older Plan
 
@@ -256,3 +445,13 @@ reconstruction for fields not stored in snapshots. Audit `load_snapshot()` and
 - Phase 2 (Node History): task list; fjall-log-derived approach recommended.
 - Phase 3 (Maintenance): task list for batch delete, retention cap, log compaction, export/import.
 - Implementation not started.
+
+### 2026-02-20 - Session 2
+
+- Added baseline lifecycle/sessioning policy tied into runtime reconciliation:
+  - active MRU cap (4),
+  - warm MRU cap (12),
+  - pressure-aware demotion/eviction behavior.
+- Added Persistence Hub runtime diagnostics for lifecycle counts and memory pressure.
+- Added or updated unit tests for active/warm MRU eviction behavior.
+- Phase 1/2/3 feature scopes (Bookmarks, Node History UI, Maintenance batch tools) still pending.

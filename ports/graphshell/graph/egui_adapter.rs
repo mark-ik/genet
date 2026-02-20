@@ -53,6 +53,8 @@ pub struct GraphNodeShape {
     workspace_membership_count: usize,
     #[serde(default)]
     workspace_membership_names: Vec<String>,
+    #[serde(default)]
+    is_pinned: bool,
 }
 
 impl From<NodeProps<Node>> for GraphNodeShape {
@@ -77,6 +79,7 @@ impl From<NodeProps<Node>> for GraphNodeShape {
             favicon_handle: None,
             workspace_membership_count: 0,
             workspace_membership_names: Vec::new(),
+            is_pinned: node_props.payload.is_pinned,
         };
         shape.thumbnail_hash = Self::hash_bytes(&shape.thumbnail_png);
         shape.favicon_hash = Self::hash_favicon(&shape.favicon_rgba);
@@ -94,7 +97,7 @@ impl DisplayNode<Node, EdgeType, Directed, DefaultIx> for GraphNodeShape {
     }
 
     fn shapes(&mut self, ctx: &DrawContext) -> Vec<Shape> {
-        let mut res = Vec::with_capacity(3);
+        let mut res = Vec::with_capacity(4);
         let circle_center = ctx.meta.canvas_to_screen_pos(self.pos);
         let circle_radius = ctx.meta.canvas_to_screen_size(self.radius);
         let color = self.effective_color(ctx);
@@ -122,6 +125,7 @@ impl DisplayNode<Node, EdgeType, Directed, DefaultIx> for GraphNodeShape {
             res.push(Shape::image(texture_id, rect, uv, Color32::WHITE));
         }
         self.push_workspace_membership_badge(ctx, circle_center, circle_radius, &mut res);
+        self.push_pinned_indicator(circle_center, circle_radius, &mut res);
 
         if !(self.selected || self.dragged || self.hovered) {
             return res;
@@ -143,6 +147,7 @@ impl DisplayNode<Node, EdgeType, Directed, DefaultIx> for GraphNodeShape {
         self.hovered = state.hovered;
         self.label_text = state.label.to_string();
         self.color = state.color();
+        self.is_pinned = state.payload.is_pinned;
 
         let new_thumbnail = state.payload.thumbnail_png.clone();
         let new_thumbnail_hash = Self::hash_bytes(&new_thumbnail);
@@ -237,32 +242,28 @@ impl GraphNodeShape {
         ));
         let badge_pos = Pos2::new(badge_rect.min.x + padding.x, badge_rect.min.y + padding.y);
         shapes.push(TextShape::new(badge_pos, badge_galley, Color32::from_gray(245)).into());
+    }
 
-        if !self.hovered || self.workspace_membership_names.is_empty() {
+    fn push_pinned_indicator(
+        &self,
+        circle_center: Pos2,
+        circle_radius: f32,
+        shapes: &mut Vec<Shape>,
+    ) {
+        if !self.is_pinned {
             return;
         }
-        let tooltip_text = format!("Workspaces\n{}", self.workspace_membership_names.join("\n"));
-        let tooltip_font = FontId::new((9.0 * scale).clamp(8.0, 14.0), FontFamily::Monospace);
-        let tooltip_galley = ctx.ctx.fonts_mut(|f| {
-            f.layout_no_wrap(tooltip_text, tooltip_font, Color32::from_rgb(244, 246, 250))
-        });
-        let tooltip_padding = Vec2::new(6.0 * scale, 4.0 * scale);
-        let tooltip_size = tooltip_galley.size() + tooltip_padding * 2.0;
-        let tooltip_min = Pos2::new(
-            badge_rect.max.x + 6.0 * scale,
-            badge_rect.min.y - 2.0 * scale,
+        let marker_center = Pos2::new(circle_center.x, circle_center.y - circle_radius * 0.9);
+        let marker_radius = circle_radius.clamp(2.0, 5.0);
+        shapes.push(
+            CircleShape {
+                center: marker_center,
+                radius: marker_radius,
+                fill: Color32::WHITE,
+                stroke: Stroke::new(1.0, Color32::from_gray(40)),
+            }
+            .into(),
         );
-        let tooltip_rect = Rect::from_min_size(tooltip_min, tooltip_size);
-        shapes.push(Shape::rect_filled(
-            tooltip_rect,
-            5.0 * scale,
-            Color32::from_rgba_unmultiplied(18, 24, 34, 228),
-        ));
-        let tooltip_pos = Pos2::new(
-            tooltip_rect.min.x + tooltip_padding.x,
-            tooltip_rect.min.y + tooltip_padding.y,
-        );
-        shapes.push(TextShape::new(tooltip_pos, tooltip_galley, Color32::from_gray(245)).into());
     }
 
     fn ensure_thumbnail_texture(&mut self, ctx: &DrawContext) -> Option<TextureId> {
@@ -412,6 +413,7 @@ impl EguiGraphState {
                 // Set color based on lifecycle.
                 let color = match lifecycle {
                     NodeLifecycle::Active => Color32::from_rgb(100, 200, 255),
+                    NodeLifecycle::Warm => Color32::from_rgb(120, 170, 205),
                     NodeLifecycle::Cold => Color32::from_rgb(140, 140, 165),
                 };
                 node.set_color(color);
@@ -419,6 +421,7 @@ impl EguiGraphState {
                 // Set radius based on lifecycle
                 let radius = match lifecycle {
                     NodeLifecycle::Active => 18.0,
+                    NodeLifecycle::Warm => 16.5,
                     NodeLifecycle::Cold => 15.0,
                 };
                 node.display_mut().radius = radius;
@@ -546,19 +549,24 @@ mod tests {
     fn test_egui_adapter_lifecycle_colors() {
         let mut graph = Graph::new();
         let key_active = graph.add_node("active".to_string(), Point2D::new(0.0, 0.0));
+        let key_warm = graph.add_node("warm".to_string(), Point2D::new(50.0, 0.0));
         let key_cold = graph.add_node("cold".to_string(), Point2D::new(100.0, 0.0));
 
         graph.get_node_mut(key_active).unwrap().lifecycle = NodeLifecycle::Active;
+        graph.get_node_mut(key_warm).unwrap().lifecycle = NodeLifecycle::Warm;
         let selected_nodes = HashSet::new();
         let state = EguiGraphState::from_graph(&graph, &selected_nodes);
 
         let idx_active = state.get_index(key_active).unwrap();
+        let idx_warm = state.get_index(key_warm).unwrap();
         let idx_cold = state.get_index(key_cold).unwrap();
 
         let active_node = state.graph.node(idx_active).unwrap();
+        let warm_node = state.graph.node(idx_warm).unwrap();
         let cold_node = state.graph.node(idx_cold).unwrap();
 
         assert_eq!(active_node.color(), Some(Color32::from_rgb(100, 200, 255)));
+        assert_eq!(warm_node.color(), Some(Color32::from_rgb(120, 170, 205)));
         assert_eq!(cold_node.color(), Some(Color32::from_rgb(140, 140, 165)));
     }
 
@@ -615,5 +623,16 @@ mod tests {
 
         assert_eq!(shape.workspace_membership_count, 0);
         assert!(shape.workspace_membership_names.is_empty());
+    }
+
+    #[test]
+    fn test_pinned_flag_copied_from_graph_node() {
+        let mut graph = Graph::new();
+        let key = graph.add_node("https://example.com".to_string(), Point2D::new(0.0, 0.0));
+        graph.get_node_mut(key).unwrap().is_pinned = true;
+
+        let state = EguiGraphState::from_graph(&graph, &HashSet::new());
+        let shape = state.graph.node(key).unwrap().display();
+        assert!(shape.is_pinned);
     }
 }

@@ -29,6 +29,11 @@ pub struct KeyboardActions {
     pub remove_user_edge: bool,
     pub pin_selected: bool,
     pub unpin_selected: bool,
+    pub toggle_pin_primary: bool,
+    pub zoom_in: bool,
+    pub zoom_out: bool,
+    pub zoom_reset: bool,
+    pub zoom_to_selected: bool,
     pub delete_selected: bool,
     pub clear_graph: bool,
     pub undo: bool,
@@ -37,14 +42,15 @@ pub struct KeyboardActions {
 
 /// Collect keyboard actions from the egui context (input detection only).
 pub(crate) fn collect_actions(ctx: &egui::Context) -> KeyboardActions {
-    // Don't handle shortcuts when a text field (e.g., URL bar) has focus
-    let text_field_focused = ctx.memory(|m| m.focused().is_some());
+    // Don't handle shortcuts while egui is actively capturing keyboard input
+    // (for example, URL bar text editing).
+    let keyboard_captured_by_egui = ctx.wants_keyboard_input();
     let mut actions = KeyboardActions::default();
 
     ctx.input(|i| {
         // Escape always works: unfocus text field or toggle view
         if i.key_pressed(Key::Escape) {
-            if text_field_focused {
+            if keyboard_captured_by_egui {
                 // Escape will unfocus the text field (handled by egui)
                 return;
             }
@@ -56,8 +62,8 @@ pub(crate) fn collect_actions(ctx: &egui::Context) -> KeyboardActions {
             actions.toggle_view = true;
         }
 
-        // Skip remaining shortcuts if a text field is focused
-        if text_field_focused {
+        // Skip remaining shortcuts while egui is consuming keyboard input.
+        if keyboard_captured_by_egui {
             return;
         }
 
@@ -66,9 +72,15 @@ pub(crate) fn collect_actions(ctx: &egui::Context) -> KeyboardActions {
             actions.toggle_physics = true;
         }
 
-        // C: Fit graph to screen
-        if i.key_pressed(Key::C) {
-            actions.fit_to_screen = true;
+        // + / - / 0: keyboard zoom controls
+        if i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals) {
+            actions.zoom_in = true;
+        }
+        if i.key_pressed(Key::Minus) {
+            actions.zoom_out = true;
+        }
+        if i.key_pressed(Key::Num0) {
+            actions.zoom_reset = true;
         }
 
         // P: Toggle physics config panel
@@ -79,6 +91,11 @@ pub(crate) fn collect_actions(ctx: &egui::Context) -> KeyboardActions {
         // N: Create new node
         if i.key_pressed(Key::N) {
             actions.create_node = true;
+        }
+
+        // Z: zoom to selected (without Ctrl modifier)
+        if i.key_pressed(Key::Z) && !i.modifiers.ctrl {
+            actions.zoom_to_selected = true;
         }
 
         // G: connect selected pair, Shift+G: connect both directions, Alt+G: remove user edge
@@ -100,6 +117,16 @@ pub(crate) fn collect_actions(ctx: &egui::Context) -> KeyboardActions {
         // U: unpin selected node(s)
         if i.key_pressed(Key::U) {
             actions.unpin_selected = true;
+        }
+
+        // L: toggle pin state on primary selected node
+        if i.key_pressed(Key::L)
+            && !i.modifiers.ctrl
+            && !i.modifiers.shift
+            && !i.modifiers.alt
+            && !i.modifiers.command
+        {
+            actions.toggle_pin_primary = true;
         }
 
         // F1 or ?: Toggle keyboard shortcut help panel
@@ -152,6 +179,18 @@ pub fn intents_from_actions(actions: &KeyboardActions) -> Vec<GraphIntent> {
     if actions.fit_to_screen {
         intents.push(GraphIntent::RequestFitToScreen);
     }
+    if actions.zoom_in {
+        intents.push(GraphIntent::RequestZoomIn);
+    }
+    if actions.zoom_out {
+        intents.push(GraphIntent::RequestZoomOut);
+    }
+    if actions.zoom_reset {
+        intents.push(GraphIntent::RequestZoomReset);
+    }
+    if actions.zoom_to_selected {
+        intents.push(GraphIntent::RequestZoomToSelected);
+    }
     if actions.toggle_physics_panel {
         intents.push(GraphIntent::TogglePhysicsPanel);
     }
@@ -191,6 +230,9 @@ pub fn intents_from_actions(actions: &KeyboardActions) -> Vec<GraphIntent> {
         intents.push(GraphIntent::ExecuteEdgeCommand {
             command: EdgeCommand::UnpinSelected,
         });
+    }
+    if actions.toggle_pin_primary {
+        intents.push(GraphIntent::TogglePrimaryNodePin);
     }
     if actions.delete_selected {
         intents.push(GraphIntent::RemoveSelectedNodes);
@@ -260,6 +302,48 @@ mod tests {
         app.apply_intents(intents);
 
         assert!(app.fit_to_screen_requested);
+    }
+
+    #[test]
+    fn test_zoom_in_action_maps_to_intent() {
+        let intents = intents_from_actions(&KeyboardActions {
+            zoom_in: true,
+            ..Default::default()
+        });
+        assert!(intents.iter().any(|i| matches!(i, GraphIntent::RequestZoomIn)));
+    }
+
+    #[test]
+    fn test_zoom_out_action_maps_to_intent() {
+        let intents = intents_from_actions(&KeyboardActions {
+            zoom_out: true,
+            ..Default::default()
+        });
+        assert!(intents
+            .iter()
+            .any(|i| matches!(i, GraphIntent::RequestZoomOut)));
+    }
+
+    #[test]
+    fn test_zoom_reset_action_maps_to_intent() {
+        let intents = intents_from_actions(&KeyboardActions {
+            zoom_reset: true,
+            ..Default::default()
+        });
+        assert!(intents
+            .iter()
+            .any(|i| matches!(i, GraphIntent::RequestZoomReset)));
+    }
+
+    #[test]
+    fn test_zoom_to_selected_action_maps_to_intent() {
+        let intents = intents_from_actions(&KeyboardActions {
+            zoom_to_selected: true,
+            ..Default::default()
+        });
+        assert!(intents
+            .iter()
+            .any(|i| matches!(i, GraphIntent::RequestZoomToSelected)));
     }
 
     #[test]
@@ -402,6 +486,19 @@ mod tests {
                 command: EdgeCommand::UnpinSelected
             }
         )));
+    }
+
+    #[test]
+    fn test_toggle_pin_primary_action_maps_to_intent() {
+        let intents = intents_from_actions(&KeyboardActions {
+            toggle_pin_primary: true,
+            ..Default::default()
+        });
+        assert!(
+            intents
+                .iter()
+                .any(|i| matches!(i, GraphIntent::TogglePrimaryNodePin))
+        );
     }
 
     #[test]

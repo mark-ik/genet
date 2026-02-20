@@ -37,10 +37,10 @@ $env:RUST_LOG="graphshell=debug"; cargo run -p graphshell --bin graphshell -- -M
    - Expected B: `workspace-alpha` restores.
    - Run note (2026-02-19): Passed (A and B).
 
-3. [ ] **Zero-membership open remains ephemeral**
+3. [ ] **Zero-membership open remains in current workspace context**
    - Action: create a new node `E` and do not save any workspace that contains it; open `E`.
    - Expected: opens in current workspace context (tab open), no named workspace is created implicitly.
-   - Run note (2026-02-19): Core behavior passed (no named workspace auto-created). Prompt gating behavior changed twice (sticky, then suppressed). Follow-up fixes landed: routed workspace-open no longer clears ephemeral prompt state before switch handling; `SetNodePosition` no longer flags ephemeral unsaved state; session-autosave path no longer raises modal prompt (prompting is reserved for explicit workspace-switch flows). Requires final headed re-validation.
+   - Run note (2026-02-19): Core behavior passed (no named workspace auto-created). Prompt gating behavior changed twice (sticky, then suppressed). Follow-up fixes landed: routed workspace-open no longer clears workspace prompt state before switch handling; `SetNodePosition` no longer flags unsaved state; session-autosave path no longer raises modal prompt (prompting is reserved for explicit workspace-switch flows). Re-validation reported no prompt at all in expected switch case; follow-up fix pending and requires headed re-validation.
 
 4. [x] **Open with Neighbors synthesis cap**
    - Action: choose a hub node with many direct neighbors; run `Open with Neighbors`.
@@ -63,24 +63,74 @@ $env:RUST_LOG="graphshell=debug"; cargo run -p graphshell --bin graphshell -- -M
    - Note: this case may require a stale-layout fixture or manual store edit to force an empty post-prune restore.
    - Run note (2026-02-19): Not yet reproduced.
 
-8. [ ] **Radial pair-edge parity with keyboard `G`**
+8. [x] **Radial pair-edge parity with keyboard `G`**
    - Action: with a valid pair context, trigger pair edge creation from radial menu (`Edge -> Pair`) and compare with keyboard `G`.
    - Expected: radial path creates the same `UserGrouped` edge as keyboard command.
-   - Run note (2026-02-19): Reported mismatch (`G` works, radial pair did not). Follow-up fixes landed: pair context honors explicit node context target; graph interactions are disabled while command menu is open; right-click now opens a compact node context menu (radial remains keyboard/F3 path), avoiding immediate close on right-button release. Requires headed re-validation.
+   - Run note (2026-02-19): Reported mismatch (`G` works, radial pair did not). Follow-up fixes landed: pair context honors explicit node context target; graph interactions are disabled while command menu is open; right-click now opens a compact node context menu (radial remains keyboard/F3 path), avoiding immediate close on right-button release. Re-validation passed via current context-menu path.
 
-9. [ ] **Node context menu hierarchy**
+9. [x] **Node context menu hierarchy**
    - Action: right-click a node in graph view.
    - Expected: context menu presents grouped hierarchy (`Workspace`, `Edge`, `Node`) via submenu-style entries, and closes on `Esc` or action selection.
-   - Keyboard: while open, `1/2/3` or `Left/Right` switches group, `Up/Down` moves action focus, `Enter` executes highlighted action.
+   - Keyboard: while open, `Left/Right` switches group, `Up/Down` moves action focus (including `Close`), `Enter` executes highlighted action or closes when `Close` is focused.
+   - Run note (2026-02-19): Passed; follow-up polish applied to rely on arrow-key navigation only and include keyboard-selectable close.
 
-10. [ ] **Add node tab to existing workspace**
+10. [x] **Add node tab to existing workspace**
    - Action: right-click node `E` -> `Workspace` -> `Add To Workspace...` and pick `workspace-alpha`.
    - Expected: `workspace-alpha` snapshot now includes `E` as a tab on next restore/load, and `E` workspace badge count increments accordingly.
+   - Run note (2026-02-19): Passed; wording/label clarity for workspace-route action remains a UX follow-up.
 
 11. [ ] **Unified context-aware pin control**
    - Action A: with graph/workspace focus (no active pane focus), use Persistence Hub `Pin Workspace`; mutate layout and verify highlight toggles off; restore using `Load Pin... -> Workspace Pin` and verify previous layout restores.
    - Action B: with an active pane focus, use Persistence Hub `Pin Pane`; mutate layout and verify highlight toggles off; restore using `Load Pin... -> Pane Pin` and verify previous layout restores.
    - Expected: single pin control adapts to focus context (`Workspace` vs `Pane`) and renders active state only when current layout matches saved pin snapshot.
+   - Run note (2026-02-19): Workspace pin flow passed. Pane pin restore semantics remain unclear in graph-only context, and pane pin persistence/visibility after view switching needs follow-up.
+
+---
+
+## Graph UX Polish: Phase 1.1 / 1.2 (Headed Manual)
+
+**Source**: `implementation_strategy/2026-02-19_graph_ux_polish_plan.md`
+
+**Context**: Automated coverage exists for input/intent/app semantics. Headed-manual validation is
+required for end-to-end viewport behavior and interaction feel.
+
+**Keyboard model update**:
+- `C` keyboard fit shortcut is retired.
+- `Z` is the single smart-fit key:
+  - `2+` selected nodes: fit selected bounds.
+  - `0` or `1` selected node: fit full graph.
+
+1. [ ] **Keyboard zoom in/out/reset**
+   - Action: in graph view (no text field focused), press `+` a few times, `-` a few times, then `0`.
+   - Expected: zoom increases, decreases, then resets to `1.0x` in overlay.
+
+2. [ ] **Keyboard zoom blocked during text entry**
+   - Action: focus URL bar (`Ctrl+L`), then press `+`, `-`, `0`, `Z`.
+   - Expected: graph zoom/fit does not trigger while text input owns keyboard focus.
+
+3. [ ] **Smart-fit: zero selection**
+   - Action: clear selection and press `Z`.
+   - Expected: full-graph fit.
+
+4. [ ] **Smart-fit: single selection**
+   - Action: select exactly one node and press `Z`.
+   - Expected: full-graph fit (not single-node framing).
+
+5. [ ] **Smart-fit: multi-selection**
+   - Action: select two or more distant nodes and press `Z`.
+   - Expected: viewport fits selected-node AABB with padding.
+
+6. [ ] **Wheel/trackpad zoom feel**
+   - Action: use Ctrl+wheel or Ctrl+trackpad pinch/scroll.
+   - Expected: zoom responsiveness feels slightly faster than previous `0.01` setting and remains controllable.
+
+7. [ ] **Zoom bounds**
+   - Action: repeatedly zoom out, then repeatedly zoom in.
+   - Expected: zoom clamps at configured bounds; no runaway scale.
+
+8. [ ] **Interaction regression sweep**
+   - Action: after zoom/fit operations, drag/select nodes and open nodes from graph.
+   - Expected: graph interactions remain stable (no stuck input state).
 
 ---
 

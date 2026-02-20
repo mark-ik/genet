@@ -93,7 +93,12 @@ impl SelectionState {
 
     pub fn select(&mut self, key: NodeKey, multi_select: bool) {
         if multi_select {
-            if self.nodes.insert(key) {
+            if self.nodes.contains(&key) {
+                self.nodes.remove(&key);
+                self.order.retain(|existing| *existing != key);
+                self.primary = self.order.last().copied();
+                self.revision = self.revision.saturating_add(1);
+            } else if self.nodes.insert(key) {
                 self.order.push(key);
                 self.primary = Some(key);
                 self.revision = self.revision.saturating_add(1);
@@ -102,6 +107,10 @@ impl SelectionState {
         }
 
         if self.nodes.len() == 1 && self.nodes.contains(&key) && self.primary == Some(key) {
+            self.nodes.clear();
+            self.order.clear();
+            self.primary = None;
+            self.revision = self.revision.saturating_add(1);
             return;
         }
 
@@ -172,6 +181,21 @@ pub enum PendingConnectedOpenScope {
     Connected,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyboardZoomRequest {
+    In,
+    Out,
+    Reset,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryPressureLevel {
+    Unknown,
+    Normal,
+    Warning,
+    Critical,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceOpenAction {
     /// Restore an existing workspace and focus the target node.
@@ -181,7 +205,7 @@ pub enum WorkspaceOpenAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EphemeralWorkspacePromptRequest {
+pub enum UnsavedWorkspacePromptRequest {
     WorkspaceSwitch {
         name: String,
         focus_node: Option<NodeKey>,
@@ -189,7 +213,7 @@ pub enum EphemeralWorkspacePromptRequest {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EphemeralWorkspacePromptAction {
+pub enum UnsavedWorkspacePromptAction {
     ProceedWithoutSaving,
     Cancel,
 }
@@ -210,6 +234,10 @@ pub struct ChooseWorkspacePickerRequest {
 pub enum GraphIntent {
     TogglePhysics,
     RequestFitToScreen,
+    RequestZoomIn,
+    RequestZoomOut,
+    RequestZoomReset,
+    RequestZoomToSelected,
     TogglePhysicsPanel,
     ToggleHelpPanel,
     ToggleCommandPalette,
@@ -268,10 +296,14 @@ pub enum GraphIntent {
         key: NodeKey,
         is_pinned: bool,
     },
+    TogglePrimaryNodePin,
     PromoteNodeToActive {
         key: NodeKey,
     },
     DemoteNodeToCold {
+        key: NodeKey,
+    },
+    DemoteNodeToWarm {
         key: NodeKey,
     },
     MapWebviewToNode {
@@ -294,6 +326,15 @@ pub enum GraphIntent {
         webview_id: WebViewId,
         entries: Vec<String>,
         current: usize,
+    },
+    WebViewScrollChanged {
+        webview_id: WebViewId,
+        scroll_x: f32,
+        scroll_y: f32,
+    },
+    SetNodeFormDraft {
+        key: NodeKey,
+        form_draft: Option<String>,
     },
     WebViewTitleChanged {
         webview_id: WebViewId,
@@ -341,6 +382,18 @@ pub struct GraphBrowserApp {
     /// Nodes that had webviews before switching to graph view (for restoration).
     /// Managed by the webview_controller module.
     pub(crate) active_webview_nodes: Vec<NodeKey>,
+
+    /// Active mapped nodes in LRU order (oldest at index 0, newest at end).
+    active_lru: Vec<NodeKey>,
+
+    /// Maximum number of active mapped webviews to retain.
+    active_webview_limit: usize,
+
+    /// Warm-cached nodes in LRU order (oldest at index 0, newest at end).
+    warm_cache_lru: Vec<NodeKey>,
+
+    /// Maximum number of warm-cached webviews to retain.
+    warm_cache_limit: usize,
 
     /// Counter for unique placeholder URLs (about:blank#1, about:blank#2, ...).
     /// Prevents `url_to_node` clobbering when pressing N multiple times.
@@ -391,11 +444,11 @@ pub struct GraphBrowserApp {
     /// One-shot node focus request applied after a routed workspace restore.
     pending_workspace_restore_focus_node: Option<NodeKey>,
 
-    /// Pending modal prompt context for unsaved ephemeral workspace transitions.
-    pending_ephemeral_workspace_prompt: Option<EphemeralWorkspacePromptRequest>,
+    /// Pending modal prompt context for unsaved workspace transitions.
+    pending_unsaved_workspace_prompt: Option<UnsavedWorkspacePromptRequest>,
 
-    /// User decision captured from ephemeral workspace modal prompt.
-    pending_ephemeral_workspace_prompt_action: Option<EphemeralWorkspacePromptAction>,
+    /// User decision captured from unsaved-workspace modal prompt.
+    pending_unsaved_workspace_prompt_action: Option<UnsavedWorkspacePromptAction>,
 
     /// Node target and mode for "Choose Workspace..." picker window.
     pending_choose_workspace_picker_request: Option<ChooseWorkspacePickerRequest>,
@@ -423,6 +476,12 @@ pub struct GraphBrowserApp {
 
     /// Pending UI command: keep only latest N named workspaces.
     pending_keep_latest_named_workspaces: Option<usize>,
+
+    /// Pending keyboard-driven zoom command to apply against graph metadata.
+    pending_keyboard_zoom_request: Option<KeyboardZoomRequest>,
+
+    /// Pending "zoom to selected" request for graph render metadata.
+    pending_zoom_to_selected_request: bool,
 
     /// One-shot flag: fit graph to screen on next frame (triggered by 'C' key)
     pub fit_to_screen_requested: bool,
@@ -461,20 +520,31 @@ pub struct GraphBrowserApp {
     /// UUID-keyed workspace membership index (runtime-derived from persisted layouts).
     node_workspace_membership: HashMap<Uuid, BTreeSet<String>>,
 
-    /// True while current tile tree is synthesized without a named workspace save.
-    current_workspace_is_ephemeral: bool,
+    /// True while current tile tree was synthesized without a named restore context.
+    /// Retained for routing/session bookkeeping only.
+    current_workspace_is_synthesized: bool,
 
-    /// True if graph-mutating action happened while workspace is ephemeral.
-    ephemeral_workspace_modified: bool,
+    /// True if graph-mutating action happened since last workspace baseline/save.
+    workspace_has_unsaved_changes: bool,
 
-    /// True after we've emitted a warning for the current unsaved-ephemeral state.
-    ephemeral_workspace_prompt_warned: bool,
+    /// True after we've emitted a warning for the current unsaved workspace state.
+    unsaved_workspace_prompt_warned: bool,
 
     /// Cached egui_graphs state (persists across frames for drag/interaction)
     pub egui_state: Option<EguiGraphState>,
 
     /// Flag: egui_state needs rebuild (set when graph structure changes)
     pub egui_state_dirty: bool,
+
+    /// Last sampled runtime memory pressure classification.
+    memory_pressure_level: MemoryPressureLevel,
+    /// Last sampled available system memory (MiB).
+    memory_available_mib: u64,
+    /// Last sampled total system memory (MiB).
+    memory_total_mib: u64,
+
+    /// Whether form draft capture/replay metadata is enabled.
+    form_draft_capture_enabled: bool,
 }
 
 impl GraphBrowserApp {
@@ -484,6 +554,8 @@ impl GraphBrowserApp {
     pub const WORKSPACE_PIN_PANE_NAME: &'static str = "workspace:pin-pane-current";
     pub const DEFAULT_WORKSPACE_AUTOSAVE_INTERVAL_SECS: u64 = 60;
     pub const DEFAULT_WORKSPACE_AUTOSAVE_RETENTION: u8 = 1;
+    pub const DEFAULT_ACTIVE_WEBVIEW_LIMIT: usize = 4;
+    pub const DEFAULT_WARM_CACHE_LIMIT: usize = 12;
 
     pub fn default_physics_state() -> FruchtermanReingoldWithCenterGravityState {
         let mut state = FruchtermanReingoldWithCenterGravityState::default();
@@ -533,6 +605,10 @@ impl GraphBrowserApp {
             node_to_webview: HashMap::new(),
             node_crash_state: HashMap::new(),
             active_webview_nodes: Vec::new(),
+            active_lru: Vec::new(),
+            active_webview_limit: Self::DEFAULT_ACTIVE_WEBVIEW_LIMIT,
+            warm_cache_lru: Vec::new(),
+            warm_cache_limit: Self::DEFAULT_WARM_CACHE_LIMIT,
             next_placeholder_id,
             is_interacting: false,
             drag_release_frames_remaining: 0,
@@ -550,8 +626,8 @@ impl GraphBrowserApp {
             pending_save_workspace_snapshot_named: None,
             pending_restore_workspace_snapshot_named: None,
             pending_workspace_restore_focus_node: None,
-            pending_ephemeral_workspace_prompt: None,
-            pending_ephemeral_workspace_prompt_action: None,
+            pending_unsaved_workspace_prompt: None,
+            pending_unsaved_workspace_prompt_action: None,
             pending_choose_workspace_picker_request: None,
             pending_add_node_to_workspace: None,
             pending_save_graph_snapshot_named: None,
@@ -561,6 +637,8 @@ impl GraphBrowserApp {
             pending_detach_node_to_split: None,
             pending_prune_empty_workspaces: false,
             pending_keep_latest_named_workspaces: None,
+            pending_keyboard_zoom_request: None,
+            pending_zoom_to_selected_request: false,
             fit_to_screen_requested: false,
             camera: Camera::new(),
             persistence,
@@ -576,11 +654,16 @@ impl GraphBrowserApp {
             workspace_activation_seq: 0,
             node_last_active_workspace: HashMap::new(),
             node_workspace_membership: HashMap::new(),
-            current_workspace_is_ephemeral: false,
-            ephemeral_workspace_modified: false,
-            ephemeral_workspace_prompt_warned: false,
+            current_workspace_is_synthesized: false,
+            workspace_has_unsaved_changes: false,
+            unsaved_workspace_prompt_warned: false,
             egui_state: None,
             egui_state_dirty: true,
+            memory_pressure_level: MemoryPressureLevel::Unknown,
+            memory_available_mib: 0,
+            memory_total_mib: 0,
+            form_draft_capture_enabled: std::env::var_os("GRAPHSHELL_ENABLE_FORM_DRAFT")
+                .is_some(),
         }
     }
 
@@ -596,6 +679,10 @@ impl GraphBrowserApp {
             node_to_webview: HashMap::new(),
             node_crash_state: HashMap::new(),
             active_webview_nodes: Vec::new(),
+            active_lru: Vec::new(),
+            active_webview_limit: Self::DEFAULT_ACTIVE_WEBVIEW_LIMIT,
+            warm_cache_lru: Vec::new(),
+            warm_cache_limit: Self::DEFAULT_WARM_CACHE_LIMIT,
             next_placeholder_id: 0,
             is_interacting: false,
             drag_release_frames_remaining: 0,
@@ -613,8 +700,8 @@ impl GraphBrowserApp {
             pending_save_workspace_snapshot_named: None,
             pending_restore_workspace_snapshot_named: None,
             pending_workspace_restore_focus_node: None,
-            pending_ephemeral_workspace_prompt: None,
-            pending_ephemeral_workspace_prompt_action: None,
+            pending_unsaved_workspace_prompt: None,
+            pending_unsaved_workspace_prompt_action: None,
             pending_choose_workspace_picker_request: None,
             pending_add_node_to_workspace: None,
             pending_save_graph_snapshot_named: None,
@@ -624,6 +711,8 @@ impl GraphBrowserApp {
             pending_detach_node_to_split: None,
             pending_prune_empty_workspaces: false,
             pending_keep_latest_named_workspaces: None,
+            pending_keyboard_zoom_request: None,
+            pending_zoom_to_selected_request: false,
             fit_to_screen_requested: false,
             camera: Camera::new(),
             persistence: None,
@@ -639,11 +728,15 @@ impl GraphBrowserApp {
             workspace_activation_seq: 0,
             node_last_active_workspace: HashMap::new(),
             node_workspace_membership: HashMap::new(),
-            current_workspace_is_ephemeral: false,
-            ephemeral_workspace_modified: false,
-            ephemeral_workspace_prompt_warned: false,
+            current_workspace_is_synthesized: false,
+            workspace_has_unsaved_changes: false,
+            unsaved_workspace_prompt_warned: false,
             egui_state: None,
             egui_state_dirty: true,
+            memory_pressure_level: MemoryPressureLevel::Unknown,
+            memory_available_mib: 0,
+            memory_total_mib: 0,
+            form_draft_capture_enabled: false,
         }
     }
 
@@ -668,6 +761,16 @@ impl GraphBrowserApp {
     /// Request fit-to-screen on next render frame (one-shot)
     pub fn request_fit_to_screen(&mut self) {
         self.fit_to_screen_requested = true;
+    }
+
+    /// Consume one pending keyboard zoom request.
+    pub fn take_pending_keyboard_zoom_request(&mut self) -> Option<KeyboardZoomRequest> {
+        self.pending_keyboard_zoom_request.take()
+    }
+
+    /// Consume pending zoom-to-selected request.
+    pub fn take_pending_zoom_to_selected_request(&mut self) -> bool {
+        std::mem::take(&mut self.pending_zoom_to_selected_request)
     }
 
     /// Set whether the user is actively interacting with the graph
@@ -715,30 +818,47 @@ impl GraphBrowserApp {
     }
 
     fn apply_intent(&mut self, intent: GraphIntent) {
-        if self.current_workspace_is_ephemeral
-            && matches!(
-                intent,
-                GraphIntent::CreateNodeNearCenter
-                    | GraphIntent::CreateNodeAtUrl { .. }
-                    | GraphIntent::RemoveSelectedNodes
-                    | GraphIntent::ClearGraph
-                    | GraphIntent::CreateUserGroupedEdge { .. }
-                    | GraphIntent::CreateUserGroupedEdgeFromPrimarySelection
-                    | GraphIntent::RemoveEdge { .. }
-                    | GraphIntent::SetNodePinned { .. }
-                    | GraphIntent::SetNodeUrl { .. }
-                    | GraphIntent::ExecuteEdgeCommand { .. }
-            )
-        {
-            // Any new graph mutation in an ephemeral workspace starts a fresh
-            // unsaved-change episode for prompt gating.
-            self.ephemeral_workspace_prompt_warned = false;
-            self.ephemeral_workspace_modified = true;
+        if matches!(
+            intent,
+            GraphIntent::CreateNodeNearCenter
+                | GraphIntent::CreateNodeAtUrl { .. }
+                | GraphIntent::RemoveSelectedNodes
+                | GraphIntent::ClearGraph
+                | GraphIntent::CreateUserGroupedEdge { .. }
+                | GraphIntent::CreateUserGroupedEdgeFromPrimarySelection
+                | GraphIntent::RemoveEdge { .. }
+                | GraphIntent::SetNodePinned { .. }
+                | GraphIntent::SetNodeUrl { .. }
+                | GraphIntent::ExecuteEdgeCommand { .. }
+        ) {
+            // Any graph mutation starts a fresh unsaved-change episode for
+            // workspace-switch prompt gating.
+            self.unsaved_workspace_prompt_warned = false;
+            self.workspace_has_unsaved_changes = true;
         }
 
         match intent {
             GraphIntent::TogglePhysics => self.toggle_physics(),
             GraphIntent::RequestFitToScreen => self.request_fit_to_screen(),
+            GraphIntent::RequestZoomIn => {
+                self.pending_keyboard_zoom_request = Some(KeyboardZoomRequest::In);
+            },
+            GraphIntent::RequestZoomOut => {
+                self.pending_keyboard_zoom_request = Some(KeyboardZoomRequest::Out);
+            },
+            GraphIntent::RequestZoomReset => {
+                self.pending_keyboard_zoom_request = Some(KeyboardZoomRequest::Reset);
+            },
+            GraphIntent::RequestZoomToSelected => {
+                // Context-aware zoom:
+                // - 0 or 1 selected node: use full-graph fit.
+                // - 2+ selected nodes: fit selected bounds.
+                if self.selected_nodes.len() < 2 {
+                    self.request_fit_to_screen();
+                } else {
+                    self.pending_zoom_to_selected_request = true;
+                }
+            },
             GraphIntent::TogglePhysicsPanel => self.toggle_physics_panel(),
             GraphIntent::ToggleHelpPanel => self.toggle_help_panel(),
             GraphIntent::ToggleCommandPalette => self.toggle_command_palette(),
@@ -763,7 +883,22 @@ impl GraphBrowserApp {
             },
             GraphIntent::RemoveSelectedNodes => self.remove_selected_nodes(),
             GraphIntent::ClearGraph => self.clear_graph(),
-            GraphIntent::SelectNode { key, multi_select } => self.select_node(key, multi_select),
+            GraphIntent::SelectNode { key, multi_select } => {
+                self.select_node(key, multi_select);
+                // Single-selecting a cold node should prewarm it (without opening a tile).
+                if !multi_select
+                    && self.selected_nodes.primary() == Some(key)
+                    && !self.node_crash_state.contains_key(&key)
+                    && self.get_webview_for_node(key).is_none()
+                    && self
+                        .graph
+                        .get_node(key)
+                        .map(|node| node.lifecycle == crate::graph::NodeLifecycle::Cold)
+                        .unwrap_or(false)
+                {
+                    self.promote_node_to_active(key);
+                }
+            },
             GraphIntent::SetInteracting { interacting } => self.set_interacting(interacting),
             GraphIntent::SetNodePosition { key, position } => {
                 if let Some(node) = self.graph.get_node_mut(key) {
@@ -787,7 +922,7 @@ impl GraphBrowserApp {
                         self.request_restore_workspace_snapshot_named(name);
                     },
                     WorkspaceOpenAction::OpenInCurrentWorkspace { .. } => {
-                        self.current_workspace_is_ephemeral = true;
+                        self.current_workspace_is_synthesized = true;
                         self.pending_workspace_restore_focus_node = None;
                         self.request_open_selected_tile_mode(PendingTileOpenMode::Tab);
                     },
@@ -819,8 +954,21 @@ impl GraphBrowserApp {
             GraphIntent::SetNodePinned { key, is_pinned } => {
                 self.set_node_pinned_and_log(key, is_pinned);
             },
+            GraphIntent::TogglePrimaryNodePin => {
+                if let Some(key) = self.selected_nodes.primary()
+                    && let Some(node) = self.graph.get_node(key)
+                {
+                    self.apply_intent(GraphIntent::SetNodePinned {
+                        key,
+                        is_pinned: !node.is_pinned,
+                    });
+                }
+            },
             GraphIntent::PromoteNodeToActive { key } => {
                 self.promote_node_to_active(key);
+            },
+            GraphIntent::DemoteNodeToWarm { key } => {
+                self.demote_node_to_warm(key);
             },
             GraphIntent::DemoteNodeToCold { key } => {
                 self.demote_node_to_cold(key);
@@ -912,6 +1060,26 @@ impl GraphBrowserApp {
                 if let Some(node) = self.graph.get_node_mut(node_key) {
                     node.history_entries = entries;
                     node.history_index = new_index;
+                }
+            },
+            GraphIntent::WebViewScrollChanged {
+                webview_id,
+                scroll_x,
+                scroll_y,
+            } => {
+                let Some(node_key) = self.get_node_for_webview(webview_id) else {
+                    return;
+                };
+                if let Some(node) = self.graph.get_node_mut(node_key) {
+                    node.session_scroll = Some((scroll_x, scroll_y));
+                }
+            },
+            GraphIntent::SetNodeFormDraft { key, form_draft } => {
+                if !self.form_draft_capture_enabled {
+                    return;
+                }
+                if let Some(node) = self.graph.get_node_mut(key) {
+                    node.session_form_draft = form_draft;
                 }
             },
             GraphIntent::WebViewTitleChanged { webview_id, title } => {
@@ -1164,9 +1332,9 @@ impl GraphBrowserApp {
             warn!("Failed to save workspace layout '{name}': {e}");
         }
         if !Self::is_reserved_workspace_layout_name(name) {
-            self.current_workspace_is_ephemeral = false;
-            self.ephemeral_workspace_modified = false;
-            self.ephemeral_workspace_prompt_warned = false;
+            self.current_workspace_is_synthesized = false;
+            self.workspace_has_unsaved_changes = false;
+            self.unsaved_workspace_prompt_warned = false;
         }
     }
 
@@ -1316,58 +1484,51 @@ impl GraphBrowserApp {
         Ok(())
     }
 
-    /// Whether ephemeral workspace graph changes should trigger a save prompt.
-    pub fn should_prompt_ephemeral_workspace_save(&self) -> bool {
-        self.current_workspace_is_ephemeral && self.ephemeral_workspace_modified
+    /// Whether the current workspace has unsaved graph changes.
+    pub fn should_prompt_unsaved_workspace_save(&self) -> bool {
+        self.workspace_has_unsaved_changes
     }
 
-    /// Returns true once per unsaved-ephemeral episode to enable one-shot warnings.
-    pub fn consume_ephemeral_workspace_prompt_warning(&mut self) -> bool {
-        if !self.should_prompt_ephemeral_workspace_save() || self.ephemeral_workspace_prompt_warned
-        {
+    /// Returns true once per unsaved-changes episode to enable one-shot warnings.
+    pub fn consume_unsaved_workspace_prompt_warning(&mut self) -> bool {
+        if !self.should_prompt_unsaved_workspace_save() || self.unsaved_workspace_prompt_warned {
             return false;
         }
-        self.ephemeral_workspace_prompt_warned = true;
+        self.unsaved_workspace_prompt_warned = true;
         true
     }
 
-    /// Queue/replace an ephemeral workspace prompt request.
-    pub fn request_ephemeral_workspace_prompt(&mut self, request: EphemeralWorkspacePromptRequest) {
-        self.pending_ephemeral_workspace_prompt = Some(request);
-        self.pending_ephemeral_workspace_prompt_action = None;
+    /// Queue/replace an unsaved-workspace prompt request.
+    pub fn request_unsaved_workspace_prompt(&mut self, request: UnsavedWorkspacePromptRequest) {
+        self.pending_unsaved_workspace_prompt = Some(request);
+        self.pending_unsaved_workspace_prompt_action = None;
     }
 
-    /// Inspect active ephemeral workspace prompt request.
-    pub fn ephemeral_workspace_prompt_request(&self) -> Option<&EphemeralWorkspacePromptRequest> {
-        self.pending_ephemeral_workspace_prompt.as_ref()
+    /// Inspect active unsaved-workspace prompt request.
+    pub fn unsaved_workspace_prompt_request(&self) -> Option<&UnsavedWorkspacePromptRequest> {
+        self.pending_unsaved_workspace_prompt.as_ref()
     }
 
-    /// Capture user action from ephemeral workspace prompt UI.
-    pub fn set_ephemeral_workspace_prompt_action(
+    /// Capture user action from unsaved-workspace prompt UI.
+    pub fn set_unsaved_workspace_prompt_action(&mut self, action: UnsavedWorkspacePromptAction) {
+        self.pending_unsaved_workspace_prompt_action = Some(action);
+    }
+
+    /// Resolve and clear active unsaved-workspace prompt when an action was chosen.
+    pub fn take_unsaved_workspace_prompt_resolution(
         &mut self,
-        action: EphemeralWorkspacePromptAction,
-    ) {
-        self.pending_ephemeral_workspace_prompt_action = Some(action);
-    }
-
-    /// Resolve and clear active ephemeral prompt when an action was chosen.
-    pub fn take_ephemeral_workspace_prompt_resolution(
-        &mut self,
-    ) -> Option<(
-        EphemeralWorkspacePromptRequest,
-        EphemeralWorkspacePromptAction,
-    )> {
-        let action = self.pending_ephemeral_workspace_prompt_action?;
-        let request = self.pending_ephemeral_workspace_prompt.take()?;
-        self.pending_ephemeral_workspace_prompt_action = None;
+    ) -> Option<(UnsavedWorkspacePromptRequest, UnsavedWorkspacePromptAction)> {
+        let action = self.pending_unsaved_workspace_prompt_action?;
+        let request = self.pending_unsaved_workspace_prompt.take()?;
+        self.pending_unsaved_workspace_prompt_action = None;
         Some((request, action))
     }
 
-    /// Mark the current tile tree as synthesized (unnamed) workspace context.
-    pub fn mark_current_workspace_ephemeral(&mut self) {
-        self.current_workspace_is_ephemeral = true;
-        self.ephemeral_workspace_modified = false;
-        self.ephemeral_workspace_prompt_warned = false;
+    /// Mark the current workspace context as synthesized from runtime actions.
+    pub fn mark_current_workspace_synthesized(&mut self) {
+        self.current_workspace_is_synthesized = true;
+        self.workspace_has_unsaved_changes = false;
+        self.unsaved_workspace_prompt_warned = false;
     }
 
     /// Workspace-activation recency sequence for a node (higher = more recent).
@@ -1419,9 +1580,9 @@ impl GraphBrowserApp {
                 .or_default()
                 .insert(workspace_name.clone());
         }
-        self.current_workspace_is_ephemeral = false;
-        self.ephemeral_workspace_modified = false;
-        self.ephemeral_workspace_prompt_warned = false;
+        self.current_workspace_is_synthesized = false;
+        self.workspace_has_unsaved_changes = false;
+        self.unsaved_workspace_prompt_warned = false;
         self.egui_state_dirty = true;
     }
 
@@ -1551,20 +1712,24 @@ impl GraphBrowserApp {
         self.selected_nodes.clear();
         self.webview_to_node.clear();
         self.node_to_webview.clear();
+        self.active_lru.clear();
+        self.warm_cache_lru.clear();
         self.node_crash_state.clear();
         self.active_webview_nodes.clear();
         self.pending_node_context_target = None;
         self.pending_workspace_restore_focus_node = None;
-        self.pending_ephemeral_workspace_prompt = None;
-        self.pending_ephemeral_workspace_prompt_action = None;
+        self.pending_unsaved_workspace_prompt = None;
+        self.pending_unsaved_workspace_prompt_action = None;
         self.pending_choose_workspace_picker_request = None;
         self.pending_add_node_to_workspace = None;
         self.pending_prune_empty_workspaces = false;
         self.pending_keep_latest_named_workspaces = None;
+        self.pending_keyboard_zoom_request = None;
+        self.pending_zoom_to_selected_request = false;
         self.node_workspace_membership.clear();
-        self.current_workspace_is_ephemeral = false;
-        self.ephemeral_workspace_modified = false;
-        self.ephemeral_workspace_prompt_warned = false;
+        self.current_workspace_is_synthesized = false;
+        self.workspace_has_unsaved_changes = false;
+        self.unsaved_workspace_prompt_warned = false;
         self.next_placeholder_id = Self::scan_max_placeholder_id(&self.graph);
         self.egui_state = None;
         self.egui_state_dirty = true;
@@ -1599,16 +1764,20 @@ impl GraphBrowserApp {
         self.selected_nodes.clear();
         self.webview_to_node.clear();
         self.node_to_webview.clear();
+        self.active_lru.clear();
+        self.warm_cache_lru.clear();
         self.node_crash_state.clear();
         self.active_webview_nodes.clear();
         self.pending_node_context_target = None;
         self.pending_workspace_restore_focus_node = None;
-        self.pending_ephemeral_workspace_prompt = None;
-        self.pending_ephemeral_workspace_prompt_action = None;
+        self.pending_unsaved_workspace_prompt = None;
+        self.pending_unsaved_workspace_prompt_action = None;
         self.pending_choose_workspace_picker_request = None;
         self.pending_add_node_to_workspace = None;
         self.pending_prune_empty_workspaces = false;
         self.pending_keep_latest_named_workspaces = None;
+        self.pending_keyboard_zoom_request = None;
+        self.pending_zoom_to_selected_request = false;
         self.next_placeholder_id = next_placeholder_id;
         self.egui_state = None;
         self.egui_state_dirty = true;
@@ -1617,9 +1786,9 @@ impl GraphBrowserApp {
         self.workspace_activation_seq = 0;
         self.node_last_active_workspace.clear();
         self.node_workspace_membership.clear();
-        self.current_workspace_is_ephemeral = false;
-        self.ephemeral_workspace_modified = false;
-        self.ephemeral_workspace_prompt_warned = false;
+        self.current_workspace_is_synthesized = false;
+        self.workspace_has_unsaved_changes = false;
+        self.unsaved_workspace_prompt_warned = false;
         self.is_interacting = false;
         self.physics_running_before_interaction = None;
         Ok(())
@@ -1627,14 +1796,26 @@ impl GraphBrowserApp {
 
     /// Add a bidirectional mapping between a webview and a node
     pub fn map_webview_to_node(&mut self, webview_id: WebViewId, node_key: NodeKey) {
+        if let Some(previous_node) = self.webview_to_node.remove(&webview_id) {
+            self.node_to_webview.remove(&previous_node);
+            self.remove_active_node(previous_node);
+            self.remove_warm_cache_node(previous_node);
+        }
+        if let Some(previous_webview_id) = self.node_to_webview.remove(&node_key) {
+            self.webview_to_node.remove(&previous_webview_id);
+        }
         self.webview_to_node.insert(webview_id, node_key);
         self.node_to_webview.insert(node_key, webview_id);
+        self.touch_active_node(node_key);
+        self.remove_warm_cache_node(node_key);
     }
 
     /// Remove the mapping for a webview and its corresponding node
     pub fn unmap_webview(&mut self, webview_id: WebViewId) -> Option<NodeKey> {
         if let Some(node_key) = self.webview_to_node.remove(&webview_id) {
             self.node_to_webview.remove(&node_key);
+            self.remove_active_node(node_key);
+            self.remove_warm_cache_node(node_key);
             Some(node_key)
         } else {
             None
@@ -1962,7 +2143,24 @@ impl GraphBrowserApp {
         if let Some(node) = self.graph.get_node_mut(node_key) {
             node.lifecycle = NodeLifecycle::Active;
         }
+        self.touch_active_node(node_key);
+        self.remove_warm_cache_node(node_key);
         self.node_crash_state.remove(&node_key);
+    }
+
+    /// Demote a node to Warm lifecycle (keep mapped webview alive in cache).
+    pub fn demote_node_to_warm(&mut self, node_key: NodeKey) {
+        use crate::graph::NodeLifecycle;
+        let has_mapped_webview = self.node_to_webview.contains_key(&node_key);
+        if let Some(node) = self.graph.get_node_mut(node_key)
+            && has_mapped_webview
+        {
+            node.lifecycle = NodeLifecycle::Warm;
+            self.touch_warm_cache_node(node_key);
+        } else {
+            self.remove_warm_cache_node(node_key);
+        }
+        self.remove_active_node(node_key);
     }
 
     /// Demote a node to Cold lifecycle (mark as not needing webview)
@@ -1971,11 +2169,162 @@ impl GraphBrowserApp {
         if let Some(node) = self.graph.get_node_mut(node_key) {
             node.lifecycle = NodeLifecycle::Cold;
         }
+        self.remove_active_node(node_key);
+        self.remove_warm_cache_node(node_key);
         // Also unmap webview association if it exists
         if let Some(webview_id) = self.node_to_webview.get(&node_key).copied() {
             self.webview_to_node.remove(&webview_id);
             self.node_to_webview.remove(&node_key);
         }
+    }
+
+    fn touch_active_node(&mut self, node_key: NodeKey) {
+        self.remove_active_node(node_key);
+        self.active_lru.push(node_key);
+    }
+
+    fn remove_active_node(&mut self, node_key: NodeKey) {
+        self.active_lru.retain(|key| *key != node_key);
+    }
+
+    fn touch_warm_cache_node(&mut self, node_key: NodeKey) {
+        self.remove_warm_cache_node(node_key);
+        self.warm_cache_lru.push(node_key);
+    }
+
+    fn remove_warm_cache_node(&mut self, node_key: NodeKey) {
+        self.warm_cache_lru.retain(|key| *key != node_key);
+    }
+
+    /// Return least-recently-used warm nodes that must be hard-evicted.
+    pub(crate) fn take_warm_cache_evictions(&mut self) -> Vec<NodeKey> {
+        let mut normalized = Vec::with_capacity(self.warm_cache_lru.len());
+        for key in self.warm_cache_lru.drain(..) {
+            let keep = self
+                .graph
+                .get_node(key)
+                .map(|node| node.lifecycle == crate::graph::NodeLifecycle::Warm)
+                .unwrap_or(false)
+                && self.node_to_webview.contains_key(&key)
+                && !normalized.contains(&key);
+            if keep {
+                normalized.push(key);
+            }
+        }
+        self.warm_cache_lru = normalized;
+
+        let mut evicted = Vec::new();
+        while self.warm_cache_lru.len() > self.warm_cache_limit {
+            evicted.push(self.warm_cache_lru.remove(0));
+        }
+        evicted
+    }
+
+    /// Return least-recently-used active nodes that should be demoted.
+    pub(crate) fn take_active_webview_evictions(
+        &mut self,
+        protected: &HashSet<NodeKey>,
+    ) -> Vec<NodeKey> {
+        self.take_active_webview_evictions_with_limit(self.active_webview_limit, protected)
+    }
+
+    /// Return least-recently-used active nodes that exceed `limit`.
+    pub(crate) fn take_active_webview_evictions_with_limit(
+        &mut self,
+        limit: usize,
+        protected: &HashSet<NodeKey>,
+    ) -> Vec<NodeKey> {
+        let mut normalized = Vec::with_capacity(self.active_lru.len());
+        for key in self.active_lru.drain(..) {
+            let keep = self
+                .graph
+                .get_node(key)
+                .map(|node| node.lifecycle == crate::graph::NodeLifecycle::Active)
+                .unwrap_or(false)
+                && self.node_to_webview.contains_key(&key)
+                && !normalized.contains(&key);
+            if keep {
+                normalized.push(key);
+            }
+        }
+
+        // Backfill any mapped-active nodes not seen in LRU (defensive against stale state).
+        for (&key, _) in &self.node_to_webview {
+            let is_active = self
+                .graph
+                .get_node(key)
+                .map(|node| node.lifecycle == crate::graph::NodeLifecycle::Active)
+                .unwrap_or(false);
+            if is_active && !normalized.contains(&key) {
+                normalized.push(key);
+            }
+        }
+        self.active_lru = normalized;
+
+        let mut evicted = Vec::new();
+        while self.active_lru.len() > limit {
+            let candidate_idx = self.active_lru.iter().position(|key| !protected.contains(key));
+            let Some(candidate_idx) = candidate_idx else {
+                break;
+            };
+            let key = self.active_lru.remove(candidate_idx);
+            evicted.push(key);
+        }
+        evicted
+    }
+
+    pub fn active_webview_limit(&self) -> usize {
+        self.active_webview_limit
+    }
+
+    pub fn warm_cache_limit(&self) -> usize {
+        self.warm_cache_limit
+    }
+
+    pub fn lifecycle_counts(&self) -> (usize, usize, usize) {
+        let mut active = 0usize;
+        let mut warm = 0usize;
+        let mut cold = 0usize;
+        for (_, node) in self.graph.nodes() {
+            match node.lifecycle {
+                crate::graph::NodeLifecycle::Active => active += 1,
+                crate::graph::NodeLifecycle::Warm => warm += 1,
+                crate::graph::NodeLifecycle::Cold => cold += 1,
+            }
+        }
+        (active, warm, cold)
+    }
+
+    pub fn mapped_webview_count(&self) -> usize {
+        self.node_to_webview.len()
+    }
+
+    pub fn memory_pressure_level(&self) -> MemoryPressureLevel {
+        self.memory_pressure_level
+    }
+
+    #[cfg(test)]
+    fn set_form_draft_capture_enabled_for_testing(&mut self, enabled: bool) {
+        self.form_draft_capture_enabled = enabled;
+    }
+
+    pub fn memory_available_mib(&self) -> u64 {
+        self.memory_available_mib
+    }
+
+    pub fn memory_total_mib(&self) -> u64 {
+        self.memory_total_mib
+    }
+
+    pub(crate) fn set_memory_pressure_status(
+        &mut self,
+        level: MemoryPressureLevel,
+        available_mib: u64,
+        total_mib: u64,
+    ) {
+        self.memory_pressure_level = level;
+        self.memory_available_mib = available_mib;
+        self.memory_total_mib = total_mib;
     }
 
     /// Scan graph for existing `about:blank#N` placeholder URLs and return
@@ -2227,9 +2576,10 @@ impl GraphBrowserApp {
 
             // Unmap webview if it exists
             if let Some(webview_id) = self.node_to_webview.get(&node_key).copied() {
-                self.webview_to_node.remove(&webview_id);
-                self.node_to_webview.remove(&node_key);
+                let _ = self.unmap_webview(webview_id);
             }
+            self.remove_active_node(node_key);
+            self.remove_warm_cache_node(node_key);
             self.node_crash_state.remove(&node_key);
             self.node_last_active_workspace.remove(&node_key);
             if let Some(node_id) = node_id {
@@ -2278,18 +2628,22 @@ impl GraphBrowserApp {
         self.pending_node_context_target = None;
         self.pending_choose_workspace_picker_request = None;
         self.pending_add_node_to_workspace = None;
-        self.pending_ephemeral_workspace_prompt = None;
-        self.pending_ephemeral_workspace_prompt_action = None;
+        self.pending_unsaved_workspace_prompt = None;
+        self.pending_unsaved_workspace_prompt_action = None;
         self.pending_prune_empty_workspaces = false;
         self.pending_keep_latest_named_workspaces = None;
+        self.pending_keyboard_zoom_request = None;
+        self.pending_zoom_to_selected_request = false;
         self.webview_to_node.clear();
         self.node_to_webview.clear();
+        self.active_lru.clear();
+        self.warm_cache_lru.clear();
         self.node_crash_state.clear();
         self.node_last_active_workspace.clear();
         self.node_workspace_membership.clear();
-        self.current_workspace_is_ephemeral = false;
-        self.ephemeral_workspace_modified = false;
-        self.ephemeral_workspace_prompt_warned = false;
+        self.current_workspace_is_synthesized = false;
+        self.workspace_has_unsaved_changes = false;
+        self.unsaved_workspace_prompt_warned = false;
         self.egui_state_dirty = true;
     }
 
@@ -2306,18 +2660,22 @@ impl GraphBrowserApp {
         self.pending_node_context_target = None;
         self.pending_choose_workspace_picker_request = None;
         self.pending_add_node_to_workspace = None;
-        self.pending_ephemeral_workspace_prompt = None;
-        self.pending_ephemeral_workspace_prompt_action = None;
+        self.pending_unsaved_workspace_prompt = None;
+        self.pending_unsaved_workspace_prompt_action = None;
         self.pending_prune_empty_workspaces = false;
         self.pending_keep_latest_named_workspaces = None;
+        self.pending_keyboard_zoom_request = None;
+        self.pending_zoom_to_selected_request = false;
         self.webview_to_node.clear();
         self.node_to_webview.clear();
+        self.active_lru.clear();
+        self.warm_cache_lru.clear();
         self.node_crash_state.clear();
         self.node_last_active_workspace.clear();
         self.node_workspace_membership.clear();
-        self.current_workspace_is_ephemeral = false;
-        self.ephemeral_workspace_modified = false;
-        self.ephemeral_workspace_prompt_warned = false;
+        self.current_workspace_is_synthesized = false;
+        self.workspace_has_unsaved_changes = false;
+        self.unsaved_workspace_prompt_warned = false;
         self.active_webview_nodes.clear();
         self.next_placeholder_id = 0;
         self.egui_state_dirty = true;
@@ -2398,6 +2756,71 @@ mod tests {
     }
 
     #[test]
+    fn test_zoom_intents_queue_keyboard_zoom_requests() {
+        let mut app = GraphBrowserApp::new_for_testing();
+
+        app.apply_intents([GraphIntent::RequestZoomIn]);
+        assert_eq!(
+            app.take_pending_keyboard_zoom_request(),
+            Some(KeyboardZoomRequest::In)
+        );
+        assert_eq!(app.take_pending_keyboard_zoom_request(), None);
+
+        app.apply_intents([GraphIntent::RequestZoomOut]);
+        assert_eq!(
+            app.take_pending_keyboard_zoom_request(),
+            Some(KeyboardZoomRequest::Out)
+        );
+
+        app.apply_intents([GraphIntent::RequestZoomReset]);
+        assert_eq!(
+            app.take_pending_keyboard_zoom_request(),
+            Some(KeyboardZoomRequest::Reset)
+        );
+    }
+
+    #[test]
+    fn test_zoom_to_selected_falls_back_to_fit_when_selection_empty() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        assert!(app.selected_nodes.is_empty());
+        assert!(!app.fit_to_screen_requested);
+
+        app.apply_intents([GraphIntent::RequestZoomToSelected]);
+
+        assert!(app.fit_to_screen_requested);
+        assert!(!app.take_pending_zoom_to_selected_request());
+    }
+
+    #[test]
+    fn test_zoom_to_selected_falls_back_to_fit_when_single_selected() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app.graph.add_node("test".to_string(), Point2D::new(0.0, 0.0));
+        app.select_node(key, false);
+        assert!(!app.fit_to_screen_requested);
+
+        app.apply_intents([GraphIntent::RequestZoomToSelected]);
+
+        assert!(app.fit_to_screen_requested);
+        assert!(!app.take_pending_zoom_to_selected_request());
+    }
+
+    #[test]
+    fn test_zoom_to_selected_sets_pending_when_multi_selected() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key_a = app.graph.add_node("a".to_string(), Point2D::new(0.0, 0.0));
+        let key_b = app.graph.add_node("b".to_string(), Point2D::new(100.0, 50.0));
+        app.select_node(key_a, false);
+        app.select_node(key_b, true);
+        assert_eq!(app.selected_nodes.len(), 2);
+        assert!(!app.fit_to_screen_requested);
+
+        app.apply_intents([GraphIntent::RequestZoomToSelected]);
+
+        assert!(app.take_pending_zoom_to_selected_request());
+        assert!(!app.fit_to_screen_requested);
+    }
+
+    #[test]
     fn test_select_node_single() {
         let mut app = GraphBrowserApp::new_for_testing();
         let key = app
@@ -2408,6 +2831,21 @@ mod tests {
 
         assert_eq!(app.selected_nodes.len(), 1);
         assert!(app.selected_nodes.contains(&key));
+    }
+
+    #[test]
+    fn test_select_node_single_click_selected_toggles_off() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app
+            .graph
+            .add_node("test".to_string(), Point2D::new(0.0, 0.0));
+
+        app.select_node(key, false);
+        assert_eq!(app.selected_nodes.primary(), Some(key));
+
+        app.select_node(key, false);
+        assert!(app.selected_nodes.is_empty());
+        assert_eq!(app.selected_nodes.primary(), None);
     }
 
     #[test]
@@ -2427,6 +2865,129 @@ mod tests {
     }
 
     #[test]
+    fn test_select_node_multi_click_selected_toggles_off() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key1 = app.graph.add_node("a".to_string(), Point2D::new(0.0, 0.0));
+        let key2 = app
+            .graph
+            .add_node("b".to_string(), Point2D::new(100.0, 0.0));
+
+        app.select_node(key1, false);
+        app.select_node(key2, true);
+        assert_eq!(app.selected_nodes.len(), 2);
+        assert_eq!(app.selected_nodes.primary(), Some(key2));
+
+        // Ctrl-click selected node toggles it off.
+        app.select_node(key2, true);
+        assert_eq!(app.selected_nodes.len(), 1);
+        assert!(app.selected_nodes.contains(&key1));
+        assert!(!app.selected_nodes.contains(&key2));
+        assert_eq!(app.selected_nodes.primary(), Some(key1));
+    }
+
+    #[test]
+    fn test_select_node_multi_click_only_selected_clears_selection() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app.graph.add_node("a".to_string(), Point2D::new(0.0, 0.0));
+
+        app.select_node(key, false);
+        assert_eq!(app.selected_nodes.primary(), Some(key));
+
+        // Ctrl-click selected single node toggles it off, clearing selection.
+        app.select_node(key, true);
+        assert!(app.selected_nodes.is_empty());
+        assert_eq!(app.selected_nodes.primary(), None);
+    }
+
+    #[test]
+    fn test_select_node_intent_single_prewarms_cold_node() {
+        use crate::graph::NodeLifecycle;
+
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app.graph.add_node("a".to_string(), Point2D::new(0.0, 0.0));
+        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Cold);
+
+        app.apply_intents([GraphIntent::SelectNode {
+            key,
+            multi_select: false,
+        }]);
+
+        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Active);
+    }
+
+    #[test]
+    fn test_select_node_intent_toggle_off_does_not_prewarm() {
+        use crate::graph::NodeLifecycle;
+
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app.graph.add_node("a".to_string(), Point2D::new(0.0, 0.0));
+
+        app.apply_intents([GraphIntent::SelectNode {
+            key,
+            multi_select: false,
+        }]);
+        app.demote_node_to_cold(key);
+        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Cold);
+
+        // Clicking the already-selected node toggles it off and should not re-promote.
+        app.apply_intents([GraphIntent::SelectNode {
+            key,
+            multi_select: false,
+        }]);
+
+        assert!(app.selected_nodes.is_empty());
+        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Cold);
+    }
+
+    #[test]
+    fn test_select_node_intent_multiselect_does_not_prewarm_cold_node() {
+        use crate::graph::NodeLifecycle;
+
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key1 = app.graph.add_node("a".to_string(), Point2D::new(0.0, 0.0));
+        let key2 = app.graph.add_node("b".to_string(), Point2D::new(10.0, 0.0));
+
+        app.apply_intents([GraphIntent::SelectNode {
+            key: key1,
+            multi_select: false,
+        }]);
+        app.demote_node_to_cold(key1);
+        assert_eq!(app.graph.get_node(key1).unwrap().lifecycle, NodeLifecycle::Cold);
+        assert_eq!(app.graph.get_node(key2).unwrap().lifecycle, NodeLifecycle::Cold);
+
+        app.apply_intents([GraphIntent::SelectNode {
+            key: key2,
+            multi_select: true,
+        }]);
+
+        assert_eq!(app.graph.get_node(key2).unwrap().lifecycle, NodeLifecycle::Cold);
+    }
+
+    #[test]
+    fn test_select_node_intent_does_not_prewarm_crashed_node() {
+        use crate::graph::NodeLifecycle;
+
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app.graph.add_node("a".to_string(), Point2D::new(0.0, 0.0));
+        let webview_id = test_webview_id();
+        app.map_webview_to_node(webview_id, key);
+        app.apply_intents([GraphIntent::WebViewCrashed {
+            webview_id,
+            reason: "boom".to_string(),
+            has_backtrace: false,
+        }]);
+        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Cold);
+        assert!(app.get_node_crash_state(key).is_some());
+
+        app.apply_intents([GraphIntent::SelectNode {
+            key,
+            multi_select: false,
+        }]);
+
+        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Cold);
+    }
+
+    #[test]
     fn test_selection_revision_increments_on_change() {
         let mut app = GraphBrowserApp::new_for_testing();
         let key1 = app.graph.add_node("a".to_string(), Point2D::new(0.0, 0.0));
@@ -2439,11 +3000,16 @@ mod tests {
 
         app.select_node(key1, false);
         let rev2 = app.selected_nodes.revision();
-        assert_eq!(rev2, rev1);
+        assert!(rev2 > rev1);
+        assert!(app.selected_nodes.is_empty());
 
         app.select_node(key2, true);
         let rev3 = app.selected_nodes.revision();
         assert!(rev3 > rev2);
+
+        app.select_node(key2, true);
+        let rev4 = app.selected_nodes.revision();
+        assert!(rev4 > rev3);
     }
 
     #[test]
@@ -2541,6 +3107,50 @@ mod tests {
         let node = app.graph.get_node(key).unwrap();
         assert_eq!(node.history_entries.len(), 2);
         assert_eq!(node.history_index, 1);
+    }
+
+    #[test]
+    fn test_intent_webview_scroll_changed_updates_node_session_scroll() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app
+            .graph
+            .add_node("https://a.com".into(), Point2D::new(0.0, 0.0));
+        let wv = test_webview_id();
+        app.map_webview_to_node(wv, key);
+
+        app.apply_intents([GraphIntent::WebViewScrollChanged {
+            webview_id: wv,
+            scroll_x: 15.0,
+            scroll_y: 320.0,
+        }]);
+
+        let node = app.graph.get_node(key).unwrap();
+        assert_eq!(node.session_scroll, Some((15.0, 320.0)));
+    }
+
+    #[test]
+    fn test_form_draft_restore_feature_flag_guarded() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app
+            .graph
+            .add_node("https://a.com".into(), Point2D::new(0.0, 0.0));
+
+        app.set_form_draft_capture_enabled_for_testing(false);
+        app.apply_intents([GraphIntent::SetNodeFormDraft {
+            key,
+            form_draft: Some("draft text".to_string()),
+        }]);
+        assert_eq!(app.graph.get_node(key).unwrap().session_form_draft, None);
+
+        app.set_form_draft_capture_enabled_for_testing(true);
+        app.apply_intents([GraphIntent::SetNodeFormDraft {
+            key,
+            form_draft: Some("draft text".to_string()),
+        }]);
+        assert_eq!(
+            app.graph.get_node(key).unwrap().session_form_draft,
+            Some("draft text".to_string())
+        );
     }
 
     #[test]
@@ -2802,6 +3412,21 @@ mod tests {
         app.apply_intents([GraphIntent::ExecuteEdgeCommand {
             command: EdgeCommand::UnpinSelected,
         }]);
+        assert!(app.graph.get_node(key).is_some_and(|node| !node.is_pinned));
+    }
+
+    #[test]
+    fn test_toggle_primary_node_pin_toggles_selected_primary() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app
+            .graph
+            .add_node("https://pin.com".into(), Point2D::new(0.0, 0.0));
+        app.select_node(key, false);
+
+        app.apply_intents([GraphIntent::TogglePrimaryNodePin]);
+        assert!(app.graph.get_node(key).is_some_and(|node| node.is_pinned));
+
+        app.apply_intents([GraphIntent::TogglePrimaryNodePin]);
         assert!(app.graph.get_node(key).is_some_and(|node| !node.is_pinned));
     }
 
@@ -3197,7 +3822,7 @@ mod tests {
         let mut app = GraphBrowserApp::new_for_testing();
         app.graph.add_node("a".to_string(), Point2D::new(0.0, 0.0));
 
-        // No selection — should be a no-op
+        // No selection â€” should be a no-op
         app.remove_selected_nodes();
         assert_eq!(app.graph.node_count(), 1);
     }
@@ -3235,12 +3860,17 @@ mod tests {
 
         let fake_wv_id = test_webview_id();
         app.map_webview_to_node(fake_wv_id, k1);
+        app.demote_node_to_warm(k1);
+        assert_eq!(app.warm_cache_lru, vec![k1]);
 
         app.clear_graph();
 
         assert_eq!(app.graph.node_count(), 0);
         assert!(app.selected_nodes.is_empty());
         assert!(app.get_node_for_webview(fake_wv_id).is_none());
+        assert!(app.warm_cache_lru.is_empty());
+        assert!(!app.workspace_has_unsaved_changes);
+        assert!(!app.should_prompt_unsaved_workspace_save());
     }
 
     // --- TEST-1: create_new_node_near_center ---
@@ -3311,6 +3941,119 @@ mod tests {
         app.demote_node_to_cold(key);
         assert!(app.get_webview_for_node(key).is_none());
         assert!(app.get_node_for_webview(fake_wv_id).is_none());
+    }
+
+    #[test]
+    fn test_demote_to_warm_requires_mapping_and_sets_lifecycle() {
+        use crate::graph::NodeLifecycle;
+
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app.graph.add_node("a".to_string(), Point2D::new(0.0, 0.0));
+        app.promote_node_to_active(key);
+
+        app.demote_node_to_warm(key);
+        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Active);
+        assert!(app.warm_cache_lru.is_empty());
+
+        let wv_id = test_webview_id();
+        app.map_webview_to_node(wv_id, key);
+        app.demote_node_to_warm(key);
+        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Warm);
+        assert_eq!(app.warm_cache_lru, vec![key]);
+    }
+
+    #[test]
+    fn test_promote_to_active_removes_warm_cache_membership() {
+        use crate::graph::NodeLifecycle;
+
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app.graph.add_node("a".to_string(), Point2D::new(0.0, 0.0));
+        let wv_id = test_webview_id();
+        app.map_webview_to_node(wv_id, key);
+        app.demote_node_to_warm(key);
+
+        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Warm);
+        assert_eq!(app.warm_cache_lru, vec![key]);
+
+        app.promote_node_to_active(key);
+        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Active);
+        assert!(app.warm_cache_lru.is_empty());
+    }
+
+    #[test]
+    fn test_unmap_webview_removes_warm_cache_membership() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key = app.graph.add_node("a".to_string(), Point2D::new(0.0, 0.0));
+        let wv_id = test_webview_id();
+        app.map_webview_to_node(wv_id, key);
+        app.demote_node_to_warm(key);
+        assert_eq!(app.warm_cache_lru, vec![key]);
+
+        let _ = app.unmap_webview(wv_id);
+        assert!(app.warm_cache_lru.is_empty());
+    }
+
+    #[test]
+    fn test_take_warm_cache_evictions_respects_lru_and_limit() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key_a = app.graph.add_node("a".to_string(), Point2D::new(0.0, 0.0));
+        let key_b = app.graph.add_node("b".to_string(), Point2D::new(1.0, 0.0));
+        let key_c = app.graph.add_node("c".to_string(), Point2D::new(2.0, 0.0));
+
+        app.map_webview_to_node(test_webview_id(), key_a);
+        app.demote_node_to_warm(key_a);
+        app.map_webview_to_node(test_webview_id(), key_b);
+        app.demote_node_to_warm(key_b);
+        app.map_webview_to_node(test_webview_id(), key_c);
+        app.demote_node_to_warm(key_c);
+
+        assert_eq!(app.warm_cache_lru, vec![key_a, key_b, key_c]);
+
+        app.warm_cache_limit = 2;
+        let evicted = app.take_warm_cache_evictions();
+        assert_eq!(evicted, vec![key_a]);
+        assert_eq!(app.warm_cache_lru, vec![key_b, key_c]);
+    }
+
+    #[test]
+    fn test_take_active_webview_evictions_respects_limit_and_protection() {
+        use std::collections::HashSet;
+
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key_a = app.graph.add_node("a".to_string(), Point2D::new(0.0, 0.0));
+        let key_b = app.graph.add_node("b".to_string(), Point2D::new(1.0, 0.0));
+        let key_c = app.graph.add_node("c".to_string(), Point2D::new(2.0, 0.0));
+        let key_d = app.graph.add_node("d".to_string(), Point2D::new(3.0, 0.0));
+
+        for key in [key_a, key_b, key_c, key_d] {
+            app.promote_node_to_active(key);
+            app.map_webview_to_node(test_webview_id(), key);
+        }
+
+        app.active_webview_limit = 3;
+        let protected = HashSet::from([key_a]);
+        let evicted = app.take_active_webview_evictions(&protected);
+
+        assert_eq!(evicted.len(), 1);
+        assert!(!protected.contains(&evicted[0]));
+    }
+
+    #[test]
+    fn test_take_active_webview_evictions_with_lower_limit() {
+        use std::collections::HashSet;
+
+        let mut app = GraphBrowserApp::new_for_testing();
+        let key_a = app.graph.add_node("a".to_string(), Point2D::new(0.0, 0.0));
+        let key_b = app.graph.add_node("b".to_string(), Point2D::new(1.0, 0.0));
+        let key_c = app.graph.add_node("c".to_string(), Point2D::new(2.0, 0.0));
+
+        for key in [key_a, key_b, key_c] {
+            app.promote_node_to_active(key);
+            app.map_webview_to_node(test_webview_id(), key);
+        }
+
+        let evicted = app.take_active_webview_evictions_with_limit(1, &HashSet::new());
+        assert_eq!(evicted.len(), 2);
     }
 
     #[test]
@@ -3697,7 +4440,7 @@ mod tests {
             app.take_pending_open_selected_tile_mode(),
             Some(PendingTileOpenMode::Tab)
         );
-        assert!(app.current_workspace_is_ephemeral);
+        assert!(app.current_workspace_is_synthesized);
         assert!(
             app.take_pending_restore_workspace_snapshot_named()
                 .is_none()
@@ -3705,7 +4448,7 @@ mod tests {
     }
 
     #[test]
-    fn test_open_node_workspace_routed_preserves_ephemeral_prompt_state_until_restore() {
+    fn test_open_node_workspace_routed_preserves_unsaved_prompt_state_until_restore() {
         let mut app = GraphBrowserApp::new_for_testing();
         let key = app
             .graph
@@ -3715,9 +4458,9 @@ mod tests {
         let mut index = HashMap::new();
         index.insert(node_id, BTreeSet::from(["workspace-alpha".to_string()]));
         app.init_membership_index(index);
-        app.current_workspace_is_ephemeral = true;
-        app.ephemeral_workspace_modified = true;
-        app.ephemeral_workspace_prompt_warned = false;
+        app.current_workspace_is_synthesized = true;
+        app.workspace_has_unsaved_changes = true;
+        app.unsaved_workspace_prompt_warned = false;
 
         app.apply_intents([GraphIntent::OpenNodeWorkspaceRouted {
             key,
@@ -3728,7 +4471,7 @@ mod tests {
             app.take_pending_restore_workspace_snapshot_named(),
             Some("workspace-alpha".to_string())
         );
-        assert!(app.should_prompt_ephemeral_workspace_save());
+        assert!(app.should_prompt_unsaved_workspace_save());
     }
 
     #[test]
@@ -3779,99 +4522,111 @@ mod tests {
     }
 
     #[test]
-    fn test_ephemeral_workspace_modified_for_graph_mutations() {
+    fn test_workspace_has_unsaved_changes_for_graph_mutations() {
         let mut app = GraphBrowserApp::new_for_testing();
-        app.current_workspace_is_ephemeral = true;
-        app.ephemeral_workspace_modified = false;
+        app.current_workspace_is_synthesized = true;
+        app.workspace_has_unsaved_changes = false;
 
         app.apply_intents([GraphIntent::CreateNodeNearCenter]);
 
-        assert!(app.ephemeral_workspace_modified);
-        assert!(app.should_prompt_ephemeral_workspace_save());
+        assert!(app.workspace_has_unsaved_changes);
+        assert!(app.should_prompt_unsaved_workspace_save());
     }
 
     #[test]
-    fn test_ephemeral_workspace_not_modified_for_non_graph_mutations() {
+    fn test_workspace_modified_for_graph_mutations_even_when_not_synthesized() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        app.current_workspace_is_synthesized = false;
+        app.workspace_has_unsaved_changes = false;
+
+        app.apply_intents([GraphIntent::CreateNodeNearCenter]);
+
+        assert!(app.workspace_has_unsaved_changes);
+        assert!(app.should_prompt_unsaved_workspace_save());
+    }
+
+    #[test]
+    fn test_workspace_not_modified_for_non_graph_mutations() {
         let mut app = GraphBrowserApp::new_for_testing();
         let key = app
             .graph
             .add_node("https://example.com".to_string(), Point2D::new(0.0, 0.0));
-        app.current_workspace_is_ephemeral = true;
-        app.ephemeral_workspace_modified = false;
+        app.current_workspace_is_synthesized = true;
+        app.workspace_has_unsaved_changes = false;
 
         app.apply_intents([GraphIntent::SelectNode {
             key,
             multi_select: false,
         }]);
 
-        assert!(!app.ephemeral_workspace_modified);
-        assert!(!app.should_prompt_ephemeral_workspace_save());
+        assert!(!app.workspace_has_unsaved_changes);
+        assert!(!app.should_prompt_unsaved_workspace_save());
     }
 
     #[test]
-    fn test_ephemeral_prompt_warning_resets_on_additional_graph_mutation() {
+    fn test_unsaved_prompt_warning_resets_on_additional_graph_mutation() {
         let mut app = GraphBrowserApp::new_for_testing();
-        app.current_workspace_is_ephemeral = true;
-        app.ephemeral_workspace_modified = true;
-        app.ephemeral_workspace_prompt_warned = true;
+        app.current_workspace_is_synthesized = true;
+        app.workspace_has_unsaved_changes = true;
+        app.unsaved_workspace_prompt_warned = true;
 
         app.apply_intents([GraphIntent::CreateNodeNearCenter]);
 
-        assert!(app.ephemeral_workspace_modified);
-        assert!(!app.ephemeral_workspace_prompt_warned);
+        assert!(app.workspace_has_unsaved_changes);
+        assert!(!app.unsaved_workspace_prompt_warned);
     }
 
     #[test]
-    fn test_ephemeral_workspace_not_modified_for_set_node_position() {
+    fn test_workspace_not_modified_for_set_node_position() {
         let mut app = GraphBrowserApp::new_for_testing();
         let key = app
             .graph
             .add_node("https://example.com".to_string(), Point2D::new(0.0, 0.0));
-        app.current_workspace_is_ephemeral = true;
-        app.ephemeral_workspace_modified = false;
+        app.current_workspace_is_synthesized = true;
+        app.workspace_has_unsaved_changes = false;
 
         app.apply_intents([GraphIntent::SetNodePosition {
             key,
             position: Point2D::new(42.0, 24.0),
         }]);
 
-        assert!(!app.ephemeral_workspace_modified);
-        assert!(!app.should_prompt_ephemeral_workspace_save());
+        assert!(!app.workspace_has_unsaved_changes);
+        assert!(!app.should_prompt_unsaved_workspace_save());
     }
 
     #[test]
-    fn test_ephemeral_workspace_modified_for_set_node_pinned() {
+    fn test_workspace_has_unsaved_changes_for_set_node_pinned() {
         let mut app = GraphBrowserApp::new_for_testing();
         let key = app
             .graph
             .add_node("https://example.com".to_string(), Point2D::new(0.0, 0.0));
-        app.current_workspace_is_ephemeral = true;
-        app.ephemeral_workspace_modified = false;
+        app.current_workspace_is_synthesized = true;
+        app.workspace_has_unsaved_changes = false;
 
         app.apply_intents([GraphIntent::SetNodePinned {
             key,
             is_pinned: true,
         }]);
 
-        assert!(app.ephemeral_workspace_modified);
-        assert!(app.should_prompt_ephemeral_workspace_save());
+        assert!(app.workspace_has_unsaved_changes);
+        assert!(app.should_prompt_unsaved_workspace_save());
     }
 
     #[test]
-    fn test_save_named_workspace_clears_ephemeral_prompt_state() {
+    fn test_save_named_workspace_clears_unsaved_prompt_state() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().to_path_buf();
         let mut app = GraphBrowserApp::new_from_dir(path);
-        app.current_workspace_is_ephemeral = true;
-        app.ephemeral_workspace_modified = true;
-        app.ephemeral_workspace_prompt_warned = true;
+        app.current_workspace_is_synthesized = true;
+        app.workspace_has_unsaved_changes = true;
+        app.unsaved_workspace_prompt_warned = true;
 
         app.save_workspace_layout_json("workspace:user-saved", "{\"root\":null}");
 
-        assert!(!app.current_workspace_is_ephemeral);
-        assert!(!app.ephemeral_workspace_modified);
-        assert!(!app.ephemeral_workspace_prompt_warned);
-        assert!(!app.should_prompt_ephemeral_workspace_save());
+        assert!(!app.current_workspace_is_synthesized);
+        assert!(!app.workspace_has_unsaved_changes);
+        assert!(!app.unsaved_workspace_prompt_warned);
+        assert!(!app.should_prompt_unsaved_workspace_save());
     }
 
     #[test]
@@ -3940,3 +4695,4 @@ mod tests {
         assert_eq!(app.snapshot_interval_secs(), None);
     }
 }
+

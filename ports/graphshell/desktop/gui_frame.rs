@@ -31,8 +31,8 @@ use super::toolbar_ui::{self, OmnibarSearchSession, ToolbarUiArgs, ToolbarUiOutp
 use super::webview_backpressure::WebviewCreationBackpressureState;
 use super::webview_controller;
 use crate::app::{
-    EphemeralWorkspacePromptAction, EphemeralWorkspacePromptRequest, GraphBrowserApp, GraphIntent,
-    PendingConnectedOpenScope, PendingTileOpenMode,
+    GraphBrowserApp, GraphIntent, PendingConnectedOpenScope, PendingTileOpenMode,
+    UnsavedWorkspacePromptAction, UnsavedWorkspacePromptRequest,
 };
 use crate::graph::NodeKey;
 use crate::input;
@@ -422,7 +422,9 @@ fn is_user_undoable_intent(intent: &GraphIntent) -> bool {
             | GraphIntent::RemoveEdge { .. }
             | GraphIntent::ExecuteEdgeCommand { .. }
             | GraphIntent::SetNodePinned { .. }
+            | GraphIntent::TogglePrimaryNodePin
             | GraphIntent::PromoteNodeToActive { .. }
+            | GraphIntent::DemoteNodeToWarm { .. }
             | GraphIntent::DemoteNodeToCold { .. }
     )
 }
@@ -875,19 +877,19 @@ pub(crate) fn run_post_render_phase<FActive>(
         persistence_panel_layout_json.as_deref(),
     );
     render::render_choose_workspace_picker(ctx, graph_app);
-    render::render_ephemeral_workspace_prompt(ctx, graph_app);
+    render::render_unsaved_workspace_prompt(ctx, graph_app);
 
-    if let Some((request, action)) = graph_app.take_ephemeral_workspace_prompt_resolution() {
+    if let Some((request, action)) = graph_app.take_unsaved_workspace_prompt_resolution() {
         match (request, action) {
             (
-                EphemeralWorkspacePromptRequest::WorkspaceSwitch { name, focus_node },
-                EphemeralWorkspacePromptAction::ProceedWithoutSaving,
+                UnsavedWorkspacePromptRequest::WorkspaceSwitch { name, focus_node },
+                UnsavedWorkspacePromptAction::ProceedWithoutSaving,
             ) => {
                 restore_named_workspace_snapshot(graph_app, tiles_tree, &name, focus_node);
             },
             (
-                EphemeralWorkspacePromptRequest::WorkspaceSwitch { .. },
-                EphemeralWorkspacePromptAction::Cancel,
+                UnsavedWorkspacePromptRequest::WorkspaceSwitch { .. },
+                UnsavedWorkspacePromptAction::Cancel,
             ) => {},
         }
     }
@@ -923,12 +925,12 @@ pub(crate) fn run_post_render_phase<FActive>(
 
     if let Some(name) = graph_app.take_pending_restore_workspace_snapshot_named() {
         let focus_node = graph_app.take_pending_workspace_restore_focus_node();
-        if graph_app.should_prompt_ephemeral_workspace_save() {
-            if graph_app.consume_ephemeral_workspace_prompt_warning() {
-                warn!("Ephemeral workspace has unsaved graph changes before switching to '{name}'");
+        if graph_app.should_prompt_unsaved_workspace_save() {
+            if graph_app.consume_unsaved_workspace_prompt_warning() {
+                warn!("Current workspace has unsaved graph changes before switching to '{name}'");
             }
-            graph_app.request_ephemeral_workspace_prompt(
-                EphemeralWorkspacePromptRequest::WorkspaceSwitch { name, focus_node },
+            graph_app.request_unsaved_workspace_prompt(
+                UnsavedWorkspacePromptRequest::WorkspaceSwitch { name, focus_node },
             );
         } else {
             restore_named_workspace_snapshot(graph_app, tiles_tree, &name, focus_node);
@@ -1025,7 +1027,7 @@ pub(crate) fn run_post_render_phase<FActive>(
         ordered.push(source);
         ordered.extend(connected);
 
-        graph_app.mark_current_workspace_ephemeral();
+        graph_app.mark_current_workspace_synthesized();
         let tile_mode = tile_open_mode_from_pending(open_mode);
         match tile_mode {
             tile_view_ops::TileOpenMode::Tab => {
@@ -1058,8 +1060,8 @@ pub(crate) fn run_post_render_phase<FActive>(
         }
     }
 
-    let prompt_pending = graph_app.ephemeral_workspace_prompt_request().is_some();
-    // Session autosave should not block on ephemeral-save prompts. Prompting
+    let prompt_pending = graph_app.unsaved_workspace_prompt_request().is_some();
+    // Session autosave should not block on unsaved-workspace prompts. Prompting
     // is reserved for explicit workspace-switch actions.
     if !prompt_pending {
         match serde_json::to_string(tiles_tree) {

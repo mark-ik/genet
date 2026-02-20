@@ -16,7 +16,9 @@ use petgraph::{Directed, Direction};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::persistence::types::{GraphSnapshot, PersistedEdge, PersistedEdgeType, PersistedNode};
+use crate::persistence::types::{
+    GraphSnapshot, PersistedEdge, PersistedEdgeType, PersistedNode, PersistedNodeSessionState,
+};
 
 pub mod egui_adapter;
 
@@ -74,6 +76,12 @@ pub struct Node {
     /// Favicon height in pixels (valid when `favicon_rgba` is `Some`).
     pub favicon_height: u32,
 
+    /// Last known scroll offset for higher-fidelity cold restore.
+    pub session_scroll: Option<(f32, f32)>,
+
+    /// Optional best-effort form draft payload (feature-guarded by caller policy).
+    pub session_form_draft: Option<String>,
+
     /// Webview lifecycle state
     pub lifecycle: NodeLifecycle,
 }
@@ -83,6 +91,9 @@ pub struct Node {
 pub enum NodeLifecycle {
     /// Active webview (visible, rendering)
     Active,
+
+    /// Warm webview (kept alive in memory but not currently visible in a pane)
+    Warm,
 
     /// Cold (metadata only, no process)
     Cold,
@@ -156,6 +167,8 @@ impl Graph {
             favicon_rgba: None,
             favicon_width: 0,
             favicon_height: 0,
+            session_scroll: None,
+            session_form_draft: None,
             lifecycle: NodeLifecycle::Cold,
         });
 
@@ -306,6 +319,13 @@ impl Graph {
                 favicon_rgba: node.favicon_rgba.clone(),
                 favicon_width: node.favicon_width,
                 favicon_height: node.favicon_height,
+                session_state: Some(PersistedNodeSessionState {
+                    history_entries: node.history_entries.clone(),
+                    history_index: node.history_index,
+                    scroll_x: node.session_scroll.map(|(x, _)| x),
+                    scroll_y: node.session_scroll.map(|(_, y)| y),
+                    form_draft: node.session_form_draft.clone(),
+                }),
             })
             .collect();
 
@@ -357,6 +377,7 @@ impl Graph {
                 pnode.url.clone(),
                 Point2D::new(pnode.position_x, pnode.position_y),
             );
+            let mut restore_url_from_session: Option<String> = None;
             if let Some(node) = graph.get_node_mut(key) {
                 node.title = pnode.title.clone();
                 node.is_pinned = pnode.is_pinned;
@@ -370,6 +391,20 @@ impl Graph {
                 node.favicon_rgba = pnode.favicon_rgba.clone();
                 node.favicon_width = pnode.favicon_width;
                 node.favicon_height = pnode.favicon_height;
+                if let Some(session) = &pnode.session_state {
+                    node.history_entries = session.history_entries.clone();
+                    node.history_index = session
+                        .history_index
+                        .min(node.history_entries.len().saturating_sub(1));
+                    restore_url_from_session = node.history_entries.get(node.history_index).cloned();
+                    node.session_scroll = session.scroll_x.zip(session.scroll_y);
+                    node.session_form_draft = session.form_draft.clone();
+                }
+            }
+            if let Some(current_url) = restore_url_from_session
+                && !current_url.is_empty()
+            {
+                let _ = graph.update_node_url(key, current_url);
             }
         }
 
@@ -804,6 +839,7 @@ mod tests {
                 favicon_rgba: None,
                 favicon_width: 0,
                 favicon_height: 0,
+                session_state: None,
             }],
             edges: vec![PersistedEdge {
                 from_node_id: Uuid::new_v4().to_string(),
@@ -841,6 +877,7 @@ mod tests {
                     favicon_rgba: None,
                     favicon_width: 0,
                     favicon_height: 0,
+                    session_state: None,
                 },
                 PersistedNode {
                     node_id: Uuid::new_v4().to_string(),
@@ -857,6 +894,7 @@ mod tests {
                     favicon_rgba: None,
                     favicon_width: 0,
                     favicon_height: 0,
+                    session_state: None,
                 },
             ],
             edges: vec![],
@@ -890,5 +928,118 @@ mod tests {
         let fake_key = NodeKey::new(999);
 
         assert_eq!(graph.update_node_url(fake_key, "x".to_string()), None);
+    }
+
+    #[test]
+    fn test_cold_restore_reapplies_history_index() {
+        use crate::persistence::types::{GraphSnapshot, PersistedNode, PersistedNodeSessionState};
+
+        let node_id = Uuid::new_v4();
+        let snapshot = GraphSnapshot {
+            nodes: vec![PersistedNode {
+                node_id: node_id.to_string(),
+                url: "https://fallback.example".to_string(),
+                title: "Node".to_string(),
+                position_x: 0.0,
+                position_y: 0.0,
+                is_pinned: false,
+                history_entries: vec!["https://legacy.example".to_string()],
+                history_index: 0,
+                thumbnail_png: None,
+                thumbnail_width: 0,
+                thumbnail_height: 0,
+                favicon_rgba: None,
+                favicon_width: 0,
+                favicon_height: 0,
+                session_state: Some(PersistedNodeSessionState {
+                    history_entries: vec![
+                        "https://example.com/one".to_string(),
+                        "https://example.com/two".to_string(),
+                        "https://example.com/three".to_string(),
+                    ],
+                    history_index: 2,
+                    scroll_x: Some(4.0),
+                    scroll_y: Some(120.0),
+                    form_draft: None,
+                }),
+            }],
+            edges: vec![],
+            timestamp_secs: 0,
+        };
+
+        let restored = Graph::from_snapshot(&snapshot);
+        let (_, node) = restored.get_node_by_id(node_id).unwrap();
+        assert_eq!(node.history_entries.len(), 3);
+        assert_eq!(node.history_index, 2);
+    }
+
+    #[test]
+    fn test_cold_restore_reapplies_scroll_offset() {
+        use crate::persistence::types::{GraphSnapshot, PersistedNode, PersistedNodeSessionState};
+
+        let snapshot = GraphSnapshot {
+            nodes: vec![PersistedNode {
+                node_id: Uuid::new_v4().to_string(),
+                url: "https://example.com".to_string(),
+                title: "Node".to_string(),
+                position_x: 0.0,
+                position_y: 0.0,
+                is_pinned: false,
+                history_entries: vec![],
+                history_index: 0,
+                thumbnail_png: None,
+                thumbnail_width: 0,
+                thumbnail_height: 0,
+                favicon_rgba: None,
+                favicon_width: 0,
+                favicon_height: 0,
+                session_state: Some(PersistedNodeSessionState {
+                    history_entries: vec!["https://example.com".to_string()],
+                    history_index: 0,
+                    scroll_x: Some(20.0),
+                    scroll_y: Some(640.0),
+                    form_draft: None,
+                }),
+            }],
+            edges: vec![],
+            timestamp_secs: 0,
+        };
+
+        let restored = Graph::from_snapshot(&snapshot);
+        let (_, node) = restored.get_node_by_url("https://example.com").unwrap();
+        assert_eq!(node.session_scroll, Some((20.0, 640.0)));
+    }
+
+    #[test]
+    fn test_restore_fallback_without_session_state() {
+        use crate::persistence::types::{GraphSnapshot, PersistedNode};
+
+        let snapshot = GraphSnapshot {
+            nodes: vec![PersistedNode {
+                node_id: Uuid::new_v4().to_string(),
+                url: "https://fallback.example".to_string(),
+                title: "Node".to_string(),
+                position_x: 0.0,
+                position_y: 0.0,
+                is_pinned: false,
+                history_entries: vec!["https://legacy-one.example".to_string()],
+                history_index: 0,
+                thumbnail_png: None,
+                thumbnail_width: 0,
+                thumbnail_height: 0,
+                favicon_rgba: None,
+                favicon_width: 0,
+                favicon_height: 0,
+                session_state: None,
+            }],
+            edges: vec![],
+            timestamp_secs: 0,
+        };
+
+        let restored = Graph::from_snapshot(&snapshot);
+        let (_, node) = restored.get_node_by_url("https://fallback.example").unwrap();
+        assert_eq!(node.history_entries, vec!["https://legacy-one.example".to_string()]);
+        assert_eq!(node.history_index, 0);
+        assert_eq!(node.session_scroll, None);
     }
 }

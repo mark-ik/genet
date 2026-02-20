@@ -128,10 +128,14 @@ petgraph = { version = "0.8.3", features = ["serde-1"] }
 fjall = "3"
 redb = "3"
 rkyv = { version = "0.8", features = ["std"] }
+aes-gcm = { workspace = true }
+keyring = "3"
+zstd = "0.13"
 gilrs = "0.11.1"
 glow = { workspace = true }
 headers = { workspace = true }
 serde_json = { workspace = true }
+sysinfo = "0.30"
 # For optional feature servo_allocator/use-system-allocator and servo_allocator/allocation-tracking
 servo_allocator = { path = "../../components/allocator" }
 surfman = { workspace = true, features = ["sm-raw-window-handle-06", "sm-x11"] }
