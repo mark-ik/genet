@@ -7,7 +7,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -18,7 +18,20 @@ use crate::persistence::types::{LogEntry, PersistedEdgeType};
 use egui_graphs::FruchtermanReingoldWithCenterGravityState;
 use euclid::default::Point2D;
 use log::warn;
+// Platform-agnostic renderer handle.
+// On desktop this aliases servo::WebViewId so existing callers in the
+// desktop module work without any conversion.
+// On iOS, Servo is not a dependency, so a standalone opaque type is used.
+#[cfg(not(target_os = "ios"))]
 use servo::WebViewId;
+/// Opaque handle for a renderer instance (webview, PDF viewer, etc.).
+/// On desktop: identical to `servo::WebViewId` (type alias, zero cost).
+/// On iOS: an opaque counter assigned by the iOS renderer layer.
+#[cfg(not(target_os = "ios"))]
+pub type RendererId = WebViewId;
+#[cfg(target_os = "ios")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RendererId(u64);
 use uuid::Uuid;
 
 /// Camera state for zoom bounds enforcement
@@ -66,6 +79,31 @@ pub struct NodeCrashState {
     pub reason: String,
     pub has_backtrace: bool,
     pub crashed_at: SystemTime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchDisplayMode {
+    Highlight,
+    Filter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionUpdateMode {
+    Replace,
+    Add,
+    Toggle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardCopyKind {
+    Url,
+    Title,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClipboardCopyRequest {
+    pub key: NodeKey,
+    pub kind: ClipboardCopyKind,
 }
 
 #[derive(Clone)]
@@ -130,6 +168,52 @@ impl SelectionState {
         self.order.clear();
         self.primary = None;
         self.revision = self.revision.saturating_add(1);
+    }
+
+    pub fn update_many(&mut self, keys: Vec<NodeKey>, mode: SelectionUpdateMode) {
+        match mode {
+            SelectionUpdateMode::Replace => {
+                self.nodes.clear();
+                self.order.clear();
+                for key in keys {
+                    if self.nodes.insert(key) {
+                        self.order.push(key);
+                    }
+                }
+                self.primary = self.order.last().copied();
+                self.revision = self.revision.saturating_add(1);
+            },
+            SelectionUpdateMode::Add => {
+                let mut changed = false;
+                for key in keys {
+                    if self.nodes.insert(key) {
+                        self.order.push(key);
+                        self.primary = Some(key);
+                        changed = true;
+                    }
+                }
+                if changed {
+                    self.revision = self.revision.saturating_add(1);
+                }
+            },
+            SelectionUpdateMode::Toggle => {
+                let mut changed = false;
+                for key in keys {
+                    if self.nodes.remove(&key) {
+                        self.order.retain(|existing| *existing != key);
+                        changed = true;
+                    } else if self.nodes.insert(key) {
+                        self.order.push(key);
+                        self.primary = Some(key);
+                        changed = true;
+                    }
+                }
+                self.primary = self.order.last().copied();
+                if changed {
+                    self.revision = self.revision.saturating_add(1);
+                }
+            },
+        }
     }
 
     /// Ordered pair of selected nodes when exactly two nodes are selected.
@@ -222,12 +306,134 @@ pub enum UnsavedWorkspacePromptAction {
 pub enum ChooseWorkspacePickerMode {
     OpenNodeInWorkspace,
     AddNodeToWorkspace,
+    AddConnectedSelectionToWorkspace,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChooseWorkspacePickerRequest {
     pub node: NodeKey,
     pub mode: ChooseWorkspacePickerMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToastAnchorPreference {
+    TopRight,
+    TopLeft,
+    BottomRight,
+    BottomLeft,
+}
+
+impl ToastAnchorPreference {
+    fn as_persisted_str(self) -> &'static str {
+        match self {
+            Self::TopRight => "top-right",
+            Self::TopLeft => "top-left",
+            Self::BottomRight => "bottom-right",
+            Self::BottomLeft => "bottom-left",
+        }
+    }
+
+    fn from_persisted_str(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "top-right" => Some(Self::TopRight),
+            "top-left" => Some(Self::TopLeft),
+            "bottom-right" => Some(Self::BottomRight),
+            "bottom-left" => Some(Self::BottomLeft),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LassoMouseBinding {
+    RightDrag,
+    ShiftLeftDrag,
+}
+
+impl LassoMouseBinding {
+    fn as_persisted_str(self) -> &'static str {
+        match self {
+            Self::RightDrag => "right-drag",
+            Self::ShiftLeftDrag => "shift-left-drag",
+        }
+    }
+
+    fn from_persisted_str(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "right-drag" => Some(Self::RightDrag),
+            "shift-left-drag" => Some(Self::ShiftLeftDrag),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandPaletteShortcut {
+    F2,
+    CtrlK,
+}
+
+impl CommandPaletteShortcut {
+    fn as_persisted_str(self) -> &'static str {
+        match self {
+            Self::F2 => "f2",
+            Self::CtrlK => "ctrl-k",
+        }
+    }
+
+    fn from_persisted_str(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "f2" => Some(Self::F2),
+            "ctrl-k" => Some(Self::CtrlK),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelpPanelShortcut {
+    F1OrQuestion,
+    H,
+}
+
+impl HelpPanelShortcut {
+    fn as_persisted_str(self) -> &'static str {
+        match self {
+            Self::F1OrQuestion => "f1-or-question",
+            Self::H => "h",
+        }
+    }
+
+    fn from_persisted_str(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "f1-or-question" => Some(Self::F1OrQuestion),
+            "h" => Some(Self::H),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RadialMenuShortcut {
+    F3,
+    R,
+}
+
+impl RadialMenuShortcut {
+    fn as_persisted_str(self) -> &'static str {
+        match self {
+            Self::F3 => "f3",
+            Self::R => "r",
+        }
+    }
+
+    fn from_persisted_str(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "f3" => Some(Self::F3),
+            "r" => Some(Self::R),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -256,6 +462,11 @@ pub enum GraphIntent {
         key: NodeKey,
         multi_select: bool,
     },
+    UpdateSelection {
+        keys: Vec<NodeKey>,
+        mode: SelectionUpdateMode,
+    },
+    SelectAll,
     SetInteracting {
         interacting: bool,
     },
@@ -307,28 +518,28 @@ pub enum GraphIntent {
         key: NodeKey,
     },
     MapWebviewToNode {
-        webview_id: WebViewId,
+        webview_id: RendererId,
         key: NodeKey,
     },
     UnmapWebview {
-        webview_id: WebViewId,
+        webview_id: RendererId,
     },
     WebViewCreated {
-        parent_webview_id: WebViewId,
-        child_webview_id: WebViewId,
+        parent_webview_id: RendererId,
+        child_webview_id: RendererId,
         initial_url: Option<String>,
     },
     WebViewUrlChanged {
-        webview_id: WebViewId,
+        webview_id: RendererId,
         new_url: String,
     },
     WebViewHistoryChanged {
-        webview_id: WebViewId,
+        webview_id: RendererId,
         entries: Vec<String>,
         current: usize,
     },
     WebViewScrollChanged {
-        webview_id: WebViewId,
+        webview_id: RendererId,
         scroll_x: f32,
         scroll_y: f32,
     },
@@ -337,11 +548,11 @@ pub enum GraphIntent {
         form_draft: Option<String>,
     },
     WebViewTitleChanged {
-        webview_id: WebViewId,
+        webview_id: RendererId,
         title: Option<String>,
     },
     WebViewCrashed {
-        webview_id: WebViewId,
+        webview_id: RendererId,
         reason: String,
         has_backtrace: bool,
     },
@@ -373,9 +584,9 @@ pub struct GraphBrowserApp {
     /// Currently selected nodes (can be multiple)
     pub selected_nodes: SelectionState,
 
-    /// Bidirectional mapping between browser tabs and graph nodes
-    webview_to_node: HashMap<WebViewId, NodeKey>,
-    node_to_webview: HashMap<NodeKey, WebViewId>,
+    /// Bidirectional mapping between renderer instances and graph nodes
+    webview_to_node: HashMap<RendererId, NodeKey>,
+    node_to_webview: HashMap<NodeKey, RendererId>,
     /// Runtime-only crash metadata keyed by graph node.
     node_crash_state: HashMap<NodeKey, NodeCrashState>,
 
@@ -418,9 +629,21 @@ pub struct GraphBrowserApp {
 
     /// Whether the persistence hub panel is open.
     pub show_persistence_panel: bool,
+    /// Preferred toast anchor location.
+    pub toast_anchor_preference: ToastAnchorPreference,
+    /// Preferred lasso activation gesture.
+    pub lasso_mouse_binding: LassoMouseBinding,
+    /// Shortcut binding for command palette.
+    pub command_palette_shortcut: CommandPaletteShortcut,
+    /// Shortcut binding for help panel.
+    pub help_panel_shortcut: HelpPanelShortcut,
+    /// Shortcut binding for radial menu.
+    pub radial_menu_shortcut: RadialMenuShortcut,
 
     /// Last hovered node in graph view (updated by graph render pass).
     pub hovered_graph_node: Option<NodeKey>,
+    /// Graph search display mode (context-preserving highlight vs strict filter).
+    pub search_display_mode: SearchDisplayMode,
     /// Explicit node context target (e.g. right-click) for open commands.
     pending_node_context_target: Option<NodeKey>,
     /// Explicit highlighted edge in graph view (for edge-search targeting).
@@ -455,6 +678,8 @@ pub struct GraphBrowserApp {
 
     /// Pending UI command: add a node tab to an existing named workspace snapshot.
     pending_add_node_to_workspace: Option<(NodeKey, String)>,
+    /// Pending UI command: add connected nodes (from seed selection) to a named workspace snapshot.
+    pending_add_connected_to_workspace: Option<(Vec<NodeKey>, String)>,
 
     /// Pending UI command: persist named full-graph snapshot.
     pending_save_graph_snapshot_named: Option<String>,
@@ -476,6 +701,12 @@ pub struct GraphBrowserApp {
 
     /// Pending UI command: keep only latest N named workspaces.
     pending_keep_latest_named_workspaces: Option<usize>,
+
+    /// Pending clipboard copy request for node-derived values.
+    pending_clipboard_copy: Option<ClipboardCopyRequest>,
+
+    /// Pending UI command: switch persistence data directory.
+    pending_switch_data_dir: Option<PathBuf>,
 
     /// Pending keyboard-driven zoom command to apply against graph metadata.
     pending_keyboard_zoom_request: Option<KeyboardZoomRequest>,
@@ -552,6 +783,14 @@ impl GraphBrowserApp {
     const SESSION_WORKSPACE_PREV_PREFIX: &'static str = "workspace:session-prev-";
     pub const WORKSPACE_PIN_WORKSPACE_NAME: &'static str = "workspace:pin-workspace-current";
     pub const WORKSPACE_PIN_PANE_NAME: &'static str = "workspace:pin-pane-current";
+    pub const SETTINGS_TOAST_ANCHOR_NAME: &'static str = "workspace:settings-toast-anchor";
+    pub const SETTINGS_LASSO_MOUSE_BINDING_NAME: &'static str = "workspace:settings-lasso-binding";
+    pub const SETTINGS_COMMAND_PALETTE_SHORTCUT_NAME: &'static str =
+        "workspace:settings-command-palette-shortcut";
+    pub const SETTINGS_HELP_PANEL_SHORTCUT_NAME: &'static str =
+        "workspace:settings-help-panel-shortcut";
+    pub const SETTINGS_RADIAL_MENU_SHORTCUT_NAME: &'static str =
+        "workspace:settings-radial-menu-shortcut";
     pub const DEFAULT_WORKSPACE_AUTOSAVE_INTERVAL_SECS: u64 = 60;
     pub const DEFAULT_WORKSPACE_AUTOSAVE_RETENTION: u8 = 1;
     pub const DEFAULT_ACTIVE_WEBVIEW_LIMIT: usize = 4;
@@ -596,7 +835,7 @@ impl GraphBrowserApp {
         // Scan recovered graph for existing placeholder IDs to avoid collisions
         let next_placeholder_id = Self::scan_max_placeholder_id(&graph);
 
-        Self {
+        let mut app = Self {
             graph,
             physics: Self::default_physics_state(),
             physics_running_before_interaction: None,
@@ -617,7 +856,13 @@ impl GraphBrowserApp {
             show_command_palette: false,
             show_radial_menu: false,
             show_persistence_panel: false,
+            toast_anchor_preference: ToastAnchorPreference::BottomRight,
+            lasso_mouse_binding: LassoMouseBinding::RightDrag,
+            command_palette_shortcut: CommandPaletteShortcut::F2,
+            help_panel_shortcut: HelpPanelShortcut::F1OrQuestion,
+            radial_menu_shortcut: RadialMenuShortcut::F3,
             hovered_graph_node: None,
+            search_display_mode: SearchDisplayMode::Highlight,
             pending_node_context_target: None,
             highlighted_graph_edge: None,
             pending_open_connected_from: None,
@@ -630,6 +875,7 @@ impl GraphBrowserApp {
             pending_unsaved_workspace_prompt_action: None,
             pending_choose_workspace_picker_request: None,
             pending_add_node_to_workspace: None,
+            pending_add_connected_to_workspace: None,
             pending_save_graph_snapshot_named: None,
             pending_restore_graph_snapshot_named: None,
             pending_restore_graph_snapshot_latest: false,
@@ -637,6 +883,8 @@ impl GraphBrowserApp {
             pending_detach_node_to_split: None,
             pending_prune_empty_workspaces: false,
             pending_keep_latest_named_workspaces: None,
+            pending_clipboard_copy: None,
+            pending_switch_data_dir: None,
             pending_keyboard_zoom_request: None,
             pending_zoom_to_selected_request: false,
             fit_to_screen_requested: false,
@@ -662,9 +910,10 @@ impl GraphBrowserApp {
             memory_pressure_level: MemoryPressureLevel::Unknown,
             memory_available_mib: 0,
             memory_total_mib: 0,
-            form_draft_capture_enabled: std::env::var_os("GRAPHSHELL_ENABLE_FORM_DRAFT")
-                .is_some(),
-        }
+            form_draft_capture_enabled: std::env::var_os("GRAPHSHELL_ENABLE_FORM_DRAFT").is_some(),
+        };
+        app.load_persisted_ui_settings();
+        app
     }
 
     /// Create a new graph browser application without persistence (for tests)
@@ -691,7 +940,13 @@ impl GraphBrowserApp {
             show_command_palette: false,
             show_radial_menu: false,
             show_persistence_panel: false,
+            toast_anchor_preference: ToastAnchorPreference::BottomRight,
+            lasso_mouse_binding: LassoMouseBinding::RightDrag,
+            command_palette_shortcut: CommandPaletteShortcut::F2,
+            help_panel_shortcut: HelpPanelShortcut::F1OrQuestion,
+            radial_menu_shortcut: RadialMenuShortcut::F3,
             hovered_graph_node: None,
+            search_display_mode: SearchDisplayMode::Highlight,
             pending_node_context_target: None,
             highlighted_graph_edge: None,
             pending_open_connected_from: None,
@@ -704,6 +959,7 @@ impl GraphBrowserApp {
             pending_unsaved_workspace_prompt_action: None,
             pending_choose_workspace_picker_request: None,
             pending_add_node_to_workspace: None,
+            pending_add_connected_to_workspace: None,
             pending_save_graph_snapshot_named: None,
             pending_restore_graph_snapshot_named: None,
             pending_restore_graph_snapshot_latest: false,
@@ -711,6 +967,8 @@ impl GraphBrowserApp {
             pending_detach_node_to_split: None,
             pending_prune_empty_workspaces: false,
             pending_keep_latest_named_workspaces: None,
+            pending_clipboard_copy: None,
+            pending_switch_data_dir: None,
             pending_keyboard_zoom_request: None,
             pending_zoom_to_selected_request: false,
             fit_to_screen_requested: false,
@@ -885,7 +1143,7 @@ impl GraphBrowserApp {
             GraphIntent::ClearGraph => self.clear_graph(),
             GraphIntent::SelectNode { key, multi_select } => {
                 self.select_node(key, multi_select);
-                // Single-selecting a cold node should prewarm it (without opening a tile).
+                // Single-selecting an unloaded node should prewarm it (without opening a tile).
                 if !multi_select
                     && self.selected_nodes.primary() == Some(key)
                     && !self.node_crash_state.contains_key(&key)
@@ -893,11 +1151,21 @@ impl GraphBrowserApp {
                     && self
                         .graph
                         .get_node(key)
-                        .map(|node| node.lifecycle == crate::graph::NodeLifecycle::Cold)
+                        .map(|node| node.lifecycle != crate::graph::NodeLifecycle::Active)
                         .unwrap_or(false)
                 {
                     self.promote_node_to_active(key);
                 }
+            },
+            GraphIntent::UpdateSelection { keys, mode } => {
+                self.selected_nodes.update_many(keys, mode);
+                self.egui_state_dirty = true;
+            },
+            GraphIntent::SelectAll => {
+                let all_keys: Vec<NodeKey> = self.graph.nodes().map(|(k, _)| k).collect();
+                self.selected_nodes
+                    .update_many(all_keys, SelectionUpdateMode::Replace);
+                self.egui_state_dirty = true;
             },
             GraphIntent::SetInteracting { interacting } => self.set_interacting(interacting),
             GraphIntent::SetNodePosition { key, position } => {
@@ -1411,7 +1679,120 @@ impl GraphBrowserApp {
             || name == Self::SESSION_WORKSPACE_LAYOUT_NAME
             || name == Self::WORKSPACE_PIN_WORKSPACE_NAME
             || name == Self::WORKSPACE_PIN_PANE_NAME
+            || name == Self::SETTINGS_TOAST_ANCHOR_NAME
+            || name == Self::SETTINGS_LASSO_MOUSE_BINDING_NAME
+            || name == Self::SETTINGS_COMMAND_PALETTE_SHORTCUT_NAME
+            || name == Self::SETTINGS_HELP_PANEL_SHORTCUT_NAME
+            || name == Self::SETTINGS_RADIAL_MENU_SHORTCUT_NAME
             || name.starts_with(Self::SESSION_WORKSPACE_PREV_PREFIX)
+    }
+
+    pub fn set_toast_anchor_preference(&mut self, preference: ToastAnchorPreference) {
+        self.toast_anchor_preference = preference;
+        self.save_toast_anchor_preference();
+    }
+
+    fn save_toast_anchor_preference(&mut self) {
+        self.save_workspace_layout_json(
+            Self::SETTINGS_TOAST_ANCHOR_NAME,
+            self.toast_anchor_preference.as_persisted_str(),
+        );
+    }
+
+    pub fn set_lasso_mouse_binding(&mut self, binding: LassoMouseBinding) {
+        self.lasso_mouse_binding = binding;
+        self.save_lasso_mouse_binding();
+    }
+
+    fn save_lasso_mouse_binding(&mut self) {
+        self.save_workspace_layout_json(
+            Self::SETTINGS_LASSO_MOUSE_BINDING_NAME,
+            self.lasso_mouse_binding.as_persisted_str(),
+        );
+    }
+
+    pub fn set_command_palette_shortcut(&mut self, shortcut: CommandPaletteShortcut) {
+        self.command_palette_shortcut = shortcut;
+        self.save_command_palette_shortcut();
+    }
+
+    fn save_command_palette_shortcut(&mut self) {
+        self.save_workspace_layout_json(
+            Self::SETTINGS_COMMAND_PALETTE_SHORTCUT_NAME,
+            self.command_palette_shortcut.as_persisted_str(),
+        );
+    }
+
+    pub fn set_help_panel_shortcut(&mut self, shortcut: HelpPanelShortcut) {
+        self.help_panel_shortcut = shortcut;
+        self.save_help_panel_shortcut();
+    }
+
+    fn save_help_panel_shortcut(&mut self) {
+        self.save_workspace_layout_json(
+            Self::SETTINGS_HELP_PANEL_SHORTCUT_NAME,
+            self.help_panel_shortcut.as_persisted_str(),
+        );
+    }
+
+    pub fn set_radial_menu_shortcut(&mut self, shortcut: RadialMenuShortcut) {
+        self.radial_menu_shortcut = shortcut;
+        self.save_radial_menu_shortcut();
+    }
+
+    fn save_radial_menu_shortcut(&mut self) {
+        self.save_workspace_layout_json(
+            Self::SETTINGS_RADIAL_MENU_SHORTCUT_NAME,
+            self.radial_menu_shortcut.as_persisted_str(),
+        );
+    }
+
+    fn load_persisted_ui_settings(&mut self) {
+        let Some(raw) = self.load_workspace_layout_json(Self::SETTINGS_TOAST_ANCHOR_NAME) else {
+            return self.load_additional_persisted_ui_settings();
+        };
+        if let Some(preference) = ToastAnchorPreference::from_persisted_str(&raw) {
+            self.toast_anchor_preference = preference;
+        } else {
+            warn!("Ignoring invalid persisted toast anchor preference: '{raw}'");
+        }
+        self.load_additional_persisted_ui_settings();
+    }
+
+    fn load_additional_persisted_ui_settings(&mut self) {
+        if let Some(raw) = self.load_workspace_layout_json(Self::SETTINGS_LASSO_MOUSE_BINDING_NAME)
+        {
+            if let Some(binding) = LassoMouseBinding::from_persisted_str(&raw) {
+                self.lasso_mouse_binding = binding;
+            } else {
+                warn!("Ignoring invalid persisted lasso binding: '{raw}'");
+            }
+        }
+        if let Some(raw) =
+            self.load_workspace_layout_json(Self::SETTINGS_COMMAND_PALETTE_SHORTCUT_NAME)
+        {
+            if let Some(shortcut) = CommandPaletteShortcut::from_persisted_str(&raw) {
+                self.command_palette_shortcut = shortcut;
+            } else {
+                warn!("Ignoring invalid persisted command-palette shortcut: '{raw}'");
+            }
+        }
+        if let Some(raw) = self.load_workspace_layout_json(Self::SETTINGS_HELP_PANEL_SHORTCUT_NAME)
+        {
+            if let Some(shortcut) = HelpPanelShortcut::from_persisted_str(&raw) {
+                self.help_panel_shortcut = shortcut;
+            } else {
+                warn!("Ignoring invalid persisted help-panel shortcut: '{raw}'");
+            }
+        }
+        if let Some(raw) = self.load_workspace_layout_json(Self::SETTINGS_RADIAL_MENU_SHORTCUT_NAME)
+        {
+            if let Some(shortcut) = RadialMenuShortcut::from_persisted_str(&raw) {
+                self.radial_menu_shortcut = shortcut;
+            } else {
+                warn!("Ignoring invalid persisted radial-menu shortcut: '{raw}'");
+            }
+        }
     }
 
     /// Delete a persisted workspace layout by name.
@@ -1722,6 +2103,7 @@ impl GraphBrowserApp {
         self.pending_unsaved_workspace_prompt_action = None;
         self.pending_choose_workspace_picker_request = None;
         self.pending_add_node_to_workspace = None;
+        self.pending_add_connected_to_workspace = None;
         self.pending_prune_empty_workspaces = false;
         self.pending_keep_latest_named_workspaces = None;
         self.pending_keyboard_zoom_request = None;
@@ -1774,6 +2156,7 @@ impl GraphBrowserApp {
         self.pending_unsaved_workspace_prompt_action = None;
         self.pending_choose_workspace_picker_request = None;
         self.pending_add_node_to_workspace = None;
+        self.pending_add_connected_to_workspace = None;
         self.pending_prune_empty_workspaces = false;
         self.pending_keep_latest_named_workspaces = None;
         self.pending_keyboard_zoom_request = None;
@@ -1791,11 +2174,17 @@ impl GraphBrowserApp {
         self.unsaved_workspace_prompt_warned = false;
         self.is_interacting = false;
         self.physics_running_before_interaction = None;
+        self.toast_anchor_preference = ToastAnchorPreference::BottomRight;
+        self.lasso_mouse_binding = LassoMouseBinding::RightDrag;
+        self.command_palette_shortcut = CommandPaletteShortcut::F2;
+        self.help_panel_shortcut = HelpPanelShortcut::F1OrQuestion;
+        self.radial_menu_shortcut = RadialMenuShortcut::F3;
+        self.load_persisted_ui_settings();
         Ok(())
     }
 
-    /// Add a bidirectional mapping between a webview and a node
-    pub fn map_webview_to_node(&mut self, webview_id: WebViewId, node_key: NodeKey) {
+    /// Add a bidirectional mapping between a renderer instance and a node
+    pub fn map_webview_to_node(&mut self, webview_id: RendererId, node_key: NodeKey) {
         if let Some(previous_node) = self.webview_to_node.remove(&webview_id) {
             self.node_to_webview.remove(&previous_node);
             self.remove_active_node(previous_node);
@@ -1810,8 +2199,8 @@ impl GraphBrowserApp {
         self.remove_warm_cache_node(node_key);
     }
 
-    /// Remove the mapping for a webview and its corresponding node
-    pub fn unmap_webview(&mut self, webview_id: WebViewId) -> Option<NodeKey> {
+    /// Remove the mapping for a renderer instance and its corresponding node
+    pub fn unmap_webview(&mut self, webview_id: RendererId) -> Option<NodeKey> {
         if let Some(node_key) = self.webview_to_node.remove(&webview_id) {
             self.node_to_webview.remove(&node_key);
             self.remove_active_node(node_key);
@@ -1822,8 +2211,8 @@ impl GraphBrowserApp {
         }
     }
 
-    /// Get the node key for a given webview
-    pub fn get_node_for_webview(&self, webview_id: WebViewId) -> Option<NodeKey> {
+    /// Get the node key for a given renderer instance
+    pub fn get_node_for_webview(&self, webview_id: RendererId) -> Option<NodeKey> {
         self.webview_to_node.get(&webview_id).copied()
     }
 
@@ -1831,13 +2220,17 @@ impl GraphBrowserApp {
         self.node_crash_state.get(&node_key)
     }
 
-    /// Get the webview ID for a given node
-    pub fn get_webview_for_node(&self, node_key: NodeKey) -> Option<WebViewId> {
+    pub fn crashed_node_keys(&self) -> impl Iterator<Item = NodeKey> + '_ {
+        self.node_crash_state.keys().copied()
+    }
+
+    /// Get the renderer ID for a given node
+    pub fn get_webview_for_node(&self, node_key: NodeKey) -> Option<RendererId> {
         self.node_to_webview.get(&node_key).copied()
     }
 
-    /// Get all webview-node mappings as an iterator
-    pub fn webview_node_mappings(&self) -> impl Iterator<Item = (WebViewId, NodeKey)> + '_ {
+    /// Get all renderer-node mappings as an iterator
+    pub fn webview_node_mappings(&self) -> impl Iterator<Item = (RendererId, NodeKey)> + '_ {
         self.webview_to_node.iter().map(|(&wv, &nk)| (wv, nk))
     }
 
@@ -1981,6 +2374,14 @@ impl GraphBrowserApp {
         );
     }
 
+    /// Request opening the "Choose Workspace..." picker to add connected nodes.
+    pub fn request_add_connected_to_workspace_picker(&mut self, key: NodeKey) {
+        self.request_choose_workspace_picker_for_mode(
+            key,
+            ChooseWorkspacePickerMode::AddConnectedSelectionToWorkspace,
+        );
+    }
+
     /// Active request for "Choose Workspace..." picker.
     pub fn choose_workspace_picker_request(&self) -> Option<ChooseWorkspacePickerRequest> {
         self.pending_choose_workspace_picker_request
@@ -2003,6 +2404,20 @@ impl GraphBrowserApp {
     /// Take and clear pending add-node-to-workspace request.
     pub fn take_pending_add_node_to_workspace(&mut self) -> Option<(NodeKey, String)> {
         self.pending_add_node_to_workspace.take()
+    }
+
+    /// Request adding nodes connected to `seed_nodes` into named workspace snapshot `workspace_name`.
+    pub fn request_add_connected_to_workspace(
+        &mut self,
+        seed_nodes: Vec<NodeKey>,
+        workspace_name: impl Into<String>,
+    ) {
+        self.pending_add_connected_to_workspace = Some((seed_nodes, workspace_name.into()));
+    }
+
+    /// Take and clear pending add-connected-to-workspace request.
+    pub fn take_pending_add_connected_to_workspace(&mut self) -> Option<(Vec<NodeKey>, String)> {
+        self.pending_add_connected_to_workspace.take()
     }
 
     /// Request opening connected nodes for a given source node, tile mode, and scope.
@@ -2137,6 +2552,32 @@ impl GraphBrowserApp {
         self.pending_keep_latest_named_workspaces.take()
     }
 
+    pub fn request_copy_node_url(&mut self, key: NodeKey) {
+        self.pending_clipboard_copy = Some(ClipboardCopyRequest {
+            key,
+            kind: ClipboardCopyKind::Url,
+        });
+    }
+
+    pub fn request_copy_node_title(&mut self, key: NodeKey) {
+        self.pending_clipboard_copy = Some(ClipboardCopyRequest {
+            key,
+            kind: ClipboardCopyKind::Title,
+        });
+    }
+
+    pub fn take_pending_clipboard_copy(&mut self) -> Option<ClipboardCopyRequest> {
+        self.pending_clipboard_copy.take()
+    }
+
+    pub fn request_switch_data_dir(&mut self, path: impl AsRef<Path>) {
+        self.pending_switch_data_dir = Some(path.as_ref().to_path_buf());
+    }
+
+    pub fn take_pending_switch_data_dir(&mut self) -> Option<PathBuf> {
+        self.pending_switch_data_dir.take()
+    }
+
     /// Promote a node to Active lifecycle (mark as needing webview)
     pub fn promote_node_to_active(&mut self, node_key: NodeKey) {
         use crate::graph::NodeLifecycle;
@@ -2263,7 +2704,10 @@ impl GraphBrowserApp {
 
         let mut evicted = Vec::new();
         while self.active_lru.len() > limit {
-            let candidate_idx = self.active_lru.iter().position(|key| !protected.contains(key));
+            let candidate_idx = self
+                .active_lru
+                .iter()
+                .position(|key| !protected.contains(key));
             let Some(candidate_idx) = candidate_idx else {
                 break;
             };
@@ -2604,6 +3048,18 @@ impl GraphBrowserApp {
             .pending_add_node_to_workspace
             .take()
             .filter(|(key, _)| self.graph.get_node(*key).is_some());
+        self.pending_add_connected_to_workspace = self
+            .pending_add_connected_to_workspace
+            .take()
+            .map(|(keys, name)| {
+                (
+                    keys.into_iter()
+                        .filter(|key| self.graph.get_node(*key).is_some())
+                        .collect::<Vec<_>>(),
+                    name,
+                )
+            })
+            .filter(|(keys, _)| !keys.is_empty());
     }
 
     /// Get the currently selected node (if exactly one is selected)
@@ -2628,6 +3084,7 @@ impl GraphBrowserApp {
         self.pending_node_context_target = None;
         self.pending_choose_workspace_picker_request = None;
         self.pending_add_node_to_workspace = None;
+        self.pending_add_connected_to_workspace = None;
         self.pending_unsaved_workspace_prompt = None;
         self.pending_unsaved_workspace_prompt_action = None;
         self.pending_prune_empty_workspaces = false;
@@ -2660,6 +3117,7 @@ impl GraphBrowserApp {
         self.pending_node_context_target = None;
         self.pending_choose_workspace_picker_request = None;
         self.pending_add_node_to_workspace = None;
+        self.pending_add_connected_to_workspace = None;
         self.pending_unsaved_workspace_prompt = None;
         self.pending_unsaved_workspace_prompt_action = None;
         self.pending_prune_empty_workspaces = false;
@@ -2711,19 +3169,26 @@ mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
-    /// Create a unique WebViewId for testing.
-    /// Ensures the pipeline namespace is installed on the current thread.
-    fn test_webview_id() -> servo::WebViewId {
-        thread_local! {
-            static NS_INSTALLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-        }
-        NS_INSTALLED.with(|cell| {
-            if !cell.get() {
-                base::id::PipelineNamespace::install(base::id::PipelineNamespaceId(42));
-                cell.set(true);
+    /// Create a unique RendererId for testing.
+    fn test_webview_id() -> RendererId {
+        #[cfg(not(target_os = "ios"))]
+        {
+            thread_local! {
+                static NS_INSTALLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
             }
-        });
-        servo::WebViewId::new(base::id::PainterId::next())
+            NS_INSTALLED.with(|cell| {
+                if !cell.get() {
+                    base::id::PipelineNamespace::install(base::id::PipelineNamespaceId(42));
+                    cell.set(true);
+                }
+            });
+            servo::WebViewId::new(base::id::PainterId::next())
+        }
+        #[cfg(target_os = "ios")]
+        {
+            static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            RendererId(COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+        }
     }
 
     #[test]
@@ -2794,7 +3259,9 @@ mod tests {
     #[test]
     fn test_zoom_to_selected_falls_back_to_fit_when_single_selected() {
         let mut app = GraphBrowserApp::new_for_testing();
-        let key = app.graph.add_node("test".to_string(), Point2D::new(0.0, 0.0));
+        let key = app
+            .graph
+            .add_node("test".to_string(), Point2D::new(0.0, 0.0));
         app.select_node(key, false);
         assert!(!app.fit_to_screen_requested);
 
@@ -2808,7 +3275,9 @@ mod tests {
     fn test_zoom_to_selected_sets_pending_when_multi_selected() {
         let mut app = GraphBrowserApp::new_for_testing();
         let key_a = app.graph.add_node("a".to_string(), Point2D::new(0.0, 0.0));
-        let key_b = app.graph.add_node("b".to_string(), Point2D::new(100.0, 50.0));
+        let key_b = app
+            .graph
+            .add_node("b".to_string(), Point2D::new(100.0, 50.0));
         app.select_node(key_a, false);
         app.select_node(key_b, true);
         assert_eq!(app.selected_nodes.len(), 2);
@@ -2905,14 +3374,20 @@ mod tests {
 
         let mut app = GraphBrowserApp::new_for_testing();
         let key = app.graph.add_node("a".to_string(), Point2D::new(0.0, 0.0));
-        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Cold);
+        assert_eq!(
+            app.graph.get_node(key).unwrap().lifecycle,
+            NodeLifecycle::Cold
+        );
 
         app.apply_intents([GraphIntent::SelectNode {
             key,
             multi_select: false,
         }]);
 
-        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Active);
+        assert_eq!(
+            app.graph.get_node(key).unwrap().lifecycle,
+            NodeLifecycle::Active
+        );
     }
 
     #[test]
@@ -2927,7 +3402,10 @@ mod tests {
             multi_select: false,
         }]);
         app.demote_node_to_cold(key);
-        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Cold);
+        assert_eq!(
+            app.graph.get_node(key).unwrap().lifecycle,
+            NodeLifecycle::Cold
+        );
 
         // Clicking the already-selected node toggles it off and should not re-promote.
         app.apply_intents([GraphIntent::SelectNode {
@@ -2936,7 +3414,10 @@ mod tests {
         }]);
 
         assert!(app.selected_nodes.is_empty());
-        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Cold);
+        assert_eq!(
+            app.graph.get_node(key).unwrap().lifecycle,
+            NodeLifecycle::Cold
+        );
     }
 
     #[test]
@@ -2952,15 +3433,24 @@ mod tests {
             multi_select: false,
         }]);
         app.demote_node_to_cold(key1);
-        assert_eq!(app.graph.get_node(key1).unwrap().lifecycle, NodeLifecycle::Cold);
-        assert_eq!(app.graph.get_node(key2).unwrap().lifecycle, NodeLifecycle::Cold);
+        assert_eq!(
+            app.graph.get_node(key1).unwrap().lifecycle,
+            NodeLifecycle::Cold
+        );
+        assert_eq!(
+            app.graph.get_node(key2).unwrap().lifecycle,
+            NodeLifecycle::Cold
+        );
 
         app.apply_intents([GraphIntent::SelectNode {
             key: key2,
             multi_select: true,
         }]);
 
-        assert_eq!(app.graph.get_node(key2).unwrap().lifecycle, NodeLifecycle::Cold);
+        assert_eq!(
+            app.graph.get_node(key2).unwrap().lifecycle,
+            NodeLifecycle::Cold
+        );
     }
 
     #[test]
@@ -2976,7 +3466,10 @@ mod tests {
             reason: "boom".to_string(),
             has_backtrace: false,
         }]);
-        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Cold);
+        assert_eq!(
+            app.graph.get_node(key).unwrap().lifecycle,
+            NodeLifecycle::Cold
+        );
         assert!(app.get_node_crash_state(key).is_some());
 
         app.apply_intents([GraphIntent::SelectNode {
@@ -2984,7 +3477,10 @@ mod tests {
             multi_select: false,
         }]);
 
-        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Cold);
+        assert_eq!(
+            app.graph.get_node(key).unwrap().lifecycle,
+            NodeLifecycle::Cold
+        );
     }
 
     #[test]
@@ -3010,6 +3506,51 @@ mod tests {
         app.select_node(key2, true);
         let rev4 = app.selected_nodes.revision();
         assert!(rev4 > rev3);
+    }
+
+    #[test]
+    fn test_update_selection_replace_sets_exact_members() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let a = app.add_node_and_sync("a".to_string(), Point2D::new(0.0, 0.0));
+        let b = app.add_node_and_sync("b".to_string(), Point2D::new(10.0, 0.0));
+        let c = app.add_node_and_sync("c".to_string(), Point2D::new(20.0, 0.0));
+        app.select_node(a, false);
+
+        app.apply_intents([GraphIntent::UpdateSelection {
+            keys: vec![b, c],
+            mode: SelectionUpdateMode::Replace,
+        }]);
+
+        assert_eq!(app.selected_nodes.len(), 2);
+        assert!(!app.selected_nodes.contains(&a));
+        assert!(app.selected_nodes.contains(&b));
+        assert!(app.selected_nodes.contains(&c));
+        assert_eq!(app.selected_nodes.primary(), Some(c));
+    }
+
+    #[test]
+    fn test_update_selection_add_and_toggle() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let a = app.add_node_and_sync("a".to_string(), Point2D::new(0.0, 0.0));
+        let b = app.add_node_and_sync("b".to_string(), Point2D::new(10.0, 0.0));
+        app.apply_intents([GraphIntent::UpdateSelection {
+            keys: vec![a],
+            mode: SelectionUpdateMode::Replace,
+        }]);
+        app.apply_intents([GraphIntent::UpdateSelection {
+            keys: vec![b],
+            mode: SelectionUpdateMode::Add,
+        }]);
+        assert!(app.selected_nodes.contains(&a));
+        assert!(app.selected_nodes.contains(&b));
+        assert_eq!(app.selected_nodes.primary(), Some(b));
+
+        app.apply_intents([GraphIntent::UpdateSelection {
+            keys: vec![a],
+            mode: SelectionUpdateMode::Toggle,
+        }]);
+        assert!(!app.selected_nodes.contains(&a));
+        assert!(app.selected_nodes.contains(&b));
     }
 
     #[test]
@@ -3952,13 +4493,19 @@ mod tests {
         app.promote_node_to_active(key);
 
         app.demote_node_to_warm(key);
-        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Active);
+        assert_eq!(
+            app.graph.get_node(key).unwrap().lifecycle,
+            NodeLifecycle::Active
+        );
         assert!(app.warm_cache_lru.is_empty());
 
         let wv_id = test_webview_id();
         app.map_webview_to_node(wv_id, key);
         app.demote_node_to_warm(key);
-        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Warm);
+        assert_eq!(
+            app.graph.get_node(key).unwrap().lifecycle,
+            NodeLifecycle::Warm
+        );
         assert_eq!(app.warm_cache_lru, vec![key]);
     }
 
@@ -3972,11 +4519,17 @@ mod tests {
         app.map_webview_to_node(wv_id, key);
         app.demote_node_to_warm(key);
 
-        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Warm);
+        assert_eq!(
+            app.graph.get_node(key).unwrap().lifecycle,
+            NodeLifecycle::Warm
+        );
         assert_eq!(app.warm_cache_lru, vec![key]);
 
         app.promote_node_to_active(key);
-        assert_eq!(app.graph.get_node(key).unwrap().lifecycle, NodeLifecycle::Active);
+        assert_eq!(
+            app.graph.get_node(key).unwrap().lifecycle,
+            NodeLifecycle::Active
+        );
         assert!(app.warm_cache_lru.is_empty());
     }
 
@@ -4679,6 +5232,73 @@ mod tests {
     }
 
     #[test]
+    fn test_new_from_dir_loads_persisted_toast_anchor_preference() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+        {
+            let mut store = GraphStore::open(path.clone()).unwrap();
+            store
+                .save_workspace_layout_json(GraphBrowserApp::SETTINGS_TOAST_ANCHOR_NAME, "top-left")
+                .unwrap();
+        }
+
+        let app = GraphBrowserApp::new_from_dir(path);
+        assert_eq!(app.toast_anchor_preference, ToastAnchorPreference::TopLeft);
+    }
+
+    #[test]
+    fn test_set_toast_anchor_preference_persists_across_restart() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+
+        let mut app = GraphBrowserApp::new_from_dir(path.clone());
+        app.set_toast_anchor_preference(ToastAnchorPreference::TopRight);
+        drop(app);
+
+        let reopened = GraphBrowserApp::new_from_dir(path);
+        assert_eq!(
+            reopened.toast_anchor_preference,
+            ToastAnchorPreference::TopRight
+        );
+    }
+
+    #[test]
+    fn test_set_lasso_mouse_binding_persists_across_restart() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+
+        let mut app = GraphBrowserApp::new_from_dir(path.clone());
+        app.set_lasso_mouse_binding(LassoMouseBinding::ShiftLeftDrag);
+        drop(app);
+
+        let reopened = GraphBrowserApp::new_from_dir(path);
+        assert_eq!(
+            reopened.lasso_mouse_binding,
+            LassoMouseBinding::ShiftLeftDrag
+        );
+    }
+
+    #[test]
+    fn test_set_shortcut_bindings_persist_across_restart() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+
+        let mut app = GraphBrowserApp::new_from_dir(path.clone());
+        app.set_command_palette_shortcut(CommandPaletteShortcut::CtrlK);
+        app.set_help_panel_shortcut(HelpPanelShortcut::H);
+        app.set_radial_menu_shortcut(RadialMenuShortcut::R);
+        drop(app);
+
+        let reopened = GraphBrowserApp::new_from_dir(path);
+        assert_eq!(
+            reopened.command_palette_shortcut,
+            CommandPaletteShortcut::CtrlK
+        );
+        assert_eq!(reopened.help_panel_shortcut, HelpPanelShortcut::H);
+        assert_eq!(reopened.radial_menu_shortcut, RadialMenuShortcut::R);
+    }
+
+    #[test]
     fn test_set_snapshot_interval_secs_updates_store() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().to_path_buf();
@@ -4695,4 +5315,3 @@ mod tests {
         assert_eq!(app.snapshot_interval_secs(), None);
     }
 }
-

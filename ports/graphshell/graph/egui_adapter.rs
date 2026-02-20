@@ -8,13 +8,14 @@
 //! and reads back user interactions (drag, selection, double-click).
 
 use super::{EdgeType, Graph, Node, NodeKey, NodeLifecycle};
-use egui::epaint::{CircleShape, TextShape};
+use egui::epaint::{CircleShape, CubicBezierShape, TextShape};
 use egui::{
     Color32, FontFamily, FontId, Pos2, Rect, Shape, Stroke, TextureHandle, TextureId, Vec2,
 };
 use egui_graphs::DrawContext;
-use egui_graphs::NodeProps;
-use egui_graphs::{DefaultEdgeShape, DisplayNode, to_graph_custom};
+use egui_graphs::{
+    DefaultEdgeShape, DisplayEdge, DisplayNode, EdgeProps, NodeProps, to_graph_custom,
+};
 use image::load_from_memory;
 use petgraph::Directed;
 use petgraph::graph::DefaultIx;
@@ -25,7 +26,15 @@ use uuid::Uuid;
 
 /// Type alias for the egui_graphs graph with our node/edge types
 pub type EguiGraph =
-    egui_graphs::Graph<Node, EdgeType, Directed, DefaultIx, GraphNodeShape, DefaultEdgeShape>;
+    egui_graphs::Graph<Node, EdgeType, Directed, DefaultIx, GraphNodeShape, GraphEdgeShape>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+enum SelectionVisualRole {
+    #[default]
+    None,
+    Primary,
+    Secondary,
+}
 
 /// Node shape that renders favicon textures when available.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -36,6 +45,8 @@ pub struct GraphNodeShape {
     hovered: bool,
     color: Option<Color32>,
     label_text: String,
+    title_text: String,
+    url_text: String,
     radius: f32,
     thumbnail_png: Option<Vec<u8>>,
     thumbnail_width: u32,
@@ -55,6 +66,10 @@ pub struct GraphNodeShape {
     workspace_membership_names: Vec<String>,
     #[serde(default)]
     is_pinned: bool,
+    #[serde(default)]
+    is_crashed: bool,
+    #[serde(default)]
+    selection_role: SelectionVisualRole,
 }
 
 impl From<NodeProps<Node>> for GraphNodeShape {
@@ -66,6 +81,8 @@ impl From<NodeProps<Node>> for GraphNodeShape {
             hovered: node_props.hovered,
             color: node_props.color(),
             label_text: node_props.label.to_string(),
+            title_text: node_props.payload.title.clone(),
+            url_text: node_props.payload.url.clone(),
             radius: 5.0,
             thumbnail_png: node_props.payload.thumbnail_png.clone(),
             thumbnail_width: node_props.payload.thumbnail_width,
@@ -80,6 +97,12 @@ impl From<NodeProps<Node>> for GraphNodeShape {
             workspace_membership_count: 0,
             workspace_membership_names: Vec::new(),
             is_pinned: node_props.payload.is_pinned,
+            is_crashed: false,
+            selection_role: if node_props.selected {
+                SelectionVisualRole::Primary
+            } else {
+                SelectionVisualRole::None
+            },
         };
         shape.thumbnail_hash = Self::hash_bytes(&shape.thumbnail_png);
         shape.favicon_hash = Self::hash_favicon(&shape.favicon_rgba);
@@ -113,25 +136,29 @@ impl DisplayNode<Node, EdgeType, Directed, DefaultIx> for GraphNodeShape {
             .into(),
         );
 
-        if let Some(texture_id) = self.ensure_thumbnail_texture(ctx) {
-            let size = Vec2::new(circle_radius * 2.4, circle_radius * 1.8);
+        if let Some(texture_id) = self.ensure_favicon_texture(ctx) {
+            let size = Vec2::splat(circle_radius * 1.5);
             let rect = Rect::from_center_size(circle_center, size);
             let uv = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
             res.push(Shape::image(texture_id, rect, uv, Color32::WHITE));
-        } else if let Some(texture_id) = self.ensure_favicon_texture(ctx) {
-            let size = Vec2::splat(circle_radius * 1.5);
+        }
+        if (self.selected || self.dragged || self.hovered)
+            && let Some(texture_id) = self.ensure_thumbnail_texture(ctx)
+        {
+            let size = Vec2::new(circle_radius * 2.4, circle_radius * 1.8);
             let rect = Rect::from_center_size(circle_center, size);
             let uv = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
             res.push(Shape::image(texture_id, rect, uv, Color32::WHITE));
         }
         self.push_workspace_membership_badge(ctx, circle_center, circle_radius, &mut res);
         self.push_pinned_indicator(circle_center, circle_radius, &mut res);
+        self.push_secondary_selection_halo(circle_center, circle_radius, &mut res);
 
-        if !(self.selected || self.dragged || self.hovered) {
+        let Some(label_text) = self.label_text_for_zoom(ctx.meta.zoom) else {
             return res;
-        }
+        };
 
-        let galley = self.label_galley(ctx, circle_radius, color);
+        let galley = self.label_galley(ctx, circle_radius, color, label_text);
         let label_pos = Pos2::new(
             center_x(galley.size().x, circle_center.x),
             circle_center.y - circle_radius * 2.0,
@@ -146,8 +173,13 @@ impl DisplayNode<Node, EdgeType, Directed, DefaultIx> for GraphNodeShape {
         self.dragged = state.dragged;
         self.hovered = state.hovered;
         self.label_text = state.label.to_string();
+        self.title_text = state.payload.title.clone();
+        self.url_text = state.payload.url.clone();
         self.color = state.color();
         self.is_pinned = state.payload.is_pinned;
+        if !self.selected {
+            self.selection_role = SelectionVisualRole::None;
+        }
 
         let new_thumbnail = state.payload.thumbnail_png.clone();
         let new_thumbnail_hash = Self::hash_bytes(&new_thumbnail);
@@ -210,6 +242,14 @@ impl GraphNodeShape {
         self.workspace_membership_names = names;
     }
 
+    fn set_selection_role(&mut self, role: SelectionVisualRole) {
+        self.selection_role = role;
+    }
+
+    fn set_crashed(&mut self, crashed: bool) {
+        self.is_crashed = crashed;
+    }
+
     fn push_workspace_membership_badge(
         &self,
         ctx: &DrawContext,
@@ -266,6 +306,26 @@ impl GraphNodeShape {
         );
     }
 
+    fn push_secondary_selection_halo(
+        &self,
+        circle_center: Pos2,
+        circle_radius: f32,
+        shapes: &mut Vec<Shape>,
+    ) {
+        if self.selection_role != SelectionVisualRole::Secondary || self.hovered || self.dragged {
+            return;
+        }
+        shapes.push(
+            CircleShape {
+                center: circle_center,
+                radius: circle_radius + 2.0,
+                fill: Color32::TRANSPARENT,
+                stroke: Stroke::new(2.0, Color32::from_rgb(255, 200, 100)),
+            }
+            .into(),
+        );
+    }
+
     fn ensure_thumbnail_texture(&mut self, ctx: &DrawContext) -> Option<TextureId> {
         if self.thumbnail_handle.is_none() {
             let thumbnail_png = self.thumbnail_png.as_ref()?;
@@ -293,7 +353,7 @@ impl GraphNodeShape {
     }
 
     fn effective_color(&self, ctx: &DrawContext) -> Color32 {
-        if let Some(c) = self.color {
+        if let Some(c) = self.projected_color() {
             return c;
         }
         let style = if self.selected || self.dragged || self.hovered {
@@ -304,6 +364,16 @@ impl GraphNodeShape {
         style.fg_stroke.color
     }
 
+    fn projected_color(&self) -> Option<Color32> {
+        if self.selection_role == SelectionVisualRole::Primary {
+            return Some(Color32::from_rgb(255, 200, 100));
+        }
+        if self.is_crashed {
+            return Some(Color32::from_rgb(205, 112, 82));
+        }
+        self.color
+    }
+
     fn effective_stroke(&self, ctx: &DrawContext) -> Stroke {
         let _ = ctx;
         if self.dragged {
@@ -312,7 +382,7 @@ impl GraphNodeShape {
         if self.hovered {
             return Stroke::new(2.0, Color32::from_rgb(255, 170, 90));
         }
-        if self.selected {
+        if self.selection_role == SelectionVisualRole::Primary {
             return Stroke::new(1.8, Color32::from_rgb(255, 200, 120));
         }
         Stroke::new(1.0, Color32::from_gray(90))
@@ -323,6 +393,7 @@ impl GraphNodeShape {
         ctx: &DrawContext,
         radius: f32,
         color: Color32,
+        label_text: String,
     ) -> std::sync::Arc<egui::Galley> {
         // Guard against pathological zoom/scale values that can request enormous glyph atlases.
         let font_size = if radius.is_finite() {
@@ -332,11 +403,45 @@ impl GraphNodeShape {
         };
         ctx.ctx.fonts_mut(|f| {
             f.layout_no_wrap(
-                self.label_text.clone(),
+                label_text,
                 FontId::new(font_size, FontFamily::Monospace),
                 color,
             )
         })
+    }
+
+    fn label_text_for_zoom(&self, zoom: f32) -> Option<String> {
+        Self::label_text_for_zoom_value(&self.title_text, &self.url_text, &self.label_text, zoom)
+    }
+
+    fn label_text_for_zoom_value(
+        title: &str,
+        url: &str,
+        fallback: &str,
+        zoom: f32,
+    ) -> Option<String> {
+        if zoom < 0.6 {
+            return None;
+        }
+        if zoom <= 1.5 {
+            if let Ok(parsed) = url::Url::parse(url)
+                && let Some(host) = parsed.host_str()
+            {
+                return Some(host.to_string());
+            }
+            let candidate = if title.is_empty() { fallback } else { title };
+            return Some(crate::util::truncate_with_ellipsis(candidate, 20));
+        }
+
+        if !title.is_empty() && title != url {
+            Some(title.to_string())
+        } else if !url.is_empty() {
+            Some(url.to_string())
+        } else if fallback.is_empty() {
+            None
+        } else {
+            Some(fallback.to_string())
+        }
     }
 
     fn ensure_favicon_texture(&mut self, ctx: &DrawContext) -> Option<TextureId> {
@@ -379,6 +484,162 @@ impl GraphNodeShape {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum GraphEdgeVisualStyle {
+    Hyperlink,
+    History,
+    UserGrouped,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct GraphEdgeShape {
+    default_impl: DefaultEdgeShape,
+    style: GraphEdgeVisualStyle,
+    dimmed: bool,
+}
+
+impl From<EdgeProps<EdgeType>> for GraphEdgeShape {
+    fn from(edge: EdgeProps<EdgeType>) -> Self {
+        let style = match edge.payload {
+            EdgeType::Hyperlink => GraphEdgeVisualStyle::Hyperlink,
+            EdgeType::History => GraphEdgeVisualStyle::History,
+            EdgeType::UserGrouped => GraphEdgeVisualStyle::UserGrouped,
+        };
+        Self {
+            default_impl: DefaultEdgeShape::from(edge),
+            style,
+            dimmed: false,
+        }
+    }
+}
+
+impl<
+    N: Clone,
+    Ty: petgraph::EdgeType,
+    Ix: petgraph::stable_graph::IndexType,
+    D: DisplayNode<N, EdgeType, Ty, Ix>,
+> DisplayEdge<N, EdgeType, Ty, Ix, D> for GraphEdgeShape
+{
+    fn shapes(
+        &mut self,
+        start: &egui_graphs::Node<N, EdgeType, Ty, Ix, D>,
+        end: &egui_graphs::Node<N, EdgeType, Ty, Ix, D>,
+        ctx: &DrawContext,
+    ) -> Vec<Shape> {
+        let (base_color, width) = self.style_stroke();
+        let color = if self.dimmed {
+            base_color.gamma_multiply(0.35)
+        } else {
+            base_color
+        };
+        if self.style == GraphEdgeVisualStyle::History {
+            return self.dashed_shapes(start, end, ctx, color, width);
+        }
+
+        self.default_impl
+            .shapes(start, end, ctx)
+            .into_iter()
+            .map(|shape| restyle_edge_shape(shape, color, width))
+            .collect()
+    }
+
+    fn update(&mut self, state: &EdgeProps<EdgeType>) {
+        <DefaultEdgeShape as DisplayEdge<N, EdgeType, Ty, Ix, D>>::update(
+            &mut self.default_impl,
+            state,
+        );
+        self.style = match state.payload {
+            EdgeType::Hyperlink => GraphEdgeVisualStyle::Hyperlink,
+            EdgeType::History => GraphEdgeVisualStyle::History,
+            EdgeType::UserGrouped => GraphEdgeVisualStyle::UserGrouped,
+        };
+    }
+
+    fn is_inside(
+        &self,
+        start: &egui_graphs::Node<N, EdgeType, Ty, Ix, D>,
+        end: &egui_graphs::Node<N, EdgeType, Ty, Ix, D>,
+        pos: Pos2,
+    ) -> bool {
+        self.default_impl.is_inside(start, end, pos)
+    }
+}
+
+impl GraphEdgeShape {
+    pub(crate) fn set_dimmed(&mut self, dimmed: bool) {
+        self.dimmed = dimmed;
+    }
+
+    fn style_stroke(&self) -> (Color32, f32) {
+        match self.style {
+            GraphEdgeVisualStyle::Hyperlink => (Color32::from_gray(160), 1.4),
+            GraphEdgeVisualStyle::History => (Color32::from_rgb(120, 180, 210), 1.8),
+            GraphEdgeVisualStyle::UserGrouped => (Color32::from_rgb(236, 171, 64), 3.0),
+        }
+    }
+
+    fn dashed_shapes<
+        N: Clone,
+        Ty: petgraph::EdgeType,
+        Ix: petgraph::stable_graph::IndexType,
+        D: DisplayNode<N, EdgeType, Ty, Ix>,
+    >(
+        &self,
+        start: &egui_graphs::Node<N, EdgeType, Ty, Ix, D>,
+        end: &egui_graphs::Node<N, EdgeType, Ty, Ix, D>,
+        ctx: &DrawContext,
+        color: Color32,
+        width: f32,
+    ) -> Vec<Shape> {
+        if start.id() == end.id() {
+            return self
+                .default_impl
+                .clone()
+                .shapes(start, end, ctx)
+                .into_iter()
+                .map(|shape| restyle_edge_shape(shape, color, width))
+                .collect();
+        }
+        let dir = (end.location() - start.location()).normalized();
+        let start_connector = start.display().closest_boundary_point(dir);
+        let end_connector = end.display().closest_boundary_point(-dir);
+        let screen_start = ctx.meta.canvas_to_screen_pos(start_connector);
+        let screen_end = ctx.meta.canvas_to_screen_pos(end_connector);
+        let vec = screen_end - screen_start;
+        let total = vec.length();
+        if total <= f32::EPSILON {
+            return Vec::new();
+        }
+        let unit = vec / total;
+        let dash = 8.0_f32;
+        let gap = 6.0_f32;
+        let mut shapes = Vec::new();
+        let mut traveled = 0.0_f32;
+        let stroke = Stroke::new(width, color);
+        while traveled < total {
+            let seg_start = screen_start + unit * traveled;
+            let seg_end = screen_start + unit * (traveled + dash).min(total);
+            shapes.push(Shape::line_segment([seg_start, seg_end], stroke));
+            traveled += dash + gap;
+        }
+        shapes
+    }
+}
+
+fn restyle_edge_shape(shape: Shape, color: Color32, width: f32) -> Shape {
+    match shape {
+        Shape::LineSegment { points, stroke: _ } => {
+            Shape::line_segment(points, Stroke::new(width, color))
+        },
+        Shape::CubicBezier(cubic) => Shape::CubicBezier(CubicBezierShape {
+            stroke: Stroke::new(width, color).into(),
+            fill: Color32::TRANSPARENT,
+            ..cubic
+        }),
+        other => other,
+    }
+}
+
 fn center_x(width: f32, center_x: f32) -> f32 {
     center_x - width / 2.0
 }
@@ -395,6 +656,15 @@ impl EguiGraphState {
     /// Sets node positions, labels, colors, and selection state
     /// based on current graph data.
     pub fn from_graph(graph: &Graph, selected_nodes: &HashSet<NodeKey>) -> Self {
+        Self::from_graph_with_visual_state(graph, selected_nodes, None, &HashSet::new())
+    }
+
+    pub fn from_graph_with_visual_state(
+        graph: &Graph,
+        selected_nodes: &HashSet<NodeKey>,
+        primary_selected: Option<NodeKey>,
+        crashed_nodes: &HashSet<NodeKey>,
+    ) -> Self {
         let mut egui_graph: EguiGraph = to_graph_custom(
             &graph.inner,
             |node: &mut egui_graphs::Node<Node, EdgeType, Directed, DefaultIx, GraphNodeShape>| {
@@ -406,8 +676,12 @@ impl EguiGraphState {
                 // Seed position from app graph state
                 node.set_location(Pos2::new(position.x, position.y));
 
-                // Set label (truncated title)
-                let label = crate::util::truncate_with_ellipsis(&title, 20);
+                // Keep full label source; zoom tiers are handled in GraphNodeShape.
+                let label = if title.is_empty() {
+                    node.payload().url.clone()
+                } else {
+                    title.clone()
+                };
                 node.set_label(label);
 
                 // Set color based on lifecycle.
@@ -429,8 +703,8 @@ impl EguiGraphState {
                 // Selection is projected from app state after graph conversion.
                 node.set_selected(false);
             },
-            |_edge| {
-                // Edge styling handled by SettingsStyle hooks
+            |edge| {
+                edge.set_label(String::new());
             },
         );
 
@@ -438,7 +712,21 @@ impl EguiGraphState {
         for key in selected_nodes {
             if let Some(node) = egui_graph.node_mut(*key) {
                 node.set_selected(true);
-                node.set_color(Color32::from_rgb(255, 200, 100));
+                let is_primary = primary_selected == Some(*key);
+                node.display_mut().set_selection_role(if is_primary {
+                    SelectionVisualRole::Primary
+                } else {
+                    SelectionVisualRole::Secondary
+                });
+                if is_primary {
+                    node.set_color(Color32::from_rgb(255, 200, 100));
+                }
+            }
+        }
+
+        for key in crashed_nodes {
+            if let Some(node) = egui_graph.node_mut(*key) {
+                node.display_mut().set_crashed(true);
             }
         }
 
@@ -449,9 +737,16 @@ impl EguiGraphState {
     pub fn from_graph_with_memberships(
         graph: &Graph,
         selected_nodes: &HashSet<NodeKey>,
+        primary_selected: Option<NodeKey>,
+        crashed_nodes: &HashSet<NodeKey>,
         memberships_by_uuid: &HashMap<Uuid, Vec<String>>,
     ) -> Self {
-        let mut state = Self::from_graph(graph, selected_nodes);
+        let mut state = Self::from_graph_with_visual_state(
+            graph,
+            selected_nodes,
+            primary_selected,
+            crashed_nodes,
+        );
         for (key, node) in graph.nodes() {
             if let Some(egui_node) = state.graph.node_mut(key) {
                 egui_node.display_mut().set_workspace_memberships(
@@ -484,6 +779,7 @@ impl EguiGraphState {
 mod tests {
     use super::*;
     use crate::graph::EdgeType;
+    use egui::Color32;
     use euclid::default::Point2D;
 
     #[test]
@@ -594,8 +890,13 @@ mod tests {
             vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()],
         )]);
 
-        let state =
-            EguiGraphState::from_graph_with_memberships(&graph, &selected_nodes, &memberships);
+        let state = EguiGraphState::from_graph_with_memberships(
+            &graph,
+            &selected_nodes,
+            None,
+            &HashSet::new(),
+            &memberships,
+        );
         let node = state.graph.node(key).unwrap();
         let shape = node.display();
 
@@ -616,8 +917,13 @@ mod tests {
         let selected_nodes = HashSet::new();
         let memberships: HashMap<Uuid, Vec<String>> = HashMap::new();
 
-        let state =
-            EguiGraphState::from_graph_with_memberships(&graph, &selected_nodes, &memberships);
+        let state = EguiGraphState::from_graph_with_memberships(
+            &graph,
+            &selected_nodes,
+            None,
+            &HashSet::new(),
+            &memberships,
+        );
         let node = state.graph.node(key).unwrap();
         let shape = node.display();
 
@@ -634,5 +940,105 @@ mod tests {
         let state = EguiGraphState::from_graph(&graph, &HashSet::new());
         let shape = state.graph.node(key).unwrap().display();
         assert!(shape.is_pinned);
+    }
+
+    #[test]
+    fn test_label_tier_full() {
+        let label = GraphNodeShape::label_text_for_zoom_value(
+            "https://example.com/full/path",
+            "https://example.com/full/path",
+            "fallback",
+            2.0,
+        );
+        assert_eq!(label.as_deref(), Some("https://example.com/full/path"));
+    }
+
+    #[test]
+    fn test_label_tier_domain() {
+        let label = GraphNodeShape::label_text_for_zoom_value(
+            "Very Long Title Name",
+            "https://docs.example.com/some/path?q=1",
+            "fallback",
+            1.0,
+        );
+        assert_eq!(label.as_deref(), Some("docs.example.com"));
+    }
+
+    #[test]
+    fn test_label_tier_none() {
+        let label = GraphNodeShape::label_text_for_zoom_value(
+            "Title",
+            "https://example.com",
+            "fallback",
+            0.4,
+        );
+        assert!(label.is_none());
+    }
+
+    #[test]
+    fn test_edge_shape_selection() {
+        let history = GraphEdgeShape::from(EdgeProps {
+            payload: EdgeType::History,
+            order: 0,
+            selected: false,
+            label: String::new(),
+        });
+        let grouped = GraphEdgeShape::from(EdgeProps {
+            payload: EdgeType::UserGrouped,
+            order: 0,
+            selected: false,
+            label: String::new(),
+        });
+
+        let (history_color, _) = history.style_stroke();
+        let (grouped_color, grouped_width) = grouped.style_stroke();
+        assert_eq!(history.style, GraphEdgeVisualStyle::History);
+        assert_eq!(grouped.style, GraphEdgeVisualStyle::UserGrouped);
+        assert_eq!(history_color, Color32::from_rgb(120, 180, 210));
+        assert_eq!(grouped_color, Color32::from_rgb(236, 171, 64));
+        assert!(grouped_width > 2.0);
+    }
+
+    #[test]
+    fn test_secondary_selected_visual_differs_from_primary() {
+        let mut graph = Graph::new();
+        let primary = graph.add_node("https://a.example".into(), Point2D::new(0.0, 0.0));
+        let secondary = graph.add_node("https://b.example".into(), Point2D::new(10.0, 0.0));
+        let mut selected = HashSet::new();
+        selected.insert(primary);
+        selected.insert(secondary);
+
+        let state = EguiGraphState::from_graph_with_visual_state(
+            &graph,
+            &selected,
+            Some(primary),
+            &HashSet::new(),
+        );
+        let p = state.graph.node(primary).unwrap().display();
+        let s = state.graph.node(secondary).unwrap().display();
+        assert_eq!(p.selection_role, SelectionVisualRole::Primary);
+        assert_eq!(s.selection_role, SelectionVisualRole::Secondary);
+    }
+
+    #[test]
+    fn test_crashed_node_color_differs_from_cold() {
+        let mut graph = Graph::new();
+        let cold = graph.add_node("https://cold.example".into(), Point2D::new(0.0, 0.0));
+        let crashed = graph.add_node("https://crashed.example".into(), Point2D::new(10.0, 0.0));
+        let crashed_nodes = HashSet::from([crashed]);
+        let state = EguiGraphState::from_graph_with_visual_state(
+            &graph,
+            &HashSet::new(),
+            None,
+            &crashed_nodes,
+        );
+        let cold_color = state.graph.node(cold).unwrap().display().projected_color();
+        let crashed_color = state
+            .graph
+            .node(crashed)
+            .unwrap()
+            .display()
+            .projected_color();
+        assert_ne!(cold_color, crashed_color);
     }
 }

@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use crate::app::GraphBrowserApp;
+use crate::app::{GraphBrowserApp, SearchDisplayMode};
 use crate::graph::NodeKey;
 
 pub(crate) struct GraphSearchUiArgs<'a> {
@@ -58,7 +58,26 @@ pub(crate) fn render_graph_search_window<F>(
                     );
                     graph_app.egui_state_dirty = true;
                 }
-                if ui.checkbox(graph_search_filter_mode, "Filter").changed() {
+                let mut mode_changed = false;
+                ui.horizontal(|ui| {
+                    if ui
+                        .selectable_label(!*graph_search_filter_mode, "Highlight")
+                        .clicked()
+                    {
+                        *graph_search_filter_mode = false;
+                        graph_app.search_display_mode = SearchDisplayMode::Highlight;
+                        mode_changed = true;
+                    }
+                    if ui
+                        .selectable_label(*graph_search_filter_mode, "Filter")
+                        .clicked()
+                    {
+                        *graph_search_filter_mode = true;
+                        graph_app.search_display_mode = SearchDisplayMode::Filter;
+                        mode_changed = true;
+                    }
+                });
+                if mode_changed {
                     graph_app.egui_state_dirty = true;
                 }
                 if ui.button("Clear").clicked() {

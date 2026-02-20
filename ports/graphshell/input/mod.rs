@@ -7,7 +7,10 @@
 //! Keyboard shortcuts are handled here. Mouse interaction (drag, pan, zoom,
 //! selection) is handled by egui_graphs via the GraphView widget.
 
-use crate::app::{EdgeCommand, GraphIntent};
+use crate::app::{
+    CommandPaletteShortcut, EdgeCommand, GraphBrowserApp, GraphIntent, HelpPanelShortcut,
+    RadialMenuShortcut,
+};
 use egui::Key;
 
 /// Keyboard actions collected from egui input events.
@@ -36,12 +39,13 @@ pub struct KeyboardActions {
     pub zoom_to_selected: bool,
     pub delete_selected: bool,
     pub clear_graph: bool,
+    pub select_all: bool,
     pub undo: bool,
     pub redo: bool,
 }
 
 /// Collect keyboard actions from the egui context (input detection only).
-pub(crate) fn collect_actions(ctx: &egui::Context) -> KeyboardActions {
+pub(crate) fn collect_actions(ctx: &egui::Context, graph_app: &GraphBrowserApp) -> KeyboardActions {
     // Don't handle shortcuts while egui is actively capturing keyboard input
     // (for example, URL bar text editing).
     let keyboard_captured_by_egui = ctx.wants_keyboard_input();
@@ -129,19 +133,46 @@ pub(crate) fn collect_actions(ctx: &egui::Context) -> KeyboardActions {
             actions.toggle_pin_primary = true;
         }
 
-        // F1 or ?: Toggle keyboard shortcut help panel
-        if i.key_pressed(Key::F1) || i.key_pressed(Key::Questionmark) {
-            actions.toggle_help_panel = true;
+        // Toggle keyboard shortcut help panel.
+        match graph_app.help_panel_shortcut {
+            HelpPanelShortcut::F1OrQuestion => {
+                if i.key_pressed(Key::F1) || i.key_pressed(Key::Questionmark) {
+                    actions.toggle_help_panel = true;
+                }
+            },
+            HelpPanelShortcut::H => {
+                if i.key_pressed(Key::H) {
+                    actions.toggle_help_panel = true;
+                }
+            },
         }
 
-        // F2: Toggle edge command palette
-        if i.key_pressed(Key::F2) {
-            actions.toggle_command_palette = true;
+        // Toggle edge command palette.
+        match graph_app.command_palette_shortcut {
+            CommandPaletteShortcut::F2 => {
+                if i.key_pressed(Key::F2) {
+                    actions.toggle_command_palette = true;
+                }
+            },
+            CommandPaletteShortcut::CtrlK => {
+                if i.modifiers.ctrl && i.key_pressed(Key::K) {
+                    actions.toggle_command_palette = true;
+                }
+            },
         }
 
-        // F3: Toggle radial command menu.
-        if i.key_pressed(Key::F3) {
-            actions.toggle_radial_menu = true;
+        // Toggle radial command menu.
+        match graph_app.radial_menu_shortcut {
+            RadialMenuShortcut::F3 => {
+                if i.key_pressed(Key::F3) {
+                    actions.toggle_radial_menu = true;
+                }
+            },
+            RadialMenuShortcut::R => {
+                if i.key_pressed(Key::R) {
+                    actions.toggle_radial_menu = true;
+                }
+            },
         }
 
         // Ctrl+Shift+Delete: Clear entire graph
@@ -163,6 +194,11 @@ pub(crate) fn collect_actions(ctx: &egui::Context) -> KeyboardActions {
         }
         if i.modifiers.ctrl && i.key_pressed(Key::Y) {
             actions.redo = true;
+        }
+
+        // Ctrl+A: select all nodes
+        if i.modifiers.ctrl && i.key_pressed(Key::A) {
+            actions.select_all = true;
         }
     });
 
@@ -246,6 +282,9 @@ pub fn intents_from_actions(actions: &KeyboardActions) -> Vec<GraphIntent> {
     if actions.redo {
         intents.push(GraphIntent::Redo);
     }
+    if actions.select_all {
+        intents.push(GraphIntent::SelectAll);
+    }
     intents
 }
 
@@ -310,7 +349,11 @@ mod tests {
             zoom_in: true,
             ..Default::default()
         });
-        assert!(intents.iter().any(|i| matches!(i, GraphIntent::RequestZoomIn)));
+        assert!(
+            intents
+                .iter()
+                .any(|i| matches!(i, GraphIntent::RequestZoomIn))
+        );
     }
 
     #[test]
@@ -319,9 +362,11 @@ mod tests {
             zoom_out: true,
             ..Default::default()
         });
-        assert!(intents
-            .iter()
-            .any(|i| matches!(i, GraphIntent::RequestZoomOut)));
+        assert!(
+            intents
+                .iter()
+                .any(|i| matches!(i, GraphIntent::RequestZoomOut))
+        );
     }
 
     #[test]
@@ -330,9 +375,11 @@ mod tests {
             zoom_reset: true,
             ..Default::default()
         });
-        assert!(intents
-            .iter()
-            .any(|i| matches!(i, GraphIntent::RequestZoomReset)));
+        assert!(
+            intents
+                .iter()
+                .any(|i| matches!(i, GraphIntent::RequestZoomReset))
+        );
     }
 
     #[test]
@@ -341,9 +388,11 @@ mod tests {
             zoom_to_selected: true,
             ..Default::default()
         });
-        assert!(intents
-            .iter()
-            .any(|i| matches!(i, GraphIntent::RequestZoomToSelected)));
+        assert!(
+            intents
+                .iter()
+                .any(|i| matches!(i, GraphIntent::RequestZoomToSelected))
+        );
     }
 
     #[test]
@@ -549,5 +598,34 @@ mod tests {
 
         assert_eq!(app.graph.node_count(), before_count);
         assert_eq!(app.physics.base.is_running, before_physics);
+    }
+
+    #[test]
+    fn test_select_all_action_selects_every_node() {
+        let mut app = test_app();
+        use euclid::default::Point2D;
+        let a = app.add_node_and_sync("a".into(), Point2D::new(0.0, 0.0));
+        let b = app.add_node_and_sync("b".into(), Point2D::new(10.0, 0.0));
+        let c = app.add_node_and_sync("c".into(), Point2D::new(20.0, 0.0));
+
+        let intents = intents_from_actions(&KeyboardActions {
+            select_all: true,
+            ..Default::default()
+        });
+        app.apply_intents(intents);
+
+        assert!(app.selected_nodes.contains(&a));
+        assert!(app.selected_nodes.contains(&b));
+        assert!(app.selected_nodes.contains(&c));
+        assert_eq!(app.selected_nodes.len(), 3);
+    }
+
+    #[test]
+    fn test_select_all_maps_to_intent() {
+        let intents = intents_from_actions(&KeyboardActions {
+            select_all: true,
+            ..Default::default()
+        });
+        assert!(intents.iter().any(|i| matches!(i, GraphIntent::SelectAll)));
     }
 }

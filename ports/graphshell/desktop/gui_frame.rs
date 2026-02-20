@@ -146,34 +146,40 @@ fn workspace_tree_with_single_node(node_key: NodeKey) -> Tree<TileKind> {
     Tree::new("graphshell_workspace_layout", root, tiles)
 }
 
-fn add_node_to_named_workspace_snapshot(
+fn add_nodes_to_named_workspace_snapshot(
     graph_app: &mut GraphBrowserApp,
     name: &str,
-    node_key: NodeKey,
+    node_keys: &[NodeKey],
 ) {
-    if graph_app.graph.get_node(node_key).is_none() {
-        warn!("Cannot add missing node {node_key:?} to workspace '{name}'");
+    if GraphBrowserApp::is_reserved_workspace_layout_name(name) {
+        warn!("Cannot add nodes to reserved workspace '{name}'");
         return;
     }
-    if GraphBrowserApp::is_reserved_workspace_layout_name(name) {
-        warn!("Cannot add node to reserved workspace '{name}'");
+    let live_nodes: Vec<NodeKey> = node_keys
+        .iter()
+        .copied()
+        .filter(|key| graph_app.graph.get_node(*key).is_some())
+        .collect();
+    if live_nodes.is_empty() {
+        warn!("Cannot add empty/missing node set to workspace '{name}'");
         return;
     }
 
     let mut workspace_tree = graph_app
         .load_workspace_layout_json(name)
         .and_then(|layout| serde_json::from_str::<Tree<TileKind>>(&layout).ok())
-        .unwrap_or_else(|| workspace_tree_with_single_node(node_key));
+        .unwrap_or_else(|| workspace_tree_with_single_node(live_nodes[0]));
     tile_runtime::prune_stale_webview_tile_keys_only(&mut workspace_tree, graph_app);
     if workspace_tree.root().is_none() {
-        workspace_tree = workspace_tree_with_single_node(node_key);
+        workspace_tree = workspace_tree_with_single_node(live_nodes[0]);
     }
-
-    tile_view_ops::open_or_focus_webview_tile_with_mode(
-        &mut workspace_tree,
-        node_key,
-        tile_view_ops::TileOpenMode::Tab,
-    );
+    for node_key in live_nodes {
+        tile_view_ops::open_or_focus_webview_tile_with_mode(
+            &mut workspace_tree,
+            node_key,
+            tile_view_ops::TileOpenMode::Tab,
+        );
+    }
     match serde_json::to_string(&workspace_tree) {
         Ok(layout_json) => {
             graph_app.save_workspace_layout_json(name, &layout_json);
@@ -184,6 +190,27 @@ fn add_node_to_named_workspace_snapshot(
             warn!("Failed to serialize workspace snapshot '{name}' after add-tab operation: {e}")
         },
     }
+}
+
+fn connected_workspace_import_nodes(
+    graph_app: &GraphBrowserApp,
+    seeds: &[NodeKey],
+) -> Vec<NodeKey> {
+    let mut out = HashSet::new();
+    for seed in seeds {
+        if graph_app.graph.get_node(*seed).is_none() {
+            continue;
+        }
+        out.insert(*seed);
+        out.extend(graph_app.graph.out_neighbors(*seed));
+        out.extend(graph_app.graph.in_neighbors(*seed));
+    }
+    let mut nodes: Vec<NodeKey> = out
+        .into_iter()
+        .filter(|key| graph_app.graph.get_node(*key).is_some())
+        .collect();
+    nodes.sort_by_key(|key| key.index());
+    nodes
 }
 
 fn apply_connected_split_layout(tree: &mut Tree<TileKind>, nodes: &[NodeKey]) {
@@ -502,7 +529,7 @@ pub(crate) fn handle_keyboard_phase<F1, F2>(
         suppress_toggle_view,
     } = args;
 
-    let mut keyboard_actions = input::collect_actions(ctx);
+    let mut keyboard_actions = input::collect_actions(ctx, graph_app);
     if suppress_toggle_view {
         keyboard_actions.toggle_view = false;
     }
@@ -566,14 +593,9 @@ pub(crate) struct ToolbarDialogPhaseArgs<'a> {
     pub(crate) location_dirty: &'a mut bool,
     pub(crate) location_submitted: &'a mut bool,
     pub(crate) focus_location_field_for_search: bool,
-    pub(crate) show_data_dir_dialog: &'a mut bool,
-    pub(crate) show_persistence_settings_dialog: &'a mut bool,
     pub(crate) show_clear_data_confirm: &'a mut bool,
     pub(crate) omnibar_search_session: &'a mut Option<OmnibarSearchSession>,
-    pub(crate) data_dir_input: &'a mut String,
-    pub(crate) data_dir_status: &'a mut Option<String>,
-    pub(crate) snapshot_interval_input: &'a mut String,
-    pub(crate) persistence_settings_status: &'a mut Option<String>,
+    pub(crate) toasts: &'a mut egui_notify::Toasts,
     pub(crate) tile_rendering_contexts: &'a mut HashMap<NodeKey, Rc<OffscreenRenderingContext>>,
     pub(crate) tile_favicon_textures: &'a mut HashMap<NodeKey, (u64, egui::TextureHandle)>,
     pub(crate) favicon_textures:
@@ -604,14 +626,9 @@ pub(crate) fn handle_toolbar_dialog_phase(
         location_dirty,
         location_submitted,
         focus_location_field_for_search,
-        show_data_dir_dialog,
-        show_persistence_settings_dialog,
         show_clear_data_confirm,
         omnibar_search_session,
-        data_dir_input,
-        data_dir_status,
-        snapshot_interval_input,
-        persistence_settings_status,
+        toasts,
         tile_rendering_contexts,
         tile_favicon_textures,
         favicon_textures,
@@ -650,8 +667,6 @@ pub(crate) fn handle_toolbar_dialog_phase(
         location_dirty,
         location_submitted,
         focus_location_field_for_search,
-        show_data_dir_dialog,
-        show_persistence_settings_dialog,
         show_clear_data_confirm,
         omnibar_search_session,
         frame_intents,
@@ -666,16 +681,10 @@ pub(crate) fn handle_toolbar_dialog_phase(
         tile_favicon_textures,
         favicon_textures,
         frame_intents,
-        location,
         location_dirty,
         location_submitted,
         show_clear_data_confirm,
-        show_data_dir_dialog,
-        data_dir_input,
-        data_dir_status,
-        show_persistence_settings_dialog,
-        snapshot_interval_input,
-        persistence_settings_status,
+        toasts,
     });
 
     ToolbarDialogPhaseOutput {
@@ -744,6 +753,8 @@ pub(crate) struct PostRenderPhaseArgs<'a> {
     pub(crate) tiles_tree: &'a mut Tree<TileKind>,
     pub(crate) tile_rendering_contexts: &'a mut HashMap<NodeKey, Rc<OffscreenRenderingContext>>,
     pub(crate) tile_favicon_textures: &'a mut HashMap<NodeKey, (u64, egui::TextureHandle)>,
+    pub(crate) favicon_textures:
+        &'a mut HashMap<WebViewId, (egui::TextureHandle, egui::load::SizedTexture)>,
     pub(crate) toolbar_height: &'a mut Length<f32, DeviceIndependentPixel>,
     pub(crate) graph_search_matches: &'a [NodeKey],
     pub(crate) graph_search_active_match_index: Option<usize>,
@@ -760,6 +771,7 @@ pub(crate) struct PostRenderPhaseArgs<'a> {
     pub(crate) focus_ring_webview_id: &'a mut Option<WebViewId>,
     pub(crate) focus_ring_started_at: &'a mut Option<Instant>,
     pub(crate) focus_ring_duration: Duration,
+    pub(crate) toasts: &'a mut egui_notify::Toasts,
 }
 
 pub(crate) fn run_post_render_phase<FActive>(
@@ -776,6 +788,7 @@ pub(crate) fn run_post_render_phase<FActive>(
         tiles_tree,
         tile_rendering_contexts,
         tile_favicon_textures,
+        favicon_textures,
         toolbar_height,
         graph_search_matches,
         graph_search_active_match_index,
@@ -791,6 +804,7 @@ pub(crate) fn run_post_render_phase<FActive>(
         focus_ring_webview_id,
         focus_ring_started_at,
         focus_ring_duration,
+        toasts,
     } = args;
 
     #[cfg(debug_assertions)]
@@ -876,6 +890,24 @@ pub(crate) fn run_post_render_phase<FActive>(
         focused_pane_node,
         persistence_panel_layout_json.as_deref(),
     );
+    if let Some(target_dir) = graph_app.take_pending_switch_data_dir() {
+        match persistence_ops::switch_persistence_store(
+            graph_app,
+            window,
+            tiles_tree,
+            tile_rendering_contexts,
+            tile_favicon_textures,
+            favicon_textures,
+            &mut post_render_intents,
+            target_dir.clone(),
+        ) {
+            Ok(()) => toasts.success(format!(
+                "Switched graph data directory to {}",
+                target_dir.display()
+            )),
+            Err(e) => toasts.error(format!("Failed to switch data directory: {e}")),
+        };
+    }
     render::render_choose_workspace_picker(ctx, graph_app);
     render::render_unsaved_workspace_prompt(ctx, graph_app);
 
@@ -938,7 +970,13 @@ pub(crate) fn run_post_render_phase<FActive>(
     }
 
     if let Some((node_key, workspace_name)) = graph_app.take_pending_add_node_to_workspace() {
-        add_node_to_named_workspace_snapshot(graph_app, &workspace_name, node_key);
+        add_nodes_to_named_workspace_snapshot(graph_app, &workspace_name, &[node_key]);
+    }
+
+    if let Some((seed_nodes, workspace_name)) = graph_app.take_pending_add_connected_to_workspace()
+    {
+        let nodes = connected_workspace_import_nodes(graph_app, &seed_nodes);
+        add_nodes_to_named_workspace_snapshot(graph_app, &workspace_name, &nodes);
     }
 
     if let Some(name) = graph_app.take_pending_save_graph_snapshot_named()

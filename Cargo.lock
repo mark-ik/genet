@@ -619,7 +619,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tungstenite",
- "webpki-roots",
+ "webpki-roots 1.0.6",
 ]
 
 [[package]]
@@ -2435,6 +2435,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui-notify"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8d811c81c13fbce131116eeb6b228086f2c7eb6e4105e03ceb3a358c53c1668"
+dependencies = [
+ "egui",
+]
+
+[[package]]
 name = "egui-winit"
 version = "0.33.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3571,6 +3580,7 @@ dependencies = [
  "accesskit",
  "aes-gcm",
  "android_logger",
+ "arboard",
  "backtrace",
  "base",
  "bpaf",
@@ -3581,6 +3591,7 @@ dependencies = [
  "dpi",
  "egui",
  "egui-file-dialog",
+ "egui-notify",
  "egui-winit",
  "egui_glow",
  "egui_graphs",
@@ -3619,6 +3630,7 @@ dependencies = [
  "raw-window-handle",
  "redb",
  "rkyv",
+ "rstar",
  "rustls",
  "serde",
  "serde_json",
@@ -3632,6 +3644,7 @@ dependencies = [
  "tracing",
  "tracing-perfetto",
  "tracing-subscriber",
+ "ureq",
  "url",
  "uuid",
  "webdriver_server",
@@ -4067,6 +4080,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hash32"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606"
+dependencies = [
+ "byteorder",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4145,6 +4167,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "54b4a22553d4242c49fddb9ba998a99962b5cc6f22cb5a3482bec22522403ce4"
 dependencies = [
  "http 1.4.0",
+]
+
+[[package]]
+name = "heapless"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad"
+dependencies = [
+ "hash32",
+ "stable_deref_trait",
 ]
 
 [[package]]
@@ -4395,7 +4427,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots",
+ "webpki-roots 1.0.6",
 ]
 
 [[package]]
@@ -6111,7 +6143,7 @@ dependencies = [
  "tungstenite",
  "url",
  "uuid",
- "webpki-roots",
+ "webpki-roots 1.0.6",
  "webrender_api",
 ]
 
@@ -8144,6 +8176,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rstar"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "421400d13ccfd26dfa5858199c30a5d76f9c54e0dba7575273025b43c5175dbb"
+dependencies = [
+ "heapless",
+ "num-traits",
+ "smallvec",
+]
+
+[[package]]
 name = "rusqlite"
 version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8219,6 +8262,7 @@ dependencies = [
  "aws-lc-rs",
  "log",
  "once_cell",
+ "ring",
  "rustls-pki-types",
  "rustls-webpki",
  "subtle",
@@ -10565,6 +10609,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
+name = "ureq"
+version = "2.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
+dependencies = [
+ "base64 0.22.1",
+ "flate2",
+ "log",
+ "once_cell",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "url",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
 name = "url"
 version = "2.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11200,6 +11262,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "804f18a4ac2676ffb4e8b5b5fa9ae38af06df08162314f96a68d2a363e21a8ca"
 dependencies = [
  "rustls-pki-types",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.6",
 ]
 
 [[package]]

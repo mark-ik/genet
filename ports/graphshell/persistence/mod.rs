@@ -176,8 +176,9 @@ impl GraphStore {
             .encrypt(Nonce::from_slice(&nonce), compressed.as_ref())
             .map_err(|e| GraphStoreError::Crypto(format!("AES-GCM encrypt failed: {e}")))?;
 
-        let mut out =
-            Vec::with_capacity(ENCRYPTED_PAYLOAD_MAGIC.len() + AES_GCM_NONCE_LEN + ciphertext.len());
+        let mut out = Vec::with_capacity(
+            ENCRYPTED_PAYLOAD_MAGIC.len() + AES_GCM_NONCE_LEN + ciphertext.len(),
+        );
         out.extend_from_slice(ENCRYPTED_PAYLOAD_MAGIC);
         out.extend_from_slice(&nonce);
         out.extend_from_slice(&ciphertext);
@@ -493,9 +494,7 @@ impl GraphStore {
         let table = read_txn.open_table(TILE_LAYOUT_TABLE).ok()?;
         let entry = table.get("latest").ok()??;
         let decrypted = self.decode_persisted_bytes(entry.value()).ok()?;
-        std::str::from_utf8(&decrypted)
-            .ok()
-            .map(|s| s.to_string())
+        std::str::from_utf8(&decrypted).ok().map(|s| s.to_string())
     }
 
     /// Persist a named full-graph snapshot.
@@ -621,9 +620,7 @@ impl GraphStore {
         let table = read_txn.open_table(TILE_LAYOUT_TABLE).ok()?;
         let entry = table.get(name).ok()??;
         let decrypted = self.decode_persisted_bytes(entry.value()).ok()?;
-        std::str::from_utf8(&decrypted)
-            .ok()
-            .map(|s| s.to_string())
+        std::str::from_utf8(&decrypted).ok().map(|s| s.to_string())
     }
 
     /// List saved workspace layout names in stable order.
@@ -693,11 +690,10 @@ impl GraphStore {
                 Err(_) => continue,
             };
 
-            let archived =
-                match rkyv::access::<ArchivedLogEntry, rkyv::rancor::Error>(&decoded) {
-                    Ok(a) => a,
-                    Err(_) => continue,
-                };
+            let archived = match rkyv::access::<ArchivedLogEntry, rkyv::rancor::Error>(&decoded) {
+                Ok(a) => a,
+                Err(_) => continue,
+            };
 
             match archived {
                 ArchivedLogEntry::AddNode {
@@ -1414,7 +1410,9 @@ mod tests {
                 }
                 let bytes = fs::read(path).unwrap();
                 assert!(
-                    !bytes.windows(test_key.len()).any(|window| window == test_key),
+                    !bytes
+                        .windows(test_key.len())
+                        .any(|window| window == test_key),
                     "Found raw key bytes in persisted file"
                 );
             }

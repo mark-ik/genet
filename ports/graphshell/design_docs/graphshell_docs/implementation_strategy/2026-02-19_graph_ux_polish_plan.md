@@ -115,7 +115,7 @@ only `KEYBINDINGS.md` update remains.
 - [x] In `GraphNodeShape::ui()` (or `graph/egui_adapter.rs`): if `node.is_pinned`, paint indicator.
 - [x] Add `toggle_pin` keyboard action to `KeyboardActions`; detect `Key::L` in `input/mod.rs`.
 - [x] Emit `GraphIntent` for pin-toggle from keyboard actions handler (`TogglePrimaryNodePin`).
-- [ ] Update `KEYBINDINGS.md` with `L` entry (help panel and in-graph shortcut overlay updated).
+- [x] Update `KEYBINDINGS.md` with `L` entry (help panel and in-graph shortcut overlay updated).
 
 **Validation Tests**
 
@@ -196,9 +196,9 @@ the label-hidden behavior. Favicon rendering is separate — see §2.4.
 
 **Tasks**
 
-- [ ] In `GraphNodeShape::ui()`: read current zoom level (via parameter or app reference).
-- [ ] Implement 3-tier label string selection.
-- [ ] Remove or bypass the hover-only early return for the label when zoom > 0.6.
+- [x] In `GraphNodeShape::ui()`: read current zoom level (via parameter or app reference).
+- [x] Implement 3-tier label string selection.
+- [x] Remove or bypass the hover-only early return for the label when zoom > 0.6.
 
 **Validation Tests**
 
@@ -257,9 +257,9 @@ if self.selected || self.dragged || self.hovered {
 
 **Tasks**
 
-- [ ] In `egui_adapter.rs GraphNodeShape::shapes()`: separate favicon (unconditional) from
+- [x] In `egui_adapter.rs GraphNodeShape::shapes()`: separate favicon (unconditional) from
   thumbnail (hover/select/drag-gated) rendering.
-- [ ] Verify thumbnail alpha-blends over favicon correctly (both at full opacity → thumbnail
+- [x] Verify thumbnail alpha-blends over favicon correctly (both at full opacity → thumbnail
   occludes favicon; use `Color32::WHITE` for both as now).
 
 **Validation Tests**
@@ -294,9 +294,9 @@ Requires a custom `EdgeShape` implementation in egui_graphs 0.29.
 
 **Tasks**
 
-- [ ] Investigate egui_graphs 0.29 `EdgeShape` trait API (docs.rs/egui_graphs).
-- [ ] Implement `GraphEdgeShape` in `graph/egui_adapter.rs` branching on `EdgeType`.
-- [ ] Wire into `EguiGraphState::from_graph()` edge construction.
+- [x] Investigate egui_graphs 0.29 `EdgeShape` trait API (docs.rs/egui_graphs).
+- [x] Implement `GraphEdgeShape` in `graph/egui_adapter.rs` branching on `EdgeType`.
+- [x] Wire into `EguiGraphState::from_graph()` edge construction.
 
 **Validation Tests**
 
@@ -319,9 +319,9 @@ requiring selection or search. Research §7.6.
 
 **Tasks**
 
-- [ ] In color projection (adapter or render): branch on `hovered_graph_node`.
-- [ ] Compute adjacency set; apply dim to non-adjacent nodes and their incident edges.
-- [ ] Ensure selected-node color takes priority over dimmed state.
+- [x] In color projection (adapter or render): branch on `hovered_graph_node`.
+- [x] Compute adjacency set; apply dim to non-adjacent nodes and their incident edges.
+- [x] Ensure selected-node color takes priority over dimmed state.
 
 **Validation Tests**
 
@@ -342,10 +342,10 @@ Current search hides non-matching nodes entirely. Research §9.1 recommends "hig
 
 **Tasks**
 
-- [ ] Add `SearchDisplayMode` enum and `search_display_mode` field to `app.rs`.
-- [ ] Update `apply_search_node_visuals()` to branch on mode.
-- [ ] Add toggle in `desktop/graph_search_ui.rs`.
-- [ ] Initialize to `Highlight`.
+- [x] Add `SearchDisplayMode` enum and `search_display_mode` field to `app.rs`.
+- [x] Update `apply_search_node_visuals()` to branch on mode.
+- [x] Add toggle in `desktop/graph_search_ui.rs`.
+- [x] Initialize to `Highlight`.
 
 **Validation Tests**
 
@@ -370,10 +370,10 @@ cold node. Research §7.1 identifies this as a missing state.
 
 **Tasks**
 
-- [ ] Confirm `Node` or app-level state carries a `Crashed` lifecycle variant distinguishable from
+- [x] Confirm `Node` or app-level state carries a `Crashed` lifecycle variant distinguishable from
   `Cold` (check `node.webview_state` or equivalent field).
-- [ ] In `GraphNodeShape` color projection: if crashed, apply red/orange tint.
-- [ ] Ensure crashed color does not override `Selected` (amber takes priority).
+- [x] In `GraphNodeShape` color projection: if crashed, apply red/orange tint.
+- [x] Ensure crashed color does not override `Selected` (amber takes priority).
 
 **Validation Tests**
 
@@ -396,9 +396,9 @@ Research §7.1: "Distinct border or halo on all selected nodes, not just primary
 
 **Tasks**
 
-- [ ] In `GraphNodeShape` color projection: distinguish primary vs. secondary selected nodes.
-- [ ] Apply a stroke-only ring (amber, stroke width ~2px) to secondary selected nodes.
-- [ ] Ensure secondary halo does not override hovered or dragged state colors.
+- [x] In `GraphNodeShape` color projection: distinguish primary vs. secondary selected nodes.
+- [x] Apply a stroke-only ring (amber, stroke width ~2px) to secondary selected nodes.
+- [x] Ensure secondary halo does not override hovered or dragged state colors.
 
 **Validation Tests**
 
@@ -408,16 +408,28 @@ Research §7.1: "Distinct border or halo on all selected nodes, not just primary
 
 ---
 
-### Phase 4: Multi-Select Extensions (deferred)
+### Phase 4: Multi-Select Extensions (in progress)
 
-Workspace routing Phases 1–3 are complete. Edge operations plan Step 4d validation is still
-pending; unblock group-drag when Step 4d lands.
+Rationale: `rstar` here is a UX interaction-performance improvement for lasso/hit-testing, not a layout algorithm change.
+
+Workspace routing Phases 1–3 are complete. Group drag implemented via `sync_graph_positions_from_layout` — no Step 4d gate needed (sync-layer approach is independent of edge operations).
 
 - **`Ctrl+A` select all**: emit `SelectAll` intent → populate `selected_nodes` with all `NodeKey`s.
 - **Group drag**: when dragging a node that is in `selected_nodes`, apply same delta to all selected
   nodes. Requires reading drag delta from egui_graphs event and iterating selection set.
 
-No task lists yet.
+**Tasks**
+
+- [x] Implement lasso gesture as `Right+Drag` in graph view to avoid right-click context-menu conflicts.
+- [x] Add bulk selection intent path supporting `Replace` / `Add` / `Toggle` semantics.
+- [x] Wire modifier behavior: `Right+Drag` = replace, `Right+Ctrl+Drag` = add, `Right+Alt+Drag` = toggle.
+- [x] Render lasso rectangle overlay during drag.
+- [x] Extend with group drag for selected-node sets.
+- [x] Add `Ctrl+A` select-all intent.
+- [x] Evaluate optional right-drag lasso mode once context-menu redesign is finalized.
+- [x] Add `rstar`-backed spatial index for graph-node hit-testing (lasso/box queries in world space).
+- [x] Route right-drag lasso selection through spatial range queries instead of full-node scans.
+- [x] Add perf validation at medium/large node counts to verify lasso frame-time improvement.
 
 ---
 
@@ -437,7 +449,7 @@ Research §11 priority table items tracked:
 | Priority | Item | Location |
 |---|---|---|
 | #1 | `Ctrl+Click` multi-select | ✅ done (edge plan Step 1) |
-| #2 | Pin node UX | Phase 1.3 (✅ partial — shortcut done, KEYBINDINGS.md pending) |
+| #2 | Pin node UX | complete (shortcut + docs + visual) |
 | #3 | Physics presets | Not yet — no preset system exists (archived plan [x] marks are wrong) |
 | #4 | Auto-pause on convergence | Layout Advanced Plan §1.1 |
 | #5 | Reheat on structural change | Layout Advanced Plan §1.2 |
@@ -452,7 +464,7 @@ Research §11 priority table items tracked:
 | #14 | Highlight vs. filter search toggle | Phase 3.3 |
 | #15 | Crashed node indicator | Phase 3.4 |
 | — | Multi-select halo (all selected nodes) | Phase 3.5 |
-| #16–18 | Lasso, group drag, edge hit targets | Phase 4 / deferred |
+| #16-18 | Lasso, group drag, edge hit targets | Phase 4 (lasso ✅ done; group drag ✅ done; edge hit targets deferred) |
 
 Research §14 advanced recommendations (degree-dependent repulsion, greedy label culling, invisible
 layout constraints) are tracked in `2026-02-19_layout_advanced_plan.md §Phase 2`.
@@ -502,3 +514,109 @@ layout constraints) are tracked in `2026-02-19_layout_advanced_plan.md §Phase 2
 - Tooltip is rendered on a non-interactable tooltip layer and suppresses itself while hovering
   workspace-membership badges to avoid overlap.
 - Added render-layer unit tests for relative-time formatting helpers.
+
+
+### 2026-02-20 � Session 6
+
+- Completed Phase 1.3 doc follow-up by adding `ports/graphshell/KEYBINDINGS.md` with `L` toggle-pin
+  and current graph shortcuts.
+- Implemented Phase 2.2 zoom-adaptive labels with three tiers (`>1.5` full, `0.6-1.5` simplified,
+  `<0.6` hidden) and removed hover-only label gating when zoom supports labels.
+- Implemented Phase 2.4 node visual hierarchy update: favicon always renders, thumbnail overlays
+  only on hover/select/drag.
+- Implemented Phase 3.1 custom `GraphEdgeShape` in `graph/egui_adapter.rs` and wired edge-type
+  styling into egui graph construction.
+- Implemented Phase 3.2 neighbor highlight dimming (non-adjacent nodes/edges dim while hovered)
+  with selected-node precedence.
+- Implemented Phase 3.3 search display mode toggle with `SearchDisplayMode` (`Highlight` default /
+  `Filter`) in app state and graph-search UI.
+- Implemented Phase 3.4 crashed-node graph tint using runtime crash metadata, with primary selected
+  amber precedence retained.
+- Implemented Phase 3.5 multi-select secondary halo (stroke ring on non-primary selected nodes),
+  without overriding hovered/dragged styling.
+- Added/updated unit tests for label tiers, edge-shape style selection, secondary-selection visual
+  role, crashed-vs-cold color projection, neighbor-set computation, and search highlight/filter
+  behavior.
+
+
+
+
+
+
+### 2026-02-20 � Session 7
+
+- Implemented first-pass lasso multi-select in graph view with `Right+Drag` rectangle selection.
+- Added bulk selection semantics via `SelectionUpdateMode` and `GraphIntent::UpdateSelection`
+  (`Replace`, `Add`, `Toggle`) for future transform features.
+- Wired modifier behavior: `Right+Drag` replaces selection, `Right+Ctrl+Drag` adds, and`r`n  `Right+Alt+Drag` toggles inside-lasso nodes.
+- Added lasso rectangle overlay rendering and updated graph shortcut help text.
+- Added unit coverage for bulk selection reducer behavior and lasso action intent mapping.
+
+
+
+### 2026-02-20 � Session 8
+
+- Switched lasso activation from `Shift+LeftDrag` to `Right+Drag` with click-vs-drag thresholding.
+- Added context-menu suppression on right-drag release so drag gesture does not also open node context UI.
+- Added `arboard` clipboard actions for node `Copy URL` and `Copy Title` from node/context command surfaces.
+- Added `egui-notify` non-blocking toasts for clipboard success/failure feedback.
+
+
+### 2026-02-20 - Session 9
+
+- Added UI feedback policy guidance for when to use blocking dialogs vs non-blocking toasts.
+
+### 2026-02-20 - Session 10
+
+- Implemented `Ctrl+A` select-all: `GraphIntent::SelectAll` added to `app.rs`, detected in
+  `input/mod.rs` as `Ctrl+A`, mapped via `intents_from_actions`. Handler iterates `graph.nodes()`
+  and replaces `selected_nodes` with all keys.
+- Added `rstar`-backed `NodeSpatialIndex` in `render/spatial_index.rs`. Index is built in canvas
+  (world) space from node positions; queries use `MetadataFrame::screen_to_canvas_pos` to invert
+  the lasso screen rect into canvas space before the range query.
+- Replaced the O(n) linear scan in `collect_right_drag_lasso_action` with the rstar range query.
+- Added 3 unit tests in `spatial_index.rs` (contained, excluded, empty graph) and 2 in
+  `input/mod.rs` (select-all applies, select-all maps to intent). All 316 tests pass.
+
+### 2026-02-19 - Session 11
+
+- Implemented group drag via `sync_graph_positions_from_layout` sync-layer approach.
+  During `is_interacting && selected_nodes.len() > 1`, detects the dragged node by finding a
+  selected node whose egui_graphs canvas position diverges from `app.graph` position by >0.01.
+  Applies the same delta to all other selected non-pinned nodes in both `app.graph` and
+  `egui_state` directly (same pattern as pinned-node position restoration).
+- No changes to `GraphAction`, `GraphIntent`, or `intents_from_actions` needed.
+- Added `setup_group_drag_sync` helper and 2 unit tests. All 318 tests pass.
+
+### 2026-02-20 - Session 12
+
+- Finalized right-drag lasso as the default gesture and retained context-menu suppression with
+  click-vs-drag thresholding.
+- Added ignored perf test `perf_nodes_in_canvas_rect_10k_under_budget` in
+  `render/spatial_index.rs` to validate medium/large-node spatial query performance.
+
+### 2026-02-20 - Session 13
+
+- Added persisted input-binding preferences in app state:
+  lasso gesture (`RightDrag`/`ShiftLeftDrag`) and configurable command/help/radial shortcuts.
+- Wired keyboard action collection through binding lookup (`input::collect_actions(ctx, graph_app)`).
+- Added `Settings -> Input` UI controls for lasso and shortcut preferences.
+- Updated graph overlay/help panel and `KEYBINDINGS.md` text to reflect configurable defaults.
+
+---
+
+## Dialog vs Toast Policy
+
+Use dialogs only when user input or explicit confirmation is required before continuing.
+
+- Use a dialog for destructive or irreversible actions that need explicit confirmation.
+- Use a dialog for branching decisions that must be resolved immediately (for example unsaved workspace prompt).
+- Use a dialog for required multi-field input that cannot be handled safely inline.
+
+Use toasts for non-blocking feedback and status.
+
+- Use a toast for success/failure outcomes (copy, save, switch data directory, settings apply).
+- Use a toast for background progress/status messages.
+- Use a toast for lightweight warnings and undo affordances.
+
+Prefer inline panels over dialogs for persistent settings surfaces (for example Persistence Hub).

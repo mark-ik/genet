@@ -10,7 +10,7 @@ use std::hash::{Hash, Hasher};
 use egui::{Id, Response, Sense, Stroke, TextStyle, Ui, Vec2, WidgetText, vec2};
 use egui_tiles::{Behavior, SimplificationOptions, TabState, Tile, TileId, Tiles, UiResponse};
 
-use crate::app::{GraphBrowserApp, GraphIntent};
+use crate::app::{GraphBrowserApp, GraphIntent, SearchDisplayMode};
 use crate::graph::{NodeKey, NodeLifecycle};
 use crate::render;
 use crate::render::GraphAction;
@@ -177,7 +177,11 @@ impl<'a> Behavior<TileKind> for GraphshellTileBehavior<'a> {
                     self.graph_app,
                     self.search_matches,
                     self.active_search_match,
-                    self.search_filter_mode,
+                    if self.search_filter_mode {
+                        SearchDisplayMode::Filter
+                    } else {
+                        SearchDisplayMode::Highlight
+                    },
                     self.search_query_active,
                 );
                 let multi_select_modifier = ui.input(|i| i.modifiers.ctrl);

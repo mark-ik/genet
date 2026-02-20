@@ -16,6 +16,7 @@ use servo::{
 };
 use url::Url;
 
+use crate::app::RendererId;
 use crate::running_app_state::{RunningAppState, UserInterfaceCommand, WebViewCollection};
 
 // This should vary by zoom level and maybe actual text size (focused or under cursor)
@@ -42,25 +43,25 @@ impl From<u64> for ServoShellWindowId {
 #[derive(Clone, Debug)]
 pub(crate) enum GraphSemanticEvent {
     UrlChanged {
-        webview_id: WebViewId,
+        webview_id: RendererId,
         new_url: String,
     },
     HistoryChanged {
-        webview_id: WebViewId,
+        webview_id: RendererId,
         entries: Vec<String>,
         current: usize,
     },
     PageTitleChanged {
-        webview_id: WebViewId,
+        webview_id: RendererId,
         title: Option<String>,
     },
     CreateNewWebView {
-        parent_webview_id: WebViewId,
-        child_webview_id: WebViewId,
+        parent_webview_id: RendererId,
+        child_webview_id: RendererId,
         initial_url: Option<String>,
     },
     WebViewCrashed {
-        webview_id: WebViewId,
+        webview_id: RendererId,
         reason: String,
         has_backtrace: bool,
     },

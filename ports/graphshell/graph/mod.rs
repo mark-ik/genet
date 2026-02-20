@@ -396,7 +396,8 @@ impl Graph {
                     node.history_index = session
                         .history_index
                         .min(node.history_entries.len().saturating_sub(1));
-                    restore_url_from_session = node.history_entries.get(node.history_index).cloned();
+                    restore_url_from_session =
+                        node.history_entries.get(node.history_index).cloned();
                     node.session_scroll = session.scroll_x.zip(session.scroll_y);
                     node.session_form_draft = session.form_draft.clone();
                 }
@@ -1037,8 +1038,13 @@ mod tests {
         };
 
         let restored = Graph::from_snapshot(&snapshot);
-        let (_, node) = restored.get_node_by_url("https://fallback.example").unwrap();
-        assert_eq!(node.history_entries, vec!["https://legacy-one.example".to_string()]);
+        let (_, node) = restored
+            .get_node_by_url("https://fallback.example")
+            .unwrap();
+        assert_eq!(
+            node.history_entries,
+            vec!["https://legacy-one.example".to_string()]
+        );
         assert_eq!(node.history_index, 0);
         assert_eq!(node.session_scroll, None);
     }

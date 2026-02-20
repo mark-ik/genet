@@ -2,17 +2,24 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+use crossbeam_channel::Receiver;
 use egui::text::{CCursor, CCursorRange};
 use egui::text_edit::TextEditState;
 use egui::{Key, Modifiers, TopBottomPanel, Vec2, WidgetInfo, WidgetType};
 use egui_tiles::Tree;
 use euclid::default::Point2D;
-use std::collections::HashSet;
+use serde_json::Value;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::thread;
+use std::time::Duration;
 use winit::window::Window;
 
 use super::tile_grouping;
 use super::toolbar_routing::{self, ToolbarNavAction, ToolbarOpenMode};
-use crate::app::{GraphBrowserApp, GraphIntent};
+use crate::app::{
+    CommandPaletteShortcut, GraphBrowserApp, GraphIntent, HelpPanelShortcut, LassoMouseBinding,
+    PendingTileOpenMode, RadialMenuShortcut, ToastAnchorPreference,
+};
 use crate::desktop::tile_kind::TileKind;
 use crate::graph::NodeKey;
 use crate::running_app_state::{RunningAppState, UserInterfaceCommand};
@@ -20,6 +27,14 @@ use crate::search::{fuzzy_match_items, fuzzy_match_node_keys};
 use crate::window::ServoShellWindow;
 
 const WORKSPACE_PIN_NAME: &str = "workspace:pin:space";
+const OMNIBAR_DROPDOWN_MAX_ROWS: usize = 8;
+const OMNIBAR_PROVIDER_MIN_QUERY_LEN: usize = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OmnibarSessionKind {
+    Graph(OmnibarSearchMode),
+    SearchProvider,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OmnibarSearchMode {
@@ -36,6 +51,7 @@ enum OmnibarSearchMode {
 pub(crate) enum OmnibarMatch {
     Node(NodeKey),
     NodeUrl(String),
+    SearchQuery(String),
     Edge { from: NodeKey, to: NodeKey },
 }
 
@@ -52,10 +68,11 @@ impl AsRef<str> for OmnibarSearchCandidate {
 }
 
 pub(crate) struct OmnibarSearchSession {
-    mode: OmnibarSearchMode,
+    kind: OmnibarSessionKind,
     pub(crate) query: String,
     pub(crate) matches: Vec<OmnibarMatch>,
     pub(crate) active_index: usize,
+    provider_rx: Option<Receiver<Vec<OmnibarMatch>>>,
 }
 
 pub(crate) struct ToolbarUiArgs<'a> {
@@ -73,8 +90,6 @@ pub(crate) struct ToolbarUiArgs<'a> {
     pub location_dirty: &'a mut bool,
     pub location_submitted: &'a mut bool,
     pub focus_location_field_for_search: bool,
-    pub show_data_dir_dialog: &'a mut bool,
-    pub show_persistence_settings_dialog: &'a mut bool,
     pub show_clear_data_confirm: &'a mut bool,
     pub omnibar_search_session: &'a mut Option<OmnibarSearchSession>,
     pub frame_intents: &'a mut Vec<GraphIntent>,
@@ -90,6 +105,55 @@ fn toolbar_button(text: &str) -> egui::Button<'_> {
     egui::Button::new(text)
         .frame(false)
         .min_size(Vec2 { x: 20.0, y: 20.0 })
+}
+
+fn toast_anchor_label(anchor: ToastAnchorPreference) -> &'static str {
+    match anchor {
+        ToastAnchorPreference::TopRight => "Top Right",
+        ToastAnchorPreference::TopLeft => "Top Left",
+        ToastAnchorPreference::BottomRight => "Bottom Right (Default)",
+        ToastAnchorPreference::BottomLeft => "Bottom Left",
+    }
+}
+
+fn lasso_binding_label(binding: LassoMouseBinding) -> &'static str {
+    match binding {
+        LassoMouseBinding::RightDrag => "Right Drag (Default)",
+        LassoMouseBinding::ShiftLeftDrag => "Shift + Left Drag",
+    }
+}
+
+fn command_palette_shortcut_label(shortcut: CommandPaletteShortcut) -> &'static str {
+    match shortcut {
+        CommandPaletteShortcut::F2 => "F2 (Default)",
+        CommandPaletteShortcut::CtrlK => "Ctrl+K",
+    }
+}
+
+fn help_shortcut_label(shortcut: HelpPanelShortcut) -> &'static str {
+    match shortcut {
+        HelpPanelShortcut::F1OrQuestion => "F1 / ? (Default)",
+        HelpPanelShortcut::H => "H",
+    }
+}
+
+fn radial_shortcut_label(shortcut: RadialMenuShortcut) -> &'static str {
+    match shortcut {
+        RadialMenuShortcut::F3 => "F3 (Default)",
+        RadialMenuShortcut::R => "R",
+    }
+}
+
+fn request_open_settings_page(
+    graph_app: &mut GraphBrowserApp,
+    frame_intents: &mut Vec<GraphIntent>,
+    url: &str,
+) {
+    frame_intents.push(GraphIntent::CreateNodeAtUrl {
+        url: url.to_string(),
+        position: graph_center_for_new_node(graph_app),
+    });
+    graph_app.request_open_selected_tile_mode(PendingTileOpenMode::Tab);
 }
 
 fn workspace_pin_name_for_node(node: NodeKey, graph_app: &GraphBrowserApp) -> Option<String> {
@@ -115,8 +179,6 @@ pub(crate) fn render_toolbar_ui(args: ToolbarUiArgs<'_>) -> ToolbarUiOutput {
         location_dirty,
         location_submitted,
         focus_location_field_for_search,
-        show_data_dir_dialog,
-        show_persistence_settings_dialog,
         show_clear_data_confirm,
         omnibar_search_session,
         frame_intents,
@@ -218,24 +280,156 @@ pub(crate) fn render_toolbar_ui(args: ToolbarUiArgs<'_>) -> ToolbarUiOutput {
                     ui.available_size(),
                     egui::Layout::right_to_left(egui::Align::Center),
                     |ui| {
-                        let mut experimental_preferences_enabled =
-                            state.experimental_preferences_enabled();
-                        let prefs_toggle = ui
-                            .toggle_value(&mut experimental_preferences_enabled, "Exp")
-                            .on_hover_text("Enable experimental prefs");
-                        prefs_toggle.widget_info(|| {
-                            let mut info = WidgetInfo::new(WidgetType::Button);
-                            info.label = Some("Enable experimental preferences".into());
-                            info.selected = Some(experimental_preferences_enabled);
-                            info
+                        ui.menu_button("Settings", |ui| {
+                            if ui.button("Open Persistence Hub").clicked() {
+                                graph_app.show_persistence_panel = true;
+                                ui.close();
+                            }
+                            if ui
+                                .button(if graph_app.show_physics_panel {
+                                    "Hide Physics Panel"
+                                } else {
+                                    "Show Physics Panel"
+                                })
+                                .clicked()
+                            {
+                                frame_intents.push(GraphIntent::TogglePhysicsPanel);
+                                ui.close();
+                            }
+                            if ui
+                                .button(if graph_app.show_help_panel {
+                                    "Hide Help Panel"
+                                } else {
+                                    "Show Help Panel"
+                                })
+                                .clicked()
+                            {
+                                frame_intents.push(GraphIntent::ToggleHelpPanel);
+                                ui.close();
+                            }
+                            ui.separator();
+                            ui.label(format!(
+                                "Toasts: {}",
+                                toast_anchor_label(graph_app.toast_anchor_preference)
+                            ));
+                            for anchor in [
+                                ToastAnchorPreference::BottomRight,
+                                ToastAnchorPreference::BottomLeft,
+                                ToastAnchorPreference::TopRight,
+                                ToastAnchorPreference::TopLeft,
+                            ] {
+                                if ui
+                                    .selectable_label(
+                                        graph_app.toast_anchor_preference == anchor,
+                                        toast_anchor_label(anchor),
+                                    )
+                                    .clicked()
+                                {
+                                    graph_app.set_toast_anchor_preference(anchor);
+                                }
+                            }
+                            ui.separator();
+                            ui.label("Input");
+                            ui.label(format!(
+                                "Lasso: {}",
+                                lasso_binding_label(graph_app.lasso_mouse_binding)
+                            ));
+                            for binding in
+                                [LassoMouseBinding::RightDrag, LassoMouseBinding::ShiftLeftDrag]
+                            {
+                                if ui
+                                    .selectable_label(
+                                        graph_app.lasso_mouse_binding == binding,
+                                        lasso_binding_label(binding),
+                                    )
+                                    .clicked()
+                                {
+                                    graph_app.set_lasso_mouse_binding(binding);
+                                }
+                            }
+                            ui.label(format!(
+                                "Command Palette: {}",
+                                command_palette_shortcut_label(graph_app.command_palette_shortcut)
+                            ));
+                            for shortcut in
+                                [CommandPaletteShortcut::F2, CommandPaletteShortcut::CtrlK]
+                            {
+                                if ui
+                                    .selectable_label(
+                                        graph_app.command_palette_shortcut == shortcut,
+                                        command_palette_shortcut_label(shortcut),
+                                    )
+                                    .clicked()
+                                {
+                                    graph_app.set_command_palette_shortcut(shortcut);
+                                }
+                            }
+                            ui.label(format!(
+                                "Help: {}",
+                                help_shortcut_label(graph_app.help_panel_shortcut)
+                            ));
+                            for shortcut in
+                                [HelpPanelShortcut::F1OrQuestion, HelpPanelShortcut::H]
+                            {
+                                if ui
+                                    .selectable_label(
+                                        graph_app.help_panel_shortcut == shortcut,
+                                        help_shortcut_label(shortcut),
+                                    )
+                                    .clicked()
+                                {
+                                    graph_app.set_help_panel_shortcut(shortcut);
+                                }
+                            }
+                            ui.label(format!(
+                                "Radial: {}",
+                                radial_shortcut_label(graph_app.radial_menu_shortcut)
+                            ));
+                            for shortcut in [RadialMenuShortcut::F3, RadialMenuShortcut::R] {
+                                if ui
+                                    .selectable_label(
+                                        graph_app.radial_menu_shortcut == shortcut,
+                                        radial_shortcut_label(shortcut),
+                                    )
+                                    .clicked()
+                                {
+                                    graph_app.set_radial_menu_shortcut(shortcut);
+                                }
+                            }
+                            ui.separator();
+                            ui.label("Preferences");
+                            if ui.button("Open Preferences Page").clicked() {
+                                request_open_settings_page(
+                                    graph_app,
+                                    frame_intents,
+                                    "servo:preferences",
+                                );
+                                ui.close();
+                            }
+                            if ui.button("Open Experimental Preferences").clicked() {
+                                request_open_settings_page(
+                                    graph_app,
+                                    frame_intents,
+                                    "servo:experimental-preferences",
+                                );
+                                ui.close();
+                            }
+                            let mut experimental_preferences_enabled =
+                                state.experimental_preferences_enabled();
+                            let prefs_toggle = ui
+                                .toggle_value(
+                                    &mut experimental_preferences_enabled,
+                                    "Experimental Preferences",
+                                )
+                                .on_hover_text("Enable experimental prefs");
+                            if prefs_toggle.clicked() {
+                                state.set_experimental_preferences_enabled(
+                                    experimental_preferences_enabled,
+                                );
+                                *location_dirty = false;
+                                window.queue_user_interface_command(UserInterfaceCommand::ReloadAll);
+                            }
                         });
-                        if prefs_toggle.clicked() {
-                            state.set_experimental_preferences_enabled(
-                                experimental_preferences_enabled,
-                            );
-                            *location_dirty = false;
-                            window.queue_user_interface_command(UserInterfaceCommand::ReloadAll);
-                        }
 
                         let (view_icon, view_tooltip) = if has_webview_tiles {
                             ("Graph", "Switch to Graph View")
@@ -252,30 +446,6 @@ pub(crate) fn render_toolbar_ui(args: ToolbarUiArgs<'_>) -> ToolbarUiOutput {
                         });
                         if view_toggle_button.clicked() {
                             toggle_tile_view_requested = true;
-                        }
-
-                        let data_dir_button = ui
-                            .add(toolbar_button("Dir"))
-                            .on_hover_text("Switch graph data directory");
-                        data_dir_button.widget_info(|| {
-                            let mut info = WidgetInfo::new(WidgetType::Button);
-                            info.label = Some("Switch graph data directory".into());
-                            info
-                        });
-                        if data_dir_button.clicked() {
-                            *show_data_dir_dialog = true;
-                        }
-
-                        let persistence_settings_button = ui
-                            .add(toolbar_button("Cfg"))
-                            .on_hover_text("Persistence settings");
-                        persistence_settings_button.widget_info(|| {
-                            let mut info = WidgetInfo::new(WidgetType::Button);
-                            info.label = Some("Persistence settings".into());
-                            info
-                        });
-                        if persistence_settings_button.clicked() {
-                            *show_persistence_settings_dialog = true;
                         }
 
                         let clear_data_button = ui
@@ -295,13 +465,6 @@ pub(crate) fn render_toolbar_ui(args: ToolbarUiArgs<'_>) -> ToolbarUiOutput {
                             .on_hover_text("Open command palette (F2)");
                         if command_button.clicked() {
                             frame_intents.push(GraphIntent::ToggleCommandPalette);
-                        }
-
-                        let persistence_button = ui
-                            .add(toolbar_button("Persist"))
-                            .on_hover_text("Open persistence hub");
-                        if persistence_button.clicked() {
-                            frame_intents.push(GraphIntent::TogglePersistencePanel);
                         }
 
                         if has_webview_tiles {
@@ -408,26 +571,220 @@ pub(crate) fn render_toolbar_ui(args: ToolbarUiArgs<'_>) -> ToolbarUiOutput {
                             state.store(ui.ctx(), location_id);
                         }
 
-                        if let Some(query) = location.trim().strip_prefix('@') {
-                            let (mode, query) = parse_omnibar_search_query(query);
-                            if let Some(session) = omnibar_search_session.as_ref()
-                                && session.mode == mode
-                                && session.query == query
-                                && !session.matches.is_empty()
+                        if location_field.has_focus() {
+                            let trimmed_location = location.trim();
+                            if let Some(query_raw) = trimmed_location.strip_prefix('@') {
+                                let (mode, query) = parse_omnibar_search_query(query_raw);
+                                if query.is_empty() {
+                                    *omnibar_search_session = None;
+                                } else {
+                                    let needs_refresh =
+                                        !omnibar_search_session.as_ref().is_some_and(|session| {
+                                            session.kind == OmnibarSessionKind::Graph(mode)
+                                                && session.query == query
+                                        });
+                                    if needs_refresh {
+                                        let matches = omnibar_matches_for_query(
+                                            graph_app,
+                                            tiles_tree,
+                                            mode,
+                                            query,
+                                            has_webview_tiles,
+                                        );
+                                        *omnibar_search_session = if matches.is_empty() {
+                                            None
+                                        } else {
+                                            Some(OmnibarSearchSession {
+                                                kind: OmnibarSessionKind::Graph(mode),
+                                                query: query.to_string(),
+                                                matches,
+                                                active_index: 0,
+                                                provider_rx: None,
+                                            })
+                                        };
+                                    }
+                                }
+                            } else if trimmed_location.len() >= OMNIBAR_PROVIDER_MIN_QUERY_LEN {
+                                let needs_refresh =
+                                    !omnibar_search_session.as_ref().is_some_and(|session| {
+                                        session.kind == OmnibarSessionKind::SearchProvider
+                                            && session.query == trimmed_location
+                                    });
+                                if needs_refresh {
+                                    *omnibar_search_session = Some(OmnibarSearchSession {
+                                        kind: OmnibarSessionKind::SearchProvider,
+                                        query: trimmed_location.to_string(),
+                                        matches: Vec::new(),
+                                        active_index: 0,
+                                        provider_rx: Some(spawn_provider_suggestion_request(
+                                            &state.servoshell_preferences.searchpage,
+                                            trimmed_location,
+                                        )),
+                                    });
+                                }
+                            } else {
+                                *omnibar_search_session = None;
+                            }
+                        }
+
+                        let mut clear_provider_session = false;
+                        if let Some(session) = omnibar_search_session.as_mut()
+                            && session.kind == OmnibarSessionKind::SearchProvider
+                            && location_field.has_focus()
+                            && session.query == location.trim()
+                        {
+                            let mut fetched_matches = None;
+                            if let Some(rx) = &session.provider_rx {
+                                match rx.try_recv() {
+                                    Ok(matches) => fetched_matches = Some(matches),
+                                    Err(crossbeam_channel::TryRecvError::Empty) => {
+                                        ctx.request_repaint_after(Duration::from_millis(75));
+                                    },
+                                    Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                                        fetched_matches = Some(Vec::new());
+                                    },
+                                }
+                            }
+                            if let Some(matches) = fetched_matches {
+                                session.provider_rx = None;
+                                if matches.is_empty() {
+                                    clear_provider_session = true;
+                                } else {
+                                    session.matches = matches;
+                                    session.active_index = 0;
+                                }
+                            }
+                        }
+                        if clear_provider_session {
+                            *omnibar_search_session = None;
+                        }
+
+                        let mut overlay_meta: Option<(usize, usize, OmnibarMatch)> = None;
+                        if let Some(session) = omnibar_search_session.as_mut()
+                            && location_field.has_focus()
+                            && session.query == location.trim()
+                            && !session.matches.is_empty()
+                        {
+                            if ui.input(|i| i.key_pressed(Key::ArrowDown)) {
+                                session.active_index =
+                                    (session.active_index + 1) % session.matches.len();
+                            }
+                            if ui.input(|i| i.key_pressed(Key::ArrowUp)) {
+                                session.active_index = if session.active_index == 0 {
+                                    session.matches.len() - 1
+                                } else {
+                                    session.active_index - 1
+                                };
+                            }
+                            if let Some(active_match) =
+                                session.matches.get(session.active_index).cloned()
                             {
-                                let counter = format!(
-                                    "{}/{}",
-                                    session.active_index + 1,
-                                    session.matches.len()
-                                );
-                                let pos = location_field.rect.right_top() + Vec2::new(-8.0, 4.0);
-                                ui.painter().text(
-                                    pos,
-                                    egui::Align2::RIGHT_TOP,
-                                    counter,
-                                    egui::FontId::proportional(11.0),
-                                    egui::Color32::GRAY,
-                                );
+                                overlay_meta =
+                                    Some((session.active_index, session.matches.len(), active_match));
+                            }
+                        }
+                        if let Some((active_index, total, active_match)) = overlay_meta {
+                            let counter = format!("{}/{}", active_index + 1, total);
+                            let pos = location_field.rect.right_top() + Vec2::new(-8.0, 4.0);
+                            ui.painter().text(
+                                pos,
+                                egui::Align2::RIGHT_TOP,
+                                counter,
+                                egui::FontId::proportional(11.0),
+                                egui::Color32::GRAY,
+                            );
+                            let tag = omnibar_match_signifier(graph_app, tiles_tree, &active_match);
+                            let tag_pos = pos + Vec2::new(0.0, 12.0);
+                            ui.painter().text(
+                                tag_pos,
+                                egui::Align2::RIGHT_TOP,
+                                tag,
+                                egui::FontId::proportional(10.0),
+                                egui::Color32::from_gray(150),
+                            );
+                        }
+
+                        let mut clicked_omnibar_match: Option<OmnibarMatch> = None;
+                        if let Some(session) = omnibar_search_session.as_mut()
+                            && location_field.has_focus()
+                            && session.query == location.trim()
+                            && !session.matches.is_empty()
+                        {
+                            let dropdown_pos =
+                                location_field.rect.left_bottom() + Vec2::new(0.0, 2.0);
+                            egui::Area::new(egui::Id::new("omnibar_dropdown"))
+                                .order(egui::Order::Foreground)
+                                .fixed_pos(dropdown_pos)
+                                .show(ctx, |ui| {
+                                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                        ui.set_min_width(location_field.rect.width());
+                                        let row_count = session
+                                            .matches
+                                            .len()
+                                            .min(OMNIBAR_DROPDOWN_MAX_ROWS);
+                                        for idx in 0..row_count {
+                                            let active = idx == session.active_index;
+                                            let m = session.matches[idx].clone();
+                                            let label = omnibar_match_label(graph_app, &m);
+                                            let signifier =
+                                                omnibar_match_signifier(graph_app, tiles_tree, &m);
+                                            let row = ui.horizontal(|ui| {
+                                                let selected = ui.selectable_label(active, label);
+                                                ui.with_layout(
+                                                    egui::Layout::right_to_left(
+                                                        egui::Align::Center,
+                                                    ),
+                                                    |ui| {
+                                                        ui.small(signifier);
+                                                    },
+                                                );
+                                                selected
+                                            });
+                                            let response = row.inner;
+                                            if response.hovered() {
+                                                session.active_index = idx;
+                                            }
+                                            if response.clicked() {
+                                                clicked_omnibar_match = Some(m);
+                                            }
+                                        }
+                                    });
+                                });
+                        }
+
+                        if let Some(active_match) = clicked_omnibar_match {
+                            match active_match {
+                                OmnibarMatch::SearchQuery(query) => {
+                                    *location = query;
+                                    *omnibar_search_session = None;
+                                    let split_open_requested = ui.input(|i| i.modifiers.shift);
+                                    let submit_result = toolbar_routing::submit_address_bar_intents(
+                                        graph_app,
+                                        location,
+                                        is_graph_view,
+                                        focused_toolbar_node,
+                                        split_open_requested,
+                                        window,
+                                        &state.servoshell_preferences.searchpage,
+                                    );
+                                    frame_intents.extend(submit_result.intents);
+                                    if submit_result.mark_clean {
+                                        *location_dirty = false;
+                                        open_selected_mode_after_submit = submit_result.open_mode;
+                                    }
+                                },
+                                other => {
+                                    let shift_override_original = ui.input(|i| i.modifiers.shift);
+                                    apply_omnibar_match(
+                                        graph_app,
+                                        other,
+                                        has_webview_tiles,
+                                        shift_override_original,
+                                        frame_intents,
+                                        &mut open_selected_mode_after_submit,
+                                    );
+                                    *location_dirty = true;
+                                },
                             }
                         }
 
@@ -453,18 +810,14 @@ pub(crate) fn render_toolbar_ui(args: ToolbarUiArgs<'_>) -> ToolbarUiOutput {
                                 }
 
                                 if !handled_omnibar_search {
-                                    let reuse_existing =
-                                        omnibar_search_session.as_ref().is_some_and(|session| {
-                                            session.mode == mode
+                                    let reuse_existing = omnibar_search_session
+                                        .as_ref()
+                                        .is_some_and(|session| {
+                                            session.kind == OmnibarSessionKind::Graph(mode)
                                                 && session.query == query
                                                 && !session.matches.is_empty()
                                         });
-                                    if reuse_existing {
-                                        if let Some(session) = omnibar_search_session.as_mut() {
-                                            session.active_index =
-                                                (session.active_index + 1) % session.matches.len();
-                                        }
-                                    } else {
+                                    if !reuse_existing {
                                         let matches = omnibar_matches_for_query(
                                             graph_app,
                                             tiles_tree,
@@ -476,10 +829,11 @@ pub(crate) fn render_toolbar_ui(args: ToolbarUiArgs<'_>) -> ToolbarUiOutput {
                                             *omnibar_search_session = None;
                                         } else {
                                             *omnibar_search_session = Some(OmnibarSearchSession {
-                                                mode,
+                                                kind: OmnibarSessionKind::Graph(mode),
                                                 query: query.to_string(),
                                                 matches,
                                                 active_index: 0,
+                                                provider_rx: None,
                                             });
                                         }
                                     }
@@ -489,10 +843,13 @@ pub(crate) fn render_toolbar_ui(args: ToolbarUiArgs<'_>) -> ToolbarUiOutput {
                                         && let Some(active_match) =
                                             session.matches.get(session.active_index).cloned()
                                     {
+                                        let shift_override_original =
+                                            ui.input(|i| i.modifiers.shift);
                                         apply_omnibar_match(
                                             graph_app,
                                             active_match,
                                             has_webview_tiles,
+                                            shift_override_original,
                                             frame_intents,
                                             &mut open_selected_mode_after_submit,
                                         );
@@ -505,6 +862,15 @@ pub(crate) fn render_toolbar_ui(args: ToolbarUiArgs<'_>) -> ToolbarUiOutput {
                             }
 
                             if !handled_omnibar_search {
+                                if let Some(session) = omnibar_search_session.as_ref()
+                                    && session.kind == OmnibarSessionKind::SearchProvider
+                                    && session.query == trimmed_location
+                                    && !session.matches.is_empty()
+                                    && let Some(OmnibarMatch::SearchQuery(query)) =
+                                        session.matches.get(session.active_index).cloned()
+                                {
+                                    *location = query;
+                                }
                                 *omnibar_search_session = None;
                                 let split_open_requested = ui.input(|i| i.modifiers.shift);
                                 let submit_result = toolbar_routing::submit_address_bar_intents(
@@ -562,6 +928,93 @@ fn parse_omnibar_search_query(raw: &str) -> (OmnibarSearchMode, &str) {
     (OmnibarSearchMode::Mixed, trimmed)
 }
 
+fn spawn_provider_suggestion_request(searchpage: &str, query: &str) -> Receiver<Vec<OmnibarMatch>> {
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    let searchpage = searchpage.to_string();
+    let query = query.to_string();
+    thread::spawn(move || {
+        let suggestions = fetch_provider_search_suggestions(&searchpage, &query)
+            .into_iter()
+            .map(OmnibarMatch::SearchQuery)
+            .collect();
+        let _ = tx.send(suggestions);
+    });
+    rx
+}
+
+fn fetch_provider_search_suggestions(searchpage: &str, query: &str) -> Vec<String> {
+    let Some(suggest_url) = provider_suggest_url(searchpage, query) else {
+        return Vec::new();
+    };
+    let response = ureq::get(&suggest_url).call();
+    let Ok(response) = response else {
+        return Vec::new();
+    };
+    let Ok(body) = response.into_string() else {
+        return Vec::new();
+    };
+    parse_provider_suggestion_body(&body, query)
+}
+
+fn provider_suggest_url(searchpage: &str, query: &str) -> Option<String> {
+    let host = url::Url::parse(searchpage)
+        .ok()?
+        .host_str()?
+        .to_ascii_lowercase();
+    let encoded: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
+    if host.contains("duckduckgo.") {
+        return Some(format!("https://duckduckgo.com/ac/?q={encoded}&type=list"));
+    }
+    if host.contains("bing.") {
+        return Some(format!("https://api.bing.com/osjson.aspx?query={encoded}"));
+    }
+    if host.contains("google.") {
+        return Some(format!(
+            "https://suggestqueries.google.com/complete/search?client=firefox&q={encoded}"
+        ));
+    }
+    None
+}
+
+fn parse_provider_suggestion_body(body: &str, fallback_query: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<Value>(body) else {
+        return Vec::new();
+    };
+    let mut suggestions = Vec::new();
+
+    if let Some(items) = value.as_array() {
+        if let Some(second) = items.get(1).and_then(Value::as_array) {
+            for item in second {
+                if let Some(s) = item.as_str() {
+                    suggestions.push(s.to_string());
+                }
+            }
+        } else {
+            for item in items {
+                if let Some(s) = item.get("phrase").and_then(Value::as_str) {
+                    suggestions.push(s.to_string());
+                }
+            }
+        }
+    }
+
+    let mut deduped = Vec::new();
+    let mut seen = HashSet::new();
+    if seen.insert(fallback_query.to_string()) {
+        deduped.push(fallback_query.to_string());
+    }
+    for suggestion in suggestions {
+        let normalized = suggestion.trim();
+        if normalized.is_empty() {
+            continue;
+        }
+        if seen.insert(normalized.to_string()) {
+            deduped.push(normalized.to_string());
+        }
+    }
+    deduped
+}
+
 fn tab_node_keys_in_tree(tiles_tree: &Tree<TileKind>) -> HashSet<NodeKey> {
     tile_grouping::webview_tab_group_memberships(tiles_tree)
         .keys()
@@ -579,6 +1032,19 @@ fn tab_node_keys_in_workspace_layout_json(layout_json: &str) -> HashSet<NodeKey>
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn saved_tab_node_keys(graph_app: &GraphBrowserApp) -> HashSet<NodeKey> {
+    let mut saved_tab_nodes = HashSet::new();
+    for workspace_name in graph_app.list_workspace_layout_names() {
+        if GraphBrowserApp::is_reserved_workspace_layout_name(&workspace_name) {
+            continue;
+        }
+        if let Some(layout_json) = graph_app.load_workspace_layout_json(&workspace_name) {
+            saved_tab_nodes.extend(tab_node_keys_in_workspace_layout_json(&layout_json));
+        }
+    }
+    saved_tab_nodes
 }
 
 fn edge_type_label(edge_type: crate::graph::EdgeType) -> &'static str {
@@ -664,6 +1130,97 @@ fn tab_candidates_for_keys(
         .collect()
 }
 
+fn connected_hop_distances_for_context(
+    graph_app: &GraphBrowserApp,
+    context: NodeKey,
+) -> HashMap<NodeKey, usize> {
+    let mut distances = HashMap::new();
+    if graph_app.graph.get_node(context).is_none() {
+        return distances;
+    }
+    let mut queue = VecDeque::new();
+    distances.insert(context, 0);
+    queue.push_back(context);
+    while let Some(current) = queue.pop_front() {
+        let Some(current_hop) = distances.get(&current).copied() else {
+            continue;
+        };
+        for neighbor in graph_app
+            .graph
+            .out_neighbors(current)
+            .chain(graph_app.graph.in_neighbors(current))
+        {
+            if distances.contains_key(&neighbor) {
+                continue;
+            }
+            distances.insert(neighbor, current_hop + 1);
+            queue.push_back(neighbor);
+        }
+    }
+    distances
+}
+
+fn omnibar_match_signifier(
+    graph_app: &GraphBrowserApp,
+    tiles_tree: &Tree<TileKind>,
+    m: &OmnibarMatch,
+) -> &'static str {
+    match m {
+        OmnibarMatch::Node(key) => {
+            let local_tabs = tab_node_keys_in_tree(tiles_tree);
+            let saved_tabs = saved_tab_node_keys(graph_app);
+            let is_local_tab = local_tabs.contains(key);
+            let is_saved_tab = saved_tabs.contains(key);
+            let is_connected = graph_app
+                .selected_nodes
+                .primary()
+                .map(|context| connected_hop_distances_for_context(graph_app, context))
+                .and_then(|hops| hops.get(key).copied())
+                .unwrap_or(usize::MAX)
+                != usize::MAX;
+            if is_connected && is_local_tab {
+                "related tab"
+            } else if is_local_tab {
+                "workspace tab"
+            } else if is_saved_tab {
+                "other workspace"
+            } else if is_connected {
+                "related node"
+            } else {
+                "graph node"
+            }
+        },
+        OmnibarMatch::NodeUrl(_) => "historical",
+        OmnibarMatch::SearchQuery(_) => "search suggestion",
+        OmnibarMatch::Edge { .. } => "edge",
+    }
+}
+
+fn omnibar_match_label(graph_app: &GraphBrowserApp, m: &OmnibarMatch) -> String {
+    match m {
+        OmnibarMatch::Node(key) => graph_app
+            .graph
+            .get_node(*key)
+            .map(|node| format!("{}  {}", node.title, node.url))
+            .unwrap_or_else(|| format!("node {}", key.index())),
+        OmnibarMatch::NodeUrl(url) => url.clone(),
+        OmnibarMatch::SearchQuery(query) => query.clone(),
+        OmnibarMatch::Edge { from, to } => {
+            let from_label = graph_app
+                .graph
+                .get_node(*from)
+                .map(|n| n.title.clone())
+                .unwrap_or_else(|| from.index().to_string());
+            let to_label = graph_app
+                .graph
+                .get_node(*to)
+                .map(|n| n.title.clone())
+                .unwrap_or_else(|| to.index().to_string());
+            format!("{from_label} -> {to_label}")
+        },
+    }
+}
+
 fn dedupe_matches_in_order(matches: Vec<OmnibarMatch>) -> Vec<OmnibarMatch> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
@@ -688,13 +1245,14 @@ fn apply_omnibar_match(
     graph_app: &GraphBrowserApp,
     active_match: OmnibarMatch,
     has_webview_tiles: bool,
+    force_original_workspace: bool,
     frame_intents: &mut Vec<GraphIntent>,
     open_selected_mode_after_submit: &mut Option<ToolbarOpenMode>,
 ) {
     match active_match {
         OmnibarMatch::Node(key) => {
             frame_intents.push(GraphIntent::ClearHighlightedEdge);
-            if has_webview_tiles {
+            if has_webview_tiles && force_original_workspace {
                 frame_intents.push(GraphIntent::OpenNodeWorkspaceRouted {
                     key,
                     prefer_workspace: None,
@@ -704,6 +1262,9 @@ fn apply_omnibar_match(
                     key,
                     multi_select: false,
                 });
+                if has_webview_tiles {
+                    *open_selected_mode_after_submit = Some(ToolbarOpenMode::Tab);
+                }
             }
         },
         OmnibarMatch::NodeUrl(url) => {
@@ -730,6 +1291,7 @@ fn apply_omnibar_match(
                 }
             }
         },
+        OmnibarMatch::SearchQuery(_) => {},
         OmnibarMatch::Edge { from, to } => {
             frame_intents.push(GraphIntent::SetHighlightedEdge { from, to });
             frame_intents.push(GraphIntent::SelectNode {
@@ -760,12 +1322,7 @@ fn omnibar_matches_for_query(
     let local_node_candidates = node_candidates_for_graph(&graph_app.graph);
     let local_edge_candidates = edge_candidates_for_graph(&graph_app.graph, None);
 
-    let mut saved_tab_nodes = HashSet::new();
-    for workspace_name in graph_app.list_workspace_layout_names() {
-        if let Some(layout_json) = graph_app.load_workspace_layout_json(&workspace_name) {
-            saved_tab_nodes.extend(tab_node_keys_in_workspace_layout_json(&layout_json));
-        }
-    }
+    let saved_tab_nodes = saved_tab_node_keys(graph_app);
 
     let mut all_graph_node_candidates = local_node_candidates.clone();
     let mut all_graph_edge_candidates = local_edge_candidates.clone();
@@ -887,26 +1444,96 @@ fn omnibar_matches_for_query(
         OmnibarSearchMode::Mixed => {
             let node_matches = fuzzy_match_node_keys(&graph_app.graph, query);
             if node_matches.is_empty() {
-                return Vec::new();
+                return ranked_matches(all_graph_node_candidates, query);
             }
+            let hop_distances = graph_app
+                .selected_nodes
+                .primary()
+                .map(|context| connected_hop_distances_for_context(graph_app, context))
+                .unwrap_or_default();
             let local_tab_set = tab_node_keys_in_tree(tiles_tree);
-            let tab_matches: Vec<OmnibarMatch> = node_matches
+            if !has_webview_tiles {
+                let node_rank: HashMap<NodeKey, usize> = node_matches
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .map(|(idx, key)| (key, idx))
+                    .collect();
+                let mut ordered_nodes = node_matches;
+                ordered_nodes.sort_by_key(|key| {
+                    (
+                        hop_distances.get(key).copied().unwrap_or(usize::MAX),
+                        node_rank.get(key).copied().unwrap_or(usize::MAX),
+                    )
+                });
+                let mut out: Vec<OmnibarMatch> =
+                    ordered_nodes.into_iter().map(OmnibarMatch::Node).collect();
+                out.extend(ranked_matches(all_graph_node_candidates, query));
+                return dedupe_matches_in_order(out);
+            }
+            let all_tab_ranked_matches = ranked_matches(
+                tab_candidates_for_keys(&graph_app.graph, &all_tab_keys),
+                query,
+            );
+            let tab_rank: HashMap<NodeKey, usize> = all_tab_ranked_matches
                 .iter()
-                .copied()
-                .filter(|key| local_tab_set.contains(key))
+                .enumerate()
+                .filter_map(|(idx, m)| match m {
+                    OmnibarMatch::Node(key) => Some((*key, idx)),
+                    _ => None,
+                })
+                .collect();
+            let mut local_connected_tabs = Vec::new();
+            let mut local_tabs = Vec::new();
+            let mut other_workspace_connected_tabs = Vec::new();
+            let mut other_workspace_tabs = Vec::new();
+            for candidate in all_tab_ranked_matches {
+                let OmnibarMatch::Node(key) = candidate else {
+                    continue;
+                };
+                let connected = hop_distances.contains_key(&key);
+                if connected && local_tab_set.contains(&key) {
+                    local_connected_tabs.push(key);
+                } else if local_tab_set.contains(&key) {
+                    local_tabs.push(key);
+                } else if connected {
+                    other_workspace_connected_tabs.push(key);
+                } else {
+                    other_workspace_tabs.push(key);
+                }
+            }
+            local_connected_tabs.sort_by_key(|key| {
+                (
+                    hop_distances.get(key).copied().unwrap_or(usize::MAX),
+                    tab_rank.get(key).copied().unwrap_or(usize::MAX),
+                )
+            });
+            other_workspace_connected_tabs.sort_by_key(|key| {
+                (
+                    hop_distances.get(key).copied().unwrap_or(usize::MAX),
+                    tab_rank.get(key).copied().unwrap_or(usize::MAX),
+                )
+            });
+            let mut out: Vec<OmnibarMatch> = local_connected_tabs
+                .into_iter()
+                .chain(local_tabs)
+                .chain(other_workspace_connected_tabs)
+                .chain(other_workspace_tabs)
                 .map(OmnibarMatch::Node)
                 .collect();
-            if !has_webview_tiles {
-                return node_matches.into_iter().map(OmnibarMatch::Node).collect();
-            }
-            let mut out = tab_matches;
-            out.extend(
-                node_matches
-                    .into_iter()
-                    .filter(|key| !local_tab_set.contains(key))
-                    .map(OmnibarMatch::Node),
-            );
-            out
+            let mut remaining_nodes = ranked_matches(all_graph_node_candidates, query);
+            remaining_nodes.retain(|m| {
+                matches!(m, OmnibarMatch::NodeUrl(_))
+                    || matches!(m, OmnibarMatch::Node(key) if !all_tab_keys.contains(key))
+            });
+            remaining_nodes.sort_by_key(|m| match m {
+                OmnibarMatch::Node(key) => hop_distances.get(key).copied().unwrap_or(usize::MAX),
+                OmnibarMatch::NodeUrl(_) => usize::MAX,
+                OmnibarMatch::SearchQuery(_) => usize::MAX,
+                OmnibarMatch::Edge { .. } => usize::MAX,
+            });
+            out.extend(remaining_nodes);
+            dedupe_matches_in_order(out)
         },
     }
 }
@@ -920,6 +1547,34 @@ mod tests {
     use egui_tiles::Tree;
     use euclid::default::Point2D;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_provider_suggest_url_duckduckgo() {
+        let url = provider_suggest_url("https://duckduckgo.com/html/?q=%s", "rust graph")
+            .expect("duckduckgo suggest url");
+        assert!(
+            url.starts_with("https://duckduckgo.com/ac/?q=rust+graph"),
+            "unexpected duckduckgo suggest url: {url}"
+        );
+    }
+
+    #[test]
+    fn test_parse_provider_suggestion_body_ddg_shape() {
+        let body = r#"[{"phrase":"rust book"},{"phrase":"rust language"}]"#;
+        let suggestions = parse_provider_suggestion_body(body, "rust");
+        assert_eq!(suggestions.first().map(String::as_str), Some("rust"));
+        assert!(suggestions.iter().any(|s| s == "rust book"));
+        assert!(suggestions.iter().any(|s| s == "rust language"));
+    }
+
+    #[test]
+    fn test_parse_provider_suggestion_body_osjson_shape() {
+        let body = r#"["rust",["rust book","rust language"],[],[]]"#;
+        let suggestions = parse_provider_suggestion_body(body, "rust");
+        assert_eq!(suggestions.first().map(String::as_str), Some("rust"));
+        assert!(suggestions.iter().any(|s| s == "rust book"));
+        assert!(suggestions.iter().any(|s| s == "rust language"));
+    }
 
     #[test]
     fn test_parse_omnibar_search_query_modes() {
@@ -991,6 +1646,109 @@ mod tests {
     }
 
     #[test]
+    fn test_omnibar_mixed_mode_prioritizes_related_tabs_for_selected_node() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let context_key = app.add_node_and_sync("https://context.example".into(), Point2D::zero());
+        let related_tab = app.add_node_and_sync(
+            "https://alpha-related.example".into(),
+            Point2D::new(20.0, 0.0),
+        );
+        let unrelated_tab = app.add_node_and_sync(
+            "https://alpha-unrelated.example".into(),
+            Point2D::new(40.0, 0.0),
+        );
+        app.graph
+            .add_edge(context_key, related_tab, EdgeType::Hyperlink)
+            .expect("edge should be valid");
+        app.apply_intents([GraphIntent::SelectNode {
+            key: context_key,
+            multi_select: false,
+        }]);
+
+        let mut tiles = egui_tiles::Tiles::default();
+        let context_tile = tiles.insert_pane(TileKind::WebView(context_key));
+        let unrelated_tile = tiles.insert_pane(TileKind::WebView(unrelated_tab));
+        let related_tile = tiles.insert_pane(TileKind::WebView(related_tab));
+        let tabs = tiles.insert_tab_tile(vec![context_tile, unrelated_tile, related_tile]);
+        let tree = Tree::new("mixed_related_test", tabs, tiles);
+
+        let matches =
+            omnibar_matches_for_query(&app, &tree, OmnibarSearchMode::Mixed, "alpha", true);
+        assert!(matches.len() >= 2);
+        assert_eq!(matches[0], OmnibarMatch::Node(related_tab));
+        assert_eq!(matches[1], OmnibarMatch::Node(unrelated_tab));
+    }
+
+    #[test]
+    fn test_omnibar_mixed_mode_orders_connected_tabs_by_hop_distance() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let context_key = app.add_node_and_sync("https://context.example".into(), Point2D::zero());
+        let hop1 =
+            app.add_node_and_sync("https://alpha-hop1.example".into(), Point2D::new(10.0, 0.0));
+        let hop2 =
+            app.add_node_and_sync("https://alpha-hop2.example".into(), Point2D::new(20.0, 0.0));
+        let hop3 =
+            app.add_node_and_sync("https://alpha-hop3.example".into(), Point2D::new(30.0, 0.0));
+        let _ = app.graph.add_edge(context_key, hop1, EdgeType::Hyperlink);
+        let _ = app.graph.add_edge(hop1, hop2, EdgeType::Hyperlink);
+        let _ = app.graph.add_edge(hop2, hop3, EdgeType::Hyperlink);
+        app.apply_intents([GraphIntent::SelectNode {
+            key: context_key,
+            multi_select: false,
+        }]);
+
+        let mut tiles = egui_tiles::Tiles::default();
+        let context_leaf = tiles.insert_pane(TileKind::WebView(context_key));
+        let hop3_leaf = tiles.insert_pane(TileKind::WebView(hop3));
+        let hop2_leaf = tiles.insert_pane(TileKind::WebView(hop2));
+        let hop1_leaf = tiles.insert_pane(TileKind::WebView(hop1));
+        let root = tiles.insert_tab_tile(vec![context_leaf, hop3_leaf, hop2_leaf, hop1_leaf]);
+        let tree = Tree::new("hop_order_test", root, tiles);
+
+        let matches =
+            omnibar_matches_for_query(&app, &tree, OmnibarSearchMode::Mixed, "alpha-hop", true);
+        assert!(matches.len() >= 3);
+        assert_eq!(matches[0], OmnibarMatch::Node(hop1));
+        assert_eq!(matches[1], OmnibarMatch::Node(hop2));
+        assert_eq!(matches[2], OmnibarMatch::Node(hop3));
+    }
+
+    #[test]
+    fn test_omnibar_mixed_graph_mode_orders_connected_nodes_by_hop_distance() {
+        let mut app = GraphBrowserApp::new_for_testing();
+        let context_key = app.add_node_and_sync("https://context.example".into(), Point2D::zero());
+        let hop1 = app.add_node_and_sync(
+            "https://alpha-graph-hop1.example".into(),
+            Point2D::new(10.0, 0.0),
+        );
+        let hop2 = app.add_node_and_sync(
+            "https://alpha-graph-hop2.example".into(),
+            Point2D::new(20.0, 0.0),
+        );
+        let _ = app.graph.add_edge(context_key, hop1, EdgeType::Hyperlink);
+        let _ = app.graph.add_edge(hop1, hop2, EdgeType::Hyperlink);
+        app.apply_intents([GraphIntent::SelectNode {
+            key: context_key,
+            multi_select: false,
+        }]);
+
+        let mut tiles = egui_tiles::Tiles::default();
+        let root = tiles.insert_pane(TileKind::Graph);
+        let tree = Tree::new("graph_hop_order_test", root, tiles);
+
+        let matches = omnibar_matches_for_query(
+            &app,
+            &tree,
+            OmnibarSearchMode::Mixed,
+            "alpha-graph-hop",
+            false,
+        );
+        assert!(matches.len() >= 2);
+        assert_eq!(matches[0], OmnibarMatch::Node(hop1));
+        assert_eq!(matches[1], OmnibarMatch::Node(hop2));
+    }
+
+    #[test]
     fn test_omnibar_nodes_all_includes_saved_graph_nodes() {
         let temp = TempDir::new().expect("temp dir");
         let mut app = GraphBrowserApp::new_from_dir(temp.path().to_path_buf());
@@ -1050,6 +1808,36 @@ mod tests {
     }
 
     #[test]
+    fn test_omnibar_mixed_mode_includes_other_workspace_tabs_after_local_tabs() {
+        let temp = TempDir::new().expect("temp dir");
+        let mut app = GraphBrowserApp::new_from_dir(temp.path().to_path_buf());
+        let local_tab =
+            app.add_node_and_sync("https://alpha-local.example".into(), Point2D::zero());
+        let saved_tab = app.add_node_and_sync(
+            "https://alpha-saved.example".into(),
+            Point2D::new(20.0, 0.0),
+        );
+
+        let mut current_tiles = egui_tiles::Tiles::default();
+        let local_leaf = current_tiles.insert_pane(TileKind::WebView(local_tab));
+        let current_root = current_tiles.insert_tab_tile(vec![local_leaf]);
+        let current_tree = Tree::new("current_tree", current_root, current_tiles);
+
+        let mut workspace_tiles = egui_tiles::Tiles::default();
+        let saved_leaf = workspace_tiles.insert_pane(TileKind::WebView(saved_tab));
+        let saved_root = workspace_tiles.insert_tab_tile(vec![saved_leaf]);
+        let workspace_tree = Tree::new("saved_workspace", saved_root, workspace_tiles);
+        let layout_json = serde_json::to_string(&workspace_tree).expect("serialize workspace");
+        app.save_workspace_layout_json("workspace:saved-alpha", &layout_json);
+
+        let matches =
+            omnibar_matches_for_query(&app, &current_tree, OmnibarSearchMode::Mixed, "alpha", true);
+        assert!(matches.len() >= 2);
+        assert_eq!(matches[0], OmnibarMatch::Node(local_tab));
+        assert!(matches.contains(&OmnibarMatch::Node(saved_tab)));
+    }
+
+    #[test]
     fn test_omnibar_edges_all_includes_saved_graph_edges_when_nodes_map_by_url() {
         let temp = TempDir::new().expect("temp dir");
         let mut app = GraphBrowserApp::new_from_dir(temp.path().to_path_buf());
@@ -1081,6 +1869,7 @@ mod tests {
             &app,
             OmnibarMatch::Edge { from, to },
             false,
+            false,
             &mut intents,
             &mut open_mode,
         );
@@ -1092,7 +1881,7 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_omnibar_node_match_routes_workspace_open_in_detail_mode() {
+    fn test_apply_omnibar_node_match_opens_in_current_workspace_in_detail_mode() {
         let app = GraphBrowserApp::new_for_testing();
         let key = NodeKey::new(7);
         let mut intents = Vec::new();
@@ -1101,6 +1890,40 @@ mod tests {
         apply_omnibar_match(
             &app,
             OmnibarMatch::Node(key),
+            true,
+            false,
+            &mut intents,
+            &mut open_mode,
+        );
+
+        assert!(intents.iter().any(|intent| {
+            matches!(
+                intent,
+                GraphIntent::SelectNode {
+                    key: selected_key,
+                    multi_select: false
+                } if *selected_key == key
+            )
+        }));
+        assert!(
+            !intents
+                .iter()
+                .any(|intent| { matches!(intent, GraphIntent::OpenNodeWorkspaceRouted { .. }) })
+        );
+        assert!(matches!(open_mode, Some(ToolbarOpenMode::Tab)));
+    }
+
+    #[test]
+    fn test_apply_omnibar_node_match_shift_forces_workspace_routing() {
+        let app = GraphBrowserApp::new_for_testing();
+        let key = NodeKey::new(9);
+        let mut intents = Vec::new();
+        let mut open_mode = None;
+
+        apply_omnibar_match(
+            &app,
+            OmnibarMatch::Node(key),
+            true,
             true,
             &mut intents,
             &mut open_mode,
@@ -1115,15 +1938,11 @@ mod tests {
                 } if *routed_key == key
             )
         }));
-        assert!(!intents.iter().any(|intent| {
-            matches!(
-                intent,
-                GraphIntent::SelectNode {
-                    key: selected_key,
-                    multi_select: false
-                } if *selected_key == key
-            )
-        }));
+        assert!(
+            !intents
+                .iter()
+                .any(|intent| { matches!(intent, GraphIntent::SelectNode { .. }) })
+        );
         assert!(open_mode.is_none());
     }
 
@@ -1138,6 +1957,7 @@ mod tests {
             &app,
             OmnibarMatch::NodeUrl("https://node-url.example".into()),
             true,
+            false,
             &mut intents,
             &mut open_mode,
         );
@@ -1164,6 +1984,7 @@ mod tests {
             &app,
             OmnibarMatch::NodeUrl("https://new-node-url.example".into()),
             true,
+            false,
             &mut intents,
             &mut open_mode,
         );

@@ -4,7 +4,7 @@
 
 use egui::Key;
 
-use crate::app::{GraphBrowserApp, GraphIntent};
+use crate::app::{GraphBrowserApp, GraphIntent, SearchDisplayMode};
 use crate::graph::NodeKey;
 
 pub(crate) struct GraphSearchFlowArgs<'a> {
@@ -58,6 +58,7 @@ where
         graph_search_matches.clear();
         *graph_search_active_match_index = None;
         *graph_search_filter_mode = false;
+        graph_app.search_display_mode = SearchDisplayMode::Highlight;
         graph_app.egui_state_dirty = true;
     }
 
@@ -119,6 +120,7 @@ where
             if graph_search_query.trim().is_empty() {
                 *graph_search_open = false;
                 *graph_search_filter_mode = false;
+                graph_app.search_display_mode = SearchDisplayMode::Highlight;
             } else {
                 graph_search_query.clear();
             }

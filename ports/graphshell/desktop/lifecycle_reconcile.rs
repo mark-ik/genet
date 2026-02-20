@@ -105,25 +105,39 @@ pub(crate) fn reconcile_runtime(args: RuntimeReconcileArgs<'_>) {
         .set_memory_pressure_status(memory_pressure_level, available_mib, total_mib);
 
     let tile_nodes = tile_runtime::all_webview_tile_nodes(args.tiles_tree);
-    let active_tile_nodes: HashSet<NodeKey> = tile_compositor::active_webview_tile_rects(
-        args.tiles_tree,
-    )
-    .into_iter()
-    .map(|(node_key, _)| node_key)
-    .collect();
+    let active_tile_nodes: HashSet<NodeKey> =
+        tile_compositor::active_webview_tile_rects(args.tiles_tree)
+            .into_iter()
+            .map(|(node_key, _)| node_key)
+            .collect();
     let has_webview_tiles = !tile_nodes.is_empty();
+    for node_key in active_tile_nodes.iter().copied() {
+        let should_promote = args
+            .graph_app
+            .graph
+            .get_node(node_key)
+            .map(|node| node.lifecycle != NodeLifecycle::Active)
+            .unwrap_or(false);
+        if should_promote && args.graph_app.get_node_crash_state(node_key).is_none() {
+            args.graph_app.promote_node_to_active(node_key);
+        }
+    }
     let prewarm_selected_node = args
         .graph_app
         .get_single_selected_node()
         .filter(|node_key| !active_tile_nodes.contains(node_key))
         .filter(|node_key| args.graph_app.get_webview_for_node(*node_key).is_none())
-        .filter(|node_key| {
-            args.graph_app
-                .graph
-                .get_node(*node_key)
-                .map(|node| node.lifecycle == NodeLifecycle::Active)
-                .unwrap_or(false)
-        });
+        .filter(|node_key| args.graph_app.get_node_crash_state(*node_key).is_none());
+    if let Some(node_key) = prewarm_selected_node
+        && args
+            .graph_app
+            .graph
+            .get_node(node_key)
+            .map(|node| node.lifecycle != NodeLifecycle::Active)
+            .unwrap_or(false)
+    {
+        args.graph_app.promote_node_to_active(node_key);
+    }
 
     if has_webview_tiles {
         args.frame_intents

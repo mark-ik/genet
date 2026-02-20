@@ -9,17 +9,18 @@
 
 use crate::app::{
     ChooseWorkspacePickerMode, EdgeCommand, GraphBrowserApp, GraphIntent, KeyboardZoomRequest,
-    MemoryPressureLevel, PendingConnectedOpenScope, PendingTileOpenMode,
-    UnsavedWorkspacePromptAction, UnsavedWorkspacePromptRequest,
+    LassoMouseBinding, MemoryPressureLevel, PendingConnectedOpenScope, PendingTileOpenMode,
+    SearchDisplayMode, SelectionUpdateMode, UnsavedWorkspacePromptAction,
+    UnsavedWorkspacePromptRequest,
 };
-use crate::graph::egui_adapter::{EguiGraphState, GraphNodeShape};
+use crate::graph::egui_adapter::{EguiGraphState, GraphEdgeShape, GraphNodeShape};
 use crate::graph::{NodeKey, NodeLifecycle};
 use egui::{Color32, Key, Stroke, Ui, Vec2, Window};
 use egui_graphs::events::Event;
 use egui_graphs::{
-    DefaultEdgeShape, FruchtermanReingoldWithCenterGravity,
-    FruchtermanReingoldWithCenterGravityState, GraphView, LayoutForceDirected, MetadataFrame,
-    SettingsInteraction, SettingsNavigation, SettingsStyle, get_layout_state, set_layout_state,
+    FruchtermanReingoldWithCenterGravity, FruchtermanReingoldWithCenterGravityState, GraphView,
+    LayoutForceDirected, MetadataFrame, SettingsInteraction, SettingsNavigation, SettingsStyle,
+    get_layout_state, set_layout_state,
 };
 use euclid::default::Point2D;
 use petgraph::stable_graph::NodeIndex;
@@ -28,6 +29,9 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+
+mod spatial_index;
+use spatial_index::NodeSpatialIndex;
 
 /// Graph interaction action (resolved from egui_graphs events).
 ///
@@ -40,7 +44,14 @@ pub enum GraphAction {
     DragStart,
     DragEnd(NodeKey, Point2D<f32>),
     MoveNode(NodeKey, Point2D<f32>),
-    SelectNode { key: NodeKey, multi_select: bool },
+    SelectNode {
+        key: NodeKey,
+        multi_select: bool,
+    },
+    LassoSelect {
+        keys: Vec<NodeKey>,
+        mode: SelectionUpdateMode,
+    },
     Zoom(f32),
 }
 
@@ -58,20 +69,23 @@ pub fn render_graph_in_ui_collect_actions(
     app: &mut GraphBrowserApp,
     search_matches: &HashSet<NodeKey>,
     active_search_match: Option<NodeKey>,
-    search_filter_mode: bool,
+    search_display_mode: SearchDisplayMode,
     search_query_active: bool,
 ) -> Vec<GraphAction> {
     let ctrl_pressed = ui.input(|i| i.modifiers.ctrl);
+    let right_button_down = ui.input(|i| i.pointer.secondary_down());
     let radial_open = app.show_radial_menu;
-    let filtered_graph = if search_filter_mode && search_query_active {
-        Some(filtered_graph_for_search(app, search_matches))
-    } else {
-        None
-    };
+    let filtered_graph =
+        if matches!(search_display_mode, SearchDisplayMode::Filter) && search_query_active {
+            Some(filtered_graph_for_search(app, search_matches))
+        } else {
+            None
+        };
     let graph_for_render = filtered_graph.as_ref().unwrap_or(&app.graph);
 
     // Build or reuse egui_graphs state (rebuild always when filtering is active).
     if app.egui_state.is_none() || app.egui_state_dirty || filtered_graph.is_some() {
+        let crashed_nodes: HashSet<NodeKey> = app.crashed_node_keys().collect();
         let memberships_by_uuid: HashMap<Uuid, Vec<String>> = graph_for_render
             .nodes()
             .map(|(_, node)| {
@@ -87,6 +101,8 @@ pub fn render_graph_in_ui_collect_actions(
         app.egui_state = Some(EguiGraphState::from_graph_with_memberships(
             graph_for_render,
             &app.selected_nodes,
+            app.selected_nodes.primary(),
+            &crashed_nodes,
             &memberships_by_uuid,
         ));
         app.egui_state_dirty = false;
@@ -105,13 +121,13 @@ pub fn render_graph_in_ui_collect_actions(
     // Navigation: use egui_graphs built-in zoom/pan
     let nav = SettingsNavigation::new()
         .with_fit_to_screen_enabled(app.fit_to_screen_requested)
-        .with_zoom_and_pan_enabled(!radial_open)
+        .with_zoom_and_pan_enabled(!radial_open && !right_button_down)
         .with_zoom_speed(0.015);
 
     // Interaction: dragging, selection, clicking
     let interaction = SettingsInteraction::new()
-        .with_dragging_enabled(!radial_open)
-        .with_node_selection_enabled(!radial_open)
+        .with_dragging_enabled(!radial_open && !right_button_down)
+        .with_node_selection_enabled(!radial_open && !right_button_down)
         .with_node_clicking_enabled(!radial_open);
 
     // Style: always show labels
@@ -134,7 +150,7 @@ pub fn render_graph_in_ui_collect_actions(
                 _,
                 _,
                 GraphNodeShape,
-                DefaultEdgeShape,
+                GraphEdgeShape,
                 FruchtermanReingoldWithCenterGravityState,
                 LayoutForceDirected<FruchtermanReingoldWithCenterGravity>,
             >::new(&mut state.graph)
@@ -153,7 +169,10 @@ pub fn render_graph_in_ui_collect_actions(
             .hovered_node()
             .and_then(|idx| state.get_key(idx))
     });
+    let lasso = collect_lasso_action(ui, app, !radial_open);
+
     if ui.input(|i| i.pointer.secondary_clicked())
+        && !lasso.suppress_context_menu
         && let Some(target) = app.hovered_graph_node
     {
         app.set_pending_node_context_target(Some(target));
@@ -205,6 +224,9 @@ pub fn render_graph_in_ui_collect_actions(
 
     let split_open_modifier = ui.input(|i| i.modifiers.shift);
     let mut actions = collect_graph_actions(app, &events, split_open_modifier, ctrl_pressed);
+    if let Some(lasso_action) = lasso.action {
+        actions.push(lasso_action);
+    }
     if let Some(zoom) = keyboard_zoom {
         actions.push(GraphAction::Zoom(zoom));
     }
@@ -276,17 +298,16 @@ fn draw_hovered_node_tooltip(ui: &Ui, app: &GraphBrowserApp) {
         }
     };
     let last_visited_text = format_last_visited(node.last_visited);
-    let workspace_memberships: Vec<String> = app
-        .membership_for_node(node.id)
-        .iter()
-        .cloned()
-        .collect();
+    let workspace_memberships: Vec<String> =
+        app.membership_for_node(node.id).iter().cloned().collect();
     let anchor = pointer_pos
         .or_else(|| {
             app.egui_state.as_ref().and_then(|state| {
                 state.graph.node(key).map(|n| {
                     let meta_id = egui::Id::new("egui_graphs_metadata_");
-                    if let Some(meta) = ui.ctx().data_mut(|d| d.get_persisted::<MetadataFrame>(meta_id))
+                    if let Some(meta) = ui
+                        .ctx()
+                        .data_mut(|d| d.get_persisted::<MetadataFrame>(meta_id))
                     {
                         meta.canvas_to_screen_pos(n.location())
                     } else {
@@ -389,29 +410,49 @@ fn apply_search_node_visuals(
 ) {
     let hovered = app.hovered_graph_node;
     let highlighted_edge = app.highlighted_graph_edge;
+    let search_mode = app.search_display_mode;
+    let adjacency_set = hovered_adjacency_set(app, hovered);
     let colors: Vec<(NodeKey, Color32)> = app
         .graph
         .nodes()
         .map(|(key, node)| {
             let mut color = lifecycle_color(node.lifecycle);
-            if app.selected_nodes.contains(&key) {
-                color = Color32::from_rgb(255, 200, 100);
+            if app.get_node_crash_state(key).is_some() {
+                color = Color32::from_rgb(205, 112, 82);
             }
-            if search_query_active && search_matches.contains(&key) {
+
+            let search_match = search_query_active && search_matches.contains(&key);
+            let search_miss = search_query_active && !search_matches.contains(&key);
+            if search_match {
                 color = if active_search_match == Some(key) {
                     Color32::from_rgb(140, 255, 140)
                 } else {
                     Color32::from_rgb(95, 220, 130)
                 };
+            } else if search_miss && matches!(search_mode, SearchDisplayMode::Highlight) {
+                color = color.gamma_multiply(0.45);
+            }
+
+            if hovered.is_some() && !adjacency_set.contains(&key) {
+                color = color.gamma_multiply(0.4);
+            }
+            if hovered == Some(key) {
+                // Visual cue for command-target disambiguation while hovering.
+                color = Color32::from_rgb(255, 150, 80);
             }
             if let Some((from, to)) = highlighted_edge
                 && (key == from || key == to)
             {
                 color = Color32::from_rgb(80, 220, 255);
             }
-            if hovered == Some(key) {
-                // Visual cue for command-target disambiguation while hovering.
-                color = Color32::from_rgb(255, 150, 80);
+            if app.selected_nodes.primary() == Some(key) {
+                color = Color32::from_rgb(255, 200, 100);
+            } else if app.selected_nodes.contains(&key) && hovered != Some(key) {
+                color = if app.get_node_crash_state(key).is_some() {
+                    Color32::from_rgb(205, 112, 82)
+                } else {
+                    lifecycle_color(node.lifecycle)
+                };
             }
             (key, color)
         })
@@ -425,6 +466,44 @@ fn apply_search_node_visuals(
             node.set_color(color);
         }
     }
+
+    let edge_dimming: Vec<_> = state
+        .graph
+        .edges_iter()
+        .map(|(edge_key, _)| {
+            let mut dim = false;
+            if hovered.is_some()
+                && let Some((from, to)) = state.graph.edge_endpoints(edge_key)
+            {
+                dim = !adjacency_set.contains(&from) && !adjacency_set.contains(&to);
+            }
+            if search_query_active
+                && matches!(search_mode, SearchDisplayMode::Highlight)
+                && let Some((from, to)) = state.graph.edge_endpoints(edge_key)
+                && (!search_matches.contains(&from) || !search_matches.contains(&to))
+            {
+                dim = true;
+            }
+            (edge_key, dim)
+        })
+        .collect();
+    for (edge_key, dim) in edge_dimming {
+        if let Some(edge) = state.graph.edge_mut(edge_key) {
+            edge.display_mut().set_dimmed(dim);
+        }
+    }
+}
+
+fn hovered_adjacency_set(app: &GraphBrowserApp, hovered: Option<NodeKey>) -> HashSet<NodeKey> {
+    hovered
+        .map(|hover_key| {
+            app.graph
+                .out_neighbors(hover_key)
+                .chain(app.graph.in_neighbors(hover_key))
+                .chain(std::iter::once(hover_key))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Clamp the egui_graphs zoom to the camera's min/max bounds.
@@ -471,11 +550,13 @@ fn apply_pending_keyboard_zoom_request(
     ui.ctx().data_mut(|data| {
         if let Some(mut meta) = data.get_persisted::<MetadataFrame>(meta_id) {
             let graph_center_pos = (local_center - meta.pan) / meta.zoom;
-            let new_zoom = app.camera.clamp(if matches!(request, KeyboardZoomRequest::Reset) {
-                factor
-            } else {
-                meta.zoom * factor
-            });
+            let new_zoom = app
+                .camera
+                .clamp(if matches!(request, KeyboardZoomRequest::Reset) {
+                    factor
+                } else {
+                    meta.zoom * factor
+                });
             let pan_delta = graph_center_pos * meta.zoom - graph_center_pos * new_zoom;
             meta.pan += pan_delta;
             meta.zoom = new_zoom;
@@ -625,6 +706,149 @@ fn apply_scroll_zoom_without_ctrl(
     updated_zoom
 }
 
+struct LassoGestureResult {
+    action: Option<GraphAction>,
+    suppress_context_menu: bool,
+}
+
+fn collect_lasso_action(ui: &Ui, app: &GraphBrowserApp, enabled: bool) -> LassoGestureResult {
+    let start_id = egui::Id::new("graph_lasso_start_screen");
+    let moved_id = egui::Id::new("graph_lasso_moved");
+    let threshold_px = 6.0_f32;
+    if !enabled {
+        ui.ctx().data_mut(|d| {
+            d.remove::<egui::Pos2>(start_id);
+            d.remove::<bool>(moved_id);
+        });
+        return LassoGestureResult {
+            action: None,
+            suppress_context_menu: false,
+        };
+    }
+
+    let graph_rect = ui.max_rect();
+    let (pointer_pos, pressed, down, released, ctrl, alt) = ui.input(|i| {
+        let (pressed, down, released) = match app.lasso_mouse_binding {
+            LassoMouseBinding::RightDrag => (
+                i.pointer.secondary_pressed(),
+                i.pointer.secondary_down(),
+                i.pointer.secondary_released(),
+            ),
+            LassoMouseBinding::ShiftLeftDrag => (
+                i.pointer.primary_pressed() && i.modifiers.shift,
+                i.pointer.primary_down() && i.modifiers.shift,
+                i.pointer.primary_released(),
+            ),
+        };
+        (
+            i.pointer.latest_pos(),
+            pressed,
+            down,
+            released,
+            i.modifiers.ctrl,
+            i.modifiers.alt,
+        )
+    });
+
+    if pressed
+        && let Some(pos) = pointer_pos
+        && graph_rect.contains(pos)
+    {
+        ui.ctx().data_mut(|d| {
+            d.insert_persisted(start_id, pos);
+            d.insert_persisted(moved_id, false);
+        });
+    }
+
+    let start = ui
+        .ctx()
+        .data_mut(|d| d.get_persisted::<egui::Pos2>(start_id));
+    let mut moved = ui
+        .ctx()
+        .data_mut(|d| d.get_persisted::<bool>(moved_id))
+        .unwrap_or(false);
+    if down && let (Some(a), Some(b)) = (start, pointer_pos) {
+        if !moved && (b - a).length() >= threshold_px {
+            moved = true;
+            ui.ctx().data_mut(|d| d.insert_persisted(moved_id, true));
+        }
+        if moved {
+            let rect = egui::Rect::from_two_pos(a, b);
+            ui.painter().rect_stroke(
+                rect,
+                0.0,
+                Stroke::new(1.5, Color32::from_rgb(90, 220, 170)),
+                egui::epaint::StrokeKind::Outside,
+            );
+            ui.painter()
+                .rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(90, 220, 170, 28));
+        }
+    }
+
+    if !released {
+        return LassoGestureResult {
+            action: None,
+            suppress_context_menu: false,
+        };
+    }
+    ui.ctx().data_mut(|d| {
+        d.remove::<egui::Pos2>(start_id);
+        d.remove::<bool>(moved_id);
+    });
+
+    let (Some(a), Some(b)) = (start, pointer_pos) else {
+        return LassoGestureResult {
+            action: None,
+            suppress_context_menu: false,
+        };
+    };
+    if !moved {
+        return LassoGestureResult {
+            action: None,
+            suppress_context_menu: false,
+        };
+    }
+
+    let rect = egui::Rect::from_two_pos(a, b);
+    let mode = if alt {
+        SelectionUpdateMode::Toggle
+    } else if ctrl {
+        SelectionUpdateMode::Add
+    } else {
+        SelectionUpdateMode::Replace
+    };
+    let meta_id = egui::Id::new("egui_graphs_metadata_");
+    let meta = ui
+        .ctx()
+        .data_mut(|d| d.get_persisted::<MetadataFrame>(meta_id))
+        .unwrap_or_default();
+    let Some(state) = app.egui_state.as_ref() else {
+        return LassoGestureResult {
+            action: None,
+            suppress_context_menu: matches!(app.lasso_mouse_binding, LassoMouseBinding::RightDrag),
+        };
+    };
+    // Build an R*-tree index in canvas (world) space and query with the
+    // lasso rect inverted from screen space.  This avoids a full O(n) scan
+    // and keeps hit-testing in a stable coordinate system.
+    let index = NodeSpatialIndex::build(
+        state
+            .graph
+            .nodes_iter()
+            .map(|(key, node)| (key, node.location(), node.display().radius())),
+    );
+    let canvas_min = meta.screen_to_canvas_pos(rect.min);
+    let canvas_max = meta.screen_to_canvas_pos(rect.max);
+    let canvas_rect = egui::Rect::from_min_max(canvas_min, canvas_max);
+    let keys = index.nodes_in_canvas_rect(canvas_rect);
+
+    LassoGestureResult {
+        action: Some(GraphAction::LassoSelect { keys, mode }),
+        suppress_context_menu: matches!(app.lasso_mouse_binding, LassoMouseBinding::RightDrag)
+            && moved,
+    }
+}
+
 /// Convert egui_graphs events to resolved GraphActions and apply them.
 fn collect_graph_actions(
     app: &GraphBrowserApp,
@@ -730,6 +954,9 @@ pub fn intents_from_graph_actions(actions: Vec<GraphAction>) -> Vec<GraphIntent>
             GraphAction::SelectNode { key, multi_select } => {
                 intents.push(GraphIntent::SelectNode { key, multi_select });
             },
+            GraphAction::LassoSelect { keys, mode } => {
+                intents.push(GraphIntent::UpdateSelection { keys, mode });
+            },
             GraphAction::Zoom(new_zoom) => {
                 intents.push(GraphIntent::SetZoom { zoom: new_zoom });
             },
@@ -742,6 +969,13 @@ pub fn intents_from_graph_actions(actions: Vec<GraphAction>) -> Vec<GraphIntent>
 ///
 /// Pinned nodes keep their app-authored positions; their visual positions are
 /// restored after layout so FR simulation does not move them.
+///
+/// **Group drag**: when the user is actively dragging (`is_interacting`) with
+/// 2+ nodes selected, the dragged node's per-frame delta is detected by comparing
+/// its egui_graphs position to its last-known `app.graph` position.  That same
+/// delta is then applied to every other selected (non-pinned) node in both
+/// `egui_state` and `app.graph`, keeping the group moving together without any
+/// changes to `GraphAction` or `GraphIntent`.
 pub(crate) fn sync_graph_positions_from_layout(app: &mut GraphBrowserApp) {
     let Some(state) = app.egui_state.as_ref() else {
         return;
@@ -758,6 +992,28 @@ pub(crate) fn sync_graph_positions_from_layout(app: &mut GraphBrowserApp) {
         })
         .collect();
 
+    // Detect group drag: during active interaction with 2+ selected nodes, find
+    // the node whose egui_graphs position diverged from app.graph this frame.
+    // This is the node the user is physically dragging.
+    let group_drag_delta: Option<(NodeKey, egui::Vec2)> =
+        if app.is_interacting && app.selected_nodes.len() > 1 {
+            layout_positions.iter().find_map(|(key, egui_pos)| {
+                if !app.selected_nodes.contains(key) {
+                    return None;
+                }
+                let app_pos = app.graph.get_node(*key)?.position;
+                let delta = egui::Vec2::new(egui_pos.x - app_pos.x, egui_pos.y - app_pos.y);
+                // Only consider it a drag if it actually moved (filter float noise).
+                if delta.length() > 0.01 {
+                    Some((*key, delta))
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+
     let mut pinned_positions = Vec::new();
     for (key, pos) in layout_positions {
         if let Some(node_mut) = app.graph.get_node_mut(key) {
@@ -765,6 +1021,35 @@ pub(crate) fn sync_graph_positions_from_layout(app: &mut GraphBrowserApp) {
                 pinned_positions.push((key, node_mut.position));
             } else {
                 node_mut.position = pos;
+            }
+        }
+    }
+
+    // Propagate the drag delta to secondary selected nodes.
+    if let Some((dragged_key, delta)) = group_drag_delta {
+        let secondary_keys: Vec<NodeKey> = app
+            .selected_nodes
+            .iter()
+            .filter(|&&k| k != dragged_key)
+            .copied()
+            .collect();
+
+        let mut secondary_updates: Vec<(NodeKey, egui::Pos2)> = Vec::new();
+        for other_key in secondary_keys {
+            if let Some(node) = app.graph.get_node_mut(other_key) {
+                if !node.is_pinned {
+                    node.position.x += delta.x;
+                    node.position.y += delta.y;
+                    secondary_updates
+                        .push((other_key, egui::Pos2::new(node.position.x, node.position.y)));
+                }
+            }
+        }
+        if let Some(state_mut) = app.egui_state.as_mut() {
+            for (key, pos) in secondary_updates {
+                if let Some(egui_node) = state_mut.graph.node_mut(key) {
+                    egui_node.set_location(pos);
+                }
             }
         }
     }
@@ -801,7 +1086,25 @@ fn draw_graph_info(ui: &mut egui::Ui, app: &GraphBrowserApp) {
     );
 
     // Draw controls hint
-    let controls_text = "Shortcuts: Ctrl+Click Multi-select | Double-click Open | Drag tab out to split | N New Node | Del Remove | T Physics | +/-/0 Zoom | Z Smart Fit | L Toggle Pin | Ctrl+F Search | G Edge Ops | F2 Commands | F3 Radial | Ctrl+Z/Y Undo/Redo | F1/? Help";
+    let lasso_hint = match app.lasso_mouse_binding {
+        LassoMouseBinding::RightDrag => "Right-Drag Lasso",
+        LassoMouseBinding::ShiftLeftDrag => "Shift+Left-Drag Lasso",
+    };
+    let command_hint = match app.command_palette_shortcut {
+        crate::app::CommandPaletteShortcut::F2 => "F2 Commands",
+        crate::app::CommandPaletteShortcut::CtrlK => "Ctrl+K Commands",
+    };
+    let radial_hint = match app.radial_menu_shortcut {
+        crate::app::RadialMenuShortcut::F3 => "F3 Radial",
+        crate::app::RadialMenuShortcut::R => "R Radial",
+    };
+    let help_hint = match app.help_panel_shortcut {
+        crate::app::HelpPanelShortcut::F1OrQuestion => "F1/? Help",
+        crate::app::HelpPanelShortcut::H => "H Help",
+    };
+    let controls_text = format!(
+        "Shortcuts: Ctrl+Click Multi-select | {lasso_hint} | Double-click Open | Drag tab out to split | N New Node | Del Remove | T Physics | +/-/0 Zoom | Z Smart Fit | L Toggle Pin | Ctrl+F Search | G Edge Ops | {command_hint} | {radial_hint} | Ctrl+Z/Y Undo/Redo | {help_hint}"
+    );
     ui.painter().text(
         ui.available_rect_before_wrap().left_bottom() + Vec2::new(10.0, -10.0),
         egui::Align2::LEFT_BOTTOM,
@@ -957,6 +1260,30 @@ pub fn render_help_panel(ctx: &egui::Context, app: &mut GraphBrowserApp) {
                 .num_columns(2)
                 .spacing([20.0, 6.0])
                 .show(ui, |ui| {
+                    let lasso_base = match app.lasso_mouse_binding {
+                        LassoMouseBinding::RightDrag => "Right+Drag",
+                        LassoMouseBinding::ShiftLeftDrag => "Shift+LeftDrag",
+                    };
+                    let lasso_add = match app.lasso_mouse_binding {
+                        LassoMouseBinding::RightDrag => "Right+Ctrl+Drag",
+                        LassoMouseBinding::ShiftLeftDrag => "Shift+Ctrl+LeftDrag",
+                    };
+                    let lasso_toggle = match app.lasso_mouse_binding {
+                        LassoMouseBinding::RightDrag => "Right+Alt+Drag",
+                        LassoMouseBinding::ShiftLeftDrag => "Shift+Alt+LeftDrag",
+                    };
+                    let command_palette_key = match app.command_palette_shortcut {
+                        crate::app::CommandPaletteShortcut::F2 => "F2",
+                        crate::app::CommandPaletteShortcut::CtrlK => "Ctrl+K",
+                    };
+                    let radial_key = match app.radial_menu_shortcut {
+                        crate::app::RadialMenuShortcut::F3 => "F3",
+                        crate::app::RadialMenuShortcut::R => "R",
+                    };
+                    let help_key = match app.help_panel_shortcut {
+                        crate::app::HelpPanelShortcut::F1OrQuestion => "F1 / ?",
+                        crate::app::HelpPanelShortcut::H => "H",
+                    };
                     let shortcuts = [
                         ("Home / Esc", "Toggle Graph / Detail view"),
                         ("N", "Create new node"),
@@ -964,20 +1291,26 @@ pub fn render_help_panel(ctx: &egui::Context, app: &mut GraphBrowserApp) {
                         ("Ctrl+Shift+Delete", "Clear entire graph"),
                         ("T", "Toggle physics simulation"),
                         ("+ / - / 0", "Zoom in / out / reset"),
-                        ("Z", "Smart fit (2+ selected: fit selection; else fit graph)"),
+                        (
+                            "Z",
+                            "Smart fit (2+ selected: fit selection; else fit graph)",
+                        ),
                         ("P", "Physics settings panel"),
                         ("Ctrl+F", "Show graph search"),
-                        ("F2", "Toggle edge command palette"),
-                        ("F3", "Toggle radial command menu"),
+                        (command_palette_key, "Toggle edge command palette"),
+                        (radial_key, "Toggle radial command menu"),
                         ("Ctrl+Z / Ctrl+Y", "Undo / Redo"),
                         ("G", "Connect selected pair"),
                         ("Shift+G", "Connect both directions"),
                         ("Alt+G", "Remove user edge"),
                         ("I / U", "Pin / Unpin selected node(s)"),
                         ("L", "Toggle pin on primary selected node"),
+                        (lasso_base, "Lasso select (replace)"),
+                        (lasso_add, "Lasso add to selection"),
+                        (lasso_toggle, "Lasso toggle selection"),
                         ("Search Up/Down", "Cycle graph matches"),
                         ("Search Enter", "Select active search match"),
-                        ("F1 / ?", "This help panel"),
+                        (help_key, "This help panel"),
                         ("Ctrl+L / Alt+D", "Focus address bar"),
                         ("Double-click node", "Open node via workspace routing"),
                         ("Drag tab out", "Detach tab into split pane"),
@@ -1232,20 +1565,18 @@ pub fn render_radial_command_menu(
         if group_changed {
             command_idx = 0;
         }
-        if command_idx > close_idx {
+        if command_idx >= close_idx {
             command_idx = 0;
         }
-        let keyboard_slot_count = close_idx + 1;
-        if ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
+        let keyboard_slot_count = keyboard_commands.len();
+        if keyboard_slot_count > 0 && ctx.input(|i| i.key_pressed(Key::ArrowUp)) {
             command_idx = (command_idx + keyboard_slot_count - 1) % keyboard_slot_count;
         }
-        if ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
+        if keyboard_slot_count > 0 && ctx.input(|i| i.key_pressed(Key::ArrowDown)) {
             command_idx = (command_idx + 1) % keyboard_slot_count;
         }
         if ctx.input(|i| i.key_pressed(Key::Enter)) {
-            if command_idx == close_idx {
-                should_close = true;
-            } else if let Some(cmd) = keyboard_commands.get(command_idx).copied()
+            if let Some(cmd) = keyboard_commands.get(command_idx).copied()
                 && is_command_enabled(cmd, pair_context, any_selected, source_context)
             {
                 execute_radial_command(
@@ -1264,7 +1595,7 @@ pub fn render_radial_command_menu(
             d.insert_persisted(node_context_command_state_id, command_idx);
         });
 
-        Window::new("Node Context")
+        let window_response = Window::new("Node Context")
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
@@ -1309,12 +1640,11 @@ pub fn render_radial_command_menu(
                     }
                 });
                 ui.separator();
-                ui.small("Keyboard: <- -> groups, Up/Down actions, Enter run/close");
+                ui.small("Keyboard: <- -> groups, Up/Down actions, Enter run");
+                ui.small("Esc or click outside to close");
                 let keyboard_group = NodeContextGroup::ALL[group_idx];
                 let keyboard_commands = node_context_commands(keyboard_group);
-                if command_idx == keyboard_commands.len() {
-                    ui.small("Focus: Close");
-                } else if let Some(current_cmd) = keyboard_commands.get(command_idx).copied() {
+                if let Some(current_cmd) = keyboard_commands.get(command_idx).copied() {
                     ui.small(format!(
                         "Focus: {} / {}",
                         keyboard_group.label(),
@@ -1343,20 +1673,22 @@ pub fn render_radial_command_menu(
                     }
                 }
                 ctx.data_mut(|d| d.insert_persisted(node_context_command_state_id, command_idx));
-                ui.separator();
-                let close_label = if command_idx == keyboard_commands.len() {
-                    "> Close".to_string()
-                } else {
-                    "Close".to_string()
-                };
-                if ui.button(close_label).clicked() {
-                    command_idx = keyboard_commands.len();
-                    ctx.data_mut(|d| {
-                        d.insert_persisted(node_context_command_state_id, command_idx)
-                    });
-                    should_close = true;
-                }
             });
+        if let Some(response) = window_response {
+            let clicked_outside = ctx.input(|i| {
+                (i.pointer.primary_clicked() || i.pointer.secondary_clicked())
+                    && i.pointer
+                        .latest_pos()
+                        .is_some_and(|pos| !response.response.rect.contains(pos))
+            });
+            if clicked_outside {
+                intents.push(GraphIntent::UpdateSelection {
+                    keys: Vec::new(),
+                    mode: SelectionUpdateMode::Replace,
+                });
+                should_close = true;
+            }
+        }
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
             should_close = true;
         }
@@ -1488,6 +1820,7 @@ fn context_menu_label(command: RadialCommand) -> &'static str {
         RadialCommand::NodeOpenWorkspace => "Open via Workspace Route",
         RadialCommand::NodeChooseWorkspace => "Choose Workspace...",
         RadialCommand::NodeAddToWorkspace => "Add To Workspace...",
+        RadialCommand::NodeAddConnectedToWorkspace => "Add Connected To Workspace...",
         RadialCommand::NodeOpenNeighbors => "Open with Neighbors",
         RadialCommand::NodeOpenConnected => "Open with Connected",
         RadialCommand::NodeOpenSplit => "Open Split",
@@ -1578,11 +1911,14 @@ enum RadialCommand {
     NodeDelete,
     NodeChooseWorkspace,
     NodeAddToWorkspace,
+    NodeAddConnectedToWorkspace,
     NodeOpenWorkspace,
     NodeOpenNeighbors,
     NodeOpenConnected,
     NodeOpenSplit,
     NodeMoveToActivePane,
+    NodeCopyUrl,
+    NodeCopyTitle,
     EdgeConnectPair,
     EdgeConnectBoth,
     EdgeRemoveUser,
@@ -1607,11 +1943,14 @@ impl RadialCommand {
             Self::NodeDelete => "Delete",
             Self::NodeChooseWorkspace => "Choose WS",
             Self::NodeAddToWorkspace => "Add WS",
+            Self::NodeAddConnectedToWorkspace => "Add Conn WS",
             Self::NodeOpenWorkspace => "Workspace",
             Self::NodeOpenNeighbors => "Neighbors",
             Self::NodeOpenConnected => "Connected",
             Self::NodeOpenSplit => "Split",
             Self::NodeMoveToActivePane => "Move",
+            Self::NodeCopyUrl => "Copy URL",
+            Self::NodeCopyTitle => "Copy Title",
             Self::EdgeConnectPair => "Pair",
             Self::EdgeConnectBoth => "Both",
             Self::EdgeRemoveUser => "Remove",
@@ -1636,6 +1975,7 @@ fn node_context_commands(group: NodeContextGroup) -> &'static [RadialCommand] {
             RadialCommand::NodeOpenWorkspace,
             RadialCommand::NodeChooseWorkspace,
             RadialCommand::NodeAddToWorkspace,
+            RadialCommand::NodeAddConnectedToWorkspace,
             RadialCommand::NodeOpenNeighbors,
             RadialCommand::NodeOpenConnected,
         ],
@@ -1648,6 +1988,8 @@ fn node_context_commands(group: NodeContextGroup) -> &'static [RadialCommand] {
             RadialCommand::NodeOpenSplit,
             RadialCommand::NodePinToggle,
             RadialCommand::NodeDelete,
+            RadialCommand::NodeCopyUrl,
+            RadialCommand::NodeCopyTitle,
         ],
     }
 }
@@ -1660,11 +2002,14 @@ fn commands_for_domain(domain: RadialDomain) -> &'static [RadialCommand] {
             RadialCommand::NodeDelete,
             RadialCommand::NodeChooseWorkspace,
             RadialCommand::NodeAddToWorkspace,
+            RadialCommand::NodeAddConnectedToWorkspace,
             RadialCommand::NodeOpenWorkspace,
             RadialCommand::NodeOpenNeighbors,
             RadialCommand::NodeOpenConnected,
             RadialCommand::NodeOpenSplit,
             RadialCommand::NodeMoveToActivePane,
+            RadialCommand::NodeCopyUrl,
+            RadialCommand::NodeCopyTitle,
         ],
         RadialDomain::Edge => &[
             RadialCommand::EdgeConnectPair,
@@ -1700,11 +2045,14 @@ fn is_command_enabled(
         | RadialCommand::NodeDelete
         | RadialCommand::NodeChooseWorkspace
         | RadialCommand::NodeAddToWorkspace
+        | RadialCommand::NodeAddConnectedToWorkspace
         | RadialCommand::NodeOpenWorkspace
         | RadialCommand::NodeOpenNeighbors
         | RadialCommand::NodeOpenConnected
         | RadialCommand::NodeOpenSplit
-        | RadialCommand::NodeMoveToActivePane => any_selected || source_context.is_some(),
+        | RadialCommand::NodeMoveToActivePane
+        | RadialCommand::NodeCopyUrl
+        | RadialCommand::NodeCopyTitle => any_selected || source_context.is_some(),
         RadialCommand::EdgeConnectPair
         | RadialCommand::EdgeConnectBoth
         | RadialCommand::EdgeRemoveUser => pair_context.is_some(),
@@ -1757,6 +2105,11 @@ fn execute_radial_command(
                 app.request_add_node_to_workspace_picker(key);
             }
         },
+        RadialCommand::NodeAddConnectedToWorkspace => {
+            if let Some(key) = open_target {
+                app.request_add_connected_to_workspace_picker(key);
+            }
+        },
         RadialCommand::NodeOpenWorkspace => {
             if let Some(key) = open_target {
                 intents.push(GraphIntent::OpenNodeWorkspaceRouted {
@@ -1798,6 +2151,16 @@ fn execute_radial_command(
                     key,
                     prefer_workspace: None,
                 });
+            }
+        },
+        RadialCommand::NodeCopyUrl => {
+            if let Some(key) = open_target {
+                app.request_copy_node_url(key);
+            }
+        },
+        RadialCommand::NodeCopyTitle => {
+            if let Some(key) = open_target {
+                app.request_copy_node_title(key);
             }
         },
         RadialCommand::EdgeConnectPair => {
@@ -1959,6 +2322,54 @@ pub fn render_persistence_panel(
         .open(&mut open)
         .default_width(420.0)
         .show(ctx, |ui| {
+            ui.label("Storage");
+            ui.horizontal(|ui| {
+                ui.label("Data directory:");
+                let data_dir_input_id = ui.make_persistent_id("persistence_data_dir_input");
+                let mut data_dir_input = ui
+                    .data_mut(|d| d.get_persisted::<String>(data_dir_input_id))
+                    .unwrap_or_default();
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut data_dir_input)
+                            .desired_width(220.0)
+                            .hint_text("C:\\path\\to\\graph_data"),
+                    )
+                    .changed()
+                {
+                    ui.data_mut(|d| d.insert_persisted(data_dir_input_id, data_dir_input.clone()));
+                }
+                if ui.button("Switch").clicked() {
+                    let trimmed = data_dir_input.trim();
+                    if !trimmed.is_empty() {
+                        app.request_switch_data_dir(trimmed);
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Snapshot interval (sec):");
+                let interval_input_id =
+                    ui.make_persistent_id("persistence_snapshot_interval_input");
+                let mut interval_input = ui
+                    .data_mut(|d| d.get_persisted::<String>(interval_input_id))
+                    .unwrap_or_else(|| {
+                        app.snapshot_interval_secs()
+                            .unwrap_or(crate::persistence::DEFAULT_SNAPSHOT_INTERVAL_SECS)
+                            .to_string()
+                    });
+                if ui
+                    .add(egui::TextEdit::singleline(&mut interval_input).desired_width(80.0))
+                    .changed()
+                {
+                    ui.data_mut(|d| d.insert_persisted(interval_input_id, interval_input.clone()));
+                }
+                if ui.button("Apply").clicked()
+                    && let Ok(secs) = interval_input.trim().parse::<u64>()
+                {
+                    let _ = app.set_snapshot_interval_secs(secs);
+                }
+            });
+            ui.separator();
             ui.label("Workspaces");
             ui.horizontal(|ui| {
                 ui.label("Autosave every (sec):");
@@ -2137,6 +2548,7 @@ pub fn render_persistence_panel(
             workspace_names.retain(|name| {
                 name != GraphBrowserApp::WORKSPACE_PIN_WORKSPACE_NAME
                     && name != GraphBrowserApp::WORKSPACE_PIN_PANE_NAME
+                    && name != GraphBrowserApp::SETTINGS_TOAST_ANCHOR_NAME
             });
             if workspace_names.is_empty() {
                 ui.small("No workspaces saved.");
@@ -2339,6 +2751,15 @@ pub fn render_choose_workspace_picker(ctx: &egui::Context, app: &mut GraphBrowse
             all.sort();
             all
         },
+        ChooseWorkspacePickerMode::AddConnectedSelectionToWorkspace => {
+            let mut all = app
+                .list_workspace_layout_names()
+                .into_iter()
+                .filter(|name| !GraphBrowserApp::is_reserved_workspace_layout_name(name))
+                .collect::<Vec<_>>();
+            all.sort();
+            all
+        },
     };
     let title = app
         .graph
@@ -2359,6 +2780,9 @@ pub fn render_choose_workspace_picker(ctx: &egui::Context, app: &mut GraphBrowse
                     ChooseWorkspacePickerMode::AddNodeToWorkspace => {
                         "No named workspaces available. Save one first."
                     },
+                    ChooseWorkspacePickerMode::AddConnectedSelectionToWorkspace => {
+                        "No named workspaces available. Save one first."
+                    },
                 };
                 ui.small(msg);
             } else {
@@ -2366,6 +2790,9 @@ pub fn render_choose_workspace_picker(ctx: &egui::Context, app: &mut GraphBrowse
                 let header = match request.mode {
                     ChooseWorkspacePickerMode::OpenNodeInWorkspace => "Open in workspace:",
                     ChooseWorkspacePickerMode::AddNodeToWorkspace => "Add node to workspace:",
+                    ChooseWorkspacePickerMode::AddConnectedSelectionToWorkspace => {
+                        "Add connected nodes to workspace:"
+                    },
                 };
                 ui.small(header);
                 for name in &memberships {
@@ -2395,6 +2822,17 @@ pub fn render_choose_workspace_picker(ctx: &egui::Context, app: &mut GraphBrowse
             },
             ChooseWorkspacePickerMode::AddNodeToWorkspace => {
                 app.request_add_node_to_workspace(target, name);
+            },
+            ChooseWorkspacePickerMode::AddConnectedSelectionToWorkspace => {
+                let mut seed_nodes: Vec<NodeKey> = if app.selected_nodes.is_empty() {
+                    vec![target]
+                } else {
+                    app.selected_nodes.iter().copied().collect()
+                };
+                if !seed_nodes.contains(&target) {
+                    seed_nodes.push(target);
+                }
+                app.request_add_connected_to_workspace(seed_nodes, name);
             },
         }
     }
@@ -2481,6 +2919,7 @@ fn resolve_source_node_context(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::SearchDisplayMode;
 
     fn test_app() -> GraphBrowserApp {
         GraphBrowserApp::new_for_testing()
@@ -2548,6 +2987,24 @@ mod tests {
         app.apply_intents(intents);
 
         assert!(app.selected_nodes.contains(&key));
+    }
+
+    #[test]
+    fn test_lasso_select_action_maps_to_intent() {
+        let mut app = test_app();
+        let a = app.add_node_and_sync("a".into(), Point2D::new(0.0, 0.0));
+        let b = app.add_node_and_sync("b".into(), Point2D::new(10.0, 0.0));
+
+        let intents = intents_from_graph_actions(vec![GraphAction::LassoSelect {
+            keys: vec![a, b],
+            mode: SelectionUpdateMode::Replace,
+        }]);
+        app.apply_intents(intents);
+
+        assert_eq!(app.selected_nodes.len(), 2);
+        assert!(app.selected_nodes.contains(&a));
+        assert!(app.selected_nodes.contains(&b));
+        assert_eq!(app.selected_nodes.primary(), Some(b));
     }
 
     #[test]
@@ -2681,8 +3138,14 @@ mod tests {
         assert_eq!(format_elapsed_ago(Duration::from_secs(2)), "just now");
         assert_eq!(format_elapsed_ago(Duration::from_secs(12)), "12s ago");
         assert_eq!(format_elapsed_ago(Duration::from_secs(120)), "2m ago");
-        assert_eq!(format_elapsed_ago(Duration::from_secs(60 * 60 * 3)), "3h ago");
-        assert_eq!(format_elapsed_ago(Duration::from_secs(60 * 60 * 24 * 2)), "2d ago");
+        assert_eq!(
+            format_elapsed_ago(Duration::from_secs(60 * 60 * 3)),
+            "3h ago"
+        );
+        assert_eq!(
+            format_elapsed_ago(Duration::from_secs(60 * 60 * 24 * 2)),
+            "2d ago"
+        );
     }
 
     #[test]
@@ -2690,5 +3153,124 @@ mod tests {
         let now = SystemTime::now();
         let future = now + Duration::from_secs(10);
         assert_eq!(format_last_visited_with_now(future, now), "just now");
+    }
+
+    #[test]
+    fn test_neighbor_set_computation() {
+        let mut app = test_app();
+        let a = app.add_node_and_sync("a".into(), Point2D::new(0.0, 0.0));
+        let b = app.add_node_and_sync("b".into(), Point2D::new(10.0, 0.0));
+        let c = app.add_node_and_sync("c".into(), Point2D::new(20.0, 0.0));
+        app.graph.add_edge(a, b, crate::graph::EdgeType::Hyperlink);
+        app.graph.add_edge(c, a, crate::graph::EdgeType::Hyperlink);
+
+        let set = hovered_adjacency_set(&app, Some(a));
+        assert!(set.contains(&a));
+        assert!(set.contains(&b));
+        assert!(set.contains(&c));
+    }
+
+    #[test]
+    fn test_search_highlight_mode_dims_not_hides() {
+        let mut app = test_app();
+        let a = app.add_node_and_sync("alpha".into(), Point2D::new(0.0, 0.0));
+        let b = app.add_node_and_sync("beta".into(), Point2D::new(10.0, 0.0));
+        app.search_display_mode = SearchDisplayMode::Highlight;
+        app.egui_state = Some(EguiGraphState::from_graph_with_visual_state(
+            &app.graph,
+            &app.selected_nodes,
+            app.selected_nodes.primary(),
+            &HashSet::new(),
+        ));
+        let matches = HashSet::from([a]);
+        apply_search_node_visuals(&mut app, &matches, Some(a), true);
+
+        let state = app.egui_state.as_ref().unwrap();
+        assert!(state.graph.node(a).is_some());
+        assert!(state.graph.node(b).is_some());
+        let b_color = state.graph.node(b).unwrap().color().unwrap();
+        assert!(b_color != lifecycle_color(NodeLifecycle::Cold));
+    }
+
+    #[test]
+    fn test_search_filter_mode_hides_nodes() {
+        let mut app = test_app();
+        let a = app.add_node_and_sync("alpha".into(), Point2D::new(0.0, 0.0));
+        let b = app.add_node_and_sync("beta".into(), Point2D::new(10.0, 0.0));
+        app.search_display_mode = SearchDisplayMode::Filter;
+        let matches = HashSet::from([a]);
+        let filtered = filtered_graph_for_search(&app, &matches);
+        assert!(filtered.get_node(a).is_some());
+        assert!(filtered.get_node(b).is_none());
+    }
+
+    /// Simulate the sync conditions for group drag:
+    /// Build egui_state from the graph, move the dragged node in egui_state,
+    /// then run sync and assert secondary selected nodes follow.
+    fn setup_group_drag_sync(app: &mut GraphBrowserApp, dragged_key: NodeKey, delta: egui::Vec2) {
+        use crate::graph::egui_adapter::EguiGraphState;
+        // Build egui_state seeded from current app.graph positions.
+        app.egui_state = Some(EguiGraphState::from_graph(
+            &app.graph,
+            &std::collections::HashSet::new(),
+        ));
+        // Simulate egui_graphs moving the dragged node by delta.
+        if let Some(state_mut) = app.egui_state.as_mut() {
+            if let Some(node) = state_mut.graph.node_mut(dragged_key) {
+                let old = node.location();
+                node.set_location(egui::Pos2::new(old.x + delta.x, old.y + delta.y));
+            }
+        }
+        app.is_interacting = true;
+    }
+
+    #[test]
+    fn test_group_drag_moves_secondary_selected_nodes() {
+        let mut app = test_app();
+        let a = app.add_node_and_sync("a".into(), Point2D::new(0.0, 0.0));
+        let b = app.add_node_and_sync("b".into(), Point2D::new(100.0, 0.0));
+        let c = app.add_node_and_sync("c".into(), Point2D::new(200.0, 0.0));
+
+        // Select A (primary) and B (secondary); C is unselected.
+        app.select_node(a, false);
+        app.select_node(b, true);
+
+        let delta = egui::Vec2::new(10.0, 20.0);
+        setup_group_drag_sync(&mut app, a, delta);
+        sync_graph_positions_from_layout(&mut app);
+
+        // A moved to its dragged position.
+        let a_pos = app.graph.get_node(a).unwrap().position;
+        assert!((a_pos.x - 10.0).abs() < 0.1, "a.x={}", a_pos.x);
+        assert!((a_pos.y - 20.0).abs() < 0.1, "a.y={}", a_pos.y);
+
+        // B followed by the same delta.
+        let b_pos = app.graph.get_node(b).unwrap().position;
+        assert!((b_pos.x - 110.0).abs() < 0.1, "b.x={}", b_pos.x);
+        assert!((b_pos.y - 20.0).abs() < 0.1, "b.y={}", b_pos.y);
+
+        // C was not selected — stays put.
+        let c_pos = app.graph.get_node(c).unwrap().position;
+        assert!((c_pos.x - 200.0).abs() < 0.1, "c.x={}", c_pos.x);
+        assert!((c_pos.y - 0.0).abs() < 0.1, "c.y={}", c_pos.y);
+    }
+
+    #[test]
+    fn test_group_drag_no_propagation_when_single_selection() {
+        let mut app = test_app();
+        let a = app.add_node_and_sync("a".into(), Point2D::new(0.0, 0.0));
+        let b = app.add_node_and_sync("b".into(), Point2D::new(100.0, 0.0));
+
+        // Only A selected.
+        app.select_node(a, false);
+
+        let delta = egui::Vec2::new(10.0, 20.0);
+        setup_group_drag_sync(&mut app, a, delta);
+        sync_graph_positions_from_layout(&mut app);
+
+        // B must not move (single selection — no group drag).
+        let b_pos = app.graph.get_node(b).unwrap().position;
+        assert!((b_pos.x - 100.0).abs() < 0.1, "b.x={}", b_pos.x);
+        assert!((b_pos.y - 0.0).abs() < 0.1, "b.y={}", b_pos.y);
     }
 }

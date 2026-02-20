@@ -8,6 +8,7 @@ use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
+use arboard::Clipboard;
 use egui::pos2;
 use egui_glow::EguiGlow;
 use egui_tiles::{Tile, Tiles, Tree};
@@ -39,7 +40,10 @@ use super::toolbar_routing::ToolbarOpenMode;
 use super::toolbar_ui::OmnibarSearchSession;
 use super::webview_backpressure::WebviewCreationBackpressureState;
 use super::webview_status_sync;
-use crate::app::{GraphBrowserApp, GraphIntent, PendingTileOpenMode};
+use crate::app::{
+    ClipboardCopyKind, ClipboardCopyRequest, GraphBrowserApp, GraphIntent, PendingTileOpenMode,
+    SearchDisplayMode, ToastAnchorPreference,
+};
 use crate::desktop::event_loop::AppEvent;
 use crate::desktop::headed_window;
 use crate::graph::NodeKey;
@@ -68,29 +72,15 @@ pub struct Gui {
     /// Whether to show the "clear saved graph data" confirmation dialog.
     show_clear_data_confirm: bool,
 
-    /// Whether to show runtime persistence directory switch dialog.
-    show_data_dir_dialog: bool,
-
-    /// Current editable persistence directory path.
-    data_dir_input: String,
-
-    /// Last status message for persistence directory switching.
-    data_dir_status: Option<String>,
-
-    /// Whether to show persistence settings dialog.
-    show_persistence_settings_dialog: bool,
-
-    /// Snapshot interval input value (seconds).
-    snapshot_interval_input: String,
-
-    /// Last status message for persistence settings updates.
-    persistence_settings_status: Option<String>,
-
     /// The [`LoadStatus`] of the active `WebView`.
     load_status: LoadStatus,
 
     /// The text to display in the status bar on the bottom of the window.
     status_text: Option<String>,
+    /// Non-blocking toast notifications.
+    toasts: egui_notify::Toasts,
+    /// System clipboard handle.
+    clipboard: Option<Clipboard>,
 
     /// Whether or not the current `WebView` can navigate backward.
     can_go_back: bool,
@@ -185,6 +175,15 @@ impl Drop for Gui {
 }
 
 impl Gui {
+    fn toast_anchor(anchor: ToastAnchorPreference) -> egui_notify::Anchor {
+        match anchor {
+            ToastAnchorPreference::TopRight => egui_notify::Anchor::TopRight,
+            ToastAnchorPreference::TopLeft => egui_notify::Anchor::TopLeft,
+            ToastAnchorPreference::BottomRight => egui_notify::Anchor::BottomRight,
+            ToastAnchorPreference::BottomLeft => egui_notify::Anchor::BottomLeft,
+        }
+    }
+
     fn open_mode_from_toolbar(mode: ToolbarOpenMode) -> TileOpenMode {
         match mode {
             ToolbarOpenMode::Tab => TileOpenMode::Tab,
@@ -273,6 +272,8 @@ impl Gui {
         let membership_index = persistence_ops::build_membership_index_from_layouts(&graph_app);
         graph_app.init_membership_index(membership_index);
         let (thumbnail_capture_tx, thumbnail_capture_rx) = channel();
+        let initial_search_filter_mode =
+            matches!(graph_app.search_display_mode, SearchDisplayMode::Filter);
 
         Self {
             rendering_context,
@@ -284,17 +285,12 @@ impl Gui {
             location_dirty: false,
             location_submitted: false,
             show_clear_data_confirm: false,
-            show_data_dir_dialog: false,
-            data_dir_input: initial_data_dir.display().to_string(),
-            data_dir_status: None,
-            show_persistence_settings_dialog: false,
-            snapshot_interval_input: graph_app
-                .snapshot_interval_secs()
-                .unwrap_or(crate::persistence::DEFAULT_SNAPSHOT_INTERVAL_SECS)
-                .to_string(),
-            persistence_settings_status: None,
             load_status: LoadStatus::Complete,
             status_text: None,
+            toasts: egui_notify::Toasts::default()
+                .with_anchor(Self::toast_anchor(graph_app.toast_anchor_preference))
+                .with_margin(egui::vec2(12.0, 12.0)),
+            clipboard: Clipboard::new().ok(),
             can_go_back: false,
             can_go_forward: false,
             favicon_textures: Default::default(),
@@ -306,7 +302,7 @@ impl Gui {
             thumbnail_capture_in_flight: HashSet::new(),
             graph_search_open: false,
             graph_search_query: String::new(),
-            graph_search_filter_mode: false,
+            graph_search_filter_mode: initial_search_filter_mode,
             graph_search_matches: Vec::new(),
             graph_search_active_match_index: None,
             webview_creation_backpressure: HashMap::new(),
@@ -323,6 +319,7 @@ impl Gui {
         }
     }
 
+    #[cfg(test)]
     fn parse_data_dir_input(raw: &str) -> Option<PathBuf> {
         persistence_ops::parse_data_dir_input(raw)
     }
@@ -494,8 +491,6 @@ impl Gui {
         self.graph_app.show_command_palette
             || self.graph_app.show_help_panel
             || self.graph_app.show_physics_panel
-            || self.show_data_dir_dialog
-            || self.show_persistence_settings_dialog
             || self.show_clear_data_confirm
     }
 
@@ -527,12 +522,8 @@ impl Gui {
             location_dirty,
             location_submitted,
             show_clear_data_confirm,
-            show_data_dir_dialog,
-            data_dir_input,
-            data_dir_status,
-            show_persistence_settings_dialog,
-            snapshot_interval_input,
-            persistence_settings_status,
+            toasts,
+            clipboard,
             favicon_textures,
             graph_app,
             tile_rendering_contexts,
@@ -553,6 +544,9 @@ impl Gui {
         } = self;
 
         let winit_window = headed_window.winit_window();
+        *toasts = std::mem::take(toasts)
+            .with_anchor(Self::toast_anchor(graph_app.toast_anchor_preference))
+            .with_margin(egui::vec2(12.0, 12.0));
         context.run(winit_window, |ctx| {
             graph_app.tick_frame();
             let mut frame_intents = Vec::new();
@@ -578,6 +572,11 @@ impl Gui {
             let responsive_webviews = pre_frame.responsive_webviews;
 
             let graph_search_available = Self::active_webview_tile_node(tiles_tree).is_none();
+            graph_app.search_display_mode = if *graph_search_filter_mode {
+                SearchDisplayMode::Filter
+            } else {
+                SearchDisplayMode::Highlight
+            };
             let mut graph_search_output = graph_search_flow::handle_graph_search_flow(
                 GraphSearchFlowArgs {
                     ctx,
@@ -668,14 +667,9 @@ impl Gui {
                     location_submitted,
                     focus_location_field_for_search: graph_search_output
                         .focus_location_field_for_search,
-                    show_data_dir_dialog,
-                    show_persistence_settings_dialog,
                     show_clear_data_confirm,
                     omnibar_search_session: &mut self.omnibar_search_session,
-                    data_dir_input,
-                    data_dir_status,
-                    snapshot_interval_input,
-                    persistence_settings_status,
+                    toasts,
                     tile_rendering_contexts,
                     tile_favicon_textures,
                     favicon_textures,
@@ -797,6 +791,7 @@ impl Gui {
                     tiles_tree,
                     tile_rendering_contexts,
                     tile_favicon_textures,
+                    favicon_textures,
                     toolbar_height,
                     graph_search_matches,
                     graph_search_active_match_index: *graph_search_active_match_index,
@@ -812,10 +807,61 @@ impl Gui {
                     focus_ring_webview_id: &mut self.focus_ring_webview_id,
                     focus_ring_started_at: &mut self.focus_ring_started_at,
                     focus_ring_duration: self.focus_ring_duration,
+                    toasts,
                 },
                 |matches, active_index| active_graph_search_match(matches, active_index),
             );
+            Self::handle_pending_clipboard_copy_requests(graph_app, clipboard, toasts);
+            toasts.show(ctx);
         });
+    }
+
+    fn handle_pending_clipboard_copy_requests(
+        graph_app: &mut GraphBrowserApp,
+        clipboard: &mut Option<Clipboard>,
+        toasts: &mut egui_notify::Toasts,
+    ) {
+        while let Some(ClipboardCopyRequest { key, kind }) = graph_app.take_pending_clipboard_copy()
+        {
+            let Some(node) = graph_app.graph.get_node(key) else {
+                toasts.error("Copy failed: node no longer exists");
+                continue;
+            };
+            let value = match kind {
+                ClipboardCopyKind::Url => node.url.clone(),
+                ClipboardCopyKind::Title => {
+                    if node.title.is_empty() {
+                        node.url.clone()
+                    } else {
+                        node.title.clone()
+                    }
+                },
+            };
+            if value.trim().is_empty() {
+                toasts.warning("Nothing to copy");
+                continue;
+            }
+            if clipboard.is_none() {
+                *clipboard = Clipboard::new().ok();
+            }
+            let Some(cb) = clipboard.as_mut() else {
+                toasts.error("Clipboard unavailable");
+                continue;
+            };
+            match cb.set_text(value) {
+                Ok(()) => match kind {
+                    ClipboardCopyKind::Url => {
+                        toasts.success("Copied URL");
+                    },
+                    ClipboardCopyKind::Title => {
+                        toasts.success("Copied title");
+                    },
+                },
+                Err(e) => {
+                    toasts.error(format!("Copy failed: {e}"));
+                },
+            }
+        }
     }
 
     fn ensure_tiles_tree_root(&mut self) {
