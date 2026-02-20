@@ -2952,7 +2952,6 @@ impl GlobalScope {
 
     /// Returns the idb factory for this global.
     /// TODO: move the idb to the global itself.
-    #[expect(dead_code)]
     pub(crate) fn get_indexeddb(&self) -> DomRoot<IDBFactory> {
         if let Some(window) = self.downcast::<Window>() {
             return window.IndexedDB();

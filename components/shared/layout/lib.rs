@@ -237,6 +237,7 @@ pub struct LayoutConfig {
     pub viewport_details: ViewportDetails,
     pub user_stylesheets: Rc<Vec<DocumentStyleSheet>>,
     pub theme: Theme,
+    pub accessibility_active: bool,
 }
 
 pub struct PropertyRegistration {
@@ -391,6 +392,8 @@ pub trait Layout {
         &mut self,
         property_registration: PropertyRegistration,
     ) -> Result<(), RegisterPropertyError>;
+
+    fn set_accessibility_active(&self, active: bool);
 }
 
 /// This trait is part of `layout_api` because it depends on both `script_traits`

@@ -32,28 +32,28 @@ pub fn set(preferences: Preferences) {
     // Map between Stylo preference names and Servo preference names as the This should be
     // kept in sync with components/script/dom/bindings/codegen/run.py which generates the
     // DOM CSS style accessors.
-    stylo_config::set_bool("layout.unimplemented", preferences.layout_unimplemented);
-    stylo_config::set_i32("layout.threads", preferences.layout_threads as i32);
-    stylo_config::set_bool("layout.flexbox.enabled", preferences.layout_flexbox_enabled);
-    stylo_config::set_bool("layout.columns.enabled", preferences.layout_columns_enabled);
-    stylo_config::set_bool("layout.grid.enabled", preferences.layout_grid_enabled);
-    stylo_config::set_bool(
+    stylo_static_prefs::set_bool("layout.unimplemented", preferences.layout_unimplemented);
+    stylo_static_prefs::set_i32("layout.threads", preferences.layout_threads as i32);
+    stylo_static_prefs::set_bool("layout.flexbox.enabled", preferences.layout_flexbox_enabled);
+    stylo_static_prefs::set_bool("layout.columns.enabled", preferences.layout_columns_enabled);
+    stylo_static_prefs::set_bool("layout.grid.enabled", preferences.layout_grid_enabled);
+    stylo_static_prefs::set_bool(
         "layout.css.attr.enabled",
         preferences.layout_css_attr_enabled,
     );
-    stylo_config::set_bool(
+    stylo_static_prefs::set_bool(
         "layout.css.transition-behavior.enabled",
         preferences.layout_css_transition_behavior_enabled,
     );
-    stylo_config::set_bool(
+    stylo_static_prefs::set_bool(
         "layout.writing-mode.enabled",
         preferences.layout_writing_mode_enabled,
     );
-    stylo_config::set_bool(
+    stylo_static_prefs::set_bool(
         "layout.container-queries.enabled",
         preferences.layout_container_queries_enabled,
     );
-    stylo_config::set_bool(
+    stylo_static_prefs::set_bool(
         "layout.variable_fonts.enabled",
         preferences.layout_variable_fonts_enabled,
     );
@@ -158,7 +158,6 @@ pub struct Preferences {
     pub dom_serviceworker_timeout_seconds: i64,
     pub dom_servo_helpers_enabled: bool,
     pub dom_servoparser_async_html_tokenizer_enabled: bool,
-    pub dom_testable_crash_enabled: bool,
     pub dom_testbinding_enabled: bool,
     pub dom_testbinding_prefcontrolled_enabled: bool,
     pub dom_testbinding_prefcontrolled2_enabled: bool,
@@ -309,6 +308,10 @@ pub struct Preferences {
     /// default), then `rustls-platform-verifier` will be used, except on Android where
     /// `rust-webpki` is always used.
     pub network_use_webpki_roots: bool,
+    /// The length of the session history, in navigations, for each `WebView. Back-forward
+    /// cache entries that are more than `session_history_max_length` steps in the future or
+    /// `session_history_max_length` steps in the past will be discarded. Navigating forward
+    /// or backward to that entry will cause the entire page to be reloaded.
     pub session_history_max_length: i64,
     /// The background color of shell's viewport. This will be used by OpenGL's `glClearColor`.
     pub shell_background_color_rgba: [f64; 4],
@@ -381,7 +384,6 @@ impl Preferences {
             dom_serviceworker_timeout_seconds: 60,
             dom_servo_helpers_enabled: false,
             dom_servoparser_async_html_tokenizer_enabled: false,
-            dom_testable_crash_enabled: false,
             dom_testbinding_enabled: false,
             dom_testbinding_prefcontrolled2_enabled: false,
             dom_testbinding_prefcontrolled_enabled: false,

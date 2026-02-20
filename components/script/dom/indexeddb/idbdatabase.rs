@@ -24,7 +24,6 @@ use crate::dom::bindings::reflector::{DomGlobal, reflect_dom_object};
 use crate::dom::bindings::root::{DomRoot, MutNullableDom};
 use crate::dom::bindings::str::DOMString;
 use crate::dom::domstringlist::DOMStringList;
-use crate::dom::event::{Event, EventBubbles, EventCancelable};
 use crate::dom::eventtarget::EventTarget;
 use crate::dom::globalscope::GlobalScope;
 use crate::dom::indexeddb::idbobjectstore::IDBObjectStore;
@@ -62,7 +61,6 @@ impl IDBDatabase {
             id,
             version: Cell::new(version),
             object_store_names: Default::default(),
-
             upgrade_transaction: Default::default(),
             closing: Cell::new(false),
         }
@@ -105,26 +103,32 @@ impl IDBDatabase {
             .any(|store_name| store_name == name)
     }
 
-    pub fn version(&self) -> u64 {
-        let (sender, receiver) = channel(self.global().time_profiler_chan().clone()).unwrap();
-        let operation = SyncOperation::Version(
-            sender,
-            self.global().origin().immutable().clone(),
-            self.name.to_string(),
-        );
+    /// <https://w3c.github.io/IndexedDB/#dom-idbdatabase-version>
+    pub(crate) fn version(&self) -> u64 {
+        // The version getter steps are to return this’s version.
+        self.version.get()
+    }
 
-        let _ = self
-            .get_idb_thread()
-            .send(IndexedDBThreadMsg::Sync(operation));
-
-        receiver.recv().unwrap().unwrap_or_else(|e| {
-            error!("{e:?}");
-            u64::MAX
-        })
+    pub(crate) fn set_version(&self, version: u64) {
+        self.version.set(version);
     }
 
     pub fn set_transaction(&self, transaction: &IDBTransaction) {
         self.upgrade_transaction.set(Some(transaction));
+    }
+
+    pub(crate) fn clear_upgrade_transaction(&self, transaction: &IDBTransaction) {
+        let current = self
+            .upgrade_transaction
+            .get()
+            .expect("clear_upgrade_transaction called but no upgrade transaction is set");
+
+        debug_assert!(
+            &*current == transaction,
+            "clear_upgrade_transaction called with non-current transaction"
+        );
+
+        self.upgrade_transaction.set(None);
     }
 
     /// <https://w3c.github.io/IndexedDB/#eventdef-idbdatabase-versionchange>
@@ -135,16 +139,14 @@ impl IDBDatabase {
         can_gc: CanGc,
     ) {
         let global = self.global();
-        let event = IDBVersionChangeEvent::new(
+        let _ = IDBVersionChangeEvent::fire_version_change_event(
             &global,
+            self.upcast(),
             Atom::from("versionchange"),
-            EventBubbles::DoesNotBubble,
-            EventCancelable::NotCancelable,
             old_version,
             new_version,
             can_gc,
         );
-        event.upcast::<Event>().fire(self.upcast(), can_gc);
     }
 }
 
@@ -166,7 +168,7 @@ impl IDBDatabaseMethods<crate::DomTypeHolder> for IDBDatabase {
         }
 
         // Step 3
-        Ok(match store_names {
+        let transaction = match store_names {
             StringOrStringSequence::String(name) => IDBTransaction::new(
                 &self.global(),
                 self,
@@ -185,7 +187,28 @@ impl IDBDatabaseMethods<crate::DomTypeHolder> for IDBDatabase {
                     CanGc::note(),
                 )
             },
-        })
+        };
+
+        // https://w3c.github.io/IndexedDB/#dom-idbdatabase-transaction
+        // Step 6: If mode is not "readonly" or "readwrite", throw a TypeError.
+        if mode != IDBTransactionMode::Readonly && mode != IDBTransactionMode::Readwrite {
+            return Err(Error::Type(c"Invalid transaction mode".to_owned()));
+        }
+
+        // https://w3c.github.io/IndexedDB/#dom-idbdatabase-transaction
+        // Step 8: Set transaction’s cleanup event loop to the current event loop.
+        transaction.set_cleanup_event_loop();
+        // https://w3c.github.io/IndexedDB/#cleanup-indexed-database-transactions
+        // NOTE: These steps are invoked by [HTML]. They ensure that transactions created
+        // by a script call to transaction() are deactivated once the task that invoked
+        // the script has completed. The steps are run at most once for each transaction.
+        // https://w3c.github.io/IndexedDB/#transaction-concept
+        // A transaction optionally has a cleanup event loop which is an event loop.
+        self.global()
+            .get_indexeddb()
+            .register_indexeddb_transaction(&transaction);
+
+        Ok(transaction)
     }
 
     /// <https://www.w3.org/TR/IndexedDB-2/#dom-idbdatabase-createobjectstore>

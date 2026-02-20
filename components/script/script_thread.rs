@@ -85,14 +85,14 @@ use profile_traits::mem::{ProcessReports, ReportsChan, perform_memory_report};
 use profile_traits::time::ProfilerCategory;
 use profile_traits::time_profile;
 use rustc_hash::{FxHashMap, FxHashSet};
-use script_bindings::script_runtime::JSContext;
+use script_bindings::script_runtime::{JSContext, temp_cx};
 use script_traits::{
     ConstellationInputEvent, DiscardBrowsingContext, DocumentActivity, InitialScriptState,
     NewPipelineInfo, Painter, ProgressiveWebMetricType, ScriptThreadMessage,
     UpdatePipelineIdReason,
 };
 use servo_arc::Arc as ServoArc;
-use servo_config::{opts, prefs};
+use servo_config::{opts, pref, prefs};
 use servo_url::{ImmutableOrigin, MutableOrigin, OriginSnapshot, ServoUrl};
 use storage_traits::StorageThreads;
 use storage_traits::webstorage_thread::WebStorageType;
@@ -407,6 +407,10 @@ pub struct ScriptThread {
     /// A list of URLs that can access privileged internal APIs.
     #[no_trace]
     privileged_urls: Vec<ServoUrl>,
+
+    /// Whether accessibility is active. If true, each Layout will maintain an accessibility tree
+    /// and send accessibility updates to the embedder.
+    accessibility_active: Cell<bool>,
 }
 
 struct BHMExitSignal {
@@ -1038,6 +1042,7 @@ impl ScriptThread {
                     debugger_paused: Cell::new(false),
                     privileged_urls: state.privileged_urls,
                     this: weak_script_thread.clone(),
+                    accessibility_active: Cell::new(state.accessibility_active),
                 }
             }),
             cx,
@@ -1966,6 +1971,9 @@ impl ScriptThread {
             ScriptThreadMessage::UpdatePinchZoomInfos(id, pinch_zoom_infos) => {
                 self.handle_update_pinch_zoom_infos(id, pinch_zoom_infos, CanGc::from_cx(cx));
             },
+            ScriptThreadMessage::SetAccessibilityActive(active) => {
+                self.set_accessibility_active(active);
+            },
         }
     }
 
@@ -2068,7 +2076,7 @@ impl ScriptThread {
                 pipeline_id,
                 message,
             } => {
-                self.handle_navigation_response(pipeline_id, *message);
+                self.handle_navigation_response(cx, pipeline_id, *message);
             },
             MainThreadScriptMsg::WorkletLoaded(pipeline_id) => {
                 self.handle_worklet_loaded(pipeline_id)
@@ -2660,7 +2668,10 @@ impl ScriptThread {
         }
     }
 
+    #[expect(unsafe_code)]
     pub(crate) fn spawn_pipeline(&self, new_pipeline_info: NewPipelineInfo) {
+        let mut cx = unsafe { temp_cx() };
+        let cx = &mut cx;
         self.profile_event(
             ScriptThreadEventCategory::SpawnPipeline,
             Some(new_pipeline_info.new_pipeline_id),
@@ -2689,7 +2700,7 @@ impl ScriptThread {
                 };
 
                 // Kick off the fetch for the new resource.
-                self.pre_page_load(InProgressLoad::new(new_pipeline_info, origin));
+                self.pre_page_load(cx, InProgressLoad::new(new_pipeline_info, origin));
             },
         );
     }
@@ -3342,6 +3353,7 @@ impl ScriptThread {
             viewport_details: incomplete.viewport_details,
             user_stylesheets,
             theme: incomplete.theme,
+            accessibility_active: self.accessibility_active.get(),
         };
 
         // Create the window and document objects.
@@ -3633,6 +3645,21 @@ impl ScriptThread {
         document.event_handler().note_pending_input_event(event);
     }
 
+    fn set_accessibility_active(&self, active: bool) {
+        if !(pref!(accessibility_enabled)) {
+            return;
+        }
+
+        let old_value = self.accessibility_active.replace(active);
+        if active == old_value {
+            return;
+        }
+
+        for (_, document) in self.documents.borrow().iter() {
+            document.window().layout().set_accessibility_active(active);
+        }
+    }
+
     /// Handle a "navigate an iframe" message from the constellation.
     fn handle_navigate_iframe(
         &self,
@@ -3696,14 +3723,14 @@ impl ScriptThread {
 
     /// Instructs the constellation to fetch the document that will be loaded. Stores the InProgressLoad
     /// argument until a notification is received that the fetch is complete.
-    fn pre_page_load(&self, mut incomplete: InProgressLoad) {
+    fn pre_page_load(&self, cx: &mut js::context::JSContext, mut incomplete: InProgressLoad) {
         let url_str = incomplete.load_data.url.as_str();
         if url_str == "about:blank" {
-            self.start_page_load_about_blank(incomplete);
+            self.start_page_load_about_blank(cx, incomplete);
             return;
         }
         if url_str == "about:srcdoc" {
-            self.page_load_about_srcdoc(incomplete);
+            self.page_load_about_srcdoc(cx, incomplete);
             return;
         }
 
@@ -3729,7 +3756,12 @@ impl ScriptThread {
         self.incomplete_loads.borrow_mut().push(incomplete);
     }
 
-    fn handle_navigation_response(&self, pipeline_id: PipelineId, message: FetchResponseMsg) {
+    fn handle_navigation_response(
+        &self,
+        cx: &mut js::context::JSContext,
+        pipeline_id: PipelineId,
+        message: FetchResponseMsg,
+    ) {
         if let Some(metadata) = NavigationListener::http_redirect_metadata(&message) {
             self.handle_navigation_redirect(pipeline_id, metadata);
             return;
@@ -3743,7 +3775,7 @@ impl ScriptThread {
                 self.handle_fetch_chunk(pipeline_id, request_id, chunk.0)
             },
             FetchResponseMsg::ProcessResponseEOF(request_id, eof, timing) => {
-                self.handle_fetch_eof(pipeline_id, request_id, eof, timing)
+                self.handle_fetch_eof(cx, pipeline_id, request_id, eof, timing)
             },
             FetchResponseMsg::ProcessCspViolations(request_id, violations) => {
                 self.handle_csp_violations(pipeline_id, request_id, violations)
@@ -3788,6 +3820,7 @@ impl ScriptThread {
 
     fn handle_fetch_eof(
         &self,
+        cx: &mut js::context::JSContext,
         id: PipelineId,
         request_id: RequestId,
         eof: Result<(), NetworkError>,
@@ -3818,11 +3851,11 @@ impl ScriptThread {
                     // submit_timing will only accept timing that is of type ResourceTimingType::Resource
                     let mut resource_timing = timing.clone();
                     resource_timing.timing_type = ResourceTimingType::Resource;
-                    submit_timing(&iframe_ctx, &eof, &resource_timing, CanGc::note());
+                    submit_timing(&iframe_ctx, &eof, &resource_timing, CanGc::from_cx(cx));
                 }
             }
 
-            context.process_response_eof(request_id, eof, timing);
+            context.process_response_eof(cx, request_id, eof, timing);
         }
     }
 
@@ -3888,7 +3921,11 @@ impl ScriptThread {
 
     /// Synchronously fetch `about:blank`. Stores the `InProgressLoad`
     /// argument until a notification is received that the fetch is complete.
-    fn start_page_load_about_blank(&self, mut incomplete: InProgressLoad) {
+    fn start_page_load_about_blank(
+        &self,
+        cx: &mut js::context::JSContext,
+        mut incomplete: InProgressLoad,
+    ) {
         let url = ServoUrl::parse("about:blank").unwrap();
         let mut context = ParserContext::new(
             incomplete.webview_id,
@@ -3922,6 +3959,7 @@ impl ScriptThread {
         context.set_about_base_url(about_base_url);
         context.process_response_chunk(dummy_request_id, chunk);
         context.process_response_eof(
+            cx,
             dummy_request_id,
             Ok(()),
             ResourceFetchTiming::new(ResourceTimingType::None),
@@ -3929,7 +3967,11 @@ impl ScriptThread {
     }
 
     /// Synchronously parse a srcdoc document from a giving HTML string.
-    fn page_load_about_srcdoc(&self, mut incomplete: InProgressLoad) {
+    fn page_load_about_srcdoc(
+        &self,
+        cx: &mut js::context::JSContext,
+        mut incomplete: InProgressLoad,
+    ) {
         let url = ServoUrl::parse("about:srcdoc").unwrap();
         let mut meta = Metadata::default(url.clone());
         meta.set_content_type(Some(&mime::TEXT_HTML));
@@ -3955,6 +3997,7 @@ impl ScriptThread {
         context.set_about_base_url(about_base_url);
         context.process_response_chunk(dummy_request_id, chunk);
         context.process_response_eof(
+            cx,
             dummy_request_id,
             Ok(()),
             ResourceFetchTiming::new(ResourceTimingType::None),

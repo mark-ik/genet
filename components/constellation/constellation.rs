@@ -509,6 +509,9 @@ pub struct Constellation<STF, SWF> {
     /// to the `UserContents` need to be forwared to all the `ScriptThread`s that host
     /// the relevant `WebView`.
     pub(crate) user_contents_for_manager_id: FxHashMap<UserContentManagerId, UserContents>,
+
+    /// Whether accessibility trees are being built and sent to the underlying platform.
+    pub(crate) accessibility_active: bool,
 }
 
 /// State needed to construct a constellation.
@@ -727,6 +730,7 @@ where
                     pending_viewport_changes: Default::default(),
                     screenshot_readiness_requests: Vec::new(),
                     user_contents_for_manager_id: Default::default(),
+                    accessibility_active: false,
                 };
 
                 constellation.run();
@@ -1188,6 +1192,14 @@ where
         self.browsing_contexts
             .insert(browsing_context_id, browsing_context);
 
+        if self.accessibility_active {
+            if let Some(pipeline) = self.pipelines.get(&pipeline_id) {
+                let _ = pipeline
+                    .event_loop
+                    .send(ScriptThreadMessage::SetAccessibilityActive(true));
+            }
+        }
+
         // If this context is a nested container, attach it to parent pipeline.
         if let Some(parent_pipeline_id) = parent_pipeline_id {
             if let Some(parent) = self.pipelines.get_mut(&parent_pipeline_id) {
@@ -1551,6 +1563,9 @@ where
             },
             EmbedderToConstellationMessage::UpdatePinchZoomInfos(pipeline_id, pinch_zoom) => {
                 self.handle_update_pinch_zoom_infos(pipeline_id, pinch_zoom);
+            },
+            EmbedderToConstellationMessage::SetAccessibilityActive(active) => {
+                self.set_accessibility_active(active);
             },
         }
     }
@@ -3022,6 +3037,20 @@ where
         match event.event.state {
             KeyState::Down => self.active_keyboard_modifiers.insert(modified_modifier),
             KeyState::Up => self.active_keyboard_modifiers.remove(modified_modifier),
+        }
+    }
+
+    fn set_accessibility_active(&mut self, active: bool) {
+        if !(pref!(accessibility_enabled)) {
+            return;
+        }
+        if active == self.accessibility_active {
+            return;
+        }
+
+        self.accessibility_active = active;
+        for event_loop in self.event_loops() {
+            let _ = event_loop.send(ScriptThreadMessage::SetAccessibilityActive(active));
         }
     }
 

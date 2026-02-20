@@ -147,7 +147,7 @@ impl IDBObjectStore {
         self.name.borrow().clone()
     }
 
-    pub fn transaction(&self) -> DomRoot<IDBTransaction> {
+    pub(crate) fn transaction(&self) -> DomRoot<IDBTransaction> {
         self.transaction.as_rooted()
     }
 
@@ -194,7 +194,10 @@ impl IDBObjectStore {
         let transaction = &self.transaction;
 
         // If transaction is not active, throw a "TransactionInactiveError" DOMException.
-        if !transaction.is_active() {
+        // https://w3c.github.io/IndexedDB/#transaction-inactive
+        // A transaction is in this state after control returns to the event loop after its creation, and when events are not being dispatched.
+        // No requests can be made against the transaction when it is in this state.
+        if !transaction.is_active() || !transaction.is_usable() {
             return Err(Error::TransactionInactive(None));
         }
 
