@@ -12159,3 +12159,15 @@ dependencies = [
  "syn",
  "winnow",
 ]
+
+[[patch.unused]]
+name = "webrender"
+version = "0.62.0"
+
+[[patch.unused]]
+name = "webrender_api"
+version = "0.62.0"
+
+[[patch.unused]]
+name = "wr_malloc_size_of"
+version = "0.0.2"
