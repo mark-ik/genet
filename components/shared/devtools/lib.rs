@@ -23,9 +23,6 @@ use std::net::TcpStream;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use base::cross_process_instant::CrossProcessInstant;
-use base::generic_channel::GenericSender;
-use base::id::{BrowsingContextId, PipelineId, WebViewId};
 pub use embedder_traits::ConsoleLogLevel;
 use embedder_traits::Theme;
 use http::{HeaderMap, Method};
@@ -35,6 +32,9 @@ use net_traits::request::Destination;
 use net_traits::{DebugVec, TlsSecurityInfo};
 use profile_traits::mem::ReportsChan;
 use serde::{Deserialize, Serialize};
+use servo_base::cross_process_instant::CrossProcessInstant;
+use servo_base::generic_channel::GenericSender;
+use servo_base::id::{BrowsingContextId, PipelineId, WebViewId};
 use servo_url::ServoUrl;
 use uuid::Uuid;
 
@@ -154,7 +154,7 @@ pub enum DomMutation {
 /// <https://searchfox.org/mozilla-central/source/devtools/server/actors/object/property-iterator.js#51>
 #[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PropertyPreview {
+pub struct PropertyDescriptor {
     pub name: String,
     pub configurable: bool,
     pub enumerable: bool,
@@ -190,7 +190,7 @@ pub enum EvaluateJSReplyValue {
         is_async: Option<bool>,
         is_generator: Option<bool>,
         // Object preview
-        own_properties: Option<Vec<PropertyPreview>>,
+        own_properties: Option<Vec<PropertyDescriptor>>,
         own_properties_length: Option<u32>,
         // Array-specific
         kind: Option<String>,

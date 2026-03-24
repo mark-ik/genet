@@ -6,8 +6,6 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::collections::HashMap;
 use std::str;
 
-use base::generic_channel::GenericSender;
-use base::id::PipelineId;
 use devtools_traits::{
     AttrModification, AutoMargins, ComputedNodeLayout, CssDatabaseProperty, EventListenerInfo,
     NodeInfo, NodeStyle, RuleModification, TimelineMarker, TimelineMarkerType,
@@ -16,6 +14,8 @@ use js::context::JSContext;
 use markup5ever::{LocalName, ns};
 use rustc_hash::FxHashMap;
 use script_bindings::root::Dom;
+use servo_base::generic_channel::GenericSender;
+use servo_base::id::PipelineId;
 use servo_config::pref;
 use style::attr::AttrValue;
 
@@ -342,7 +342,7 @@ pub(crate) fn handle_get_stylesheet_style(
                 if selector != style.SelectorText() {
                     return None;
                 };
-                Some(style.Style(CanGc::from_cx(cx)))
+                Some(style.Style(cx))
             })
             .flat_map(|style| {
                 (0..style.Length()).map(move |i| {

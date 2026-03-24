@@ -7,13 +7,14 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use app_units::Au;
-use base::text::is_bidi_control;
 use fonts::{
     FontContext, FontRef, GlyphStore, LAST_RESORT_GLYPH_ADVANCE, ShapingFlags, ShapingOptions,
 };
+use icu_locid::subtags::Language;
 use log::warn;
 use malloc_size_of_derive::MallocSizeOf;
 use servo_arc::Arc as ServoArc;
+use servo_base::text::is_bidi_control;
 use style::computed_values::text_rendering::T as TextRendering;
 use style::computed_values::white_space_collapse::T as WhiteSpaceCollapse;
 use style::computed_values::word_break::T as WordBreak;
@@ -410,6 +411,12 @@ impl TextRun {
         } else {
             None
         };
+        let language = parent_style
+            .get_font()
+            ._x_lang
+            .0
+            .parse()
+            .unwrap_or(Language::UND);
 
         let mut flags = ShapingFlags::empty();
         if inherited_text_style.text_rendering == TextRendering::Optimizespeed {
@@ -459,6 +466,7 @@ impl TextRun {
                     letter_spacing,
                     word_spacing,
                     script: segment.script,
+                    language,
                     flags,
                 };
 

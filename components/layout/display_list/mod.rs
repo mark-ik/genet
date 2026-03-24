@@ -6,7 +6,6 @@ use std::cell::{OnceCell, RefCell};
 use std::sync::Arc;
 
 use app_units::{AU_PER_PX, Au};
-use base::id::{PipelineId, ScrollTreeNodeId};
 use clip::{Clip, ClipId};
 use euclid::{Box2D, Point2D, Rect, Scale, SideOffsets2D, Size2D, UnknownUnit, Vector2D};
 use fonts::GlyphStore;
@@ -15,6 +14,7 @@ use layout_api::ReflowStatistics;
 use net_traits::image_cache::Image as CachedImage;
 use paint_api::display_list::{PaintDisplayListInfo, SpatialTreeNodeInfo};
 use servo_arc::Arc as ServoArc;
+use servo_base::id::{PipelineId, ScrollTreeNodeId};
 use servo_config::opts::DiagnosticsLogging;
 use servo_config::{pref, prefs};
 use servo_geometry::MaxRect;
@@ -739,10 +739,6 @@ impl Fragment {
                 let style = iframe.base.style();
                 match style.get_inherited_box().visibility {
                     Visibility::Visible => {
-                        // From <https://www.w3.org/TR/paint-timing/#mark-paint-timing>:
-                        // > A parent frame should not be aware of the paint events from its child iframes, and
-                        // > vice versa. This means that a frame that contains just iframes will have first paint
-                        // > (due to the enclosing boxes of the iframes) but no first contentful paint.
                         let rect = iframe
                             .base
                             .rect
@@ -758,6 +754,15 @@ impl Fragment {
                             },
                             iframe.pipeline_id.into(),
                             true,
+                        );
+                        // From <https://www.w3.org/TR/paint-timing/#mark-paint-timing>:
+                        // > A parent frame should not be aware of the paint events from its child iframes, and
+                        // > vice versa. This means that a frame that contains just iframes will have first paint
+                        // > (due to the enclosing boxes of the iframes) but no first contentful paint.
+                        builder.check_if_paintable(
+                            rect.to_webrender(),
+                            common.clip_rect,
+                            style.clone_opacity(),
                         );
                     },
                     Visibility::Hidden => (),

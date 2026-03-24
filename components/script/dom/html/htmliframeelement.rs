@@ -5,7 +5,6 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use base::id::{BrowsingContextId, PipelineId, WebViewId};
 use constellation_traits::{
     IFrameLoadInfo, IFrameLoadInfoWithData, JsEvalResult, LoadData, LoadOrigin,
     NavigationHistoryBehavior, ScriptToConstellationMessage,
@@ -23,6 +22,7 @@ use net_traits::request::Destination;
 use profile_traits::ipc as ProfiledIpc;
 use script_bindings::script_runtime::temp_cx;
 use script_traits::{NewPipelineInfo, UpdatePipelineIdReason};
+use servo_base::id::{BrowsingContextId, PipelineId, WebViewId};
 use servo_url::ServoUrl;
 use style::attr::{AttrValue, LengthOrPercentageOrAuto};
 use stylo_atoms::Atom;
@@ -129,7 +129,7 @@ impl HTMLIFrameElement {
                     // Step 2.1. Let maybeURL be the result of encoding-parsing a URL given that attribute's value,
                     // relative to element's node document.
                     // Step 2.2. If maybeURL is not failure, then set url to maybeURL.
-                    self.owner_document().base_url().join(&url).ok()
+                    self.owner_document().encoding_parse_a_url(&url).ok()
                 }
             })
             // Step 1. Let url be the URL record about:blank.
@@ -958,7 +958,7 @@ impl HTMLIFrameElementMethods<crate::DomTypeHolder> for HTMLIFrameElement {
         if !self
             .owner_document()
             .origin()
-            .same_origin_domain(document.origin())
+            .same_origin_domain(&document.origin())
         {
             return None;
         }

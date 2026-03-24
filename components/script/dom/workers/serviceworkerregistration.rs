@@ -4,11 +4,11 @@
 
 use std::cell::Cell;
 
-use base::id::ServiceWorkerRegistrationId;
 use constellation_traits::{ScopeThings, WorkerScriptLoadOrigin};
 use devtools_traits::WorkerId;
 use dom_struct::dom_struct;
 use net_traits::request::Referrer;
+use servo_base::id::ServiceWorkerRegistrationId;
 use servo_url::ServoUrl;
 use uuid::Uuid;
 
@@ -126,7 +126,7 @@ impl ServiceWorkerRegistration {
 
         let worker_id = WorkerId(Uuid::new_v4());
         let devtools_chan = global.devtools_chan().cloned();
-        let init = prepare_workerscope_init(global, None, None);
+        let init = prepare_workerscope_init(global, None, Some(worker_id));
         ScopeThings {
             script_url,
             init,

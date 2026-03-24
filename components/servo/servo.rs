@@ -8,14 +8,6 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::Duration;
 
-use background_hang_monitor::HangMonitorRegister;
-use base::generic_channel::{GenericCallback, GenericSender, RoutedReceiver};
-pub use base::id::WebViewId;
-use base::id::{PipelineNamespace, PipelineNamespaceId};
-#[cfg(feature = "bluetooth")]
-use bluetooth::BluetoothThreadFactory;
-#[cfg(feature = "bluetooth")]
-use bluetooth_traits::BluetoothRequest;
 #[cfg(all(
     not(target_os = "windows"),
     not(target_os = "ios"),
@@ -61,6 +53,14 @@ use profile_traits::mem::{MemoryReportResult, ProfilerMsg, Reporter};
 use profile_traits::{mem, time};
 use rustc_hash::FxHashMap;
 use script::{JSEngineSetup, ServiceWorkerManager};
+use servo_background_hang_monitor::HangMonitorRegister;
+use servo_base::generic_channel::{GenericCallback, GenericSender, RoutedReceiver};
+pub use servo_base::id::WebViewId;
+use servo_base::id::{PipelineNamespace, PipelineNamespaceId};
+#[cfg(feature = "bluetooth")]
+use servo_bluetooth::BluetoothThreadFactory;
+#[cfg(feature = "bluetooth")]
+use servo_bluetooth_traits::BluetoothRequest;
 use servo_config::opts::Opts;
 use servo_config::prefs::{PrefValue, Preferences};
 use servo_config::{opts, pref, prefs};
@@ -134,6 +134,11 @@ enum Message {
     FromUnknown(EmbedderMsg),
 }
 
+pub struct PendingHandledInputEvent {
+    pub event_id: InputEventId,
+    pub webview_id: WebViewId,
+}
+
 struct ServoInner {
     delegate: RefCell<Rc<dyn ServoDelegate>>,
     paint: Rc<RefCell<Paint>>,
@@ -158,6 +163,11 @@ struct ServoInner {
     /// and deinitialization of the JS Engine. Multiprocess Servo instances have their
     /// own instance that exists in the content process instead.
     _js_engine_setup: Option<JSEngineSetup>,
+    /// [`InputEventId`]s that have been handled, but for which the embedder has
+    /// not been notified yet.
+    pending_handled_input_events: RefCell<Vec<PendingHandledInputEvent>>,
+    /// An [`EventLoopWaker`] used to wake up the main embedder event loop.
+    event_loop_waker: Box<dyn EventLoopWaker>,
 }
 
 impl ServoInner {
@@ -195,6 +205,26 @@ impl ServoInner {
             }
             if self.shutdown_state.get() == ShutdownState::FinishedShuttingDown {
                 break;
+            }
+        }
+        let pending_handled_input_events =
+            std::mem::take(&mut *self.pending_handled_input_events.borrow_mut());
+        for PendingHandledInputEvent {
+            event_id,
+            webview_id,
+        } in pending_handled_input_events
+        {
+            self.paint.borrow_mut().notify_input_event_handled(
+                webview_id,
+                event_id,
+                InputEventResult::DispatchFailed,
+            );
+            if let Some(webview) = self.get_webview_handle(webview_id) {
+                webview.delegate().notify_input_event_handled(
+                    webview,
+                    event_id,
+                    InputEventResult::DispatchFailed,
+                );
             }
         }
 
@@ -798,7 +828,7 @@ impl Servo {
             time_profiler_chan: time_profiler_chan.clone(),
             mem_profiler_chan: mem_profiler_chan.clone(),
             shutdown_state: shutdown_state.clone(),
-            event_loop_waker,
+            event_loop_waker: event_loop_waker.clone(),
             #[cfg(feature = "webxr")]
             webxr_registry: builder.webxr_registry,
         });
@@ -862,6 +892,8 @@ impl Servo {
             webviews: Default::default(),
             servo_errors: ServoErrorChannel::default(),
             _js_engine_setup: js_engine_setup,
+            pending_handled_input_events: Default::default(),
+            event_loop_waker,
         }))
     }
 
@@ -935,6 +967,10 @@ impl Servo {
         self.0.paint.borrow_mut()
     }
 
+    pub(crate) fn event_loop_waker(&self) -> &dyn EventLoopWaker {
+        &*self.0.event_loop_waker
+    }
+
     pub(crate) fn webviews_mut<'a>(
         &'a self,
     ) -> RefMut<'a, FxHashMap<WebViewId, Weak<RefCell<WebViewInner>>>> {
@@ -947,6 +983,13 @@ impl Servo {
 
     pub(crate) fn javascript_evaluator_mut<'a>(&'a self) -> RefMut<'a, JavaScriptEvaluator> {
         self.0.javascript_evaluator.borrow_mut()
+    }
+
+    pub(crate) fn add_pending_handled_input_event(&self, residue_event: PendingHandledInputEvent) {
+        self.0
+            .pending_handled_input_events
+            .borrow_mut()
+            .push(residue_event);
     }
 }
 

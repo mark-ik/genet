@@ -12,12 +12,11 @@ use std::time::Instant;
 use std::{iter, str};
 
 use app_units::Au;
-use base::id::PainterId;
-use base::text::{UnicodeBlock, UnicodeBlockMethod};
 use bitflags::bitflags;
 use euclid::default::{Point2D, Rect};
 use euclid::num::Zero;
 use fonts_traits::FontDescriptor;
+use icu_locid::subtags::Language;
 use log::debug;
 use malloc_size_of_derive::MallocSizeOf;
 use parking_lot::RwLock;
@@ -25,6 +24,8 @@ use read_fonts::tables::os2::{Os2, SelectionFlags};
 use read_fonts::types::Tag;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
+use servo_base::id::PainterId;
+use servo_base::text::{UnicodeBlock, UnicodeBlockMethod};
 use smallvec::SmallVec;
 use style::computed_values::font_variant_caps;
 use style::properties::style_structs::Font as FontStyleStruct;
@@ -391,6 +392,8 @@ pub struct ShapingOptions {
     pub word_spacing: Au,
     /// The Unicode script property of the characters in this run.
     pub script: Script,
+    /// The preferred language, obtained from the `lang` attribute.
+    pub language: Language,
     /// Various flags.
     pub flags: ShapingFlags,
 }

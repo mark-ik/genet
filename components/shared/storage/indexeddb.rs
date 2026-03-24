@@ -7,11 +7,11 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 
-use base::generic_channel::GenericSender;
 use malloc_size_of_derive::MallocSizeOf;
 use profile_traits::generic_callback::GenericCallback;
 use profile_traits::mem::ReportsChan;
 use serde::{Deserialize, Serialize};
+use servo_base::generic_channel::GenericSender;
 use servo_url::origin::ImmutableOrigin;
 use uuid::Uuid;
 
@@ -425,7 +425,7 @@ pub enum ConnectionMsg {
         version: u64,
         old_version: u64,
     },
-    /// A backend error related to the database occured.
+    /// A backend error related to the database occurred.
     DatabaseError {
         name: String,
         id: Uuid,

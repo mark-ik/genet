@@ -9,8 +9,6 @@ use std::fs::create_dir_all;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base::generic_channel::{self, GenericSender, RoutedReceiver};
-use base::id::{PainterId, PipelineId, WebViewId};
 use bitflags::bitflags;
 use canvas_traits::webgl::{WebGLContextId, WebGLThreads};
 use constellation_traits::EmbedderToConstellationMessage;
@@ -34,6 +32,8 @@ use profile_traits::mem::{
 };
 use profile_traits::path;
 use profile_traits::time::{self as profile_time};
+use servo_base::generic_channel::{self, GenericSender, RoutedReceiver};
+use servo_base::id::{PainterId, PipelineId, WebViewId};
 use servo_config::pref;
 use servo_geometry::DeviceIndependentPixel;
 use style_traits::CSSPixel;
@@ -786,12 +786,14 @@ impl Paint {
             .save_capture(capture_path, CaptureBits::all());
     }
 
-    pub fn notify_input_event(&self, webview_id: WebViewId, event: InputEventAndId) {
+    /// Returning `false` means this is not going to reach the Constellation,
+    /// and we need to directly notify the embedder that input event is handled.
+    pub fn notify_input_event(&self, webview_id: WebViewId, event: InputEventAndId) -> bool {
         if self.shutdown_state() != ShutdownState::NotShuttingDown {
-            return;
+            return false;
         }
         self.painter_mut(webview_id.into())
-            .notify_input_event(webview_id, event);
+            .notify_input_event(webview_id, event)
     }
 
     pub fn notify_scroll_event(&self, webview_id: WebViewId, scroll: Scroll, point: WebViewPoint) {

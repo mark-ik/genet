@@ -11,8 +11,6 @@ use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use atomic_refcell::AtomicRefCell;
-use base::generic_channel::{self, GenericSender};
-use base::id::TEST_PIPELINE_ID;
 use devtools_traits::EvaluateJSReplyValue::{
     ActorValue, BooleanValue, NullValue, NumberValue, StringValue, VoidValue,
 };
@@ -23,11 +21,13 @@ use devtools_traits::{
 use malloc_size_of_derive::MallocSizeOf;
 use serde::Serialize;
 use serde_json::{self, Map, Number, Value};
+use servo_base::generic_channel::{self, GenericSender};
+use servo_base::id::TEST_PIPELINE_ID;
 use uuid::Uuid;
 
 use crate::actor::{Actor, ActorError, ActorRegistry};
 use crate::actors::browsing_context::BrowsingContextActor;
-use crate::actors::object::{ObjectActor, PropertyDescriptor};
+use crate::actors::object::{ObjectActor, ObjectPropertyDescriptor};
 use crate::actors::worker::WorkerActor;
 use crate::protocol::{ClientRequest, JsonPacketStream};
 use crate::resource::{ResourceArrayType, ResourceAvailable};
@@ -93,15 +93,15 @@ fn console_argument_to_value(argument: ConsoleArgument, registry: &ActorRegistry
             #[serde(rename_all = "camelCase")]
             struct DevtoolsConsoleObjectArgumentPreview {
                 kind: String,
-                own_properties: HashMap<String, PropertyDescriptor>,
+                own_properties: HashMap<String, ObjectPropertyDescriptor>,
                 own_properties_length: usize,
             }
 
-            let own_properties: HashMap<String, PropertyDescriptor> = object
+            let own_properties: HashMap<String, ObjectPropertyDescriptor> = object
                 .own_properties
                 .into_iter()
                 .map(|property| {
-                    let property_descriptor = PropertyDescriptor {
+                    let property_descriptor = ObjectPropertyDescriptor {
                         configurable: property.configurable,
                         enumerable: property.enumerable,
                         writable: property.writable,
@@ -435,7 +435,7 @@ impl ConsoleActor {
                         let mut own_props_map = Map::new();
                         for prop in props {
                             let descriptor =
-                                serde_json::to_value(PropertyDescriptor::from(prop)).unwrap();
+                                serde_json::to_value(ObjectPropertyDescriptor::from(prop)).unwrap();
                             own_props_map.insert(prop.name.clone(), descriptor);
                         }
                         preview.insert("ownProperties".to_owned(), Value::Object(own_props_map));

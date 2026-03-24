@@ -12,8 +12,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 
-use base::generic_channel::{self, GenericSender, ReceiveError, RoutedReceiver};
-use base::id::{PipelineNamespace, ServiceWorkerId, ServiceWorkerRegistrationId};
 use constellation_traits::{
     DOMMessage, Job, JobError, JobResult, JobResultValue, JobType, SWManagerMsg, SWManagerSenders,
     ScopeThings, ServiceWorkerManagerFactory, ServiceWorkerMsg,
@@ -23,6 +21,8 @@ use fonts::FontContext;
 use ipc_channel::ipc;
 use ipc_channel::router::ROUTER;
 use net_traits::{CoreResourceMsg, CustomResponseMediator};
+use servo_base::generic_channel::{self, GenericSender, ReceiveError, RoutedReceiver};
+use servo_base::id::{PipelineNamespace, ServiceWorkerId, ServiceWorkerRegistrationId};
 use servo_config::pref;
 use servo_url::{ImmutableOrigin, ServoUrl};
 
@@ -455,7 +455,7 @@ impl ServiceWorkerManager {
 fn update_serviceworker(
     own_sender: GenericSender<ServiceWorkerMsg>,
     scope_url: ServoUrl,
-    scope_things: ScopeThings,
+    mut scope_things: ScopeThings,
     font_context: Arc<FontContext>,
 ) -> (
     ServiceWorker,
@@ -465,7 +465,8 @@ fn update_serviceworker(
     Arc<AtomicBool>,
 ) {
     let (sender, receiver) = unbounded();
-    let (_devtools_sender, devtools_receiver) = generic_channel::channel().unwrap();
+    let (devtools_sender, devtools_receiver) = generic_channel::channel().unwrap();
+    scope_things.init.from_devtools_sender = Some(devtools_sender);
     let worker_id = ServiceWorkerId::new();
 
     let (control_sender, control_receiver) = unbounded();

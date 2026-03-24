@@ -80,6 +80,7 @@ hkdf = { workspace = true }
 html5ever = { workspace = true }
 http = { workspace = true }
 hyper_serde = { workspace = true }
+icu_locid = { workspace = true }
 indexmap = { workspace = true }
 ipc-channel = { workspace = true }
 itertools = { workspace = true }
@@ -155,7 +156,6 @@ unicode-bidi = { workspace = true }
 unicode-script = { workspace = true }
 url = { workspace = true }
 urlpattern = { workspace = true }
-utf-8 = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
 webdriver = { workspace = true }
 webgpu_traits = { workspace = true }
