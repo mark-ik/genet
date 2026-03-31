@@ -14,7 +14,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{fmt, mem};
 
 use app_units::Au;
-use bitflags::bitflags;
 use cssparser::match_ignore_ascii_case;
 use devtools_traits::{AttrInfo, DomMutation, ScriptToDevtoolsControlMsg};
 use dom_struct::dom_struct;
@@ -37,7 +36,6 @@ use selectors::sink::Push;
 use servo_arc::Arc;
 use style::applicable_declarations::ApplicableDeclarationBlock;
 use style::attr::{AttrValue, LengthOrPercentageOrAuto};
-use style::computed_values::visibility::T as Visibility;
 use style::context::QuirksMode;
 use style::invalidation::element::restyle_hints::RestyleHint;
 use style::properties::longhands::{
@@ -99,7 +97,6 @@ use crate::dom::bindings::domname::{
 use crate::dom::bindings::error::{Error, ErrorResult, Fallible};
 use crate::dom::bindings::inheritance::{Castable, ElementTypeId, HTMLElementTypeId, NodeTypeId};
 use crate::dom::bindings::num::Finite;
-use crate::dom::bindings::refcounted::{Trusted, TrustedPromise};
 use crate::dom::bindings::reflector::DomObject;
 use crate::dom::bindings::root::{Dom, DomRoot, LayoutDom, MutNullableDom, ToLayout};
 use crate::dom::bindings::str::DOMString;
@@ -116,8 +113,6 @@ use crate::dom::domrect::DOMRect;
 use crate::dom::domrectlist::DOMRectList;
 use crate::dom::domtokenlist::DOMTokenList;
 use crate::dom::elementinternals::ElementInternals;
-use crate::dom::event::{EventBubbles, EventCancelable, EventComposed};
-use crate::dom::eventtarget::EventTarget;
 use crate::dom::globalscope::GlobalScope;
 use crate::dom::html::htmlanchorelement::HTMLAnchorElement;
 use crate::dom::html::htmlbodyelement::{HTMLBodyElement, HTMLBodyElementLayoutHelpers};
@@ -183,7 +178,6 @@ use crate::dom::virtualmethods::{VirtualMethods, vtable_for};
 use crate::script_runtime::CanGc;
 use crate::script_thread::ScriptThread;
 use crate::stylesheet_loader::StylesheetOwner;
-use crate::task::TaskOnce;
 
 // TODO: Update focus state when the top-level browsing context gains or loses system focus,
 // and when the element enters or leaves a browsing context container.
@@ -1818,176 +1812,9 @@ impl Element {
         }
     }
 
-    fn is_editing_host(&self) -> bool {
+    pub(crate) fn is_editing_host(&self) -> bool {
         self.downcast::<HTMLElement>()
             .is_some_and(|element| element.IsContentEditable())
-    }
-
-    /// <https://html.spec.whatwg.org/multipage/#focusable-area>
-    ///
-    /// The list of focusable areas at this point in the specification is both incomplete and leaves
-    /// a lot up to the user agent. In addition, the specifications for "click focusable" and
-    /// "sequentially focusable" are written in a way that they are subsets of all focusable areas.
-    /// In order to avoid having to first determine whether an element is a focusable area and then
-    /// work backwards to figure out what kind it is, this function attempts to classify the
-    /// different types of focusable areas ahead of time so that the logic is useful for answering
-    /// both "Is this element a focusable area?" and "Is this element click (or sequentially)
-    /// focusable."
-    fn focusable_area_kind(&self) -> FocusableAreaKind {
-        // Do not allow unrendered, disconnected, or disabled nodes to be focusable areas ever.
-        let node: &Node = self.upcast();
-        if !node.is_connected() || !self.has_css_layout_box() || self.is_actually_disabled() {
-            return Default::default();
-        }
-
-        // <https://www.w3.org/TR/css-display-4/#visibility>
-        // Invisible elements are removed from navigation.
-        if self
-            .style()
-            .is_some_and(|style| style.get_inherited_box().visibility != Visibility::Visible)
-        {
-            return Default::default();
-        }
-
-        // > Elements that meet all the following criteria:
-        // > the element's tabindex value is non-null, or the element is determined by the user agent to be focusable;
-        // > the element is either not a shadow host, or has a shadow root whose delegates focus is false;
-        // TODO: Handle this.
-        // > the element is not actually disabled;
-        // Note: Checked above
-        // > the element is not inert;
-        // TODO: Handle this.
-        // > the element is either being rendered, delegating its rendering to its children, or
-        // > being used as relevant canvas fallback content.
-        // Note: Checked above
-        // TODO: Handle fallback canvas content.
-        match self.explicitly_set_tab_index() {
-            // From <https://html.spec.whatwg.org/multipage/#tabindex-ordered-focus-navigation-scope>:
-            // > A tabindex-ordered focus navigation scope is a list of focusable areas and focus
-            // > navigation scope owners. Every focus navigation scope owner owner has tabindex-ordered
-            // > focus navigation scope, whose contents are determined as follows:
-            // >  - It contains all elements in owner's focus navigation scope that are themselves focus
-            // >    navigation scope owners, except the elements whose tabindex value is a negative integer.
-            // >  - It contains all of the focusable areas whose DOM anchor is an element in owner's focus
-            // >    navigation scope, except the focusable areas whose tabindex value is a negative integer.
-            Some(tab_index) if tab_index < 0 => return FocusableAreaKind::Click,
-            Some(_) => return FocusableAreaKind::Click | FocusableAreaKind::Sequential,
-            None => {},
-        }
-
-        // From <https://html.spec.whatwg.org/multipage/#tabindex-value>
-        // > If the value is null
-        // > ...
-        // > Modulo platform conventions, it is suggested that the following elements should be
-        // > considered as focusable areas and be sequentially focusable:
-        let is_focusable_area_due_to_type = match node.type_id() {
-            // >  - a elements that have an href attribute
-            NodeTypeId::Element(ElementTypeId::HTMLElement(
-                HTMLElementTypeId::HTMLAnchorElement,
-            )) => self.has_attribute(&local_name!("href")),
-
-            // >  - input elements whose type attribute are not in the Hidden state
-            // >  - button elements
-            // >  - select elements
-            // >  - textarea elements
-            // >  - Navigable containers
-            //
-            // Note: the `hidden` attribute is checked above for all elements.
-            NodeTypeId::Element(ElementTypeId::HTMLElement(
-                HTMLElementTypeId::HTMLInputElement |
-                HTMLElementTypeId::HTMLButtonElement |
-                HTMLElementTypeId::HTMLSelectElement |
-                HTMLElementTypeId::HTMLTextAreaElement |
-                HTMLElementTypeId::HTMLIFrameElement,
-            )) => true,
-            _ => {
-                // >  - summary elements that are the first summary element child of a details element
-                // >  - Editing hosts
-                // > -  Elements with a draggable attribute set, if that would enable the user agent to allow
-                // >    the user to begin drag operations for those elements without the use of a pointing device
-                self.downcast::<HTMLElement>()
-                    .is_some_and(|html_element| html_element.is_a_summary_for_its_parent_details()) ||
-                    self.is_editing_host() ||
-                    self.get_string_attribute(&local_name!("draggable")) == "true"
-            },
-        };
-
-        if is_focusable_area_due_to_type {
-            return FocusableAreaKind::Click | FocusableAreaKind::Sequential;
-        }
-
-        // > The scrollable regions of elements that are being rendered and are not inert.
-        //
-        // Note that these kind of focusable areas are only focusable via the keyboard.
-        //
-        // TODO: Handle inert.
-        if self
-            .upcast::<Node>()
-            .effective_overflow()
-            .is_some_and(|axes_overflow| {
-                // This is checking whether there is an input event scrollable overflow value in
-                // a given axis and also overflow in that same axis.
-                (matches!(axes_overflow.x, Overflow::Auto | Overflow::Scroll) &&
-                    self.ScrollWidth() > self.ClientWidth()) ||
-                    (matches!(axes_overflow.y, Overflow::Auto | Overflow::Scroll) &&
-                        self.ScrollHeight() > self.ClientHeight())
-            })
-        {
-            return FocusableAreaKind::Sequential;
-        }
-
-        Default::default()
-    }
-
-    /// <https://html.spec.whatwg.org/multipage/#sequentially-focusable>.
-    pub(crate) fn is_sequentially_focusable(&self) -> bool {
-        self.focusable_area_kind()
-            .contains(FocusableAreaKind::Sequential)
-    }
-
-    /// <https://html.spec.whatwg.org/multipage/#click-focusable>
-    pub(crate) fn is_click_focusable(&self) -> bool {
-        self.focusable_area_kind()
-            .contains(FocusableAreaKind::Click)
-    }
-
-    /// <https://html.spec.whatwg.org/multipage/#focusable-area>
-    pub(crate) fn is_focusable_area(&self) -> bool {
-        !self.focusable_area_kind().is_empty()
-    }
-
-    /// Returns the focusable appropriate DOM anchor for the focuable area when this element is
-    /// clicked on.
-    ///
-    /// This returns the shadow host if this is a text control inner editor. This is a workaround
-    /// for the focus delegation of shadow DOM and should be used only to delegate focusable inner
-    /// editor of [HTMLInputElement] and [HTMLTextAreaElement].
-    ///
-    /// TODO: This should eventually handle `delegatesFocus` in shadow DOM.
-    pub(crate) fn find_click_focusable_area(&self) -> Option<DomRoot<Element>> {
-        if self.is_click_focusable() {
-            return Some(DomRoot::from_ref(self));
-        }
-
-        if self.upcast::<Node>().implemented_pseudo_element() ==
-            Some(PseudoElement::ServoTextControlInnerEditor)
-        {
-            // The containing shadow host might not be a focusable area if it is disabled.
-            let containing_shadow_host = self
-                .containing_shadow_root()
-                .map(|root| root.Host())
-                .expect("Text control inner shadow DOM should always have a shadow host.");
-            if !containing_shadow_host.is_click_focusable() {
-                return None;
-            }
-            return Some(containing_shadow_host);
-        }
-
-        self.node
-            .inclusive_ancestors(ShadowIncluding::Yes)
-            .find_map(|node| {
-                DomRoot::downcast::<Element>(node).filter(|element| element.is_click_focusable())
-            })
     }
 
     pub(crate) fn is_actually_disabled(&self) -> bool {
@@ -2784,14 +2611,6 @@ impl Element {
                 None
             ),
         }
-    }
-
-    // https://fullscreen.spec.whatwg.org/#fullscreen-element-ready-check
-    pub(crate) fn fullscreen_element_ready_check(&self) -> bool {
-        if !self.is_connected() {
-            return false;
-        }
-        self.owner_document().get_allow_fullscreen()
     }
 
     // https://html.spec.whatwg.org/multipage/#home-subtree
@@ -5499,118 +5318,6 @@ impl TagName {
     }
 }
 
-pub(crate) struct ElementPerformFullscreenEnter {
-    element: Trusted<Element>,
-    document: Trusted<Document>,
-    promise: TrustedPromise,
-    error: bool,
-}
-
-impl ElementPerformFullscreenEnter {
-    pub(crate) fn new(
-        element: Trusted<Element>,
-        document: Trusted<Document>,
-        promise: TrustedPromise,
-        error: bool,
-    ) -> Box<ElementPerformFullscreenEnter> {
-        Box::new(ElementPerformFullscreenEnter {
-            element,
-            document,
-            promise,
-            error,
-        })
-    }
-}
-
-impl TaskOnce for ElementPerformFullscreenEnter {
-    /// Step 9-14 of <https://fullscreen.spec.whatwg.org/#dom-element-requestfullscreen>
-    fn run_once(self, cx: &mut js::context::JSContext) {
-        let element = self.element.root();
-        let promise = self.promise.root();
-        let document = element.owner_document();
-
-        // Step 9
-        // > If any of the following conditions are false, then set error to true:
-        // > - This’s node document is pendingDoc.
-        // > - The fullscreen element ready check for this returns true.
-        // Step 10
-        // > If error is true:
-        // > - Append (fullscreenerror, this) to pendingDoc’s list of pending fullscreen events.
-        // > - Reject promise with a TypeError exception and terminate these steps.
-        if self.document.root() != document ||
-            !element.fullscreen_element_ready_check() ||
-            self.error
-        {
-            // TODO(#31866): we should queue this and fire them in update the rendering.
-            document
-                .upcast::<EventTarget>()
-                .fire_event(atom!("fullscreenerror"), CanGc::from_cx(cx));
-            promise.reject_error(
-                Error::Type(c"fullscreen is not connected".to_owned()),
-                CanGc::from_cx(cx),
-            );
-            return;
-        }
-
-        // TODO(#42067): Implement step 11-13
-        // The following operations is based on the old version of the specs.
-        element.set_fullscreen_state(true);
-        document.set_fullscreen_element(Some(&element));
-        document.upcast::<EventTarget>().fire_event_with_params(
-            atom!("fullscreenchange"),
-            EventBubbles::Bubbles,
-            EventCancelable::NotCancelable,
-            EventComposed::Composed,
-            CanGc::from_cx(cx),
-        );
-
-        // Step 14.
-        // > Resolve promise with undefined.
-        promise.resolve_native(&(), CanGc::from_cx(cx));
-    }
-}
-
-pub(crate) struct ElementPerformFullscreenExit {
-    element: Trusted<Element>,
-    promise: TrustedPromise,
-}
-
-impl ElementPerformFullscreenExit {
-    pub(crate) fn new(
-        element: Trusted<Element>,
-        promise: TrustedPromise,
-    ) -> Box<ElementPerformFullscreenExit> {
-        Box::new(ElementPerformFullscreenExit { element, promise })
-    }
-}
-
-impl TaskOnce for ElementPerformFullscreenExit {
-    /// Step 9-16 of <https://fullscreen.spec.whatwg.org/#exit-fullscreen>
-    fn run_once(self, cx: &mut js::context::JSContext) {
-        let element = self.element.root();
-        let document = element.owner_document();
-        // Step 9.
-        // > Run the fully unlock the screen orientation steps with doc.
-        // TODO: Need to implement ScreenOrientation API first
-
-        // TODO(#42067): Implement step 10-15
-        // The following operations is based on the old version of the specs.
-        element.set_fullscreen_state(false);
-        document.set_fullscreen_element(None);
-        document.upcast::<EventTarget>().fire_event_with_params(
-            atom!("fullscreenchange"),
-            EventBubbles::Bubbles,
-            EventCancelable::NotCancelable,
-            EventComposed::Composed,
-            CanGc::from_cx(cx),
-        );
-
-        // Step 16
-        // > Resolve promise with undefined.
-        self.promise.root().resolve_native(&(), CanGc::from_cx(cx));
-    }
-}
-
 /// <https://html.spec.whatwg.org/multipage/#cors-settings-attribute>
 pub(crate) fn reflect_cross_origin_attribute(element: &Element) -> Option<DOMString> {
     element
@@ -5708,25 +5415,4 @@ pub(crate) fn is_element_affected_by_legacy_background_presentational_hint(
                 local_name!("td") |
                 local_name!("th")
         )
-}
-
-/// What kind of focusable area an [`Element`] is.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct FocusableAreaKind(u8);
-
-bitflags! {
-    impl FocusableAreaKind: u8 {
-        /// <https://html.spec.whatwg.org/multipage/#click-focusable>
-        ///
-        /// > A focusable area is said to be click focusable if the user agent determines that it is
-        /// > click focusable. User agents should consider focusable areas with non-null tabindex values
-        /// > to be click focusable.
-        const Click = 1 << 0;
-        /// <https://html.spec.whatwg.org/multipage/#sequentially-focusable>.
-        ///
-        /// > A focusable area is said to be sequentially focusable if it is included in its
-        /// > Document's sequential focus navigation order and the user agent determines that it is
-        /// > sequentially focusable.
-        const Sequential = 1 << 1;
-    }
 }
