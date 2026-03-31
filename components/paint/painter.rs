@@ -253,11 +253,40 @@ impl Painter {
         let notifier = Box::new(RenderNotifier::new(painter_id, paint.paint_proxy.clone()));
 
         let (mut webrender_renderer, webrender_api_sender) = if use_wgpu {
-            info!("Using wgpu backend (headless — no surface presentation yet)");
             let size = rendering_context.size();
+
+            // Create a wgpu surface from the window's raw handles if available.
+            let (wgpu_instance, surface) = match (
+                rendering_context.raw_window_handle(),
+                rendering_context.raw_display_handle(),
+            ) {
+                (Some(raw_window_handle), Some(raw_display_handle)) => {
+                    let instance = webrender::wgpu::Instance::default();
+                    // SAFETY: The winit window (HeadedWindow) outlives the Painter and
+                    // the wgpu Surface, so the raw handles remain valid.
+                    #[allow(unsafe_code)]
+                    let surface = unsafe {
+                        instance.create_surface_unsafe(
+                            webrender::wgpu::SurfaceTargetUnsafe::RawHandle {
+                                raw_display_handle,
+                                raw_window_handle,
+                            },
+                        )
+                    }
+                    .expect("Failed to create wgpu surface from window handles");
+                    info!("Using wgpu backend with window surface ({}x{})", size.width, size.height);
+                    (Some(instance), Some(surface))
+                }
+                _ => {
+                    info!("Using wgpu backend (headless — no surface)");
+                    (None, None)
+                }
+            };
+
             webrender::create_webrender_instance_with_backend(
                 webrender::RendererBackend::Wgpu {
-                    surface: None,
+                    instance: wgpu_instance,
+                    surface,
                     width: size.width,
                     height: size.height,
                 },
@@ -1303,10 +1332,17 @@ impl Painter {
             return;
         }
 
-        if let Err(error) = self.rendering_context.make_current() {
-            error!("Failed to make the rendering context current: {error:?}");
+        if !self.use_wgpu {
+            if let Err(error) = self.rendering_context.make_current() {
+                error!("Failed to make the rendering context current: {error:?}");
+            }
+            self.rendering_context.resize(new_size);
         }
-        self.rendering_context.resize(new_size);
+
+        // Resize the wgpu surface if present.
+        if let Some(renderer) = self.webrender_renderer.as_mut() {
+            renderer.resize_surface(new_size.width, new_size.height);
+        }
 
         let new_size = Size2D::new(new_size.width as f32, new_size.height as f32);
         let new_viewport_rect = Rect::from(new_size).to_box2d();

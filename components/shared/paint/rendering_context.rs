@@ -85,6 +85,16 @@ pub trait RenderingContext {
     fn refresh_driver(&self) -> Option<Rc<dyn RefreshDriver>> {
         None
     }
+
+    /// Return the raw window handle for creating a wgpu surface. Default to `None`.
+    fn raw_window_handle(&self) -> Option<raw_window_handle::RawWindowHandle> {
+        None
+    }
+
+    /// Return the raw display handle for creating a wgpu surface. Default to `None`.
+    fn raw_display_handle(&self) -> Option<raw_window_handle::RawDisplayHandle> {
+        None
+    }
 }
 
 /// A rendering context that uses the Surfman library to create and manage
@@ -410,6 +420,10 @@ pub struct WindowRenderingContext {
     /// The inner size of the window in physical pixels which excludes OS decorations.
     size: Cell<PhysicalSize<u32>>,
     surfman_context: SurfmanRenderingContext,
+    /// Raw window handle, stored for wgpu surface creation.
+    raw_window_handle: raw_window_handle::RawWindowHandle,
+    /// Raw display handle, stored for wgpu surface creation.
+    raw_display_handle: raw_window_handle::RawDisplayHandle,
 }
 
 impl WindowRenderingContext {
@@ -441,6 +455,9 @@ impl WindowRenderingContext {
         size: PhysicalSize<u32>,
         refresh_driver: Option<Rc<dyn RefreshDriver>>,
     ) -> Result<Self, Error> {
+        let raw_display_handle = display_handle.as_raw();
+        let raw_window_handle = window_handle.as_raw();
+
         let connection = Connection::from_display_handle(display_handle)?;
         let adapter = connection.create_adapter()?;
         let surfman_context = SurfmanRenderingContext::new(&connection, &adapter, refresh_driver)?;
@@ -459,6 +476,8 @@ impl WindowRenderingContext {
         Ok(Self {
             size: Cell::new(size),
             surfman_context,
+            raw_window_handle,
+            raw_display_handle,
         })
     }
 
@@ -578,6 +597,14 @@ impl RenderingContext for WindowRenderingContext {
 
     fn refresh_driver(&self) -> Option<Rc<dyn RefreshDriver>> {
         self.surfman_context.refresh_driver()
+    }
+
+    fn raw_window_handle(&self) -> Option<raw_window_handle::RawWindowHandle> {
+        Some(self.raw_window_handle)
+    }
+
+    fn raw_display_handle(&self) -> Option<raw_window_handle::RawDisplayHandle> {
+        Some(self.raw_display_handle)
     }
 }
 
@@ -884,6 +911,14 @@ impl RenderingContext for OffscreenRenderingContext {
 
     fn refresh_driver(&self) -> Option<Rc<dyn RefreshDriver>> {
         self.parent_context().refresh_driver()
+    }
+
+    fn raw_window_handle(&self) -> Option<raw_window_handle::RawWindowHandle> {
+        self.parent_context.raw_window_handle()
+    }
+
+    fn raw_display_handle(&self) -> Option<raw_window_handle::RawDisplayHandle> {
+        self.parent_context.raw_display_handle()
     }
 }
 
