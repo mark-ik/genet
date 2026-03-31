@@ -215,7 +215,7 @@ vello = "0.6"
 vello_cpu = "0.0.4"
 webdriver = { version = "0.53.0", default-features = false }
 webpki-roots = "1.0"
-webrender = { version = "0.68", features = ["capture"] }
+webrender = { version = "0.68", features = ["capture", "wgpu_backend"] }
 webrender_api = "0.68"
 web_atoms = "0.2"
 wgpu-core = "26"
@@ -374,10 +374,9 @@ codegen-units = 1
 # tendril = { path = "../html5ever/tendril" }
 #
 # For WebRender:
-#
-# webrender = { path = "../webrender/webrender" }
-# webrender_api = { path = "../webrender/webrender_api" }
-# wr_malloc_size_of = { path = "../webrender/wr_malloc_size_of" }
+webrender = { path = "../webrender/webrender" }
+webrender_api = { path = "../webrender/webrender_api" }
+wr_malloc_size_of = { path = "../webrender/wr_malloc_size_of" }
 #
 # Or for mozjs:
 #
