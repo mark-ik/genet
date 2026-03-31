@@ -12,11 +12,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 
-use constellation_traits::{
-    DOMMessage, Job, JobError, JobResult, JobResultValue, JobType, SWManagerMsg, SWManagerSenders,
-    ScopeThings, ServiceWorkerManagerFactory, ServiceWorkerMsg,
-};
 use crossbeam_channel::{Receiver, Sender, select, unbounded};
+use devtools_traits::{DevtoolsPageInfo, ScriptToDevtoolsControlMsg};
 use fonts::FontContext;
 use ipc_channel::ipc;
 use ipc_channel::router::ROUTER;
@@ -24,6 +21,10 @@ use net_traits::{CoreResourceMsg, CustomResponseMediator};
 use servo_base::generic_channel::{self, GenericSender, ReceiveError, RoutedReceiver};
 use servo_base::id::{PipelineNamespace, ServiceWorkerId, ServiceWorkerRegistrationId};
 use servo_config::pref;
+use servo_constellation_traits::{
+    DOMMessage, Job, JobError, JobResult, JobResultValue, JobType, SWManagerMsg, SWManagerSenders,
+    ScopeThings, ServiceWorkerManagerFactory, ServiceWorkerMsg,
+};
 use servo_url::{ImmutableOrigin, ServoUrl};
 
 use crate::dom::abstractworker::{MessageData, WorkerScriptMsg};
@@ -467,6 +468,28 @@ fn update_serviceworker(
     let (sender, receiver) = unbounded();
     let (devtools_sender, devtools_receiver) = generic_channel::channel().unwrap();
     scope_things.init.from_devtools_sender = Some(devtools_sender);
+
+    if let Some(ref chan) = scope_things.devtools_chan {
+        if let Some(ref sender) = scope_things.init.from_devtools_sender {
+            let page_info = DevtoolsPageInfo {
+                title: format!("Service Worker for {}", scope_things.script_url),
+                url: scope_things.script_url.clone(),
+                is_top_level_global: false,
+                is_service_worker: true,
+            };
+            let _ = chan.send(ScriptToDevtoolsControlMsg::NewGlobal(
+                (
+                    scope_things.browsing_context_id,
+                    scope_things.init.pipeline_id,
+                    Some(scope_things.worker_id),
+                    scope_things.webview_id,
+                ),
+                sender.clone(),
+                page_info,
+            ));
+        }
+    }
+
     let worker_id = ServiceWorkerId::new();
 
     let (control_sender, control_receiver) = unbounded();

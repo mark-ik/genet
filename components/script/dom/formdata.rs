@@ -2,10 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use constellation_traits::BlobImpl;
 use dom_struct::dom_struct;
 use html5ever::LocalName;
 use js::rust::HandleObject;
+use servo_constellation_traits::BlobImpl;
 
 use super::bindings::trace::NoTrace;
 use crate::dom::bindings::cell::DomRefCell;
@@ -25,7 +25,7 @@ use crate::dom::html::htmlelement::HTMLElement;
 use crate::dom::html::htmlformelement::{
     FormDatum, FormDatumValue, FormSubmitterElement, HTMLFormElement,
 };
-use crate::dom::html::htmlinputelement::HTMLInputElement;
+use crate::dom::html::input_element::HTMLInputElement;
 use crate::script_runtime::CanGc;
 
 #[dom_struct]

@@ -30,7 +30,7 @@ struct BreakpointRequest {
 #[derive(MallocSizeOf)]
 pub(crate) struct BreakpointListActor {
     name: String,
-    browsing_context: String,
+    browsing_context_name: String,
 }
 
 impl Actor for BreakpointListActor {
@@ -60,10 +60,11 @@ impl Actor for BreakpointListActor {
                 } = msg.location;
                 let source_url = source_url.ok_or(ActorError::Internal)?;
 
-                let browsing_context =
-                    registry.find::<BrowsingContextActor>(&self.browsing_context);
-                let thread = registry.find::<ThreadActor>(&browsing_context.thread);
-                let source = thread
+                let browsing_context_actor =
+                    registry.find::<BrowsingContextActor>(&self.browsing_context_name);
+                let thread_actor =
+                    registry.find::<ThreadActor>(&browsing_context_actor.thread_name);
+                let source = thread_actor
                     .source_manager
                     .find_source(registry, &source_url)
                     .ok_or(ActorError::Internal)?;
@@ -96,10 +97,11 @@ impl Actor for BreakpointListActor {
                 } = msg.location;
                 let source_url = source_url.ok_or(ActorError::Internal)?;
 
-                let browsing_context =
-                    registry.find::<BrowsingContextActor>(&self.browsing_context);
-                let thread = registry.find::<ThreadActor>(&browsing_context.thread);
-                let source = thread
+                let browsing_context_actor =
+                    registry.find::<BrowsingContextActor>(&self.browsing_context_name);
+                let thread_actor =
+                    registry.find::<ThreadActor>(&browsing_context_actor.thread_name);
+                let source = thread_actor
                     .source_manager
                     .find_source(registry, &source_url)
                     .ok_or(ActorError::Internal)?;
@@ -124,10 +126,10 @@ impl Actor for BreakpointListActor {
 }
 
 impl BreakpointListActor {
-    pub fn new(name: String, browsing_context: String) -> Self {
+    pub fn new(name: String, browsing_context_name: String) -> Self {
         Self {
             name,
-            browsing_context,
+            browsing_context_name,
         }
     }
 }

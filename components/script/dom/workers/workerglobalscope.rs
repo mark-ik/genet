@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use constellation_traits::WorkerGlobalScopeInit;
 use content_security_policy::CspList;
 use devtools_traits::{DevtoolScriptControlMsg, WorkerId};
 use dom_struct::dom_struct;
@@ -28,6 +27,7 @@ use profile_traits::mem::{ProcessReports, perform_memory_report};
 use servo_base::cross_process_instant::CrossProcessInstant;
 use servo_base::generic_channel::{GenericSend, GenericSender, RoutedReceiver};
 use servo_base::id::{PipelineId, PipelineNamespace};
+use servo_constellation_traits::WorkerGlobalScopeInit;
 use servo_url::{MutableOrigin, ServoUrl};
 use timers::TimerScheduler;
 use uuid::Uuid;
@@ -145,7 +145,12 @@ impl FetchResponseListener for ScriptFetchContext {
         });
     }
 
-    fn process_response_chunk(&mut self, _request_id: RequestId, mut chunk: Vec<u8>) {
+    fn process_response_chunk(
+        &mut self,
+        _: &mut js::context::JSContext,
+        _: RequestId,
+        mut chunk: Vec<u8>,
+    ) {
         self.body_bytes.append(&mut chunk);
     }
 

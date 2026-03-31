@@ -6,7 +6,6 @@
 
 use std::fmt;
 
-use canvas_traits::canvas::{CanvasId, CanvasMsg};
 use content_security_policy::sandboxing_directive::SandboxingFlagSet;
 use devtools_traits::{DevtoolScriptControlMsg, ScriptToDevtoolsControlMsg, WorkerId};
 use embedder_traits::user_contents::UserContentManagerId;
@@ -35,6 +34,7 @@ use servo_base::id::{
     MessagePortRouterId, PipelineId, ScriptEventLoopId, ServiceWorkerId,
     ServiceWorkerRegistrationId, WebViewId,
 };
+use servo_canvas_traits::canvas::{CanvasId, CanvasMsg};
 use servo_url::{ImmutableOrigin, OriginSnapshot, ServoUrl};
 use storage_traits::StorageThreads;
 use storage_traits::webstorage_thread::WebStorageType;
@@ -107,7 +107,7 @@ pub struct LoadData {
     /// The data that will be used as the body of the request.
     pub data: Option<RequestBody>,
     /// The result of evaluating a javascript scheme url.
-    pub js_eval_result: Option<JsEvalResult>,
+    pub js_eval_result: Option<String>,
     /// The referrer.
     pub referrer: Referrer,
     /// The referrer policy.
@@ -133,16 +133,6 @@ pub struct LoadData {
     /// If this is a load operation for an `<iframe>` whose origin is same-origin with its
     /// container documents origin then this is the encoding of the container document.
     pub container_document_encoding: Option<&'static Encoding>,
-}
-
-/// The result of evaluating a javascript scheme url.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum JsEvalResult {
-    /// The js evaluation had a non-string result, 204 status code.
-    /// <https://html.spec.whatwg.org/multipage/#navigate> 12.11
-    NoContent,
-    /// The js evaluation had a string result.
-    Ok(Vec<u8>),
 }
 
 impl LoadData {
@@ -229,6 +219,10 @@ pub struct ScopeThings {
     pub devtools_chan: Option<GenericCallback<ScriptToDevtoolsControlMsg>>,
     /// service worker id
     pub worker_id: WorkerId,
+    /// the browsing context id of the page that registered the service worker
+    pub browsing_context_id: BrowsingContextId,
+    /// the webview id of the page that registered the service worker
+    pub webview_id: WebViewId,
 }
 
 /// Message that gets passed to service worker scope on postMessage
@@ -634,6 +628,8 @@ pub enum ScriptToConstellationMessage {
         usize,
         GenericSender<Option<BrowsingContextId>>,
     ),
+    /// Get the origin of the document corresponding to the given pipeline
+    GetDocumentOrigin(PipelineId, GenericSender<Option<String>>),
     /// All pending loads are complete, and the `load` event for this pipeline
     /// has been dispatched.
     LoadComplete,

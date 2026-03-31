@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use atomic_refcell::AtomicRefCell;
-use constellation_traits::BlobImpl;
 use data_url::mime::Mime;
 use dom_struct::dom_struct;
 use encoding_rs::{Encoding, UTF_8};
@@ -37,6 +36,7 @@ use script_bindings::conversions::SafeToJSValConvertible;
 use script_bindings::num::Finite;
 use script_bindings::trace::RootedTraceableBox;
 use script_traits::DocumentActivity;
+use servo_constellation_traits::BlobImpl;
 use servo_url::ServoUrl;
 use stylo_atoms::Atom;
 use url::Position;
@@ -119,10 +119,15 @@ impl FetchResponseListener for XHRContext {
         }
     }
 
-    fn process_response_chunk(&mut self, _: RequestId, chunk: Vec<u8>) {
+    fn process_response_chunk(
+        &mut self,
+        cx: &mut js::context::JSContext,
+        _: RequestId,
+        chunk: Vec<u8>,
+    ) {
         self.xhr
             .root()
-            .process_data_available(self.gen_id, chunk, CanGc::note());
+            .process_data_available(self.gen_id, chunk, CanGc::from_cx(cx));
     }
 
     fn process_response_eof(

@@ -4,10 +4,10 @@
 
 //! Defines shared hyperlink behaviour for `<link>`, `<a>`, `<area>` and `<form>` elements.
 
-use constellation_traits::{LoadData, LoadOrigin, NavigationHistoryBehavior};
 use html5ever::local_name;
 use malloc_size_of::malloc_size_of_is_0;
 use net_traits::request::Referrer;
+use servo_constellation_traits::{LoadData, LoadOrigin, NavigationHistoryBehavior};
 use style::str::HTML_SPACE_CHARACTERS;
 
 use crate::dom::bindings::codegen::Bindings::AttrBinding::Attr_Binding::AttrMethods;
@@ -21,7 +21,7 @@ use crate::dom::html::htmlformelement::HTMLFormElement;
 use crate::dom::html::htmllinkelement::HTMLLinkElement;
 use crate::dom::node::NodeTraits;
 use crate::dom::types::Element;
-use crate::script_runtime::CanGc;
+use crate::navigation::navigate;
 
 bitflags::bitflags! {
     /// Describes the different relations that can be specified on elements using the `rel`
@@ -498,7 +498,7 @@ pub(crate) fn follow_hyperlink(
         let target = Trusted::new(target_window);
         let task = task!(navigate_follow_hyperlink: move |cx| {
             debug!("following hyperlink to {}", load_data.url);
-            target.root().load_url(history_handling, false, load_data, CanGc::from_cx(cx));
+            navigate(cx, &target.root(), history_handling, false, load_data);
         });
         target_document
             .owner_global()

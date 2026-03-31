@@ -53,8 +53,8 @@ struct SupportsHighlightersReply {
 #[derive(MallocSizeOf)]
 pub(crate) struct InspectorActor {
     name: String,
-    highlighter: String,
-    page_style: String,
+    highlighter_name: String,
+    page_style_name: String,
     pub(crate) walker: String,
 }
 
@@ -75,7 +75,7 @@ impl Actor for InspectorActor {
             "getPageStyle" => {
                 let msg = GetPageStyleReply {
                     from: self.name(),
-                    page_style: registry.encode::<PageStyleActor, _>(&self.page_style),
+                    page_style: registry.encode::<PageStyleActor, _>(&self.page_style_name),
                 };
                 request.reply_final(&msg)?
             },
@@ -83,7 +83,7 @@ impl Actor for InspectorActor {
             "getHighlighterByType" => {
                 let msg = GetHighlighterReply {
                     from: self.name(),
-                    highlighter: registry.encode::<HighlighterActor, _>(&self.highlighter),
+                    highlighter: registry.encode::<HighlighterActor, _>(&self.highlighter_name),
                 };
                 request.reply_final(&msg)?
             },
@@ -111,35 +111,35 @@ impl Actor for InspectorActor {
 }
 
 impl InspectorActor {
-    pub fn register(registry: &ActorRegistry, browsing_context: String) -> String {
-        let highlighter = HighlighterActor {
+    pub fn register(registry: &ActorRegistry, browsing_context_name: String) -> String {
+        let highlighter_actor = HighlighterActor {
             name: registry.new_name::<HighlighterActor>(),
-            browsing_context: browsing_context.clone(),
+            browsing_context_name: browsing_context_name.clone(),
         };
 
-        let page_style = PageStyleActor {
+        let page_style_actor = PageStyleActor {
             name: registry.new_name::<PageStyleActor>(),
         };
 
         let walker = WalkerActor {
             name: registry.new_name::<WalkerActor>(),
             mutations: AtomicRefCell::new(vec![]),
-            browsing_context,
+            browsing_context_name,
         };
 
-        let actor = Self {
+        let inspector_actor = Self {
             name: registry.new_name::<InspectorActor>(),
-            highlighter: highlighter.name(),
-            page_style: page_style.name(),
+            highlighter_name: highlighter_actor.name(),
+            page_style_name: page_style_actor.name(),
             walker: walker.name(),
         };
-        let name = actor.name();
+        let inspector_name = inspector_actor.name();
 
-        registry.register(highlighter);
-        registry.register(page_style);
+        registry.register(highlighter_actor);
+        registry.register(page_style_actor);
         registry.register(walker);
-        registry.register(actor);
+        registry.register(inspector_actor);
 
-        name
+        inspector_name
     }
 }

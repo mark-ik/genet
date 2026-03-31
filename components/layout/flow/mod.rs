@@ -731,7 +731,6 @@ fn layout_block_level_children(
             layout_context,
             positioning_context,
             child_boxes,
-            containing_block,
             sequential_layout_state,
             &mut placement_state,
             ignore_block_margins_for_stretch,
@@ -740,7 +739,6 @@ fn layout_block_level_children(
             layout_context,
             positioning_context,
             child_boxes,
-            containing_block,
             &mut placement_state,
             ignore_block_margins_for_stretch,
         ),
@@ -770,7 +768,6 @@ fn layout_block_level_children_in_parallel(
     layout_context: &LayoutContext,
     positioning_context: &mut PositioningContext,
     child_boxes: &[ArcRefCell<BlockLevelBox>],
-    containing_block: &ContainingBlock,
     placement_state: &mut PlacementState,
     ignore_block_margins_for_stretch: LogicalSides1D<bool>,
 ) -> Vec<Fragment> {
@@ -784,10 +781,11 @@ fn layout_block_level_children_in_parallel(
             let fragment = child_box.borrow().layout(
                 layout_context,
                 &mut child_positioning_context,
-                containing_block,
+                placement_state.containing_block,
                 /* sequential_layout_state = */ None,
                 /* collapsible_with_parent_start_margin = */ None,
                 ignore_block_margins_for_stretch,
+                false, /* has_inline_parent */
             );
             (fragment, child_positioning_context)
         })
@@ -811,7 +809,6 @@ fn layout_block_level_children_sequentially(
     layout_context: &LayoutContext,
     positioning_context: &mut PositioningContext,
     child_boxes: &[ArcRefCell<BlockLevelBox>],
-    containing_block: &ContainingBlock,
     sequential_layout_state: &mut SequentialLayoutState,
     placement_state: &mut PlacementState,
     ignore_block_margins_for_stretch: LogicalSides1D<bool>,
@@ -822,31 +819,52 @@ fn layout_block_level_children_sequentially(
     child_boxes
         .iter()
         .map(|child_box| {
-            let positioning_context_length_before_layout = positioning_context.len();
-            let mut fragment = child_box.borrow().layout(
+            layout_block_level_child(
                 layout_context,
                 positioning_context,
-                containing_block,
-                Some(&mut *sequential_layout_state),
-                Some(CollapsibleWithParentStartMargin(
-                    placement_state.next_in_flow_margin_collapses_with_parent_start_margin,
-                )),
+                &child_box.borrow(),
+                Some(sequential_layout_state),
+                placement_state,
                 ignore_block_margins_for_stretch,
-            );
-
-            placement_state
-                .place_fragment_and_update_baseline(&mut fragment, Some(sequential_layout_state));
-            positioning_context.adjust_static_position_of_hoisted_fragments(
-                &fragment,
-                positioning_context_length_before_layout,
-            );
-
-            fragment
+                false, /* has_inline_parent */
+            )
         })
         .collect()
 }
 
+fn layout_block_level_child(
+    layout_context: &LayoutContext,
+    positioning_context: &mut PositioningContext,
+    child_box: &BlockLevelBox,
+    mut sequential_layout_state: Option<&mut SequentialLayoutState>,
+    placement_state: &mut PlacementState,
+    ignore_block_margins_for_stretch: LogicalSides1D<bool>,
+    has_inline_parent: bool,
+) -> Fragment {
+    let positioning_context_length_before_layout = positioning_context.len();
+    let mut fragment = child_box.layout(
+        layout_context,
+        positioning_context,
+        placement_state.containing_block,
+        sequential_layout_state.as_deref_mut(),
+        Some(CollapsibleWithParentStartMargin(
+            placement_state.next_in_flow_margin_collapses_with_parent_start_margin,
+        )),
+        ignore_block_margins_for_stretch,
+        has_inline_parent,
+    );
+
+    placement_state.place_fragment_and_update_baseline(&mut fragment, sequential_layout_state);
+    positioning_context.adjust_static_position_of_hoisted_fragments(
+        &fragment,
+        positioning_context_length_before_layout,
+    );
+
+    fragment
+}
+
 impl BlockLevelBox {
+    #[allow(clippy::too_many_arguments)]
     fn layout(
         &self,
         layout_context: &LayoutContext,
@@ -855,6 +873,7 @@ impl BlockLevelBox {
         sequential_layout_state: Option<&mut SequentialLayoutState>,
         collapsible_with_parent_start_margin: Option<CollapsibleWithParentStartMargin>,
         ignore_block_margins_for_stretch: LogicalSides1D<bool>,
+        has_inline_parent: bool,
     ) -> Fragment {
         let fragment = match self {
             BlockLevelBox::SameFormattingContextBlock { base, contents, .. } => Fragment::Box(
@@ -872,6 +891,7 @@ impl BlockLevelBox {
                             sequential_layout_state,
                             collapsible_with_parent_start_margin,
                             ignore_block_margins_for_stretch,
+                            has_inline_parent,
                         )
                     },
                 )),
@@ -888,6 +908,7 @@ impl BlockLevelBox {
                             containing_block,
                             sequential_layout_state,
                             ignore_block_margins_for_stretch,
+                            has_inline_parent,
                         )
                     },
                 ),
@@ -949,7 +970,7 @@ impl BlockLevelBox {
 /// - <https://drafts.csswg.org/css2/visudet.html#blockwidth>
 /// - <https://drafts.csswg.org/css2/visudet.html#normal-block>
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn layout_in_flow_non_replaced_block_level_same_formatting_context(
+fn layout_in_flow_non_replaced_block_level_same_formatting_context(
     layout_context: &LayoutContext,
     positioning_context: &mut PositioningContext,
     containing_block: &ContainingBlock,
@@ -958,6 +979,7 @@ pub(crate) fn layout_in_flow_non_replaced_block_level_same_formatting_context(
     mut sequential_layout_state: Option<&mut SequentialLayoutState>,
     collapsible_with_parent_start_margin: Option<CollapsibleWithParentStartMargin>,
     ignore_block_margins_for_stretch: LogicalSides1D<bool>,
+    has_inline_parent: bool,
 ) -> BoxFragment {
     let style = &base.style;
     let layout_style = contents.layout_style(base);
@@ -980,6 +1002,7 @@ pub(crate) fn layout_in_flow_non_replaced_block_level_same_formatting_context(
         get_inline_content_sizes,
         ignore_block_margins_for_stretch,
         None,
+        has_inline_parent,
     );
     let ResolvedMargins {
         margin,
@@ -1237,6 +1260,7 @@ impl IndependentFormattingContext {
         containing_block: &ContainingBlock,
         sequential_layout_state: Option<&mut SequentialLayoutState>,
         ignore_block_margins_for_stretch: LogicalSides1D<bool>,
+        has_inline_parent: bool,
     ) -> BoxFragment {
         if let Some(sequential_layout_state) = sequential_layout_state {
             return self.layout_in_flow_block_level_sequentially(
@@ -1245,6 +1269,7 @@ impl IndependentFormattingContext {
                 containing_block,
                 sequential_layout_state,
                 ignore_block_margins_for_stretch,
+                has_inline_parent,
             );
         }
 
@@ -1267,6 +1292,7 @@ impl IndependentFormattingContext {
             get_inline_content_sizes,
             ignore_block_margins_for_stretch,
             Some(self),
+            has_inline_parent,
         );
 
         let lazy_block_size = LazySize::new(
@@ -1343,6 +1369,7 @@ impl IndependentFormattingContext {
         containing_block: &ContainingBlock<'_>,
         sequential_layout_state: &mut SequentialLayoutState,
         ignore_block_margins_for_stretch: LogicalSides1D<bool>,
+        has_inline_parent: bool,
     ) -> BoxFragment {
         let style = &self.base.style;
         let containing_block_writing_mode = containing_block.style.writing_mode;
@@ -1443,7 +1470,7 @@ impl IndependentFormattingContext {
                 .sizes
         };
 
-        let justify_self = resolve_justify_self(style, containing_block.style);
+        let justify_self = resolve_justify_self(style, containing_block.style, has_inline_parent);
         let automatic_inline_size = automatic_inline_size(justify_self, Some(self));
         let compute_inline_size = |cache: &mut Cache, stretch_size| {
             if cache.depends_on_stretch_size {
@@ -1718,6 +1745,7 @@ fn solve_containing_block_padding_and_border_for_in_flow_box<'a>(
     get_inline_content_sizes: impl FnOnce(&ConstraintSpace) -> ContentSizes,
     ignore_block_margins_for_stretch: LogicalSides1D<bool>,
     context: Option<&IndependentFormattingContext>,
+    has_inline_parent: bool,
 ) -> ContainingBlockPaddingAndBorder<'a> {
     let style = layout_style.style();
     if matches!(style.pseudo(), Some(PseudoElement::ServoAnonymousBox)) {
@@ -1800,7 +1828,7 @@ fn solve_containing_block_padding_and_border_for_in_flow_box<'a>(
             preferred_aspect_ratio,
         ))
     };
-    let justify_self = resolve_justify_self(style, containing_block.style);
+    let justify_self = resolve_justify_self(style, containing_block.style, has_inline_parent);
     let inline_size = content_box_sizes.inline.resolve(
         Direction::Inline,
         automatic_inline_size(justify_self, context),
@@ -1877,20 +1905,32 @@ fn solve_block_margins_for_in_flow_block_level(pbm: &PaddingBorderMargin) -> (Au
 }
 
 /// Resolves the `justify-self` value, preserving flags.
-fn resolve_justify_self(style: &ComputedValues, parent_style: &ComputedValues) -> AlignFlags {
-    let is_ltr = |style: &ComputedValues| style.writing_mode.line_left_is_inline_start();
+fn resolve_justify_self(
+    style: &ComputedValues,
+    containing_block_style: &ComputedValues,
+    has_inline_parent: bool,
+) -> AlignFlags {
+    // `justify-self: auto` behaves as the computed `justify-items` value of the parent box.
+    // The parent box is generally the containing block, but it can also be an inline box.
+    // In that case, since `justify-items` doesn't apply to inline boxes, we need to treat
+    // `justify-self: auto` as `normal`.
+    // See the resolution in <https://github.com/w3c/csswg-drafts/issues/11462>.
     let alignment = match style.clone_justify_self().0 {
-        AlignFlags::AUTO => parent_style.clone_justify_items().computed.0.0,
+        AlignFlags::AUTO if has_inline_parent => AlignFlags::NORMAL,
+        AlignFlags::AUTO => containing_block_style.clone_justify_items().computed.0.0,
         alignment => alignment,
     };
+    let is_ltr = |style: &ComputedValues| style.writing_mode.line_left_is_inline_start();
     let alignment_value = match alignment.value() {
-        AlignFlags::LEFT if is_ltr(parent_style) => AlignFlags::START,
+        AlignFlags::LEFT if is_ltr(containing_block_style) => AlignFlags::START,
         AlignFlags::LEFT => AlignFlags::END,
-        AlignFlags::RIGHT if is_ltr(parent_style) => AlignFlags::END,
+        AlignFlags::RIGHT if is_ltr(containing_block_style) => AlignFlags::END,
         AlignFlags::RIGHT => AlignFlags::START,
-        AlignFlags::SELF_START if is_ltr(parent_style) == is_ltr(style) => AlignFlags::START,
+        AlignFlags::SELF_START if is_ltr(containing_block_style) == is_ltr(style) => {
+            AlignFlags::START
+        },
         AlignFlags::SELF_START => AlignFlags::END,
-        AlignFlags::SELF_END if is_ltr(parent_style) == is_ltr(style) => AlignFlags::END,
+        AlignFlags::SELF_END if is_ltr(containing_block_style) == is_ltr(style) => AlignFlags::END,
         AlignFlags::SELF_END => AlignFlags::START,
         alignment_value => alignment_value,
     };

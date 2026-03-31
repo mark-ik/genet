@@ -82,7 +82,7 @@ use std::sync::Arc;
 use app_units::{Au, MAX_AU};
 use bitflags::bitflags;
 use construct::InlineFormattingContextBuilder;
-use fonts::{FontMetrics, FontRef, GlyphStore};
+use fonts::{FontMetrics, GlyphStore};
 use icu_segmenter::{LineBreakOptions, LineBreakStrictness, LineBreakWordOption};
 use inline_box::{InlineBox, InlineBoxContainerState, InlineBoxIdentifier, InlineBoxes};
 use layout_api::wrapper_traits::SharedSelection;
@@ -123,9 +123,10 @@ use crate::dom::WeakLayoutBox;
 use crate::dom_traversal::NodeAndStyleInfo;
 use crate::flow::float::{FloatBox, SequentialLayoutState};
 use crate::flow::inline::line::TextRunOffsets;
+use crate::flow::inline::text_run::FontAndScriptInfo;
 use crate::flow::{
-    BlockContainer, CollapsibleWithParentStartMargin, FloatSide, PlacementState,
-    layout_in_flow_non_replaced_block_level_same_formatting_context,
+    BlockLevelBox, CollapsibleWithParentStartMargin, FloatSide, PlacementState,
+    compute_inline_content_sizes_for_block_level_boxes, layout_block_level_child,
 };
 use crate::formatting_contexts::{Baselines, IndependentFormattingContext};
 use crate::fragment_tree::{
@@ -134,9 +135,7 @@ use crate::fragment_tree::{
 use crate::geom::{LogicalRect, LogicalSides1D, LogicalVec2, ToLogical};
 use crate::layout_box_base::LayoutBoxBase;
 use crate::positioned::{AbsolutelyPositionedBox, PositioningContext};
-use crate::sizing::{
-    ComputeInlineContentSizes, ContentSizes, InlineContentSizesResult, outer_inline,
-};
+use crate::sizing::{ComputeInlineContentSizes, ContentSizes, InlineContentSizesResult};
 use crate::style_ext::{ComputedValuesExt, PaddingBorderMargin};
 use crate::{ConstraintSpace, ContainingBlock, IndefiniteContainingBlock, SharedStyle};
 
@@ -207,74 +206,35 @@ impl SharedInlineStyles {
     }
 }
 
-/// Each sequence of block-level boxes that participate in an inline formatting context
-/// (because their parent is an inline box) gets wrapped inside an [`AnonymousBlockBox`].
-/// This way we don't have to deal with the block-levels directly.
-#[derive(Debug, MallocSizeOf)]
-pub(crate) struct AnonymousBlockBox {
-    base: LayoutBoxBase,
-    contents: BlockContainer,
-}
-
-impl AnonymousBlockBox {
+impl BlockLevelBox {
     fn layout_into_line_items(&self, layout: &mut InlineFormattingContextLayout) {
         layout.process_soft_wrap_opportunity();
         layout.commit_current_segment_to_line();
         layout.process_line_break(true);
         layout.current_line.for_block_level = true;
 
-        let positioning_context_length = layout.positioning_context.len();
-        let fragment = layout
-            .positioning_context
-            .layout_maybe_position_relative_fragment(
-                layout.layout_context,
-                layout.placement_state.containing_block,
-                &self.base,
-                |positioning_context| {
-                    layout_in_flow_non_replaced_block_level_same_formatting_context(
-                        layout.layout_context,
-                        positioning_context,
-                        layout.placement_state.containing_block,
-                        &self.base,
-                        &self.contents,
-                        layout.sequential_layout_state.as_deref_mut(),
-                        Some(CollapsibleWithParentStartMargin(
-                            layout
-                                .placement_state
-                                .next_in_flow_margin_collapses_with_parent_start_margin,
-                        )),
-                        // This doesn't matter, because the anonymous block doesn't stretch in the
-                        // block axis. However, it's not clear what to do for the block-levels inside,
-                        // see <https://github.com/w3c/csswg-drafts/issues/13260>
-                        LogicalSides1D::new(false, false),
-                    )
-                },
-            );
+        let fragment = layout_block_level_child(
+            layout.layout_context,
+            layout.positioning_context,
+            self,
+            layout.sequential_layout_state.as_deref_mut(),
+            &mut layout.placement_state,
+            // Under discussion in <https://github.com/w3c/csswg-drafts/issues/13260>.
+            LogicalSides1D::new(false, false),
+            true, /* has_inline_parent */
+        );
+
+        let Fragment::Box(fragment) = fragment else {
+            unreachable!("The fragment should be a Fragment::Box()");
+        };
 
         // If this Fragment's layout depends on the block size of the containing block,
         // then the entire layout of the inline formatting context does as well.
-        layout.depends_on_block_constraints |= fragment.base.flags.contains(
+        layout.depends_on_block_constraints |= fragment.borrow().base.flags.contains(
             FragmentFlags::SIZE_DEPENDS_ON_BLOCK_CONSTRAINTS_AND_CAN_BE_CHILD_OF_FLEX_ITEM,
         );
 
-        let mut fragment = Fragment::Box(ArcRefCell::new(fragment));
-        layout.placement_state.place_fragment_and_update_baseline(
-            &mut fragment,
-            layout.sequential_layout_state.as_deref_mut(),
-        );
-
-        // Adjust the static positions of any absolutely positioned boxes that were hoisted
-        // during layout of this anonymous block to account for the block's final position,
-        // including any resolved margin-top. This mirrors the identical pattern in
-        // `layout_block_level_children_sequentially`.
-        layout
-            .positioning_context
-            .adjust_static_position_of_hoisted_fragments(&fragment, positioning_context_length);
-
-        let Fragment::Box(fragment) = fragment else {
-            unreachable!("The fragment should still be a Fragment::Box()");
-        };
-        layout.push_line_item_to_unbreakable_segment(LineItem::AnonymousBlockBox(
+        layout.push_line_item_to_unbreakable_segment(LineItem::BlockLevel(
             layout.current_inline_box_identifier(),
             fragment,
         ));
@@ -300,7 +260,7 @@ pub(crate) enum InlineItem {
         usize, /* offset_in_text */
         Level, /* bidi_level */
     ),
-    AnonymousBlock(ArcRefCell<AnonymousBlockBox>),
+    BlockLevel(ArcRefCell<BlockLevelBox>),
 }
 
 impl InlineItem {
@@ -331,11 +291,9 @@ impl InlineItem {
             InlineItem::Atomic(atomic, ..) => {
                 atomic.borrow_mut().repair_style(context, node, new_style)
             },
-            InlineItem::AnonymousBlock(block_box) => {
-                let mut block_box = block_box.borrow_mut();
-                block_box.base.repair_style(new_style);
-                block_box.contents.repair_style(context, node, new_style);
-            },
+            InlineItem::BlockLevel(block_level) => block_level
+                .borrow_mut()
+                .repair_style(context, node, new_style),
         }
     }
 
@@ -352,7 +310,7 @@ impl InlineItem {
             InlineItem::Atomic(independent_formatting_context, ..) => {
                 callback(&independent_formatting_context.borrow().base)
             },
-            InlineItem::AnonymousBlock(block_box) => callback(&block_box.borrow().base),
+            InlineItem::BlockLevel(block_level) => block_level.borrow().with_base(callback),
         }
     }
 
@@ -371,7 +329,7 @@ impl InlineItem {
             InlineItem::Atomic(independent_formatting_context, ..) => {
                 callback(&mut independent_formatting_context.borrow_mut().base)
             },
-            InlineItem::AnonymousBlock(block_box) => callback(&mut block_box.borrow_mut().base),
+            InlineItem::BlockLevel(block_level) => block_level.borrow_mut().with_base_mut(callback),
         }
     }
 
@@ -391,9 +349,7 @@ impl InlineItem {
                 float_box.borrow().contents.attached_to_tree(layout_box)
             },
             Self::Atomic(atomic, ..) => atomic.borrow().attached_to_tree(layout_box),
-            Self::AnonymousBlock(block_box) => {
-                block_box.borrow().contents.attached_to_tree(layout_box)
-            },
+            Self::BlockLevel(block_level) => block_level.borrow().attached_to_tree(layout_box),
         }
     }
 
@@ -416,9 +372,7 @@ impl InlineItem {
             Self::Atomic(atomic, offset_in_text, bidi_level) => {
                 WeakInlineItem::Atomic(atomic.downgrade(), *offset_in_text, *bidi_level)
             },
-            Self::AnonymousBlock(block_box) => {
-                WeakInlineItem::AnonymousBlock(block_box.downgrade())
-            },
+            Self::BlockLevel(block_level) => WeakInlineItem::BlockLevel(block_level.downgrade()),
         }
     }
 }
@@ -438,7 +392,7 @@ pub(crate) enum WeakInlineItem {
         usize, /* offset_in_text */
         Level, /* bidi_level */
     ),
-    AnonymousBlock(WeakRefCell<AnonymousBlockBox>),
+    BlockLevel(WeakRefCell<BlockLevelBox>),
 }
 
 impl WeakInlineItem {
@@ -459,7 +413,7 @@ impl WeakInlineItem {
             Self::Atomic(atomic, offset_in_text, bidi_level) => {
                 InlineItem::Atomic(atomic.upgrade()?, *offset_in_text, *bidi_level)
             },
-            Self::AnonymousBlock(block_box) => InlineItem::AnonymousBlock(block_box.upgrade()?),
+            Self::BlockLevel(block_level) => InlineItem::BlockLevel(block_level.upgrade()?),
         })
     }
 }
@@ -1578,8 +1532,7 @@ impl InlineFormattingContextLayout<'_> {
         &mut self,
         glyph_store: Arc<GlyphStore>,
         text_run: &TextRun,
-        font: &FontRef,
-        bidi_level: Level,
+        info: &Arc<FontAndScriptInfo>,
         offsets: Option<TextRunOffsets>,
     ) {
         let inline_advance = glyph_store.total_advance();
@@ -1588,12 +1541,6 @@ impl InlineFormattingContextLayout<'_> {
         } else {
             SegmentContentFlags::empty()
         };
-
-        let font_metrics = &font.metrics;
-        let font_key = font.key(
-            self.layout_context.painter_id,
-            &self.layout_context.font_context,
-        );
 
         let mut block_contribution = LineBlockSizes::zero();
         let quirks_mode = self.layout_context.style_context.quirks_mode() != QuirksMode::NoQuirks;
@@ -1608,10 +1555,11 @@ impl InlineFormattingContextLayout<'_> {
         // If the metrics of this font don't match the default font, we are likely using another
         // font from the font list or a fallback and should incorporate its block size into the block
         // size of the container.
+        let font_metrics = &info.font.metrics;
         if self
             .current_inline_container_state()
             .font_metrics
-            .block_metrics_meaningfully_differ(&font.metrics)
+            .block_metrics_meaningfully_differ(font_metrics)
         {
             // TODO(mrobinson): This value should probably be cached somewhere.
             let container_state = self.current_inline_container_state();
@@ -1636,8 +1584,7 @@ impl InlineFormattingContextLayout<'_> {
         {
             if *inline_box_identifier == current_inline_box_identifier &&
                 line_item.merge_if_possible(
-                    font_key,
-                    bidi_level,
+                    info,
                     &glyph_store,
                     &offsets,
                     &text_run.inline_styles,
@@ -1653,9 +1600,7 @@ impl InlineFormattingContextLayout<'_> {
                 text: vec![glyph_store],
                 base_fragment_info: text_run.base_fragment_info,
                 inline_styles: text_run.inline_styles.clone(),
-                font_metrics: font_metrics.clone(),
-                font_key,
-                bidi_level,
+                info: info.clone(),
                 offsets: offsets.map(Box::new),
                 is_empty_for_text_cursor: false,
             },
@@ -1668,19 +1613,12 @@ impl InlineFormattingContextLayout<'_> {
     fn possibly_push_empty_text_run_to_unbreakable_segment(
         &mut self,
         text_run: &TextRun,
-        font: &FontRef,
-        bidi_level: Level,
+        info: &Arc<FontAndScriptInfo>,
         offsets: Option<TextRunOffsets>,
     ) {
         if offsets.is_none() || self.current_line_segment.has_content {
             return;
         }
-
-        let font_metrics = &font.metrics;
-        let font_key = font.key(
-            self.layout_context.painter_id,
-            &self.layout_context.font_context,
-        );
 
         self.push_line_item_to_unbreakable_segment(LineItem::TextRun(
             self.current_inline_box_identifier(),
@@ -1688,9 +1626,7 @@ impl InlineFormattingContextLayout<'_> {
                 text: Default::default(),
                 base_fragment_info: text_run.base_fragment_info,
                 inline_styles: text_run.inline_styles.clone(),
-                font_metrics: font_metrics.clone(),
-                font_key,
-                bidi_level,
+                info: info.clone(),
                 offsets: offsets.map(Box::new),
                 is_empty_for_text_cursor: true,
             },
@@ -1936,7 +1872,7 @@ impl InlineFormattingContext {
                 InlineItem::OutOfFlowAbsolutelyPositionedBox(..) |
                 InlineItem::OutOfFlowFloatBox(_) |
                 InlineItem::EndInlineBox |
-                InlineItem::AnonymousBlock { .. } => {},
+                InlineItem::BlockLevel { .. } => {},
             }
         }
 
@@ -2070,8 +2006,8 @@ impl InlineFormattingContext {
                 InlineItem::OutOfFlowFloatBox(float_box) => {
                     float_box.borrow().layout_into_line_items(&mut layout);
                 },
-                InlineItem::AnonymousBlock(block_box) => {
-                    block_box.borrow().layout_into_line_items(&mut layout);
+                InlineItem::BlockLevel(block_level) => {
+                    block_level.borrow().layout_into_line_items(&mut layout);
                 },
             }
         }
@@ -2161,9 +2097,8 @@ impl InlineFormattingContext {
             InlineItem::OutOfFlowAbsolutelyPositionedBox(..) => true,
             InlineItem::OutOfFlowFloatBox(..) => true,
             InlineItem::Atomic(..) => false,
-            InlineItem::AnonymousBlock(block_box) => block_box
+            InlineItem::BlockLevel(block_level) => block_level
                 .borrow()
-                .contents
                 .find_block_margin_collapsing_with_parent(
                     layout_context,
                     collected_margin,
@@ -2856,29 +2791,15 @@ impl<'layout_data> ContentSizesComputation<'layout_data> {
                     FloatSide::InlineEnd => self.uncleared_floats.end.union_assign(&sizes),
                 }
             },
-            InlineItem::AnonymousBlock(block) => {
+            InlineItem::BlockLevel(block_level) => {
                 self.forced_line_break();
                 self.flush_floats();
-                let borrowed_block = block.borrow();
-                let AnonymousBlockBox {
-                    ref base,
-                    ref contents,
-                    ..
-                } = *borrowed_block;
-                let inline_content_sizes_result = outer_inline(
-                    base,
-                    &contents.layout_style(base),
-                    &self.constraint_space.into(),
-                    &LogicalVec2::zero(),
-                    false,    /* auto_block_size_stretches_to_containing_block */
-                    false,    /* is_replaced */
-                    false,    /* establishes_containing_block */
-                    |_| None, /* get_preferred_aspect_ratio */
-                    |constraint_space| {
-                        base.inline_content_sizes(self.layout_context, constraint_space, contents)
-                    },
-                    |_aspect_ratio| None,
-                );
+                let inline_content_sizes_result =
+                    compute_inline_content_sizes_for_block_level_boxes(
+                        std::slice::from_ref(block_level),
+                        self.layout_context,
+                        &self.constraint_space.into(),
+                    );
                 self.depends_on_block_constraints |=
                     inline_content_sizes_result.depends_on_block_constraints;
                 self.current_line = inline_content_sizes_result.sizes;

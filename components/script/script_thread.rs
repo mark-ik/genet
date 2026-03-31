@@ -32,13 +32,7 @@ use background_hang_monitor_api::{
     BackgroundHangMonitor, BackgroundHangMonitorExitSignal, BackgroundHangMonitorRegister,
     HangAnnotation, MonitoredComponentId, MonitoredComponentType,
 };
-use canvas_traits::webgl::WebGLPipeline;
 use chrono::{DateTime, Local};
-use constellation_traits::{
-    JsEvalResult, LoadData, LoadOrigin, NavigationHistoryBehavior, ScreenshotReadinessResponse,
-    ScriptToConstellationChan, ScriptToConstellationMessage, ScrollStateUpdate,
-    StructuredSerializedData, TraversalDirection, WindowSizeType,
-};
 use crossbeam_channel::unbounded;
 use data_url::mime::Mime;
 use devtools_traits::{
@@ -87,11 +81,18 @@ use script_traits::{
 use servo_arc::Arc as ServoArc;
 use servo_base::cross_process_instant::CrossProcessInstant;
 use servo_base::generic_channel;
+use servo_base::generic_channel::GenericSender;
 use servo_base::id::{
     BrowsingContextId, HistoryStateId, PipelineId, PipelineNamespace, ScriptEventLoopId,
     TEST_WEBVIEW_ID, WebViewId,
 };
+use servo_canvas_traits::webgl::WebGLPipeline;
 use servo_config::{opts, pref, prefs};
+use servo_constellation_traits::{
+    LoadData, LoadOrigin, NavigationHistoryBehavior, ScreenshotReadinessResponse,
+    ScriptToConstellationChan, ScriptToConstellationMessage, ScrollStateUpdate,
+    StructuredSerializedData, TraversalDirection, WindowSizeType,
+};
 use servo_url::{ImmutableOrigin, MutableOrigin, OriginSnapshot, ServoUrl};
 use storage_traits::StorageThreads;
 use storage_traits::webstorage_thread::WebStorageType;
@@ -120,7 +121,6 @@ use crate::dom::bindings::conversions::{
     ConversionResult, SafeFromJSValConvertible, StringificationBehavior,
 };
 use crate::dom::bindings::inheritance::Castable;
-use crate::dom::bindings::refcounted::Trusted;
 use crate::dom::bindings::reflector::DomGlobal;
 use crate::dom::bindings::root::{Dom, DomRoot};
 use crate::dom::bindings::str::DOMString;
@@ -134,7 +134,7 @@ use crate::dom::document::{
 };
 use crate::dom::element::Element;
 use crate::dom::globalscope::GlobalScope;
-use crate::dom::html::htmliframeelement::{HTMLIFrameElement, IframeContext};
+use crate::dom::html::htmliframeelement::{HTMLIFrameElement, IframeContext, ProcessingMode};
 use crate::dom::node::{Node, NodeTraits};
 use crate::dom::servoparser::{ParserContext, ServoParser};
 use crate::dom::types::DebuggerGlobalScope;
@@ -604,58 +604,6 @@ impl ScriptThread {
         self.needs_rendering_update.store(true, Ordering::Relaxed);
     }
 
-    /// Step 13 of <https://html.spec.whatwg.org/multipage/#navigate>
-    pub(crate) fn navigate(
-        webview_id: WebViewId,
-        pipeline_id: PipelineId,
-        mut load_data: LoadData,
-        history_handling: NavigationHistoryBehavior,
-    ) {
-        with_script_thread(|script_thread| {
-            let is_javascript = load_data.url.scheme() == "javascript";
-            // If resource is a request whose url's scheme is "javascript"
-            // https://html.spec.whatwg.org/multipage/#navigate-to-a-javascript:-url
-            if is_javascript {
-                let Some(window) = script_thread.documents.borrow().find_window(pipeline_id) else {
-                    return;
-                };
-                let global = window.as_global_scope();
-                let trusted_global = Trusted::new(global);
-                let sender = script_thread
-                    .senders
-                    .pipeline_to_constellation_sender
-                    .clone();
-                load_data.about_base_url = window.Document().about_base_url();
-                let task = task!(navigate_javascript: move |cx| {
-                    // Important re security. See https://github.com/servo/servo/issues/23373
-                    if trusted_global.root().is::<Window>() {
-                        let global = &trusted_global.root();
-                        if Self::navigate_to_javascript_url(cx, global, global, &mut load_data, None) {
-                            sender
-                                .send((webview_id, pipeline_id, ScriptToConstellationMessage::LoadUrl(load_data, history_handling)))
-                                .unwrap();
-                        }
-                    }
-                });
-                // Step 20 of <https://html.spec.whatwg.org/multipage/#navigate>
-                global
-                    .task_manager()
-                    .navigation_and_traversal_task_source()
-                    .queue(task);
-            } else {
-                script_thread
-                    .senders
-                    .pipeline_to_constellation_sender
-                    .send((
-                        webview_id,
-                        pipeline_id,
-                        ScriptToConstellationMessage::LoadUrl(load_data, history_handling),
-                    ))
-                    .expect("Sending a LoadUrl message to the constellation failed");
-            }
-        });
-    }
-
     /// <https://html.spec.whatwg.org/multipage/#navigate-to-a-javascript:-url>
     pub(crate) fn can_navigate_to_javascript_url(
         cx: &mut js::context::JSContext,
@@ -683,13 +631,17 @@ impl ScriptThread {
         true
     }
 
+    /// Attempt to navigate a global to a javascript: URL. Returns true if a new document is created.
+    /// <https://html.spec.whatwg.org/multipage/#navigate-to-a-javascript:-url>
     pub(crate) fn navigate_to_javascript_url(
         cx: &mut js::context::JSContext,
         initiator_global: &GlobalScope,
         target_global: &GlobalScope,
         load_data: &mut LoadData,
         container: Option<&Element>,
+        initial_insertion: Option<bool>,
     ) -> bool {
+        // Step 6. If the result of should navigation request of type be blocked by Content Security Policy? given request and cspNavigationType is "Blocked", then return.
         if !Self::can_navigate_to_javascript_url(
             cx,
             initiator_global,
@@ -700,9 +652,34 @@ impl ScriptThread {
             return false;
         }
 
-        // Step 6. Let newDocument be the result of evaluating a javascript: URL given targetNavigable,
+        // Step 7. Let newDocument be the result of evaluating a javascript: URL given targetNavigable,
         // url, initiatorOrigin, and userInvolvement.
-        Self::eval_js_url(cx, target_global, load_data);
+        let Some(body) = Self::eval_js_url(cx, target_global, &load_data.url) else {
+            // Step 8. If newDocument is null:
+            let window_proxy = target_global.as_window().window_proxy();
+            if let Some(frame_element) = window_proxy
+                .frame_element()
+                .and_then(Castable::downcast::<HTMLIFrameElement>)
+            {
+                // Step 8.1 If initialInsertion is true and targetNavigable's active document's is initial about:blank is true, then run the iframe load event steps given targetNavigable's container.
+                if initial_insertion == Some(true) && frame_element.is_initial_blank_document() {
+                    frame_element.run_iframe_load_event_steps(cx);
+                }
+            }
+            // Step 8.2. Return.
+            return false;
+        };
+
+        // Step 11. of <https://html.spec.whatwg.org/multipage/#evaluate-a-javascript:-url>.
+        // Let response be a new response with
+        // URL         targetNavigable's active document's URL
+        // header list « (`Content-Type`, `text/html;charset=utf-8`) »
+        // body        the UTF-8 encoding of result, as a body
+        load_data.js_eval_result = Some(body);
+        load_data.url = target_global.get_url();
+        load_data
+            .headers
+            .typed_insert(headers::ContentType::from(mime::TEXT_HTML_UTF_8));
         true
     }
 
@@ -1776,6 +1753,9 @@ impl ScriptThread {
             ScriptThreadMessage::ThemeChange(_, theme) => {
                 self.handle_theme_change_msg(theme);
             },
+            ScriptThreadMessage::GetDocumentOrigin(pipeline_id, result_sender) => {
+                self.handle_get_document_origin(pipeline_id, result_sender);
+            },
             ScriptThreadMessage::GetTitle(pipeline_id) => self.handle_get_title_msg(pipeline_id),
             ScriptThreadMessage::SetDocumentActivity(pipeline_id, activity) => {
                 self.handle_set_document_activity_msg(cx, pipeline_id, activity)
@@ -1849,8 +1829,8 @@ impl ScriptThread {
             ScriptThreadMessage::WebDriverScriptCommand(pipeline_id, msg) => {
                 self.handle_webdriver_msg(pipeline_id, msg, cx)
             },
-            ScriptThreadMessage::WebFontLoaded(pipeline_id, success) => {
-                self.handle_web_font_loaded(pipeline_id, success)
+            ScriptThreadMessage::WebFontLoaded(pipeline_id) => {
+                self.handle_web_font_loaded(pipeline_id)
             },
             ScriptThreadMessage::DispatchIFrameLoadEvent {
                 target: browsing_context_id,
@@ -2722,6 +2702,19 @@ impl ScriptThread {
         }
     }
 
+    fn handle_get_document_origin(
+        &self,
+        id: PipelineId,
+        result_sender: GenericSender<Option<String>>,
+    ) {
+        let _ = result_sender.send(
+            self.documents
+                .borrow()
+                .find_document(id)
+                .map(|document| document.origin().immutable().ascii_serialization()),
+        );
+    }
+
     // exit_fullscreen creates a new JS promise object, so we need to have entered a realm
     fn handle_exit_fullscreen(&self, id: PipelineId, cx: &mut js::context::JSContext) {
         let document = self.documents.borrow().find_document(id);
@@ -2739,23 +2732,11 @@ impl ScriptThread {
             ScriptThreadEventCategory::SpawnPipeline,
             Some(new_pipeline_info.new_pipeline_id),
             || {
-                let source_origin = match new_pipeline_info.load_data.load_origin {
-                    LoadOrigin::Script(ref snapshot) => {
-                        Some(MutableOrigin::from_snapshot(snapshot.clone()))
-                    },
-                    _ => None,
-                };
-                let origin = determine_the_origin(
-                    Some(&new_pipeline_info.load_data.url),
-                    new_pipeline_info.load_data.creation_sandboxing_flag_set,
-                    source_origin,
-                );
-
                 self.devtools_state
                     .notify_pipeline_created(new_pipeline_info.new_pipeline_id);
 
                 // Kick off the fetch for the new resource.
-                self.pre_page_load(cx, InProgressLoad::new(new_pipeline_info, origin));
+                self.pre_page_load(cx, InProgressLoad::new(new_pipeline_info));
             },
         );
     }
@@ -3265,7 +3246,7 @@ impl ScriptThread {
     }
 
     /// Handles a Web font being loaded. Does nothing if the page no longer exists.
-    fn handle_web_font_loaded(&self, pipeline_id: PipelineId, _success: bool) {
+    fn handle_web_font_loaded(&self, pipeline_id: PipelineId) {
         let Some(document) = self.documents.borrow().find_document(pipeline_id) else {
             warn!("Web font loaded in closed pipeline {}.", pipeline_id);
             return;
@@ -3366,12 +3347,17 @@ impl ScriptThread {
             incomplete.load_data.url, incomplete.pipeline_id
         );
 
-        let origin = if final_url.as_str() == "about:blank" || final_url.as_str() == "about:srcdoc"
-        {
-            incomplete.origin.clone()
-        } else {
-            MutableOrigin::new(final_url.origin())
+        let source_origin = match incomplete.load_data.load_origin {
+            LoadOrigin::Script(ref snapshot) => {
+                Some(MutableOrigin::from_snapshot(snapshot.clone()))
+            },
+            _ => None,
         };
+        let origin = determine_the_origin(
+            Some(&final_url),
+            incomplete.load_data.creation_sandboxing_flag_set,
+            source_origin,
+        );
 
         let font_context = Arc::new(FontContext::new(
             self.system_font_service.clone(),
@@ -3677,6 +3663,7 @@ impl ScriptThread {
                 title: String::from(title),
                 url,
                 is_top_level_global,
+                is_service_worker: false,
             };
             chan.send(ScriptToDevtoolsControlMsg::NewGlobal(
                 (browsing_context_id, pipeline_id, worker_id, webview_id),
@@ -3745,32 +3732,40 @@ impl ScriptThread {
             .borrow()
             .find_iframe(parent_pipeline_id, browsing_context_id);
         if let Some(iframe) = iframe {
-            iframe.navigate_or_reload_child_browsing_context(load_data, history_handling, cx);
+            iframe.navigate_or_reload_child_browsing_context(
+                load_data,
+                history_handling,
+                ProcessingMode::NotFirstTime,
+                cx,
+            );
         }
     }
 
     /// Turn javascript: URL into JS code to eval, according to the steps in
-    /// <https://html.spec.whatwg.org/multipage/#javascript-protocol>
+    /// <https://html.spec.whatwg.org/multipage/#evaluate-a-javascript:-url>
+    /// Returns the evaluated body, if available.
     fn eval_js_url(
         cx: &mut js::context::JSContext,
         global_scope: &GlobalScope,
-        load_data: &mut LoadData,
-    ) {
-        // This slice of the URL’s serialization is equivalent to (5.) to (7.):
-        // Start with the scheme data of the parsed URL;
-        // append question mark and query component, if any;
-        // append number sign and fragment component if any.
-        let encoded = &load_data.url[Position::AfterScheme..][1..];
+        url: &ServoUrl,
+    ) -> Option<String> {
+        // Step 1. Let urlString be the result of running the URL serializer on url.
+        // Step 2. Let encodedScriptSource be the result of removing the leading "javascript:" from urlString.
+        let encoded = &url[Position::AfterScheme..][1..];
 
-        // Percent-decode (8.) and UTF-8 decode (9.)
+        // // Step 3. Let scriptSource be the UTF-8 decoding of the percent-decoding of encodedScriptSource.
         let script_source = percent_decode(encoded.as_bytes()).decode_utf8_lossy();
 
-        // Script source is ready to be evaluated (11.)
+        // Step 4. Let settings be targetNavigable's active document's relevant settings object.
+        // Step 5. Let baseURL be settings's API base URL.
+        // Step 6. Let script be the result of creating a classic script given scriptSource, settings, baseURL, and the default script fetch options.
+        // Note: these steps are handled by `evaluate_js_on_global`.
         let mut realm = enter_auto_realm(cx, global_scope);
         let cx = &mut realm.current_realm();
 
         rooted!(&in(cx) let mut jsval = UndefinedValue());
-        _ = global_scope.evaluate_js_on_global(
+        // Step 7. Let evaluationStatus be the result of running the classic script script.
+        let evaluation_status = global_scope.evaluate_js_on_global(
             cx,
             script_source,
             "",
@@ -3778,32 +3773,35 @@ impl ScriptThread {
             Some(jsval.handle_mut()),
         );
 
-        load_data.js_eval_result = if jsval.get().is_string() {
-            let strval = DOMString::safe_from_jsval(
-                cx.into(),
-                jsval.handle(),
-                StringificationBehavior::Empty,
-                CanGc::from_cx(cx),
-            );
-            match strval {
-                Ok(ConversionResult::Success(s)) => {
-                    Some(JsEvalResult::Ok(String::from(s).as_bytes().to_vec()))
-                },
-                _ => None,
-            }
-        } else {
-            Some(JsEvalResult::NoContent)
-        };
+        // Step 9. If evaluationStatus is a normal completion, and evaluationStatus.[[Value]]
+        //   is a String, then set result to evaluationStatus.[[Value]].
+        // Step 10. Otherwise, return null.
+        if evaluation_status.is_err() || !jsval.get().is_string() {
+            return None;
+        }
 
-        load_data.url = ServoUrl::parse("about:blank").unwrap();
+        let strval = DOMString::safe_from_jsval(
+            cx.into(),
+            jsval.handle(),
+            StringificationBehavior::Empty,
+            CanGc::from_cx(cx),
+        );
+        match strval {
+            Ok(ConversionResult::Success(s)) => {
+                // Step 11. Let response be a new response with
+                // the UTF-8 encoding of result, as a body.
+                Some(String::from(s))
+            },
+            _ => unreachable!("Couldn't get a string from a JS string??"),
+        }
     }
 
     /// Instructs the constellation to fetch the document that will be loaded. Stores the InProgressLoad
     /// argument until a notification is received that the fetch is complete.
     fn pre_page_load(&self, cx: &mut js::context::JSContext, mut incomplete: InProgressLoad) {
         let url_str = incomplete.load_data.url.as_str();
-        if url_str == "about:blank" {
-            self.start_page_load_about_blank(cx, incomplete);
+        if url_str == "about:blank" || incomplete.load_data.js_eval_result.is_some() {
+            self.start_synchronous_page_load(cx, incomplete);
             return;
         }
         if url_str == "about:srcdoc" {
@@ -3816,6 +3814,7 @@ impl ScriptThread {
             incomplete.pipeline_id,
             incomplete.load_data.url.clone(),
             incomplete.load_data.creation_sandboxing_flag_set,
+            incomplete.parent_info,
         );
         self.incomplete_parser_contexts
             .0
@@ -3849,7 +3848,7 @@ impl ScriptThread {
                 self.handle_fetch_metadata(cx, pipeline_id, request_id, metadata)
             },
             FetchResponseMsg::ProcessResponseChunk(request_id, chunk) => {
-                self.handle_fetch_chunk(pipeline_id, request_id, chunk.0)
+                self.handle_fetch_chunk(cx, pipeline_id, request_id, chunk.0)
             },
             FetchResponseMsg::ProcessResponseEOF(request_id, eof, timing) => {
                 self.handle_fetch_eof(cx, pipeline_id, request_id, eof, timing)
@@ -3885,13 +3884,19 @@ impl ScriptThread {
         }
     }
 
-    fn handle_fetch_chunk(&self, pipeline_id: PipelineId, request_id: RequestId, chunk: Vec<u8>) {
+    fn handle_fetch_chunk(
+        &self,
+        cx: &mut js::context::JSContext,
+        pipeline_id: PipelineId,
+        request_id: RequestId,
+        chunk: Vec<u8>,
+    ) {
         let mut incomplete_parser_contexts = self.incomplete_parser_contexts.0.borrow_mut();
         let parser = incomplete_parser_contexts
             .iter_mut()
             .find(|&&mut (parser_pipeline_id, _)| parser_pipeline_id == pipeline_id);
         if let Some(&mut (_, ref mut ctxt)) = parser {
-            ctxt.process_response_chunk(request_id, chunk);
+            ctxt.process_response_chunk(cx, request_id, chunk);
         }
     }
 
@@ -3937,9 +3942,22 @@ impl ScriptThread {
         }
     }
 
-    fn handle_csp_violations(&self, id: PipelineId, _: RequestId, violations: Vec<Violation>) {
-        if let Some(global) = self.documents.borrow().find_global(id) {
-            // TODO(https://github.com/w3c/webappsec-csp/issues/687): Update after spec is resolved
+    fn handle_csp_violations(
+        &self,
+        pipeline_id: PipelineId,
+        _request_id: RequestId,
+        violations: Vec<Violation>,
+    ) {
+        let mut incomplete_parser_contexts = self.incomplete_parser_contexts.0.borrow_mut();
+        let parser = incomplete_parser_contexts
+            .iter_mut()
+            .find(|&&mut (parser_pipeline_id, _)| parser_pipeline_id == pipeline_id);
+        let Some(&mut (_, ref mut ctxt)) = parser else {
+            return;
+        };
+        // We need to report violations for navigations in iframes in the parent page
+        let pipeline_id = ctxt.parent_info().unwrap_or(pipeline_id);
+        if let Some(global) = self.documents.borrow().find_global(pipeline_id) {
             global.report_csp_violations(violations, None, None);
         }
     }
@@ -3969,6 +3987,12 @@ impl ScriptThread {
             .map(Referrer::ReferrerUrl)
             .unwrap_or(Referrer::NoReferrer);
         request_builder.referrer_policy = metadata.referrer_policy;
+        request_builder.origin = request_builder
+            .client
+            .as_ref()
+            .expect("Must have a client during redirect")
+            .origin
+            .clone();
 
         let headers = metadata
             .headers
@@ -3997,34 +4021,30 @@ impl ScriptThread {
             .initiate_fetch(&self.resource_threads.core_thread, response_init);
     }
 
-    /// Synchronously fetch `about:blank`. Stores the `InProgressLoad`
+    /// Synchronously fetch a page with fixed content. Stores the `InProgressLoad`
     /// argument until a notification is received that the fetch is complete.
-    fn start_page_load_about_blank(
+    fn start_synchronous_page_load(
         &self,
         cx: &mut js::context::JSContext,
         mut incomplete: InProgressLoad,
     ) {
-        let url = ServoUrl::parse("about:blank").unwrap();
         let mut context = ParserContext::new(
             incomplete.webview_id,
             incomplete.pipeline_id,
-            url.clone(),
+            incomplete.load_data.url.clone(),
             incomplete.load_data.creation_sandboxing_flag_set,
+            incomplete.parent_info,
         );
 
-        let mut meta = Metadata::default(url);
+        let mut meta = Metadata::default(incomplete.load_data.url.clone());
         meta.set_content_type(Some(&mime::TEXT_HTML));
         meta.set_referrer_policy(incomplete.load_data.referrer_policy);
 
         // If this page load is the result of a javascript scheme url, map
         // the evaluation result into a response.
         let chunk = match incomplete.load_data.js_eval_result {
-            Some(JsEvalResult::Ok(ref mut content)) => std::mem::take(content),
-            Some(JsEvalResult::NoContent) => {
-                meta.status = http::StatusCode::NO_CONTENT.into();
-                vec![]
-            },
-            None => vec![],
+            Some(ref mut content) => std::mem::take(content),
+            None => String::new(),
         };
 
         let policy_container = incomplete.load_data.policy_container.clone();
@@ -4035,7 +4055,7 @@ impl ScriptThread {
         context.process_response(cx, dummy_request_id, Ok(FetchMetadata::Unfiltered(meta)));
         context.set_policy_container(policy_container.as_ref());
         context.set_about_base_url(about_base_url);
-        context.process_response_chunk(dummy_request_id, chunk);
+        context.process_response_chunk(cx, dummy_request_id, chunk.into());
         context.process_response_eof(
             cx,
             dummy_request_id,
@@ -4063,17 +4083,23 @@ impl ScriptThread {
 
         let webview_id = incomplete.webview_id;
         let pipeline_id = incomplete.pipeline_id;
+        let parent_info = incomplete.parent_info;
         let about_base_url = incomplete.load_data.about_base_url.clone();
         self.incomplete_loads.borrow_mut().push(incomplete);
 
-        let mut context =
-            ParserContext::new(webview_id, pipeline_id, url, creation_sandboxing_flag_set);
+        let mut context = ParserContext::new(
+            webview_id,
+            pipeline_id,
+            url,
+            creation_sandboxing_flag_set,
+            parent_info,
+        );
         let dummy_request_id = RequestId::default();
 
         context.process_response(cx, dummy_request_id, Ok(FetchMetadata::Unfiltered(meta)));
         context.set_policy_container(policy_container.as_ref());
         context.set_about_base_url(about_base_url);
-        context.process_response_chunk(dummy_request_id, chunk);
+        context.process_response_chunk(cx, dummy_request_id, chunk);
         context.process_response_eof(
             cx,
             dummy_request_id,

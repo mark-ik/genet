@@ -11,11 +11,6 @@
 
 use std::fmt;
 
-use canvas_traits::webgl::WebGLPipeline;
-use constellation_traits::{
-    KeyboardScroll, LoadData, NavigationHistoryBehavior, ScriptToConstellationSender,
-    ScrollStateUpdate, StructuredSerializedData, WindowSizeType,
-};
 use crossbeam_channel::RecvTimeoutError;
 use devtools_traits::ScriptToDevtoolsControlMsg;
 use embedder_traits::user_contents::{UserContentManagerId, UserContents};
@@ -43,7 +38,12 @@ use servo_base::id::{
 };
 #[cfg(feature = "bluetooth")]
 use servo_bluetooth_traits::BluetoothRequest;
+use servo_canvas_traits::webgl::WebGLPipeline;
 use servo_config::prefs::PrefValue;
+use servo_constellation_traits::{
+    KeyboardScroll, LoadData, NavigationHistoryBehavior, ScriptToConstellationSender,
+    ScrollStateUpdate, StructuredSerializedData, WindowSizeType,
+};
 use servo_url::{ImmutableOrigin, ServoUrl};
 use storage_traits::StorageThreads;
 use storage_traits::webstorage_thread::WebStorageType;
@@ -176,6 +176,9 @@ pub enum ScriptThreadMessage {
     RefreshCursor(PipelineId),
     /// Requests that the script thread immediately send the constellation the title of a pipeline.
     GetTitle(PipelineId),
+    /// Retrieve the origin of a document for a pipeline, in case a child needs to retrieve the
+    /// origin of a parent in a different script thread.
+    GetDocumentOrigin(PipelineId, GenericSender<Option<String>>),
     /// Notifies script thread of a change to one of its document's activity
     SetDocumentActivity(PipelineId, DocumentActivity),
     /// Set whether to use less resources by running timers at a heavily limited rate.
@@ -237,7 +240,7 @@ pub enum ScriptThreadMessage {
     TickAllAnimations(Vec<WebViewId>),
     /// Notifies the script thread that a new Web font has been loaded, and thus the page should be
     /// reflowed.
-    WebFontLoaded(PipelineId, bool /* success */),
+    WebFontLoaded(PipelineId),
     /// Cause a `load` event to be dispatched at the appropriate iframe element.
     DispatchIFrameLoadEvent {
         /// The frame that has been marked as loaded.

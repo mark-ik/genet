@@ -6,10 +6,6 @@ use std::cell::Cell;
 use std::ptr::{self, NonNull};
 use std::rc::Rc;
 
-use constellation_traits::{
-    AuxiliaryWebViewCreationRequest, LoadData, LoadOrigin, NavigationHistoryBehavior,
-    ScriptToConstellationMessage,
-};
 use content_security_policy::sandboxing_directive::SandboxingFlagSet;
 use dom_struct::dom_struct;
 use html5ever::local_name;
@@ -40,6 +36,10 @@ use serde::{Deserialize, Serialize};
 use servo_base::generic_channel;
 use servo_base::generic_channel::GenericSend;
 use servo_base::id::{BrowsingContextId, PipelineId, WebViewId};
+use servo_constellation_traits::{
+    AuxiliaryWebViewCreationRequest, LoadData, LoadOrigin, NavigationHistoryBehavior,
+    ScriptToConstellationMessage,
+};
 use servo_url::{ImmutableOrigin, ServoUrl};
 use storage_traits::webstorage_thread::WebStorageThreadMsg;
 use style::attr::parse_integer;
@@ -59,6 +59,7 @@ use crate::dom::document::Document;
 use crate::dom::element::Element;
 use crate::dom::globalscope::GlobalScope;
 use crate::dom::window::Window;
+use crate::navigation::navigate;
 use crate::realms::{AlreadyInRealm, InRealm, enter_realm};
 use crate::script_runtime::{CanGc, JSContext as SafeJSContext};
 use crate::script_thread::{ScriptThread, with_script_thread};
@@ -583,7 +584,7 @@ impl WindowProxy {
             } else {
                 NavigationHistoryBehavior::Push
             };
-            target_window.load_url(history_handling, false, load_data, CanGc::from_cx(cx));
+            navigate(cx, target_window, history_handling, false, load_data);
         }
         // Step 17 (Dis-owning has been done in create_auxiliary_browsing_context).
         if noopener {
@@ -689,6 +690,19 @@ impl WindowProxy {
                 self.browsing_context_id(),
             ))
             .unwrap();
+    }
+
+    pub fn document_origin(&self) -> Option<String> {
+        let pipeline_id = self.currently_active()?;
+        let (result_sender, result_receiver) = generic_channel::channel().unwrap();
+        self.global()
+            .script_to_constellation_chan()
+            .send(ScriptToConstellationMessage::GetDocumentOrigin(
+                pipeline_id,
+                result_sender,
+            ))
+            .ok()?;
+        result_receiver.recv().ok()?
     }
 
     #[expect(unsafe_code)]

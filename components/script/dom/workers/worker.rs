@@ -6,7 +6,6 @@ use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use constellation_traits::{StructuredSerializedData, WorkerScriptLoadOrigin};
 use crossbeam_channel::{Sender, unbounded};
 use devtools_traits::{DevtoolsPageInfo, ScriptToDevtoolsControlMsg, WorkerId};
 use dom_struct::dom_struct;
@@ -16,6 +15,7 @@ use js::jsval::UndefinedValue;
 use js::rust::{CustomAutoRooter, CustomAutoRooterGuard, HandleObject, HandleValue};
 use net_traits::request::Referrer;
 use servo_base::generic_channel;
+use servo_constellation_traits::{StructuredSerializedData, WorkerScriptLoadOrigin};
 use uuid::Uuid;
 
 use crate::dom::abstractworker::{MessageData, SimpleWorkerErrorHandler, WorkerScriptMsg};
@@ -179,7 +179,7 @@ impl WorkerMethods<crate::DomTypeHolder> for Worker {
             "Worker constructor",
         )?;
         // Step 2-4.
-        let worker_url = match global.api_base_url().join(&compliant_script_url.str()) {
+        let worker_url = match global.encoding_parse_a_url(&compliant_script_url.str()) {
             Ok(url) => url,
             Err(_) => return Err(Error::Syntax(None)),
         };
@@ -227,6 +227,7 @@ impl WorkerMethods<crate::DomTypeHolder> for Worker {
                     title,
                     url: worker_url.clone(),
                     is_top_level_global: false,
+                    is_service_worker: false,
                 };
                 let _ = chan.send(ScriptToDevtoolsControlMsg::NewGlobal(
                     (browsing_context, pipeline_id, Some(worker_id), webview_id),

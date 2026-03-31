@@ -61,7 +61,7 @@ use crate::dom::bindings::settings_stack::is_execution_stack_empty;
 use crate::dom::bindings::str::{DOMString, USVString};
 use crate::dom::characterdata::CharacterData;
 use crate::dom::comment::Comment;
-use crate::dom::csp::{GlobalCspReporting, Violation, parse_csp_list_from_metadata};
+use crate::dom::csp::{Violation, parse_csp_list_from_metadata};
 use crate::dom::customelementregistry::CustomElementReactionStack;
 use crate::dom::document::{Document, DocumentSource, HasBrowsingContext, IsHTMLDocument};
 use crate::dom::documentfragment::DocumentFragment;
@@ -80,6 +80,7 @@ use crate::dom::processingoptions::{
     LinkHeader, LinkProcessingPhase, extract_links_from_headers, process_link_headers,
 };
 use crate::dom::reporting::reportingendpoint::ReportingEndpoint;
+use crate::dom::security::csp::CspReporting;
 use crate::dom::security::xframeoptions::check_a_navigation_response_adherence_to_x_frame_options;
 use crate::dom::shadowroot::IsUserAgentWidget;
 use crate::dom::text::Text;
@@ -922,6 +923,8 @@ pub(crate) struct ParserContext {
     pushed_entry_index: Option<usize>,
     /// params required in document load algorithms
     navigation_params: NavigationParams,
+    /// To report CSP violations to the global that initiated the navigation
+    parent_info: Option<PipelineId>,
 }
 
 impl ParserContext {
@@ -930,6 +933,7 @@ impl ParserContext {
         pipeline_id: PipelineId,
         url: ServoUrl,
         creation_sandboxing_flag_set: SandboxingFlagSet,
+        parent_info: Option<PipelineId>,
     ) -> ParserContext {
         ParserContext {
             parser: None,
@@ -938,6 +942,7 @@ impl ParserContext {
             webview_id,
             pipeline_id,
             url,
+            parent_info,
             pushed_entry_index: None,
             navigation_params: NavigationParams {
                 policy_container: Default::default(),
@@ -965,6 +970,10 @@ impl ParserContext {
         self.parser
             .as_ref()
             .map(|parser| parser.root().document.as_rooted())
+    }
+
+    pub(crate) fn parent_info(&self) -> Option<PipelineId> {
+        self.parent_info
     }
 
     /// <https://html.spec.whatwg.org/multipage/#creating-a-policy-container-from-a-fetch-response>
@@ -1130,6 +1139,7 @@ impl ParserContext {
         self.initialize_document_object(&parser.document);
         // Step 8. Act as if the user agent had stopped parsing document.
         self.is_synthesized_document = true;
+        parser.last_chunk_received.set(true);
         // Step 3. Populate with html/head/body given document.
         let page = "<html><body></body></html>".into();
         parser.push_string_input_chunk(page);
@@ -1188,7 +1198,7 @@ impl ParserContext {
         process_link_headers(&link_headers, doc, LinkProcessingPhase::Media);
     }
 
-    /// <https://html.spec.whatwg.org/multipage/#read-ua-inline>
+    /// <https://html.spec.whatwg.org/multipage/#navigate-ua-inline>
     fn load_inline_unknown_content(
         &mut self,
         parser: &ServoParser,
@@ -1198,6 +1208,8 @@ impl ParserContext {
         self.is_synthesized_document = true;
         parser.document.mark_as_internal();
         parser.push_string_input_chunk(page);
+        // Step 7. Act as if the user agent had stopped parsing document.
+        parser.last_chunk_received.set(true);
         parser.parse_sync(cx);
     }
 
@@ -1300,13 +1312,18 @@ impl FetchResponseListener for ParserContext {
 
         // https://html.spec.whatwg.org/multipage/#attempt-to-populate-the-history-entry%27s-document
         // Step 4. Otherwise, if any of the following are true:
+        if
         // navigationParams is null;
         // TODO
         // the result of should navigation response to navigation request of
         // type in target be blocked by Content Security Policy? given
         // navigationParams's request, navigationParams's response, navigationParams's policy container's CSP list,
         // cspNavigationType, and navigable is "Blocked";
-        // TODO
+        policy_container.csp_list.should_navigation_response_to_navigation_request_be_blocked(
+            window,
+            self.url.clone().into_url(),
+            &document.origin().immutable().clone().into_url_origin(),
+        )
         // navigationParams's reserved environment is non-null and the result of
         // checking a navigation response's adherence to its embedder policy given navigationParams's response,
         // navigable, and navigationParams's policy container's embedder policy is false; or
@@ -1314,7 +1331,7 @@ impl FetchResponseListener for ParserContext {
         // the result of checking a navigation response's adherence to `X-Frame-Options`
         // given navigationParams's response, navigable, navigationParams's policy container's CSP list,
         // and navigationParams's origin is false,
-        if !check_a_navigation_response_adherence_to_x_frame_options(
+        || !check_a_navigation_response_adherence_to_x_frame_options(
             window,
             policy_container.csp_list.as_ref(),
             &document.origin(),
@@ -1425,11 +1442,12 @@ impl FetchResponseListener for ParserContext {
         }
     }
 
-    #[expect(unsafe_code)]
-    fn process_response_chunk(&mut self, _: RequestId, payload: Vec<u8>) {
-        // TODO: https://github.com/servo/servo/issues/42841
-        let mut cx = unsafe { temp_cx() };
-        let cx = &mut cx;
+    fn process_response_chunk(
+        &mut self,
+        cx: &mut js::context::JSContext,
+        _: RequestId,
+        payload: Vec<u8>,
+    ) {
         if self.is_synthesized_document {
             return;
         }
@@ -1467,7 +1485,7 @@ impl FetchResponseListener for ParserContext {
             Some(parser) => parser.root(),
             None => return,
         };
-        if parser.aborted.get() {
+        if parser.aborted.get() || self.is_synthesized_document {
             return;
         }
 
@@ -1512,15 +1530,8 @@ impl FetchResponseListener for ParserContext {
         }
     }
 
-    fn process_csp_violations(&mut self, _request_id: RequestId, violations: Vec<Violation>) {
-        let parser = match self.parser.as_ref() {
-            Some(parser) => parser.root(),
-            None => return,
-        };
-        let document = &parser.document;
-        let global = &document.global();
-        // TODO(https://github.com/w3c/webappsec-csp/issues/687): Update after spec is resolved
-        global.report_csp_violations(violations, None, None);
+    fn process_csp_violations(&mut self, _: RequestId, _: Vec<Violation>) {
+        unreachable!("Script_thread should handle reporting violations for parser contexts");
     }
 }
 
