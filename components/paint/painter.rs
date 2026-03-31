@@ -219,39 +219,59 @@ impl Painter {
         ));
 
         let painter_id = PainterId::next();
-        let (mut webrender_renderer, webrender_api_sender) = webrender::create_webrender_instance(
-            webrender_gl.clone(),
-            Box::new(RenderNotifier::new(painter_id, paint.paint_proxy.clone())),
-            webrender::WebRenderOptions {
-                // We force the use of optimized shaders here because rendering is broken
-                // on Android emulators with unoptimized shaders. This is due to a known
-                // issue in the emulator's OpenGL emulation layer.
-                // See: https://github.com/servo/servo/issues/31726
-                use_optimized_shaders: true,
-                resource_override_path: opts::get().shaders_path.clone(),
-                debug_flags: webrender::DebugFlags::empty(),
-                precache_flags: if pref!(gfx_precache_shaders) {
-                    ShaderPrecacheFlags::FULL_COMPILE
-                } else {
-                    ShaderPrecacheFlags::empty()
-                },
-                enable_aa: pref!(gfx_text_antialiasing_enabled),
-                enable_subpixel_aa: pref!(gfx_subpixel_text_antialiasing_enabled),
-                allow_texture_swizzling: pref!(gfx_texture_swizzling_enabled),
-                enable_dithering: true,
-                clear_color,
-                upload_method,
-                workers,
-                size_of_op: Some(servo_allocator::usable_size),
-                // This ensures that we can use the `PainterId` as the `IdNamespace`, which allows mapping
-                // from `FontKey`, `FontInstanceKey`, and `ImageKey` back to `PainterId`.
-                namespace_alloc_by_client: true,
-                shared_font_namespace: Some(painter_id.into()),
-                ..Default::default()
+        let use_wgpu = std::env::var("SERVO_WGPU_BACKEND").is_ok();
+        let webrender_options = webrender::WebRenderOptions {
+            // We force the use of optimized shaders here because rendering is broken
+            // on Android emulators with unoptimized shaders. This is due to a known
+            // issue in the emulator's OpenGL emulation layer.
+            // See: https://github.com/servo/servo/issues/31726
+            use_optimized_shaders: true,
+            resource_override_path: opts::get().shaders_path.clone(),
+            debug_flags: webrender::DebugFlags::empty(),
+            precache_flags: if pref!(gfx_precache_shaders) {
+                ShaderPrecacheFlags::FULL_COMPILE
+            } else {
+                ShaderPrecacheFlags::empty()
             },
-            None,
-        )
-        .expect("Unable to initialize WebRender.");
+            enable_aa: pref!(gfx_text_antialiasing_enabled),
+            enable_subpixel_aa: pref!(gfx_subpixel_text_antialiasing_enabled),
+            allow_texture_swizzling: pref!(gfx_texture_swizzling_enabled),
+            enable_dithering: true,
+            clear_color,
+            upload_method,
+            workers,
+            size_of_op: Some(servo_allocator::usable_size),
+            // This ensures that we can use the `PainterId` as the `IdNamespace`, which allows mapping
+            // from `FontKey`, `FontInstanceKey`, and `ImageKey` back to `PainterId`.
+            namespace_alloc_by_client: true,
+            shared_font_namespace: Some(painter_id.into()),
+            ..Default::default()
+        };
+        let notifier = Box::new(RenderNotifier::new(painter_id, paint.paint_proxy.clone()));
+
+        let (mut webrender_renderer, webrender_api_sender) = if use_wgpu {
+            info!("Using wgpu backend (headless — no surface presentation yet)");
+            let size = rendering_context.size();
+            webrender::create_webrender_instance_with_backend(
+                webrender::RendererBackend::Wgpu {
+                    surface: None,
+                    width: size.width,
+                    height: size.height,
+                },
+                notifier,
+                webrender_options,
+                None,
+            )
+            .expect("Unable to initialize WebRender with wgpu backend.")
+        } else {
+            webrender::create_webrender_instance(
+                webrender_gl.clone(),
+                notifier,
+                webrender_options,
+                None,
+            )
+            .expect("Unable to initialize WebRender.")
+        };
 
         webrender_renderer.set_external_image_handler(external_image_handlers);
 
