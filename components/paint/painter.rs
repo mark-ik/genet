@@ -132,6 +132,9 @@ pub(crate) struct Painter {
     /// A [`WebContentAnimator`] used to manage web content-derived animations. Currently this only
     /// manages blinking caret animations.
     web_content_animator: WebContentAnimator,
+
+    /// Whether this painter uses the wgpu backend (skips GL operations).
+    use_wgpu: bool,
 }
 
 impl Drop for Painter {
@@ -304,9 +307,12 @@ impl Painter {
                 paint.event_loop_waker.clone_box(),
                 (*timer_refresh_driver).clone(),
             ),
+            use_wgpu,
         };
-        painter.assert_gl_framebuffer_complete();
-        painter.clear_background();
+        if !use_wgpu {
+            painter.assert_gl_framebuffer_complete();
+            painter.clear_background();
+        }
         painter
     }
 
@@ -424,12 +430,13 @@ impl Painter {
         let refresh_driver = self.refresh_driver.clone();
         refresh_driver.notify_will_paint(self);
 
-        if let Err(error) = self.rendering_context.make_current() {
-            error!("Failed to make the rendering context current: {error:?}");
+        if !self.use_wgpu {
+            if let Err(error) = self.rendering_context.make_current() {
+                error!("Failed to make the rendering context current: {error:?}");
+            }
+            self.assert_no_gl_error();
+            self.rendering_context.prepare_for_rendering();
         }
-        self.assert_no_gl_error();
-
-        self.rendering_context.prepare_for_rendering();
 
         time_profile!(
             ProfilerCategory::Painting,
@@ -442,7 +449,9 @@ impl Painter {
 
                 // Paint the scene.
                 // TODO(gw): Take notice of any errors the renderer returns!
-                self.clear_background();
+                if !self.use_wgpu {
+                    self.clear_background();
+                }
                 if let Some(renderer) = self.webrender_renderer.as_mut() {
                     let size = self.rendering_context.size2d().to_i32();
                     renderer.render(size, 0 /* buffer_age */).ok();
