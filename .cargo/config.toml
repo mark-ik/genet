@@ -15,6 +15,7 @@ linker = "x86_64-linux-android30-clang"
 
 [target.x86_64-pc-windows-msvc]
 linker = "lld-link.exe"
+rustflags = ["-C", "link-args=/STACK:8388608"]
 
 [target.x86_64-uwp-windows-msvc]
 linker = "lld-link.exe"
