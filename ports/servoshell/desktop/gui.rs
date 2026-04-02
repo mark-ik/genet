@@ -641,6 +641,12 @@ impl Gui {
 
     /// Paint the GUI, as of the last update.
     pub(crate) fn paint(&mut self, window: &Window) {
+        // When using the wgpu backend, WebRender presents directly to the
+        // wgpu surface.  Skip the GL paint and surfman present so it doesn't
+        // overwrite the wgpu output with a stale GL framebuffer.
+        if std::env::var("SERVO_WGPU_BACKEND").is_ok() {
+            return;
+        }
         self.rendering_context
             .make_current()
             .expect("Could not make RenderingContext current");
