@@ -22,20 +22,27 @@ use net_traits::request::{
 use net_traits::response::ResponseInit;
 use net_traits::{
     BoxedFetchCallback, CoreResourceThread, DOCUMENT_ACCEPT_HEADER_VALUE, FetchResponseMsg,
-    Metadata, fetch_async, set_default_accept_language,
+    Metadata, ReferrerPolicy, fetch_async, set_default_accept_language,
 };
+use script_bindings::inheritance::Castable;
 use script_traits::{DocumentActivity, NewPipelineInfo};
 use servo_base::cross_process_instant::CrossProcessInstant;
 use servo_base::id::{BrowsingContextId, PipelineId, WebViewId};
 use servo_constellation_traits::{
     LoadData, LoadOrigin, NavigationHistoryBehavior, ScriptToConstellationMessage,
+    TargetSnapshotParams,
 };
 use servo_url::{ImmutableOrigin, MutableOrigin, ServoUrl};
 use url::Position;
 
+use crate::dom::bindings::codegen::Bindings::HTMLIFrameElementBinding::HTMLIFrameElementMethods;
 use crate::dom::bindings::codegen::Bindings::WindowBinding::WindowMethods;
 use crate::dom::bindings::refcounted::Trusted;
+use crate::dom::element::Element;
+use crate::dom::html::htmliframeelement::HTMLIFrameElement;
+use crate::dom::node::node::NodeTraits;
 use crate::dom::window::Window;
+use crate::dom::windowproxy::WindowProxy;
 use crate::fetch::FetchCanceller;
 use crate::messaging::MainThreadScriptMsg;
 use crate::script_runtime::CanGc;
@@ -175,6 +182,9 @@ pub(crate) struct InProgressLoad {
     /// The [`Theme`] to use for this page, once it loads.
     #[no_trace]
     pub(crate) theme: Theme,
+    /// The [`TargetSnapshotParams`] to use when creating this document.
+    #[no_trace]
+    pub(crate) target_snapshot_params: TargetSnapshotParams,
 }
 
 impl InProgressLoad {
@@ -196,6 +206,7 @@ impl InProgressLoad {
             url_list: vec![url],
             user_content_manager_id: new_pipeline_info.user_content_manager_id,
             theme: new_pipeline_info.theme,
+            target_snapshot_params: new_pipeline_info.target_snapshot_params,
         }
     }
 
@@ -296,6 +307,7 @@ pub(crate) fn determine_the_origin(
 
 /// <https://html.spec.whatwg.org/multipage/#navigate-fragid>
 fn navigate_to_fragment(
+    cx: &mut JSContext,
     window: &Window,
     url: &ServoUrl,
     history_handling: NavigationHistoryBehavior,
@@ -337,7 +349,7 @@ fn navigate_to_fragment(
     let Some(fragment) = url.fragment() else {
         unreachable!("Must always have a fragment");
     };
-    doc.scroll_to_the_fragment(fragment);
+    doc.scroll_to_the_fragment(fragment, CanGc::from_cx(cx));
     // Step 16. Let traversable be navigable's traversable navigable.
     // TODO
     // Step 17. Append the following session history synchronous navigation steps involving navigable to traversable:
@@ -369,105 +381,204 @@ pub(crate) fn navigate(
         }
     }
 
-    // Step 23. Let unloadPromptCanceled be the result of checking if unloading
-    // is canceled for navigable's active document's inclusive descendant navigables.
-    if doc.check_if_unloading_is_cancelled(false, CanGc::from_cx(cx)) {
-        // Step 12. If historyHandling is "auto", then:
-        let history_handling = if history_handling == NavigationHistoryBehavior::Auto {
-            // Step 12.1. If url equals navigable's active document's URL, and
-            // initiatorOriginSnapshot is same origin with targetNavigable's active document's
-            // origin, then set historyHandling to "replace".
-            //
-            // Note: `targetNavigable` is not actually defined in the spec, "active document" is
-            // assumed to be the correct reference based on WPT results
-            if let LoadOrigin::Script(initiator_origin) = initiator_origin_snapshot {
-                if load_data.url == doc.url() && initiator_origin.same_origin(&*doc.origin()) {
-                    NavigationHistoryBehavior::Replace
-                } else {
-                    // Step 12.2. Otherwise, set historyHandling to "push".
-                    NavigationHistoryBehavior::Push
-                }
+    // Step 12. If historyHandling is "auto", then:
+    let history_handling = if history_handling == NavigationHistoryBehavior::Auto {
+        // Step 12.1. If url equals navigable's active document's URL, and
+        // initiatorOriginSnapshot is same origin with targetNavigable's active document's
+        // origin, then set historyHandling to "replace".
+        //
+        // Note: `targetNavigable` is not actually defined in the spec, "active document" is
+        // assumed to be the correct reference based on WPT results
+        if let LoadOrigin::Script(initiator_origin) = initiator_origin_snapshot {
+            if load_data.url == doc.url() && initiator_origin.same_origin(&*doc.origin()) {
+                NavigationHistoryBehavior::Replace
             } else {
                 // Step 12.2. Otherwise, set historyHandling to "push".
                 NavigationHistoryBehavior::Push
             }
         } else {
-            history_handling
-        };
-
-        // Step 13. If the navigation must be a replace given url and navigable's active
-        // document, then set historyHandling to "replace".
-        //
-        // Inlines implementation of https://html.spec.whatwg.org/multipage/#the-navigation-must-be-a-replace
-        let history_handling =
-            if load_data.url.scheme() == "javascript" || doc.is_initial_about_blank() {
-                NavigationHistoryBehavior::Replace
-            } else {
-                history_handling
-            };
-
-        // Step 14. If all of the following are true:
-        // > documentResource is null;
-        // > response is null;
-        if !force_reload
-            // > url equals navigable's active session history entry's URL with exclude fragments set to true; and
-            && load_data.url.as_url()[..Position::AfterQuery] ==
-                doc.url().as_url()[..Position::AfterQuery]
-            // > url's fragment is non-null,
-            && load_data.url.fragment().is_some()
-        {
-            // Step 14.1. Navigate to a fragment given navigable, url, historyHandling,
-            // userInvolvement, sourceElement, navigationAPIState, and navigationId.
-            let webdriver_sender = window.webdriver_load_status_sender();
-            if let Some(ref sender) = webdriver_sender {
-                let _ = sender.send(WebDriverLoadStatus::NavigationStart);
-            }
-            navigate_to_fragment(window, &load_data.url, history_handling);
-            // Step 14.2. Return.
-            if let Some(sender) = webdriver_sender {
-                let _ = sender.send(WebDriverLoadStatus::NavigationStop);
-            }
-            return;
+            // Step 12.2. Otherwise, set historyHandling to "push".
+            NavigationHistoryBehavior::Push
         }
+    } else {
+        history_handling
+    };
 
-        // Step 15. If navigable's parent is non-null, then set navigable's is delaying load events to true.
-        let window_proxy = window.window_proxy();
-        if window_proxy.parent().is_some() {
-            window_proxy.start_delaying_load_events_mode();
-        }
+    // Step 13. If the navigation must be a replace given url and navigable's active
+    // document, then set historyHandling to "replace".
+    //
+    // Inlines implementation of https://html.spec.whatwg.org/multipage/#the-navigation-must-be-a-replace
+    let history_handling = if load_data.url.scheme() == "javascript" || doc.is_initial_about_blank()
+    {
+        NavigationHistoryBehavior::Replace
+    } else {
+        history_handling
+    };
 
-        if let Some(sender) = window.webdriver_load_status_sender() {
+    // Step 14. If all of the following are true:
+    // > documentResource is null;
+    // > response is null;
+    if !force_reload
+        // > url equals navigable's active session history entry's URL with exclude fragments set to true; and
+        && load_data.url.as_url()[..Position::AfterQuery] ==
+            doc.url().as_url()[..Position::AfterQuery]
+        // > url's fragment is non-null,
+        && load_data.url.fragment().is_some()
+    {
+        // Step 14.1. Navigate to a fragment given navigable, url, historyHandling,
+        // userInvolvement, sourceElement, navigationAPIState, and navigationId.
+        let webdriver_sender = window.webdriver_load_status_sender();
+        if let Some(ref sender) = webdriver_sender {
             let _ = sender.send(WebDriverLoadStatus::NavigationStart);
         }
-
-        // Step 13 of <https://html.spec.whatwg.org/multipage/#navigate>
-        let is_javascript = load_data.url.scheme() == "javascript";
-        if is_javascript {
-            let global = window.as_global_scope();
-            let trusted_window = Trusted::new(window);
-            let sender = global.script_to_constellation_chan().clone();
-            let mut load_data = load_data;
-            load_data.about_base_url = window.Document().about_base_url();
-            let task = task!(navigate_javascript: move |cx| {
-                // Important re security. See https://github.com/servo/servo/issues/23373
-                let window = trusted_window.root();
-                let global = window.as_global_scope();
-                if ScriptThread::navigate_to_javascript_url(cx, global, global, &mut load_data, None, None) {
-                    sender
-                        .send(ScriptToConstellationMessage::LoadUrl(load_data, history_handling))
-                        .unwrap();
-                }
-            });
-            // Step 20 of <https://html.spec.whatwg.org/multipage/#navigate>
-            global
-                .task_manager()
-                .navigation_and_traversal_task_source()
-                .queue(task);
-        } else {
-            window.send_to_constellation(ScriptToConstellationMessage::LoadUrl(
-                load_data,
-                history_handling,
-            ));
+        navigate_to_fragment(cx, window, &load_data.url, history_handling);
+        // Step 14.2. Return.
+        if let Some(sender) = webdriver_sender {
+            let _ = sender.send(WebDriverLoadStatus::NavigationStop);
         }
-    };
+        return;
+    }
+
+    // Step 15. If navigable's parent is non-null, then set navigable's is delaying load events to true.
+    let window_proxy = window.window_proxy();
+    if window_proxy.parent().is_some() {
+        window_proxy.start_delaying_load_events_mode();
+    }
+
+    // Step 16. Let targetSnapshotParams be the result of snapshotting target
+    // snapshot params given navigable.
+    let target_snapshot_params = snapshot_target_snapshot_params(&window_proxy);
+
+    // Step 17. Invoke WebDriver BiDi navigation started with navigable
+    // and a new WebDriver BiDi navigation status whose id is navigationId,
+    // status is "pending", and url is url.
+    // TODO
+    if let Some(sender) = window.webdriver_load_status_sender() {
+        let _ = sender.send(WebDriverLoadStatus::NavigationStart);
+    }
+
+    // Step 18. If navigable's ongoing navigation is "traversal", then:
+    // TODO
+    // Step 19. Set the ongoing navigation for navigable to navigationId.
+    // TODO
+
+    // Step 20. If url's scheme is "javascript", then:
+    if load_data.url.scheme() == "javascript" {
+        // Step 20.1. Queue a global task on the navigation and traversal task source given
+        // navigable's active window to navigate to a javascript: URL given navigable, url,
+        // historyHandling, sourceSnapshotParams, initiatorOriginSnapshot, userInvolvement,
+        // cspNavigationType, initialInsertion, and navigationId.
+        let global = window.as_global_scope();
+        let trusted_window = Trusted::new(window);
+        let sender = global.script_to_constellation_chan().clone();
+        let mut load_data = load_data;
+        load_data.about_base_url = window.Document().about_base_url();
+        let task = task!(navigate_javascript: move |cx| {
+            // Important re security. See https://github.com/servo/servo/issues/23373
+            let window = trusted_window.root();
+            let global = window.as_global_scope();
+            if ScriptThread::navigate_to_javascript_url(cx, global, global, &mut load_data, None, None) {
+                sender
+                    .send(ScriptToConstellationMessage::LoadUrl(load_data, history_handling, target_snapshot_params))
+                    .unwrap();
+            }
+        });
+        global
+            .task_manager()
+            .navigation_and_traversal_task_source()
+            .queue(task);
+        // Step 20.2. Return.
+        return;
+    }
+
+    // Step 23. In parallel, run these steps:
+    //
+    // TODO: in parallel
+
+    // Step 23.1. Let unloadPromptCanceled be the result of checking if unloading
+    // is canceled for navigable's active document's inclusive descendant navigables.
+    let unload_prompt_canceled = doc.check_if_unloading_is_cancelled(false, CanGc::from_cx(cx));
+    // Step 23.2. If unloadPromptCanceled is not "continue",
+    // or navigable's ongoing navigation is no longer navigationId:
+    //
+    // TODO: Check for ongoing navigation
+    if !unload_prompt_canceled {
+        // Step 23.2.1. Invoke WebDriver BiDi navigation failed with navigable
+        // and a new WebDriver BiDi navigation status whose id is navigationId,
+        // status is "canceled", and url is url.
+        // TODO
+        // Step 23.2.2. Abort these steps.
+        return;
+    }
+
+    // Step 23.9. Attempt to populate the history entry's document for historyEntry,
+    // given navigable, "navigate", sourceSnapshotParams, targetSnapshotParams,
+    // userInvolvement, navigationId, navigationParams, cspNavigationType,
+    // with allowPOST set to true and completionSteps set to the following step:
+    window.send_to_constellation(ScriptToConstellationMessage::LoadUrl(
+        load_data,
+        history_handling,
+        target_snapshot_params,
+    ));
+}
+
+/// <https://html.spec.whatwg.org/multipage/#determining-the-creation-sandboxing-flags>
+pub(crate) fn determine_creation_sandboxing_flags(
+    browsing_context: Option<&WindowProxy>,
+    element: Option<&Element>,
+) -> SandboxingFlagSet {
+    // To determine the creation sandboxing flags for a browsing context
+    // browsing context, given null or an element embedder, return the union
+    // of the flags that are present in the following sandboxing flag sets:
+    match element {
+        // If embedder is null, then: the flags set on browsing context's
+        // popup sandboxing flag set.
+        None => browsing_context
+            .and_then(|browsing_context| browsing_context.document())
+            .map(|document| document.active_sandboxing_flag_set())
+            .unwrap_or(SandboxingFlagSet::empty()),
+        Some(element) => {
+            // If embedder is an element, then: the flags set on embedder's
+            // iframe sandboxing flag set.
+            // If embedder is an element, then: the flags set on embedder's
+            // node document's active sandboxing flag set.
+            element
+                .downcast::<HTMLIFrameElement>()
+                .map(|iframe| iframe.sandboxing_flag_set())
+                .unwrap_or(SandboxingFlagSet::empty())
+                .union(element.owner_document().active_sandboxing_flag_set())
+        },
+    }
+}
+
+/// <https://html.spec.whatwg.org/multipage/#determining-the-iframe-element-referrer-policy>
+pub(crate) fn determine_iframe_element_referrer_policy(
+    element: Option<&Element>,
+) -> ReferrerPolicy {
+    // Step 1. If embedder is an iframe element, then return embedder's referrerpolicy
+    // attribute's state's corresponding keyword.
+    element
+        .and_then(|element| element.downcast::<HTMLIFrameElement>())
+        .map(|iframe| {
+            let token = iframe.ReferrerPolicy();
+            ReferrerPolicy::from(&*token.str())
+        })
+        // Step 2. Return the empty string.
+        .unwrap_or(ReferrerPolicy::EmptyString)
+}
+
+/// <https://html.spec.whatwg.org/multipage/#snapshotting-target-snapshot-params>
+pub(crate) fn snapshot_target_snapshot_params(navigable: &WindowProxy) -> TargetSnapshotParams {
+    // TODO(jdm): This doesn't work for cross-origin parent frames.
+    let container = navigable.frame_element();
+    // the result of determining the creation sandboxing flags given targetNavigable's
+    // active browsing context and targetNavigable's container
+    let sandboxing_flags = determine_creation_sandboxing_flags(Some(navigable), container);
+    // the result of determining the iframe element referrer policy given
+    // targetNavigable's container
+    let iframe_element_referrer_policy = determine_iframe_element_referrer_policy(container);
+    TargetSnapshotParams {
+        sandboxing_flags,
+        iframe_element_referrer_policy,
+    }
 }

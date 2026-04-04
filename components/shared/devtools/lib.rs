@@ -493,9 +493,7 @@ pub struct PageError {
 #[derive(Debug, PartialEq, MallocSizeOf)]
 pub struct HttpRequest {
     pub url: ServoUrl,
-    #[ignore_malloc_size_of = "http type"]
     pub method: Method,
-    #[ignore_malloc_size_of = "http type"]
     pub headers: HeaderMap,
     pub body: Option<DebugVec>,
     pub pipeline_id: PipelineId,
@@ -640,7 +638,7 @@ pub struct EnvironmentInfo {
     pub type_: Option<String>,
     pub scope_kind: Option<String>,
     pub function_display_name: Option<String>,
-    pub binding_variables: HashMap<String, String>,
+    pub binding_variables: Vec<PropertyDescriptor>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

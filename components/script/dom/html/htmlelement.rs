@@ -12,6 +12,8 @@ use js::context::JSContext;
 use js::rust::HandleObject;
 use layout_api::{QueryMsg, ScrollContainerQueryFlags, ScrollContainerResponse};
 use script_bindings::codegen::GenericBindings::DocumentBinding::DocumentMethods;
+use script_bindings::codegen::GenericBindings::ElementBinding::ScrollLogicalPosition;
+use script_bindings::codegen::GenericBindings::WindowBinding::ScrollBehavior;
 use style::attr::AttrValue;
 use stylo_dom::ElementState;
 
@@ -36,7 +38,8 @@ use crate::dom::css::cssstyledeclaration::{
     CSSModificationAccess, CSSStyleDeclaration, CSSStyleOwner,
 };
 use crate::dom::customelementregistry::{CallbackReaction, CustomElementState};
-use crate::dom::document::{Document, FocusInitiator};
+use crate::dom::document::Document;
+use crate::dom::document::focus::{FocusInitiator, FocusOperation, FocusableArea};
 use crate::dom::document_event_handler::character_to_code;
 use crate::dom::documentfragment::DocumentFragment;
 use crate::dom::domstringmap::DOMStringMap;
@@ -62,6 +65,7 @@ use crate::dom::node::{
     BindContext, MoveContext, Node, NodeTraits, ShadowIncluding, UnbindContext,
     from_untrusted_node_address,
 };
+use crate::dom::scrolling_box::{ScrollAxisState, ScrollRequirement};
 use crate::dom::shadowroot::ShadowRoot;
 use crate::dom::text::Text;
 use crate::dom::virtualmethods::VirtualMethods;
@@ -162,7 +166,7 @@ impl HTMLElement {
         // A string matches the environment of the user if it is the empty string,
         // a string consisting of only ASCII whitespace, or is a media query list that
         // matches the user's environment according to the definitions given in Media Queries. [MQ]
-        self.upcast::<Element>()
+        self.element
             .get_attribute(&local_name!("media"))
             .is_none_or(|media| {
                 MediaList::matches_environment(&self.owner_document(), &media.value())
@@ -459,8 +463,12 @@ impl HTMLElementMethods<crate::DomTypeHolder> for HTMLElement {
         // TODO: Implement this.
 
         // 2. Run the focusing steps for this.
-        self.upcast::<Element>()
-            .run_the_focusing_steps(FocusInitiator::Script, *options, can_gc);
+        if !self.upcast::<Node>().run_the_focusing_steps(None, can_gc) {
+            // The specification seems to imply we should scroll into view even if this element
+            // is not a focusable area. No browser does this, so we return early in that case.
+            // See https://github.com/whatwg/html/issues/12231.
+            return;
+        }
 
         // > 3. If options["focusVisible"] is true, or does not exist but in an
         // >    implementation-defined  way the user agent determines it would be best to do so,
@@ -468,8 +476,19 @@ impl HTMLElementMethods<crate::DomTypeHolder> for HTMLElement {
 
         // > 4. If options["preventScroll"] is false, then scroll a target into view given this,
         // >    "auto", "center", and "center".
-        // TODO: This is currently handled as part of the focusing steps, but should eventually be
-        // handled here.
+        if !options.preventScroll {
+            let scroll_axis = ScrollAxisState {
+                position: ScrollLogicalPosition::Center,
+                requirement: ScrollRequirement::IfNotVisible,
+            };
+            self.upcast::<Element>().scroll_into_view_with_options(
+                ScrollBehavior::Smooth,
+                scroll_axis,
+                scroll_axis,
+                None,
+                None,
+            );
+        }
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-blur>
@@ -480,8 +499,11 @@ impl HTMLElementMethods<crate::DomTypeHolder> for HTMLElement {
             return;
         }
         // https://html.spec.whatwg.org/multipage/#unfocusing-steps
-        let document = self.owner_document();
-        document.request_focus(None, FocusInitiator::Script, can_gc);
+        self.owner_document().focus_handler().focus(
+            FocusOperation::Focus(FocusableArea::Viewport),
+            FocusInitiator::Local,
+            can_gc,
+        );
     }
 
     /// <https://drafts.csswg.org/cssom-view/#dom-htmlelement-scrollparent>
@@ -503,7 +525,7 @@ impl HTMLElementMethods<crate::DomTypeHolder> for HTMLElement {
 
     /// <https://drafts.csswg.org/cssom-view/#dom-htmlelement-offsetparent>
     fn GetOffsetParent(&self) -> Option<DomRoot<Element>> {
-        if self.is::<HTMLBodyElement>() || self.upcast::<Element>().is_root() {
+        if self.is::<HTMLBodyElement>() || self.element.is_root() {
             return None;
         }
 
@@ -656,18 +678,18 @@ impl HTMLElementMethods<crate::DomTypeHolder> for HTMLElement {
     /// <https://html.spec.whatwg.org/multipage/#dom-contenteditable>
     fn SetContentEditable(&self, value: DOMString, can_gc: CanGc) -> ErrorResult {
         let lower_value = value.to_ascii_lowercase();
-        let element = self.upcast::<Element>();
         let attr_name = &local_name!("contenteditable");
         match lower_value.as_ref() {
             // > On setting, if the new value is an ASCII case-insensitive match for the string "inherit", then the content attribute must be removed,
             "inherit" => {
-                element.remove_attribute_by_name(attr_name, can_gc);
+                self.element.remove_attribute_by_name(attr_name, can_gc);
             },
             // > if the new value is an ASCII case-insensitive match for the string "true", then the content attribute must be set to the string "true",
             // > if the new value is an ASCII case-insensitive match for the string "plaintext-only", then the content attribute must be set to the string "plaintext-only",
             // > if the new value is an ASCII case-insensitive match for the string "false", then the content attribute must be set to the string "false",
             "true" | "false" | "plaintext-only" => {
-                element.set_attribute(attr_name, AttrValue::String(lower_value), can_gc);
+                self.element
+                    .set_attribute(attr_name, AttrValue::String(lower_value), can_gc);
             },
             // > and otherwise the attribute setter must throw a "SyntaxError" DOMException.
             _ => return Err(Error::Syntax(None)),
@@ -683,9 +705,8 @@ impl HTMLElementMethods<crate::DomTypeHolder> for HTMLElement {
 
     /// <https://html.spec.whatwg.org/multipage#dom-attachinternals>
     fn AttachInternals(&self, can_gc: CanGc) -> Fallible<DomRoot<ElementInternals>> {
-        let element = self.as_element();
         // Step 1: If this's is value is not null, then throw a "NotSupportedError" DOMException
-        if element.get_is().is_some() {
+        if self.element.get_is().is_some() {
             return Err(Error::NotSupported(None));
         }
 
@@ -708,7 +729,7 @@ impl HTMLElementMethods<crate::DomTypeHolder> for HTMLElement {
         }
 
         // Step 5: If this's attached internals is non-null, then throw an "NotSupportedError" DOMException
-        let internals = element.ensure_element_internals(can_gc);
+        let internals = self.element.ensure_element_internals(can_gc);
         if internals.attached() {
             return Err(Error::NotSupported(None));
         }
@@ -716,14 +737,14 @@ impl HTMLElementMethods<crate::DomTypeHolder> for HTMLElement {
         // Step 6: If this's custom element state is not "precustomized" or "custom",
         // then throw a "NotSupportedError" DOMException.
         if !matches!(
-            element.get_custom_element_state(),
+            self.element.get_custom_element_state(),
             CustomElementState::Precustomized | CustomElementState::Custom
         ) {
             return Err(Error::NotSupported(None));
         }
 
         if self.is_form_associated_custom_element() {
-            element.init_state_for_internals();
+            self.element.init_state_for_internals();
         }
 
         // Step 6-7: Set this's attached internals to a new ElementInternals instance
@@ -1307,6 +1328,8 @@ impl VirtualMethods for HTMLElement {
     }
 
     /// <https://html.spec.whatwg.org/multipage#dom-trees:concept-node-remove-ext>
+    ///
+    /// TODO: These are the node removal steps, so this should be done for all Nodes.
     fn unbind_from_tree(&self, context: &UnbindContext, can_gc: CanGc) {
         // 1. Let document be removedNode's node document.
         let document = self.owner_document();
@@ -1315,13 +1338,18 @@ impl VirtualMethods for HTMLElement {
         // document's viewport, and set document's relevant global object's navigation API's focus
         // changed during ongoing navigation to false.
         //
-        // TODO: Should this also happen for non-HTML elements such as SVG elements?
+        // We are not calling the focusing steps on purpose here. There is a note about this in
+        // the specification that reads:
+        //
+        // > This does not perform the unfocusing steps, focusing steps, or focus update steps, and
+        // > thus no blur or change events are fired.
         let element = self.as_element();
         if document
-            .get_focused_element()
+            .focus_handler()
+            .focused_element()
             .is_some_and(|focused_element| &*focused_element == element)
         {
-            document.request_focus(None, FocusInitiator::Script, can_gc);
+            document.focus_handler().set_focused_element(None);
         }
 
         // 3. If removedNode is an element whose namespace is the HTML namespace, and this standard
@@ -1362,10 +1390,9 @@ impl VirtualMethods for HTMLElement {
     }
 
     fn attribute_affects_presentational_hints(&self, attr: &Attr) -> bool {
-        let element = self.upcast::<Element>();
         if is_element_affected_by_legacy_background_presentational_hint(
-            element.namespace(),
-            element.local_name(),
+            self.element.namespace(),
+            self.element.local_name(),
         ) && attr.local_name() == &local_name!("background")
         {
             return true;
@@ -1377,14 +1404,13 @@ impl VirtualMethods for HTMLElement {
     }
 
     fn parse_plain_attribute(&self, name: &LocalName, value: DOMString) -> AttrValue {
-        let element = self.upcast::<Element>();
         match *name {
             local_name!("itemprop") => AttrValue::from_serialized_tokenlist(value.into()),
             local_name!("itemtype") => AttrValue::from_serialized_tokenlist(value.into()),
             local_name!("background")
                 if is_element_affected_by_legacy_background_presentational_hint(
-                    element.namespace(),
-                    element.local_name(),
+                    self.element.namespace(),
+                    self.element.local_name(),
                 ) =>
             {
                 AttrValue::from_resolved_url(
@@ -1411,7 +1437,7 @@ impl VirtualMethods for HTMLElement {
         // Step 2. If movedNode is a form-associated element with a non-null form owner and
         // movedNode and its form owner are no longer in the same tree, then reset the form owner of
         // movedNode.
-        if let Some(form_control) = self.upcast::<Element>().as_maybe_form_control() {
+        if let Some(form_control) = self.element.as_maybe_form_control() {
             form_control.moving_steps(can_gc)
         }
     }
@@ -1419,11 +1445,11 @@ impl VirtualMethods for HTMLElement {
 
 impl Activatable for HTMLElement {
     fn as_element(&self) -> &Element {
-        self.upcast::<Element>()
+        &self.element
     }
 
     fn is_instance_activatable(&self) -> bool {
-        self.as_element().local_name() == &local_name!("summary")
+        self.element.local_name() == &local_name!("summary")
     }
 
     // Basically used to make the HTMLSummaryElement activatable (which has no IDL definition)
@@ -1440,20 +1466,20 @@ impl Activatable for HTMLElement {
 impl FormControl for HTMLElement {
     fn form_owner(&self) -> Option<DomRoot<HTMLFormElement>> {
         debug_assert!(self.is_form_associated_custom_element());
-        self.as_element()
+        self.element
             .get_element_internals()
             .and_then(|e| e.form_owner())
     }
 
     fn set_form_owner(&self, form: Option<&HTMLFormElement>) {
         debug_assert!(self.is_form_associated_custom_element());
-        self.as_element()
+        self.element
             .ensure_element_internals(CanGc::note())
             .set_form_owner(form);
     }
 
     fn to_element(&self) -> &Element {
-        self.as_element()
+        &self.element
     }
 
     fn is_listed(&self) -> bool {

@@ -5,6 +5,8 @@
 use dom_struct::dom_struct;
 use html5ever::{LocalName, Prefix, local_name, ns};
 use js::rust::HandleObject;
+use script_bindings::codegen::GenericBindings::ElementBinding::ScrollLogicalPosition;
+use script_bindings::codegen::GenericBindings::WindowBinding::ScrollBehavior;
 use script_bindings::str::DOMString;
 use stylo_dom::ElementState;
 
@@ -16,9 +18,11 @@ use crate::dom::bindings::root::{Dom, DomRoot, MutNullableDom};
 use crate::dom::css::cssstyledeclaration::{
     CSSModificationAccess, CSSStyleDeclaration, CSSStyleOwner,
 };
-use crate::dom::document::{Document, FocusInitiator};
+use crate::dom::document::Document;
+use crate::dom::document::focus::{FocusInitiator, FocusOperation, FocusableArea};
 use crate::dom::element::{AttributeMutation, Element};
 use crate::dom::node::{Node, NodeTraits};
+use crate::dom::scrolling_box::{ScrollAxisState, ScrollRequirement};
 use crate::dom::virtualmethods::VirtualMethods;
 use crate::script_runtime::CanGc;
 
@@ -144,11 +148,15 @@ impl SVGElementMethods<crate::DomTypeHolder> for SVGElement {
         // TODO: Implement this.
 
         // 2. Run the focusing steps for this.
-        self.upcast::<Element>().run_the_focusing_steps(
-            FocusInitiator::Script,
-            *options,
-            CanGc::from_cx(cx),
-        );
+        if !self
+            .upcast::<Node>()
+            .run_the_focusing_steps(None, CanGc::from_cx(cx))
+        {
+            // The specification seems to imply we should scroll into view even if this element
+            // is not a focusable area. No browser does this, so we return early in that case.
+            // See https://github.com/whatwg/html/issues/12231.
+            return;
+        }
 
         // > 3. If options["focusVisible"] is true, or does not exist but in an
         // >    implementation-defined  way the user agent determines it would be best to do so,
@@ -157,8 +165,34 @@ impl SVGElementMethods<crate::DomTypeHolder> for SVGElement {
 
         // > 4. If options["preventScroll"] is false, then scroll a target into view given this,
         // >    "auto", "center", and "center".
-        // TODO: This is currently handled as part of the focusing steps, but should eventually be
-        // handled here.
+        if !options.preventScroll {
+            let scroll_axis = ScrollAxisState {
+                position: ScrollLogicalPosition::Center,
+                requirement: ScrollRequirement::IfNotVisible,
+            };
+            self.upcast::<Element>().scroll_into_view_with_options(
+                ScrollBehavior::Smooth,
+                scroll_axis,
+                scroll_axis,
+                None,
+                None,
+            );
+        }
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/#dom-blur>
+    fn Blur(&self, cx: &mut js::context::JSContext) {
+        // TODO: Run the unfocusing steps. Focus the top-level document, not
+        //       the current document.
+        if !self.as_element().focus_state() {
+            return;
+        }
+        // https://html.spec.whatwg.org/multipage/#unfocusing-steps
+        self.owner_document().focus_handler().focus(
+            FocusOperation::Focus(FocusableArea::Viewport),
+            FocusInitiator::Local,
+            CanGc::from_cx(cx),
+        );
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-tabindex>

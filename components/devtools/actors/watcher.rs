@@ -186,7 +186,7 @@ pub(crate) struct WatcherActor {
     network_parent_name: String,
     target_configuration: String,
     thread_configuration_name: String,
-    breakpoint_list: String,
+    breakpoint_list_name: String,
     session_context: SessionContext,
 }
 
@@ -422,7 +422,7 @@ impl Actor for WatcherActor {
                 let msg = GetBreakpointListActorReply {
                     from: self.name(),
                     breakpoint_list: registry
-                        .encode::<BreakpointListActor, _>(&self.breakpoint_list),
+                        .encode::<BreakpointListActor, _>(&self.breakpoint_list_name),
                 };
                 request.reply_final(&msg)?
             },
@@ -444,31 +444,26 @@ impl WatcherActor {
         browsing_context_name: String,
         session_context: SessionContext,
     ) -> Self {
-        let network_parent_actor =
-            NetworkParentActor::new(registry.new_name::<NetworkParentActor>());
+        let network_parent_name = NetworkParentActor::register(registry);
         let target_configuration =
             TargetConfigurationActor::new(registry.new_name::<TargetConfigurationActor>());
         let thread_configuration_actor =
             ThreadConfigurationActor::new(registry.new_name::<ThreadConfigurationActor>());
-        let breakpoint_list = BreakpointListActor::new(
-            registry.new_name::<BreakpointListActor>(),
-            browsing_context_name.clone(),
-        );
+        let breakpoint_list_name =
+            BreakpointListActor::register(registry, browsing_context_name.clone());
 
         let watcher_actor = Self {
             name: registry.new_name::<WatcherActor>(),
             browsing_context_name,
-            network_parent_name: network_parent_actor.name(),
+            network_parent_name,
             target_configuration: target_configuration.name(),
             thread_configuration_name: thread_configuration_actor.name(),
-            breakpoint_list: breakpoint_list.name(),
+            breakpoint_list_name,
             session_context,
         };
 
-        registry.register(network_parent_actor);
         registry.register(target_configuration);
         registry.register(thread_configuration_actor);
-        registry.register(breakpoint_list);
 
         watcher_actor
     }

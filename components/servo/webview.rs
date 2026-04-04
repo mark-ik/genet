@@ -15,7 +15,7 @@ use embedder_traits::{
     ContextMenuAction, ContextMenuItem, Cursor, EmbedderControlId, EmbedderControlRequest, Image,
     InputEvent, InputEventAndId, InputEventId, JSValue, JavaScriptEvaluationError, LoadStatus,
     MediaSessionActionType, NewWebViewDetails, ScreenGeometry, ScreenshotCaptureError, Scroll,
-    Theme, TraversalId, ViewportDetails, WebViewPoint, WebViewRect,
+    Theme, TraversalId, UrlRequest, ViewportDetails, WebViewPoint, WebViewRect,
 };
 use euclid::{Scale, Size2D};
 use image::RgbaImage;
@@ -49,10 +49,14 @@ pub(crate) const MINIMUM_WEBVIEW_SIZE: Size2D<i32, DevicePixel> = Size2D::new(1,
 /// considers that the webview has closed and will clean up all associated resources related
 /// to this webview.
 ///
+/// ## Creating a WebView
+///
+/// To create a [`WebView`], use [`WebViewBuilder`].
+///
 /// ## Rendering Model
 ///
-/// Every [`WebView`] has a [`RenderingContext`](crate::RenderingContext). The embedder manages when
-/// the contents of the [`WebView`] paint to the [`RenderingContext`](crate::RenderingContext). When
+/// Every [`WebView`] has a [`RenderingContext`]. The embedder manages when
+/// the contents of the [`WebView`] paint to the [`RenderingContext`]. When
 /// a [`WebView`] needs to be painted, for instance, because its contents have changed, Servo will
 /// call [`WebViewDelegate::notify_new_frame_ready`] in order to signal that it is time to repaint
 /// the [`WebView`] using [`WebView::paint`].
@@ -62,8 +66,8 @@ pub(crate) const MINIMUM_WEBVIEW_SIZE: Size2D<i32, DevicePixel> = Size2D::new(1,
 /// 1. [`WebViewDelegate::notify_new_frame_ready`] is called. The applications triggers a request
 ///    to repaint the window that contains this [`WebView`].
 /// 2. During window repainting, the application calls [`WebView::paint`] and the contents of the
-///    [`RenderingContext`][crate::RenderingContext] are updated.
-/// 3. If the [`RenderingContext`][crate::RenderingContext] is double-buffered, the
+///    [`RenderingContext`] are updated.
+/// 3. If the [`RenderingContext`] is double-buffered, the
 ///    application then calls [`crate::RenderingContext::present()`] in order to swap the back buffer
 ///    to the front, finally displaying the updated [`WebView`] contents.
 ///
@@ -453,7 +457,18 @@ impl WebView {
             .constellation_proxy()
             .send(EmbedderToConstellationMessage::LoadUrl(
                 self.id(),
-                url.into(),
+                UrlRequest::new(url),
+            ))
+    }
+
+    /// Load a [`UrlRequest`] into this [`WebView`].
+    pub fn load_request(&self, url_request: UrlRequest) {
+        self.inner()
+            .servo
+            .constellation_proxy()
+            .send(EmbedderToConstellationMessage::LoadUrl(
+                self.id(),
+                url_request,
             ))
     }
 
@@ -547,9 +562,7 @@ impl WebView {
     /// zoom, which will adjust the `devicePixelRatio` of the page and cause it to modify
     /// its layout.
     ///
-    /// These values will be clamped internally. The values used for clamping can be
-    /// adjusted by page content when `<meta viewport>` parsing is enabled via
-    /// `Prefs::viewport_meta_enabled`.
+    /// These values will be clamped internally to the inclusive range [0.1, 10.0]).
     pub fn set_page_zoom(&self, new_zoom: f32) {
         self.inner()
             .servo
@@ -569,8 +582,9 @@ impl WebView {
     /// zoom, which is a type of zoom which does not modify layout, and instead simply
     /// magnifies the view in the viewport.
     ///
-    /// The final pinch zoom values will be clamped to reasonable defaults (currently to
-    /// the inclusive range [1.0, 10.0]).
+    /// The final pinch zoom values will be clamped to defaults (the inclusive range [1.0, 10.0]).
+    /// The values used for clamping can be adjusted by page content when `<meta viewport>`
+    /// parsing is enabled via `Prefs::viewport_meta_enabled`, exclusively on mobile devices.
     pub fn adjust_pinch_zoom(&self, pinch_zoom_delta: f32, center: DevicePoint) {
         self.inner()
             .servo
@@ -787,10 +801,9 @@ impl WebView {
     /// sending any tree updates from the webview to your AccessKit adapter. Otherwise you may
     /// violate AccessKit’s subtree invariants and **panic**.
     ///
-    /// This method may call [`WebViewDelegate::notify_accessibility_tree_update()`] synchronously
-    /// with an initial tree update, so if your impl for that method can’t create the graft node
-    /// (and send *that* update to AccessKit) before sending this update to AccessKit, then it must
-    /// queue the update for later.
+    /// If your impl for [`WebViewDelegate::notify_accessibility_tree_update()`] can’t create the
+    /// graft node (and send *that* update to AccessKit) before sending any updates from this
+    /// webview to AccessKit, then it must queue those updates until it can guarantee that.
     ///
     /// [graft]: https://docs.rs/accesskit/0.24.0/accesskit/struct.Node.html#method.tree_id
     /// [`set_tree_id()`]: https://docs.rs/accesskit/0.24.0/accesskit/struct.Node.html#method.set_tree_id
@@ -806,23 +819,6 @@ impl WebView {
         if active {
             let accesskit_tree_id = TreeId(AccesskitUuid::new_v4());
             self.inner_mut().accesskit_tree_id = Some(accesskit_tree_id);
-
-            // Synchronously emit a TreeUpdate containing just a ScrollView, but no graft node yet.
-            let root_node_id = NodeId(0);
-            let root_node = AccesskitNode::new(Role::ScrollView);
-            self.delegate().notify_accessibility_tree_update(
-                self.clone(),
-                TreeUpdate {
-                    nodes: vec![(root_node_id, root_node)],
-                    tree: Some(Tree {
-                        root: root_node_id,
-                        toolkit_name: None,
-                        toolkit_version: None,
-                    }),
-                    tree_id: accesskit_tree_id,
-                    focus: root_node_id,
-                },
-            );
         } else {
             self.inner_mut().accesskit_tree_id = None;
         }
@@ -834,7 +830,7 @@ impl WebView {
         self.accesskit_tree_id()
     }
 
-    pub fn notify_accessibility_tree_id(&self, grafted_tree_id: TreeId) {
+    pub(crate) fn notify_document_accessibility_tree_id(&self, grafted_tree_id: TreeId) {
         let Some(webview_accesskit_tree_id) = self.inner().accesskit_tree_id else {
             return;
         };
@@ -850,7 +846,6 @@ impl WebView {
         let mut root_node = AccesskitNode::new(Role::ScrollView);
         let graft_node_id = NodeId(1);
         let mut graft_node = AccesskitNode::new(Role::GenericContainer);
-        graft_node.set_label("graft");
         graft_node.set_tree_id(grafted_tree_id);
         root_node.set_children(vec![graft_node_id]);
         self.delegate().notify_accessibility_tree_update(
@@ -893,7 +888,7 @@ impl WebViewTrait for ServoRendererWebView {
     }
 }
 
-/// Builder for [`WebView`].
+/// Builder for creating a [`WebView`].
 pub struct WebViewBuilder {
     servo: Servo,
     rendering_context: Rc<dyn RenderingContext>,

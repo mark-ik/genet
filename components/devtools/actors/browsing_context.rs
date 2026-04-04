@@ -139,7 +139,7 @@ pub(crate) struct BrowsingContextActor {
     active_pipeline_id: AtomicRefCell<PipelineId>,
     active_outer_window_id: AtomicRefCell<DevtoolsOuterWindowId>,
     pub browsing_context_id: DevtoolsBrowsingContextId,
-    accessibility: String,
+    accessibility_name: String,
     pub console_name: String,
     css_properties_name: String,
     pub(crate) inspector_name: String,
@@ -197,7 +197,8 @@ impl Actor for BrowsingContextActor {
 
 impl BrowsingContextActor {
     #[expect(clippy::too_many_arguments)]
-    pub(crate) fn new(
+    pub(crate) fn register(
+        registry: &ActorRegistry,
         console_name: String,
         browser_id: DevtoolsBrowserId,
         browsing_context_id: DevtoolsBrowsingContextId,
@@ -205,8 +206,7 @@ impl BrowsingContextActor {
         pipeline_id: PipelineId,
         outer_window_id: DevtoolsOuterWindowId,
         script_sender: GenericSender<DevtoolScriptControlMsg>,
-        registry: &ActorRegistry,
-    ) -> BrowsingContextActor {
+    ) -> String {
         let name = registry.new_name::<BrowsingContextActor>();
         let DevtoolsPageInfo {
             title,
@@ -215,8 +215,7 @@ impl BrowsingContextActor {
             ..
         } = page_info;
 
-        let accessibility_actor =
-            AccessibilityActor::new(registry.new_name::<AccessibilityActor>());
+        let accessibility_name = AccessibilityActor::register(registry);
 
         let properties = (|| {
             let (properties_sender, properties_receiver) = generic_channel::channel()?;
@@ -224,23 +223,19 @@ impl BrowsingContextActor {
             properties_receiver.recv().ok()
         })()
         .unwrap_or_default();
-        let css_properties_actor =
-            CssPropertiesActor::new(registry.new_name::<CssPropertiesActor>(), properties);
+        let css_properties_name = CssPropertiesActor::register(registry, properties);
 
         let inspector_name = InspectorActor::register(registry, name.clone());
 
-        let reflow_actor = ReflowActor::new(registry.new_name::<ReflowActor>());
+        let reflow_name = ReflowActor::register(registry);
 
-        let style_sheets_actor = StyleSheetsActor::new(registry.new_name::<StyleSheetsActor>());
+        let style_sheets_name = StyleSheetsActor::register(registry);
 
         let tab_descriptor_actor =
             TabDescriptorActor::new(registry, name.clone(), is_top_level_global);
 
-        let thread_actor = ThreadActor::new(
-            registry.new_name::<ThreadActor>(),
-            script_sender.clone(),
-            Some(name.clone()),
-        );
+        let thread_name =
+            ThreadActor::register(registry, script_sender.clone(), Some(name.clone()));
 
         let watcher_actor = WatcherActor::new(
             registry,
@@ -251,8 +246,8 @@ impl BrowsingContextActor {
         let mut script_chans = FxHashMap::default();
         script_chans.insert(pipeline_id, script_sender);
 
-        let target = BrowsingContextActor {
-            name,
+        let actor = BrowsingContextActor {
+            name: name.clone(),
             script_chans: AtomicRefCell::new(script_chans),
             title: AtomicRefCell::new(title),
             url: AtomicRefCell::new(url.into_string()),
@@ -260,26 +255,22 @@ impl BrowsingContextActor {
             active_outer_window_id: AtomicRefCell::new(outer_window_id),
             browser_id,
             browsing_context_id,
-            accessibility: accessibility_actor.name(),
+            accessibility_name,
             console_name,
-            css_properties_name: css_properties_actor.name(),
+            css_properties_name,
             inspector_name,
-            reflow_name: reflow_actor.name(),
-            style_sheets_name: style_sheets_actor.name(),
+            reflow_name,
+            style_sheets_name,
             _tab: tab_descriptor_actor.name(),
-            thread_name: thread_actor.name(),
+            thread_name,
             watcher_name: watcher_actor.name(),
         };
 
-        registry.register(accessibility_actor);
-        registry.register(css_properties_actor);
-        registry.register(reflow_actor);
-        registry.register(style_sheets_actor);
         registry.register(tab_descriptor_actor);
-        registry.register(thread_actor);
         registry.register(watcher_actor);
+        registry.register::<Self>(actor);
 
-        target
+        name
     }
 
     pub(crate) fn handle_new_global(
@@ -404,7 +395,7 @@ impl ActorEncode<BrowsingContextActorMsg> for BrowsingContextActor {
             browsing_context_id: self.browsing_context_id.value(),
             outer_window_id: self.outer_window_id().value(),
             is_top_level_target: true,
-            accessibility_actor: self.accessibility.clone(),
+            accessibility_actor: self.accessibility_name.clone(),
             console_actor: self.console_name.clone(),
             css_properties_actor: self.css_properties_name.clone(),
             inspector_actor: self.inspector_name.clone(),

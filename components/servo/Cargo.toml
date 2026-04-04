@@ -18,8 +18,11 @@ crate-type = ["rlib"]
 [features]
 # Note: Servoshell does not use the default features of servo, so you also
 # need to add features that should be default to ports/servoshell/Cargo.toml
-default = ["clipboard", "js_jit"]
+default = ["baked-in-resources", "clipboard", "js_jit"]
 background_hang_monitor = ["servo-background-hang-monitor/sampler"]
+# This is slightly magical, but this will also work on ohos, where `servo-default-resource` is not added,
+# which makes `baked-in-resources a no-op (as intended) on ohos (and perhaps other platforms in the future).
+baked-in-resources = ["dep:servo-default-resources"]
 bluetooth = [
     "servo-bluetooth-traits",
     "dep:servo-bluetooth",
@@ -62,6 +65,7 @@ webgl_backtrace = [
     "servo-canvas-traits/webgl_backtrace",
 ]
 webgpu = [
+    "dep:webgpu",
     "script/webgpu",
     "paint/webgpu",
     "servo-constellation/webgpu",
@@ -88,6 +92,7 @@ env_logger = { workspace = true }
 euclid = { workspace = true }
 fonts = { workspace = true }
 gstreamer = { workspace = true, optional = true }
+http = { workspace = true }
 image = { workspace = true }
 ipc-channel = { workspace = true }
 keyboard-types = { workspace = true }
@@ -130,10 +135,16 @@ tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true, optional = true }
 url = { workspace = true }
 webgl = { workspace = true, default-features = false }
-webgpu = { workspace = true }
+webgpu = { workspace = true, optional = true }
 webrender = { workspace = true }
 webrender_api = { workspace = true }
 webxr-api = { workspace = true, optional = true }
+
+# On most platforms we bake in the resources for simplicity. On ohos we load resources via the filesystem.
+# In the future we might want to use this approach also for the other platforms.
+# If the feature is turned off, a resource reader must be injected into the build via `inventory::submit!()`.
+[target.'cfg(not(target_env = "ohos"))'.dependencies]
+servo-default-resources = { workspace = true, optional = true }
 
 [target.'cfg(any(target_os = "android", target_env = "ohos"))'.dependencies]
 webxr = { workspace = true, optional = true }
@@ -153,6 +164,7 @@ accesskit_consumer = "0.35.0"
 http = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
+itertools = { workspace = true }
 net = { workspace = true, features = ["test-util"] }
 rustls = { version = "0.23", default-features = false }
 # This must always be a path dependency, we don't want to add a dependency on a

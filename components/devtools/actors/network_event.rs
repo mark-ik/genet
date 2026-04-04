@@ -468,9 +468,10 @@ impl Actor for NetworkEventActor {
                     let (encoding, text) = if mime_type.is_some() {
                         // Queue a LongStringActor for this body
                         let body_string = String::from_utf8_lossy(body).to_string();
-                        let long_string = LongStringActor::new(registry, body_string);
-                        let value = long_string.long_string_obj();
-                        registry.register(long_string);
+                        let long_string_name = LongStringActor::register(registry, body_string);
+                        let value = registry
+                            .find::<LongStringActor>(&long_string_name)
+                            .long_string_obj();
                         (None, serde_json::to_value(value).unwrap())
                     } else {
                         let b64 = STANDARD.encode(&body.0);
@@ -535,13 +536,16 @@ impl Actor for NetworkEventActor {
 }
 
 impl NetworkEventActor {
-    pub fn new(name: String, resource_id: u64, watcher_name: String) -> NetworkEventActor {
-        NetworkEventActor {
-            name,
+    pub fn register(registry: &ActorRegistry, resource_id: u64, watcher_name: String) -> String {
+        let name = registry.new_name::<Self>();
+        let actor = NetworkEventActor {
+            name: name.clone(),
             resource_id,
             watcher_name,
             ..Default::default()
-        }
+        };
+        registry.register::<Self>(actor);
+        name
     }
 
     pub fn add_request(&self, request: HttpRequest) {

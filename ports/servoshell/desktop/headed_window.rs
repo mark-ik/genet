@@ -752,7 +752,19 @@ impl HeadedWindow {
                             )));
                         },
                         Ime::Disabled => {
-                            webview.notify_input_event(InputEvent::Ime(ImeEvent::Dismissed));
+                            // There are two reasons we receive this message from winit:
+                            //
+                            // 1. The user dismissed the IME. In that case we want to inform Servo
+                            //    so it can unfocus the current editable element.
+                            // 2. Servo changed focus and requested that we dismiss the IME, which
+                            //    in turn triggers this message. We know this is the case when we don't
+                            //    expect any IME to be open and shouldn't send any more messages to
+                            //    Servo as it might cause unexpected blurring of the newly focused
+                            //    element.
+                            if !self.visible_input_methods.borrow().is_empty() {
+                                self.visible_input_methods.borrow_mut().clear();
+                                webview.notify_input_event(InputEvent::Ime(ImeEvent::Dismissed));
+                            }
                         },
                     },
                     _ => {},
@@ -761,9 +773,21 @@ impl HeadedWindow {
         }
     }
 
-    pub(crate) fn handle_winit_app_event(&self, _window: &ServoShellWindow, app_event: AppEvent) {
+    pub(crate) fn handle_winit_app_event(&self, state: Rc<RunningAppState>, app_event: AppEvent) {
         if let AppEvent::Accessibility(ref event) = app_event {
-            // TODO(#41930): Forward accesskit_winit::WindowEvent events to Servo where appropriate
+            match &event.window_event {
+                egui_winit::accesskit_winit::WindowEvent::InitialTreeRequested => {
+                    state.set_accessibility_active(true);
+                },
+                egui_winit::accesskit_winit::WindowEvent::ActionRequested(req) => {
+                    if req.target_tree != accesskit::TreeId::ROOT {
+                        // TODO(#4344): Forward action to Servo
+                    }
+                },
+                egui_winit::accesskit_winit::WindowEvent::AccessibilityDeactivated => {
+                    state.set_accessibility_active(false);
+                },
+            }
 
             if self
                 .gui

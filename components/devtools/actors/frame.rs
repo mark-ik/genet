@@ -12,7 +12,7 @@ use servo_base::generic_channel::channel;
 use crate::StreamId;
 use crate::actor::{Actor, ActorEncode, ActorError, ActorRegistry};
 use crate::actors::environment::{EnvironmentActor, EnvironmentActorMsg};
-use crate::actors::object::{ObjectActor, ObjectActorMsg};
+use crate::actors::object::ObjectActor;
 use crate::actors::source::SourceActor;
 use crate::protocol::{ClientRequest, JsonPacketStream};
 
@@ -49,7 +49,7 @@ pub(crate) struct FrameActorMsg {
     display_name: String,
     oldest: bool,
     state: FrameState,
-    this: ObjectActorMsg,
+    this: Value,
     #[serde(rename = "where")]
     where_: FrameWhere,
 }
@@ -89,11 +89,11 @@ impl Actor for FrameActor {
                     .script_sender
                     .send(DevtoolScriptControlMsg::GetEnvironment(self.name(), tx))
                     .map_err(|_| ActorError::Internal)?;
-                let environment = rx.recv().map_err(|_| ActorError::Internal)?;
+                let environment_name = rx.recv().map_err(|_| ActorError::Internal)?;
 
                 let msg = FrameEnvironmentReply {
                     from: self.name(),
-                    environment: registry.encode::<EnvironmentActor, _>(&environment),
+                    environment: registry.encode::<EnvironmentActor, _>(&environment_name),
                 };
                 // This reply has a `type` field but it doesn't need a followup,
                 // unlike most messages. We need to skip the validity check.
@@ -112,12 +112,12 @@ impl FrameActor {
         source_actor: String,
         frame_result: FrameInfo,
     ) -> String {
-        let object_actor = ObjectActor::register(registry, None, "Object".to_owned());
+        let object_name = ObjectActor::register(registry, None, "Object".to_owned(), None);
 
         let name = registry.new_name::<Self>();
         let actor = Self {
             name: name.clone(),
-            object_actor,
+            object_actor: object_name,
             source_actor,
             frame_result,
             current_offset: Default::default(),

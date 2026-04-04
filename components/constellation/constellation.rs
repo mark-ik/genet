@@ -164,7 +164,8 @@ use servo_constellation_traits::{
     LoadData, LogEntry, MessagePortMsg, NavigationHistoryBehavior, PaintMetricEvent,
     PortMessageTask, PortTransferInfo, SWManagerMsg, SWManagerSenders, ScreenshotReadinessResponse,
     ScriptToConstellationMessage, ScrollStateUpdate, ServiceWorkerManagerFactory, ServiceWorkerMsg,
-    StructuredSerializedData, TraversalDirection, UserContentManagerAction, WindowSizeType,
+    StructuredSerializedData, TargetSnapshotParams, TraversalDirection, UserContentManagerAction,
+    WindowSizeType,
 };
 use servo_url::{Host, ImmutableOrigin, ServoUrl};
 use storage_traits::StorageThreads;
@@ -190,7 +191,13 @@ use crate::process_manager::ProcessManager;
 use crate::serviceworker::ServiceWorkerUnprivilegedContent;
 use crate::session_history::{NeedsToReload, SessionHistoryChange, SessionHistoryDiff};
 
-type PendingApprovalNavigations = FxHashMap<PipelineId, (LoadData, NavigationHistoryBehavior)>;
+struct PendingApprovalNavigation {
+    load_data: LoadData,
+    history_behaviour: NavigationHistoryBehavior,
+    target_snapshot_params: TargetSnapshotParams,
+}
+
+type PendingApprovalNavigations = FxHashMap<PipelineId, PendingApprovalNavigation>;
 
 #[derive(Debug)]
 /// The state used by MessagePortInfo to represent the various states the port can be in.
@@ -1021,6 +1028,7 @@ where
         load_data: LoadData,
         is_private: bool,
         throttled: bool,
+        target_snapshot_params: TargetSnapshotParams,
     ) {
         if self.shutting_down {
             return;
@@ -1062,6 +1070,7 @@ where
             viewport_details: initial_viewport_details,
             user_content_manager_id,
             theme,
+            target_snapshot_params,
         };
         let pipeline = match Pipeline::spawn(new_pipeline_info, event_loop, self, throttled) {
             Ok(pipeline) => pipeline,
@@ -1356,9 +1365,15 @@ where
                 };
 
                 match pending {
-                    Some((load_data, history_handling)) => {
+                    Some(pending) => {
                         if allowed {
-                            self.load_url(webview_id, pipeline_id, load_data, history_handling);
+                            self.load_url(
+                                webview_id,
+                                pipeline_id,
+                                pending.load_data,
+                                pending.history_behaviour,
+                                pending.target_snapshot_params,
+                            );
                         } else {
                             if let Some((sender, id)) = &self.webdriver_load_status_sender {
                                 if pipeline_id == *id {
@@ -1393,8 +1408,13 @@ where
             // Load a new page from a typed url
             // If there is already a pending page (self.pending_changes), it will not be overridden;
             // However, if the id is not encompassed by another change, it will be.
-            EmbedderToConstellationMessage::LoadUrl(webview_id, url) => {
-                let load_data = LoadData::new_for_new_unrelated_webview(url);
+            EmbedderToConstellationMessage::LoadUrl(webview_id, url_request) => {
+                let mut load_data = LoadData::new_for_new_unrelated_webview(url_request.url);
+
+                if !url_request.headers.is_empty() {
+                    load_data.headers.extend(url_request.headers);
+                }
+
                 let ctx_id = BrowsingContextId::from(webview_id);
                 let pipeline_id = match self.browsing_contexts.get(&ctx_id) {
                     Some(ctx) => ctx.pipeline_id,
@@ -1409,6 +1429,7 @@ where
                     pipeline_id,
                     load_data,
                     NavigationHistoryBehavior::Push,
+                    TargetSnapshotParams::default(),
                 );
             },
             // Create a new top level browsing context. Will use response_chan to return
@@ -1820,12 +1841,17 @@ where
                 self.handle_change_running_animations_state(source_pipeline_id, animation_state)
             },
             // Ask the embedder for permission to load a new page.
-            ScriptToConstellationMessage::LoadUrl(load_data, history_handling) => {
+            ScriptToConstellationMessage::LoadUrl(
+                load_data,
+                history_handling,
+                target_snapshot_params,
+            ) => {
                 self.schedule_navigation(
                     webview_id,
                     source_pipeline_id,
                     load_data,
                     history_handling,
+                    target_snapshot_params,
                 );
             },
             ScriptToConstellationMessage::AbortLoadUrl => {
@@ -3017,6 +3043,7 @@ where
             new_load_data,
             is_private,
             throttled,
+            TargetSnapshotParams::default(),
         );
         self.add_pending_change(SessionHistoryChange {
             webview_id,
@@ -3129,7 +3156,7 @@ where
 
         webview.accessibility_active = active;
         self.constellation_to_embedder_proxy.send(
-            ConstellationToEmbedderMsg::AccessibilityTreeIdChanged(
+            ConstellationToEmbedderMsg::DocumentAccessibilityTreeIdChanged(
                 webview_id,
                 webview.active_top_level_pipeline_id.into(),
             ),
@@ -3249,6 +3276,7 @@ where
             load_data,
             is_private,
             throttled,
+            TargetSnapshotParams::default(),
         );
         self.add_pending_change(SessionHistoryChange {
             webview_id,
@@ -3388,6 +3416,7 @@ where
             new_pipeline_id,
             is_private,
             mut history_handling,
+            target_snapshot_params,
             ..
         } = load_info.info;
 
@@ -3467,6 +3496,7 @@ where
             load_info.load_data,
             is_private,
             browsing_context_throttled,
+            target_snapshot_params,
         );
         self.add_pending_change(SessionHistoryChange {
             webview_id,
@@ -3730,6 +3760,7 @@ where
         source_id: PipelineId,
         load_data: LoadData,
         history_handling: NavigationHistoryBehavior,
+        target_snapshot_params: TargetSnapshotParams,
     ) {
         match self.pending_approval_navigations.entry(source_id) {
             Entry::Occupied(_) => {
@@ -3739,7 +3770,11 @@ where
                 );
             },
             Entry::Vacant(entry) => {
-                let _ = entry.insert((load_data.clone(), history_handling));
+                let _ = entry.insert(PendingApprovalNavigation {
+                    load_data: load_data.clone(),
+                    history_behaviour: history_handling,
+                    target_snapshot_params,
+                });
             },
         };
         // Allow the embedder to handle the url itself
@@ -3759,6 +3794,7 @@ where
         source_id: PipelineId,
         load_data: LoadData,
         history_handling: NavigationHistoryBehavior,
+        target_snapshot_params: TargetSnapshotParams,
     ) -> Option<PipelineId> {
         debug!(
             "{}: Loading ({}replacing): {}",
@@ -3821,6 +3857,7 @@ where
                     browsing_context_id,
                     load_data,
                     history_handling,
+                    target_snapshot_params,
                 );
                 let result = match self.pipelines.get(&parent_pipeline_id) {
                     Some(parent_pipeline) => parent_pipeline.event_loop.send(msg),
@@ -3878,6 +3915,7 @@ where
                     load_data,
                     is_private,
                     is_throttled,
+                    target_snapshot_params,
                 );
                 self.add_pending_change(SessionHistoryChange {
                     webview_id,
@@ -4172,6 +4210,10 @@ where
                     load_data.clone(),
                     is_private,
                     throttled,
+                    // TODO(jdm): We need to store the original target snapshot params
+                    // with the pipeline when it's created, so we can support reloading
+                    // a discarded document properly.
+                    TargetSnapshotParams::default(),
                 );
                 self.add_pending_change(SessionHistoryChange {
                     webview_id,
@@ -5762,7 +5804,7 @@ where
                 if frame_tree.pipeline.id != webview.active_top_level_pipeline_id {
                     webview.active_top_level_pipeline_id = frame_tree.pipeline.id;
                     self.constellation_to_embedder_proxy.send(
-                        ConstellationToEmbedderMsg::AccessibilityTreeIdChanged(
+                        ConstellationToEmbedderMsg::DocumentAccessibilityTreeIdChanged(
                             webview_id,
                             webview.active_top_level_pipeline_id.into(),
                         ),

@@ -237,7 +237,7 @@ impl Actor for WalkerActor {
                     .ok_or(ActorError::MissingParameter)?
                     .as_str()
                     .ok_or(ActorError::BadParameterType)?;
-                let node = msg
+                let node_name = msg
                     .get("node")
                     .ok_or(ActorError::MissingParameter)?
                     .as_str()
@@ -247,7 +247,7 @@ impl Actor for WalkerActor {
                     browsing_context_actor.pipeline_id(),
                     &self.name,
                     registry,
-                    node,
+                    node_name,
                     vec![],
                     |msg| msg.display_name == selector,
                 )
@@ -280,6 +280,17 @@ impl Actor for WalkerActor {
 }
 
 impl WalkerActor {
+    pub fn register(registry: &ActorRegistry, browsing_context_name: String) -> String {
+        let name = registry.new_name::<WalkerActor>();
+        let actor = WalkerActor {
+            name: name.clone(),
+            mutations: AtomicRefCell::new(vec![]),
+            browsing_context_name,
+        };
+        registry.register::<Self>(actor);
+        name
+    }
+
     pub(crate) fn browsing_context_actor(
         &self,
         registry: &ActorRegistry,
@@ -378,7 +389,7 @@ pub fn find_child(
     pipeline: PipelineId,
     name: &str,
     registry: &ActorRegistry,
-    node: &str,
+    node_name: &str,
     mut hierarchy: Vec<NodeActorMsg>,
     compare_fn: impl Fn(&NodeActorMsg) -> bool + Clone,
 ) -> Result<Vec<NodeActorMsg>, Vec<NodeActorMsg>> {
@@ -386,7 +397,7 @@ pub fn find_child(
     script_chan
         .send(GetChildren(
             pipeline,
-            registry.actor_to_script(node.into()),
+            registry.actor_to_script(node_name.into()),
             tx,
         ))
         .unwrap();

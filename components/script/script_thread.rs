@@ -91,7 +91,7 @@ use servo_config::{opts, pref, prefs};
 use servo_constellation_traits::{
     LoadData, LoadOrigin, NavigationHistoryBehavior, ScreenshotReadinessResponse,
     ScriptToConstellationChan, ScriptToConstellationMessage, ScrollStateUpdate,
-    StructuredSerializedData, TraversalDirection, WindowSizeType,
+    StructuredSerializedData, TargetSnapshotParams, TraversalDirection, WindowSizeType,
 };
 use servo_url::{ImmutableOrigin, MutableOrigin, OriginSnapshot, ServoUrl};
 use storage_traits::StorageThreads;
@@ -128,9 +128,9 @@ use crate::dom::csp::{CspReporting, GlobalCspReporting, Violation};
 use crate::dom::customelementregistry::{
     CallbackReaction, CustomElementDefinition, CustomElementReactionStack,
 };
+use crate::dom::document::focus::{FocusInitiator, FocusOperation, FocusableArea};
 use crate::dom::document::{
-    Document, DocumentSource, FocusInitiator, HasBrowsingContext, IsHTMLDocument,
-    RenderingUpdateReason,
+    Document, DocumentSource, HasBrowsingContext, IsHTMLDocument, RenderingUpdateReason,
 };
 use crate::dom::element::Element;
 use crate::dom::globalscope::GlobalScope;
@@ -151,7 +151,7 @@ use crate::messaging::{
 };
 use crate::microtask::{Microtask, MicrotaskQueue};
 use crate::mime::{APPLICATION, CHARSET, MimeExt, TEXT, XML};
-use crate::navigation::{InProgressLoad, NavigationListener, determine_the_origin};
+use crate::navigation::{InProgressLoad, NavigationListener};
 use crate::network_listener::{FetchResponseListener, submit_timing};
 use crate::realms::{enter_auto_realm, enter_realm};
 use crate::script_mutation_observers::ScriptMutationObservers;
@@ -537,10 +537,17 @@ impl ScriptThread {
         webview_id: WebViewId,
         pipeline_id: PipelineId,
         metadata: Option<&Metadata>,
+        origin: MutableOrigin,
         cx: &mut js::context::JSContext,
     ) -> Option<DomRoot<ServoParser>> {
         with_script_thread(|script_thread| {
-            script_thread.handle_page_headers_available(webview_id, pipeline_id, metadata, cx)
+            script_thread.handle_page_headers_available(
+                webview_id,
+                pipeline_id,
+                metadata,
+                origin,
+                cx,
+            )
         })
     }
 
@@ -1235,7 +1242,9 @@ impl ScriptThread {
             // > For each doc of docs, if the focused area of doc is not a focusable area, then run the
             // > focusing steps for doc's viewport, and set doc's relevant global object's navigation API's
             // > focus changed during ongoing navigation to false.
-            document.perform_focus_fixup_rule(CanGc::from_cx(cx));
+            document
+                .focus_handler()
+                .perform_focus_fixup_rule(CanGc::from_cx(cx));
 
             // TODO: Perform pending transition operations from
             // https://drafts.csswg.org/css-view-transitions/#perform-pending-transition-operations.
@@ -1737,11 +1746,13 @@ impl ScriptThread {
                 browsing_context_id,
                 load_data,
                 history_handling,
+                target_snapshot_params,
             ) => self.handle_navigate_iframe(
                 parent_pipeline_id,
                 browsing_context_id,
                 load_data,
                 history_handling,
+                target_snapshot_params,
                 cx,
             ),
             ScriptThreadMessage::UnloadDocument(pipeline_id) => {
@@ -2854,28 +2865,34 @@ impl ScriptThread {
             .find_document(parent_pipeline_id)
             .unwrap();
 
-        let Some(iframe_element_root) = ({
+        let Some(iframe_element) = ({
             // Enclose `iframes()` call and create a new root to avoid retaining
             // borrow.
             let iframes = document.iframes();
             iframes
                 .get(browsing_context_id)
-                .map(|iframe| DomRoot::from_ref(iframe.element.upcast()))
+                .map(|iframe| DomRoot::from_ref(iframe.element.upcast::<Node>()))
         }) else {
             return;
         };
 
-        if document.get_focus_sequence() > sequence {
+        if document.focus_handler().focus_sequence() > sequence {
             debug!(
                 "Disregarding the FocusIFrame message because the contained sequence number is \
                 too old ({:?} < {:?})",
                 sequence,
-                document.get_focus_sequence()
+                document.focus_handler().focus_sequence()
             );
             return;
         }
 
-        document.request_focus(Some(&iframe_element_root), FocusInitiator::Remote, can_gc);
+        if let Some(focusable_area) = iframe_element.get_the_focusable_area() {
+            iframe_element.owner_document().focus_handler().focus(
+                FocusOperation::Focus(focusable_area),
+                FocusInitiator::Remote,
+                can_gc,
+            );
+        }
     }
 
     fn handle_focus_document_msg(
@@ -2884,17 +2901,22 @@ impl ScriptThread {
         sequence: FocusSequenceNumber,
         can_gc: CanGc,
     ) {
-        if let Some(doc) = self.documents.borrow().find_document(pipeline_id) {
-            if doc.get_focus_sequence() > sequence {
+        if let Some(document) = self.documents.borrow().find_document(pipeline_id) {
+            let focus_handler = document.focus_handler();
+            if focus_handler.focus_sequence() > sequence {
                 debug!(
                     "Disregarding the FocusDocument message because the contained sequence number is \
                     too old ({:?} < {:?})",
                     sequence,
-                    doc.get_focus_sequence()
+                    focus_handler.focus_sequence()
                 );
                 return;
             }
-            doc.request_focus(None, FocusInitiator::Remote, can_gc);
+            focus_handler.focus(
+                FocusOperation::Focus(FocusableArea::Viewport),
+                FocusInitiator::Remote,
+                can_gc,
+            );
         } else {
             warn!(
                 "Couldn't find document by pipleline_id:{pipeline_id:?} when handle_focus_document_msg."
@@ -2908,17 +2930,18 @@ impl ScriptThread {
         sequence: FocusSequenceNumber,
         can_gc: CanGc,
     ) {
-        if let Some(doc) = self.documents.borrow().find_document(pipeline_id) {
-            if doc.get_focus_sequence() > sequence {
+        if let Some(document) = self.documents.borrow().find_document(pipeline_id) {
+            let focus_handler = document.focus_handler();
+            if focus_handler.focus_sequence() > sequence {
                 debug!(
                     "Disregarding the Unfocus message because the contained sequence number is \
                     too old ({:?} < {:?})",
                     sequence,
-                    doc.get_focus_sequence()
+                    focus_handler.focus_sequence()
                 );
                 return;
             }
-            doc.handle_container_unfocus(can_gc);
+            focus_handler.handle_container_unfocus(can_gc);
         } else {
             warn!(
                 "Couldn't find document by pipleline_id:{pipeline_id:?} when handle_unfocus_msg."
@@ -3070,6 +3093,7 @@ impl ScriptThread {
         webview_id: WebViewId,
         pipeline_id: PipelineId,
         metadata: Option<&Metadata>,
+        origin: MutableOrigin,
         cx: &mut js::context::JSContext,
     ) -> Option<DomRoot<ServoParser>> {
         if self.closed_pipelines.borrow().contains(&pipeline_id) {
@@ -3122,7 +3146,7 @@ impl ScriptThread {
         };
 
         let load = self.incomplete_loads.borrow_mut().remove(idx);
-        metadata.map(|meta| self.load(meta, load, cx))
+        metadata.map(|meta| self.load(meta, load, origin, cx))
     }
 
     /// Handles a request for the window title.
@@ -3330,6 +3354,7 @@ impl ScriptThread {
         &self,
         metadata: &Metadata,
         incomplete: InProgressLoad,
+        origin: MutableOrigin,
         cx: &mut js::context::JSContext,
     ) -> DomRoot<ServoParser> {
         let script_to_constellation_chan = ScriptToConstellationChan {
@@ -3345,18 +3370,6 @@ impl ScriptThread {
         debug!(
             "ScriptThread: loading {} on pipeline {:?}",
             incomplete.load_data.url, incomplete.pipeline_id
-        );
-
-        let source_origin = match incomplete.load_data.load_origin {
-            LoadOrigin::Script(ref snapshot) => {
-                Some(MutableOrigin::from_snapshot(snapshot.clone()))
-            },
-            _ => None,
-        };
-        let origin = determine_the_origin(
-            Some(&final_url),
-            incomplete.load_data.creation_sandboxing_flag_set,
-            source_origin,
         );
 
         let font_context = Arc::new(FontContext::new(
@@ -3725,6 +3738,7 @@ impl ScriptThread {
         browsing_context_id: BrowsingContextId,
         load_data: LoadData,
         history_handling: NavigationHistoryBehavior,
+        target_snapshot_params: TargetSnapshotParams,
         cx: &mut js::context::JSContext,
     ) {
         let iframe = self
@@ -3736,6 +3750,7 @@ impl ScriptThread {
                 load_data,
                 history_handling,
                 ProcessingMode::NotFirstTime,
+                target_snapshot_params,
                 cx,
             );
         }
@@ -3815,6 +3830,8 @@ impl ScriptThread {
             incomplete.load_data.url.clone(),
             incomplete.load_data.creation_sandboxing_flag_set,
             incomplete.parent_info,
+            incomplete.target_snapshot_params,
+            incomplete.load_data.load_origin.clone(),
         );
         self.incomplete_parser_contexts
             .0
@@ -4034,6 +4051,8 @@ impl ScriptThread {
             incomplete.load_data.url.clone(),
             incomplete.load_data.creation_sandboxing_flag_set,
             incomplete.parent_info,
+            incomplete.target_snapshot_params,
+            incomplete.load_data.load_origin.clone(),
         );
 
         let mut meta = Metadata::default(incomplete.load_data.url.clone());
@@ -4085,6 +4104,8 @@ impl ScriptThread {
         let pipeline_id = incomplete.pipeline_id;
         let parent_info = incomplete.parent_info;
         let about_base_url = incomplete.load_data.about_base_url.clone();
+        let target_snapshot_params = incomplete.target_snapshot_params;
+        let load_origin = incomplete.load_data.load_origin.clone();
         self.incomplete_loads.borrow_mut().push(incomplete);
 
         let mut context = ParserContext::new(
@@ -4093,6 +4114,8 @@ impl ScriptThread {
             url,
             creation_sandboxing_flag_set,
             parent_info,
+            target_snapshot_params,
+            load_origin,
         );
         let dummy_request_id = RequestId::default();
 
@@ -4146,6 +4169,7 @@ impl ScriptThread {
                     ScriptToConstellationMessage::LoadUrl(
                         LoadData::new_for_new_unrelated_webview(url),
                         NavigationHistoryBehavior::Push,
+                        TargetSnapshotParams::default(),
                     ),
                 ))
                 .unwrap();

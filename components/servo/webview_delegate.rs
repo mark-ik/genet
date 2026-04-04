@@ -5,8 +5,6 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
-#[cfg(feature = "gamepad")]
-use embedder_traits::GamepadHapticEffectType;
 use embedder_traits::{
     AlertResponse, AllowOrDeny, AuthenticationResponse, BluetoothDeviceDescription,
     ConfirmResponse, ConsoleLogLevel, ContextMenuAction, ContextMenuElementInformation,
@@ -235,6 +233,7 @@ impl WebResourceLoad {
     pub fn request(&self) -> &WebResourceRequest {
         &self.request
     }
+
     /// Intercept this [`WebResourceLoad`] and control the response via the returned
     /// [`InterceptedWebResourceLoad`].
     pub fn intercept(mut self, response: WebResourceResponse) -> InterceptedWebResourceLoad {
@@ -434,7 +433,7 @@ impl SelectElement {
     }
 
     /// Consecutive `<option>` elements outside of an `<optgroup>` will be combined
-    /// into a single anonymous group, whose [`label`](SelectElementGroup::label) is `None`.
+    /// into a single anonymous group without a label.
     pub fn options(&self) -> &[SelectElementOptionOrOptgroup] {
         &self.options
     }
@@ -451,7 +450,7 @@ impl SelectElement {
         self.selected_option
     }
 
-    /// Resolve the prompt with the options that have been selected by calling [select] previously.
+    /// Resolve the prompt with the options that have been selected by calling [`Self::select`] previously.
     pub fn submit(mut self) {
         self.response_sent = true;
         self.constellation_proxy
@@ -506,7 +505,7 @@ impl ColorPicker {
         self.current_color = color;
     }
 
-    /// Resolve the prompt with the options that have been selected by calling [select] previously.
+    /// Resolve the prompt with the options that have been selected by calling [`Self::select`] previously.
     pub fn submit(mut self) {
         self.response_sent = true;
         self.constellation_proxy
@@ -560,7 +559,7 @@ impl FilePicker {
         self.file_picker_request.current_paths = paths.to_owned();
     }
 
-    /// Resolve the prompt with the options that have been selected by calling [select] previously.
+    /// Resolve the prompt with the options that have been selected by calling [`Self::select`] previously.
     pub fn submit(mut self) {
         if let Some(sender) = self.response_sender.take() {
             let _ = sender.send(Some(std::mem::take(
@@ -796,7 +795,7 @@ impl Drop for ConfirmDialog {
 /// The prompt dialog is expected to be represented by a mesage, a text entry field, and
 /// an "Ok" and "Cancel" buttons. When "Ok" is selected the current prompt value is sent
 /// as the response to the DOM API. A default value may be sent with the [`PromptDialog`],
-/// which be be retrieved by calling [`Self::current_value`]. Before calling [`Self::ok`]
+/// which be be retrieved by calling [`Self::current_value`]. Before calling [`Self::confirm`]
 /// or as the prompt field changes, the embedder is expected to call
 /// [`Self::set_current_value`].
 pub struct PromptDialog {
@@ -886,7 +885,7 @@ pub trait WebViewDelegate {
     /// cursor can accessed via [`WebView::cursor`].
     fn notify_cursor_changed(&self, _webview: WebView, _: Cursor) {}
     /// The favicon of the currently loaded page in this [`WebView`] has changed. The new
-    /// favicon [`Image`] can accessed via [`WebView::favicon`].
+    /// favicon [`Image`](embedder_traits::Image) can accessed via [`WebView::favicon`].
     fn notify_favicon_changed(&self, _webview: WebView) {}
     /// Notify the embedder that it needs to present a new frame.
     fn notify_new_frame_ready(&self, _webview: WebView) {}
@@ -987,24 +986,6 @@ pub trait WebViewDelegate {
     ///
     /// After this point, any further responses to that request will be ignored.
     fn hide_embedder_control(&self, _webview: WebView, _control_id: EmbedderControlId) {}
-
-    /// Request to play a haptic effect on a connected gamepad. The embedder is expected to
-    /// call the provided callback when the effect is complete with `true` for success
-    /// and `false` for failure.
-    #[cfg(feature = "gamepad")]
-    fn play_gamepad_haptic_effect(
-        &self,
-        _webview: WebView,
-        _: usize,
-        _: GamepadHapticEffectType,
-        _: Box<dyn FnOnce(bool)>,
-    ) {
-    }
-    /// Request to stop a haptic effect on a connected gamepad. The embedder is expected to
-    /// call the provided callback when the effect is complete with `true` for success
-    /// and `false` for failure.
-    #[cfg(feature = "gamepad")]
-    fn stop_gamepad_haptic_effect(&self, _webview: WebView, _: usize, _: Box<dyn FnOnce(bool)>) {}
 
     /// Triggered when this [`WebView`] will load a web (HTTP/HTTPS) resource. The load may be
     /// intercepted and alternate contents can be loaded by the client by calling
