@@ -140,20 +140,20 @@ impl HTMLLinkElement {
     }
 
     pub(crate) fn new(
+        cx: &mut js::context::JSContext,
         local_name: LocalName,
         prefix: Option<Prefix>,
         document: &Document,
         proto: Option<HandleObject>,
         creator: ElementCreator,
-        can_gc: CanGc,
     ) -> DomRoot<HTMLLinkElement> {
         Node::reflect_node_with_proto(
+            cx,
             Box::new(HTMLLinkElement::new_inherited(
                 local_name, prefix, document, creator,
             )),
             document,
             proto,
-            can_gc,
         )
     }
 
@@ -639,7 +639,7 @@ impl HTMLLinkElement {
             // Step 5. If request is null, then return.
             return;
         };
-        let url = request.url.clone();
+        let url = request.url.url();
 
         // Step 6. Set request's initiator to "prefetch".
         let request = request.initiator(Initiator::Prefetch);
@@ -1032,6 +1032,7 @@ impl HTMLLinkElement {
             parser_metadata: ParserMetadata::NotParserInserted,
             credentials_mode,
             referrer_policy,
+            render_blocking: false,
         };
 
         let link = DomRoot::from_ref(self);

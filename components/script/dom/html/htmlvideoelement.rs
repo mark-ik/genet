@@ -10,6 +10,7 @@ use euclid::default::Size2D;
 use html5ever::{LocalName, Prefix, local_name, ns};
 use js::rust::HandleObject;
 use layout_api::{HTMLMediaData, MediaMetadata};
+use net_traits::blob_url_store::UrlWithBlobClaim;
 use net_traits::image_cache::{
     ImageCache, ImageCacheResult, ImageLoadListener, ImageOrMetadataAvailable, ImageResponse,
     PendingImageId,
@@ -42,7 +43,6 @@ use crate::dom::performance::performanceresourcetiming::InitiatorType;
 use crate::dom::virtualmethods::VirtualMethods;
 use crate::fetch::{FetchCanceller, RequestWithGlobalScope};
 use crate::network_listener::{self, FetchResponseListener, ResourceTimingListener};
-use crate::script_runtime::CanGc;
 
 #[dom_struct]
 pub(crate) struct HTMLVideoElement {
@@ -79,19 +79,19 @@ impl HTMLVideoElement {
     }
 
     pub(crate) fn new(
+        cx: &mut js::context::JSContext,
         local_name: LocalName,
         prefix: Option<Prefix>,
         document: &Document,
         proto: Option<HandleObject>,
-        can_gc: CanGc,
     ) -> DomRoot<HTMLVideoElement> {
         Node::reflect_node_with_proto(
+            cx,
             Box::new(HTMLVideoElement::new_inherited(
                 local_name, prefix, document,
             )),
             document,
             proto,
-            can_gc,
         )
     }
 
@@ -233,7 +233,7 @@ impl HTMLVideoElement {
         let global = self.owner_global();
         let request = RequestBuilder::new(
             Some(document.webview_id()),
-            poster_url.clone(),
+            UrlWithBlobClaim::from_url_without_having_claimed_blob(poster_url.clone()),
             global.get_referrer(),
         )
         .destination(Destination::Image)

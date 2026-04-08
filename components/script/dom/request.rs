@@ -42,6 +42,7 @@ use crate::dom::promise::Promise;
 use crate::dom::stream::readablestream::ReadableStream;
 use crate::fetch::RequestWithGlobalScope;
 use crate::script_runtime::CanGc;
+use crate::url::ensure_blob_referenced_by_url_is_kept_alive;
 
 #[dom_struct]
 pub(crate) struct Request {
@@ -573,6 +574,7 @@ impl Request {
 }
 
 fn net_request_from_global(global: &GlobalScope, url: ServoUrl) -> NetTraitsRequest {
+    let url = ensure_blob_referenced_by_url_is_kept_alive(global, url);
     RequestBuilder::new(global.webview_id(), url, global.get_referrer())
         .with_global_scope(global)
         .build()

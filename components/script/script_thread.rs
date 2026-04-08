@@ -468,6 +468,7 @@ impl ScriptThreadFactory for ScriptThread {
         let script_thread_id = state.id;
         thread::Builder::new()
             .name(format!("Script#{script_thread_id}"))
+            .stack_size(8 * 1024 * 1024) // 8 MiB stack to be consistent with other browsers.
             .spawn(move || {
                 thread_state::initialize(ThreadState::SCRIPT);
                 PipelineNamespace::install(state.pipeline_namespace_id);
@@ -1855,7 +1856,9 @@ impl ScriptThread {
                 key,
                 old_value,
                 new_value,
-            ) => self.handle_storage_event(pipeline_id, storage, url, key, old_value, new_value),
+            ) => {
+                self.handle_storage_event(pipeline_id, storage, url, key, old_value, new_value, cx)
+            },
             ScriptThreadMessage::ReportCSSError(pipeline_id, filename, line, column, msg) => {
                 self.handle_css_error_reporting(pipeline_id, filename, line, column, msg)
             },
@@ -2130,22 +2133,17 @@ impl ScriptThread {
             DevtoolScriptControlMsg::GetAttributeStyle(id, node_id, reply) => {
                 devtools::handle_get_attribute_style(cx, &self.devtools_state, id, &node_id, reply)
             },
-            DevtoolScriptControlMsg::GetStylesheetStyle(
-                id,
-                node_id,
-                selector,
-                stylesheet,
-                reply,
-            ) => devtools::handle_get_stylesheet_style(
-                cx,
-                &self.devtools_state,
-                &documents,
-                id,
-                &node_id,
-                selector,
-                stylesheet,
-                reply,
-            ),
+            DevtoolScriptControlMsg::GetStylesheetStyle(id, node_id, matched_rule, reply) => {
+                devtools::handle_get_stylesheet_style(
+                    cx,
+                    &self.devtools_state,
+                    &documents,
+                    id,
+                    &node_id,
+                    matched_rule,
+                    reply,
+                )
+            },
             DevtoolScriptControlMsg::GetSelectors(id, node_id, reply) => {
                 devtools::handle_get_selectors(
                     cx,
@@ -2542,12 +2540,7 @@ impl ScriptThread {
                 )
             },
             WebDriverScriptCommand::GetPageSource(reply) => {
-                webdriver_handlers::handle_get_page_source(
-                    &documents,
-                    pipeline_id,
-                    reply,
-                    CanGc::from_cx(cx),
-                )
+                webdriver_handlers::handle_get_page_source(cx, &documents, pipeline_id, reply)
             },
             WebDriverScriptCommand::GetCookies(reply) => {
                 webdriver_handlers::handle_get_cookies(&documents, pipeline_id, reply)
@@ -3289,6 +3282,7 @@ impl ScriptThread {
     }
 
     /// Notify a window of a storage event
+    #[allow(clippy::too_many_arguments)]
     fn handle_storage_event(
         &self,
         pipeline_id: PipelineId,
@@ -3297,14 +3291,18 @@ impl ScriptThread {
         key: Option<String>,
         old_value: Option<String>,
         new_value: Option<String>,
+        cx: &mut js::context::JSContext,
     ) {
         let Some(window) = self.documents.borrow().find_window(pipeline_id) else {
             return warn!("Storage event sent to closed pipeline {pipeline_id}.");
         };
 
         let storage = match storage_type {
-            WebStorageType::Local => window.LocalStorage(),
-            WebStorageType::Session => window.SessionStorage(),
+            WebStorageType::Local => window.GetLocalStorage(cx),
+            WebStorageType::Session => window.GetSessionStorage(cx),
+        };
+        let Ok(storage) = storage else {
+            return;
         };
 
         storage.queue_storage_event(url, key, old_value, new_value);
