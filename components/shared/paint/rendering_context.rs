@@ -95,6 +95,23 @@ pub trait RenderingContext {
     fn raw_display_handle(&self) -> Option<raw_window_handle::RawDisplayHandle> {
         None
     }
+
+    /// Return a shared wgpu device for the wgpu backend. Default to `None`.
+    ///
+    /// When an embedder provides a device and queue, WebRender will use
+    /// `RendererBackend::WgpuShared` instead of creating its own device.
+    /// The embedder clones its `wgpu::Device` handle (which is internally
+    /// Arc-shared) so both sides operate on the same GPU context.
+    #[cfg(feature = "wgpu_backend")]
+    fn wgpu_device(&self) -> Option<wgpu::Device> {
+        None
+    }
+
+    /// Return a shared wgpu queue for the wgpu backend. Default to `None`.
+    #[cfg(feature = "wgpu_backend")]
+    fn wgpu_queue(&self) -> Option<wgpu::Queue> {
+        None
+    }
 }
 
 /// A rendering context that uses the Surfman library to create and manage

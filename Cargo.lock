@@ -8531,6 +8531,7 @@ dependencies = [
  "surfman",
  "tracing",
  "webrender_api",
+ "wgpu",
 ]
 
 [[package]]
