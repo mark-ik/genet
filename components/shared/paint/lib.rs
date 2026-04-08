@@ -567,8 +567,8 @@ impl PainterSurfmanDetailsMap {
 
     pub fn remove(&self, painter_id: PainterId) {
         let mut map = self.0.lock().expect("poisoned");
-        let details = map.remove(&painter_id);
-        assert!(details.is_some());
+        // Details may be absent for pure-wgpu painters that have no surfman connection.
+        map.remove(&painter_id);
     }
 }
 
