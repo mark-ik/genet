@@ -255,41 +255,57 @@ impl Painter {
         let (mut webrender_renderer, webrender_api_sender) = if use_wgpu {
             let size = rendering_context.size();
 
-            // Create a wgpu surface from the window's raw handles if available.
-            let (wgpu_instance, surface) = match (
-                rendering_context.raw_window_handle(),
-                rendering_context.raw_display_handle(),
+            // Check if the embedder provides a shared wgpu device (e.g. from egui).
+            // If so, use WgpuShared — WebRender renders on the host's GPU context
+            // without owning a surface.
+            let backend = match (
+                rendering_context.wgpu_device(),
+                rendering_context.wgpu_queue(),
             ) {
-                (Some(raw_window_handle), Some(raw_display_handle)) => {
-                    let instance = webrender::wgpu::Instance::default();
-                    // SAFETY: The winit window (HeadedWindow) outlives the Painter and
-                    // the wgpu Surface, so the raw handles remain valid.
-                    #[allow(unsafe_code)]
-                    let surface = unsafe {
-                        instance.create_surface_unsafe(
-                            webrender::wgpu::SurfaceTargetUnsafe::RawHandle {
-                                raw_display_handle,
-                                raw_window_handle,
-                            },
-                        )
-                    }
-                    .expect("Failed to create wgpu surface from window handles");
-                    info!("Using wgpu backend with window surface ({}x{})", size.width, size.height);
-                    (Some(instance), Some(surface))
+                (Some(device), Some(queue)) => {
+                    info!("Using wgpu backend with shared device (embedder-provided)");
+                    webrender::RendererBackend::WgpuShared { device, queue }
                 }
                 _ => {
-                    info!("Using wgpu backend (headless — no surface)");
-                    (None, None)
+                    // Create a wgpu surface from the window's raw handles if available.
+                    let (wgpu_instance, surface) = match (
+                        rendering_context.raw_window_handle(),
+                        rendering_context.raw_display_handle(),
+                    ) {
+                        (Some(raw_window_handle), Some(raw_display_handle)) => {
+                            let instance = webrender::wgpu::Instance::default();
+                            // SAFETY: The winit window (HeadedWindow) outlives the Painter and
+                            // the wgpu Surface, so the raw handles remain valid.
+                            #[allow(unsafe_code)]
+                            let surface = unsafe {
+                                instance.create_surface_unsafe(
+                                    webrender::wgpu::SurfaceTargetUnsafe::RawHandle {
+                                        raw_display_handle,
+                                        raw_window_handle,
+                                    },
+                                )
+                            }
+                            .expect("Failed to create wgpu surface from window handles");
+                            info!("Using wgpu backend with window surface ({}x{})", size.width, size.height);
+                            (Some(instance), Some(surface))
+                        }
+                        _ => {
+                            info!("Using wgpu backend (headless — no surface)");
+                            (None, None)
+                        }
+                    };
+
+                    webrender::RendererBackend::Wgpu {
+                        instance: wgpu_instance,
+                        surface,
+                        width: size.width,
+                        height: size.height,
+                    }
                 }
             };
 
             webrender::create_webrender_instance_with_backend(
-                webrender::RendererBackend::Wgpu {
-                    instance: wgpu_instance,
-                    surface,
-                    width: size.width,
-                    height: size.height,
-                },
+                backend,
                 notifier,
                 webrender_options,
                 None,

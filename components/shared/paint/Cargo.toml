@@ -16,6 +16,7 @@ path = "lib.rs"
 [features]
 no-wgl = ["surfman/sm-angle-default"]
 tracing = ["dep:tracing"]
+wgpu_backend = ["dep:wgpu"]
 
 [dependencies]
 bitflags = { workspace = true }
@@ -47,3 +48,4 @@ stylo_traits = { workspace = true }
 surfman = { workspace = true, features = ["sm-x11"] }
 tracing = { workspace = true, optional = true }
 webrender_api = { workspace = true }
+wgpu = { workspace = true, optional = true }
