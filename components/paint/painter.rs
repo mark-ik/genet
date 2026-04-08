@@ -104,8 +104,8 @@ pub(crate) struct Painter {
     /// The webrender renderer.
     pub(crate) webrender_renderer: Option<webrender::Renderer>,
 
-    /// The GL bindings for webrender
-    webrender_gl: Rc<dyn gleam::gl::Gl>,
+    /// The GL bindings for webrender (None when using the wgpu backend).
+    webrender_gl: Option<Rc<dyn gleam::gl::Gl>>,
 
     /// The last position in the rendered view that the mouse moved over. This becomes `None`
     /// when the mouse leaves the rendered view.
@@ -139,8 +139,10 @@ pub(crate) struct Painter {
 
 impl Drop for Painter {
     fn drop(&mut self) {
-        if let Err(error) = self.rendering_context.make_current() {
-            error!("Failed to make the rendering context current: {error:?}");
+        if !self.use_wgpu {
+            if let Err(error) = self.rendering_context.make_current() {
+                error!("Failed to make the rendering context current: {error:?}");
+            }
         }
 
         self.webrender_api.stop_render_backend();
@@ -154,13 +156,19 @@ impl Drop for Painter {
 
 impl Painter {
     pub(crate) fn new(rendering_context: Rc<dyn RenderingContext>, paint: &Paint) -> Self {
-        let webrender_gl = rendering_context.gleam_gl_api();
+        let use_wgpu = std::env::var("SERVO_WGPU_BACKEND").is_ok();
 
-        // Make sure the gl context is made current.
-        if let Err(err) = rendering_context.make_current() {
-            warn!("Failed to make the rendering context current: {:?}", err);
-        }
-        debug_assert_eq!(webrender_gl.get_error(), gleam::gl::NO_ERROR,);
+        let webrender_gl = if use_wgpu {
+            None
+        } else {
+            let gl = rendering_context.gleam_gl_api();
+            // Make sure the gl context is made current.
+            if let Err(err) = rendering_context.make_current() {
+                warn!("Failed to make the rendering context current: {:?}", err);
+            }
+            debug_assert_eq!(gl.get_error(), gleam::gl::NO_ERROR,);
+            Some(gl)
+        };
 
         let id_manager = paint.webrender_external_image_id_manager();
         let mut external_image_handlers = Box::new(WebRenderExternalImageHandlers::new(id_manager));
@@ -204,10 +212,9 @@ impl Painter {
 
         // Use same texture upload method as Gecko with ANGLE:
         // https://searchfox.org/mozilla-central/source/gfx/webrender_bindings/src/bindings.rs#1215-1219
-        let upload_method = if webrender_gl.get_string(RENDERER).starts_with("ANGLE") {
-            UploadMethod::Immediate
-        } else {
-            UploadMethod::PixelBuffer(ONE_TIME_USAGE_HINT)
+        let upload_method = match &webrender_gl {
+            Some(gl) if gl.get_string(RENDERER).starts_with("ANGLE") => UploadMethod::Immediate,
+            _ => UploadMethod::PixelBuffer(ONE_TIME_USAGE_HINT),
         };
         let worker_threads = std::thread::available_parallelism()
             .map(|i| i.get())
@@ -222,7 +229,6 @@ impl Painter {
         ));
 
         let painter_id = PainterId::next();
-        let use_wgpu = std::env::var("SERVO_WGPU_BACKEND").is_ok();
         let webrender_options = webrender::WebRenderOptions {
             // We force the use of optimized shaders here because rendering is broken
             // on Android emulators with unoptimized shaders. This is due to a known
@@ -313,7 +319,7 @@ impl Painter {
             .expect("Unable to initialize WebRender with wgpu backend.")
         } else {
             webrender::create_webrender_instance(
-                webrender_gl.clone(),
+                webrender_gl.clone().expect("GL backend requires gleam_gl_api()"),
                 notifier,
                 webrender_options,
                 None,
@@ -326,9 +332,11 @@ impl Painter {
         let webrender_api = webrender_api_sender.create_api_by_client(painter_id.into());
         let webrender_document = webrender_api.add_document(rendering_context.size2d().to_i32());
 
-        let gl_renderer = webrender_gl.get_string(gleam::gl::RENDERER);
-        let gl_version = webrender_gl.get_string(gleam::gl::VERSION);
-        info!("Running on {gl_renderer} with OpenGL version {gl_version}");
+        if let Some(gl) = &webrender_gl {
+            let gl_renderer = gl.get_string(gleam::gl::RENDERER);
+            let gl_version = gl.get_string(gleam::gl::VERSION);
+            info!("Running on {gl_renderer} with OpenGL version {gl_version}");
+        }
 
         let painter = Painter {
             painter_id,
@@ -363,8 +371,10 @@ impl Painter {
 
     pub(crate) fn perform_updates(&mut self) {
         // The WebXR thread may make a different context current
-        if let Err(err) = self.rendering_context.make_current() {
-            warn!("Failed to make the rendering context current: {:?}", err);
+        if !self.use_wgpu {
+            if let Err(err) = self.rendering_context.make_current() {
+                warn!("Failed to make the rendering context current: {:?}", err);
+            }
         }
 
         let mut need_zoom = false;
@@ -396,19 +406,22 @@ impl Painter {
 
     #[track_caller]
     fn assert_no_gl_error(&self) {
-        debug_assert_eq!(self.webrender_gl.get_error(), gleam::gl::NO_ERROR);
+        if let Some(gl) = &self.webrender_gl {
+            debug_assert_eq!(gl.get_error(), gleam::gl::NO_ERROR);
+        }
     }
 
     #[track_caller]
     fn assert_gl_framebuffer_complete(&self) {
-        debug_assert_eq!(
-            (
-                self.webrender_gl.get_error(),
-                self.webrender_gl
-                    .check_frame_buffer_status(gleam::gl::FRAMEBUFFER)
-            ),
-            (gleam::gl::NO_ERROR, gleam::gl::FRAMEBUFFER_COMPLETE)
-        );
+        if let Some(gl) = &self.webrender_gl {
+            debug_assert_eq!(
+                (
+                    gl.get_error(),
+                    gl.check_frame_buffer_status(gleam::gl::FRAMEBUFFER)
+                ),
+                (gleam::gl::NO_ERROR, gleam::gl::FRAMEBUFFER_COMPLETE)
+            );
+        }
     }
 
     pub(crate) fn webview_renderer(&self, webview_id: WebViewId) -> Option<&WebViewRenderer> {
@@ -518,14 +531,16 @@ impl Painter {
         // Always clear the entire RenderingContext, regardless of how many WebViews there are
         // or where they are positioned. This is so WebView actually clears even before the
         // first WebView is ready.
-        let color = servo_config::pref!(shell_background_color_rgba);
-        self.webrender_gl.clear_color(
-            color[0] as f32,
-            color[1] as f32,
-            color[2] as f32,
-            color[3] as f32,
-        );
-        self.webrender_gl.clear(gleam::gl::COLOR_BUFFER_BIT);
+        if let Some(gl) = &self.webrender_gl {
+            let color = servo_config::pref!(shell_background_color_rgba);
+            gl.clear_color(
+                color[0] as f32,
+                color[1] as f32,
+                color[2] as f32,
+                color[3] as f32,
+            );
+            gl.clear(gleam::gl::COLOR_BUFFER_BIT);
+        }
     }
 
     /// Send all pending paint metrics messages after a composite operation, which may advance
@@ -660,7 +675,9 @@ impl Painter {
     }
 
     pub(crate) fn send_transaction(&mut self, transaction: Transaction) {
-        let _ = self.rendering_context.make_current();
+        if !self.use_wgpu {
+            let _ = self.rendering_context.make_current();
+        }
         self.webrender_api
             .send_transaction(self.webrender_document, transaction);
     }
