@@ -7521,6 +7521,7 @@ dependencies = [
  "url",
  "webrender",
  "webrender_api",
+ "wgpu",
  "winit",
 ]
 

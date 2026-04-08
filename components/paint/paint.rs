@@ -294,6 +294,17 @@ impl Paint {
         self.painter(painter_id).rendering_context.size2d()
     }
 
+    /// Returns a clone of the WebRender composite output `wgpu::Texture` for the given painter.
+    ///
+    /// Only available when using the wgpu backend with a shared device
+    /// (`RendererBackend::WgpuShared`). The texture lives on the embedder's device.
+    /// Cloning a `wgpu::Texture` is cheap (Arc bump).
+    pub fn composite_texture(&self, painter_id: PainterId) -> Option<webrender::wgpu::Texture> {
+        self.maybe_painter(painter_id)?
+            .composite_output()
+            .map(|t| t.texture.clone())
+    }
+
     pub fn webgl_threads(&self) -> WebGLThreads {
         self.webgl_threads.clone()
     }

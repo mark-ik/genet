@@ -404,6 +404,17 @@ impl Painter {
         }
     }
 
+    /// Returns the WebRender composite output texture for the wgpu backend.
+    ///
+    /// The returned texture is on the shared wgpu device (the one provided by the
+    /// embedder via `RenderingContext::wgpu_device()`). The embedder can create a
+    /// `TextureView` from it and sample it in its own render pass — zero GPU copy.
+    pub(crate) fn composite_output(&self) -> Option<&webrender::WgpuTexture> {
+        self.webrender_renderer
+            .as_ref()
+            .and_then(|r| r.composite_output())
+    }
+
     #[track_caller]
     fn assert_no_gl_error(&self) {
         if let Some(gl) = &self.webrender_gl {
