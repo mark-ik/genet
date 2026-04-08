@@ -388,6 +388,31 @@ impl WebView {
         self.inner().rendering_context.size2d().to_f32()
     }
 
+    /// Trigger WebRender to render the current scene for this WebView.
+    ///
+    /// Embedders must call this when [`WebViewDelegate::notify_new_frame_ready`] fires.
+    /// For wgpu embedders, call this before accessing [`WebView::composite_texture`].
+    pub fn render(&self) {
+        let inner = self.inner();
+        inner.servo.paint().render(inner.id);
+    }
+
+    /// Returns a clone of the WebRender composite output `wgpu::Texture`.
+    ///
+    /// Only available when using the wgpu backend with a shared device
+    /// (i.e. `RenderingContext::wgpu_device()` returns `Some`). The texture
+    /// lives on the embedder's shared device — create a `wgpu::TextureView`
+    /// from it and sample it directly in your own render pass (zero GPU copy).
+    ///
+    /// Cloning a `wgpu::Texture` is cheap (Arc bump).
+    ///
+    /// Returns `None` when using the GL backend or if no frame has composited yet.
+    pub fn composite_texture(&self) -> Option<wgpu::Texture> {
+        let inner = self.inner();
+        let painter_id = servo_base::id::PainterId::from(inner.id);
+        inner.servo.paint().composite_texture(painter_id)
+    }
+
     /// Request that the given [`WebView`]'s [`RenderingContext`] be resized. Note that the
     /// minimum size for a WebView is 1 pixel by 1 pixel so any requested size will be
     /// clamped by that value.

@@ -138,6 +138,7 @@ webgl = { workspace = true, default-features = false }
 webgpu = { workspace = true, optional = true }
 webrender = { workspace = true }
 webrender_api = { workspace = true }
+wgpu = { workspace = true }
 webxr-api = { workspace = true, optional = true }
 
 # On most platforms we bake in the resources for simplicity. On ohos we load resources via the filesystem.

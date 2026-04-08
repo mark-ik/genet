@@ -12,6 +12,7 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use dpi::PhysicalSize;
@@ -101,11 +102,17 @@ impl RenderingContext for WgpuRenderingContext {
 // Minimal WebViewDelegate
 // ---------------------------------------------------------------------------
 
-struct MinimalDelegate;
+/// Signals the host event loop that a new frame is ready to composite.
+struct MinimalDelegate {
+    frame_ready: Arc<AtomicBool>,
+}
 
 impl WebViewDelegate for MinimalDelegate {
-    fn notify_new_frame_ready(&self, _webview: WebView) {
-        // In a real app, request a redraw here.
+    fn notify_new_frame_ready(&self, webview: WebView) {
+        // Trigger WebRender to render the scene into the composite texture.
+        webview.render();
+        // Signal the host event loop to redraw.
+        self.frame_ready.store(true, Ordering::Relaxed);
     }
 }
 
@@ -136,6 +143,7 @@ struct App {
     waker: Box<dyn EventLoopWaker>,
     url: String,
     state: Option<RunningState>,
+    frame_ready: Arc<AtomicBool>,
 }
 
 struct RunningState {
@@ -145,7 +153,7 @@ struct RunningState {
     device: wgpu::Device,
     queue: wgpu::Queue,
     servo: servo::Servo,
-    _webview: WebView,
+    webview: WebView,
     // Blit pipeline for compositing WebRender output onto the window surface.
     blit_pipeline: wgpu::RenderPipeline,
     blit_bind_group_layout: wgpu::BindGroupLayout,
@@ -158,6 +166,7 @@ impl App {
             waker,
             url,
             state: None,
+            frame_ready: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -306,7 +315,9 @@ impl ApplicationHandler<()> for App {
         let webview = WebViewBuilder::new(&servo, rendering_context)
             .url(url.as_url().clone())
             .hidpi_scale_factor(Scale::new(window.scale_factor() as f32))
-            .delegate(Rc::new(MinimalDelegate))
+            .delegate(Rc::new(MinimalDelegate {
+                frame_ready: self.frame_ready.clone(),
+            }))
             .build();
 
         self.state = Some(RunningState {
@@ -316,7 +327,7 @@ impl ApplicationHandler<()> for App {
             device,
             queue,
             servo,
-            _webview: webview,
+            webview,
             blit_pipeline,
             blit_bind_group_layout,
             sampler,
@@ -346,12 +357,7 @@ impl ApplicationHandler<()> for App {
                 state.window.request_redraw();
             }
             WindowEvent::RedrawRequested => {
-                // Pump Servo's event loop.
-                state.servo.spin_event_loop();
 
-                // TODO: Access WebRender's composite_output() texture and blit it
-                // to the window surface. For now, just clear to dark grey to prove
-                // the host render loop works.
                 let frame = match state.surface.get_current_texture() {
                     Ok(f) => f,
                     Err(wgpu::SurfaceError::Outdated) => return,
@@ -360,14 +366,55 @@ impl ApplicationHandler<()> for App {
                         return;
                     }
                 };
-                let view = frame.texture.create_view(&Default::default());
-
+                let surface_view = frame.texture.create_view(&Default::default());
                 let mut encoder = state.device.create_command_encoder(&Default::default());
-                {
+
+                // Try to get WebRender's composite output texture.
+                // It's None until the first frame has been rendered.
+                if let Some(wr_texture) = state.webview.composite_texture() {
+                    let wr_view = wr_texture.create_view(&wgpu::TextureViewDescriptor {
+                        format: Some(wgpu::TextureFormat::Bgra8Unorm),
+                        ..Default::default()
+                    });
+
+                    let bind_group = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("blit_bind_group"),
+                        layout: &state.blit_bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&wr_view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Sampler(&state.sampler),
+                            },
+                        ],
+                    });
+
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("blit_pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &surface_view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: None,
+                        ..Default::default()
+                    });
+                    pass.set_pipeline(&state.blit_pipeline);
+                    pass.set_bind_group(0, &bind_group, &[]);
+                    pass.draw(0..3, 0..1); // fullscreen triangle
+                } else {
+                    // No composite texture yet — clear to dark grey.
                     let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("host_clear"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &view,
+                            view: &surface_view,
                             resolve_target: None,
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -383,21 +430,35 @@ impl ApplicationHandler<()> for App {
                         depth_stencil_attachment: None,
                         ..Default::default()
                     });
-                    // TODO: bind WebRender texture and draw fullscreen quad
                 }
+
                 state.queue.submit(Some(encoder.finish()));
                 frame.present();
 
-                // Request next frame.
+                // Keep requesting redraws to pump Servo's page load.
                 state.window.request_redraw();
             }
             _ => {}
         }
     }
 
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
+        // Servo's EventLoopWaker fired — spin the event loop.
+        if let Some(state) = &self.state {
+            state.servo.spin_event_loop();
+            if self.frame_ready.swap(false, Ordering::Relaxed) {
+                state.window.request_redraw();
+            }
+        }
+    }
+
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(state) = &self.state {
             state.servo.spin_event_loop();
+            // If Servo signalled a new frame is ready, request a redraw.
+            if self.frame_ready.swap(false, Ordering::Relaxed) {
+                state.window.request_redraw();
+            }
         }
     }
 }
