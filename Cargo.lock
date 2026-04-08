@@ -11045,6 +11045,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "wgpu-embedder"
+version = "0.1.0"
+dependencies = [
+ "dpi",
+ "env_logger",
+ "euclid",
+ "gleam",
+ "glow",
+ "image",
+ "log",
+ "pollster",
+ "servo",
+ "servo-paint-api",
+ "surfman",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
 name = "wgpu-hal"
 version = "26.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"

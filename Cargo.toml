@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "components/media/examples",
     "components/xpath",
+    "examples/wgpu-embedder",
     "ports/servoshell",
     "tests/unit/*",
 ]

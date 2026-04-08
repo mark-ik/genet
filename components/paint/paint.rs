@@ -233,19 +233,20 @@ impl Paint {
         }
 
         let painter = Painter::new(rendering_context.clone(), self);
-        let connection = rendering_context
-            .connection()
-            .expect("Failed to get connection");
-        let adapter = connection
-            .create_adapter()
-            .expect("Failed to create adapter");
 
-        let painter_surfman_details = PainterSurfmanDetails {
-            connection,
-            adapter,
-        };
-        self.painter_surfman_details_map
-            .insert(painter.painter_id, painter_surfman_details);
+        // Surfman connection is required for WebGL swap chains but not for
+        // pure-wgpu embedders that don't expose a GL context.
+        if let Some(connection) = rendering_context.connection() {
+            let adapter = connection
+                .create_adapter()
+                .expect("Failed to create adapter");
+            let painter_surfman_details = PainterSurfmanDetails {
+                connection,
+                adapter,
+            };
+            self.painter_surfman_details_map
+                .insert(painter.painter_id, painter_surfman_details);
+        }
 
         let painter_id = painter.painter_id;
         self.painters.push(Rc::new(RefCell::new(painter)));
