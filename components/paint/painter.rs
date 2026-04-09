@@ -229,6 +229,43 @@ impl Painter {
         ));
 
         let painter_id = PainterId::next();
+
+        // Determine the wgpu pipeline cache directory when using the wgpu backend.
+        // We use the platform-appropriate user cache directory so the cache
+        // survives across runs.  Failure to create the directory is silently
+        // ignored — the pipeline cache degrades to a no-op rather than crashing.
+        #[cfg(feature = "wgpu_backend")]
+        let pipeline_cache_dir: Option<std::path::PathBuf> = if use_wgpu {
+            let base: std::path::PathBuf = {
+                #[cfg(target_os = "macos")]
+                {
+                    std::env::var_os("HOME")
+                        .map(|h| std::path::PathBuf::from(h).join("Library").join("Caches"))
+                        .unwrap_or_else(std::env::temp_dir)
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    std::env::var_os("LOCALAPPDATA")
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(std::env::temp_dir)
+                }
+                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+                {
+                    std::env::var_os("XDG_CACHE_HOME")
+                        .map(std::path::PathBuf::from)
+                        .or_else(|| {
+                            std::env::var_os("HOME")
+                                .map(|h| std::path::PathBuf::from(h).join(".cache"))
+                        })
+                        .unwrap_or_else(std::env::temp_dir)
+                }
+            };
+            let dir = base.join("servo").join("webrender-pipeline-cache");
+            std::fs::create_dir_all(&dir).ok().map(|_| dir)
+        } else {
+            None
+        };
+
         let webrender_options = webrender::WebRenderOptions {
             // We force the use of optimized shaders here because rendering is broken
             // on Android emulators with unoptimized shaders. This is due to a known
@@ -254,6 +291,8 @@ impl Painter {
             // from `FontKey`, `FontInstanceKey`, and `ImageKey` back to `PainterId`.
             namespace_alloc_by_client: true,
             shared_font_namespace: Some(painter_id.into()),
+            #[cfg(feature = "wgpu_backend")]
+            pipeline_cache_dir,
             ..Default::default()
         };
         let notifier = Box::new(RenderNotifier::new(painter_id, paint.paint_proxy.clone()));
@@ -261,52 +300,53 @@ impl Painter {
         let (mut webrender_renderer, webrender_api_sender) = if use_wgpu {
             let size = rendering_context.size();
 
-            // Check if the embedder provides a shared wgpu device (e.g. from egui).
-            // If so, use WgpuShared — WebRender renders on the host's GPU context
-            // without owning a surface.
-            let backend = match (
+            // Determine which wgpu backend variant to use:
+            //  1. WgpuHal  — embedder provides a raw-hal device factory (rarest, richest interop)
+            //  2. WgpuShared — embedder provides an existing wgpu::Device + Queue
+            //  3. Wgpu — WebRender creates its own device, optionally from a window surface
+            let backend = if let Some(factory) = rendering_context.wgpu_hal_device_factory() {
+                info!("Using wgpu backend with hal device factory (WgpuHal)");
+                webrender::RendererBackend::WgpuHal { device_factory: factory }
+            } else if let (Some(device), Some(queue)) = (
                 rendering_context.wgpu_device(),
                 rendering_context.wgpu_queue(),
             ) {
-                (Some(device), Some(queue)) => {
-                    info!("Using wgpu backend with shared device (embedder-provided)");
-                    webrender::RendererBackend::WgpuShared { device, queue }
-                }
-                _ => {
-                    // Create a wgpu surface from the window's raw handles if available.
-                    let (wgpu_instance, surface) = match (
-                        rendering_context.raw_window_handle(),
-                        rendering_context.raw_display_handle(),
-                    ) {
-                        (Some(raw_window_handle), Some(raw_display_handle)) => {
-                            let instance = webrender::wgpu::Instance::default();
-                            // SAFETY: The winit window (HeadedWindow) outlives the Painter and
-                            // the wgpu Surface, so the raw handles remain valid.
-                            #[allow(unsafe_code)]
-                            let surface = unsafe {
-                                instance.create_surface_unsafe(
-                                    webrender::wgpu::SurfaceTargetUnsafe::RawHandle {
-                                        raw_display_handle,
-                                        raw_window_handle,
-                                    },
-                                )
-                            }
-                            .expect("Failed to create wgpu surface from window handles");
-                            info!("Using wgpu backend with window surface ({}x{})", size.width, size.height);
-                            (Some(instance), Some(surface))
+                info!("Using wgpu backend with shared device (WgpuShared)");
+                webrender::RendererBackend::WgpuShared { device, queue }
+            } else {
+                // Create a wgpu surface from the window's raw handles if available.
+                let (wgpu_instance, surface) = match (
+                    rendering_context.raw_window_handle(),
+                    rendering_context.raw_display_handle(),
+                ) {
+                    (Some(raw_window_handle), Some(raw_display_handle)) => {
+                        let instance = webrender::wgpu::Instance::default();
+                        // SAFETY: The winit window (HeadedWindow) outlives the Painter and
+                        // the wgpu Surface, so the raw handles remain valid.
+                        #[allow(unsafe_code)]
+                        let surface = unsafe {
+                            instance.create_surface_unsafe(
+                                webrender::wgpu::SurfaceTargetUnsafe::RawHandle {
+                                    raw_display_handle,
+                                    raw_window_handle,
+                                },
+                            )
                         }
-                        _ => {
-                            info!("Using wgpu backend (headless — no surface)");
-                            (None, None)
-                        }
-                    };
-
-                    webrender::RendererBackend::Wgpu {
-                        instance: wgpu_instance,
-                        surface,
-                        width: size.width,
-                        height: size.height,
+                        .expect("Failed to create wgpu surface from window handles");
+                        info!("Using wgpu backend with window surface ({}x{})", size.width, size.height);
+                        (Some(instance), Some(surface))
                     }
+                    _ => {
+                        info!("Using wgpu backend (headless — no surface)");
+                        (None, None)
+                    }
+                };
+
+                webrender::RendererBackend::Wgpu {
+                    instance: wgpu_instance,
+                    surface,
+                    width: size.width,
+                    height: size.height,
                 }
             };
 

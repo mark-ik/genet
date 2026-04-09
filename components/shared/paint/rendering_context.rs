@@ -112,6 +112,25 @@ pub trait RenderingContext {
     fn wgpu_queue(&self) -> Option<wgpu::Queue> {
         None
     }
+
+    /// Return a factory closure that creates a `wgpu::Device` and `wgpu::Queue`
+    /// from a raw hal device.  Default to `None`.
+    ///
+    /// Use this when the embedder holds a raw `wgpu_hal` device (e.g. a
+    /// `hal::OpenDevice<Vulkan>`) and wants WebRender to wrap it using
+    /// [`Adapter::create_device_from_hal`] rather than creating its own
+    /// separate device stack.  The closure is called exactly once during
+    /// `create_webrender_instance_with_backend` and must not be called again.
+    ///
+    /// This corresponds to [`webrender::RendererBackend::WgpuHal`].  If both
+    /// `wgpu_hal_device_factory` and `wgpu_device` are provided, the factory
+    /// takes precedence.
+    #[cfg(feature = "wgpu_backend")]
+    fn wgpu_hal_device_factory(
+        &self,
+    ) -> Option<Box<dyn FnOnce() -> (wgpu::Device, wgpu::Queue) + Send>> {
+        None
+    }
 }
 
 /// A rendering context that uses the Surfman library to create and manage
