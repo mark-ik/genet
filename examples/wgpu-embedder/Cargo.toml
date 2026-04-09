@@ -18,6 +18,7 @@ euclid = { workspace = true }
 gleam = { workspace = true }
 glow = { workspace = true }
 image = { workspace = true }
+keyboard-types = { version = "0.8.3" }
 log = { workspace = true }
 paint_api = { workspace = true, features = ["wgpu_backend"] }
 pollster = "0.4"
