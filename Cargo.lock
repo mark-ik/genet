@@ -11119,6 +11119,7 @@ dependencies = [
  "gleam",
  "glow",
  "image",
+ "keyboard-types",
  "log",
  "pollster",
  "servo",
