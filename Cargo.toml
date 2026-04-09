@@ -110,7 +110,7 @@ indexmap = { version = "2.11.4", features = ["std"] }
 inventory = { version = "0.3.24" }
 ipc-channel = "0.21"
 itertools = "0.14"
-js = { package = "mozjs", version = "=0.15.7", default-features = false, features = ["libz-sys", "intl"] }
+js = { package = "mozjs", version = "=0.15.8", default-features = false, features = ["libz-sys", "intl"] }
 keyboard-types = { version = "0.8.3", features = ["serde", "webdriver"] }
 kurbo = { version = "0.12", features = ["euclid"] }
 libc = "0.2"
@@ -280,6 +280,7 @@ servo-media-gstreamer = { version = "0.1.0", path = "components/media/backends/g
 servo-media-gstreamer-render = { version = "0.1.0", path = "components/media/backends/gstreamer/render" }
 servo-media-gstreamer-render-android = { version = "0.1.0", path = "components/media/backends/gstreamer/render-android" }
 servo-media-gstreamer-render-unix = { version = "0.1.0", path = "components/media/backends/gstreamer/render-unix" }
+servo-media-ohos = { version = "0.1.0", path = "components/media/backends/ohos" }
 servo-media-player = { version = "0.1.0", path = "components/media/player" }
 servo-media-streams = { version = "0.1.0", path = "components/media/streams" }
 servo-media-traits = { version = "0.1.0", path = "components/media/traits" }
