@@ -14,8 +14,9 @@ name = "paint"
 path = "lib.rs"
 
 [features]
-default = []
+default = ["wgpu_backend"]
 tracing = ["dep:tracing"]
+wgpu_backend = ["paint_api/wgpu_backend"]
 webgpu = ["dep:webgpu"]
 webxr = ["dep:webxr", "dep:webxr-api"]
 
@@ -35,7 +36,7 @@ ipc-channel = { workspace = true }
 log = { workspace = true }
 malloc_size_of = { workspace = true }
 media = { workspace = true }
-paint_api = { workspace = true, features = ["wgpu_backend"] }
+paint_api = { workspace = true }
 profile_traits = { workspace = true }
 rayon = { workspace = true }
 rustc-hash = { workspace = true }

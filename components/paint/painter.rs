@@ -298,8 +298,6 @@ impl Painter {
         let notifier = Box::new(RenderNotifier::new(painter_id, paint.paint_proxy.clone()));
 
         let (mut webrender_renderer, webrender_api_sender) = if use_wgpu {
-            let size = rendering_context.size();
-
             // Determine which wgpu backend variant to use:
             //  1. WgpuHal  — embedder provides a raw-hal device factory (rarest, richest interop)
             //  2. WgpuShared — embedder provides an existing wgpu::Device + Queue
@@ -314,40 +312,11 @@ impl Painter {
                 info!("Using wgpu backend with shared device (WgpuShared)");
                 webrender::RendererBackend::WgpuShared { device, queue }
             } else {
-                // Create a wgpu surface from the window's raw handles if available.
-                let (wgpu_instance, surface) = match (
-                    rendering_context.raw_window_handle(),
-                    rendering_context.raw_display_handle(),
-                ) {
-                    (Some(raw_window_handle), Some(raw_display_handle)) => {
-                        let instance = webrender::wgpu::Instance::default();
-                        // SAFETY: The winit window (HeadedWindow) outlives the Painter and
-                        // the wgpu Surface, so the raw handles remain valid.
-                        #[allow(unsafe_code)]
-                        let surface = unsafe {
-                            instance.create_surface_unsafe(
-                                webrender::wgpu::SurfaceTargetUnsafe::RawHandle {
-                                    raw_display_handle,
-                                    raw_window_handle,
-                                },
-                            )
-                        }
-                        .expect("Failed to create wgpu surface from window handles");
-                        info!("Using wgpu backend with window surface ({}x{})", size.width, size.height);
-                        (Some(instance), Some(surface))
-                    }
-                    _ => {
-                        info!("Using wgpu backend (headless — no surface)");
-                        (None, None)
-                    }
-                };
-
-                webrender::RendererBackend::Wgpu {
-                    instance: wgpu_instance,
-                    surface,
-                    width: size.width,
-                    height: size.height,
-                }
+                panic!(
+                    "wgpu backend requested but RenderingContext provides neither \
+                     wgpu_device()/wgpu_queue() nor wgpu_hal_device_factory(). \
+                     The embedder must supply a wgpu device via the RenderingContext."
+                );
             };
 
             webrender::create_webrender_instance_with_backend(
@@ -557,13 +526,38 @@ impl Painter {
                 }
 
                 // Paint the scene.
-                // TODO(gw): Take notice of any errors the renderer returns!
                 if !self.use_wgpu {
                     self.clear_background();
                 }
-                if let Some(renderer) = self.webrender_renderer.as_mut() {
-                    let size = self.rendering_context.size2d().to_i32();
-                    renderer.render(size, 0 /* buffer_age */).ok();
+
+                #[cfg(feature = "wgpu_backend")]
+                if self.use_wgpu {
+                    // Zero-copy wgpu path: acquire a frame target from the
+                    // context, render directly into it, then present.
+                    if let Some(frame_view) = self.rendering_context.acquire_wgpu_frame_target() {
+                        if let Some(renderer) = self.webrender_renderer.as_mut() {
+                            let size = self.rendering_context.size2d().to_i32();
+                            renderer.render_to_view(frame_view, size, 0).ok();
+                        }
+                        self.rendering_context.present();
+                    } else if let Some(renderer) = self.webrender_renderer.as_mut() {
+                        // Fallback: context doesn't support frame acquisition
+                        // (e.g. headless). Render to internal texture.
+                        let size = self.rendering_context.size2d().to_i32();
+                        renderer.render(size, 0 /* buffer_age */).ok();
+                    }
+                }
+
+                #[cfg(not(feature = "wgpu_backend"))]
+                if self.use_wgpu {
+                    unreachable!("wgpu backend not compiled in");
+                }
+
+                if !self.use_wgpu {
+                    if let Some(renderer) = self.webrender_renderer.as_mut() {
+                        let size = self.rendering_context.size2d().to_i32();
+                        renderer.render(size, 0 /* buffer_age */).ok();
+                    }
                 }
             }
         );
@@ -1420,13 +1414,9 @@ impl Painter {
             if let Err(error) = self.rendering_context.make_current() {
                 error!("Failed to make the rendering context current: {error:?}");
             }
-            self.rendering_context.resize(new_size);
         }
-
-        // Resize the wgpu surface if present.
-        if let Some(renderer) = self.webrender_renderer.as_mut() {
-            renderer.resize_surface(new_size.width, new_size.height);
-        }
+        // Resize the context's surface (GL or wgpu).
+        self.rendering_context.resize(new_size);
 
         let new_size = Size2D::new(new_size.width as f32, new_size.height as f32);
         let new_viewport_rect = Rect::from(new_size).to_box2d();

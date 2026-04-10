@@ -59,6 +59,7 @@ tracing = [
     "net/tracing",
 ]
 vello = ["servo-constellation/vello"]
+wgpu_backend = ["paint/wgpu_backend", "paint_api/wgpu_backend"]
 webgl_backtrace = [
     "script/webgl_backtrace",
     "webgl/webgl_backtrace",
