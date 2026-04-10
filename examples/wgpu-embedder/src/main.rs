@@ -370,9 +370,6 @@ fn winit_button_to_servo(button: MouseButton) -> ServoMouseButton {
 }
 
 fn main() {
-    // SAFETY: called before any threads are spawned.
-    unsafe { std::env::set_var("SERVO_WGPU_BACKEND", "1") };
-
     let url = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "https://servo.org".to_string());
