@@ -59,9 +59,17 @@ impl WgpuRenderingContext {
             }))
             .expect("No suitable GPU adapter found");
 
+        // Request features that WebRender can take advantage of, intersected
+        // with what the adapter actually supports.
+        let wanted_features = wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+            | wgpu::Features::DUAL_SOURCE_BLENDING
+            | wgpu::Features::TIMESTAMP_QUERY;
+        let required_features = adapter.features() & wanted_features;
+
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("servo_wgpu_rendering_context"),
+                required_features,
                 required_limits: wgpu::Limits {
                     // WebRender's composite shader uses up to @location(17).
                     max_inter_stage_shader_variables: 28,
