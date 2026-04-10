@@ -62,6 +62,11 @@ impl WgpuRenderingContext {
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("servo_wgpu_rendering_context"),
+                required_limits: wgpu::Limits {
+                    // WebRender's composite shader uses up to @location(17).
+                    max_inter_stage_shader_variables: 28,
+                    ..Default::default()
+                },
                 ..Default::default()
             }))
             .expect("Failed to create wgpu device");
