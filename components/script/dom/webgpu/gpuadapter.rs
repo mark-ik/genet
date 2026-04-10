@@ -161,8 +161,8 @@ impl GPUAdapter {
         // subgroup size. Otherwise, set this value to 128.
         let (subgroup_min_size, subgroup_max_size) = if features.has("subgroups".into()) {
             (
-                limits.wgpu_limits().min_subgroup_size,
-                limits.wgpu_limits().max_subgroup_size,
+                info.subgroup_min_size,
+                info.subgroup_max_size,
             )
         } else {
             (4, 128)
@@ -231,6 +231,7 @@ impl GPUAdapterMethods<crate::DomTypeHolder> for GPUAdapter {
             label: Some(descriptor.parent.label.to_string()),
             memory_hints: MemoryHints::MemoryUsage,
             trace: wgpu_types::Trace::Off,
+            experimental_features: wgpu_types::ExperimentalFeatures::disabled(),
         };
         let device_id = self.global().wgpu_id_hub().create_device_id();
         let queue_id = self.global().wgpu_id_hub().create_queue_id();

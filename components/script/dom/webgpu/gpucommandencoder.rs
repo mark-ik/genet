@@ -318,7 +318,8 @@ impl GPUCommandEncoderMethods<crate::DomTypeHolder> for GPUCommandEncoder {
             })
             .expect("Failed to send Finish");
 
-        let buffer = WebGPUCommandBuffer(self.encoder.0.into_command_buffer_id());
+        let (index, epoch) = self.encoder.0.unzip();
+        let buffer = WebGPUCommandBuffer(wgpu_core::id::Id::zip(index, epoch));
         GPUCommandBuffer::new(
             &self.global(),
             self.channel.clone(),

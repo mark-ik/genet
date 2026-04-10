@@ -205,11 +205,12 @@ impl GenericDrawTarget for VelloDrawTarget {
         let backends = Backends::from_env().unwrap_or_default() - Backends::GL;
         let flags = InstanceFlags::from_build_config().with_env();
         let backend_options = BackendOptions::from_env_or_default();
-        let instance = Instance::new(&InstanceDescriptor {
+        let instance = Instance::new(InstanceDescriptor {
             backends,
             flags,
             backend_options,
             memory_budget_thresholds: MemoryBudgetThresholds::default(),
+            display: None,
         });
         let mut context = vello::util::RenderContext {
             instance,

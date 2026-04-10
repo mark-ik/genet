@@ -237,8 +237,8 @@ impl StagingBuffer {
         )?;
         let (command_buffer_id, error) = self
             .global
-            .command_encoder_finish(encoder_id, &CommandBufferDescriptor::default());
-        if let Some(error) = error {
+            .command_encoder_finish(encoder_id, &CommandBufferDescriptor::default(), None);
+        if let Some((_label, error)) = error {
             return Err(error.into());
         };
         Ok(command_buffer_id)

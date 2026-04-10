@@ -668,7 +668,7 @@ impl<'a> Convert<BindGroupEntry<'a>> for &GPUBindGroupEntry {
                     BindingResource::Buffer(BufferBinding {
                         buffer: b.buffer.id().0,
                         offset: b.offset,
-                        size: b.size.and_then(wgpu_types::BufferSize::new),
+                        size: b.size,
                     })
                 },
             },
