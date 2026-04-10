@@ -16,7 +16,7 @@ path = "lib.rs"
 [features]
 default = ["wgpu_backend"]
 tracing = ["dep:tracing"]
-wgpu_backend = ["paint_api/wgpu_backend"]
+wgpu_backend = ["paint_api/wgpu_backend", "dep:wgpu", "dep:wgpu-native-texture-interop"]
 webgpu = ["dep:webgpu"]
 webxr = ["dep:webxr", "dep:webxr-api"]
 
@@ -56,6 +56,8 @@ webgl = { workspace = true }
 webgpu = { workspace = true, optional = true }
 webrender = { workspace = true }
 webrender_api = { workspace = true }
+wgpu = { workspace = true, optional = true }
+wgpu-native-texture-interop = { workspace = true, optional = true }
 webxr = { workspace = true, optional = true }
 webxr-api = { workspace = true, optional = true }
 wr_malloc_size_of = { workspace = true }
