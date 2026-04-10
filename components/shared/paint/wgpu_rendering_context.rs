@@ -183,21 +183,23 @@ impl RenderingContext for WgpuRenderingContext {
 
     fn acquire_wgpu_frame_target(&self) -> Option<wgpu::TextureView> {
         let frame = match self.surface.get_current_texture() {
-            Ok(f) => f,
-            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
+            wgpu::CurrentSurfaceTexture::Success(f)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 // Reconfigure and retry once.
                 let config = self.surface_config.borrow();
                 self.surface.configure(&self.device, &config);
                 match self.surface.get_current_texture() {
-                    Ok(f) => f,
-                    Err(e) => {
-                        warn!("WgpuRenderingContext: failed to acquire frame after reconfigure: {e:?}");
+                    wgpu::CurrentSurfaceTexture::Success(f)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+                    other => {
+                        warn!("WgpuRenderingContext: failed to acquire frame after reconfigure: {other:?}");
                         return None;
                     },
                 }
             },
-            Err(e) => {
-                warn!("WgpuRenderingContext: surface error: {e:?}");
+            other => {
+                warn!("WgpuRenderingContext: surface error: {other:?}");
                 return None;
             },
         };

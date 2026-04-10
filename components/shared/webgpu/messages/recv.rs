@@ -282,7 +282,7 @@ pub enum WebGPURequest {
         render_pass_id: RenderPassId,
         label: Label<'static>,
         color_attachments: Vec<Option<RenderPassColorAttachment>>,
-        depth_stencil_attachment: Option<RenderPassDepthStencilAttachment>,
+        depth_stencil_attachment: Option<RenderPassDepthStencilAttachment<TextureViewId>>,
         device_id: DeviceId,
     },
     RenderPassCommand {

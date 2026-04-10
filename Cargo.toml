@@ -213,9 +213,10 @@ webdriver = "0.53.0"
 webpki-roots = "1.0"
 webrender = { version = "0.68", features = ["capture", "wgpu_backend"] }
 webrender_api = "0.68"
-wgpu = "26"
-wgpu-core = "26"
-wgpu-types = "26"
+wgpu = "29"
+wgpu-core = "29"
+wgpu-native-texture-interop = { path = "../wgpu-gui-bridge/wgpu-native-texture-interop" }
+wgpu-types = "29"
 winapi = "0.3"
 windows-sys = "0.61"
 winit = "0.30.13"

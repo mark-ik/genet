@@ -2028,7 +2028,10 @@ impl ScriptThread {
             WebGPUMsg::FreeBindGroupLayout(id) => self.gpu_id_hub.free_bind_group_layout_id(id),
             WebGPUMsg::FreeCommandBuffer(id) => self
                 .gpu_id_hub
-                .free_command_buffer_id(id.into_command_encoder_id()),
+                .free_command_buffer_id({
+                    let (index, epoch) = id.unzip();
+                    wgpu_core::id::Id::zip(index, epoch)
+                }),
             WebGPUMsg::FreeSampler(id) => self.gpu_id_hub.free_sampler_id(id),
             WebGPUMsg::FreeShaderModule(id) => self.gpu_id_hub.free_shader_module_id(id),
             WebGPUMsg::FreeRenderBundle(id) => self.gpu_id_hub.free_render_bundle_id(id),

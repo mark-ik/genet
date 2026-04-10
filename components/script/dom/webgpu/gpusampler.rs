@@ -110,7 +110,10 @@ impl GPUSampler {
             ],
             mag_filter: descriptor.magFilter.convert(),
             min_filter: descriptor.minFilter.convert(),
-            mipmap_filter: descriptor.mipmapFilter.convert(),
+            mipmap_filter: match descriptor.mipmapFilter.convert() {
+                wgpu_types::FilterMode::Nearest => wgpu_types::MipmapFilterMode::Nearest,
+                wgpu_types::FilterMode::Linear => wgpu_types::MipmapFilterMode::Linear,
+            },
             lod_min_clamp: *descriptor.lodMinClamp,
             lod_max_clamp: *descriptor.lodMaxClamp,
             compare: descriptor.compare.map(Convert::convert),

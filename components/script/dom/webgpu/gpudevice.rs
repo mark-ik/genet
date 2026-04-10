@@ -366,8 +366,8 @@ impl GPUDevice {
                     self.validate_texture_format_required_features(&dss_desc.format)
                         .map(|format| wgpu_types::DepthStencilState {
                             format,
-                            depth_write_enabled: dss_desc.depthWriteEnabled,
-                            depth_compare: dss_desc.depthCompare.convert(),
+                            depth_write_enabled: Some(dss_desc.depthWriteEnabled),
+                            depth_compare: Some(dss_desc.depthCompare.convert()),
                             stencil: wgpu_types::StencilState {
                                 front: wgpu_types::StencilFaceState {
                                     compare: dss_desc.stencilFront.compare.convert(),
@@ -398,7 +398,7 @@ impl GPUDevice {
                 mask: descriptor.multisample.mask as u64,
                 alpha_to_coverage_enabled: descriptor.multisample.alphaToCoverageEnabled,
             },
-            multiview: None,
+            multiview_mask: None,
         };
         Ok((pipeline_layout, desc))
     }

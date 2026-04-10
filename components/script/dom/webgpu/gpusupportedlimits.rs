@@ -148,7 +148,9 @@ impl GPUSupportedLimitsMethods<crate::DomTypeHolder> for GPUSupportedLimits {
 
     /// <https://gpuweb.github.io/gpuweb/#dom-gpusupportedlimits-maxinterstageshadercomponents>
     fn MaxInterStageShaderComponents(&self) -> u32 {
-        self.limits.max_inter_stage_shader_components
+        // WebGPU spec defines components as ~4x variables; wgpu 29 only
+        // exposes the variables limit. Return variables * 4 as an approximation.
+        self.limits.max_inter_stage_shader_variables * 4
     }
 
     /// <https://gpuweb.github.io/gpuweb/#dom-gpusupportedlimits-maxcomputeworkgroupstoragesize>
@@ -294,13 +296,11 @@ pub(crate) fn set_limit(limits: &mut Limits, limit: &str, value: u64) -> bool {
             set_maximum(&mut limits.max_vertex_buffer_array_stride, value)
         },
         "maxInterStageShaderComponents" => {
-            set_maximum(&mut limits.max_inter_stage_shader_components, value)
+            // WebGPU spec components ≈ variables * 4; convert to variables limit.
+            set_maximum(&mut limits.max_inter_stage_shader_variables, value / 4)
         },
         "maxInterStageShaderVariables" => {
-            // not in wgpu but we're allowed to give back better limits than requested.
-            // we use dummy value to still produce value verification
-            let mut v: u32 = 0;
-            set_maximum(&mut v, value)
+            set_maximum(&mut limits.max_inter_stage_shader_variables, value)
         },
         "maxColorAttachments" => set_maximum(&mut limits.max_color_attachments, value),
         "maxColorAttachmentBytesPerSample" => {
