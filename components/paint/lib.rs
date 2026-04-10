@@ -33,6 +33,8 @@ mod touch;
 mod web_content_animation;
 mod webrender_external_images;
 mod webview_renderer;
+#[cfg(feature = "wgpu_backend")]
+mod wgpu_webgl_external_images;
 
 /// Data used to initialize the `Paint` subsystem.
 pub struct InitialPaintState {

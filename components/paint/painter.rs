@@ -133,13 +133,11 @@ pub(crate) struct Painter {
     /// manages blinking caret animations.
     web_content_animator: WebContentAnimator,
 
-    /// Whether this painter uses the wgpu backend (skips GL operations).
-    use_wgpu: bool,
 }
 
 impl Drop for Painter {
     fn drop(&mut self) {
-        if !self.use_wgpu {
+        if self.webrender_gl.is_some() {
             if let Err(error) = self.rendering_context.make_current() {
                 error!("Failed to make the rendering context current: {error:?}");
             }
@@ -156,12 +154,17 @@ impl Drop for Painter {
 
 impl Painter {
     pub(crate) fn new(rendering_context: Rc<dyn RenderingContext>, paint: &Paint) -> Self {
-        let use_wgpu = matches!(
-            rendering_context.backend_binding(),
-            paint_api::rendering_context::RenderingBackendBinding::Wgpu(..)
-        );
+        let is_wgpu = {
+            #[cfg(feature = "wgpu_backend")]
+            { matches!(
+                rendering_context.backend_binding(),
+                paint_api::rendering_context::RenderingBackendBinding::Wgpu(..)
+            ) }
+            #[cfg(not(feature = "wgpu_backend"))]
+            { false }
+        };
 
-        let webrender_gl = if use_wgpu {
+        let webrender_gl = if is_wgpu {
             None
         } else {
             let gl = rendering_context.gleam_gl_api();
@@ -238,7 +241,7 @@ impl Painter {
         // survives across runs.  Failure to create the directory is silently
         // ignored — the pipeline cache degrades to a no-op rather than crashing.
         #[cfg(feature = "wgpu_backend")]
-        let pipeline_cache_dir: Option<std::path::PathBuf> = if use_wgpu {
+        let pipeline_cache_dir: Option<std::path::PathBuf> = if is_wgpu {
             let base: std::path::PathBuf = {
                 #[cfg(target_os = "macos")]
                 {
@@ -300,7 +303,8 @@ impl Painter {
         };
         let notifier = Box::new(RenderNotifier::new(painter_id, paint.paint_proxy.clone()));
 
-        let (mut webrender_renderer, webrender_api_sender) = if use_wgpu {
+        #[cfg(feature = "wgpu_backend")]
+        let create_wgpu_renderer = |notifier, webrender_options| {
             // Determine which wgpu backend variant to use:
             //  1. WgpuHal  — embedder provides a raw-hal device factory (rarest, richest interop)
             //  2. WgpuShared — embedder provides an existing wgpu::Device + Queue
@@ -329,6 +333,13 @@ impl Painter {
                 None,
             )
             .expect("Unable to initialize WebRender with wgpu backend.")
+        };
+
+        let (mut webrender_renderer, webrender_api_sender) = if is_wgpu {
+            #[cfg(feature = "wgpu_backend")]
+            { create_wgpu_renderer(notifier, webrender_options) }
+            #[cfg(not(feature = "wgpu_backend"))]
+            { unreachable!("wgpu backend not compiled in") }
         } else {
             webrender::create_webrender_instance(
                 webrender_gl.clone().expect("GL backend requires gleam_gl_api()"),
@@ -340,6 +351,32 @@ impl Painter {
         };
 
         webrender_renderer.set_external_image_handler(external_image_handlers);
+
+        // On the wgpu path, set up the wgpu-native WebGL external image handler
+        // that imports WebGL canvas surfaces into wgpu textures via native interop.
+        #[cfg(feature = "wgpu_backend")]
+        if is_wgpu {
+            if let (Some(device), Some(queue)) = (
+                rendering_context.wgpu_device(),
+                rendering_context.wgpu_queue(),
+            ) {
+                match crate::wgpu_webgl_external_images::WgpuWebGLExternalImages::new(
+                    paint.webgl_threads(),
+                    paint.swap_chains.clone(),
+                    paint.busy_webgl_contexts_map.clone(),
+                    device,
+                    queue,
+                ) {
+                    Ok(handler) => {
+                        webrender_renderer.set_wgpu_external_image_handler(Box::new(handler));
+                        info!("wgpu WebGL external image handler installed");
+                    },
+                    Err(e) => {
+                        log::error!("Failed to create wgpu WebGL external image handler: {:?}", e);
+                    },
+                }
+            }
+        }
 
         let webrender_api = webrender_api_sender.create_api_by_client(painter_id.into());
         let webrender_document = webrender_api.add_document(rendering_context.size2d().to_i32());
@@ -372,9 +409,8 @@ impl Painter {
                 paint.event_loop_waker.clone_box(),
                 (*timer_refresh_driver).clone(),
             ),
-            use_wgpu,
         };
-        if !use_wgpu {
+        if !is_wgpu {
             painter.assert_gl_framebuffer_complete();
             painter.clear_background();
         }
@@ -383,7 +419,7 @@ impl Painter {
 
     pub(crate) fn perform_updates(&mut self) {
         // The WebXR thread may make a different context current
-        if !self.use_wgpu {
+        if self.webrender_gl.is_some() {
             if let Err(err) = self.rendering_context.make_current() {
                 warn!("Failed to make the rendering context current: {:?}", err);
             }
@@ -511,7 +547,7 @@ impl Painter {
         let refresh_driver = self.refresh_driver.clone();
         refresh_driver.notify_will_paint(self);
 
-        if !self.use_wgpu {
+        if self.webrender_gl.is_some() {
             if let Err(error) = self.rendering_context.make_current() {
                 error!("Failed to make the rendering context current: {error:?}");
             }
@@ -529,12 +565,12 @@ impl Painter {
                 }
 
                 // Paint the scene.
-                if !self.use_wgpu {
+                if self.webrender_gl.is_some() {
                     self.clear_background();
                 }
 
                 #[cfg(feature = "wgpu_backend")]
-                if self.use_wgpu {
+                if self.webrender_gl.is_none() {
                     // Zero-copy wgpu path: acquire a frame target from the
                     // context, render directly into it, then present.
                     if let Some(frame_view) = self.rendering_context.acquire_wgpu_frame_target() {
@@ -552,11 +588,11 @@ impl Painter {
                 }
 
                 #[cfg(not(feature = "wgpu_backend"))]
-                if self.use_wgpu {
+                if self.webrender_gl.is_none() {
                     unreachable!("wgpu backend not compiled in");
                 }
 
-                if !self.use_wgpu {
+                if self.webrender_gl.is_some() {
                     if let Some(renderer) = self.webrender_renderer.as_mut() {
                         let size = self.rendering_context.size2d().to_i32();
                         renderer.render(size, 0 /* buffer_age */).ok();
@@ -723,7 +759,7 @@ impl Painter {
     }
 
     pub(crate) fn send_transaction(&mut self, transaction: Transaction) {
-        if !self.use_wgpu {
+        if self.webrender_gl.is_some() {
             let _ = self.rendering_context.make_current();
         }
         self.webrender_api
@@ -1413,7 +1449,7 @@ impl Painter {
             return;
         }
 
-        if !self.use_wgpu {
+        if self.webrender_gl.is_some() {
             if let Err(error) = self.rendering_context.make_current() {
                 error!("Failed to make the rendering context current: {error:?}");
             }
