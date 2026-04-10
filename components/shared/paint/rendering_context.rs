@@ -27,6 +27,30 @@ use surfman::{
 };
 use webrender_api::units::{DeviceIntRect, DevicePixel};
 
+/// GL-specific handles extracted from a [`RenderingContext`].
+pub struct GlBinding {
+    pub gleam_gl: Rc<dyn gleam::gl::Gl>,
+    pub glow_gl: Arc<glow::Context>,
+}
+
+/// wgpu-specific handles extracted from a [`RenderingContext`].
+#[cfg(feature = "wgpu_backend")]
+pub struct WgpuBinding {
+    /// Clone of the context's device (shares the GPU via wgpu's internal Arc).
+    pub device: wgpu::Device,
+    /// Clone of the context's queue.
+    pub queue: wgpu::Queue,
+}
+
+/// Identifies which rendering backend a [`RenderingContext`] uses.
+///
+/// `Painter` matches on this to decide the WebRender initialization path.
+pub enum RenderingBackendBinding {
+    Gl(GlBinding),
+    #[cfg(feature = "wgpu_backend")]
+    Wgpu(WgpuBinding),
+}
+
 /// The `RenderingContext` trait defines a set of methods for managing
 /// an OpenGL or GLES rendering context.
 /// Implementors of this trait are responsible for handling the creation,
@@ -129,6 +153,31 @@ pub trait RenderingContext {
     fn wgpu_hal_device_factory(
         &self,
     ) -> Option<Box<dyn FnOnce() -> (wgpu::Device, wgpu::Queue) + Send>> {
+        None
+    }
+
+    /// Return the backend binding for this context.
+    ///
+    /// The default implementation returns [`RenderingBackendBinding::Gl`] using
+    /// the GL accessors.  wgpu-backed contexts override this to return
+    /// [`RenderingBackendBinding::Wgpu`].
+    fn backend_binding(&self) -> RenderingBackendBinding {
+        RenderingBackendBinding::Gl(GlBinding {
+            gleam_gl: self.gleam_gl_api(),
+            glow_gl: self.glow_gl_api(),
+        })
+    }
+
+    /// Acquire the next frame target for wgpu rendering.
+    ///
+    /// The context gets the current surface texture, stores it internally
+    /// (needed for [`RenderingContext::present`]), and returns a
+    /// [`wgpu::TextureView`] that WebRender can render into via
+    /// `Renderer::render_to_view()`.
+    ///
+    /// Returns `None` for GL-based contexts.
+    #[cfg(feature = "wgpu_backend")]
+    fn acquire_wgpu_frame_target(&self) -> Option<wgpu::TextureView> {
         None
     }
 }

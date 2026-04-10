@@ -15,16 +15,10 @@ path = "src/main.rs"
 dpi = { workspace = true }
 env_logger = { workspace = true }
 euclid = { workspace = true }
-gleam = { workspace = true }
-glow = { workspace = true }
-image = { workspace = true }
 keyboard-types = { version = "0.8.3" }
 log = { workspace = true }
 paint_api = { workspace = true, features = ["wgpu_backend"] }
-pollster = "0.4"
 # Use same feature set as `cargo check -p servo` (default features) to reuse
 # cached build artifacts and avoid a full mozjs rebuild.
 servo = { version = "0.1.0", path = "../../components/servo" }
-surfman = { workspace = true }
-wgpu = { workspace = true }
 winit = { workspace = true }

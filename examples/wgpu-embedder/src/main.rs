@@ -1,13 +1,13 @@
-// A hardened pure-wgpu Servo embedder.
+// A pure-wgpu Servo embedder using the zero-copy render_to_view() path.
 //
-// Demonstrates the shared-device pipeline: the host app owns the wgpu device
-// and surface, passes the device to Servo/WebRender via a custom
-// RenderingContext, and composites WebRender's output texture into its own
-// render pass — zero-copy on the GPU.
+// Uses WgpuRenderingContext from servo-paint-api which owns the wgpu device
+// and surface. Servo/WebRender renders directly into the surface texture
+// via render_to_view() — no intermediate blit needed.
 //
-// Features over the minimal seed:
-//   - sRGB colour fix: surface viewed as Bgra8Unorm to avoid double-encoding
-//   - Proper resize: webview.resize() propagates through Servo/WebRender
+// Features:
+//   - Zero-copy rendering: WebRender writes directly to the swap-chain frame
+//   - sRGB colour fix: handled by WgpuRenderingContext's non-sRGB view
+//   - Proper resize: webview.resize() propagates through the context
 //   - HiDPI: scale factor propagated on ScaleFactorChanged
 //   - Mouse: move, click, wheel, leave-viewport all routed to Servo
 //   - Keyboard: full key translation via keyutils module
@@ -26,12 +26,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use dpi::PhysicalSize;
-use euclid::{Scale, Size2D};
-use image::RgbaImage;
+use euclid::Scale;
 use log::info;
 use paint_api::rendering_context::RenderingContext;
+use paint_api::wgpu_rendering_context::WgpuRenderingContext;
 use servo::{
-    Cursor, DeviceIntRect, DevicePixel, DevicePoint, EventLoopWaker, InputEvent,
+    Cursor, DevicePoint, EventLoopWaker, InputEvent,
     MouseButton as ServoMouseButton, MouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent,
     MouseMoveEvent, ServoBuilder, WebView, WebViewBuilder, WebViewDelegate, WheelDelta, WheelEvent,
     WheelMode,
@@ -45,69 +45,6 @@ use winit::window::{CursorIcon, Window, WindowAttributes, WindowId};
 // Pixels per "line" for line-delta scroll events.
 const LINE_HEIGHT: f32 = 76.0;
 const LINE_WIDTH: f32 = 76.0;
-
-// ---------------------------------------------------------------------------
-// WgpuRenderingContext: a pure-wgpu RenderingContext for Servo
-// ---------------------------------------------------------------------------
-
-struct WgpuRenderingContext {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    size: Cell<PhysicalSize<u32>>,
-}
-
-impl WgpuRenderingContext {
-    fn new(device: wgpu::Device, queue: wgpu::Queue, size: PhysicalSize<u32>) -> Self {
-        Self {
-            device,
-            queue,
-            size: Cell::new(size),
-        }
-    }
-}
-
-impl RenderingContext for WgpuRenderingContext {
-    fn size(&self) -> PhysicalSize<u32> {
-        self.size.get()
-    }
-
-    fn size2d(&self) -> Size2D<u32, DevicePixel> {
-        let s = self.size.get();
-        Size2D::new(s.width, s.height)
-    }
-
-    fn resize(&self, size: PhysicalSize<u32>) {
-        self.size.set(size);
-    }
-
-    fn present(&self) {}
-
-    fn prepare_for_rendering(&self) {}
-
-    fn make_current(&self) -> Result<(), surfman::Error> {
-        Ok(())
-    }
-
-    fn gleam_gl_api(&self) -> Rc<dyn gleam::gl::Gl> {
-        unreachable!("gleam_gl_api called on pure-wgpu RenderingContext")
-    }
-
-    fn glow_gl_api(&self) -> Arc<glow::Context> {
-        unreachable!("glow_gl_api called on pure-wgpu RenderingContext")
-    }
-
-    fn read_to_image(&self, _source_rectangle: DeviceIntRect) -> Option<RgbaImage> {
-        None
-    }
-
-    fn wgpu_device(&self) -> Option<wgpu::Device> {
-        Some(self.device.clone())
-    }
-
-    fn wgpu_queue(&self) -> Option<wgpu::Queue> {
-        Some(self.queue.clone())
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Delegate
@@ -214,15 +151,8 @@ struct App {
 
 struct RunningState {
     window: Arc<Window>,
-    surface: wgpu::Surface<'static>,
-    surface_config: wgpu::SurfaceConfiguration,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
     servo: servo::Servo,
     webview: WebView,
-    blit_pipeline: wgpu::RenderPipeline,
-    blit_bind_group_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
     // Input tracking
     cursor_pos: Cell<DevicePoint>,
     cursor_in_window: Cell<bool>,
@@ -258,134 +188,20 @@ impl ApplicationHandler<AppEvent> for App {
                 .expect("Failed to create window"),
         );
 
-        let instance = wgpu::Instance::default();
-        let surface = instance
-            .create_surface(window.clone())
-            .expect("Failed to create surface");
-
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            compatible_surface: Some(&surface),
-            ..Default::default()
-        }))
-        .expect("No suitable GPU adapter found");
-
-        info!("GPU: {}", adapter.get_info().name);
-
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("host"),
-                ..Default::default()
-            },
-        ))
-        .expect("Failed to create device");
-
         let win_size = window.inner_size();
         let hidpi_scale = window.scale_factor();
 
-        // Use Bgra8UnormSrgb as the native preferred format, but expose
-        // Bgra8Unorm as an additional view_format so we can create the surface
-        // view without the automatic sRGB re-encode.  WebRender's composite
-        // output is already display-encoded (sRGB); a second encode would
-        // produce washed-out/wrong colours.
-        let preferred_format = surface.get_capabilities(&adapter).formats[0];
-        let non_srgb_format = preferred_format.remove_srgb_suffix();
-        let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: preferred_format,
-            width: win_size.width.max(1),
-            height: win_size.height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
-            alpha_mode: wgpu::CompositeAlphaMode::Auto,
-            // Allow creating a non-sRGB view over the sRGB surface texture
-            // so writes bypass the automatic gamma encoding.
-            view_formats: if non_srgb_format != preferred_format {
-                vec![non_srgb_format]
-            } else {
-                vec![]
-            },
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&device, &surface_config);
+        // WgpuRenderingContext handles device/queue/surface creation, sRGB config,
+        // and frame acquisition. Servo/WebRender renders directly into surface
+        // textures via render_to_view().
+        let rendering_context: Rc<dyn RenderingContext> = Rc::new(
+            WgpuRenderingContext::new(
+                window.clone(),
+                PhysicalSize::new(win_size.width, win_size.height),
+            ),
+        );
 
-        // Blit pipeline — fullscreen triangle that samples WebRender's texture.
-        let blit_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("blit_bind_group_layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
-            });
-
-        let blit_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("blit_pipeline_layout"),
-                bind_group_layouts: &[&blit_bind_group_layout],
-                push_constant_ranges: &[],
-            });
-
-        let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("blit_shader"),
-            source: wgpu::ShaderSource::Wgsl(BLIT_SHADER_WGSL.into()),
-        });
-
-        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("blit_pipeline"),
-            layout: Some(&blit_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &blit_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &blit_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    // Write to the non-sRGB view to skip automatic gamma encoding.
-                    format: non_srgb_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview: None,
-            cache: None,
-        });
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("blit_sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-
-        // Rendering context wraps the wgpu device for Servo.
-        let rendering_context: Rc<dyn RenderingContext> = Rc::new(WgpuRenderingContext::new(
-            device.clone(),
-            queue.clone(),
-            PhysicalSize::new(win_size.width, win_size.height),
-        ));
+        info!("Created WgpuRenderingContext ({}x{})", win_size.width, win_size.height);
 
         let servo = ServoBuilder::default()
             .event_loop_waker(self.waker.clone())
@@ -405,15 +221,8 @@ impl ApplicationHandler<AppEvent> for App {
 
         self.state = Some(RunningState {
             window,
-            surface,
-            surface_config,
-            device,
-            queue,
             servo,
             webview,
-            blit_pipeline,
-            blit_bind_group_layout,
-            sampler,
             cursor_pos: Cell::new(DevicePoint::zero()),
             cursor_in_window: Cell::new(false),
             modifiers: Cell::new(ModifiersState::empty()),
@@ -441,10 +250,6 @@ impl ApplicationHandler<AppEvent> for App {
 
             // ---- Resize ----
             WindowEvent::Resized(new_size) => {
-                state.surface_config.width = new_size.width.max(1);
-                state.surface_config.height = new_size.height.max(1);
-                state.surface.configure(&state.device, &state.surface_config);
-                // Propagate to Servo/WebRender through the webview handle.
                 state.webview.resize(new_size);
                 state.window.request_redraw();
             }
@@ -457,89 +262,10 @@ impl ApplicationHandler<AppEvent> for App {
 
             // ---- Redraw ----
             WindowEvent::RedrawRequested => {
-                let frame = match state.surface.get_current_texture() {
-                    Ok(f) => f,
-                    Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
-                        state.surface.configure(&state.device, &state.surface_config);
-                        return;
-                    }
-                    Err(e) => {
-                        log::error!("Surface error: {e:?}");
-                        return;
-                    }
-                };
-
-                // Create a non-sRGB view to avoid double-encoding WR's output.
-                let non_srgb_format = state.surface_config.format.remove_srgb_suffix();
-                let surface_view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-                    format: Some(non_srgb_format),
-                    ..Default::default()
-                });
-                let mut encoder = state.device.create_command_encoder(&Default::default());
-
-                if let Some(wr_texture) = state.webview.composite_texture() {
-                    let wr_view = wr_texture.create_view(&wgpu::TextureViewDescriptor {
-                        format: Some(wgpu::TextureFormat::Bgra8Unorm),
-                        ..Default::default()
-                    });
-
-                    let bind_group = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("blit_bind_group"),
-                        layout: &state.blit_bind_group_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(&wr_view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::Sampler(&state.sampler),
-                            },
-                        ],
-                    });
-
-                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("blit_pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &surface_view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        ..Default::default()
-                    });
-                    pass.set_pipeline(&state.blit_pipeline);
-                    pass.set_bind_group(0, &bind_group, &[]);
-                    pass.draw(0..3, 0..1);
-                } else {
-                    // No composite texture yet — clear to loading colour.
-                    let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("host_clear"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &surface_view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: 0.15,
-                                    g: 0.15,
-                                    b: 0.15,
-                                    a: 1.0,
-                                }),
-                                store: wgpu::StoreOp::Store,
-                            },
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        ..Default::default()
-                    });
-                }
-
-                state.queue.submit(Some(encoder.finish()));
-                frame.present();
+                // With render_to_view(), Servo/WebRender renders directly into
+                // the surface texture during webview.render(). The frame is
+                // presented by the RenderingContext automatically. We just need
+                // to trigger a new frame.
                 state.window.request_redraw();
             }
 
@@ -642,32 +368,6 @@ fn winit_button_to_servo(button: MouseButton) -> ServoMouseButton {
         MouseButton::Other(v) => ServoMouseButton::Other(v),
     }
 }
-
-// Fullscreen-triangle blit shader (WGSL).
-const BLIT_SHADER_WGSL: &str = r#"
-@group(0) @binding(0) var t_input: texture_2d<f32>;
-@group(0) @binding(1) var s_input: sampler;
-
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-};
-
-@vertex
-fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
-    let x = f32(i32(vi & 1u)) * 4.0 - 1.0;
-    let y = f32(i32(vi >> 1u)) * 4.0 - 1.0;
-    var out: VertexOutput;
-    out.position = vec4<f32>(x, y, 0.0, 1.0);
-    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-    return out;
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(t_input, s_input, in.uv);
-}
-"#;
 
 fn main() {
     // SAFETY: called before any threads are spawned.
