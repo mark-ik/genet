@@ -156,7 +156,10 @@ impl Drop for Painter {
 
 impl Painter {
     pub(crate) fn new(rendering_context: Rc<dyn RenderingContext>, paint: &Paint) -> Self {
-        let use_wgpu = std::env::var("SERVO_WGPU_BACKEND").is_ok();
+        let use_wgpu = matches!(
+            rendering_context.backend_binding(),
+            paint_api::rendering_context::RenderingBackendBinding::Wgpu(..)
+        );
 
         let webrender_gl = if use_wgpu {
             None
