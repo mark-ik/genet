@@ -699,8 +699,9 @@ impl Element {
         // non-shadow-tree children of `self` no longer have layout boxes as they are no
         // longer in the flat tree.
         let node = self.upcast::<Node>();
-        node.remove_layout_boxes_from_subtree();
-
+        if node.is_connected() {
+            node.remove_layout_boxes_from_subtree();
+        }
         // Step 6. Set shadow's delegates focus to delegatesFocus
         shadow_root.set_delegates_focus(delegates_focus);
 
@@ -2431,7 +2432,7 @@ impl Element {
         // Step 2.1: Let nonce be element's [[CryptographicNonce]].
         let nonce = self.nonce_value();
         // Step 2.2: Set an attribute value for element using "nonce" and the empty string.
-        self.set_string_attribute(&local_name!("nonce"), "".into(), CanGc::note());
+        self.set_string_attribute(&local_name!("nonce"), "".into(), CanGc::deprecated_note());
         // Step 2.3: Set element's [[CryptographicNonce]] to nonce.
         self.update_nonce_internal_slot(nonce);
     }
@@ -4250,9 +4251,9 @@ impl ElementMethods<crate::DomTypeHolder> for Element {
 
     /// <https://drafts.csswg.org/css-shadow-parts/#dom-element-part>
     fn Part(&self) -> DomRoot<DOMTokenList> {
-        self.ensure_rare_data()
-            .part
-            .or_init(|| DOMTokenList::new(self, &local_name!("part"), None, CanGc::note()))
+        self.ensure_rare_data().part.or_init(|| {
+            DOMTokenList::new(self, &local_name!("part"), None, CanGc::deprecated_note())
+        })
     }
 }
 

@@ -129,6 +129,13 @@ impl Actor for PageStyleActor {
 }
 
 impl PageStyleActor {
+    pub fn register(registry: &ActorRegistry) -> String {
+        let name = registry.new_name::<Self>();
+        let actor = Self { name: name.clone() };
+        registry.register::<Self>(actor);
+        name
+    }
+
     fn get_applied(
         &self,
         request: ClientRequest,
@@ -200,8 +207,9 @@ impl PageStyleActor {
                         })
                         .clone();
 
-                    let actor = registry.find::<StyleRuleActor>(&style_rule_name);
-                    let rule = actor.applied(registry)?;
+                    let rule = registry
+                        .find::<StyleRuleActor>(&style_rule_name)
+                        .applied(registry)?;
                     if inherited.is_some() && rule.declarations.is_empty() {
                         return None;
                     }
@@ -242,20 +250,19 @@ impl PageStyleActor {
             ancestor_data: vec![],
         };
 
-        let computed = {
-            let style_rule_name = node_actor
-                .style_rules
-                .borrow_mut()
-                .entry(style_attribute_rule)
-                .or_insert_with(|| StyleRuleActor::register(registry, node_name.into(), None))
-                .clone();
-
-            let actor = registry.find::<StyleRuleActor>(&style_rule_name);
-            actor.computed(registry)
-        };
+        let style_rule_name = node_actor
+            .style_rules
+            .borrow_mut()
+            .entry(style_attribute_rule)
+            .or_insert_with(|| StyleRuleActor::register(registry, node_name.into(), None))
+            .clone();
+        let computed = registry
+            .find::<StyleRuleActor>(&style_rule_name)
+            .computed(registry)
+            .unwrap_or_default();
 
         let msg = GetComputedReply {
-            computed: computed.unwrap_or_default(),
+            computed,
             from: self.name(),
         };
         request.reply_final(&msg)
