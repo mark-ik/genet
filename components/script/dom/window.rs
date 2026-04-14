@@ -290,6 +290,7 @@ pub(crate) struct Window {
     #[ignore_malloc_size_of = "TODO: Add MallocSizeOf support to layout"]
     layout: RefCell<Box<dyn Layout>>,
     navigator: MutNullableDom<Navigator>,
+    crypto: MutNullableDom<Crypto>,
     #[ignore_malloc_size_of = "ImageCache"]
     #[no_trace]
     image_cache: Arc<dyn ImageCache>,
@@ -306,6 +307,8 @@ pub(crate) struct Window {
     screen: MutNullableDom<Screen>,
     session_storage: MutNullableDom<Storage>,
     local_storage: MutNullableDom<Storage>,
+    /// <https://cookiestore.spec.whatwg.org/#globals>
+    cookie_store: MutNullableDom<CookieStore>,
     status: DomRefCell<DOMString>,
     trusted_types: MutNullableDom<TrustedTypePolicyFactory>,
 
@@ -425,10 +428,6 @@ pub(crate) struct Window {
     #[no_trace]
     paint_api: CrossProcessPaintApi,
 
-    /// Indicate whether a SetDocumentStatus message has been sent after a reflow is complete.
-    /// It is used to avoid sending idle message more than once, which is unnecessary.
-    has_sent_idle_message: Cell<bool>,
-
     /// The [`UserScript`]s added via `UserContentManager`. These are potentially shared with other
     /// `WebView`s in this `ScriptThread`.
     #[no_trace]
@@ -478,6 +477,10 @@ pub(crate) struct Window {
     /// <https://html.spec.whatwg.org/multipage/#last-activation-timestamp>
     #[no_trace]
     last_activation_timestamp: Cell<UserActivationTimestamp>,
+
+    /// A flag to indicate whether the developer tools has requested
+    /// live updates from the window.
+    devtools_wants_updates: Cell<bool>,
 }
 
 impl Window {
@@ -1502,12 +1505,14 @@ impl WindowMethods<crate::DomTypeHolder> for Window {
 
     /// <https://cookiestore.spec.whatwg.org/#Window>
     fn CookieStore(&self, can_gc: CanGc) -> DomRoot<CookieStore> {
-        self.global().cookie_store(can_gc)
+        self.cookie_store
+            .or_init(|| CookieStore::new(self.upcast::<GlobalScope>(), can_gc))
     }
 
     /// <https://dvcs.w3.org/hg/webcrypto-api/raw-file/tip/spec/Overview.html#dfn-GlobalCrypto>
     fn Crypto(&self) -> DomRoot<Crypto> {
-        self.as_global_scope().crypto(CanGc::deprecated_note())
+        self.crypto
+            .or_init(|| Crypto::new(self.as_global_scope(), CanGc::deprecated_note()))
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-frameelement>
@@ -2663,7 +2668,6 @@ impl Window {
             viewport_details: self.viewport_details.get(),
             origin: self.origin().immutable().clone(),
             reflow_goal,
-            dom_count: document.dom_count(),
             animation_timeline_value: document.current_animation_timeline_value(),
             animations: document.animations().sets.clone(),
             animating_images: document.image_animation_manager().animating_images(),
@@ -3693,6 +3697,7 @@ impl Window {
             image_cache_sender,
             image_cache,
             navigator: Default::default(),
+            crypto: Default::default(),
             location: Default::default(),
             history: Default::default(),
             custom_element_registry: Default::default(),
@@ -3703,6 +3708,7 @@ impl Window {
             screen: Default::default(),
             session_storage: Default::default(),
             local_storage: Default::default(),
+            cookie_store: Default::default(),
             status: DomRefCell::new(DOMString::new()),
             parent_info,
             dom_static: GlobalStaticData::new(),
@@ -3739,7 +3745,6 @@ impl Window {
             paint_worklet: Default::default(),
             exists_mut_observer: Cell::new(false),
             paint_api,
-            has_sent_idle_message: Cell::new(false),
             user_scripts,
             player_context,
             throttled: Cell::new(false),
@@ -3756,6 +3761,7 @@ impl Window {
             weak_script_thread,
             has_changed_visual_viewport_dimension: Default::default(),
             last_activation_timestamp: Cell::new(UserActivationTimestamp::PositiveInfinity),
+            devtools_wants_updates: Default::default(),
         });
 
         WindowBinding::Wrap::<crate::DomTypeHolder>(cx, win)
@@ -3763,6 +3769,14 @@ impl Window {
 
     pub(crate) fn pipeline_id(&self) -> PipelineId {
         self.as_global_scope().pipeline_id()
+    }
+
+    pub(crate) fn live_devtools_updates(&self) -> bool {
+        self.devtools_wants_updates.get()
+    }
+
+    pub(crate) fn set_devtools_wants_updates(&self, value: bool) {
+        self.devtools_wants_updates.set(value);
     }
 
     /// Create a new cached instance of the given value.

@@ -5,12 +5,12 @@
 use devtools_traits::{DebuggerValue, ObjectPreview, PropertyDescriptor};
 use malloc_size_of_derive::MallocSizeOf;
 use serde::Serialize;
-use serde_json::{Map, Number, Value};
+use serde_json::{Map, Value};
 
-use crate::StreamId;
 use crate::actor::{Actor, ActorEncode, ActorError, ActorRegistry};
 use crate::actors::property_iterator::PropertyIteratorActor;
 use crate::protocol::ClientRequest;
+use crate::{StreamId, debugger_value_to_json};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -77,52 +77,6 @@ impl ObjectPropertyDescriptor {
     }
 }
 
-/// <https://searchfox.org/mozilla-central/source/devtools/server/actors/object/utils.js#148>
-pub(crate) fn debugger_value_to_json(registry: &ActorRegistry, value: DebuggerValue) -> Value {
-    let mut v = Map::new();
-    match value {
-        DebuggerValue::VoidValue => {
-            v.insert("type".to_owned(), Value::String("undefined".to_owned()));
-            Value::Object(v)
-        },
-        DebuggerValue::NullValue => {
-            v.insert("type".to_owned(), Value::String("null".to_owned()));
-            Value::Object(v)
-        },
-        DebuggerValue::BooleanValue(boolean) => Value::Bool(boolean),
-        DebuggerValue::NumberValue(val) => {
-            if val.is_nan() {
-                v.insert("type".to_owned(), Value::String("NaN".to_owned()));
-                Value::Object(v)
-            } else if val.is_infinite() {
-                if val < 0. {
-                    v.insert("type".to_owned(), Value::String("-Infinity".to_owned()));
-                } else {
-                    v.insert("type".to_owned(), Value::String("Infinity".to_owned()));
-                }
-                Value::Object(v)
-            } else if val == 0. && val.is_sign_negative() {
-                v.insert("type".to_owned(), Value::String("-0".to_owned()));
-                Value::Object(v)
-            } else {
-                Value::Number(Number::from_f64(val).unwrap())
-            }
-        },
-        DebuggerValue::StringValue(str) => Value::String(str),
-        DebuggerValue::ObjectValue {
-            uuid,
-            class,
-            preview,
-            ..
-        } => {
-            let object_name = ObjectActor::register(registry, Some(uuid), class, preview);
-            let object_msg = registry.encode::<ObjectActor, _>(&object_name);
-            let value = serde_json::to_value(object_msg).unwrap_or_default();
-            Value::Object(value.as_object().cloned().unwrap_or_default())
-        },
-    }
-}
-
 #[derive(MallocSizeOf)]
 pub(crate) struct ObjectActor {
     name: String,
@@ -147,11 +101,45 @@ impl Actor for ObjectActor {
     ) -> Result<(), ActorError> {
         match msg_type {
             "enumProperties" => {
-                let properties = self
-                    .preview
-                    .as_ref()
-                    .and_then(|preview| preview.own_properties.clone())
-                    .unwrap_or_default();
+                let properties = self.preview.as_ref().map_or_else(Vec::new, |preview| {
+                    if preview.kind == "ArrayLike" {
+                        // For arrays, convert items to indexed properties
+                        // <https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/getOwnPropertyDescriptor#description>
+                        let mut props: Vec<PropertyDescriptor> = preview
+                            .items
+                            .as_ref()
+                            .map(|items| {
+                                items
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(index, value)| PropertyDescriptor {
+                                        name: index.to_string(),
+                                        value: value.clone(),
+                                        configurable: true,
+                                        enumerable: true,
+                                        writable: true,
+                                        is_accessor: false,
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        // Add length property
+                        if let Some(length) = preview.array_length {
+                            // <https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/length#value>
+                            props.push(PropertyDescriptor {
+                                name: "length".to_string(),
+                                value: DebuggerValue::NumberValue(length as f64),
+                                configurable: false,
+                                enumerable: false,
+                                writable: true,
+                                is_accessor: false,
+                            });
+                        }
+                        props
+                    } else {
+                        preview.own_properties.clone().unwrap_or_default()
+                    }
+                });
                 let property_iterator_name = PropertyIteratorActor::register(registry, properties);
                 let property_iterator_actor =
                     registry.find::<PropertyIteratorActor>(&property_iterator_name);
@@ -253,9 +241,22 @@ impl ActorEncode<Value> for ObjectActor {
         };
         let mut preview_map = Map::new();
 
+        preview_map.insert("kind".to_owned(), Value::String(preview.kind.clone()));
+
         if preview.kind == "ArrayLike" {
             if let Some(length) = preview.array_length {
                 preview_map.insert("length".to_owned(), Value::Number(length.into()));
+                m.insert(
+                    "ownPropertyLength".to_owned(),
+                    Value::Number((length + 1).into()),
+                );
+            }
+            if let Some(ref items) = preview.items {
+                let items_json: Vec<Value> = items
+                    .iter()
+                    .map(|item| debugger_value_to_json(registry, item.clone()))
+                    .collect();
+                preview_map.insert("items".to_owned(), Value::Array(items_json));
             }
         } else {
             if let Some(ref props) = preview.own_properties {
@@ -278,7 +279,6 @@ impl ActorEncode<Value> for ObjectActor {
                 m.insert("ownPropertyLength".to_owned(), Value::Number(length.into()));
             }
         }
-        preview_map.insert("kind".to_owned(), Value::String(preview.kind));
 
         // Function-specific metadata
         if let Some(function) = preview.function {

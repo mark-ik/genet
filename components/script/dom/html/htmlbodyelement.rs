@@ -17,7 +17,7 @@ use crate::dom::bindings::inheritance::Castable;
 use crate::dom::bindings::root::{DomRoot, LayoutDom};
 use crate::dom::bindings::str::DOMString;
 use crate::dom::document::Document;
-use crate::dom::element::{AttributeMutation, Element, LayoutElementHelpers};
+use crate::dom::element::{AttributeMutation, Element};
 use crate::dom::eventtarget::EventTarget;
 use crate::dom::html::htmlelement::HTMLElement;
 use crate::dom::node::{BindContext, Node, NodeTraits};
@@ -84,20 +84,15 @@ impl HTMLBodyElementMethods<crate::DomTypeHolder> for HTMLBodyElement {
     window_event_handlers!(ForwardToWindow);
 }
 
-pub(crate) trait HTMLBodyElementLayoutHelpers {
-    fn get_background_color(self) -> Option<AbsoluteColor>;
-    fn get_color(self) -> Option<AbsoluteColor>;
-}
-
-impl HTMLBodyElementLayoutHelpers for LayoutDom<'_, HTMLBodyElement> {
-    fn get_background_color(self) -> Option<AbsoluteColor> {
+impl LayoutDom<'_, HTMLBodyElement> {
+    pub(crate) fn get_background_color(self) -> Option<AbsoluteColor> {
         self.upcast::<Element>()
             .get_attr_for_layout(&ns!(), &local_name!("bgcolor"))
             .and_then(AttrValue::as_color)
             .cloned()
     }
 
-    fn get_color(self) -> Option<AbsoluteColor> {
+    pub(crate) fn get_color(self) -> Option<AbsoluteColor> {
         self.upcast::<Element>()
             .get_attr_for_layout(&ns!(), &local_name!("text"))
             .and_then(AttrValue::as_color)
@@ -159,7 +154,7 @@ impl VirtualMethods for HTMLBodyElement {
     ) {
         let do_super_mutate = match (attr.local_name(), mutation) {
             (name, AttributeMutation::Set(..)) if name.starts_with("on") => {
-                let window = self.owner_window();
+                let document = self.owner_document();
                 // https://html.spec.whatwg.org/multipage/
                 // #event-handlers-on-elements,-document-objects,-and-window-objects:event-handlers-6
                 match name {
@@ -186,15 +181,22 @@ impl VirtualMethods for HTMLBodyElement {
                     &local_name!("onstorage") |
                     &local_name!("onunhandledrejection") |
                     &local_name!("onunload") => {
-                        let source = &**attr.value();
-                        let evtarget = window.upcast::<EventTarget>(); // forwarded event
-                        let source_line = 1; // TODO(#9604) obtain current JS execution line
-                        evtarget.set_event_handler_uncompiled(
-                            window.get_url(),
-                            source_line,
-                            &name[2..],
-                            source,
-                        );
+                        if document.has_browsing_context() {
+                            // https://html.spec.whatwg.org/multipage/webappapis.html
+                            // #event-handler-attributes%3Aevent-handler-content-attributes-3
+                            // This matches the `has_browsing_context()` check done by the
+                            // `window_event_handlers!(ForwardToWindow)` macro for WebIDL attributes.
+                            let window = document.window();
+                            let source = &**attr.value();
+                            let evtarget = window.upcast::<EventTarget>(); // forwarded event
+                            let source_line = 1; // TODO(#9604) obtain current JS execution line
+                            evtarget.set_event_handler_uncompiled(
+                                window.get_url(),
+                                source_line,
+                                &name[2..],
+                                source,
+                            );
+                        }
                         false
                     },
                     _ => true, // HTMLElement::attribute_mutated will take care of this.
