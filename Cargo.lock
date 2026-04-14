@@ -8710,6 +8710,7 @@ dependencies = [
  "tracing",
  "webrender_api",
  "wgpu 29.0.1",
+ "wgpu-native-texture-interop",
 ]
 
 [[package]]

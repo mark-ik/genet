@@ -26,6 +26,8 @@ use surfman::{
     SurfaceType,
 };
 use webrender_api::units::{DeviceIntRect, DevicePixel};
+#[cfg(feature = "wgpu_backend")]
+use wgpu_native_texture_interop::{HostWgpuContext, InteropBackend};
 
 /// GL-specific handles extracted from a [`RenderingContext`].
 pub struct GlBinding {
@@ -942,6 +944,60 @@ impl OffscreenRenderingContext {
             );
             gl.bind_framebuffer(gl::FRAMEBUFFER, target_framebuffer_id);
         }
+    }
+
+    #[cfg(feature = "wgpu_backend")]
+    pub fn import_to_shared_wgpu_texture(
+        &self,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+    ) -> Option<wgpu::Texture> {
+        let host = HostWgpuContext::new(device, queue);
+        let gl = self.parent_context.glow_gl_api();
+        let size = self.size.get();
+        let source_fbo = self.framebuffer.borrow().framebuffer_id;
+        let surfman_context = &self.parent_context.surfman_context;
+        let surfman_device = surfman_context.device.borrow();
+        let surfman_gl_context = surfman_context.context.borrow();
+        let proc_loader = |name: &str| surfman_device.get_proc_address(&surfman_gl_context, name);
+
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        if host.backend == InteropBackend::Vulkan {
+            return wgpu_native_texture_interop::raw_gl::linux::import_gl_framebuffer_vulkan(
+                gl.as_ref(),
+                &proc_loader,
+                source_fbo,
+                size,
+                &host,
+            )
+            .ok();
+        }
+
+        #[cfg(target_os = "windows")]
+        if host.backend == InteropBackend::Vulkan {
+            return wgpu_native_texture_interop::raw_gl::windows::import_gl_framebuffer_vulkan_win32(
+                gl.as_ref(),
+                &proc_loader,
+                source_fbo,
+                size,
+                &host,
+            )
+            .ok();
+        }
+
+        #[cfg(target_os = "windows")]
+        if host.backend == InteropBackend::Dx12 {
+            return wgpu_native_texture_interop::raw_gl::dx12::import_gl_framebuffer_dx12(
+                gl.as_ref(),
+                &proc_loader,
+                source_fbo,
+                size,
+                &host,
+            )
+            .ok();
+        }
+
+        None
     }
 }
 
