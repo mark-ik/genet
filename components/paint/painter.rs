@@ -132,7 +132,6 @@ pub(crate) struct Painter {
     /// A [`WebContentAnimator`] used to manage web content-derived animations. Currently this only
     /// manages blinking caret animations.
     web_content_animator: WebContentAnimator,
-
 }
 
 impl Drop for Painter {
@@ -156,12 +155,16 @@ impl Painter {
     pub(crate) fn new(rendering_context: Rc<dyn RenderingContext>, paint: &Paint) -> Self {
         let is_wgpu = {
             #[cfg(feature = "wgpu_backend")]
-            { matches!(
-                rendering_context.backend_binding(),
-                paint_api::rendering_context::RenderingBackendBinding::Wgpu(..)
-            ) }
+            {
+                matches!(
+                    rendering_context.backend_binding(),
+                    paint_api::rendering_context::RenderingBackendBinding::Wgpu(..)
+                )
+            }
             #[cfg(not(feature = "wgpu_backend"))]
-            { false }
+            {
+                false
+            }
         };
 
         let webrender_gl = if is_wgpu {
@@ -311,7 +314,9 @@ impl Painter {
             //  3. Wgpu — WebRender creates its own device, optionally from a window surface
             let backend = if let Some(factory) = rendering_context.wgpu_hal_device_factory() {
                 info!("Using wgpu backend with hal device factory (WgpuHal)");
-                webrender::RendererBackend::WgpuHal { device_factory: factory }
+                webrender::RendererBackend::WgpuHal {
+                    device_factory: factory,
+                }
             } else if let (Some(device), Some(queue)) = (
                 rendering_context.wgpu_device(),
                 rendering_context.wgpu_queue(),
@@ -337,12 +342,18 @@ impl Painter {
 
         let (mut webrender_renderer, webrender_api_sender) = if is_wgpu {
             #[cfg(feature = "wgpu_backend")]
-            { create_wgpu_renderer(notifier, webrender_options) }
+            {
+                create_wgpu_renderer(notifier, webrender_options)
+            }
             #[cfg(not(feature = "wgpu_backend"))]
-            { unreachable!("wgpu backend not compiled in") }
+            {
+                unreachable!("wgpu backend not compiled in")
+            }
         } else {
             webrender::create_webrender_instance(
-                webrender_gl.clone().expect("GL backend requires gleam_gl_api()"),
+                webrender_gl
+                    .clone()
+                    .expect("GL backend requires gleam_gl_api()"),
                 notifier,
                 webrender_options,
                 None,
@@ -372,7 +383,10 @@ impl Painter {
                         info!("wgpu WebGL external image handler installed");
                     },
                     Err(e) => {
-                        log::error!("Failed to create wgpu WebGL external image handler: {:?}", e);
+                        log::error!(
+                            "Failed to create wgpu WebGL external image handler: {:?}",
+                            e
+                        );
                     },
                 }
             }
@@ -824,8 +838,8 @@ impl Painter {
                 webview_renderer.id.into(),
             );
 
-            let scaled_webview_rect = webview_renderer.rect /
-                webview_renderer.device_pixels_per_page_pixel_not_including_pinch_zoom();
+            let scaled_webview_rect = webview_renderer.rect
+                / webview_renderer.device_pixels_per_page_pixel_not_including_pinch_zoom();
             builder.push_iframe(
                 LayoutRect::from_untyped(&scaled_webview_rect.to_untyped()),
                 LayoutRect::from_untyped(&scaled_webview_rect.to_untyped()),
@@ -923,9 +937,9 @@ impl Painter {
         let mut flags = renderer.get_debug_flags();
         let flag = match option {
             WebRenderDebugOption::Profiler => {
-                webrender::DebugFlags::PROFILER_DBG |
-                    webrender::DebugFlags::GPU_TIME_QUERIES |
-                    webrender::DebugFlags::GPU_SAMPLE_QUERIES
+                webrender::DebugFlags::PROFILER_DBG
+                    | webrender::DebugFlags::GPU_TIME_QUERIES
+                    | webrender::DebugFlags::GPU_SAMPLE_QUERIES
             },
             WebRenderDebugOption::TextureCacheDebug => webrender::DebugFlags::TEXTURE_CACHE_DBG,
             WebRenderDebugOption::RenderTargetDebug => webrender::DebugFlags::RENDER_TARGET_DBG,
@@ -1155,17 +1169,17 @@ impl Painter {
 
         let epoch = display_list_info.epoch.into();
         let first_reflow = display_list_info.first_reflow;
-        if details.first_paint_metric.get() == PaintMetricState::Waiting &&
-            display_list_info.is_paintable
+        if details.first_paint_metric.get() == PaintMetricState::Waiting
+            && display_list_info.is_paintable
         {
             details
                 .first_paint_metric
                 .set(PaintMetricState::Seen(epoch, first_reflow));
         }
 
-        if details.first_contentful_paint_metric.get() == PaintMetricState::Waiting &&
-            display_list_info.is_paintable &&
-            display_list_info.is_contentful
+        if details.first_contentful_paint_metric.get() == PaintMetricState::Waiting
+            && display_list_info.is_paintable
+            && display_list_info.is_contentful
         {
             details
                 .first_contentful_paint_metric

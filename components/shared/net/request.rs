@@ -949,11 +949,11 @@ impl Request {
     pub fn is_navigation_request(&self) -> bool {
         matches!(
             self.destination,
-            Destination::Document |
-                Destination::Embed |
-                Destination::Frame |
-                Destination::IFrame |
-                Destination::Object
+            Destination::Document
+                | Destination::Embed
+                | Destination::Frame
+                | Destination::IFrame
+                | Destination::Object
         )
     }
 
@@ -961,16 +961,16 @@ impl Request {
     pub fn is_subresource_request(&self) -> bool {
         matches!(
             self.destination,
-            Destination::Audio |
-                Destination::Font |
-                Destination::Image |
-                Destination::Manifest |
-                Destination::Script |
-                Destination::Style |
-                Destination::Track |
-                Destination::Video |
-                Destination::Xslt |
-                Destination::None
+            Destination::Audio
+                | Destination::Font
+                | Destination::Image
+                | Destination::Manifest
+                | Destination::Script
+                | Destination::Style
+                | Destination::Track
+                | Destination::Video
+                | Destination::Xslt
+                | Destination::None
         )
     }
 
@@ -1069,8 +1069,8 @@ impl Request {
 
             // Step 4.2. If url’s origin is not same site with lastURL’s origin and
             // request’s origin is not same site with lastURL’s origin, then return "cross-site".
-            if !is_same_site(&url.origin(), &last_url.origin()) &&
-                !is_same_site(request_origin, &last_url.origin())
+            if !is_same_site(&url.origin(), &last_url.origin())
+                && !is_same_site(request_origin, &last_url.origin())
             {
                 return RedirectTaint::CrossSite;
             }
@@ -1166,9 +1166,9 @@ pub fn is_cors_safelisted_request_content_type(value: &[u8]) -> bool {
     match value_mime_result {
         Err(_) => false, // step 3
         Ok(value_mime) => match (value_mime.type_(), value_mime.subtype()) {
-            (mime::APPLICATION, mime::WWW_FORM_URLENCODED) |
-            (mime::MULTIPART, mime::FORM_DATA) |
-            (mime::TEXT, mime::PLAIN) => true,
+            (mime::APPLICATION, mime::WWW_FORM_URLENCODED)
+            | (mime::MULTIPART, mime::FORM_DATA)
+            | (mime::TEXT, mime::PLAIN) => true,
             _ => false, // step 4
         },
     }

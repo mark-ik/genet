@@ -220,8 +220,8 @@ impl HTMLSlotElement {
             for child in self.upcast::<Node>().children() {
                 let is_slottable = matches!(
                     child.type_id(),
-                    NodeTypeId::Element(_) |
-                        NodeTypeId::CharacterData(CharacterDataTypeId::Text(_))
+                    NodeTypeId::Element(_)
+                        | NodeTypeId::CharacterData(CharacterDataTypeId::Text(_))
                 );
                 if is_slottable {
                     slottables.push(Slottable(child.as_traced()));
@@ -297,8 +297,8 @@ impl HTMLSlotElement {
             for child in host.upcast::<Node>().children() {
                 let is_slottable = matches!(
                     child.type_id(),
-                    NodeTypeId::Element(_) |
-                        NodeTypeId::CharacterData(CharacterDataTypeId::Text(_))
+                    NodeTypeId::Element(_)
+                        | NodeTypeId::CharacterData(CharacterDataTypeId::Text(_))
                 );
                 if is_slottable {
                     rooted!(in(*cx) let slottable = Slottable(child.as_traced()));

@@ -295,14 +295,14 @@ impl LocationStepExpression {
         // Enforce tree order between nodes in the list
         if matches!(
             self.axis,
-            Axis::Child |
-                Axis::Descendant |
-                Axis::Parent |
-                Axis::Following |
-                Axis::FollowingSibling |
-                Axis::Attribute |
-                Axis::Self_ |
-                Axis::DescendantOrSelf
+            Axis::Child
+                | Axis::Descendant
+                | Axis::Parent
+                | Axis::Following
+                | Axis::FollowingSibling
+                | Axis::Attribute
+                | Axis::Self_
+                | Axis::DescendantOrSelf
         ) {
             // The elements on these axis values are already in tree order
             filtered_nodes.assume_sorted();

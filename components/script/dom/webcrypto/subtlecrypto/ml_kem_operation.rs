@@ -302,10 +302,10 @@ pub(crate) fn generate_key(
     if usages.iter().any(|usage| {
         !matches!(
             usage,
-            KeyUsage::EncapsulateKey |
-                KeyUsage::EncapsulateBits |
-                KeyUsage::DecapsulateKey |
-                KeyUsage::DecapsulateBits
+            KeyUsage::EncapsulateKey
+                | KeyUsage::EncapsulateBits
+                | KeyUsage::DecapsulateKey
+                | KeyUsage::DecapsulateBits
         )
     }) {
         return Err(Error::Syntax(Some(
@@ -712,8 +712,8 @@ pub(crate) fn import_key(
 
             // Step 2.2. If the priv field of jwk is present and if usages contains an entry which
             // is not "decapsulateKey" or "decapsulateBits" then throw a SyntaxError.
-            if jwk.priv_.is_some() &&
-                usages.iter().any(|usage| {
+            if jwk.priv_.is_some()
+                && usages.iter().any(|usage| {
                     !matches!(usage, KeyUsage::DecapsulateKey | KeyUsage::DecapsulateBits)
                 })
             {
@@ -726,8 +726,8 @@ pub(crate) fn import_key(
 
             // Step 2.3. If the priv field of jwk is not present and if usages contains an entry
             // which is not "encapsulateKey" or "encapsulateBits" then throw a SyntaxError.
-            if jwk.priv_.is_none() &&
-                usages.iter().any(|usage| {
+            if jwk.priv_.is_none()
+                && usages.iter().any(|usage| {
                     !matches!(usage, KeyUsage::EncapsulateKey | KeyUsage::EncapsulateBits)
                 })
             {

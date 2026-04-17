@@ -154,8 +154,8 @@ impl WindowGLContext {
             return;
         }
 
-        if matches!(window_gl_context.display, NativeDisplay::Unknown) ||
-            matches!(window_gl_context.context, GlContext::Unknown)
+        if matches!(window_gl_context.display, NativeDisplay::Unknown)
+            || matches!(window_gl_context.context, GlContext::Unknown)
         {
             return;
         }

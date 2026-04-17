@@ -10,6 +10,7 @@
 
 use std::rc::Rc;
 
+use dpi::PhysicalSize;
 use log::debug;
 use rustc_hash::FxHashMap;
 use servo_canvas_traits::webgl::{WebGLContextId, WebGLThreads};
@@ -18,7 +19,6 @@ use surfman::{Device, Surface};
 use webgl::webgl_thread::WebGLContextBusyMap;
 use webrender::WgpuExternalImageHandler;
 use wgpu_native_texture_interop::surfman_gl::{SurfmanFrameContext, SurfmanFrameProducer};
-use dpi::PhysicalSize;
 use wgpu_native_texture_interop::{
     FrameProducer, HostWgpuContext, ImportOptions, TextureImporter, WgpuTextureImporter,
 };
@@ -127,7 +127,10 @@ impl WgpuExternalImageHandler for WgpuWebGLExternalImages {
             },
         };
 
-        let imported = match self.importer.import_frame(&frame, &ImportOptions::default()) {
+        let imported = match self
+            .importer
+            .import_frame(&frame, &ImportOptions::default())
+        {
             Ok(tex) => tex,
             Err(e) => {
                 log::error!("Failed to import WebGL texture into wgpu: {:?}", e);

@@ -128,16 +128,16 @@ impl GPUQueueMethods<crate::DomTypeHolder> for GPUQueue {
         };
 
         // Step 4
-        let valid = data_offset + content_size <= data_size as u64 &&
-            content_size * sizeof_element as u64 % wgpu_types::COPY_BUFFER_ALIGNMENT == 0;
+        let valid = data_offset + content_size <= data_size as u64
+            && content_size * sizeof_element as u64 % wgpu_types::COPY_BUFFER_ALIGNMENT == 0;
         if !valid {
             return Err(Error::Operation(None));
         }
 
         // Step 5&6
         let contents = GenericSharedMemory::from_bytes(
-            &data[(data_offset as usize) * sizeof_element..
-                ((data_offset + content_size) as usize) * sizeof_element],
+            &data[(data_offset as usize) * sizeof_element
+                ..((data_offset + content_size) as usize) * sizeof_element],
         );
         if let Err(e) = self.channel.0.send(WebGPURequest::WriteBuffer {
             device_id: self.device.borrow().as_ref().unwrap().id().0,

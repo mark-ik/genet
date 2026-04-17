@@ -890,8 +890,8 @@ impl PlatformWindow for HeadedWindow {
         let new_outer_size =
             new_outer_size.clamp(MIN_WINDOW_INNER_SIZE + decoration_size, screen_size * 2);
 
-        if outer_size.width == new_outer_size.width as u32 &&
-            outer_size.height == new_outer_size.height as u32
+        if outer_size.width == new_outer_size.width as u32
+            && outer_size.height == new_outer_size.height as u32
         {
             return Some(new_outer_size);
         }

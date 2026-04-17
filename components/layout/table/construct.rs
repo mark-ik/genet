@@ -43,8 +43,8 @@ impl ResolvedSlotAndLocation<'_> {
     fn covers_cell_at(&self, coords: TableSlotCoordinates) -> bool {
         let covered_in_x =
             coords.x >= self.coords.x && coords.x < self.coords.x + self.cell.colspan;
-        let covered_in_y = coords.y >= self.coords.y &&
-            (self.cell.rowspan == 0 || coords.y < self.coords.y + self.cell.rowspan);
+        let covered_in_y = coords.y >= self.coords.y
+            && (self.cell.rowspan == 0 || coords.y < self.coords.y + self.cell.rowspan);
         covered_in_x && covered_in_y
     }
 }
@@ -780,9 +780,9 @@ impl<'dom> TraversalHandler<'dom> for TableBuilderTraversal<'_, 'dom> {
     ) {
         match display {
             DisplayGeneratingBox::LayoutInternal(internal) => match internal {
-                DisplayLayoutInternal::TableRowGroup |
-                DisplayLayoutInternal::TableFooterGroup |
-                DisplayLayoutInternal::TableHeaderGroup => {
+                DisplayLayoutInternal::TableRowGroup
+                | DisplayLayoutInternal::TableFooterGroup
+                | DisplayLayoutInternal::TableHeaderGroup => {
                     self.finish_anonymous_row_if_needed();
                     self.builder.incoming_rowspans.clear();
 

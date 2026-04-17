@@ -154,8 +154,8 @@ fn check_tree_find(tree: &FloatBandTree, block_position: Au, sorted_bands: &[Flo
     let reference_band_index = sorted_bands
         .iter()
         .position(|band| band.top > block_position)
-        .expect("Couldn't find the reference band!") -
-        1;
+        .expect("Couldn't find the reference band!")
+        - 1;
     let reference_band = &sorted_bands[reference_band_index];
     assert_eq!(found_band.top, reference_band.top);
     assert_eq!(found_band.inline_start, reference_band.inline_start);
@@ -508,8 +508,8 @@ fn check_floats_rule_1(placement: &FloatPlacement) {
             ),
             FloatSide::InlineEnd => {
                 assert!(
-                    placed_float.rect().max_inline_position() <=
-                        placed_float.containing_block_info.inline_end
+                    placed_float.rect().max_inline_position()
+                        <= placed_float.containing_block_info.inline_end
                 )
             },
         }
@@ -527,18 +527,18 @@ fn check_floats_rule_2(placement: &FloatPlacement) {
             match (this_float.info.side, prev_float.info.side) {
                 (FloatSide::InlineStart, FloatSide::InlineStart) => {
                     assert!(
-                        this_float.origin.inline >= prev_float.rect().max_inline_position() ||
-                            this_float.origin.block >= prev_float.rect().max_block_position()
+                        this_float.origin.inline >= prev_float.rect().max_inline_position()
+                            || this_float.origin.block >= prev_float.rect().max_block_position()
                     );
                 },
                 (FloatSide::InlineEnd, FloatSide::InlineEnd) => {
                     assert!(
-                        this_float.rect().max_inline_position() <= prev_float.origin.inline ||
-                            this_float.origin.block >= prev_float.rect().max_block_position()
+                        this_float.rect().max_inline_position() <= prev_float.origin.inline
+                            || this_float.origin.block >= prev_float.rect().max_block_position()
                     );
                 },
-                (FloatSide::InlineStart, FloatSide::InlineEnd) |
-                (FloatSide::InlineEnd, FloatSide::InlineStart) => {},
+                (FloatSide::InlineStart, FloatSide::InlineEnd)
+                | (FloatSide::InlineEnd, FloatSide::InlineStart) => {},
             }
         }
     }
@@ -558,11 +558,11 @@ fn check_floats_rule_3(placement: &FloatPlacement) {
             //
             // Where the top of `b` should probably be 32px per Rule 3, but unless this distinction
             // is made the top of `b` could legally be 0px.
-            if this_float.origin.block >= other_float.rect().max_block_position() ||
-                (this_float.info.size.block.is_zero() &&
-                    this_float.rect().max_block_position() < other_float.origin.block) ||
-                (this_float.info.size.block > Au::zero() &&
-                    this_float.rect().max_block_position() <= other_float.origin.block)
+            if this_float.origin.block >= other_float.rect().max_block_position()
+                || (this_float.info.size.block.is_zero()
+                    && this_float.rect().max_block_position() < other_float.origin.block)
+                || (this_float.info.size.block > Au::zero()
+                    && this_float.rect().max_block_position() <= other_float.origin.block)
             {
                 continue;
             }
@@ -574,8 +574,8 @@ fn check_floats_rule_3(placement: &FloatPlacement) {
                 (FloatSide::InlineEnd, FloatSide::InlineStart) => {
                     assert!(this_float.origin.inline >= other_float.rect().max_inline_position());
                 },
-                (FloatSide::InlineStart, FloatSide::InlineStart) |
-                (FloatSide::InlineEnd, FloatSide::InlineEnd) => {},
+                (FloatSide::InlineStart, FloatSide::InlineStart)
+                | (FloatSide::InlineEnd, FloatSide::InlineEnd) => {},
             }
         }
     }
@@ -618,8 +618,8 @@ fn check_floats_rule_7(placement: &FloatPlacement) {
         // Only consider floats that stick out.
         match placed_float.info.side {
             FloatSide::InlineStart => {
-                if placed_float.rect().max_inline_position() <=
-                    placed_float.containing_block_info.inline_end
+                if placed_float.rect().max_inline_position()
+                    <= placed_float.containing_block_info.inline_end
                 {
                     continue;
                 }
@@ -634,9 +634,9 @@ fn check_floats_rule_7(placement: &FloatPlacement) {
         // Make sure there are no previous floats to the left or right.
         for prev_float in &placement.placed_floats[0..placed_float_index] {
             assert!(
-                prev_float.info.side != placed_float.info.side ||
-                    prev_float.rect().max_block_position() <= placed_float.origin.block ||
-                    prev_float.origin.block >= placed_float.rect().max_block_position()
+                prev_float.info.side != placed_float.info.side
+                    || prev_float.rect().max_block_position() <= placed_float.origin.block
+                    || prev_float.origin.block >= placed_float.rect().max_block_position()
             );
         }
     }
@@ -728,11 +728,11 @@ fn check_floats_rule_10(placement: &FloatPlacement) {
             //
             // Where the top of `b` should probably be 32px per Rule 3, but unless this distinction
             // is made the top of `b` could legally be 0px.
-            if this_float.origin.block >= other_float.rect().max_block_position() ||
-                (this_float.info.size.block.is_zero() &&
-                    this_float.rect().max_block_position() < other_float.origin.block) ||
-                (this_float.info.size.block > Au::zero() &&
-                    this_float.rect().max_block_position() <= other_float.origin.block)
+            if this_float.origin.block >= other_float.rect().max_block_position()
+                || (this_float.info.size.block.is_zero()
+                    && this_float.rect().max_block_position() < other_float.origin.block)
+                || (this_float.info.size.block > Au::zero()
+                    && this_float.rect().max_block_position() <= other_float.origin.block)
             {
                 continue;
             }

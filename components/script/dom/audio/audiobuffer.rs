@@ -199,11 +199,11 @@ impl AudioBufferMethods<crate::DomTypeHolder> for AudioBuffer {
         proto: Option<HandleObject>,
         options: &AudioBufferOptions,
     ) -> Fallible<DomRoot<AudioBuffer>> {
-        if options.length == 0 ||
-            options.numberOfChannels == 0 ||
-            options.numberOfChannels > MAX_CHANNEL_COUNT ||
-            *options.sampleRate < MIN_SAMPLE_RATE ||
-            *options.sampleRate > MAX_SAMPLE_RATE
+        if options.length == 0
+            || options.numberOfChannels == 0
+            || options.numberOfChannels > MAX_CHANNEL_COUNT
+            || *options.sampleRate < MIN_SAMPLE_RATE
+            || *options.sampleRate > MAX_SAMPLE_RATE
         {
             return Err(Error::NotSupported(None));
         }

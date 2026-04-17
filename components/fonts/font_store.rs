@@ -129,8 +129,9 @@ impl FontStore {
     }
 
     pub(crate) fn number_of_fonts_still_loading(&self) -> usize {
-        self.web_fonts_loading_for_script +
-            self.web_fonts_loading_for_stylesheets
+        self.web_fonts_loading_for_script
+            + self
+                .web_fonts_loading_for_stylesheets
                 .iter()
                 .map(|(_, count)| count)
                 .sum::<usize>()
@@ -263,8 +264,8 @@ impl FontTemplates {
     pub fn add_template(&mut self, new_template: FontTemplate) {
         for existing_template in &self.templates {
             let existing_template = existing_template.borrow();
-            if *existing_template.identifier() == new_template.identifier &&
-                existing_template.descriptor == new_template.descriptor
+            if *existing_template.identifier() == new_template.identifier
+                && existing_template.descriptor == new_template.descriptor
             {
                 return;
             }

@@ -72,8 +72,8 @@ impl LayoutBoxBase {
         let mut cache = self.cached_inline_content_size.borrow_mut();
         if let Some(cached_inline_content_size) = cache.as_ref() {
             let (previous_cb_block_size, result) = **cached_inline_content_size;
-            if !result.depends_on_block_constraints ||
-                previous_cb_block_size == constraint_space.block_size
+            if !result.depends_on_block_constraints
+                || previous_cb_block_size == constraint_space.block_size
             {
                 return result;
             }
@@ -128,8 +128,8 @@ impl LayoutBoxBase {
     ) -> LayoutDamage {
         self.clear_fragments_and_fragment_cache();
 
-        if !element_damage.is_empty() ||
-            damage_from_children.contains(LayoutDamage::RECOMPUTE_INLINE_CONTENT_SIZES)
+        if !element_damage.is_empty()
+            || damage_from_children.contains(LayoutDamage::RECOMPUTE_INLINE_CONTENT_SIZES)
         {
             *self.cached_inline_content_size.borrow_mut() = None;
         }
@@ -148,9 +148,10 @@ impl LayoutBoxBase {
         // and we can keep the cache.
         damage_for_parent.set(
             LayoutDamage::RECOMPUTE_INLINE_CONTENT_SIZES,
-            !element_damage.is_empty() ||
-                (!self.base_fragment_info.is_anonymous() &&
-                    self.outer_inline_content_sizes_depend_on_content
+            !element_damage.is_empty()
+                || (!self.base_fragment_info.is_anonymous()
+                    && self
+                        .outer_inline_content_sizes_depend_on_content
                         .load(Ordering::Relaxed)),
         );
 

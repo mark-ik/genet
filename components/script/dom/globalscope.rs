@@ -717,8 +717,8 @@ impl FileListener {
                 },
             },
             Err(_) => match self.state.take() {
-                Some(FileListenerState::Receiving(_, target)) |
-                Some(FileListenerState::Empty(target)) => {
+                Some(FileListenerState::Receiving(_, target))
+                | Some(FileListenerState::Empty(target)) => {
                     let error = Err(Error::Network(None));
 
                     match target {
@@ -3179,8 +3179,8 @@ impl GlobalScope {
             None => {
                 // Workers and worklets don't have a top-level creation URL
                 assert!(
-                    self.downcast::<WorkerGlobalScope>().is_some() ||
-                        self.downcast::<WorkletGlobalScope>().is_some()
+                    self.downcast::<WorkerGlobalScope>().is_some()
+                        || self.downcast::<WorkletGlobalScope>().is_some()
                 );
                 true
             },
@@ -3189,8 +3189,8 @@ impl GlobalScope {
                 // Step 2. If the result of Is url potentially trustworthy?
                 // given environment's top-level creation URL is "Potentially Trustworthy", then return true.
                 // Step 3. Return false.
-                if top_level_creation_url.scheme() == "blob" &&
-                    Some(true) == self.inherited_secure_context
+                if top_level_creation_url.scheme() == "blob"
+                    && Some(true) == self.inherited_secure_context
                 {
                     return true;
                 }

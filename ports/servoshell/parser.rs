@@ -84,8 +84,8 @@ fn try_as_file(request: &str) -> Option<ServoUrl> {
 
 fn try_as_domain(request: &str) -> Option<ServoUrl> {
     fn is_domain_like(s: &str) -> bool {
-        !s.starts_with('/') && s.contains('/') ||
-            (!s.contains(' ') && !s.starts_with('.') && s.split('.').count() > 1)
+        !s.starts_with('/') && s.contains('/')
+            || (!s.contains(' ') && !s.starts_with('.') && s.split('.').count() > 1)
     }
 
     if !request.contains(' ') && is_reg_domain(request) || is_domain_like(request) {

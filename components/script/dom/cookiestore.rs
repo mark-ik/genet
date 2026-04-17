@@ -626,8 +626,8 @@ impl CookieStore {
         let value = CookieStore::normalize(&properties.value);
 
         // 3. If name or value contain U+003B (;), any C0 control character except U+0009 TAB, or U+007F DELETE, then return failure.
-        if CookieStore::contains_control_characters(&name) ||
-            CookieStore::contains_control_characters(&value)
+        if CookieStore::contains_control_characters(&name)
+            || CookieStore::contains_control_characters(&value)
         {
             return None;
         }

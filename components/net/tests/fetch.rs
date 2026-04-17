@@ -318,8 +318,8 @@ fn test_cors_preflight_fetch() {
     let handler =
         move |request: HyperRequest<Incoming>,
               response: &mut HyperResponse<BoxBody<Bytes, hyper::Error>>| {
-            if request.method() == Method::OPTIONS &&
-                state.clone().fetch_add(1, Ordering::SeqCst) == 0
+            if request.method() == Method::OPTIONS
+                && state.clone().fetch_add(1, Ordering::SeqCst) == 0
             {
                 assert!(
                     request
@@ -390,8 +390,8 @@ fn test_cors_preflight_cache_fetch() {
     let handler =
         move |request: HyperRequest<Incoming>,
               response: &mut HyperResponse<BoxBody<Bytes, hyper::Error>>| {
-            if request.method() == Method::OPTIONS &&
-                state.clone().fetch_add(1, Ordering::SeqCst) == 0
+            if request.method() == Method::OPTIONS
+                && state.clone().fetch_add(1, Ordering::SeqCst) == 0
             {
                 assert!(
                     request
@@ -465,8 +465,8 @@ fn test_cors_preflight_fetch_network_error() {
     let handler =
         move |request: HyperRequest<Incoming>,
               response: &mut HyperResponse<BoxBody<Bytes, hyper::Error>>| {
-            if request.method() == Method::OPTIONS &&
-                state.clone().fetch_add(1, Ordering::SeqCst) == 0
+            if request.method() == Method::OPTIONS
+                && state.clone().fetch_add(1, Ordering::SeqCst) == 0
             {
                 assert!(
                     request

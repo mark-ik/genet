@@ -249,12 +249,12 @@ impl Snapshot {
             },
             (_, SnapshotAlphaMode::Opaque) => Multiply::None,
             (
-                SnapshotAlphaMode::Transparent { premultiplied } |
-                SnapshotAlphaMode::AsOpaque { premultiplied },
+                SnapshotAlphaMode::Transparent { premultiplied }
+                | SnapshotAlphaMode::AsOpaque { premultiplied },
                 SnapshotAlphaMode::Transparent {
                     premultiplied: target_premultiplied,
-                } |
-                SnapshotAlphaMode::AsOpaque {
+                }
+                | SnapshotAlphaMode::AsOpaque {
                     premultiplied: target_premultiplied,
                 },
             ) => {
@@ -268,8 +268,8 @@ impl Snapshot {
             },
         };
 
-        let clear_alpha = !matches!(self.alpha_mode, SnapshotAlphaMode::Opaque) &&
-            matches!(target_alpha_mode, SnapshotAlphaMode::Opaque);
+        let clear_alpha = !matches!(self.alpha_mode, SnapshotAlphaMode::Opaque)
+            && matches!(target_alpha_mode, SnapshotAlphaMode::Opaque);
 
         if matches!(multiply, Multiply::None) && !swap_rb && !clear_alpha {
             return;

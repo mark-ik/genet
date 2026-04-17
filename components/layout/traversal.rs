@@ -135,8 +135,8 @@ pub(crate) fn compute_damage_and_rebuild_box_tree(
     let mut maybe_parent_node = unsafe { dirty_root.dangerous_flat_tree_parent() };
     while let Some(parent_node) = maybe_parent_node {
         // If we need box tree reconstruction, try it here.
-        if needs_box_tree_rebuild &&
-            parent_node.rebuild_box_tree_from_independent_formatting_context(layout_context)
+        if needs_box_tree_rebuild
+            && parent_node.rebuild_box_tree_from_independent_formatting_context(layout_context)
         {
             needs_box_tree_rebuild = false;
         }
@@ -152,8 +152,8 @@ pub(crate) fn compute_damage_and_rebuild_box_tree(
             let new_damage_for_ancestors = Cell::new(LayoutDamage::empty());
             parent_node.with_layout_box_base_including_pseudos(|base| {
                 new_damage_for_ancestors.set(
-                    new_damage_for_ancestors.get() |
-                        base.add_damage(Default::default(), damage_for_ancestors),
+                    new_damage_for_ancestors.get()
+                        | base.add_damage(Default::default(), damage_for_ancestors),
                 );
             });
             damage_for_ancestors = new_damage_for_ancestors.get();
@@ -202,14 +202,14 @@ pub(crate) fn compute_damage_and_rebuild_box_tree_inner(
     // box damage.
     let mut damage_for_children = element_and_parent_damage;
     damage_for_children.truncate();
-    let rebuild_children = element_damage.contains(LayoutDamage::box_damage()) ||
-        (damage_from_parent.contains(LayoutDamage::box_damage()) &&
-            !node.isolates_damage_for_damage_propagation());
+    let rebuild_children = element_damage.contains(LayoutDamage::box_damage())
+        || (damage_from_parent.contains(LayoutDamage::box_damage())
+            && !node.isolates_damage_for_damage_propagation());
     if rebuild_children {
         damage_for_children.insert(LayoutDamage::box_damage());
-    } else if element_and_parent_damage.contains(RestyleDamage::RELAYOUT) &&
-        !element_damage.contains(RestyleDamage::RELAYOUT) &&
-        node.isolates_damage_for_damage_propagation()
+    } else if element_and_parent_damage.contains(RestyleDamage::RELAYOUT)
+        && !element_damage.contains(RestyleDamage::RELAYOUT)
+        && node.isolates_damage_for_damage_propagation()
     {
         // If not rebuilding the boxes for this node, but fragments need to be rebuilt
         // only because of an ancestor, fragment layout caches should still be valid when
@@ -239,8 +239,8 @@ pub(crate) fn compute_damage_and_rebuild_box_tree_inner(
     let descendant_needs_rebuild =
         damage_from_children.contains(LayoutDamage::descendant_has_box_damage());
     if element_or_ancestors_need_rebuild || descendant_needs_rebuild {
-        if damage_from_parent.contains(LayoutDamage::descendant_has_box_damage()) ||
-            !node.rebuild_box_tree_from_independent_formatting_context(layout_context)
+        if damage_from_parent.contains(LayoutDamage::descendant_has_box_damage())
+            || !node.rebuild_box_tree_from_independent_formatting_context(layout_context)
         {
             // In this case:
             //  - an ancestor needs to be completely rebuilt, or
@@ -270,8 +270,8 @@ pub(crate) fn compute_damage_and_rebuild_box_tree_inner(
             let extra_layout_damage_for_parent = Cell::new(LayoutDamage::empty());
             node.with_layout_box_base_including_pseudos(|base| {
                 extra_layout_damage_for_parent.set(
-                    extra_layout_damage_for_parent.get() |
-                        base.add_damage(element_damage.into(), damage_from_children.into()),
+                    extra_layout_damage_for_parent.get()
+                        | base.add_damage(element_damage.into(), damage_from_children.into()),
                 );
             });
             layout_damage_for_parent.insert(extra_layout_damage_for_parent.get().into());

@@ -192,10 +192,10 @@ impl From<ServoLayoutNode<'_>> for BaseFragmentInfo {
         // some WPT tests. This needs more investigation.
         if matches!(
             pseudo_element_chain.innermost(),
-            Some(PseudoElement::ServoAnonymousBox) |
-                Some(PseudoElement::ServoAnonymousTable) |
-                Some(PseudoElement::ServoAnonymousTableCell) |
-                Some(PseudoElement::ServoAnonymousTableRow)
+            Some(PseudoElement::ServoAnonymousBox)
+                | Some(PseudoElement::ServoAnonymousTable)
+                | Some(PseudoElement::ServoAnonymousTableCell)
+                | Some(PseudoElement::ServoAnonymousTableRow)
         ) {
             return Self::anonymous();
         }

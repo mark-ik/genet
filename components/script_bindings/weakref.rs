@@ -131,8 +131,8 @@ impl<T: WeakReferenceable> MallocSizeOf for WeakRef<T> {
 impl<T: WeakReferenceable> PartialEq for WeakRef<T> {
     fn eq(&self, other: &Self) -> bool {
         unsafe {
-            (*self.ptr.as_ptr()).value.get().map(ptr::NonNull::as_ptr) ==
-                (*other.ptr.as_ptr()).value.get().map(ptr::NonNull::as_ptr)
+            (*self.ptr.as_ptr()).value.get().map(ptr::NonNull::as_ptr)
+                == (*other.ptr.as_ptr()).value.get().map(ptr::NonNull::as_ptr)
         }
     }
 }

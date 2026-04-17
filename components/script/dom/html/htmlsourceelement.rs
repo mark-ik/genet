@@ -96,10 +96,10 @@ impl VirtualMethods for HTMLSourceElement {
             .attribute_mutated(cx, attr, mutation);
 
         match attr.local_name() {
-            &local_name!("srcset") |
-            &local_name!("sizes") |
-            &local_name!("media") |
-            &local_name!("type") => {
+            &local_name!("srcset")
+            | &local_name!("sizes")
+            | &local_name!("media")
+            | &local_name!("type") => {
                 // <https://html.spec.whatwg.org/multipage/#reacting-to-dom-mutations>
                 // The element's parent is a picture element and a source element that is a previous
                 // sibling has its srcset, sizes, media, type attributes set, changed, or removed.

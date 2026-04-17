@@ -234,8 +234,8 @@ impl LayerInit {
             LayerInit::WebGLLayer {
                 framebuffer_scale_factor: scale,
                 ..
-            } |
-            LayerInit::ProjectionLayer {
+            }
+            | LayerInit::ProjectionLayer {
                 scale_factor: scale,
                 ..
             } => {

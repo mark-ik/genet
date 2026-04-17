@@ -172,13 +172,13 @@ impl<N: Node> PartialEq<Value<N>> for Value<N> {
                     right_nodes.iter().map(|node| node.text_content()).collect();
                 !left_strings.is_disjoint(&right_strings)
             },
-            (&Value::NodeSet(ref nodes), &Value::Number(val)) |
-            (&Value::Number(val), &Value::NodeSet(ref nodes)) => {
+            (&Value::NodeSet(ref nodes), &Value::Number(val))
+            | (&Value::Number(val), &Value::NodeSet(ref nodes)) => {
                 let numbers = num_vals(nodes);
                 numbers.contains(&val)
             },
-            (&Value::NodeSet(ref nodes), &Value::String(ref string)) |
-            (&Value::String(ref string), &Value::NodeSet(ref nodes)) => nodes
+            (&Value::NodeSet(ref nodes), &Value::String(ref string))
+            | (&Value::String(ref string), &Value::NodeSet(ref nodes)) => nodes
                 .iter()
                 .map(|node| node.text_content())
                 .any(|text_content| &text_content == string),

@@ -59,8 +59,8 @@ impl AudioSink for OfflineAudioSink {
     }
 
     fn has_enough_data(&self) -> bool {
-        self.has_enough_data.get() ||
-            (self.rendered_blocks.get() * FRAMES_PER_BLOCK_USIZE >= self.length)
+        self.has_enough_data.get()
+            || (self.rendered_blocks.get() * FRAMES_PER_BLOCK_USIZE >= self.length)
     }
 
     fn push_data(&self, mut chunk: Chunk) -> Result<(), AudioSinkError> {

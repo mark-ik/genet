@@ -150,8 +150,8 @@ pub(crate) fn handle_get_known_window(
                 .map_or(Err(ErrorStatus::NoSuchWindow), |window| {
                     let window_proxy = window.window_proxy();
                     // Step 3-4: Window must be top level browsing context.
-                    if window_proxy.browsing_context_id() != window_proxy.webview_id() ||
-                        window_proxy.webview_id().to_string() != webview_id
+                    if window_proxy.browsing_context_id() != window_proxy.webview_id()
+                        || window_proxy.webview_id().to_string() != webview_id
                     {
                         Err(ErrorStatus::NoSuchWindow)
                     } else {
@@ -1789,24 +1789,24 @@ pub(crate) fn handle_get_url(
 /// <https://w3c.github.io/webdriver/#dfn-mutable-form-control-element>
 fn element_is_mutable_form_control(element: &Element) -> bool {
     if let Some(input_element) = element.downcast::<HTMLInputElement>() {
-        input_element.is_mutable() &&
-            matches!(
+        input_element.is_mutable()
+            && matches!(
                 *input_element.input_type(),
-                InputType::Text(_) |
-                    InputType::Search(_) |
-                    InputType::Url(_) |
-                    InputType::Tel(_) |
-                    InputType::Email(_) |
-                    InputType::Password(_) |
-                    InputType::Date(_) |
-                    InputType::Month(_) |
-                    InputType::Week(_) |
-                    InputType::Time(_) |
-                    InputType::DatetimeLocal(_) |
-                    InputType::Number(_) |
-                    InputType::Range(_) |
-                    InputType::Color(_) |
-                    InputType::File(_)
+                InputType::Text(_)
+                    | InputType::Search(_)
+                    | InputType::Url(_)
+                    | InputType::Tel(_)
+                    | InputType::Email(_)
+                    | InputType::Password(_)
+                    | InputType::Date(_)
+                    | InputType::Month(_)
+                    | InputType::Week(_)
+                    | InputType::Time(_)
+                    | InputType::DatetimeLocal(_)
+                    | InputType::Number(_)
+                    | InputType::Range(_)
+                    | InputType::Color(_)
+                    | InputType::File(_)
             )
     } else if let Some(textarea_element) = element.downcast::<HTMLTextAreaElement>() {
         textarea_element.is_mutable()

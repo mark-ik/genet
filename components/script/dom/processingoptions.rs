@@ -380,9 +380,9 @@ pub(crate) fn process_link_headers(
         // Not applicable, that's in `link_object.params`
         // Step 2.3. Let expectedPhase be "media" if either "srcset", "imagesrcset",
         // or "media" exist in attribs; otherwise "pre-media".
-        let expected_phase = if link_object.has_key_in_link_header("srcset") ||
-            link_object.has_key_in_link_header("imagesrcset") ||
-            link_object.has_key_in_link_header("media")
+        let expected_phase = if link_object.has_key_in_link_header("srcset")
+            || link_object.has_key_in_link_header("imagesrcset")
+            || link_object.has_key_in_link_header("media")
         {
             LinkProcessingPhase::Media
         } else {

@@ -18,9 +18,7 @@ use image::RgbaImage;
 use log::warn;
 use webrender_api::units::{DeviceIntRect, DevicePixel};
 
-use crate::rendering_context::{
-    RenderingBackendBinding, RenderingContext, WgpuBinding,
-};
+use crate::rendering_context::{RenderingBackendBinding, RenderingContext, WgpuBinding};
 
 /// A pure-wgpu rendering context that owns the GPU device and presentation surface.
 ///
@@ -46,18 +44,26 @@ impl WgpuRenderingContext {
     ///
     /// This creates a wgpu Instance, requests an Adapter and Device, and
     /// configures a Surface for presentation.
-    pub fn new(window: Arc<impl raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle + Send + Sync + 'static>, size: PhysicalSize<u32>) -> Self {
+    pub fn new(
+        window: Arc<
+            impl raw_window_handle::HasWindowHandle
+            + raw_window_handle::HasDisplayHandle
+            + Send
+            + Sync
+            + 'static,
+        >,
+        size: PhysicalSize<u32>,
+    ) -> Self {
         let instance = wgpu::Instance::default();
         let surface = instance
             .create_surface(window)
             .expect("Failed to create wgpu surface");
 
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                compatible_surface: Some(&surface),
-                ..Default::default()
-            }))
-            .expect("No suitable GPU adapter found");
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            compatible_surface: Some(&surface),
+            ..Default::default()
+        }))
+        .expect("No suitable GPU adapter found");
 
         // Request features that WebRender can take advantage of, intersected
         // with what the adapter actually supports.
@@ -66,18 +72,17 @@ impl WgpuRenderingContext {
             | wgpu::Features::TIMESTAMP_QUERY;
         let required_features = adapter.features() & wanted_features;
 
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("servo_wgpu_rendering_context"),
-                required_features,
-                required_limits: wgpu::Limits {
-                    // WebRender's composite shader uses up to @location(17).
-                    max_inter_stage_shader_variables: 28,
-                    ..Default::default()
-                },
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("servo_wgpu_rendering_context"),
+            required_features,
+            required_limits: wgpu::Limits {
+                // WebRender's composite shader uses up to @location(17).
+                max_inter_stage_shader_variables: 28,
                 ..Default::default()
-            }))
-            .expect("Failed to create wgpu device");
+            },
+            ..Default::default()
+        }))
+        .expect("Failed to create wgpu device");
 
         // Configure surface — prefer non-sRGB to avoid double-encoding since
         // WebRender's output is already display-encoded (sRGB).
@@ -206,7 +211,9 @@ impl RenderingContext for WgpuRenderingContext {
                     wgpu::CurrentSurfaceTexture::Success(f)
                     | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
                     other => {
-                        warn!("WgpuRenderingContext: failed to acquire frame after reconfigure: {other:?}");
+                        warn!(
+                            "WgpuRenderingContext: failed to acquire frame after reconfigure: {other:?}"
+                        );
                         return None;
                     },
                 }

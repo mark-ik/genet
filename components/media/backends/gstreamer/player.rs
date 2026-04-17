@@ -323,14 +323,14 @@ impl PlayerInner {
                     start.unwrap()
                 } else {
                     gstreamer::format::Percent::from_percent(0)
-                } / gstreamer::format::Percent::MAX) as f64 *
-                    duration.as_secs_f64();
+                } / gstreamer::format::Percent::MAX) as f64
+                    * duration.as_secs_f64();
                 let end = (if let gstreamer::GenericFormattedValue::Percent(end) = end {
                     end.unwrap()
                 } else {
                     gstreamer::format::Percent::from_percent(0)
-                } / gstreamer::format::Percent::MAX) as f64 *
-                    duration.as_secs_f64();
+                } / gstreamer::format::Percent::MAX) as f64
+                    * duration.as_secs_f64();
                 buffered_ranges.push(Range { start, end });
             }
         }

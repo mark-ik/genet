@@ -372,10 +372,10 @@ impl OperatorToken {
             Self::Or => 0,
             Self::And => 1,
             Self::Equal | Self::NotEqual => 2,
-            Self::LessThan |
-            Self::LessThanOrEqual |
-            Self::GreaterThan |
-            Self::GreaterThanOrEqual => 3,
+            Self::LessThan
+            | Self::LessThanOrEqual
+            | Self::GreaterThan
+            | Self::GreaterThanOrEqual => 3,
             Self::Add | Self::Subtract => 4,
             Self::Multiply | Self::Divide | Self::Modulo => 5,
         }
@@ -386,15 +386,15 @@ impl<'a> Token<'a> {
     pub(crate) fn is_start_of_location_step(&self) -> bool {
         matches!(
             self,
-            Self::AxisIdentifier(_) |
-                Self::AtSign |
-                Self::ParentNode |
-                Self::SelfNode |
-                Self::CName(_) |
-                Self::CommentTest |
-                Self::NodeTest |
-                Self::ProcessingInstructionTest |
-                Self::TextTest
+            Self::AxisIdentifier(_)
+                | Self::AtSign
+                | Self::ParentNode
+                | Self::SelfNode
+                | Self::CName(_)
+                | Self::CommentTest
+                | Self::NodeTest
+                | Self::ProcessingInstructionTest
+                | Self::TextTest
         )
     }
 
@@ -402,13 +402,13 @@ impl<'a> Token<'a> {
     fn followed_by_operator(&self) -> bool {
         matches!(
             self,
-            Self::Literal(_) |
-                Self::CName(_) |
-                Self::VariableReference(_) |
-                Self::ParentNode |
-                Self::SelfNode |
-                Self::ClosingBracket |
-                Self::ClosingParenthesis
+            Self::Literal(_)
+                | Self::CName(_)
+                | Self::VariableReference(_)
+                | Self::ParentNode
+                | Self::SelfNode
+                | Self::ClosingBracket
+                | Self::ClosingParenthesis
         )
     }
 }

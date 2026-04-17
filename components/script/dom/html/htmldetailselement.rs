@@ -309,8 +309,8 @@ impl HTMLDetailsElement {
         // Step 1. Assert: element has an open attribute.
         // Step 1. If element does not have an open attribute, then return.
         if !self.Open() {
-            if conflict_resolution_behaviour ==
-                ExclusivityConflictResolution::CloseExistingOpenElement
+            if conflict_resolution_behaviour
+                == ExclusivityConflictResolution::CloseExistingOpenElement
             {
                 unreachable!()
             } else {
@@ -351,8 +351,8 @@ impl HTMLDetailsElement {
                 .filter(|details_element| {
                     details_element
                         .upcast::<Element>()
-                        .get_string_attribute(&local_name!("name")) ==
-                        name
+                        .get_string_attribute(&local_name!("name"))
+                        == name
                 })
                 .filter(|group_member| &**group_member != self)
                 .find(|group_member| group_member.Open())

@@ -477,8 +477,8 @@ impl DOMString {
             Regex::new(r"^-?(?:\d+\.\d+|\d+|\.\d+)(?:(e|E)(\+|\-)?\d+)?$").unwrap()
         });
 
-        RE.is_match(self.0.borrow_mut().ensure_rust_string()) &&
-            self.parse_floating_point_number().is_some()
+        RE.is_match(self.0.borrow_mut().ensure_rust_string())
+            && self.parse_floating_point_number().is_some()
     }
 
     pub fn parse<T: FromStr>(&self) -> Result<T, <T as FromStr>::Err> {

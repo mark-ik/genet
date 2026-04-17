@@ -156,8 +156,8 @@ impl FragmentTree {
                         //
                         // Additionally, recurse into any anonymous fragments, as the `<body>` fragment may
                         // have created anonymous parents (for instance by creating an inline formatting context).
-                        if borrowed_box_fragment.is_root_element() ||
-                            borrowed_box_fragment.base.is_anonymous()
+                        if borrowed_box_fragment.is_root_element()
+                            || borrowed_box_fragment.base.is_anonymous()
                         {
                             find_body(&borrowed_box_fragment.children)
                         } else {

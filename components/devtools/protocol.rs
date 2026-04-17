@@ -198,9 +198,9 @@ impl<'req> ClientRequest<'req, '_> {
     /// This incurs a runtime conversion to a BTreeMap, so it should only be used in debug assertions.
     fn is_valid_reply<T: Serialize>(&self, message: &T) -> bool {
         let reply = json!(message);
-        reply.get("from").and_then(|from| from.as_str()) == Some(self.actor_name) &&
-            reply.get("to").is_none() &&
-            reply.get("type").is_none()
+        reply.get("from").and_then(|from| from.as_str()) == Some(self.actor_name)
+            && reply.get("to").is_none()
+            && reply.get("type").is_none()
     }
 
     /// Manually mark the request as handled, for one-way message types.

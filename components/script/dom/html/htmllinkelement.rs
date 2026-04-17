@@ -210,16 +210,17 @@ impl HTMLLinkElement {
     }
 
     pub(crate) fn is_alternate(&self) -> bool {
-        self.relations.get().contains(LinkRelations::ALTERNATE) &&
-            !self
+        self.relations.get().contains(LinkRelations::ALTERNATE)
+            && !self
                 .upcast::<Element>()
                 .get_string_attribute(&local_name!("title"))
                 .is_empty()
     }
 
     pub(crate) fn is_effectively_disabled(&self) -> bool {
-        (self.is_alternate() && !self.is_explicitly_enabled.get()) ||
-            self.upcast::<Element>()
+        (self.is_alternate() && !self.is_explicitly_enabled.get())
+            || self
+                .upcast::<Element>()
                 .has_attribute(&local_name!("disabled"))
     }
 
@@ -387,8 +388,8 @@ impl VirtualMethods for HTMLLinkElement {
                 // is already browsing-context connected, but was previously not obtained due to
                 // the type attribute specifying an unsupported type for the request destination,
                 // is set, removed, or changed.
-                if self.relations.get().contains(LinkRelations::PRELOAD) &&
-                    !self.previous_type_matched.get()
+                if self.relations.get().contains(LinkRelations::PRELOAD)
+                    && !self.previous_type_matched.get()
                 {
                     self.handle_preload_url();
                 }
@@ -398,8 +399,8 @@ impl VirtualMethods for HTMLLinkElement {
                 // When the media attribute of the link element of an external resource link that
                 // is already browsing-context connected, but was previously not obtained due to
                 // the media attribute not matching the environment, is changed or removed.
-                if self.relations.get().contains(LinkRelations::PRELOAD) &&
-                    !self.previous_media_environment_matched.get()
+                if self.relations.get().contains(LinkRelations::PRELOAD)
+                    && !self.previous_media_environment_matched.get()
                 {
                     match mutation {
                         AttributeMutation::Removed | AttributeMutation::Set(Some(_), _) => {
@@ -775,8 +776,8 @@ impl HTMLLinkElement {
             }) => {
                 self.process_favicon_response(image);
             },
-            ImageCacheResult::Available(ImageOrMetadataAvailable::MetadataAvailable(_, id)) |
-            ImageCacheResult::Pending(id) => {
+            ImageCacheResult::Available(ImageOrMetadataAvailable::MetadataAvailable(_, id))
+            | ImageCacheResult::Pending(id) => {
                 let sender = self.register_image_cache_callback(id);
                 window.image_cache().add_listener(ImageLoadListener::new(
                     sender,
@@ -1091,8 +1092,9 @@ impl StylesheetOwner for HTMLLinkElement {
         //
         // https://html.spec.whatwg.org/multipage/#link-type-stylesheet:implicitly-potentially-render-blocking
         // > A link element of this type is implicitly potentially render-blocking if the element was created by its node document's parser.
-        self.parser_inserted() ||
-            self.blocking
+        self.parser_inserted()
+            || self
+                .blocking
                 .get()
                 .is_some_and(|list| list.Contains("render".into()))
     }

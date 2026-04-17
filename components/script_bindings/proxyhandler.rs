@@ -500,13 +500,13 @@ fn ensure_cross_origin_property_holder(
             HandleObject::null(),
         ));
 
-        if out_holder.get().is_null() ||
-            !js::rust::wrappers2::JS_DefineProperties(
+        if out_holder.get().is_null()
+            || !js::rust::wrappers2::JS_DefineProperties(
                 cx,
                 out_holder.handle(),
                 cross_origin_properties.attributes.as_ptr(),
-            ) ||
-            !js::rust::wrappers2::JS_DefineFunctions(
+            )
+            || !js::rust::wrappers2::JS_DefineFunctions(
                 cx,
                 out_holder.handle(),
                 cross_origin_properties.methods.as_ptr(),
@@ -528,9 +528,9 @@ fn ensure_cross_origin_property_holder(
 /// [1]: https://html.spec.whatwg.org/multipage/#integration-with-idl
 pub(crate) fn is_cross_origin_object<D: DomTypes>(cx: SafeJSContext, obj: RawHandleObject) -> bool {
     unsafe {
-        jsapi::IsWindowProxy(*obj) ||
-            native_from_object::<D::Location>(*obj, *cx).is_ok() ||
-            native_from_object::<D::DissimilarOriginLocation>(*obj, *cx).is_ok()
+        jsapi::IsWindowProxy(*obj)
+            || native_from_object::<D::Location>(*obj, *cx).is_ok()
+            || native_from_object::<D::DissimilarOriginLocation>(*obj, *cx).is_ok()
     }
 }
 

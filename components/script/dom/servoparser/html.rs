@@ -222,8 +222,8 @@ impl SerializationIterator {
         }
 
         if let Some(shadow_root) = node.downcast::<Element>().and_then(Element::shadow_root) {
-            let should_be_serialized = (self.serialize_shadow_roots && shadow_root.Serializable()) ||
-                self.shadow_roots.contains(&shadow_root);
+            let should_be_serialized = (self.serialize_shadow_roots && shadow_root.Serializable())
+                || self.shadow_roots.contains(&shadow_root);
             if !shadow_root.is_user_agent_widget() && should_be_serialized {
                 self.stack
                     .push(SerializationCommand::SerializeShadowRoot(shadow_root));

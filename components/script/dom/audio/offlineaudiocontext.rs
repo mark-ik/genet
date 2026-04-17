@@ -78,10 +78,10 @@ impl OfflineAudioContext {
         sample_rate: f32,
         can_gc: CanGc,
     ) -> Fallible<DomRoot<OfflineAudioContext>> {
-        if channel_count > MAX_CHANNEL_COUNT ||
-            channel_count == 0 ||
-            length == 0 ||
-            !(MIN_SAMPLE_RATE..=MAX_SAMPLE_RATE).contains(&sample_rate)
+        if channel_count > MAX_CHANNEL_COUNT
+            || channel_count == 0
+            || length == 0
+            || !(MIN_SAMPLE_RATE..=MAX_SAMPLE_RATE).contains(&sample_rate)
         {
             return Err(Error::NotSupported(None));
         }

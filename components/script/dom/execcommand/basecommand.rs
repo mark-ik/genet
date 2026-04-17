@@ -420,13 +420,13 @@ impl CommandName {
                         // https://w3c.github.io/editing/docs/execCommand/#the-bold-command
                         // > Either the two strings are equal, or one is "bold" and the other is "700",
                         // > or one is "normal" and the other is "400".
-                        first_str == second_str ||
-                            matches!(
+                        first_str == second_str
+                            || matches!(
                                 (first_str.str().as_ref(), second_str.str().as_ref()),
-                                ("bold", "700") |
-                                    ("700", "bold") |
-                                    ("normal", "400") |
-                                    ("400", "normal")
+                                ("bold", "700")
+                                    | ("700", "bold")
+                                    | ("normal", "400")
+                                    | ("400", "normal")
                             )
                     },
                     CommandName::BackColor | CommandName::ForeColor | CommandName::HiliteColor => {
@@ -511,21 +511,21 @@ impl CommandName {
     pub(crate) fn is_enabled_in_plaintext_only_state(&self) -> bool {
         matches!(
             self,
-            CommandName::Copy |
-                CommandName::Cut |
-                CommandName::DefaultParagraphSeparator |
-                CommandName::FormatBlock |
-                CommandName::ForwardDelete |
-                CommandName::InsertHtml |
-                CommandName::InsertLineBreak |
-                CommandName::InsertParagraph |
-                CommandName::InsertText |
-                CommandName::Paste |
-                CommandName::Redo |
-                CommandName::StyleWithCss |
-                CommandName::Undo |
-                CommandName::Usecss |
-                CommandName::Delete
+            CommandName::Copy
+                | CommandName::Cut
+                | CommandName::DefaultParagraphSeparator
+                | CommandName::FormatBlock
+                | CommandName::ForwardDelete
+                | CommandName::InsertHtml
+                | CommandName::InsertLineBreak
+                | CommandName::InsertParagraph
+                | CommandName::InsertText
+                | CommandName::Paste
+                | CommandName::Redo
+                | CommandName::StyleWithCss
+                | CommandName::Undo
+                | CommandName::Usecss
+                | CommandName::Delete
         )
     }
 

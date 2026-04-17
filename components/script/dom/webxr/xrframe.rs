@@ -164,8 +164,8 @@ impl XRFrameMethods<crate::DomTypeHolder> for XRFrame {
         base_space: &XRSpace,
         can_gc: CanGc,
     ) -> Result<Option<DomRoot<XRJointPose>>, Error> {
-        if self.session != space.upcast::<XRSpace>().session() ||
-            self.session != base_space.session()
+        if self.session != space.upcast::<XRSpace>().session()
+            || self.session != base_space.session()
         {
             return Err(Error::InvalidState(None));
         }

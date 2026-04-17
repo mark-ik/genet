@@ -160,10 +160,7 @@ impl GPUAdapter {
         // Step 7. If "subgroups" is supported, set subgroupMaxSize to the largest supported
         // subgroup size. Otherwise, set this value to 128.
         let (subgroup_min_size, subgroup_max_size) = if features.has("subgroups".into()) {
-            (
-                info.subgroup_min_size,
-                info.subgroup_max_size,
-            )
+            (info.subgroup_min_size, info.subgroup_max_size)
         } else {
             (4, 128)
         };

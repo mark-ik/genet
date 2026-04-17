@@ -75,8 +75,8 @@ pub(crate) fn is_valid_element_local_name(name: &str) -> bool {
             // U+002D (-), U+002E (.), U+003A (:), U+005F (_),
             // or in the range U+0080 to U+10FFFF, inclusive,
             // then return false.
-            if !c.is_ascii_alphanumeric() &&
-                !matches!(
+            if !c.is_ascii_alphanumeric()
+                && !matches!(
                     c,
                     '\u{002D}' | '\u{002E}' | '\u{003A}' | '\u{005F}' | '\u{0080}'..='\u{10FFF}'
                 )
@@ -197,8 +197,8 @@ pub(crate) fn validate_and_extract(
         Some("xml") if *namespace != *XML_NAMESPACE => Err(Error::Namespace(None)),
         // Step 10. If either qualifiedName or prefix is "xmlns" and namespace
         //      is not the XMLNS namespace, then throw a "NamespaceError" DOMException.
-        p if (qualified_name == "xmlns" || p == Some("xmlns")) &&
-            *namespace != *XMLNS_NAMESPACE =>
+        p if (qualified_name == "xmlns" || p == Some("xmlns"))
+            && *namespace != *XMLNS_NAMESPACE =>
         {
             Err(Error::Namespace(None))
         },
@@ -207,8 +207,8 @@ pub(crate) fn validate_and_extract(
         },
         // Step 11. If namespace is the XMLNS namespace and neither qualifiedName
         //      nor prefix is "xmlns", then throw a "NamespaceError" DOMException.
-        p if *namespace == *XMLNS_NAMESPACE &&
-            (qualified_name != "xmlns" && p != Some("xmlns")) =>
+        p if *namespace == *XMLNS_NAMESPACE
+            && (qualified_name != "xmlns" && p != Some("xmlns")) =>
         {
             Err(Error::Namespace(None))
         },

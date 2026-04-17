@@ -115,8 +115,8 @@ fn get_matching_adapter(
             let result = adapter.GetDesc1(&mut adapter_desc);
             assert_eq!(result, S_OK);
             let adapter_luid = &adapter_desc.AdapterLuid;
-            if adapter_luid.LowPart == requirements.adapter_luid.LowPart &&
-                adapter_luid.HighPart == requirements.adapter_luid.HighPart
+            if adapter_luid.LowPart == requirements.adapter_luid.LowPart
+                && adapter_luid.HighPart == requirements.adapter_luid.HighPart
             {
                 return Ok(adapter);
             }

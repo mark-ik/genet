@@ -221,12 +221,14 @@ impl WGPU {
                         desc,
                     } => {
                         let global = &self.global;
-                        let result = if let Some(err) =
-                            self.error_command_encoders.get(&command_encoder_id.into_raw())
+                        let result = if let Some(err) = self
+                            .error_command_encoders
+                            .get(&command_encoder_id.into_raw())
                         {
                             Err(Error::Validation(err.clone()))
-                        } else if let Some((_label, error)) =
-                            global.command_encoder_finish(command_encoder_id, &desc, None).1
+                        } else if let Some((_label, error)) = global
+                            .command_encoder_finish(command_encoder_id, &desc, None)
+                            .1
                         {
                             Err(Error::from_error(error))
                         } else {
@@ -377,8 +379,8 @@ impl WGPU {
                         if let Some(sender) = sender {
                             let res = match error {
                                 // if device is lost we must return pipeline and not raise any error
-                                Some(CreateComputePipelineError::Device(DeviceError::Lost)) |
-                                None => Ok(Pipeline {
+                                Some(CreateComputePipelineError::Device(DeviceError::Lost))
+                                | None => Ok(Pipeline {
                                     id: compute_pipeline_id,
                                     label: descriptor.label.unwrap_or_default().to_string(),
                                 }),
@@ -426,8 +428,8 @@ impl WGPU {
                         if let Some(sender) = sender {
                             let res = match error {
                                 // if device is lost we must return pipeline and not raise any error
-                                Some(CreateRenderPipelineError::Device(DeviceError::Lost)) |
-                                None => Ok(Pipeline {
+                                Some(CreateRenderPipelineError::Device(DeviceError::Lost))
+                                | None => Ok(Pipeline {
                                     id: render_pipeline_id,
                                     label: descriptor.label.unwrap_or_default().to_string(),
                                 }),
@@ -579,8 +581,7 @@ impl WGPU {
                         break;
                     },
                     WebGPURequest::DropCommandBuffer(id) => {
-                        self.error_command_encoders
-                            .remove(&id.into_raw());
+                        self.error_command_encoders.remove(&id.into_raw());
                         let global = &self.global;
                         global.command_buffer_drop(id);
                         if let Err(e) = self.script_sender.send(WebGPUMsg::FreeCommandBuffer(id)) {
@@ -943,10 +944,9 @@ impl WGPU {
                         command_buffers,
                     } => {
                         let global = &self.global;
-                        let cmd_id = command_buffers.iter().find(|id| {
-                            self.error_command_encoders
-                                .contains_key(&id.into_raw())
-                        });
+                        let cmd_id = command_buffers
+                            .iter()
+                            .find(|id| self.error_command_encoders.contains_key(&id.into_raw()));
                         let result = if cmd_id.is_some() {
                             Err(Error::Validation(String::from(
                                 "Invalid command buffer submitted",

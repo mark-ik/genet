@@ -301,8 +301,8 @@ pub(crate) fn handle_get_children(
         return;
     };
     let is_whitespace = |node: &NodeInfo| {
-        node.node_type == NodeConstants::TEXT_NODE &&
-            node.node_value.as_ref().is_none_or(|v| v.trim().is_empty())
+        node.node_type == NodeConstants::TEXT_NODE
+            && node.node_value.as_ref().is_none_or(|v| v.trim().is_empty())
     };
     let mut pipeline_state = state.mut_pipeline_state_for(pipeline).unwrap();
 
@@ -644,8 +644,8 @@ pub(crate) fn handle_get_xpath(
                 let Some(sibling) = sibling.downcast::<Element>() else {
                     return false;
                 };
-                sibling.namespace() == element.namespace() &&
-                    sibling.local_name() == element.local_name()
+                sibling.namespace() == element.namespace()
+                    && sibling.local_name() == element.local_name()
             };
 
             let matching_elements_before = ancestor

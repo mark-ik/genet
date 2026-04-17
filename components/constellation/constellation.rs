@@ -2401,8 +2401,8 @@ where
                         entangled_with: entry.entangled_with,
                     }
                 },
-                TransferState::CompletionFailed(buffer) |
-                TransferState::CompletionRequested(_, buffer) => {
+                TransferState::CompletionFailed(buffer)
+                | TransferState::CompletionRequested(_, buffer) => {
                     // If the completion had already failed,
                     // this is a request coming from a global to complete a new transfer,
                     // but we're still awaiting the return of the buffer
@@ -2567,8 +2567,8 @@ where
         if let Some(info) = self.message_ports.get_mut(&port2) {
             info.entangled_with = None;
             match &mut info.state {
-                TransferState::Managed(router_id) |
-                TransferState::CompletionInProgress(router_id) => {
+                TransferState::Managed(router_id)
+                | TransferState::CompletionInProgress(router_id) => {
                     // We try to disentangle the other port now,
                     // and if it has been transfered out by the time the message is received,
                     // it will be ignored,
@@ -2692,8 +2692,8 @@ where
             // and, if type is "session", whose relevant settings object's associated Document's
             // node navigable's traversable navigable is thisDocument's node navigable's
             // traversable navigable."
-            if storage == WebStorageType::Session &&
-                pipeline.webview_id != source_pipeline.webview_id
+            if storage == WebStorageType::Session
+                && pipeline.webview_id != source_pipeline.webview_id
             {
                 continue;
             }
@@ -4836,18 +4836,18 @@ where
                     "ScriptCommand after closure",
                 );
             },
-            WebDriverCommandMsg::CloseWebView(..) |
-            WebDriverCommandMsg::NewWindow(..) |
-            WebDriverCommandMsg::FocusWebView(..) |
-            WebDriverCommandMsg::IsWebViewOpen(..) |
-            WebDriverCommandMsg::GetWindowRect(..) |
-            WebDriverCommandMsg::GetViewportSize(..) |
-            WebDriverCommandMsg::SetWindowRect(..) |
-            WebDriverCommandMsg::MaximizeWebView(..) |
-            WebDriverCommandMsg::LoadUrl(..) |
-            WebDriverCommandMsg::Refresh(..) |
-            WebDriverCommandMsg::InputEvent(..) |
-            WebDriverCommandMsg::TakeScreenshot(..) => {
+            WebDriverCommandMsg::CloseWebView(..)
+            | WebDriverCommandMsg::NewWindow(..)
+            | WebDriverCommandMsg::FocusWebView(..)
+            | WebDriverCommandMsg::IsWebViewOpen(..)
+            | WebDriverCommandMsg::GetWindowRect(..)
+            | WebDriverCommandMsg::GetViewportSize(..)
+            | WebDriverCommandMsg::SetWindowRect(..)
+            | WebDriverCommandMsg::MaximizeWebView(..)
+            | WebDriverCommandMsg::LoadUrl(..)
+            | WebDriverCommandMsg::Refresh(..)
+            | WebDriverCommandMsg::InputEvent(..)
+            | WebDriverCommandMsg::TakeScreenshot(..) => {
                 unreachable!("This command should be send directly to the embedder.");
             },
             _ => {
@@ -5171,8 +5171,9 @@ where
             .get(&change.webview_id)
             .map(|webview| webview.focused_browsing_context_id);
         focused_browsing_context_id.is_some_and(|focused_browsing_context_id| {
-            focused_browsing_context_id == change.browsing_context_id ||
-                self.fully_active_descendant_browsing_contexts_iter(change.browsing_context_id)
+            focused_browsing_context_id == change.browsing_context_id
+                || self
+                    .fully_active_descendant_browsing_contexts_iter(change.browsing_context_id)
                     .any(|nested_ctx| nested_ctx.id == focused_browsing_context_id)
         })
     }
@@ -5787,8 +5788,8 @@ where
                     if self
                         .pending_changes
                         .iter()
-                        .any(|change| change.new_pipeline_id == pipeline.id) &&
-                        probability <= rng.random::<f32>()
+                        .any(|change| change.new_pipeline_id == pipeline.id)
+                        && probability <= rng.random::<f32>()
                     {
                         // We tend not to close pending pipelines, as that almost always
                         // results in pipelines being closed early in their lifecycle,

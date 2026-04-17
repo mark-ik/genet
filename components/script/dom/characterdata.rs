@@ -227,11 +227,11 @@ impl CharacterDataMethods<crate::DomTypeHolder> for CharacterData {
 
             // Step 5 to 7.
             new_data = String::with_capacity(
-                prefix.len() +
-                    replacement_before.len() +
-                    arg.len() +
-                    replacement_after.len() +
-                    suffix.len(),
+                prefix.len()
+                    + replacement_before.len()
+                    + arg.len()
+                    + replacement_after.len()
+                    + suffix.len(),
             );
             new_data.push_str(prefix);
             new_data.push_str(replacement_before);

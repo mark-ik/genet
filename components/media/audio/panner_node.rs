@@ -206,8 +206,8 @@ impl PannerNode {
             self.orientation_z.value(),
         );
 
-        if source_orientation == Vector3D::zero() ||
-            (self.cone_inner_angle == 360. && self.cone_outer_angle == 360.)
+        if source_orientation == Vector3D::zero()
+            || (self.cone_inner_angle == 360. && self.cone_outer_angle == 360.)
         {
             return 0.;
         }

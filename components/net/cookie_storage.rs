@@ -62,11 +62,11 @@ impl CookieStorage {
                 let existing_domain = c.cookie.domain().as_ref().unwrap().to_owned();
                 let existing_path = c.cookie.path().as_ref().unwrap().to_owned();
 
-                c.cookie.name() == cookie.cookie.name() &&
-                    c.cookie.secure().unwrap_or(false) &&
-                    (ServoCookie::domain_match(new_domain, existing_domain) ||
-                        ServoCookie::domain_match(existing_domain, new_domain)) &&
-                    ServoCookie::path_match(new_path, existing_path)
+                c.cookie.name() == cookie.cookie.name()
+                    && c.cookie.secure().unwrap_or(false)
+                    && (ServoCookie::domain_match(new_domain, existing_domain)
+                        || ServoCookie::domain_match(existing_domain, new_domain))
+                    && ServoCookie::path_match(new_path, existing_path)
             });
 
             if any_overlapping {
@@ -76,9 +76,9 @@ impl CookieStorage {
 
         // Step 11.1
         let position = cookies.iter().position(|c| {
-            c.cookie.domain() == cookie.cookie.domain() &&
-                c.cookie.path() == cookie.cookie.path() &&
-                c.cookie.name() == cookie.cookie.name()
+            c.cookie.domain() == cookie.cookie.domain()
+                && c.cookie.path() == cookie.cookie.path()
+                && c.cookie.name() == cookie.cookie.name()
         });
 
         if let Some(ind) = position {
@@ -180,8 +180,8 @@ impl CookieStorage {
             let new_len = cookies.len();
 
             // https://www.ietf.org/id/draft-ietf-httpbis-cookie-alone-01.txt
-            if new_len == old_len &&
-                !evict_one_cookie(cookie.cookie.secure().unwrap_or(false), cookies)
+            if new_len == old_len
+                && !evict_one_cookie(cookie.cookie.secure().unwrap_or(false), cookies)
             {
                 return;
             }
@@ -233,9 +233,9 @@ impl CookieStorage {
             (match acc.len() {
                 0 => acc,
                 _ => acc + "; ",
-            }) + cookie.name() +
-                "=" +
-                cookie.value()
+            }) + cookie.name()
+                + "="
+                + cookie.value()
         };
 
         // Serialize the cookie-list into a cookie-string by processing each cookie in the cookie-list in order
@@ -341,8 +341,8 @@ fn get_oldest_accessed(
 ) -> Option<(usize, SystemTime)> {
     let mut oldest_accessed = None;
     for (i, c) in cookies.iter().enumerate() {
-        if (c.cookie.secure().unwrap_or(false) == is_secure_cookie) &&
-            oldest_accessed
+        if (c.cookie.secure().unwrap_or(false) == is_secure_cookie)
+            && oldest_accessed
                 .as_ref()
                 .is_none_or(|(_, current_oldest_time)| c.last_access < *current_oldest_time)
         {

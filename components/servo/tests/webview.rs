@@ -831,8 +831,8 @@ fn test_contextual_context_menu_items() {
             ContextMenuAction::OpenImageInNewView,
         ],
         ContextMenuElementInformation {
-            flags: ContextMenuElementInformationFlags::Link |
-                ContextMenuElementInformationFlags::Image,
+            flags: ContextMenuElementInformationFlags::Link
+                | ContextMenuElementInformationFlags::Image,
             link_url: Url::parse("https://nested.org").ok(),
             image_url: Url::parse("https://servo.org/nested.png").ok(),
         },

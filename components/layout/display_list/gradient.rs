@@ -245,12 +245,12 @@ pub(super) fn build_radial(
                 abs_vector_to_corner(gradient_box, center, f32::max).to_size()
             },
             ShapeExtent::ClosestCorner => {
-                abs_vector_to_corner(gradient_box, center, f32::min).to_size() *
-                    (std::f32::consts::FRAC_1_SQRT_2 * 2.0)
+                abs_vector_to_corner(gradient_box, center, f32::min).to_size()
+                    * (std::f32::consts::FRAC_1_SQRT_2 * 2.0)
             },
             ShapeExtent::FarthestCorner | ShapeExtent::Cover => {
-                abs_vector_to_corner(gradient_box, center, f32::max).to_size() *
-                    (std::f32::consts::FRAC_1_SQRT_2 * 2.0)
+                abs_vector_to_corner(gradient_box, center, f32::max).to_size()
+                    * (std::f32::consts::FRAC_1_SQRT_2 * 2.0)
             },
         },
     };

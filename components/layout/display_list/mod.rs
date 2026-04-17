@@ -1027,8 +1027,8 @@ impl Fragment {
             return;
         }
 
-        if offsets.character_range.start > shared_selection.character_range.end ||
-            offsets.character_range.end < shared_selection.character_range.start
+        if offsets.character_range.start > shared_selection.character_range.end
+            || offsets.character_range.end < shared_selection.character_range.start
         {
             return;
         }
@@ -1037,8 +1037,8 @@ impl Fragment {
         // layout will push an empty fragment in order to trigger painting of the cursor on an empty line.
         // This code ensure that it is only painted if the cursor is on the starting index of the empty
         // fragment.
-        if fragment.is_empty_for_text_cursor &&
-            !offsets
+        if fragment.is_empty_for_text_cursor
+            && !offsets
                 .character_range
                 .contains(&shared_selection.character_range.start)
         {
@@ -1051,11 +1051,11 @@ impl Fragment {
         let mut end_advance = None;
         for glyph_store in fragment.glyphs.iter() {
             let glyph_store_character_count = glyph_store.total_characters();
-            if current_character_index + glyph_store_character_count <
-                shared_selection.character_range.start
+            if current_character_index + glyph_store_character_count
+                < shared_selection.character_range.start
             {
-                current_advance += glyph_store.total_advance() +
-                    (justification_adjustment * glyph_store.total_word_separators() as i32);
+                current_advance += glyph_store.total_advance()
+                    + (justification_adjustment * glyph_store.total_word_separators() as i32);
                 current_character_index += glyph_store_character_count;
                 continue;
             }
@@ -1087,8 +1087,8 @@ impl Fragment {
         let parent_style = fragment.base.style();
         if !shared_selection.range.is_empty() {
             let selection_rect = Rect::new(
-                containing_block_rect.origin +
-                    Vector2D::new(fragment_x_offset + start_x, Au::zero()),
+                containing_block_rect.origin
+                    + Vector2D::new(fragment_x_offset + start_x, Au::zero()),
                 Size2D::new(end_x - start_x, containing_block_rect.height()),
             )
             .to_webrender();
@@ -1263,9 +1263,9 @@ impl<'a> BuilderForBoxFragment<'a> {
     }
 
     fn build(&mut self, builder: &mut DisplayListBuilder, section: StackingContextSection) {
-        if self.is_hit_test_for_scrollable_overflow &&
-            self.fragment.style().get_inherited_ui().pointer_events !=
-                style::computed_values::pointer_events::T::None
+        if self.is_hit_test_for_scrollable_overflow
+            && self.fragment.style().get_inherited_ui().pointer_events
+                != style::computed_values::pointer_events::T::None
         {
             self.build_hit_test(
                 builder,
@@ -1365,8 +1365,8 @@ impl<'a> BuilderForBoxFragment<'a> {
             return;
         }
         // If the `<body>` background was inherited by the root element, don't paint it again here.
-        if !builder.paint_body_background &&
-            flags.intersects(FragmentFlags::IS_BODY_ELEMENT_OF_HTML_ELEMENT_ROOT)
+        if !builder.paint_body_background
+            && flags.intersects(FragmentFlags::IS_BODY_ELEMENT_OF_HTML_ELEMENT_ROOT)
         {
             return;
         }
@@ -2169,10 +2169,10 @@ impl BoxFragment {
     fn border_radius(&self) -> BorderRadius {
         let style = self.style();
         let border = style.get_border();
-        if border.border_top_left_radius.0.is_zero() &&
-            border.border_top_right_radius.0.is_zero() &&
-            border.border_bottom_right_radius.0.is_zero() &&
-            border.border_bottom_left_radius.0.is_zero()
+        if border.border_top_left_radius.0.is_zero()
+            && border.border_top_right_radius.0.is_zero()
+            && border.border_bottom_right_radius.0.is_zero()
+            && border.border_bottom_left_radius.0.is_zero()
         {
             return BorderRadius::zero();
         }

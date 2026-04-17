@@ -513,9 +513,10 @@ impl ShapedText {
 
 impl ShapedGlyph {
     fn can_be_simple_glyph(&self) -> bool {
-        is_simple_glyph_id(self.glyph_id) &&
-            is_simple_advance(self.advance) &&
-            self.offset
+        is_simple_glyph_id(self.glyph_id)
+            && is_simple_advance(self.advance)
+            && self
+                .offset
                 .is_none_or(|offset| offset == Default::default())
     }
 

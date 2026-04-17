@@ -2697,11 +2697,11 @@ impl WebDriverHandler<ServoExtensionRoute> for Handler {
         // Unless we are trying to create/delete a new session, check status, or shutdown Servo,
         // we need to ensure that a session has previously been created.
         match msg.command {
-            WebDriverCommand::NewSession(_) |
-            WebDriverCommand::Status |
-            WebDriverCommand::DeleteSession |
-            WebDriverCommand::Extension(ServoExtensionCommand::Shutdown) |
-            WebDriverCommand::Extension(ServoExtensionCommand::ResetAllCookies) => {},
+            WebDriverCommand::NewSession(_)
+            | WebDriverCommand::Status
+            | WebDriverCommand::DeleteSession
+            | WebDriverCommand::Extension(ServoExtensionCommand::Shutdown)
+            | WebDriverCommand::Extension(ServoExtensionCommand::ResetAllCookies) => {},
             _ => {
                 self.session()?;
             },

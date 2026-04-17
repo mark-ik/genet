@@ -1306,10 +1306,10 @@ impl ScriptThread {
             .iter()
             .any(|(_, document)| document.needs_rendering_update());
         let running_animations = self.documents.borrow().iter().any(|(_, document)| {
-            document.is_fully_active() &&
-                !document.window().throttled() &&
-                (document.animations().running_animation_count() != 0 ||
-                    document.has_active_request_animation_frame_callbacks())
+            document.is_fully_active()
+                && !document.window().throttled()
+                && (document.animations().running_animation_count() != 0
+                    || document.has_active_request_animation_frame_callbacks())
         });
 
         // If we are not running animations and no rendering update is
@@ -1910,9 +1910,9 @@ impl ScriptThread {
                     document.handle_no_longer_waiting_on_asynchronous_image_updates();
                 }
             },
-            msg @ ScriptThreadMessage::SpawnPipeline(..) |
-            msg @ ScriptThreadMessage::ExitFullScreen(..) |
-            msg @ ScriptThreadMessage::ExitScriptThread => {
+            msg @ ScriptThreadMessage::SpawnPipeline(..)
+            | msg @ ScriptThreadMessage::ExitFullScreen(..)
+            | msg @ ScriptThreadMessage::ExitScriptThread => {
                 panic!("should have handled {:?} already", msg)
             },
             ScriptThreadMessage::SetScrollStates(pipeline_id, scroll_states) => {
@@ -2021,12 +2021,10 @@ impl ScriptThread {
             WebGPUMsg::FreeComputePipeline(id) => self.gpu_id_hub.free_compute_pipeline_id(id),
             WebGPUMsg::FreeBindGroup(id) => self.gpu_id_hub.free_bind_group_id(id),
             WebGPUMsg::FreeBindGroupLayout(id) => self.gpu_id_hub.free_bind_group_layout_id(id),
-            WebGPUMsg::FreeCommandBuffer(id) => self
-                .gpu_id_hub
-                .free_command_buffer_id({
-                    let (index, epoch) = id.unzip();
-                    wgpu_core::id::Id::zip(index, epoch)
-                }),
+            WebGPUMsg::FreeCommandBuffer(id) => self.gpu_id_hub.free_command_buffer_id({
+                let (index, epoch) = id.unzip();
+                wgpu_core::id::Id::zip(index, epoch)
+            }),
             WebGPUMsg::FreeSampler(id) => self.gpu_id_hub.free_sampler_id(id),
             WebGPUMsg::FreeShaderModule(id) => self.gpu_id_hub.free_shader_module_id(id),
             WebGPUMsg::FreeRenderBundle(id) => self.gpu_id_hub.free_render_bundle_id(id),

@@ -432,8 +432,9 @@ where
             return 0;
         }
 
-        self.shallow_size_of(ops) +
-            self.iter()
+        self.shallow_size_of(ops)
+            + self
+                .iter()
                 .map(|element| element.conditional_size_of(ops))
                 .sum::<usize>()
     }
@@ -791,10 +792,10 @@ impl<T: MallocSizeOf, U> MallocSizeOf for euclid::Rect<T, U> {
 
 impl<T: MallocSizeOf, U> MallocSizeOf for euclid::SideOffsets2D<T, U> {
     fn size_of(&self, ops: &mut MallocSizeOfOps) -> usize {
-        self.top.size_of(ops) +
-            self.right.size_of(ops) +
-            self.bottom.size_of(ops) +
-            self.left.size_of(ops)
+        self.top.size_of(ops)
+            + self.right.size_of(ops)
+            + self.bottom.size_of(ops)
+            + self.left.size_of(ops)
     }
 }
 
@@ -806,45 +807,45 @@ impl<T: MallocSizeOf, U> MallocSizeOf for euclid::Size2D<T, U> {
 
 impl<T: MallocSizeOf, Src, Dst> MallocSizeOf for euclid::Transform2D<T, Src, Dst> {
     fn size_of(&self, ops: &mut MallocSizeOfOps) -> usize {
-        self.m11.size_of(ops) +
-            self.m12.size_of(ops) +
-            self.m21.size_of(ops) +
-            self.m22.size_of(ops) +
-            self.m31.size_of(ops) +
-            self.m32.size_of(ops)
+        self.m11.size_of(ops)
+            + self.m12.size_of(ops)
+            + self.m21.size_of(ops)
+            + self.m22.size_of(ops)
+            + self.m31.size_of(ops)
+            + self.m32.size_of(ops)
     }
 }
 
 impl<T: MallocSizeOf, Src, Dst> MallocSizeOf for euclid::Transform3D<T, Src, Dst> {
     fn size_of(&self, ops: &mut MallocSizeOfOps) -> usize {
-        self.m11.size_of(ops) +
-            self.m12.size_of(ops) +
-            self.m13.size_of(ops) +
-            self.m14.size_of(ops) +
-            self.m21.size_of(ops) +
-            self.m22.size_of(ops) +
-            self.m23.size_of(ops) +
-            self.m24.size_of(ops) +
-            self.m31.size_of(ops) +
-            self.m32.size_of(ops) +
-            self.m33.size_of(ops) +
-            self.m34.size_of(ops) +
-            self.m41.size_of(ops) +
-            self.m42.size_of(ops) +
-            self.m43.size_of(ops) +
-            self.m44.size_of(ops)
+        self.m11.size_of(ops)
+            + self.m12.size_of(ops)
+            + self.m13.size_of(ops)
+            + self.m14.size_of(ops)
+            + self.m21.size_of(ops)
+            + self.m22.size_of(ops)
+            + self.m23.size_of(ops)
+            + self.m24.size_of(ops)
+            + self.m31.size_of(ops)
+            + self.m32.size_of(ops)
+            + self.m33.size_of(ops)
+            + self.m34.size_of(ops)
+            + self.m41.size_of(ops)
+            + self.m42.size_of(ops)
+            + self.m43.size_of(ops)
+            + self.m44.size_of(ops)
     }
 }
 
 impl<T: MallocSizeOf, Src, Dst> MallocSizeOf for euclid::RigidTransform3D<T, Src, Dst> {
     fn size_of(&self, ops: &mut MallocSizeOfOps) -> usize {
-        self.rotation.i.size_of(ops) +
-            self.rotation.j.size_of(ops) +
-            self.rotation.k.size_of(ops) +
-            self.rotation.r.size_of(ops) +
-            self.translation.x.size_of(ops) +
-            self.translation.y.size_of(ops) +
-            self.translation.z.size_of(ops)
+        self.rotation.i.size_of(ops)
+            + self.rotation.j.size_of(ops)
+            + self.rotation.k.size_of(ops)
+            + self.rotation.r.size_of(ops)
+            + self.translation.x.size_of(ops)
+            + self.translation.y.size_of(ops)
+            + self.translation.z.size_of(ops)
     }
 }
 
@@ -888,13 +889,13 @@ impl MallocSizeOf for usvg::Tree {
         let filters = self.filters();
         let fontdb = self.fontdb();
 
-        let mut sum = root.size_of(ops) +
-            linear_gradients.size_of(ops) +
-            radial_gradients.size_of(ops) +
-            patterns.size_of(ops) +
-            clip_paths.size_of(ops) +
-            masks.size_of(ops) +
-            filters.size_of(ops);
+        let mut sum = root.size_of(ops)
+            + linear_gradients.size_of(ops)
+            + radial_gradients.size_of(ops)
+            + patterns.size_of(ops)
+            + clip_paths.size_of(ops)
+            + masks.size_of(ops)
+            + filters.size_of(ops);
 
         sum += fontdb.conditional_size_of(ops);
 
@@ -1183,14 +1184,14 @@ malloc_size_of_is_0!(std::net::TcpStream);
 impl MallocSizeOf for urlpattern::UrlPattern {
     fn size_of(&self, _ops: &mut MallocSizeOfOps) -> usize {
         // This is an approximation
-        self.protocol().len() +
-            self.username().len() +
-            self.password().len() +
-            self.hostname().len() +
-            self.port().len() +
-            self.pathname().len() +
-            self.search().len() +
-            self.hash().len()
+        self.protocol().len()
+            + self.username().len()
+            + self.password().len()
+            + self.hostname().len()
+            + self.port().len()
+            + self.pathname().len()
+            + self.search().len()
+            + self.hash().len()
     }
 }
 
@@ -1359,13 +1360,13 @@ impl MallocSizeOf for resvg::usvg::fontdb::Source {
 
 impl MallocSizeOf for resvg::usvg::fontdb::FaceInfo {
     fn size_of(&self, ops: &mut MallocSizeOfOps) -> usize {
-        self.id.size_of(ops) +
-            self.source.size_of(ops) +
-            self.families.size_of(ops) +
-            self.post_script_name.size_of(ops) +
-            self.style.size_of(ops) +
-            self.weight.size_of(ops) +
-            self.stretch.size_of(ops)
+        self.id.size_of(ops)
+            + self.source.size_of(ops)
+            + self.families.size_of(ops)
+            + self.post_script_name.size_of(ops)
+            + self.style.size_of(ops)
+            + self.weight.size_of(ops)
+            + self.stretch.size_of(ops)
     }
 }
 

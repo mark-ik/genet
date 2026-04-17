@@ -260,9 +260,9 @@ impl Range {
                             CommandName::FontSize => {
                                 let value_override =
                                     context_object.value_override(&CommandName::FontSize);
-                                if value_override != optional_string ||
-                                    (value_override.is_none() &&
-                                        !CommandName::FontSize.are_loosely_equivalent_values(
+                                if value_override != optional_string
+                                    || (value_override.is_none()
+                                        && !CommandName::FontSize.are_loosely_equivalent_values(
                                             node.effective_command_value(&CommandName::FontSize)
                                                 .as_ref(),
                                             optional_string.as_ref(),

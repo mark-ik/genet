@@ -96,8 +96,8 @@ pub(crate) fn process_box_area_request(
     let mut rects = fragments
         .iter()
         .filter(|fragment| {
-            !exclude_transform_and_inline ||
-                fragment
+            !exclude_transform_and_inline
+                || fragment
                     .retrieve_box_fragment()
                     .is_none_or(|fragment| !fragment.borrow().is_inline_box())
         })
@@ -269,14 +269,14 @@ pub fn process_resolved_style_request(
 
     let computed_style = |fragment: Option<&Fragment>| match longhand_id {
         LonghandId::MinWidth
-            if style.clone_min_width() == Size::Auto &&
-                !should_honor_min_size_auto(fragment, style) =>
+            if style.clone_min_width() == Size::Auto
+                && !should_honor_min_size_auto(fragment, style) =>
         {
             String::from("0px")
         },
         LonghandId::MinHeight
-            if style.clone_min_height() == Size::Auto &&
-                !should_honor_min_size_auto(fragment, style) =>
+            if style.clone_min_height() == Size::Auto
+                && !should_honor_min_size_auto(fragment, style) =>
         {
             String::from("0px")
         },
@@ -408,11 +408,11 @@ fn resolved_size_should_be_used_value(fragment: &Fragment) -> bool {
     // > Applies to: all elements except non-replaced inlines
     match fragment {
         Fragment::Box(box_fragment) => !box_fragment.borrow().is_inline_box(),
-        Fragment::Float(_) |
-        Fragment::Positioning(_) |
-        Fragment::AbsoluteOrFixedPositioned(_) |
-        Fragment::Image(_) |
-        Fragment::IFrame(_) => true,
+        Fragment::Float(_)
+        | Fragment::Positioning(_)
+        | Fragment::AbsoluteOrFixedPositioned(_)
+        | Fragment::Image(_)
+        | Fragment::IFrame(_) => true,
         Fragment::Text(_) => false,
     }
 }
@@ -430,8 +430,8 @@ fn should_honor_min_size_auto(fragment: Option<&Fragment>, style: &ComputedValue
         return false;
     };
     let flags = box_fragment.borrow().base.flags;
-    flags.contains(FragmentFlags::IS_FLEX_OR_GRID_ITEM) ||
-        style.clone_aspect_ratio() != AspectRatio::auto()
+    flags.contains(FragmentFlags::IS_FLEX_OR_GRID_ITEM)
+        || style.clone_aspect_ratio() != AspectRatio::auto()
 }
 
 fn resolve_grid_template(
@@ -474,9 +474,9 @@ fn resolve_grid_template(
         // <https://drafts.csswg.org/css-grid/#resolved-track-list-standalone>
         // > When an element generates a grid container box, the resolved value of its grid-template-rows or
         // > grid-template-columns property in a standalone axis is the used value, serialized with:
-        GenericGridTemplateComponent::None |
-        GenericGridTemplateComponent::TrackList(_) |
-        GenericGridTemplateComponent::Masonry => {
+        GenericGridTemplateComponent::None
+        | GenericGridTemplateComponent::TrackList(_)
+        | GenericGridTemplateComponent::Masonry => {
             serialize_standalone_non_subgrid_track_list(&track_info.sizes)
         },
 
@@ -620,8 +620,8 @@ fn offset_parent_fragments(node: ServoLayoutNode<'_>) -> Option<OffsetParentFrag
 
             let flags = parent_fragment.borrow().base.flags;
             if flags.intersects(
-                FragmentFlags::IS_BODY_ELEMENT_OF_HTML_ELEMENT_ROOT |
-                    FragmentFlags::IS_TABLE_TH_OR_TD_ELEMENT,
+                FragmentFlags::IS_BODY_ELEMENT_OF_HTML_ELEMENT_ROOT
+                    | FragmentFlags::IS_TABLE_TH_OR_TD_ELEMENT,
             ) {
                 return Some(OffsetParentFragments {
                     parent: parent_fragment.clone(),
@@ -683,8 +683,8 @@ pub fn process_offset_parent_query(
     let parent_is_static_body_element = parent_fragment
         .base
         .flags
-        .contains(FragmentFlags::IS_BODY_ELEMENT_OF_HTML_ELEMENT_ROOT) &&
-        parent_fragment.style().get_box().position == Position::Static;
+        .contains(FragmentFlags::IS_BODY_ELEMENT_OF_HTML_ELEMENT_ROOT)
+        && parent_fragment.style().get_box().position == Position::Static;
 
     // For `offsetLeft`:
     // 3. Return the result of subtracting the y-coordinate of the top padding edge of the
@@ -811,16 +811,16 @@ pub(crate) fn process_scroll_container_query(
     //
     // Note: We only do this for `scrollParent`, which needs to be null. But `scrollIntoView` on the
     // `<body>` or root element should still bring it into view by scrolling the viewport.
-    if query_flags.contains(ScrollContainerQueryFlags::ForScrollParent) &&
-        flags.intersects(
+    if query_flags.contains(ScrollContainerQueryFlags::ForScrollParent)
+        && flags.intersects(
             FragmentFlags::IS_ROOT_ELEMENT | FragmentFlags::IS_BODY_ELEMENT_OF_HTML_ELEMENT_ROOT,
         )
     {
         return None;
     }
 
-    if query_flags.contains(ScrollContainerQueryFlags::Inclusive) &&
-        style.establishes_scroll_container(flags)
+    if query_flags.contains(ScrollContainerQueryFlags::Inclusive)
+        && style.establishes_scroll_container(flags)
     {
         return Some(ScrollContainerResponse::Element(
             node.opaque().into(),
@@ -990,13 +990,13 @@ fn rendered_text_collection_steps(
                 match parent_node.type_id() {
                     // Any text contained in these elements must be ignored.
                     Some(
-                        LayoutNodeType::Element(LayoutElementType::HTMLCanvasElement) |
-                        LayoutNodeType::Element(LayoutElementType::HTMLImageElement) |
-                        LayoutNodeType::Element(LayoutElementType::HTMLIFrameElement) |
-                        LayoutNodeType::Element(LayoutElementType::HTMLObjectElement) |
-                        LayoutNodeType::Element(LayoutElementType::HTMLInputElement) |
-                        LayoutNodeType::Element(LayoutElementType::HTMLTextAreaElement) |
-                        LayoutNodeType::Element(LayoutElementType::HTMLMediaElement),
+                        LayoutNodeType::Element(LayoutElementType::HTMLCanvasElement)
+                        | LayoutNodeType::Element(LayoutElementType::HTMLImageElement)
+                        | LayoutNodeType::Element(LayoutElementType::HTMLIFrameElement)
+                        | LayoutNodeType::Element(LayoutElementType::HTMLObjectElement)
+                        | LayoutNodeType::Element(LayoutElementType::HTMLInputElement)
+                        | LayoutNodeType::Element(LayoutElementType::HTMLTextAreaElement)
+                        | LayoutNodeType::Element(LayoutElementType::HTMLMediaElement),
                     ) => {
                         return items;
                     },
@@ -1062,8 +1062,8 @@ fn rendered_text_collection_steps(
                         // Even if set to Display::None, Option/OptGroup elements need to
                         // be rendered.
                         Some(
-                            LayoutNodeType::Element(LayoutElementType::HTMLOptGroupElement) |
-                            LayoutNodeType::Element(LayoutElementType::HTMLOptionElement),
+                            LayoutNodeType::Element(LayoutElementType::HTMLOptGroupElement)
+                            | LayoutNodeType::Element(LayoutElementType::HTMLOptionElement),
                         ) => {},
                         _ => {
                             return items;
@@ -1260,8 +1260,8 @@ fn rendered_text_collection_steps(
                 // Option/OptGroup elements should go on separate lines, by treating them like
                 // Block elements we can achieve that.
                 Some(
-                    LayoutNodeType::Element(LayoutElementType::HTMLOptionElement) |
-                    LayoutNodeType::Element(LayoutElementType::HTMLOptGroupElement),
+                    LayoutNodeType::Element(LayoutElementType::HTMLOptionElement)
+                    | LayoutNodeType::Element(LayoutElementType::HTMLOptGroupElement),
                 ) => {
                     surrounding_line_breaks = 1;
                 },
@@ -1282,13 +1282,13 @@ fn rendered_text_collection_steps(
                 // space, since for example <span>asd <input> qwe</span> must
                 // product "asd  qwe" (note the 2 spaces)
                 Some(
-                    LayoutNodeType::Element(LayoutElementType::HTMLCanvasElement) |
-                    LayoutNodeType::Element(LayoutElementType::HTMLImageElement) |
-                    LayoutNodeType::Element(LayoutElementType::HTMLIFrameElement) |
-                    LayoutNodeType::Element(LayoutElementType::HTMLObjectElement) |
-                    LayoutNodeType::Element(LayoutElementType::HTMLInputElement) |
-                    LayoutNodeType::Element(LayoutElementType::HTMLTextAreaElement) |
-                    LayoutNodeType::Element(LayoutElementType::HTMLMediaElement),
+                    LayoutNodeType::Element(LayoutElementType::HTMLCanvasElement)
+                    | LayoutNodeType::Element(LayoutElementType::HTMLImageElement)
+                    | LayoutNodeType::Element(LayoutElementType::HTMLIFrameElement)
+                    | LayoutNodeType::Element(LayoutElementType::HTMLObjectElement)
+                    | LayoutNodeType::Element(LayoutElementType::HTMLInputElement)
+                    | LayoutNodeType::Element(LayoutElementType::HTMLTextAreaElement)
+                    | LayoutNodeType::Element(LayoutElementType::HTMLMediaElement),
                 ) => {
                     if display != Display::Block && state.did_truncate_trailing_white_space {
                         items.push(InnerOrOuterTextItem::Text(String::from(" ")));

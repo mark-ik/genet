@@ -90,9 +90,9 @@ impl OhosPlayer {
     /// 2. after running external initialize step.
     ///    e.g. setup_window_buffer_listener
     pub fn initialize_check_state_action(&mut self) {
-        if self.state == AVPlayerState::AV_INITIALIZED &&
-            self.native_window.is_some() &&
-            !self.has_set_window
+        if self.state == AVPlayerState::AV_INITIALIZED
+            && self.native_window.is_some()
+            && !self.has_set_window
         {
             self.has_set_window = true;
             self.set_window_to_player();

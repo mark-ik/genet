@@ -72,9 +72,9 @@ impl CorsCacheEntry {
 }
 
 fn match_headers(cors_cache: &CorsCacheEntry, cors_req: &Request) -> bool {
-    cors_cache.origin == cors_req.origin &&
-        cors_cache.url == cors_req.current_url() &&
-        (cors_cache.credentials || cors_req.credentials_mode != CredentialsMode::Include)
+    cors_cache.origin == cors_req.origin
+        && cors_cache.url == cors_req.current_url()
+        && (cors_cache.credentials || cors_req.credentials_mode != CredentialsMode::Include)
 }
 
 /// A simple, vector-based CORS Cache

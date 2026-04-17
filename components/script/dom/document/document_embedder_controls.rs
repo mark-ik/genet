@@ -126,10 +126,10 @@ impl DocumentEmbedderControls {
             .insert(id.index.into(), element);
 
         match request {
-            EmbedderControlRequest::SelectElement(..) |
-            EmbedderControlRequest::ColorPicker(..) |
-            EmbedderControlRequest::InputMethod(..) |
-            EmbedderControlRequest::ContextMenu(..) => self
+            EmbedderControlRequest::SelectElement(..)
+            | EmbedderControlRequest::ColorPicker(..)
+            | EmbedderControlRequest::InputMethod(..)
+            | EmbedderControlRequest::ContextMenu(..) => self
                 .window
                 .send_to_embedder(EmbedderMsg::ShowEmbedderControl(id, rect, request)),
             EmbedderControlRequest::FilePicker(file_picker_request) => {

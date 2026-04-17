@@ -391,8 +391,8 @@ impl FetchResponseListener for StylesheetContext {
                 // > the URL of the external resource, and the Content-Type metadata of the
                 // > external resource is not a supported style sheet type, the user agent must
                 // > instead assume it to be text/css.
-                document.quirks_mode() == QuirksMode::Quirks &&
-                    document.origin().immutable().clone() == metadata.final_url.origin()
+                document.quirks_mode() == QuirksMode::Quirks
+                    && document.origin().immutable().clone() == metadata.final_url.origin()
             );
 
             if !is_css {
@@ -511,9 +511,9 @@ impl ElementStylesheetLoader<'_> {
 
         // If element's media attribute's value matches the environment and
         // element is potentially render-blocking, then block rendering on element.
-        context.is_render_blocking = element.media_attribute_matches_media_environment() &&
-            owner.potentially_render_blocking() &&
-            document.allows_adding_render_blocking_elements();
+        context.is_render_blocking = element.media_attribute_matches_media_environment()
+            && owner.potentially_render_blocking()
+            && document.allows_adding_render_blocking_elements();
         if context.is_render_blocking {
             document.increment_render_blocking_element_count();
         }
