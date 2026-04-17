@@ -368,8 +368,8 @@ impl InlineFormattingContextBuilder {
             .inspect(|&character| {
                 character_count += 1;
 
-                self.is_empty = self.is_empty &&
-                    match white_space_collapse {
+                self.is_empty = self.is_empty
+                    && match white_space_collapse {
                         WhiteSpaceCollapse::Collapse => character.is_ascii_whitespace(),
                         WhiteSpaceCollapse::PreserveBreaks => {
                             character.is_ascii_whitespace() && character != '\n'
@@ -526,8 +526,8 @@ where
         // > characters are considered collapsible
         // If whitespace is not considered collapsible, it is preserved entirely, which
         // means that we can simply return the input string exactly.
-        if self.white_space_collapse == WhiteSpaceCollapse::Preserve ||
-            self.white_space_collapse == WhiteSpaceCollapse::BreakSpaces
+        if self.white_space_collapse == WhiteSpaceCollapse::Preserve
+            || self.white_space_collapse == WhiteSpaceCollapse::BreakSpaces
         {
             // From <https://drafts.csswg.org/css-text-3/#white-space-processing>:
             // > Carriage returns (U+000D) are treated identically to spaces (U+0020) in all respects.
@@ -574,9 +574,9 @@ where
                 // >    collapsible segment break is removed.
                 // > 2. Then any remaining segment break is either transformed into a space (U+0020)
                 // >    or removed depending on the context before and after the break.
-                } else if !self.following_newline &&
-                    preserve_segment_break() &&
-                    !self.is_leading_trimmed_white_space()
+                } else if !self.following_newline
+                    && preserve_segment_break()
+                    && !self.is_leading_trimmed_white_space()
                 {
                     self.inside_white_space = false;
                     self.following_newline = true;
@@ -827,9 +827,9 @@ fn first_letter_range(text: &str) -> Range<usize> {
             State::Lns => {
                 // TODO: Implement support for intervening spaces
                 // <https://drafts.csswg.org/css-pseudo/#first-letter-pattern>
-                if character.is_punctuation() &&
-                    !character.is_punctuation_open() &&
-                    !character.is_punctuation_dash()
+                if character.is_punctuation()
+                    && !character.is_punctuation_open()
+                    && !character.is_punctuation_dash()
                 {
                     state = State::TrailingPunctuation;
                 } else {
@@ -839,9 +839,9 @@ fn first_letter_range(text: &str) -> Range<usize> {
             State::TrailingPunctuation => {
                 // TODO: Implement support for intervening spaces
                 // <https://drafts.csswg.org/css-pseudo/#first-letter-pattern>
-                if character.is_punctuation() &&
-                    !character.is_punctuation_open() &&
-                    !character.is_punctuation_dash()
+                if character.is_punctuation()
+                    && !character.is_punctuation_open()
+                    && !character.is_punctuation_dash()
                 {
                     continue;
                 } else {

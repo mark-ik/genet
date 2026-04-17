@@ -93,31 +93,31 @@ impl PartialOrd for IndexedDBKeyType {
             // Step 3: If ta is array and tb is binary, string, date or number, return 1.
             (
                 IndexedDBKeyType::Array(_),
-                IndexedDBKeyType::Binary(_) |
-                IndexedDBKeyType::Date(_) |
-                IndexedDBKeyType::Number(_) |
-                IndexedDBKeyType::String(_),
+                IndexedDBKeyType::Binary(_)
+                | IndexedDBKeyType::Date(_)
+                | IndexedDBKeyType::Number(_)
+                | IndexedDBKeyType::String(_),
             ) => Some(Ordering::Greater),
             // Step 4: If tb is array and ta is binary, string, date or number, return -1.
             (
-                IndexedDBKeyType::Binary(_) |
-                IndexedDBKeyType::Date(_) |
-                IndexedDBKeyType::Number(_) |
-                IndexedDBKeyType::String(_),
+                IndexedDBKeyType::Binary(_)
+                | IndexedDBKeyType::Date(_)
+                | IndexedDBKeyType::Number(_)
+                | IndexedDBKeyType::String(_),
                 IndexedDBKeyType::Array(_),
             ) => Some(Ordering::Less),
             // Step 5: If ta is binary and tb is string, date or number, return 1.
             (
                 IndexedDBKeyType::Binary(_),
-                IndexedDBKeyType::String(_) |
-                IndexedDBKeyType::Date(_) |
-                IndexedDBKeyType::Number(_),
+                IndexedDBKeyType::String(_)
+                | IndexedDBKeyType::Date(_)
+                | IndexedDBKeyType::Number(_),
             ) => Some(Ordering::Greater),
             // Step 6: If tb is binary and ta is string, date or number, return -1.
             (
-                IndexedDBKeyType::String(_) |
-                IndexedDBKeyType::Date(_) |
-                IndexedDBKeyType::Number(_),
+                IndexedDBKeyType::String(_)
+                | IndexedDBKeyType::Date(_)
+                | IndexedDBKeyType::Number(_),
                 IndexedDBKeyType::Binary(_),
             ) => Some(Ordering::Less),
             // Step 7: If ta is string and tb is date or number, return 1.

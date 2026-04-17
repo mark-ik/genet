@@ -237,8 +237,8 @@ impl CompiledEventListener {
                                 );
                                 // Step 4
                                 if let Ok(()) = return_value {
-                                    if rooted_return_value.handle().is_boolean() &&
-                                        rooted_return_value.handle().to_boolean()
+                                    if rooted_return_value.handle().is_boolean()
+                                        && rooted_return_value.handle().to_boolean()
                                     {
                                         event.upcast::<Event>().PreventDefault();
                                     }

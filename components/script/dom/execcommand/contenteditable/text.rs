@@ -101,8 +101,8 @@ impl Text {
             // Step 8.3. If reference is a Text node that is not a whitespace node, or is an img, break from this loop.
             if reference
                 .downcast::<Text>()
-                .is_some_and(|text| !text.is_whitespace_node()) ||
-                reference.is::<HTMLImageElement>()
+                .is_some_and(|text| !text.is_whitespace_node())
+                || reference.is::<HTMLImageElement>()
             {
                 break;
             }
@@ -118,8 +118,8 @@ impl Text {
             // Step 10.3. If reference is a Text node that is not a whitespace node, or is an img, break from this loop.
             if reference
                 .downcast::<Text>()
-                .is_some_and(|text| !text.is_whitespace_node()) ||
-                reference.is::<HTMLImageElement>()
+                .is_some_and(|text| !text.is_whitespace_node())
+                || reference.is::<HTMLImageElement>()
             {
                 break;
             }

@@ -204,10 +204,10 @@ impl Fragment {
                 return fragment.borrow().scrollable_overflow_for_parent();
             },
             Fragment::Positioning(fragment) => fragment.borrow().scrollable_overflow_for_parent(),
-            Fragment::AbsoluteOrFixedPositioned(_) |
-            Fragment::Text(..) |
-            Fragment::Image(..) |
-            Fragment::IFrame(..) => self.base().map(|base| base.rect).unwrap_or_default(),
+            Fragment::AbsoluteOrFixedPositioned(_)
+            | Fragment::Text(..)
+            | Fragment::Image(..)
+            | Fragment::IFrame(..) => self.base().map(|base| base.rect).unwrap_or_default(),
         }
     }
 
@@ -239,10 +239,10 @@ impl Fragment {
                 let fragment = fragment.borrow();
                 Some(fragment.offset_by_containing_block(&fragment.base.rect))
             },
-            Fragment::Text(_) |
-            Fragment::AbsoluteOrFixedPositioned(_) |
-            Fragment::Image(_) |
-            Fragment::IFrame(_) => None,
+            Fragment::Text(_)
+            | Fragment::AbsoluteOrFixedPositioned(_)
+            | Fragment::Image(_)
+            | Fragment::IFrame(_) => None,
         }
     }
 

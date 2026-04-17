@@ -359,10 +359,10 @@ pub fn prescan_the_byte_stream_to_determine_the_encoding(
         else if remaining_byte_stream
             .get(..b"<meta ".len())
             .is_some_and(|candidate| {
-                candidate[..b"<meta".len()].eq_ignore_ascii_case(b"<meta") &&
-                    candidate.last().is_some_and(|byte| {
-                        matches!(byte, 0x09 | 0x0A | 0x0C | 0x0D | 0x20 | 0x2F)
-                    })
+                candidate[..b"<meta".len()].eq_ignore_ascii_case(b"<meta")
+                    && candidate
+                        .last()
+                        .is_some_and(|byte| matches!(byte, 0x09 | 0x0A | 0x0C | 0x0D | 0x20 | 0x2F))
             })
         {
             // Step 1. Advance the position pointer so that it points at the next 0x09, 0x0A, 0x0C, 0x0D, 0x20,
@@ -460,8 +460,8 @@ pub fn prescan_the_byte_stream_to_determine_the_encoding(
         }
         // A sequence of bytes starting with a 0x3C byte (<), optionally a 0x2F byte (/),
         // and finally a byte in the range 0x41-0x5A or 0x61-0x7A (A-Z or a-z)
-        else if *remaining_byte_stream.first()? == b'<' &&
-            remaining_byte_stream
+        else if *remaining_byte_stream.first()? == b'<'
+            && remaining_byte_stream
                 .get(1)
                 .filter(|byte| **byte != b'=')
                 .or(remaining_byte_stream.get(2))?
@@ -480,9 +480,9 @@ pub fn prescan_the_byte_stream_to_determine_the_encoding(
         // A sequence of bytes starting with: 0x3C 0x21 (`<!`)
         // A sequence of bytes starting with: 0x3C 0x2F (`</`)
         // A sequence of bytes starting with: 0x3C 0x3F (`<?`)
-        else if remaining_byte_stream.starts_with(b"<!") ||
-            remaining_byte_stream.starts_with(b"</") ||
-            remaining_byte_stream.starts_with(b"<?")
+        else if remaining_byte_stream.starts_with(b"<!")
+            || remaining_byte_stream.starts_with(b"</")
+            || remaining_byte_stream.starts_with(b"<?")
         {
             // Advance the position pointer so that it points at the first 0x3E byte (>) that comes after the 0x3C byte that was found.
             position += remaining_byte_stream
@@ -686,8 +686,8 @@ fn extract_a_character_encoding_from_a_meta_element(input: &[u8]) -> Option<&'st
         // NOTE: In our case, the attribute value always comes from "get_an_attribute" and is already lowercased.
         position += input[position..]
             .windows(7)
-            .position(|window| window == b"charset")? +
-            b"charset".len();
+            .position(|window| window == b"charset")?
+            + b"charset".len();
 
         // Step 3. Skip any ASCII whitespace that immediately follow the word "charset" (there might not be any).
         position += &input[position..]

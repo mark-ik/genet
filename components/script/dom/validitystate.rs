@@ -129,8 +129,8 @@ impl ValidityState {
         }
 
         // https://html.spec.whatwg.org/multipage/#suffering-from-a-custom-error
-        if update_flags.contains(ValidationFlags::CUSTOM_ERROR) &&
-            !self.custom_error_message().is_empty()
+        if update_flags.contains(ValidationFlags::CUSTOM_ERROR)
+            && !self.custom_error_message().is_empty()
         {
             invalid_flags.insert(ValidationFlags::CUSTOM_ERROR);
         }

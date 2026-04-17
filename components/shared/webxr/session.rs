@@ -57,9 +57,9 @@ impl SessionInit {
         }
         let mut granted = self.required_features.clone();
         for f in &self.optional_features {
-            if f == "viewer" ||
-                (f == "local" && mode != SessionMode::Inline) ||
-                supported.contains(f)
+            if f == "viewer"
+                || (f == "local" && mode != SessionMode::Inline)
+                || supported.contains(f)
             {
                 granted.push(f.clone());
             }

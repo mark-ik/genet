@@ -347,8 +347,9 @@ impl TouchHandler {
         // if the current sequence ID does not exist in the map, then it was already handled
         if !self
             .touch_sequence_map
-            .contains_key(&self.current_sequence_id) ||
-            self.get_touch_sequence(self.current_sequence_id)
+            .contains_key(&self.current_sequence_id)
+            || self
+                .get_touch_sequence(self.current_sequence_id)
                 .is_finished()
         {
             self.current_sequence_id.next();
@@ -476,8 +477,8 @@ impl TouchHandler {
                         scroll: Scroll::Delta((-delta).into()),
                         point,
                     }))
-                } else if delta.x.abs() > TOUCH_PAN_MIN_SCREEN_PX * scale ||
-                    delta.y.abs() > TOUCH_PAN_MIN_SCREEN_PX * scale
+                } else if delta.x.abs() > TOUCH_PAN_MIN_SCREEN_PX * scale
+                    || delta.y.abs() > TOUCH_PAN_MIN_SCREEN_PX * scale
                 {
                     let _span = profile_traits::info_span!(
                         "TouchHandler::ScrollBegin",
@@ -504,9 +505,9 @@ impl TouchHandler {
                 }
             },
             2 => {
-                if touch_sequence.state == Pinching ||
-                    delta.x.abs() > TOUCH_PAN_MIN_SCREEN_PX * scale ||
-                    delta.y.abs() > TOUCH_PAN_MIN_SCREEN_PX * scale
+                if touch_sequence.state == Pinching
+                    || delta.x.abs() > TOUCH_PAN_MIN_SCREEN_PX * scale
+                    || delta.y.abs() > TOUCH_PAN_MIN_SCREEN_PX * scale
                 {
                     touch_sequence.state = Pinching;
                     let (d0, _) = touch_sequence.pinch_distance_and_center();

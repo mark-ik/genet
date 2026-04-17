@@ -120,8 +120,8 @@ impl Element {
             // > It is an a, b, em, font, i, s, span, strike, strong, sub, sup, or u element
             // > with exactly one attribute, which is style,
             // > which sets no CSS properties (including invalid or unrecognized properties).
-            if attr_count == 1 &&
-                self.attrs().first().expect("Size is 1").local_name() == &local_name!("style")
+            if attr_count == 1
+                && self.attrs().first().expect("Size is 1").local_name() == &local_name!("style")
             {
                 let style_attribute = self.style_attribute().borrow();
                 if style_attribute.as_ref().is_some_and(|declarations| {
@@ -160,9 +160,9 @@ impl Element {
                 HTMLElementTypeId::HTMLFontElement,
             ))
         ) {
-            return only_attribute == &local_name!("color") ||
-                only_attribute == &local_name!("face") ||
-                only_attribute == &local_name!("size");
+            return only_attribute == &local_name!("color")
+                || only_attribute == &local_name!("face")
+                || only_attribute == &local_name!("size");
         }
 
         // > It is a b or strong element with exactly one attribute, which is style,
@@ -213,10 +213,10 @@ impl Element {
                     return matches!(
                         text_decoration,
                         PropertyDeclaration::TextDecorationLine(
-                            TextDecorationLine::LINE_THROUGH |
-                                TextDecorationLine::UNDERLINE |
-                                TextDecorationLine::OVERLINE |
-                                TextDecorationLine::NONE
+                            TextDecorationLine::LINE_THROUGH
+                                | TextDecorationLine::UNDERLINE
+                                | TextDecorationLine::OVERLINE
+                                | TextDecorationLine::NONE
                         )
                     );
                 } else {

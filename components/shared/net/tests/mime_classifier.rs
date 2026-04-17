@@ -87,8 +87,8 @@ fn test_sniff_with_flags(
                 &supplied_type,
                 &data,
             );
-            if (parsed_mime.type_() != expected_mime.type_()) ||
-                (parsed_mime.subtype() != expected_mime.subtype())
+            if (parsed_mime.type_() != expected_mime.type_())
+                || (parsed_mime.subtype() != expected_mime.subtype())
             {
                 panic!(
                     "File {:?} parsed incorrectly should be {:?}, parsed as {:?}",

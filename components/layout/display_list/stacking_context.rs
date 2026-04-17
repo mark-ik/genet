@@ -559,24 +559,19 @@ impl StackingContext {
                 .iter()
                 .all(|c| matches!(
                     c.context_type,
-                    StackingContextType::RealStackingContext |
-                        StackingContextType::PositionedStackingContainer
+                    StackingContextType::RealStackingContext
+                        | StackingContextType::PositionedStackingContainer
                 ))
         );
-        debug_assert!(
-            self.float_stacking_containers
-                .iter()
-                .all(
-                    |c| c.context_type == StackingContextType::FloatStackingContainer &&
-                        c.z_index() == 0
-                )
-        );
+        debug_assert!(self.float_stacking_containers.iter().all(|c| c.context_type
+            == StackingContextType::FloatStackingContainer
+            && c.z_index() == 0));
         debug_assert!(
             self.atomic_inline_stacking_containers
                 .iter()
                 .all(
-                    |c| c.context_type == StackingContextType::AtomicInlineStackingContainer &&
-                        c.z_index() == 0
+                    |c| c.context_type == StackingContextType::AtomicInlineStackingContainer
+                        && c.z_index() == 0
                 )
         );
     }
@@ -595,12 +590,12 @@ impl StackingContext {
         let style = fragment.style();
         let effects = style.get_effects();
         let transform_style = style.get_used_transform_style();
-        if effects.filter.0.is_empty() &&
-            effects.opacity == 1.0 &&
-            effects.mix_blend_mode == ComputedMixBlendMode::Normal &&
-            !style.has_effective_transform_or_perspective(FragmentFlags::empty()) &&
-            style.clone_clip_path() == ClipPath::None &&
-            transform_style == TransformStyle::Flat
+        if effects.filter.0.is_empty()
+            && effects.opacity == 1.0
+            && effects.mix_blend_mode == ComputedMixBlendMode::Normal
+            && !style.has_effective_transform_or_perspective(FragmentFlags::empty())
+            && style.clone_clip_path() == ClipPath::None
+            && transform_style == TransformStyle::Flat
         {
             return false;
         }
@@ -939,8 +934,8 @@ impl Fragment {
         match self {
             Fragment::Box(fragment) | Fragment::Float(fragment) => {
                 let fragment = fragment.borrow();
-                if mode == StackingContextBuildMode::SkipHoisted &&
-                    fragment.style().clone_position().is_absolutely_positioned()
+                if mode == StackingContextBuildMode::SkipHoisted
+                    && fragment.style().clone_position().is_absolutely_positioned()
                 {
                     return;
                 }
@@ -1400,8 +1395,9 @@ impl BoxFragment {
         // > Note that text decorations are not propagated to floating and absolutely
         // > positioned descendants, nor to the contents of atomic inline-level descendants
         // > such as inline blocks and inline tables.
-        let text_decorations = match self.is_atomic_inline_level() ||
-            self.base
+        let text_decorations = match self.is_atomic_inline_level()
+            || self
+                .base
                 .flags
                 .contains(FragmentFlags::IS_OUTSIDE_LIST_ITEM_MARKER)
         {
@@ -1643,10 +1639,10 @@ impl BoxFragment {
             return None;
         }
 
-        if offsets.top.is_auto() &&
-            offsets.right.is_auto() &&
-            offsets.bottom.is_auto() &&
-            offsets.left.is_auto()
+        if offsets.top.is_auto()
+            && offsets.right.is_auto()
+            && offsets.bottom.is_auto()
+            && offsets.left.is_auto()
         {
             return None;
         }

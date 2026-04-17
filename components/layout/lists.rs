@@ -35,11 +35,11 @@ pub(crate) fn make_marker<'dom>(
             PseudoElementContentItem::Text(" ".into()),
         ]),
         // XXX: Non-None image types unimplemented.
-        Image::ImageSet(..) |
-        Image::Gradient(..) |
-        Image::CrossFade(..) |
-        Image::PaintWorklet(..) |
-        Image::None => None,
+        Image::ImageSet(..)
+        | Image::Gradient(..)
+        | Image::CrossFade(..)
+        | Image::PaintWorklet(..)
+        | Image::None => None,
         Image::LightDark(..) => unreachable!("light-dark() should be disabled"),
     };
 
@@ -94,19 +94,19 @@ pub(crate) fn generate_counter_representation(counter_style: &CounterStyle) -> &
             atom!("telugu") => "\u{C66}",       /* "౦" */
             atom!("thai") => "\u{E50}",         /* "๐" */
             atom!("tibetan") => "\u{F20}",      /* "༠" */
-            atom!("cjk-decimal") |
-            atom!("cjk-earthly-branch") |
-            atom!("cjk-heavenly-stem") |
-            atom!("japanese-informal") => "\u{3007}", /* "〇" */
+            atom!("cjk-decimal")
+            | atom!("cjk-earthly-branch")
+            | atom!("cjk-heavenly-stem")
+            | atom!("japanese-informal") => "\u{3007}", /* "〇" */
             atom!("korean-hangul-formal") => "\u{C601}", /* "영" */
-            atom!("korean-hanja-informal") |
-            atom!("korean-hanja-formal") |
-            atom!("japanese-formal") |
-            atom!("simp-chinese-informal") |
-            atom!("simp-chinese-formal") |
-            atom!("trad-chinese-informal") |
-            atom!("trad-chinese-formal") |
-            atom!("cjk-ideographic") => "\u{96F6}", /* "零" */
+            atom!("korean-hanja-informal")
+            | atom!("korean-hanja-formal")
+            | atom!("japanese-formal")
+            | atom!("simp-chinese-informal")
+            | atom!("simp-chinese-formal")
+            | atom!("trad-chinese-informal")
+            | atom!("trad-chinese-formal")
+            | atom!("cjk-ideographic") => "\u{96F6}", /* "零" */
             // Fall back to decimal.
             _ => "0",
         },
@@ -133,28 +133,28 @@ pub(crate) fn marker_string(list_style_type: &ListStyleType) -> Option<String> {
         CounterStyle::None => return None,
         CounterStyle::String(string) => return Some(string.to_string()),
         CounterStyle::Name(name) => match name.0 {
-            atom!("disc") |
-            atom!("circle") |
-            atom!("square") |
-            atom!("disclosure-open") |
-            atom!("disclosure-closed") => " ",
-            atom!("hiragana") |
-            atom!("hiragana-iroha") |
-            atom!("katakana") |
-            atom!("katakana-iroha") |
-            atom!("cjk-decimal") |
-            atom!("cjk-earthly-branch") |
-            atom!("cjk-heavenly-stem") |
-            atom!("japanese-informal") |
-            atom!("japanese-formal") |
-            atom!("simp-chinese-informal") |
-            atom!("simp-chinese-formal") |
-            atom!("trad-chinese-informal") |
-            atom!("trad-chinese-formal") |
-            atom!("cjk-ideographic") => "\u{3001}", /* "、" */
-            atom!("korean-hangul-formal") |
-            atom!("korean-hanja-informal") |
-            atom!("korean-hanja-formal") => ", ",
+            atom!("disc")
+            | atom!("circle")
+            | atom!("square")
+            | atom!("disclosure-open")
+            | atom!("disclosure-closed") => " ",
+            atom!("hiragana")
+            | atom!("hiragana-iroha")
+            | atom!("katakana")
+            | atom!("katakana-iroha")
+            | atom!("cjk-decimal")
+            | atom!("cjk-earthly-branch")
+            | atom!("cjk-heavenly-stem")
+            | atom!("japanese-informal")
+            | atom!("japanese-formal")
+            | atom!("simp-chinese-informal")
+            | atom!("simp-chinese-formal")
+            | atom!("trad-chinese-informal")
+            | atom!("trad-chinese-formal")
+            | atom!("cjk-ideographic") => "\u{3001}", /* "、" */
+            atom!("korean-hangul-formal")
+            | atom!("korean-hanja-informal")
+            | atom!("korean-hanja-formal") => ", ",
             atom!("ethiopic-numeric") => "/ ",
             _ => ". ",
         },

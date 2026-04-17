@@ -761,8 +761,8 @@ impl HTMLImageElement {
 
             // Step 5.9. If child has width or height attributes, set el's dimension attribute
             // source to child. Otherwise, set el's dimension attribute source to el.
-            if element.get_attribute(&local_name!("width")).is_some() ||
-                element.get_attribute(&local_name!("height")).is_some()
+            if element.get_attribute(&local_name!("width")).is_some()
+                || element.get_attribute(&local_name!("height")).is_some()
             {
                 self.dimension_attribute_source.set(Some(element));
             } else {
@@ -1261,8 +1261,9 @@ impl HTMLImageElement {
         // There are missing steps for the element's last selected source in specification so let's
         // check the current request's current URL as well.
         // <https://github.com/whatwg/html/issues/5060>
-        same_selected_source = same_selected_source ||
-            self.current_request
+        same_selected_source = same_selected_source
+            || self
+                .current_request
                 .borrow()
                 .source_url
                 .as_ref()
@@ -1350,8 +1351,8 @@ impl HTMLImageElement {
         // Step 2.2. If any of the following are true: this's node document is not fully active; or
         // this's current request's state is broken, then reject promise with an "EncodingError"
         // DOMException.
-        if !self.owner_document().is_fully_active() ||
-            matches!(self.current_request.borrow().state, State::Broken)
+        if !self.owner_document().is_fully_active()
+            || matches!(self.current_request.borrow().state, State::Broken)
         {
             promise.reject_error(Error::Encoding(None), can_gc);
         } else if matches!(
@@ -1360,8 +1361,8 @@ impl HTMLImageElement {
         ) {
             // this doesn't follow the spec, but it's been discussed in <https://github.com/whatwg/html/issues/4217>
             promise.resolve_native(&(), can_gc);
-        } else if matches!(self.current_request.borrow().state, State::Unavailable) &&
-            self.current_request.borrow().source_url.is_none()
+        } else if matches!(self.current_request.borrow().state, State::Unavailable)
+            && self.current_request.borrow().source_url.is_none()
         {
             // Note: Despite being not explicitly stated in the specification but if current
             // request's state is unavailable and current URL is empty string (<img> without "src"
@@ -1671,9 +1672,9 @@ impl MicrotaskRunnable for ImageElementMicrotask {
 
     fn enter_realm<'cx>(&self, cx: &'cx mut js::context::JSContext) -> AutoRealm<'cx> {
         match self {
-            &ImageElementMicrotask::UpdateImageData { ref elem, .. } |
-            &ImageElementMicrotask::EnvironmentChanges { ref elem, .. } |
-            &ImageElementMicrotask::Decode { ref elem, .. } => enter_auto_realm(cx, &**elem),
+            &ImageElementMicrotask::UpdateImageData { ref elem, .. }
+            | &ImageElementMicrotask::EnvironmentChanges { ref elem, .. }
+            | &ImageElementMicrotask::Decode { ref elem, .. } => enter_auto_realm(cx, &**elem),
         }
     }
 }
@@ -1893,8 +1894,8 @@ impl HTMLImageElementMethods<crate::DomTypeHolder> for HTMLImageElement {
         // the img element's current request's state is completely available and its pending request
         // is null; or the img element's current request's state is broken and its pending request
         // is null, then return true.
-        if matches!(self.image_request.get(), ImageRequestPhase::Current) &&
-            matches!(
+        if matches!(self.image_request.get(), ImageRequestPhase::Current)
+            && matches!(
                 self.current_request.borrow().state,
                 State::CompletelyAvailable | State::Broken
             )
@@ -2004,10 +2005,10 @@ impl VirtualMethods for HTMLImageElement {
             .unwrap()
             .attribute_mutated(cx, attr, mutation);
         match attr.local_name() {
-            &local_name!("src") |
-            &local_name!("srcset") |
-            &local_name!("width") |
-            &local_name!("sizes") => {
+            &local_name!("src")
+            | &local_name!("srcset")
+            | &local_name!("width")
+            | &local_name!("sizes") => {
                 // <https://html.spec.whatwg.org/multipage/#reacting-to-dom-mutations>
                 // The element's src, srcset, width, or sizes attributes are set, changed, or
                 // removed.
@@ -2395,9 +2396,9 @@ pub fn parse_a_srcset_attribute(input: &str) -> Vec<ImageSource> {
                 // > 2. If width and density are not both absent, then let error be yes.
                 // > 3. Apply the rules for parsing non-negative integers to the descriptor.
                 // >    If the result is 0, let error be yes. Otherwise, let width be the result.
-                'w' if is_valid_non_negative_integer_string(first_part_of_string) &&
-                    density.is_none() &&
-                    width.is_none() =>
+                'w' if is_valid_non_negative_integer_string(first_part_of_string)
+                    && density.is_none()
+                    && width.is_none() =>
                 {
                     match parse_unsigned_integer(first_part_of_string.chars()) {
                         Ok(number) if number > 0 => {
@@ -2421,10 +2422,10 @@ pub fn parse_a_srcset_attribute(input: &str) -> Vec<ImageSource> {
                 // what Gecko does, but it also checks to see if the number is a valid HTML-spec compliant
                 // number first. Not doing that means that we might be parsing numbers that otherwise
                 // wouldn't parse.
-                'x' if is_valid_floating_point_number_string(first_part_of_string) &&
-                    width.is_none() &&
-                    density.is_none() &&
-                    future_compat_h.is_none() =>
+                'x' if is_valid_floating_point_number_string(first_part_of_string)
+                    && width.is_none()
+                    && density.is_none()
+                    && future_compat_h.is_none() =>
                 {
                     match first_part_of_string.parse::<f64>() {
                         Ok(number) if number.is_finite() && number >= 0. => {
@@ -2443,9 +2444,9 @@ pub fn parse_a_srcset_attribute(input: &str) -> Vec<ImageSource> {
                 // > 2. Apply the rules for parsing non-negative integers to the descriptor.
                 // >    If the result is 0, let error be yes. Otherwise, let future-compat-h be the
                 // >    result.
-                'h' if is_valid_non_negative_integer_string(first_part_of_string) &&
-                    future_compat_h.is_none() &&
-                    density.is_none() =>
+                'h' if is_valid_non_negative_integer_string(first_part_of_string)
+                    && future_compat_h.is_none()
+                    && density.is_none() =>
                 {
                     match parse_unsigned_integer(first_part_of_string.chars()) {
                         Ok(number) if number > 0 => {

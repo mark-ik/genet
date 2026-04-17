@@ -832,12 +832,12 @@ impl HTMLElement {
                     *self.downcast::<HTMLInputElement>().unwrap().input_type(),
                     InputType::Hidden(_)
                 ),
-                HTMLElementTypeId::HTMLButtonElement |
-                HTMLElementTypeId::HTMLMeterElement |
-                HTMLElementTypeId::HTMLOutputElement |
-                HTMLElementTypeId::HTMLProgressElement |
-                HTMLElementTypeId::HTMLSelectElement |
-                HTMLElementTypeId::HTMLTextAreaElement => true,
+                HTMLElementTypeId::HTMLButtonElement
+                | HTMLElementTypeId::HTMLMeterElement
+                | HTMLElementTypeId::HTMLOutputElement
+                | HTMLElementTypeId::HTMLProgressElement
+                | HTMLElementTypeId::HTMLSelectElement
+                | HTMLElementTypeId::HTMLTextAreaElement => true,
                 _ => self.is_form_associated_custom_element(),
             },
             _ => false,
@@ -857,13 +857,13 @@ impl HTMLElement {
     pub(crate) fn is_listed_element(&self) -> bool {
         match self.upcast::<Node>().type_id() {
             NodeTypeId::Element(ElementTypeId::HTMLElement(type_id)) => match type_id {
-                HTMLElementTypeId::HTMLButtonElement |
-                HTMLElementTypeId::HTMLFieldSetElement |
-                HTMLElementTypeId::HTMLInputElement |
-                HTMLElementTypeId::HTMLObjectElement |
-                HTMLElementTypeId::HTMLOutputElement |
-                HTMLElementTypeId::HTMLSelectElement |
-                HTMLElementTypeId::HTMLTextAreaElement => true,
+                HTMLElementTypeId::HTMLButtonElement
+                | HTMLElementTypeId::HTMLFieldSetElement
+                | HTMLElementTypeId::HTMLInputElement
+                | HTMLElementTypeId::HTMLObjectElement
+                | HTMLElementTypeId::HTMLOutputElement
+                | HTMLElementTypeId::HTMLSelectElement
+                | HTMLElementTypeId::HTMLTextAreaElement => true,
                 _ => self.is_form_associated_custom_element(),
             },
             _ => false,
@@ -875,9 +875,9 @@ impl HTMLElement {
         let self_node = self.upcast::<Node>();
         self_node.GetParentNode().is_some_and(|parent| {
             let parent_node = parent.upcast::<Node>();
-            (self_node.is::<HTMLBodyElement>() || self_node.is::<HTMLFrameSetElement>()) &&
-                parent_node.is::<HTMLHtmlElement>() &&
-                self_node
+            (self_node.is::<HTMLBodyElement>() || self_node.is::<HTMLFrameSetElement>())
+                && parent_node.is::<HTMLHtmlElement>()
+                && self_node
                     .preceding_siblings()
                     .all(|n| !n.is::<HTMLBodyElement>() && !n.is::<HTMLFrameSetElement>())
         })
@@ -887,10 +887,10 @@ impl HTMLElement {
     pub(crate) fn is_submittable_element(&self) -> bool {
         match self.upcast::<Node>().type_id() {
             NodeTypeId::Element(ElementTypeId::HTMLElement(type_id)) => match type_id {
-                HTMLElementTypeId::HTMLButtonElement |
-                HTMLElementTypeId::HTMLInputElement |
-                HTMLElementTypeId::HTMLSelectElement |
-                HTMLElementTypeId::HTMLTextAreaElement => true,
+                HTMLElementTypeId::HTMLButtonElement
+                | HTMLElementTypeId::HTMLInputElement
+                | HTMLElementTypeId::HTMLSelectElement
+                | HTMLElementTypeId::HTMLTextAreaElement => true,
                 _ => self.is_form_associated_custom_element(),
             },
             _ => false,

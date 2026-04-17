@@ -153,8 +153,8 @@ impl IndependentFormattingContext {
 
                 // Some replaced elements can have inner widgets, e.g. `<video controls>`.
                 let node = node_and_style_info.node;
-                let widget = (node.pseudo_element_chain().is_empty() &&
-                    node.is_root_of_user_agent_widget())
+                let widget = (node.pseudo_element_chain().is_empty()
+                    && node.is_root_of_user_agent_widget())
                 .then(|| {
                     let widget_info = node_and_style_info
                         .with_pseudo_element(context, PseudoElement::ServoAnonymousBox)
@@ -454,11 +454,11 @@ impl IndependentFormattingContext {
     ) -> CacheableLayoutResult {
         if let Some(cache) = self.base.cached_layout_result.borrow().as_ref() {
             let cache = &**cache;
-            if cache.containing_block_for_children_size.inline ==
-                containing_block_for_children.size.inline &&
-                (cache.containing_block_for_children_size.block ==
-                    containing_block_for_children.size.block ||
-                    !cache.result.depends_on_block_constraints)
+            if cache.containing_block_for_children_size.inline
+                == containing_block_for_children.size.inline
+                && (cache.containing_block_for_children_size.block
+                    == containing_block_for_children.size.block
+                    || !cache.result.depends_on_block_constraints)
             {
                 positioning_context.append(cache.positioning_context.clone());
                 return cache.result.clone();

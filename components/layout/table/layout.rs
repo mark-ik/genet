@@ -248,8 +248,8 @@ impl<'a> TableLayout<'a> {
         // The CSSWG resolved that `auto` and `max-content` inline sizes prevent fixed table mode.
         // <https://github.com/w3c/csswg-drafts/issues/10937>
         let style = &table.style;
-        let is_in_fixed_mode = style.get_table().table_layout == TableLayoutMode::Fixed &&
-            !matches!(
+        let is_in_fixed_mode = style.get_table().table_layout == TableLayoutMode::Fixed
+            && !matches!(
                 style.box_size(style.writing_mode).inline,
                 Size::Initial | Size::MaxContent
             );
@@ -342,8 +342,8 @@ impl<'a> TableLayout<'a> {
                     let inline_content_sizes = cell
                         .context
                         .inline_content_sizes(layout_context, &constraint_space)
-                        .sizes +
-                        padding_border_sums.inline.into();
+                        .sizes
+                        + padding_border_sums.inline.into();
                     assert!(
                         inline_content_sizes.max_content >= inline_content_sizes.min_content,
                         "the max-content size should never be smaller than the min-content size"
@@ -610,15 +610,15 @@ impl<'a> TableLayout<'a> {
                 let ratio = if columns_non_percent_max_inline_size_sum.is_zero() {
                     1. / ((column_count - percent_columns_count) as f32)
                 } else {
-                    column.content_sizes.max_content.to_f32_px() /
-                        columns_non_percent_max_inline_size_sum.to_f32_px()
+                    column.content_sizes.max_content.to_f32_px()
+                        / columns_non_percent_max_inline_size_sum.to_f32_px()
                 };
                 column.percentage = Some(Percentage(surplus_percent * ratio));
             }
         }
 
-        let colspan_cell_min_size = (colspan_cell_constraints.content_sizes.min_content -
-            total_border_spacing)
+        let colspan_cell_min_size = (colspan_cell_constraints.content_sizes.min_content
+            - total_border_spacing)
             .max(Au::zero());
         let distributed_minimum =
             Self::distribute_width_to_columns(colspan_cell_min_size, &self.columns[column_range]);
@@ -629,8 +629,8 @@ impl<'a> TableLayout<'a> {
             }
         }
 
-        let colspan_cell_max_size = (colspan_cell_constraints.content_sizes.max_content -
-            total_border_spacing)
+        let colspan_cell_max_size = (colspan_cell_constraints.content_sizes.max_content
+            - total_border_spacing)
             .max(Au::zero());
         let distributed_maximum = Self::distribute_width_to_columns(
             colspan_cell_max_size,
@@ -697,8 +697,9 @@ impl<'a> TableLayout<'a> {
         // Do not take into account percentage of columns when this table is a descendant
         // of a flex, grid, or table container. These modes with percentage columns can
         // cause inline width to become infinitely wide.
-        if !percent_sum.is_zero() &&
-            self.table
+        if !percent_sum.is_zero()
+            && self
+                .table
                 .percentage_columns_allowed_for_inline_content_sizes
         {
             let total_inline_size =
@@ -980,8 +981,8 @@ impl<'a> TableLayout<'a> {
         if !total_max_content_width.is_zero() {
             for column_index in unconstrained_max_content_columns {
                 column_sizes[column_index] += extra_inline_size.scale_by(
-                    columns[column_index].content_sizes.max_content.to_f32_px() /
-                        total_max_content_width.to_f32_px(),
+                    columns[column_index].content_sizes.max_content.to_f32_px()
+                        / total_max_content_width.to_f32_px(),
                 );
             }
             return;
@@ -1025,8 +1026,8 @@ impl<'a> TableLayout<'a> {
         if !total_max_content_width.is_zero() {
             for column_index in constrained_max_content_columns {
                 column_sizes[column_index] += extra_inline_size.scale_by(
-                    columns[column_index].content_sizes.max_content.to_f32_px() /
-                        total_max_content_width.to_f32_px(),
+                    columns[column_index].content_sizes.max_content.to_f32_px()
+                        / total_max_content_width.to_f32_px(),
                 );
             }
             return;
@@ -1110,9 +1111,9 @@ impl<'a> TableLayout<'a> {
 
             let mut total_cell_width = (coordinate.x..coordinate.x + cell.colspan)
                 .map(|column_index| self.distributed_column_widths[column_index])
-                .sum::<Au>() -
-                padding_border_sums.inline +
-                border_spacing_spanned;
+                .sum::<Au>()
+                - padding_border_sums.inline
+                + border_spacing_spanned;
             total_cell_width = total_cell_width.max(Au::zero());
 
             let preferred_aspect_ratio = cell.context.preferred_aspect_ratio(&padding_border_sums);
@@ -1323,9 +1324,9 @@ impl<'a> TableLayout<'a> {
             let current_rows_size = rows_spanned.clone().map(|index| row_sizes[index]).sum();
             let border_spacing_spanned =
                 self.table.border_spacing().block * (rows_spanned.len() - 1) as i32;
-            let excess_size = (rowspan_to_distribute.measure.content_sizes.min_content -
-                current_rows_size -
-                border_spacing_spanned)
+            let excess_size = (rowspan_to_distribute.measure.content_sizes.min_content
+                - current_rows_size
+                - border_spacing_spanned)
                 .max(Au::zero());
 
             self.distribute_extra_size_to_rows(
@@ -1357,8 +1358,8 @@ impl<'a> TableLayout<'a> {
         let is_empty: Vec<bool> = track_sizes.iter().map(|size| size.is_zero()).collect();
         let is_not_empty = |track_index: &usize| !is_empty[*track_index];
         let other_row_that_starts_a_rowspan = |track_index: &usize| {
-            *track_index != track_range.start &&
-                self.rows[*track_index].has_cell_with_span_greater_than_one
+            *track_index != track_range.start
+                && self.rows[*track_index].has_cell_with_span_greater_than_one
         };
 
         // If we have a table height (not during rowspan distribution), first distribute to rows
@@ -1641,9 +1642,9 @@ impl<'a> TableLayout<'a> {
                     .padding_border_margin()
                     .to_logical(table_writing_mode);
                 table_layout.baselines = grid_fragment.baselines(table_writing_mode).offset(
-                    current_block_offset +
-                        logical_grid_content_rect.start_corner.block +
-                        grid_pbm.block_start,
+                    current_block_offset
+                        + logical_grid_content_rect.start_corner.block
+                        + grid_pbm.block_start,
                 );
 
                 grid_fragment.base.rect = LogicalRect {
@@ -2770,8 +2771,8 @@ impl ComputeInlineContentSizes for Table {
         // account when computing the inline content sizes of the table wrapper (our parent), so
         // this code removes their contribution from the inline content size of the caption.
         let caption_content_sizes = ContentSizes::from(
-            layout.compute_caption_minimum_inline_size(layout_context) -
-                layout.pbm.padding_border_sums.inline,
+            layout.compute_caption_minimum_inline_size(layout_context)
+                - layout.pbm.padding_border_sums.inline,
         );
 
         InlineContentSizesResult {
@@ -2882,16 +2883,16 @@ impl TableSlotCell {
             CellContentAlignment::Bottom => free_space(),
             CellContentAlignment::Middle => free_space().scale_by(0.5),
             CellContentAlignment::Baseline => {
-                cell_baseline -
-                    (layout.padding.block_start + layout.border.block_start) -
-                    layout.ascent()
+                cell_baseline
+                    - (layout.padding.block_start + layout.border.block_start)
+                    - layout.ascent()
             },
         };
 
         let mut base_fragment_info = self.context.base.base_fragment_info;
-        if self.context.base.style.get_inherited_table().empty_cells == EmptyCells::Hide &&
-            table_style.get_inherited_table().border_collapse != BorderCollapse::Collapse &&
-            layout.is_empty_for_empty_cells()
+        if self.context.base.style.get_inherited_table().empty_cells == EmptyCells::Hide
+            && table_style.get_inherited_table().border_collapse != BorderCollapse::Collapse
+            && layout.is_empty_for_empty_cells()
         {
             base_fragment_info.flags.insert(FragmentFlags::DO_NOT_PAINT);
         }
@@ -2928,8 +2929,8 @@ impl TableSlotCell {
             );
         positioning_context.append(layout.positioning_context);
 
-        let specific_layout_info = (table_style.get_inherited_table().border_collapse ==
-            BorderCollapse::Collapse)
+        let specific_layout_info = (table_style.get_inherited_table().border_collapse
+            == BorderCollapse::Collapse)
             .then_some(SpecificLayoutInfo::TableCellWithCollapsedBorders);
 
         BoxFragment::new(

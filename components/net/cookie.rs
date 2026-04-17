@@ -228,8 +228,8 @@ impl ServoCookie {
                 .get(..prefix.len())
                 .is_some_and(|p| p.eq_ignore_ascii_case(prefix))
         };
-        if has_case_insensitive_prefix(cookie.name(), "__Secure-") &&
-            !cookie.secure().unwrap_or(false)
+        if has_case_insensitive_prefix(cookie.name(), "__Secure-")
+            && !cookie.secure().unwrap_or(false)
         {
             return None;
         }
@@ -311,9 +311,9 @@ impl ServoCookie {
         // the following conditions holds:
 
         // The cookie-path and the request-path are identical.
-        request_path == cookie_path ||
-            (request_path.starts_with(cookie_path) &&
-                (
+        request_path == cookie_path
+            || (request_path.starts_with(cookie_path)
+                && (
                     // The cookie-path is a prefix of the request-path, and the last
                     // character of the cookie-path is %x2F ("/").
                     cookie_path.ends_with('/') ||
@@ -329,11 +329,11 @@ impl ServoCookie {
         let string = &string.to_lowercase();
         let domain_string = &domain_string.to_lowercase();
 
-        string == domain_string ||
-            (string.ends_with(domain_string) &&
-                string.as_bytes()[string.len() - domain_string.len() - 1] == b'.' &&
-                string.parse::<Ipv4Addr>().is_err() &&
-                string.parse::<Ipv6Addr>().is_err())
+        string == domain_string
+            || (string.ends_with(domain_string)
+                && string.as_bytes()[string.len() - domain_string.len() - 1] == b'.'
+                && string.parse::<Ipv4Addr>().is_err()
+                && string.parse::<Ipv6Addr>().is_err())
     }
 
     /// <http://tools.ietf.org/html/rfc6265#section-5.4> step 1
@@ -592,10 +592,10 @@ impl ServoCookie {
 
         // Step 5. Abort these steps and fail to parse the cookie-date if:
         // * at least one of the found-day-of-month, found-month, found-year, or found-time flags is not set,
-        if day_of_month_value.is_none() ||
-            month_value.is_none() ||
-            year_value.is_none() ||
-            time_value.is_none()
+        if day_of_month_value.is_none()
+            || month_value.is_none()
+            || year_value.is_none()
+            || time_value.is_none()
         {
             return None;
         }

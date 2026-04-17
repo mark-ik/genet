@@ -103,9 +103,9 @@ impl WebGLQuery {
             }
         }
         match target {
-            constants::ANY_SAMPLES_PASSED |
-            constants::ANY_SAMPLES_PASSED_CONSERVATIVE |
-            constants::TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN => (),
+            constants::ANY_SAMPLES_PASSED
+            | constants::ANY_SAMPLES_PASSED_CONSERVATIVE
+            | constants::TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN => (),
             _ => return Err(InvalidEnum),
         }
         self.gl_target.set(Some(target));
@@ -128,9 +128,9 @@ impl WebGLQuery {
             }
         }
         match target {
-            constants::ANY_SAMPLES_PASSED |
-            constants::ANY_SAMPLES_PASSED_CONSERVATIVE |
-            constants::TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN => (),
+            constants::ANY_SAMPLES_PASSED
+            | constants::ANY_SAMPLES_PASSED_CONSERVATIVE
+            | constants::TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN => (),
             _ => return Err(InvalidEnum),
         }
         context.send_command(WebGLCommand::EndQuery(target));

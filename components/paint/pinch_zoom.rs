@@ -116,8 +116,8 @@ impl PinchZoom {
         );
         let layout_viewport_in_device_pixels =
             self.transform.outer_transformed_rect(&current_viewport);
-        let max_viewport_offset = -(layout_viewport_in_device_pixels.size -
-            self.unscaled_viewport_size.to_vector().to_size());
+        let max_viewport_offset = -(layout_viewport_in_device_pixels.size
+            - self.unscaled_viewport_size.to_vector().to_size());
         let max_delta = layout_viewport_in_device_pixels.origin - max_viewport_offset;
 
         let delta = match scroll {

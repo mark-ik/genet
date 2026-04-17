@@ -197,8 +197,8 @@ impl AnalysisEngine {
         self.blackman_windows.resize(self.fft_size, 0.);
         let coeff = PI * 2. / self.fft_size as f32;
         for n in 0..self.fft_size {
-            self.blackman_windows[n] = ALPHA_0 - ALPHA_1 * (coeff * n as f32).cos() +
-                ALPHA_2 * (2. * coeff * n as f32).cos();
+            self.blackman_windows[n] = ALPHA_0 - ALPHA_1 * (coeff * n as f32).cos()
+                + ALPHA_2 * (2. * coeff * n as f32).cos();
         }
     }
 
@@ -233,8 +233,8 @@ impl AnalysisEngine {
             let sum_real = sum_real / self.fft_size as f32;
             let sum_imaginary = sum_imaginary / self.fft_size as f32;
             let magnitude = (sum_real * sum_real + sum_imaginary * sum_imaginary).sqrt();
-            self.smoothed_fft_data[k] = (self.smoothing_constant * self.smoothed_fft_data[k] as f64 +
-                (1. - self.smoothing_constant) * magnitude as f64)
+            self.smoothed_fft_data[k] = (self.smoothing_constant * self.smoothed_fft_data[k] as f64
+                + (1. - self.smoothing_constant) * magnitude as f64)
                 as f32;
             self.computed_fft_data[k] = 20. * self.smoothed_fft_data[k].log(10.);
         }

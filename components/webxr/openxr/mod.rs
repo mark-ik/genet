@@ -138,10 +138,10 @@ struct ViewInfo<Eye> {
 impl<Eye> ViewInfo<Eye> {
     fn set_view(&mut self, view: openxr::View, clip_planes: ClipPlanes) {
         self.view.pose = view.pose;
-        if self.view.fov.angle_left != view.fov.angle_left ||
-            self.view.fov.angle_right != view.fov.angle_right ||
-            self.view.fov.angle_up != view.fov.angle_up ||
-            self.view.fov.angle_down != view.fov.angle_down
+        if self.view.fov.angle_left != view.fov.angle_left
+            || self.view.fov.angle_right != view.fov.angle_right
+            || self.view.fov.angle_up != view.fov.angle_up
+            || self.view.fov.angle_down != view.fov.angle_down
         {
             // It's fine if this happens occasionally, but if this happening very
             // often we should stop caching
@@ -204,9 +204,9 @@ fn create_instance(
     warn!("Available extensions:\n{:?}", supported);
     let mut supports_hands = needs_hands && supported.ext_hand_tracking;
     let supports_passthrough = needs_passthrough && supported.fb_passthrough;
-    let supports_secondary = needs_secondary &&
-        supported.msft_secondary_view_configuration &&
-        supported.msft_first_person_observer;
+    let supports_secondary = needs_secondary
+        && supported.msft_secondary_view_configuration
+        && supported.msft_first_person_observer;
     let supports_updating_framerate = supported.fb_display_refresh_rate;
 
     let app_info = ApplicationInfo {
@@ -329,9 +329,9 @@ impl DiscoveryAPI<SurfmanGL> for OpenXrDiscovery {
                 ViewConfigurationType::PRIMARY_STEREO,
             ) {
                 if mode == SessionMode::ImmersiveAR {
-                    supports = blend_modes.contains(&EnvironmentBlendMode::ADDITIVE) ||
-                        blend_modes.contains(&EnvironmentBlendMode::ALPHA_BLEND) ||
-                        instance.supports_passthrough;
+                    supports = blend_modes.contains(&EnvironmentBlendMode::ADDITIVE)
+                        || blend_modes.contains(&EnvironmentBlendMode::ALPHA_BLEND)
+                        || instance.supports_passthrough;
                 } else if mode == SessionMode::ImmersiveVR {
                     // Immersive VR sessions are not precluded by non-opaque blending
                     supports = blend_modes.len() > 0;
@@ -1184,8 +1184,8 @@ impl SharedData {
         if let Some(ref secondary) = self.secondary {
             let secondary_vp = Rect::new(
                 Point2D::new(self.left.extent.width + self.right.extent.width, 0),
-                Size2D::new(secondary.extent.width, secondary.extent.height) /
-                    SECONDARY_VIEW_DOWNSCALE,
+                Size2D::new(secondary.extent.width, secondary.extent.height)
+                    / SECONDARY_VIEW_DOWNSCALE,
             );
             viewports.push(secondary_vp)
         }

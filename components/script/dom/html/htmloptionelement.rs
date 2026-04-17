@@ -296,8 +296,8 @@ impl HTMLOptionElementMethods<crate::DomTypeHolder> for HTMLOptionElement {
         while let Some(node) = iterator.peek() {
             if let Some(element) = node.downcast::<Element>() {
                 let html_script = element.is::<HTMLScriptElement>();
-                let svg_script = *element.namespace() == ns!(svg) &&
-                    element.local_name() == &local_name!("script");
+                let svg_script = *element.namespace() == ns!(svg)
+                    && element.local_name() == &local_name!("script");
                 if html_script || svg_script {
                     iterator.next_skipping_children();
                     continue;

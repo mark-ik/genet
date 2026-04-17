@@ -81,8 +81,8 @@ impl GStreamerRegistryScanner {
 
         let is_vorbis_supported =
             has_element_for_media_type(&audio_decoder_factories, "audio/x-vorbis");
-        if is_vorbis_supported &&
-            has_element_for_media_type(&audio_parser_factories, "audio/x-vorbis")
+        if is_vorbis_supported
+            && has_element_for_media_type(&audio_parser_factories, "audio/x-vorbis")
         {
             self.supported_codecs.insert("vorbis");
             self.supported_codecs.insert("x-vorbis");
@@ -119,8 +119,8 @@ impl GStreamerRegistryScanner {
             &video_decoder_factories,
             "video/x-h264, profile=(string){ constrained-baseline, baseline, high }",
         );
-        if is_h264_decoder_available &&
-            has_element_for_media_type(&video_parser_factories, "video/x-h264")
+        if is_h264_decoder_available
+            && has_element_for_media_type(&video_parser_factories, "video/x-h264")
         {
             self.supported_mime_types.insert("video/mp4");
             self.supported_mime_types.insert("video/x-m4v");
@@ -175,8 +175,8 @@ impl GStreamerRegistryScanner {
             self.supported_mime_types.insert("application/x-mpegurl");
         }
 
-        if has_element_for_media_type(&demux_factories, "application/x-wav") ||
-            has_element_for_media_type(&demux_factories, "audio/x-wav")
+        if has_element_for_media_type(&demux_factories, "application/x-wav")
+            || has_element_for_media_type(&demux_factories, "audio/x-wav")
         {
             self.supported_mime_types.insert("audio/wav");
             self.supported_mime_types.insert("audio/vnd.wav");
@@ -240,8 +240,8 @@ impl GStreamerRegistryScanner {
             }
         }
 
-        if (is_matroska_supported || self.is_container_type_supported("video/mp4")) &&
-            has_element_for_media_type(&video_decoder_factories, "video/x-av1")
+        if (is_matroska_supported || self.is_container_type_supported("video/mp4"))
+            && has_element_for_media_type(&video_decoder_factories, "video/x-av1")
         {
             self.supported_codecs.insert("av01*");
         }

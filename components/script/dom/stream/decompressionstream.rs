@@ -280,8 +280,8 @@ pub(crate) fn decompress_flush_and_enqueue(
     let offset = decompressor.get_ref().len();
     let is_ended = decompressor
         .write(&[0])
-        .map_err(|_| Error::Type(c"DecompressionStream: write() failed".to_owned()))? ==
-        0;
+        .map_err(|_| Error::Type(c"DecompressionStream: write() failed".to_owned()))?
+        == 0;
     decompressor
         .try_finish()
         .map_err(|_| Error::Type(c"DecompressionStream: try_finish() failed".to_owned()))?;

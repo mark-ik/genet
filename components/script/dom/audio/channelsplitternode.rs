@@ -42,9 +42,9 @@ impl ChannelSplitterNode {
             ChannelInterpretation::Discrete,
         );
 
-        if node_options.count != options.numberOfOutputs ||
-            node_options.mode != ChannelCountMode::Explicit ||
-            node_options.interpretation != ChannelInterpretation::Discrete
+        if node_options.count != options.numberOfOutputs
+            || node_options.mode != ChannelCountMode::Explicit
+            || node_options.interpretation != ChannelInterpretation::Discrete
         {
             return Err(Error::InvalidState(None));
         }

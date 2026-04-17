@@ -322,8 +322,8 @@ impl Rope {
                 .iter()
                 .take(rope_index.line)
                 .map(String::len)
-                .sum::<usize>() +
-                rope_index.code_point,
+                .sum::<usize>()
+                + rope_index.code_point,
         )
     }
 
@@ -343,8 +343,8 @@ impl Rope {
             .iter()
             .take(rope_index.line)
             .map(|line| Utf16CodeUnitLength(line.chars().map(char::len_utf16).sum()))
-            .sum::<Utf16CodeUnitLength>() +
-            final_line_offset
+            .sum::<Utf16CodeUnitLength>()
+            + final_line_offset
     }
 
     /// Convert a [`RopeIndex`] into a character offset from the start of the content.
@@ -358,8 +358,8 @@ impl Rope {
             .iter()
             .take(rope_index.line)
             .map(|line| line.chars().count())
-            .sum::<usize>() +
-            final_line_offset
+            .sum::<usize>()
+            + final_line_offset
     }
 
     /// Convert a byte offset from the start of the content into a [`RopeIndex`].

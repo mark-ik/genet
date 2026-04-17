@@ -222,10 +222,10 @@ impl IDBTransaction {
     }
 
     pub(crate) fn is_inactive(&self) -> bool {
-        !self.active.get() &&
-            !self.finished.get() &&
-            !self.abort_initiated.get() &&
-            !self.committing.get()
+        !self.active.get()
+            && !self.finished.get()
+            && !self.abort_initiated.get()
+            && !self.committing.get()
     }
 
     pub(crate) fn is_committing(&self) -> bool {

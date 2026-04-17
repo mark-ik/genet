@@ -37,15 +37,15 @@ impl LineBreaker {
 
         let mut linebreaks_range = self.current_offset..self.linebreaks.len();
 
-        while self.linebreaks[linebreaks_range.start] < text_range.start &&
-            linebreaks_range.len() > 1
+        while self.linebreaks[linebreaks_range.start] < text_range.start
+            && linebreaks_range.len() > 1
         {
             linebreaks_range.start += 1;
         }
 
         let mut ending_linebreak_index = linebreaks_range.start;
-        while self.linebreaks[ending_linebreak_index] < text_range.end &&
-            ending_linebreak_index < self.linebreaks.len() - 1
+        while self.linebreaks[ending_linebreak_index] < text_range.end
+            && ending_linebreak_index < self.linebreaks.len() - 1
         {
             ending_linebreak_index += 1;
         }

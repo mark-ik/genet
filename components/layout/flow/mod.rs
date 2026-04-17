@@ -200,8 +200,8 @@ impl BlockLevelBox {
             BlockLevelBox::SameFormattingContextBlock { base, contents, .. } => {
                 contents.layout_style(base)
             },
-            BlockLevelBox::OutOfFlowAbsolutelyPositionedBox(_) |
-            BlockLevelBox::OutOfFlowFloatBox(_) => return true,
+            BlockLevelBox::OutOfFlowAbsolutelyPositionedBox(_)
+            | BlockLevelBox::OutOfFlowFloatBox(_) => return true,
             BlockLevelBox::OutsideMarker(_) => return false,
             BlockLevelBox::Independent(context) => {
                 // FIXME: If the element doesn't fit next to floats, it will get clearance.
@@ -278,8 +278,8 @@ impl BlockLevelBox {
             return false;
         }
 
-        if !tentative_block_size.definite_or_min().is_zero() ||
-            !pbm.padding_border_sums.block.is_zero()
+        if !tentative_block_size.definite_or_min().is_zero()
+            || !pbm.padding_border_sums.block.is_zero()
         {
             return false;
         }
@@ -359,9 +359,9 @@ impl OutsideMarker {
             LayoutStyle::Default(&self.list_item_style).padding_border_margin(containing_block);
         let content_rect = LogicalRect {
             start_corner: LogicalVec2 {
-                inline: -max_inline_size -
-                    (pbm_of_list_item.border.inline_start +
-                        pbm_of_list_item.padding.inline_start),
+                inline: -max_inline_size
+                    - (pbm_of_list_item.border.inline_start
+                        + pbm_of_list_item.padding.inline_start),
                 block: Zero::zero(),
             },
             size: LogicalVec2 {
@@ -437,9 +437,9 @@ impl BlockFormattingContext {
 
         CacheableLayoutResult {
             fragments: flow_layout.fragments,
-            content_block_size: flow_layout.content_block_size +
-                flow_layout.collapsible_margins_in_children.end.solve() +
-                clearance.unwrap_or_default(),
+            content_block_size: flow_layout.content_block_size
+                + flow_layout.collapsible_margins_in_children.end.solve()
+                + clearance.unwrap_or_default(),
             content_inline_size_for_table: None,
             baselines: flow_layout.baselines,
             depends_on_block_constraints: flow_layout.depends_on_block_constraints,
@@ -479,8 +479,8 @@ fn compute_inline_content_sizes_for_block_level_boxes(
 ) -> InlineContentSizesResult {
     let get_box_info = |box_: &ArcRefCell<BlockLevelBox>| {
         match &*box_.borrow() {
-            BlockLevelBox::OutOfFlowAbsolutelyPositionedBox(_) |
-            BlockLevelBox::OutsideMarker { .. } => None,
+            BlockLevelBox::OutOfFlowAbsolutelyPositionedBox(_)
+            | BlockLevelBox::OutsideMarker { .. } => None,
             BlockLevelBox::OutOfFlowFloatBox(float_box) => {
                 let inline_content_sizes_result = float_box.contents.outer_inline_content_sizes(
                     layout_context,
@@ -1062,9 +1062,9 @@ fn layout_in_flow_non_replaced_block_level_same_formatting_context(
             // NB: This will be a no-op if we're collapsing margins with our children since that
             // can only happen if we have no block-start padding and border.
             sequential_layout_state.advance_block_position(
-                pbm.padding.block_start +
-                    pbm.border.block_start +
-                    clearance.unwrap_or_else(Au::zero),
+                pbm.padding.block_start
+                    + pbm.border.block_start
+                    + clearance.unwrap_or_else(Au::zero),
             );
 
             // We are about to lay out children. Update the offset between the block formatting
@@ -1075,10 +1075,10 @@ fn layout_in_flow_non_replaced_block_level_same_formatting_context(
             let inline_start = sequential_layout_state
                 .floats
                 .containing_block_info
-                .inline_start +
-                pbm.padding.inline_start +
-                pbm.border.inline_start +
-                effective_margin_inline_start;
+                .inline_start
+                + pbm.padding.inline_start
+                + pbm.border.inline_start
+                + effective_margin_inline_start;
             let new_cb_offsets = ContainingBlockPositionInfo {
                 block_start: sequential_layout_state.bfc_relative_block_position,
                 block_start_margins_not_collapsed: sequential_layout_state.current_margin,
@@ -1137,9 +1137,9 @@ fn layout_in_flow_non_replaced_block_level_same_formatting_context(
     } else {
         &containing_block_for_children.size.block
     };
-    let collapsed_through = collapsible_margins_in_children.collapsed_through &&
-        pbm.padding_border_sums.block.is_zero() &&
-        tentative_block_size.definite_or_min().is_zero();
+    let collapsed_through = collapsible_margins_in_children.collapsed_through
+        && pbm.padding_border_sums.block.is_zero()
+        && tentative_block_size.definite_or_min().is_zero();
     block_margins_collapsed_with_children.collapsed_through = collapsed_through;
 
     let end_margin_can_collapse_with_children =
@@ -1171,9 +1171,9 @@ fn layout_in_flow_non_replaced_block_level_same_formatting_context(
     // It would probably make more sense to check the definiteness of the containing
     // block in the logic above (when we check if there is some block-end padding or
     // border), or maybe drop the condition altogether. But for now, we match Blink.
-    let end_margin_can_collapse_with_children = end_margin_can_collapse_with_children &&
-        block_size == content_block_size &&
-        (collapsed_through || !tentative_block_size.is_definite());
+    let end_margin_can_collapse_with_children = end_margin_can_collapse_with_children
+        && block_size == content_block_size
+        && (collapsed_through || !tentative_block_size.is_definite());
     if end_margin_can_collapse_with_children {
         block_margins_collapsed_with_children
             .end
@@ -1207,12 +1207,12 @@ fn layout_in_flow_non_replaced_block_level_same_formatting_context(
 
     let content_rect = LogicalRect {
         start_corner: LogicalVec2 {
-            block: (pbm.padding.block_start +
-                pbm.border.block_start +
-                clearance.unwrap_or_else(Au::zero)),
-            inline: pbm.padding.inline_start +
-                pbm.border.inline_start +
-                effective_margin_inline_start,
+            block: (pbm.padding.block_start
+                + pbm.border.block_start
+                + clearance.unwrap_or_else(Au::zero)),
+            inline: pbm.padding.inline_start
+                + pbm.border.inline_start
+                + effective_margin_inline_start,
         },
         size: LogicalVec2 {
             block: block_size,
@@ -1326,9 +1326,9 @@ impl IndependentFormattingContext {
         let content_rect = LogicalRect {
             start_corner: LogicalVec2 {
                 block: pbm.padding.block_start + pbm.border.block_start,
-                inline: pbm.padding.inline_start +
-                    pbm.border.inline_start +
-                    effective_margin_inline_start,
+                inline: pbm.padding.inline_start
+                    + pbm.border.inline_start
+                    + effective_margin_inline_start,
             },
             size: LogicalVec2 {
                 block: block_size,
@@ -1641,8 +1641,8 @@ impl IndependentFormattingContext {
         // prevent margin collapse.
         let has_clearance = clear_position.is_some() || placement_rect.start_corner.block > ceiling;
         let clearance = has_clearance.then(|| {
-            placement_rect.start_corner.block -
-                sequential_layout_state
+            placement_rect.start_corner.block
+                - sequential_layout_state
                     .position_with_zero_clearance(&collapsed_margin_block_start)
         });
 
@@ -1679,12 +1679,12 @@ impl IndependentFormattingContext {
 
         let content_rect = LogicalRect {
             start_corner: LogicalVec2 {
-                block: pbm.padding.block_start +
-                    pbm.border.block_start +
-                    clearance.unwrap_or_else(Au::zero),
-                inline: pbm.padding.inline_start +
-                    pbm.border.inline_start +
-                    effective_margin_inline_start,
+                block: pbm.padding.block_start
+                    + pbm.border.block_start
+                    + clearance.unwrap_or_else(Au::zero),
+                inline: pbm.padding.inline_start
+                    + pbm.border.inline_start
+                    + effective_margin_inline_start,
             },
             size: content_size,
         };
@@ -1950,8 +1950,8 @@ fn automatic_inline_size<T>(
                 .base
                 .base_fragment_info
                 .flags
-                .intersects(FragmentFlags::IS_REPLACED | FragmentFlags::IS_WIDGET) ||
-                context.is_table()
+                .intersects(FragmentFlags::IS_REPLACED | FragmentFlags::IS_WIDGET)
+                || context.is_table()
         })
     };
     match justify_self {
@@ -2269,8 +2269,8 @@ impl<'container> PlacementState<'container> {
                 // the static position rectangle does not matter.
                 fragment.borrow_mut().original_static_position_rect = LogicalRect {
                     start_corner: LogicalVec2 {
-                        block: (self.current_margin.solve() +
-                            self.current_block_direction_position),
+                        block: (self.current_margin.solve()
+                            + self.current_block_direction_position),
                         inline: Au::zero(),
                     },
                     size: LogicalVec2::zero(),

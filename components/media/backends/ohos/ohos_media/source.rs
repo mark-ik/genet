@@ -180,10 +180,10 @@ impl PlaybackBuffer {
         let pos_offset = pos - self.buffer_data_head;
 
         let available_data = self.buffer.len() as i64 - pos_offset;
-        let need_seek = pos_offset < 0 ||
-            (available_data <= 0 &&
-                (!self.has_active_request ||
-                    pos >= self.buffer_data_head + self.buffer.capacity() as i64));
+        let need_seek = pos_offset < 0
+            || (available_data <= 0
+                && (!self.has_active_request
+                    || pos >= self.buffer_data_head + self.buffer.capacity() as i64));
         if need_seek {
             debug!(
                 "We don't have data at position {}, buffer head is at {}, buffer len is {}， has_active_request: {}",

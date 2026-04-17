@@ -216,8 +216,8 @@ impl ServoInternalsHelpers for ServoInternals {
             let in_realm_proof = AlreadyInRealm::assert_for_cx(cx);
             let global_scope = GlobalScope::from_context(*cx, InRealm::Already(&in_realm_proof));
             let url = global_scope.get_url();
-            (url.scheme() == "about" && url.as_str() != "about:blank") ||
-                ScriptThread::is_servo_privileged(url)
+            (url.scheme() == "about" && url.as_str() != "about:blank")
+                || ScriptThread::is_servo_privileged(url)
         }
     }
 }

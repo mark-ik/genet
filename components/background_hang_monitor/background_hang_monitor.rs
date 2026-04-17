@@ -497,8 +497,9 @@ impl BackgroundHangMonitorWorker {
         for (component_id, monitored) in self.monitored_components.iter_mut() {
             let instant = Instant::now();
             if let Ok(stack) = monitored.sampler.suspend_and_sample_thread() {
-                if self.sampling_baseline.elapsed() >
-                    self.sampling_max_duration
+                if self.sampling_baseline.elapsed()
+                    > self
+                        .sampling_max_duration
                         .expect("Max duration has been set")
                 {
                     // Buffer is full, start discarding older samples.

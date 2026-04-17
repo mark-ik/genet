@@ -375,9 +375,9 @@ impl AudioNodeEngine for BiquadFilterNode {
                 frame.mutate_with(|sample, chan| {
                     let state = &mut self.state[chan as usize];
                     let x0 = *sample as f64;
-                    let y0 = self.b0 * x0 + self.b1 * state.x1 + self.b2 * state.x2 -
-                        self.a1 * state.y1 -
-                        self.a2 * state.y2;
+                    let y0 = self.b0 * x0 + self.b1 * state.x1 + self.b2 * state.x2
+                        - self.a1 * state.y1
+                        - self.a2 * state.y2;
                     *sample = y0 as f32;
                     state.update(x0, y0);
                 });

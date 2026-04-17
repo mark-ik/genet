@@ -430,8 +430,8 @@ impl Player for OhosAvPlayer {
             .unwrap()
             .seek((time * 1000.0) as i32);
         let state_manger_lock = self.state_manager.lock().unwrap();
-        if !state_manger_lock.player_state.paused &&
-            state_manger_lock.internal_state.state == AVPlayerState::AV_COMPLETED
+        if !state_manger_lock.player_state.paused
+            && state_manger_lock.internal_state.state == AVPlayerState::AV_COMPLETED
         {
             self.player_inner.lock().unwrap().play();
         }

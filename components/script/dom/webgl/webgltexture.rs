@@ -334,14 +334,14 @@ impl WebGLTexture {
                     return Ok(());
                 },
                 constants::TEXTURE_COMPARE_FUNC => match int_value as u32 {
-                    constants::LEQUAL |
-                    constants::GEQUAL |
-                    constants::LESS |
-                    constants::GREATER |
-                    constants::EQUAL |
-                    constants::NOTEQUAL |
-                    constants::ALWAYS |
-                    constants::NEVER => {
+                    constants::LEQUAL
+                    | constants::GEQUAL
+                    | constants::LESS
+                    | constants::GREATER
+                    | constants::EQUAL
+                    | constants::NOTEQUAL
+                    | constants::ALWAYS
+                    | constants::NEVER => {
                         context.send_command(WebGLCommand::TexParameteri(target, param, int_value));
                         return Ok(());
                     },
@@ -371,12 +371,12 @@ impl WebGLTexture {
         }
         match param {
             constants::TEXTURE_MIN_FILTER => match int_value as u32 {
-                constants::NEAREST |
-                constants::LINEAR |
-                constants::NEAREST_MIPMAP_NEAREST |
-                constants::LINEAR_MIPMAP_NEAREST |
-                constants::NEAREST_MIPMAP_LINEAR |
-                constants::LINEAR_MIPMAP_LINEAR => update_filter(&self.min_filter),
+                constants::NEAREST
+                | constants::LINEAR
+                | constants::NEAREST_MIPMAP_NEAREST
+                | constants::LINEAR_MIPMAP_NEAREST
+                | constants::NEAREST_MIPMAP_LINEAR
+                | constants::LINEAR_MIPMAP_LINEAR => update_filter(&self.min_filter),
                 _ => Err(WebGLError::InvalidEnum),
             },
             constants::TEXTURE_MAG_FILTER => match int_value as u32 {
@@ -415,10 +415,10 @@ impl WebGLTexture {
         filters.iter().any(|filter| {
             matches!(
                 *filter,
-                constants::LINEAR |
-                    constants::NEAREST_MIPMAP_LINEAR |
-                    constants::LINEAR_MIPMAP_NEAREST |
-                    constants::LINEAR_MIPMAP_LINEAR
+                constants::LINEAR
+                    | constants::NEAREST_MIPMAP_LINEAR
+                    | constants::LINEAR_MIPMAP_NEAREST
+                    | constants::LINEAR_MIPMAP_LINEAR
             )
         })
     }
@@ -476,9 +476,9 @@ impl WebGLTexture {
             };
 
             // Compares height with width to enforce square dimensions
-            if current_image_info.internal_format != ref_format ||
-                current_image_info.width != ref_width ||
-                current_image_info.height != ref_width
+            if current_image_info.internal_format != ref_format
+                || current_image_info.width != ref_width
+                || current_image_info.height != ref_width
             {
                 return false;
             }
@@ -640,9 +640,9 @@ impl ImageInfo {
     }
 
     fn is_power_of_two(&self) -> bool {
-        self.width.is_power_of_two() &&
-            self.height.is_power_of_two() &&
-            self.depth.is_power_of_two()
+        self.width.is_power_of_two()
+            && self.height.is_power_of_two()
+            && self.depth.is_power_of_two()
     }
 
     fn get_max_mimap_levels(&self) -> u32 {
@@ -660,10 +660,10 @@ impl ImageInfo {
 
     /// Returns approximate physical size
     pub(crate) fn physical_size(&self) -> usize {
-        self.width as usize *
-            self.height as usize *
-            self.depth as usize *
-            self.internal_format.components() as usize
+        self.width as usize
+            * self.height as usize
+            * self.depth as usize
+            * self.internal_format.components() as usize
     }
 }
 

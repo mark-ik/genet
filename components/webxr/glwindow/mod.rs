@@ -81,9 +81,9 @@ impl GlWindowDiscovery {
     pub fn new(window: Rc<dyn GlWindow>) -> GlWindowDiscovery {
         let connection = Connection::from_display_handle(window.display_handle()).unwrap();
         let adapter = connection.create_adapter().unwrap();
-        let flags = ContextAttributeFlags::ALPHA |
-            ContextAttributeFlags::DEPTH |
-            ContextAttributeFlags::STENCIL;
+        let flags = ContextAttributeFlags::ALPHA
+            | ContextAttributeFlags::DEPTH
+            | ContextAttributeFlags::STENCIL;
         let version = match connection.gl_api() {
             GLApi::GLES => GLVersion { major: 3, minor: 0 },
             GLApi::GL => GLVersion { major: 3, minor: 2 },
@@ -838,15 +838,15 @@ impl GlWindowShader {
 
             match self.mode {
                 GlWindowMode::StereoRedCyan => {
-                    let wasted = 1.0 -
-                        (texture_size.width as f32 / viewport_size.width as f32).clamp(0.0, 1.0);
+                    let wasted = 1.0
+                        - (texture_size.width as f32 / viewport_size.width as f32).clamp(0.0, 1.0);
                     let wasted_location = self.gl.get_uniform_location(self.program, "wasted");
                     self.gl.uniform_1_f32(wasted_location.as_ref(), wasted);
                 },
-                GlWindowMode::Blit |
-                GlWindowMode::Cubemap |
-                GlWindowMode::Spherical |
-                GlWindowMode::StereoLeftRight => {},
+                GlWindowMode::Blit
+                | GlWindowMode::Cubemap
+                | GlWindowMode::Spherical
+                | GlWindowMode::StereoLeftRight => {},
             }
 
             self.gl

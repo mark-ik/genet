@@ -345,8 +345,8 @@ impl VideoFrameRenderer for MediaFrameRenderer {
 
         match &mut self.current_frame {
             Some(current_frame)
-                if current_frame.width == frame.get_width() &&
-                    current_frame.height == frame.get_height() =>
+                if current_frame.width == frame.get_width()
+                    && current_frame.height == frame.get_height() =>
             {
                 if !frame.is_gl_texture() {
                     updates.push(ImageUpdate::UpdateImage(
@@ -776,8 +776,8 @@ impl HTMLMediaElement {
         // Generally "ended" and "looping" are exclusive. Here, the loop attribute is ignored to
         // seek back to start in case loop was set after playback ended.
         // <https://github.com/whatwg/html/issues/4487>
-        if self.ended_playback(LoopCondition::Ignored) &&
-            self.direction_of_playback() == PlaybackDirection::Forwards
+        if self.ended_playback(LoopCondition::Ignored)
+            && self.direction_of_playback() == PlaybackDirection::Forwards
         {
             self.seek(
                 self.earliest_possible_position(),
@@ -809,9 +809,9 @@ impl HTMLMediaElement {
             // readyState attribute has the value HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA: notify about
             // playing for the element.
             match state {
-                ReadyState::HaveNothing |
-                ReadyState::HaveMetadata |
-                ReadyState::HaveCurrentData => {
+                ReadyState::HaveNothing
+                | ReadyState::HaveMetadata
+                | ReadyState::HaveCurrentData => {
                     self.queue_media_element_task_to_fire_event(atom!("waiting"));
                 },
                 ReadyState::HaveFutureData | ReadyState::HaveEnoughData => {
@@ -998,8 +998,8 @@ impl HTMLMediaElement {
 
         // => "If the previous ready state was HAVE_CURRENT_DATA or less, and the new ready state is
         // HAVE_FUTURE_DATA or more"
-        if old_ready_state <= ReadyState::HaveCurrentData &&
-            ready_state >= ReadyState::HaveFutureData
+        if old_ready_state <= ReadyState::HaveCurrentData
+            && ready_state >= ReadyState::HaveFutureData
         {
             // The user agent must queue a media element task given the media element to fire an
             // event named canplay at the element.
@@ -1657,17 +1657,17 @@ impl HTMLMediaElement {
 
     /// <https://html.spec.whatwg.org/multipage/#potentially-playing>
     fn is_potentially_playing(&self) -> bool {
-        !self.paused.get() &&
-            !self.ended_playback(LoopCondition::Included) &&
-            self.error.get().is_none() &&
-            !self.is_blocked_media_element()
+        !self.paused.get()
+            && !self.ended_playback(LoopCondition::Included)
+            && self.error.get().is_none()
+            && !self.is_blocked_media_element()
     }
 
     /// <https://html.spec.whatwg.org/multipage/#blocked-media-element>
     fn is_blocked_media_element(&self) -> bool {
-        self.ready_state.get() <= ReadyState::HaveCurrentData ||
-            self.is_paused_for_user_interaction() ||
-            self.is_paused_for_in_band_content()
+        self.ready_state.get() <= ReadyState::HaveCurrentData
+            || self.is_paused_for_user_interaction()
+            || self.is_paused_for_in_band_content()
     }
 
     /// <https://html.spec.whatwg.org/multipage/#paused-for-user-interaction>
@@ -2259,8 +2259,8 @@ impl HTMLMediaElement {
             // direction of playback is forwards, and the media element does not have a loop
             // attribute specified.
             PlaybackDirection::Forwards => {
-                playback_position >= self.Duration() &&
-                    (loop_condition == LoopCondition::Ignored || !self.Loop())
+                playback_position >= self.Duration()
+                    && (loop_condition == LoopCondition::Ignored || !self.Loop())
             },
             // Or: The current playback position is the earliest possible position, and the
             // direction of playback is backwards.
@@ -2582,9 +2582,9 @@ impl HTMLMediaElement {
         if let Some(servo_url) = self.resource_url.borrow().as_ref() {
             let fragment = MediaFragmentParser::from(servo_url);
             if let Some(initial_playback_position) = fragment.start() {
-                if initial_playback_position > 0. &&
-                    initial_playback_position < self.duration.get() &&
-                    !jumped
+                if initial_playback_position > 0.
+                    && initial_playback_position < self.duration.get()
+                    && !jumped
                 {
                     self.seek(
                         initial_playback_position,
@@ -3245,8 +3245,8 @@ impl HTMLMediaElementMethods<crate::DomTypeHolder> for HTMLMediaElement {
 
     /// <https://html.spec.whatwg.org/multipage/#dom-media-ended>
     fn Ended(&self) -> bool {
-        self.ended_playback(LoopCondition::Included) &&
-            self.direction_of_playback() == PlaybackDirection::Forwards
+        self.ended_playback(LoopCondition::Included)
+            && self.direction_of_playback() == PlaybackDirection::Forwards
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-media-fastseek>
@@ -3521,11 +3521,11 @@ impl MicrotaskRunnable for MediaElementMicrotask {
 
     fn enter_realm<'cx>(&self, cx: &'cx mut js::context::JSContext) -> AutoRealm<'cx> {
         match self {
-            &MediaElementMicrotask::ResourceSelection { ref elem, .. } |
-            &MediaElementMicrotask::PauseIfNotInDocument { ref elem } |
-            &MediaElementMicrotask::Seeked { ref elem, .. } |
-            &MediaElementMicrotask::SelectNextSourceChild { ref elem, .. } |
-            &MediaElementMicrotask::SelectNextSourceChildAfterWait { ref elem, .. } => {
+            &MediaElementMicrotask::ResourceSelection { ref elem, .. }
+            | &MediaElementMicrotask::PauseIfNotInDocument { ref elem }
+            | &MediaElementMicrotask::Seeked { ref elem, .. }
+            | &MediaElementMicrotask::SelectNextSourceChild { ref elem, .. }
+            | &MediaElementMicrotask::SelectNextSourceChildAfterWait { ref elem, .. } => {
                 enter_auto_realm(cx, &**elem)
             },
         }
@@ -3816,8 +3816,8 @@ impl FetchResponseListener for HTMLMediaElementFetchListener {
             }
 
             // Discard chunk of the response body if fetch context doesn't support range requests.
-            let payload = if !current_fetch_context.is_seekable() &&
-                self.content_length_to_discard != 0
+            let payload = if !current_fetch_context.is_seekable()
+                && self.content_length_to_discard != 0
             {
                 if chunk.len() as u64 > self.content_length_to_discard {
                     let shrink_chunk = chunk[self.content_length_to_discard as usize..].to_vec();

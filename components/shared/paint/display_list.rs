@@ -83,10 +83,10 @@ impl StickyNodeInfo {
         viewport_scroll_offset: &LayoutVector2D,
         viewport_rect: &LayoutRect,
     ) -> LayoutVector2D {
-        if self.margins.top.is_none() &&
-            self.margins.bottom.is_none() &&
-            self.margins.left.is_none() &&
-            self.margins.right.is_none()
+        if self.margins.top.is_none()
+            && self.margins.bottom.is_none()
+            && self.margins.left.is_none()
+            && self.margins.right.is_none()
         {
             return LayoutVector2D::zero();
         }
@@ -204,8 +204,8 @@ impl ScrollableNodeInfo {
         new_offset: LayoutVector2D,
         context: ScrollType,
     ) -> Option<LayoutVector2D> {
-        if !self.scroll_sensitivity.x.contains(context) &&
-            !self.scroll_sensitivity.y.contains(context)
+        if !self.scroll_sensitivity.x.contains(context)
+            && !self.scroll_sensitivity.y.contains(context)
         {
             return None;
         }
@@ -234,8 +234,8 @@ impl ScrollableNodeInfo {
         scroll_location: ScrollLocation,
         context: ScrollType,
     ) -> Option<LayoutVector2D> {
-        if !self.scroll_sensitivity.x.contains(context) &&
-            !self.scroll_sensitivity.y.contains(context)
+        if !self.scroll_sensitivity.x.contains(context)
+            && !self.scroll_sensitivity.y.contains(context)
         {
             return None;
         }
@@ -726,8 +726,8 @@ impl ScrollTree {
                     nearest_scrolling_ancestor_viewport: parent_transforms
                         .nearest_scrolling_ancestor_viewport,
                     nearest_scrolling_ancestor_offset: parent_transforms
-                        .nearest_scrolling_ancestor_offset +
-                        offset,
+                        .nearest_scrolling_ancestor_offset
+                        + offset,
                     cumulative_sticky_offsets: parent_transforms.cumulative_sticky_offsets + offset,
                 }
             },

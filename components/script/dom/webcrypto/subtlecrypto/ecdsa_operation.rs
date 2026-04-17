@@ -655,8 +655,8 @@ pub(crate) fn import_key(
             // Step 2.2. If the d field is present and usages contains a value which is not "sign",
             // or, if the d field is not present and usages contains a value which is not "verify"
             // then throw a SyntaxError.
-            if (jwk.d.is_some() && usages.iter().any(|usage| *usage != KeyUsage::Sign)) ||
-                (jwk.d.is_none() && usages.iter().any(|usage| *usage != KeyUsage::Verify))
+            if (jwk.d.is_some() && usages.iter().any(|usage| *usage != KeyUsage::Sign))
+                || (jwk.d.is_none() && usages.iter().any(|usage| *usage != KeyUsage::Verify))
             {
                 return Err(Error::Syntax(None));
             }

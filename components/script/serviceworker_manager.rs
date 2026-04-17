@@ -336,8 +336,8 @@ impl ServiceWorkerManager {
             return;
         }
 
-        if job.script_url.origin() != job.referrer.origin() ||
-            job.scope_url.origin() != job.referrer.origin()
+        if job.script_url.origin() != job.referrer.origin()
+            || job.scope_url.origin() != job.referrer.origin()
         {
             // Step 2.1
             let _ = job

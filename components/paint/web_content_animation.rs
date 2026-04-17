@@ -141,8 +141,8 @@ impl PipelineAnimations {
                 Some(CaretAnimation {
                     caret_property_key,
                     original_caret_color,
-                    remaining_blink_count: (CARET_BLINK_TIMEOUT.as_millis() /
-                        caret_blink_time.as_millis())
+                    remaining_blink_count: (CARET_BLINK_TIMEOUT.as_millis()
+                        / caret_blink_time.as_millis())
                         as usize,
                 })
             },

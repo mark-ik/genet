@@ -65,8 +65,8 @@ impl HTMLDialogElement {
     pub fn show_a_modal(&self, source: Option<DomRoot<Element>>, can_gc: CanGc) -> ErrorResult {
         let subject = self.upcast::<Element>();
         // Step 1. If subject has an open attribute and is modal of subject is true, then return.
-        if subject.has_attribute(&local_name!("open")) &&
-            subject.state().contains(ElementState::MODAL)
+        if subject.has_attribute(&local_name!("open"))
+            && subject.state().contains(ElementState::MODAL)
         {
             return Ok(());
         }
@@ -294,8 +294,8 @@ impl HTMLDialogElementMethods<crate::DomTypeHolder> for HTMLDialogElement {
     fn Show(&self, can_gc: CanGc) -> ErrorResult {
         let element = self.upcast::<Element>();
         // Step 1. If this has an open attribute and is modal of this is false, then return.
-        if element.has_attribute(&local_name!("open")) &&
-            !element.state().contains(ElementState::MODAL)
+        if element.has_attribute(&local_name!("open"))
+            && !element.state().contains(ElementState::MODAL)
         {
             return Ok(());
         }

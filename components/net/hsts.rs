@@ -206,17 +206,18 @@ impl HstsList {
         }
 
         let upgrade_scheme = if pref!(network_enforce_tls_enabled) {
-            if (!pref!(network_enforce_tls_localhost) &&
-                match url.host() {
+            if (!pref!(network_enforce_tls_localhost)
+                && match url.host() {
                     Some(Host::Domain(domain)) => {
                         domain.ends_with(".localhost") || domain == "localhost"
                     },
                     Some(Host::Ipv4(ipv4)) => ipv4.is_loopback(),
                     Some(Host::Ipv6(ipv6)) => ipv6.is_loopback(),
                     _ => false,
-                }) ||
-                (!pref!(network_enforce_tls_onion) &&
-                    url.domain()
+                })
+                || (!pref!(network_enforce_tls_onion)
+                    && url
+                        .domain()
                         .is_some_and(|domain| domain.ends_with(".onion")))
             {
                 url.domain()

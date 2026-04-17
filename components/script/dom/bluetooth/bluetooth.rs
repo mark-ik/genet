@@ -348,11 +348,11 @@ where
 /// <https://webbluetoothcg.github.io/web-bluetooth/#bluetoothlescanfilterinit-canonicalizing>
 fn canonicalize_filter(filter: &BluetoothLEScanFilterInit) -> Fallible<BluetoothScanfilter> {
     // Step 1.
-    if filter.services.is_none() &&
-        filter.name.is_none() &&
-        filter.namePrefix.is_none() &&
-        filter.manufacturerData.is_none() &&
-        filter.serviceData.is_none()
+    if filter.services.is_none()
+        && filter.name.is_none()
+        && filter.namePrefix.is_none()
+        && filter.manufacturerData.is_none()
+        && filter.serviceData.is_none()
     {
         return Err(Type(FILTER_ERROR.to_owned()));
     }
@@ -540,8 +540,8 @@ impl BluetoothMethods<crate::DomTypeHolder> for Bluetooth {
     fn RequestDevice(&self, cx: &mut CurrentRealm, option: &RequestDeviceOptions) -> Rc<Promise> {
         let p = Promise::new_in_realm(cx);
         // Step 1.
-        if (option.filters.is_some() && option.acceptAllDevices) ||
-            (option.filters.is_none() && !option.acceptAllDevices)
+        if (option.filters.is_some() && option.acceptAllDevices)
+            || (option.filters.is_none() && !option.acceptAllDevices)
         {
             p.reject_error(Error::Type(OPTIONS_ERROR.to_owned()), CanGc::from_cx(cx));
             return p;
@@ -775,8 +775,8 @@ impl PermissionAlgorithm for Bluetooth {
         for (id, device) in device_map.iter() {
             let id = DOMString::from(id.clone());
             // Step 2.1.
-            if allowed_devices.iter().any(|d| d.deviceId == id) &&
-                !device.is_represented_device_null()
+            if allowed_devices.iter().any(|d| d.deviceId == id)
+                && !device.is_represented_device_null()
             {
                 // Note: We don't need to update the allowed_services,
                 // because we store it in the lower level

@@ -361,8 +361,8 @@ impl Event {
 
         // Step 6. If target is not relatedTarget or target is event’s relatedTarget:
         let mut pre_activation_result: Option<InputActivationState> = None;
-        if related_target.as_ref() != Some(&target) ||
-            self.related_target.get().as_ref() == Some(&target)
+        if related_target.as_ref() != Some(&target)
+            || self.related_target.get().as_ref() == Some(&target)
         {
             // Step 6.1. Let touchTargets be a new list.
             // TODO
@@ -548,8 +548,8 @@ impl Event {
                         .shadow_adjusted_target
                         .as_ref()
                         .and_then(|target| target.downcast::<Node>())
-                        .is_some_and(Node::is_in_a_shadow_tree) ||
-                        clear_targets
+                        .is_some_and(Node::is_in_a_shadow_tree)
+                        || clear_targets
                             .related_target
                             .as_ref()
                             .and_then(|target| target.downcast::<Node>())

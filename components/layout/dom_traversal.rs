@@ -230,8 +230,8 @@ fn traverse_pseudo_element_contents<'dom>(
                 };
                 // `display` is not inherited, so we get the initial value
                 debug_assert!(
-                    Display::from(anonymous_info.style.get_box().display) ==
-                        Display::GeneratingBox(display_inline)
+                    Display::from(anonymous_info.style.get_box().display)
+                        == Display::GeneratingBox(display_inline)
                 );
                 handler.handle_element(
                     anonymous_info,
@@ -257,9 +257,9 @@ impl Contents {
         let is_widget = matches!(
             node.type_id(),
             Some(LayoutNodeType::Element(
-                LayoutElementType::HTMLInputElement |
-                    LayoutElementType::HTMLSelectElement |
-                    LayoutElementType::HTMLTextAreaElement
+                LayoutElementType::HTMLInputElement
+                    | LayoutElementType::HTMLSelectElement
+                    | LayoutElementType::HTMLTextAreaElement
             ))
         );
         if is_widget {

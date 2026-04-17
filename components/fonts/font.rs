@@ -189,9 +189,9 @@ impl FontMetrics {
     /// Whether or not the block metrics of the two `FontMetrics` instances differ in a way
     /// that requires the resulting block size of a containing inline box to change.
     pub fn block_metrics_meaningfully_differ(&self, other: &Self) -> bool {
-        self.ascent != other.ascent ||
-            self.descent != other.descent ||
-            self.line_gap != other.line_gap
+        self.ascent != other.ascent
+            || self.descent != other.descent
+            || self.line_gap != other.line_gap
     }
 }
 
@@ -262,10 +262,11 @@ impl malloc_size_of::MallocSizeOf for Font {
         // TODO: Collect memory usage for platform fonts and for shapers.
         // This skips the template, because they are already stored in the template cache.
 
-        self.metrics.size_of(ops) +
-            self.descriptor.size_of(ops) +
-            self.cached_shape_data.read().size_of(ops) +
-            self.font_instance_key
+        self.metrics.size_of(ops)
+            + self.descriptor.size_of(ops)
+            + self.cached_shape_data.read().size_of(ops)
+            + self
+                .font_instance_key
                 .read()
                 .values()
                 .map(|key| key.size_of(ops))
@@ -324,9 +325,9 @@ impl Font {
 
     pub(crate) fn has_color_bitmap_or_colr_table(&self) -> bool {
         *self.has_color_bitmap_or_colr_table.get_or_init(|| {
-            self.table_for_tag(SBIX).is_some() ||
-                self.table_for_tag(CBDT).is_some() ||
-                self.table_for_tag(COLR).is_some()
+            self.table_for_tag(SBIX).is_some()
+                || self.table_for_tag(CBDT).is_some()
+                || self.table_for_tag(COLR).is_some()
         })
     }
 
@@ -404,8 +405,8 @@ impl ShapingOptions {
         // Letter spacing ignores invisible zero-width formatting characters (such as those from the Unicode Cf category).
         // Spacing must be added as if those characters did not exist in the document.
         self.letter_spacing.filter(|_| {
-            icu_properties::maps::general_category().get(character) !=
-                icu_properties::GeneralCategory::Format
+            icu_properties::maps::general_category().get(character)
+                != icu_properties::GeneralCategory::Format
         })
     }
 }
@@ -458,14 +459,14 @@ impl Font {
     ///
     /// Note: This will eventually be removed.
     pub fn can_do_fast_shaping(&self, text: &str, options: &ShapingOptions) -> bool {
-        options.script == Script::Latin &&
-            !options.flags.contains(ShapingFlags::RTL_FLAG) &&
-            *self.can_do_fast_shaping.get_or_init(|| {
-                self.table_for_tag(KERN).is_some() &&
-                    self.table_for_tag(GPOS).is_none() &&
-                    self.table_for_tag(GSUB).is_none()
-            }) &&
-            text.is_ascii()
+        options.script == Script::Latin
+            && !options.flags.contains(ShapingFlags::RTL_FLAG)
+            && *self.can_do_fast_shaping.get_or_init(|| {
+                self.table_for_tag(KERN).is_some()
+                    && self.table_for_tag(GPOS).is_none()
+                    && self.table_for_tag(GSUB).is_none()
+            })
+            && text.is_ascii()
     }
 
     /// Fast path for ASCII text that only needs simple horizontal LTR kerning.
@@ -664,8 +665,8 @@ impl FontGroup {
 
         let options = FallbackFontSelectionOptions::new(codepoint, next_codepoint, language);
 
-        let should_look_for_small_caps = self.descriptor.variant == font_variant_caps::T::SmallCaps &&
-            options.character.is_ascii_lowercase();
+        let should_look_for_small_caps = self.descriptor.variant == font_variant_caps::T::SmallCaps
+            && options.character.is_ascii_lowercase();
         let font_or_synthesized_small_caps = |font: FontRef| {
             if should_look_for_small_caps && font.synthesized_small_caps.is_some() {
                 return font.synthesized_small_caps.clone();
@@ -700,8 +701,8 @@ impl FontGroup {
 
         let fallback_key = FallbackKey::new(&options);
         if let Some(fallback) = self.fallbacks.read().get(&fallback_key) {
-            if char_in_template(fallback.template.clone()) &&
-                font_has_glyph_and_presentation(fallback)
+            if char_in_template(fallback.template.clone())
+                && font_has_glyph_and_presentation(fallback)
             {
                 return font_or_synthesized_small_caps(fallback.clone());
             }

@@ -58,10 +58,10 @@ impl UnderlyingSourceType {
     pub(crate) fn is_native(&self) -> bool {
         matches!(
             self,
-            UnderlyingSourceType::Memory(_) |
-                UnderlyingSourceType::Blob(_) |
-                UnderlyingSourceType::FetchResponse |
-                UnderlyingSourceType::Transfer(_)
+            UnderlyingSourceType::Memory(_)
+                | UnderlyingSourceType::Blob(_)
+                | UnderlyingSourceType::FetchResponse
+                | UnderlyingSourceType::Transfer(_)
         )
     }
 

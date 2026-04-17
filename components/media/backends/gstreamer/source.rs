@@ -216,8 +216,8 @@ mod imp {
             // to report that it "is bandwidth limited".
             let ret = match query.view_mut() {
                 gstreamer::QueryViewMut::Scheduling(ref mut q) => {
-                    let flags = gstreamer::SchedulingFlags::SEQUENTIAL |
-                        gstreamer::SchedulingFlags::BANDWIDTH_LIMITED;
+                    let flags = gstreamer::SchedulingFlags::SEQUENTIAL
+                        | gstreamer::SchedulingFlags::BANDWIDTH_LIMITED;
                     q.set(flags, 1, -1, 0);
                     q.add_scheduling_modes([gstreamer::PadMode::Push]);
                     true

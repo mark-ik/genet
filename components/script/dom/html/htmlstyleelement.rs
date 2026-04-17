@@ -370,8 +370,8 @@ impl VirtualMethods for HTMLStyleElement {
         }
 
         let node = self.upcast::<Node>();
-        if !(node.is_in_a_document_tree() || node.is_in_a_shadow_tree()) ||
-            self.in_stack_of_open_elements.get()
+        if !(node.is_in_a_document_tree() || node.is_in_a_shadow_tree())
+            || self.in_stack_of_open_elements.get()
         {
             return;
         }
@@ -432,8 +432,9 @@ impl StylesheetOwner for HTMLStyleElement {
         //
         // https://html.spec.whatwg.org/multipage/#the-style-element:implicitly-potentially-render-blocking
         // > A style element is implicitly potentially render-blocking if the element was created by its node document's parser.
-        self.parser_inserted() ||
-            self.blocking
+        self.parser_inserted()
+            || self
+                .blocking
                 .get()
                 .is_some_and(|list| list.Contains("render".into()))
     }

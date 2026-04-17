@@ -185,8 +185,8 @@ impl GPUTextureMethods<crate::DomTypeHolder> for GPUTexture {
         &self,
         descriptor: &GPUTextureViewDescriptor,
     ) -> Fallible<DomRoot<GPUTextureView>> {
-        let desc = if !matches!(descriptor.mipLevelCount, Some(0)) &&
-            !matches!(descriptor.arrayLayerCount, Some(0))
+        let desc = if !matches!(descriptor.mipLevelCount, Some(0))
+            && !matches!(descriptor.arrayLayerCount, Some(0))
         {
             Some(resource::TextureViewDescriptor {
                 label: (&descriptor.parent).convert(),

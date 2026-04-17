@@ -535,8 +535,8 @@ impl BluetoothManager {
     }
 
     fn device_is_cached(&self, device_id: &str) -> bool {
-        self.cached_devices.contains_key(device_id) &&
-            self.address_to_id.values().any(|v| v == device_id)
+        self.cached_devices.contains_key(device_id)
+            && self.address_to_id.values().any(|v| v == device_id)
     }
 
     async fn device_matches_filter(
@@ -564,8 +564,9 @@ impl BluetoothManager {
         };
 
         services.retain(|s| {
-            !uuid_is_blocklisted(&s.get_uuid().unwrap_or_default(), Blocklist::All) &&
-                self.allowed_services
+            !uuid_is_blocklisted(&s.get_uuid().unwrap_or_default(), Blocklist::All)
+                && self
+                    .allowed_services
                     .get(device_id)
                     .is_some_and(|uuids| uuids.contains(&s.get_uuid().unwrap_or_default()))
         });
@@ -591,8 +592,8 @@ impl BluetoothManager {
     }
 
     fn service_is_cached(&self, service_id: &str) -> bool {
-        self.cached_services.contains_key(service_id) &&
-            self.service_to_device.contains_key(service_id)
+        self.cached_services.contains_key(service_id)
+            && self.service_to_device.contains_key(service_id)
     }
 
     // Characteristic
@@ -655,8 +656,9 @@ impl BluetoothManager {
     }
 
     fn characteristic_is_cached(&self, characteristic_id: &str) -> bool {
-        self.cached_characteristics.contains_key(characteristic_id) &&
-            self.characteristic_to_service
+        self.cached_characteristics.contains_key(characteristic_id)
+            && self
+                .characteristic_to_service
                 .contains_key(characteristic_id)
     }
 

@@ -253,8 +253,8 @@ impl Layout for LayoutThread {
     fn set_viewport_details(&mut self, viewport_details: ViewportDetails) -> bool {
         let device = self.stylist.device_mut();
         let device_pixel_ratio = Scale::new(viewport_details.hidpi_scale_factor.get());
-        if device.viewport_size() == viewport_details.size &&
-            device.device_pixel_ratio() == device_pixel_ratio
+        if device.viewport_size() == viewport_details.size
+            && device.device_pixel_ratio() == device_pixel_ratio
         {
             return false;
         }
@@ -621,8 +621,8 @@ impl Layout for LayoutThread {
 
     fn ensure_stacking_context_tree(&self, viewport_details: ViewportDetails) {
         with_layout_state(|| {
-            if self.stacking_context_tree.borrow().is_some() &&
-                !self.need_new_stacking_context_tree.get()
+            if self.stacking_context_tree.borrow().is_some()
+                && !self.need_new_stacking_context_tree.get()
             {
                 return;
             }
@@ -833,8 +833,8 @@ impl LayoutThread {
         // If only the stacking context tree is required, and it's up-to-date,
         // layout is unnecessary, otherwise a layout is necessary.
         if necessary_phases == ReflowPhases::StackingContextTreeConstruction {
-            return self.stacking_context_tree.borrow().is_some() &&
-                !self.need_new_stacking_context_tree.get();
+            return self.stacking_context_tree.borrow().is_some()
+                && !self.need_new_stacking_context_tree.get();
         }
 
         // Otherwise, the only interesting thing is whether the current display
@@ -1686,22 +1686,22 @@ impl ReflowPhases {
                 QueryMsg::NodesFromPointQuery => {
                     Self::StackingContextTreeConstruction | Self::DisplayListConstruction
                 },
-                QueryMsg::BoxArea |
-                QueryMsg::BoxAreas |
-                QueryMsg::ElementsFromPoint |
-                QueryMsg::OffsetParentQuery |
-                QueryMsg::ResolvedStyleQuery |
-                QueryMsg::ScrollingAreaOrOffsetQuery |
-                QueryMsg::TextIndexQuery => Self::StackingContextTreeConstruction,
-                QueryMsg::ClientRectQuery |
-                QueryMsg::CurrentCSSZoomQuery |
-                QueryMsg::EffectiveOverflow |
-                QueryMsg::ElementInnerOuterTextQuery |
-                QueryMsg::InnerWindowDimensionsQuery |
-                QueryMsg::PaddingQuery |
-                QueryMsg::ResolvedFontStyleQuery |
-                QueryMsg::ScrollParentQuery |
-                QueryMsg::StyleQuery => Self::empty(),
+                QueryMsg::BoxArea
+                | QueryMsg::BoxAreas
+                | QueryMsg::ElementsFromPoint
+                | QueryMsg::OffsetParentQuery
+                | QueryMsg::ResolvedStyleQuery
+                | QueryMsg::ScrollingAreaOrOffsetQuery
+                | QueryMsg::TextIndexQuery => Self::StackingContextTreeConstruction,
+                QueryMsg::ClientRectQuery
+                | QueryMsg::CurrentCSSZoomQuery
+                | QueryMsg::EffectiveOverflow
+                | QueryMsg::ElementInnerOuterTextQuery
+                | QueryMsg::InnerWindowDimensionsQuery
+                | QueryMsg::PaddingQuery
+                | QueryMsg::ResolvedFontStyleQuery
+                | QueryMsg::ScrollParentQuery
+                | QueryMsg::StyleQuery => Self::empty(),
             },
             ReflowGoal::UpdateScrollNode(..) | ReflowGoal::UpdateTheRendering => {
                 Self::StackingContextTreeConstruction | Self::DisplayListConstruction

@@ -94,8 +94,8 @@ impl MimeClassifier {
             .unwrap_or(mime::APPLICATION_OCTET_STREAM);
         // Step 1. If the supplied MIME type is an XML MIME type or HTML MIME type,
         // the computed MIME type is the supplied MIME type.
-        if Self::is_xml(&supplied_type_or_octet_stream) ||
-            Self::is_html(&supplied_type_or_octet_stream)
+        if Self::is_xml(&supplied_type_or_octet_stream)
+            || Self::is_html(&supplied_type_or_octet_stream)
         {
             return supplied_type_or_octet_stream;
         }
@@ -254,10 +254,10 @@ impl MimeClassifier {
     /// SVG is worth distinguishing from other XML MIME types:
     /// <https://mimesniff.spec.whatwg.org/#mime-type-miscellaneous>
     fn is_xml(mt: &Mime) -> bool {
-        !Self::is_image(mt) &&
-            (mt.suffix() == Some(mime::XML) ||
-                mt.essence_str() == "text/xml" ||
-                mt.essence_str() == "application/xml")
+        !Self::is_image(mt)
+            && (mt.suffix() == Some(mime::XML)
+                || mt.essence_str() == "text/xml"
+                || mt.essence_str() == "application/xml")
     }
 
     /// <https://mimesniff.spec.whatwg.org/#html-mime-type>
@@ -272,24 +272,24 @@ impl MimeClassifier {
 
     /// <https://mimesniff.spec.whatwg.org/#audio-or-video-mime-type>
     fn is_audio_video(mt: &Mime) -> bool {
-        mt.type_() == mime::AUDIO ||
-            mt.type_() == mime::VIDEO ||
-            mt.essence_str() == "application/ogg"
+        mt.type_() == mime::AUDIO
+            || mt.type_() == mime::VIDEO
+            || mt.essence_str() == "application/ogg"
     }
 
     fn is_explicit_unknown(mt: &Mime) -> bool {
-        mt.type_().as_str() == "unknown" && mt.subtype().as_str() == "unknown" ||
-            mt.type_() == mime::APPLICATION && mt.subtype().as_str() == "unknown" ||
-            mt.type_() == mime::STAR && mt.subtype() == mime::STAR
+        mt.type_().as_str() == "unknown" && mt.subtype().as_str() == "unknown"
+            || mt.type_() == mime::APPLICATION && mt.subtype().as_str() == "unknown"
+            || mt.type_() == mime::STAR && mt.subtype() == mime::STAR
     }
 
     /// <https://mimesniff.spec.whatwg.org/#javascript-mime-type>
     pub fn is_javascript(mt: &Mime) -> bool {
-        (mt.type_() == mime::APPLICATION &&
-            (["ecmascript", "javascript", "x-ecmascript", "x-javascript"]
-                .contains(&mt.subtype().as_str()))) ||
-            (mt.type_() == mime::TEXT &&
-                ([
+        (mt.type_() == mime::APPLICATION
+            && (["ecmascript", "javascript", "x-ecmascript", "x-javascript"]
+                .contains(&mt.subtype().as_str())))
+            || (mt.type_() == mime::TEXT
+                && ([
                     "ecmascript",
                     "javascript",
                     "javascript1.0",
@@ -308,16 +308,16 @@ impl MimeClassifier {
 
     /// <https://mimesniff.spec.whatwg.org/#json-mime-type>
     pub fn is_json(mt: &Mime) -> bool {
-        mt.suffix() == Some(mime::JSON) ||
-            mt.essence_str() == "application/json" ||
-            mt.essence_str() == "text/json"
+        mt.suffix() == Some(mime::JSON)
+            || mt.essence_str() == "application/json"
+            || mt.essence_str() == "text/json"
     }
 
     /// <https://mimesniff.spec.whatwg.org/#font-mime-type>
     fn is_font(mt: &Mime) -> bool {
-        mt.type_() == mime::FONT ||
-            (mt.type_() == mime::APPLICATION &&
-                ([
+        mt.type_() == mime::FONT
+            || (mt.type_() == mime::APPLICATION
+                && ([
                     "font-cff",
                     "font-off",
                     "font-sfnt",
@@ -473,10 +473,10 @@ impl Mp4Matcher {
 
         // Step 4. Let box-size be the four bytes from sequence[0] to sequence[3],
         // interpreted as a 32-bit unsigned big-endian integer.
-        let box_size = (((data[0] as u32) << 24) |
-            ((data[1] as u32) << 16) |
-            ((data[2] as u32) << 8) |
-            (data[3] as u32)) as usize;
+        let box_size = (((data[0] as u32) << 24)
+            | ((data[1] as u32) << 16)
+            | ((data[2] as u32) << 8)
+            | (data[3] as u32)) as usize;
         // Step 5. If length is less than box-size or if box-size modulo 4 is not equal to 0, return false.
         if (data.len() < box_size) || (box_size % 4 != 0) {
             return false;
@@ -528,16 +528,16 @@ impl BinaryOrPlaintextClassifier {
         // Step 3. If length is greater than or equal to 3
         // and the first 3 bytes of the resource header are equal to
         // 0xEF 0xBB 0xBF (UTF-8 BOM), the computed MIME type is "text/plain".
-        if data.starts_with(&[0xFFu8, 0xFEu8]) ||
-            data.starts_with(&[0xFEu8, 0xFFu8]) ||
-            data.starts_with(&[0xEFu8, 0xBBu8, 0xBFu8])
+        if data.starts_with(&[0xFFu8, 0xFEu8])
+            || data.starts_with(&[0xFEu8, 0xFFu8])
+            || data.starts_with(&[0xEFu8, 0xBBu8, 0xBFu8])
         {
             mime::TEXT_PLAIN
         } else if data.iter().any(|&x| {
-            x <= 0x08u8 ||
-                x == 0x0Bu8 ||
-                (0x0Eu8..=0x1Au8).contains(&x) ||
-                (0x1Cu8..=0x1Fu8).contains(&x)
+            x <= 0x08u8
+                || x == 0x0Bu8
+                || (0x0Eu8..=0x1Au8).contains(&x)
+                || (0x1Cu8..=0x1Fu8).contains(&x)
         }) {
             // Step 5. The computed MIME type is "application/octet-stream".
             mime::APPLICATION_OCTET_STREAM

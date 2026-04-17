@@ -161,8 +161,8 @@ pub(crate) fn outer_inline(
                 .size
                 .block
                 .map(|v| Au::zero().max(v - pbm_sums.block));
-            let automatic_size = if preferred_size_computes_to_auto.block &&
-                auto_block_size_stretches_to_containing_block
+            let automatic_size = if preferred_size_computes_to_auto.block
+                && auto_block_size_stretches_to_containing_block
             {
                 depends_on_block_constraints = true;
                 Size::Stretch
@@ -263,13 +263,13 @@ pub(crate) fn outer_inline(
             matches!(size, Size::Numeric(numeric) if numeric.has_percentage())
         };
         let writing_mode = containing_block.style.writing_mode;
-        if content_box_sizes.inline.preferred.is_initial() &&
-            has_percentage(style.box_size(writing_mode).inline)
+        if content_box_sizes.inline.preferred.is_initial()
+            && has_percentage(style.box_size(writing_mode).inline)
         {
             preferred_min_content = Au::zero();
         }
-        if content_box_sizes.inline.max.is_initial() &&
-            has_percentage(style.max_box_size(writing_mode).inline)
+        if content_box_sizes.inline.max.is_initial()
+            && has_percentage(style.max_box_size(writing_mode).inline)
         {
             max_min_content = Some(Au::zero());
         }
@@ -288,16 +288,16 @@ pub(crate) fn outer_inline(
     InlineContentSizesResult {
         sizes: ContentSizes {
             min_content: preferred_min_content
-                .clamp_between_extremums(min_min_content, max_min_content) +
-                pbm_sums.inline,
+                .clamp_between_extremums(min_min_content, max_min_content)
+                + pbm_sums.inline,
             max_content: preferred_max_content
-                .clamp_between_extremums(min_max_content, max_max_content) +
-                pbm_sums.inline,
+                .clamp_between_extremums(min_max_content, max_max_content)
+                + pbm_sums.inline,
         },
-        depends_on_block_constraints: depends_on_block_constraints &&
-            (preferred_depends_on_block_constraints ||
-                min_depends_on_block_constraints ||
-                max_depends_on_block_constraints),
+        depends_on_block_constraints: depends_on_block_constraints
+            && (preferred_depends_on_block_constraints
+                || min_depends_on_block_constraints
+                || max_depends_on_block_constraints),
     }
 }
 
@@ -577,11 +577,11 @@ impl Size<Au> {
     #[inline]
     pub(crate) fn maybe_resolve_extrinsic(&self, stretch_size: Option<Au>) -> Option<Au> {
         match self {
-            Self::Initial |
-            Self::MinContent |
-            Self::MaxContent |
-            Self::FitContent |
-            Self::FitContentFunction(_) => None,
+            Self::Initial
+            | Self::MinContent
+            | Self::MaxContent
+            | Self::FitContent
+            | Self::FitContentFunction(_) => None,
             Self::Stretch => stretch_size,
             Self::Numeric(numeric) => Some(*numeric),
         }

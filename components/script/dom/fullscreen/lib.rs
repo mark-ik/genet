@@ -245,8 +245,8 @@ impl DocumentOrShadowRoot {
         // Step 3. If candidate and this are in the same tree, then return candidate.
         if *candidate
             .upcast::<Node>()
-            .GetRootNode(&GetRootNodeOptions::empty()) ==
-            *node
+            .GetRootNode(&GetRootNodeOptions::empty())
+            == *node
         {
             return Some(candidate);
         }
@@ -304,9 +304,9 @@ impl TaskOnce for ElementPerformFullscreenEnter {
         // > If error is true:
         // > - Append (fullscreenerror, this) to pendingDoc’s list of pending fullscreen events.
         // > - Reject promise with a TypeError exception and terminate these steps.
-        if self.document.root() != document ||
-            !element.fullscreen_element_ready_check() ||
-            self.error
+        if self.document.root() != document
+            || !element.fullscreen_element_ready_check()
+            || self.error
         {
             // TODO(#31866): we should queue this and fire them in update the rendering.
             document

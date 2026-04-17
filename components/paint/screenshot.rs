@@ -87,8 +87,8 @@ impl ScreenshotTaker {
         let expected_epochs = Rc::new(expected_epochs);
 
         for screenshot_request in self.requests.borrow_mut().iter_mut() {
-            if screenshot_request.webview_id != webview_id ||
-                screenshot_request.phase != ScreenshotRequestPhase::ConstellationRequest
+            if screenshot_request.webview_id != webview_id
+                || screenshot_request.phase != ScreenshotRequestPhase::ConstellationRequest
             {
                 continue;
             }

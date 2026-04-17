@@ -665,8 +665,8 @@ pub fn get_desired_proto(
             let global = GetNonCCWObjectGlobal(*new_target);
             let proto_or_iface_cache = get_proto_or_iface_array(global);
             desired_proto.set((*proto_or_iface_cache)[proto_id as usize]);
-            if *new_target != *original_new_target &&
-                !js::rust::wrappers2::JS_WrapObject(cx, desired_proto)
+            if *new_target != *original_new_target
+                && !js::rust::wrappers2::JS_WrapObject(cx, desired_proto)
             {
                 return Err(());
             }

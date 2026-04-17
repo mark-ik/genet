@@ -620,11 +620,11 @@ impl WebViewRenderer {
                         TouchSequenceState::Finished => {
                             self.touch_handler.remove_touch_sequence(sequence_id);
                         },
-                        TouchSequenceState::Touching |
-                        TouchSequenceState::Panning { .. } |
-                        TouchSequenceState::Pinching |
-                        TouchSequenceState::MultiTouch |
-                        TouchSequenceState::PendingFling { .. } => {
+                        TouchSequenceState::Touching
+                        | TouchSequenceState::Panning { .. }
+                        | TouchSequenceState::Pinching
+                        | TouchSequenceState::MultiTouch
+                        | TouchSequenceState::PendingFling { .. } => {
                             // It's possible to transition from Pinch to pan, Which means that
                             // a touch_up event for a pinch might have arrived here, but we
                             // already transitioned to pan or even PendingFling.
@@ -688,9 +688,9 @@ impl WebViewRenderer {
                         TouchSequenceState::Finished => {
                             self.touch_handler.remove_touch_sequence(sequence_id);
                         },
-                        TouchSequenceState::Panning { .. } |
-                        TouchSequenceState::Pinching |
-                        TouchSequenceState::PendingFling { .. } => {
+                        TouchSequenceState::Panning { .. }
+                        | TouchSequenceState::Pinching
+                        | TouchSequenceState::PendingFling { .. } => {
                             // It's possible to transition from Pinch to pan, Which means that
                             // a touch_up event for a pinch might have arrived here, but we
                             // already transitioned to pan or even PendingFling.
@@ -878,8 +878,8 @@ impl WebViewRenderer {
         let mut previous_pipeline_id = None;
         for hit_test_result in hit_test_results {
             let pipeline_details = self.pipelines.get_mut(&hit_test_result.pipeline_id)?;
-            if previous_pipeline_id.replace(hit_test_result.pipeline_id) !=
-                Some(hit_test_result.pipeline_id)
+            if previous_pipeline_id.replace(hit_test_result.pipeline_id)
+                != Some(hit_test_result.pipeline_id)
             {
                 let scroll_result = pipeline_details.scroll_tree.scroll_node_or_ancestor(
                     hit_test_result.external_scroll_id,

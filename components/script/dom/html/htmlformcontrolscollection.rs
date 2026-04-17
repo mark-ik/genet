@@ -73,8 +73,8 @@ impl HTMLFormControlsCollectionMethods<crate::DomTypeHolder> for HTMLFormControl
         let name = Atom::from(name);
 
         let mut filter_map = self.collection.elements_iter().filter_map(|elem| {
-            if elem.get_name().is_some_and(|n| n == name) ||
-                elem.get_id().is_some_and(|i| i == name)
+            if elem.get_name().is_some_and(|n| n == name)
+                || elem.get_id().is_some_and(|i| i == name)
             {
                 Some(elem)
             } else {

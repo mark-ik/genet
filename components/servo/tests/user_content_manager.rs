@@ -151,8 +151,8 @@ fn test_user_content_manager_for_auxiliary_webviews() {
     let load_webview = webview.clone();
     let delegate_clone = delegate.clone();
     let _ = servo_test.spin(move || {
-        load_webview.load_status() != LoadStatus::Complete ||
-            delegate_clone
+        load_webview.load_status() != LoadStatus::Complete
+            || delegate_clone
                 .auxiliary_webview
                 .borrow()
                 .as_ref()

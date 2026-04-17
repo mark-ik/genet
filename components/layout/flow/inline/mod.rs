@@ -646,9 +646,9 @@ impl LineBlockSizes {
             None => {
                 // This is the case mentinoned above where there are multiple solutions.
                 // This code is putting the baseline roughly in the middle of the line.
-                let leading = self.resolve() -
-                    (self.size_for_baseline_positioning.ascent +
-                        self.size_for_baseline_positioning.descent);
+                let leading = self.resolve()
+                    - (self.size_for_baseline_positioning.ascent
+                        + self.size_for_baseline_positioning.descent);
                 leading.scale_by(0.5) + self.size_for_baseline_positioning.ascent
             },
         }
@@ -957,8 +957,8 @@ impl InlineFormattingContextLayout<'_> {
         if inline_box_state
             .base_fragment_info
             .flags
-            .contains(FragmentFlags::IS_BR_ELEMENT) &&
-            self.deferred_br_clear == Clear::None
+            .contains(FragmentFlags::IS_BR_ELEMENT)
+            && self.deferred_br_clear == Clear::None
         {
             self.deferred_br_clear = Clear::from_style_and_container_writing_mode(
                 &inline_box_state.base.style,
@@ -1153,8 +1153,8 @@ impl InlineFormattingContextLayout<'_> {
         }
 
         // If the line doesn't have any fragments, we don't need to add a containing fragment for it.
-        if fragments.is_empty() &&
-            self.positioning_context.len() == start_positioning_context_length
+        if fragments.is_empty()
+            && self.positioning_context.len() == start_positioning_context_length
         {
             return;
         }
@@ -1262,8 +1262,8 @@ impl InlineFormattingContextLayout<'_> {
         // line box."
         let text_indent = self.current_line.start_position.inline;
         let line_length = self.current_line.inline_position - whitespace_trimmed - text_indent;
-        let adjusted_line_start = line_start +
-            match text_align {
+        let adjusted_line_start = line_start
+            + match text_align {
                 TextAlign::Start => text_indent,
                 TextAlign::End => (available_space - line_length).max(text_indent),
                 TextAlign::Center => (available_space - line_length + text_indent)
@@ -1305,8 +1305,8 @@ impl InlineFormattingContextLayout<'_> {
             .expect("Tried to lay out a float with no sequential placement state!");
 
         let block_offset_from_containining_block_top = state
-            .current_block_position_including_margins() -
-            state.current_containing_block_offset();
+            .current_block_position_including_margins()
+            - state.current_containing_block_offset();
         state.place_float_fragment(
             fragment,
             self.placement_state.containing_block,
@@ -1442,8 +1442,8 @@ impl InlineFormattingContextLayout<'_> {
         if !can_break {
             // Even if we cannot break, adding content to this line might change its position.
             // In that case we need to redo our placement among floats.
-            if self.sequential_layout_state.is_some() &&
-                (inline_would_overflow || block_would_overflow)
+            if self.sequential_layout_state.is_some()
+                && (inline_would_overflow || block_would_overflow)
             {
                 let new_placement = self.place_line_among_floats(potential_line_size);
                 self.current_line
@@ -1466,8 +1466,8 @@ impl InlineFormattingContextLayout<'_> {
             // If we have a limited block size then we are wedging this line between floats.
             assert!(self.sequential_layout_state.is_some());
             let new_placement = self.place_line_among_floats(potential_line_size);
-            if new_placement.start_corner.block !=
-                self.current_line_block_start_considering_placement_among_floats()
+            if new_placement.start_corner.block
+                != self.current_line_block_start_considering_placement_among_floats()
             {
                 return true;
             } else {
@@ -1584,8 +1584,8 @@ impl InlineFormattingContextLayout<'_> {
         if let Some(LineItem::TextRun(inline_box_identifier, line_item)) =
             self.current_line_segment.line_items.last_mut()
         {
-            if *inline_box_identifier == current_inline_box_identifier &&
-                line_item.merge_if_possible(
+            if *inline_box_identifier == current_inline_box_identifier
+                && line_item.merge_if_possible(
                     info,
                     &glyph_store,
                     &offsets,
@@ -1680,8 +1680,8 @@ impl InlineFormattingContextLayout<'_> {
 
     fn unbreakable_segment_fits_on_line(&mut self) -> bool {
         let potential_line_size = LogicalVec2 {
-            inline: self.current_line.inline_position + self.current_line_segment.inline_size -
-                self.current_line_segment.trailing_whitespace_size,
+            inline: self.current_line.inline_position + self.current_line_segment.inline_size
+                - self.current_line_segment.trailing_whitespace_size,
             block: self
                 .current_line_max_block_size_including_nested_containers()
                 .max(&self.current_line_segment.max_block_size)
@@ -1796,8 +1796,8 @@ impl From<&InheritedText> for SegmentContentFlags {
 
         // White-space with `white-space-collapse: break-spaces` never hangs and always takes up
         // space.
-        if style_text.text_wrap_mode == TextWrapMode::Wrap &&
-            style_text.white_space_collapse != WhiteSpaceCollapse::BreakSpaces
+        if style_text.text_wrap_mode == TextWrapMode::Wrap
+            && style_text.white_space_collapse != WhiteSpaceCollapse::BreakSpaces
         {
             flags.insert(Self::WRAPPABLE_AND_HANGABLE_WHITESPACE);
         }
@@ -1883,10 +1883,10 @@ impl InlineFormattingContext {
                 InlineItem::Atomic(_, index_in_text, bidi_level) => {
                     *bidi_level = bidi_info.levels[*index_in_text];
                 },
-                InlineItem::OutOfFlowAbsolutelyPositionedBox(..) |
-                InlineItem::OutOfFlowFloatBox(_) |
-                InlineItem::EndInlineBox |
-                InlineItem::BlockLevel { .. } => {},
+                InlineItem::OutOfFlowAbsolutelyPositionedBox(..)
+                | InlineItem::OutOfFlowFloatBox(_)
+                | InlineItem::EndInlineBox
+                | InlineItem::BlockLevel { .. } => {},
             }
         }
 
@@ -2012,8 +2012,8 @@ impl InlineFormattingContext {
                             absolutely_positioned_box: positioned_box.clone(),
                             preceding_line_content_would_produce_phantom_line: layout
                                 .current_line
-                                .is_phantom() &&
-                                layout.current_line_segment.is_phantom(),
+                                .is_phantom()
+                                && layout.current_line_segment.is_phantom(),
                         },
                     ));
                 },
@@ -2074,17 +2074,17 @@ impl InlineFormattingContext {
                     .borrow()
                     .layout_style()
                     .padding_border_margin(containing_block_for_children);
-                if pbm.padding.inline_end.is_zero() &&
-                    pbm.border.inline_end.is_zero() &&
-                    pbm.margin.inline_end.auto_is(Au::zero).is_zero()
+                if pbm.padding.inline_end.is_zero()
+                    && pbm.border.inline_end.is_zero()
+                    && pbm.margin.inline_end.auto_is(Au::zero).is_zero()
                 {
                     nesting_levels_from_nonzero_end_pbm += 1;
                 } else {
                     nesting_levels_from_nonzero_end_pbm = 0;
                 }
-                pbm.padding.inline_start.is_zero() &&
-                    pbm.border.inline_start.is_zero() &&
-                    pbm.margin.inline_start.auto_is(Au::zero).is_zero()
+                pbm.padding.inline_start.is_zero()
+                    && pbm.border.inline_start.is_zero()
+                    && pbm.margin.inline_start.auto_is(Au::zero).is_zero()
             },
             InlineItem::EndInlineBox => {
                 if nesting_levels_from_nonzero_end_pbm == 0 {
@@ -2099,9 +2099,9 @@ impl InlineFormattingContext {
                 let parent_style = text_run.inline_styles.style.borrow();
                 text_run.shaped_text.iter().all(|segment| {
                     segment.runs.iter().all(|run| {
-                        run.is_whitespace() &&
-                            !run.is_single_preserved_newline() &&
-                            !matches!(
+                        run.is_whitespace()
+                            && !run.is_single_preserved_newline()
+                            && !matches!(
                                 parent_style.get_inherited_text().white_space_collapse,
                                 WhiteSpaceCollapse::Preserve | WhiteSpaceCollapse::BreakSpaces
                             )
@@ -2300,8 +2300,8 @@ impl InlineContainerState {
             &self.font_metrics,
             &self.font_metrics,
         );
-        self.baseline_offset +
-            match child_alignment_baseline {
+        self.baseline_offset
+            + match child_alignment_baseline {
                 AlignmentBaseline::Baseline => Au::zero(),
                 AlignmentBaseline::TextTop => {
                     child_block_size.size_for_baseline_positioning.ascent - self.font_metrics.ascent
@@ -2309,32 +2309,32 @@ impl InlineContainerState {
                 AlignmentBaseline::Middle => {
                     // "Align the vertical midpoint of the box with the baseline of the parent
                     // box plus half the x-height of the parent."
-                    (child_block_size.size_for_baseline_positioning.ascent -
-                        child_block_size.size_for_baseline_positioning.descent -
-                        self.font_metrics.x_height)
+                    (child_block_size.size_for_baseline_positioning.ascent
+                        - child_block_size.size_for_baseline_positioning.descent
+                        - self.font_metrics.x_height)
                         .scale_by(0.5)
                 },
                 AlignmentBaseline::TextBottom => {
-                    self.font_metrics.descent -
-                        child_block_size.size_for_baseline_positioning.descent
+                    self.font_metrics.descent
+                        - child_block_size.size_for_baseline_positioning.descent
                 },
-                AlignmentBaseline::Alphabetic |
-                AlignmentBaseline::Ideographic |
-                AlignmentBaseline::Central |
-                AlignmentBaseline::Mathematical |
-                AlignmentBaseline::Hanging => {
+                AlignmentBaseline::Alphabetic
+                | AlignmentBaseline::Ideographic
+                | AlignmentBaseline::Central
+                | AlignmentBaseline::Mathematical
+                | AlignmentBaseline::Hanging => {
                     unreachable!("Got alignment-baseline value that should be disabled in Stylo")
                 },
-            } +
-            match child_baseline_shift {
+            }
+            + match child_baseline_shift {
                 // `top` and `bottom are not actually relative to the baseline, but this value is unused
                 // in those cases.
                 // TODO: We should distinguish these from `baseline` in order to implement "aligned subtrees" properly.
                 // See https://drafts.csswg.org/css2/#aligned-subtree.
                 BaselineShift::Keyword(
-                    BaselineShiftKeyword::Top |
-                    BaselineShiftKeyword::Bottom |
-                    BaselineShiftKeyword::Center,
+                    BaselineShiftKeyword::Top
+                    | BaselineShiftKeyword::Bottom
+                    | BaselineShiftKeyword::Center,
                 ) => Au::zero(),
                 BaselineShift::Keyword(BaselineShiftKeyword::Sub) => {
                     block_size.resolve().scale_by(FONT_SUBSCRIPT_OFFSET_RATIO)
@@ -2399,8 +2399,8 @@ impl IndependentFormattingContext {
             Some(child_positioning_context)
         };
 
-        if layout.text_wrap_mode == TextWrapMode::Wrap &&
-            !layout
+        if layout.text_wrap_mode == TextWrapMode::Wrap
+            && !layout
                 .ifc
                 .previous_character_prevents_soft_wrap_opportunity(offset_in_text)
         {
@@ -2772,8 +2772,8 @@ impl<'layout_data> ContentSizesComputation<'layout_data> {
             },
             InlineItem::Atomic(atomic, offset_in_text, _level) => {
                 // TODO: need to handle TextWrapMode::Nowrap.
-                if self.had_content_yet_for_min_content &&
-                    !inline_formatting_context
+                if self.had_content_yet_for_min_content
+                    && !inline_formatting_context
                         .previous_character_prevents_soft_wrap_opportunity(*offset_in_text)
                 {
                     self.line_break_opportunity();
@@ -2936,7 +2936,7 @@ fn char_prevents_soft_wrap_opportunity_when_before_or_after_atomic(character: ch
         return false;
     }
     let class = linebreak_property(character);
-    class == XI_LINE_BREAKING_CLASS_GL ||
-        class == XI_LINE_BREAKING_CLASS_WJ ||
-        class == XI_LINE_BREAKING_CLASS_ZWJ
+    class == XI_LINE_BREAKING_CLASS_GL
+        || class == XI_LINE_BREAKING_CLASS_WJ
+        || class == XI_LINE_BREAKING_CLASS_ZWJ
 }

@@ -439,10 +439,10 @@ impl BaseAudioContextMethods<crate::DomTypeHolder> for BaseAudioContext {
         sample_rate: Finite<f32>,
         can_gc: CanGc,
     ) -> Fallible<DomRoot<AudioBuffer>> {
-        if number_of_channels == 0 ||
-            number_of_channels > MAX_CHANNEL_COUNT ||
-            length == 0 ||
-            *sample_rate <= 0.
+        if number_of_channels == 0
+            || number_of_channels > MAX_CHANNEL_COUNT
+            || length == 0
+            || *sample_rate <= 0.
         {
             return Err(Error::NotSupported(None));
         }

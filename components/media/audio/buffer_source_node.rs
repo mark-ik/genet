@@ -235,9 +235,9 @@ impl AudioNodeEngine for AudioBufferSourceNode {
             if self.start_when > info.time - 1. / info.sample_rate as f64 {
                 let first_time = info.time + start_at as f64 / info.sample_rate as f64;
                 if self.start_when <= first_time {
-                    let subsample_offset = (first_time - self.start_when) *
-                        (buffer.sample_rate as f64) *
-                        computed_playback_rate;
+                    let subsample_offset = (first_time - self.start_when)
+                        * (buffer.sample_rate as f64)
+                        * computed_playback_rate;
                     self.buffer_pos += subsample_offset;
                     self.buffer_duration -= subsample_offset.abs();
                 }
@@ -276,12 +276,12 @@ impl AudioNodeEngine for AudioBufferSourceNode {
 
         // Fast path for the case where we can just copy FRAMES_PER_BLOCK
         // frames straight from the buffer.
-        if frames_to_output == FRAMES_PER_BLOCK.0 as usize &&
-            forward &&
-            buffer_offset_per_tick == 1. &&
-            self.buffer_pos.trunc() == self.buffer_pos &&
-            self.buffer_pos + (FRAMES_PER_BLOCK.0 as f64) <= actual_loop_end &&
-            FRAMES_PER_BLOCK.0 as f64 <= self.buffer_duration
+        if frames_to_output == FRAMES_PER_BLOCK.0 as usize
+            && forward
+            && buffer_offset_per_tick == 1.
+            && self.buffer_pos.trunc() == self.buffer_pos
+            && self.buffer_pos + (FRAMES_PER_BLOCK.0 as f64) <= actual_loop_end
+            && FRAMES_PER_BLOCK.0 as f64 <= self.buffer_duration
         {
             let mut block = Block::empty();
             let pos = self.buffer_pos as usize;
@@ -339,8 +339,8 @@ impl AudioNodeEngine for AudioBufferSourceNode {
             inputs.blocks.push(block);
         }
 
-        if !self.loop_enabled && (self.buffer_pos < 0. || self.buffer_pos >= buffer.len() as f64) ||
-            self.buffer_duration <= 0.
+        if !self.loop_enabled && (self.buffer_pos < 0. || self.buffer_pos >= buffer.len() as f64)
+            || self.buffer_duration <= 0.
         {
             self.maybe_trigger_onended_callback();
         }
@@ -419,14 +419,14 @@ impl AudioBuffer {
         let offset = pos - pos.floor();
         match self.buffers[chan as usize].get(prev + 1) {
             Some(next_sample) => {
-                ((1. - offset) * (self.buffers[chan as usize][prev] as f64) +
-                    offset * (*next_sample as f64)) as f32
+                ((1. - offset) * (self.buffers[chan as usize][prev] as f64)
+                    + offset * (*next_sample as f64)) as f32
             },
             _ => {
                 // linear extrapolation of two prev samples if there are two
                 if prev > 0 {
-                    ((1. + offset) * (self.buffers[chan as usize][prev] as f64) -
-                        offset * (self.buffers[chan as usize][prev - 1] as f64))
+                    ((1. + offset) * (self.buffers[chan as usize][prev] as f64)
+                        - offset * (self.buffers[chan as usize][prev - 1] as f64))
                         as f32
                 } else {
                     self.buffers[chan as usize][prev]

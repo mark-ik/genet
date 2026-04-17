@@ -479,8 +479,8 @@ impl HoistedAbsolutelyPositionedBox {
             box_offsets: inline_box_offsets,
             static_position_rect_axis: static_position_rect.get_axis(Direction::Inline),
             alignment: inline_alignment,
-            flip_anchor: self.original_parent_writing_mode.is_bidi_ltr() !=
-                containing_block_writing_mode.is_bidi_ltr(),
+            flip_anchor: self.original_parent_writing_mode.is_bidi_ltr()
+                != containing_block_writing_mode.is_bidi_ltr(),
             is_table_or_replaced,
         };
 
@@ -716,9 +716,9 @@ impl AbsoluteAxisSolver {
         ) {
             (None, None) => {
                 if self.flip_anchor {
-                    self.containing_size -
-                        self.static_position_rect_axis.origin -
-                        self.static_position_rect_axis.length
+                    self.containing_size
+                        - self.static_position_rect_axis.origin
+                        - self.static_position_rect_axis.length
                 } else {
                     self.static_position_rect_axis.origin
                 }
@@ -749,10 +749,10 @@ impl AbsoluteAxisSolver {
     #[inline]
     fn stretch_size(&self) -> Au {
         Au::zero().max(
-            self.available_space() -
-                self.padding_border_sum -
-                self.computed_margin_start.auto_is(Au::zero) -
-                self.computed_margin_end.auto_is(Au::zero),
+            self.available_space()
+                - self.padding_border_sum
+                - self.computed_margin_start.auto_is(Au::zero)
+                - self.computed_margin_end.auto_is(Au::zero),
         )
     }
 
@@ -835,8 +835,8 @@ impl AbsoluteAxisSolver {
             "Mixed horizontal and vertical writing modes are not supported yet"
         );
         let self_value_matches_container = || {
-            self.axis == Direction::Block ||
-                self_writing_mode.is_bidi_ltr() == alignment_container_writing_mode.is_bidi_ltr()
+            self.axis == Direction::Block
+                || self_writing_mode.is_bidi_ltr() == alignment_container_writing_mode.is_bidi_ltr()
         };
 
         // Here we resolve the alignment to either start, center, or end.
@@ -892,8 +892,8 @@ impl AbsoluteAxisSolver {
             AlignFlags::END => alignment_container.origin + free_space,
             _ => unreachable!(),
         };
-        if matches!(flags, AlignFlags::SAFE | AlignFlags::UNSAFE) ||
-            matches!(
+        if matches!(flags, AlignFlags::SAFE | AlignFlags::UNSAFE)
+            || matches!(
                 self.alignment,
                 AlignFlags::NORMAL | AlignFlags::AUTO | AlignFlags::STRETCH
             )

@@ -22,8 +22,8 @@ mod keyutils;
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use dpi::PhysicalSize;
 use euclid::Scale;
@@ -31,10 +31,9 @@ use log::info;
 use paint_api::rendering_context::RenderingContext;
 use paint_api::wgpu_rendering_context::WgpuRenderingContext;
 use servo::{
-    Cursor, DevicePoint, EventLoopWaker, InputEvent,
-    MouseButton as ServoMouseButton, MouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent,
-    MouseMoveEvent, ServoBuilder, WebView, WebViewBuilder, WebViewDelegate, WheelDelta, WheelEvent,
-    WheelMode,
+    Cursor, DevicePoint, EventLoopWaker, InputEvent, MouseButton as ServoMouseButton,
+    MouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent, MouseMoveEvent, ServoBuilder,
+    WebView, WebViewBuilder, WebViewDelegate, WheelDelta, WheelEvent, WheelMode,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -194,14 +193,15 @@ impl ApplicationHandler<AppEvent> for App {
         // WgpuRenderingContext handles device/queue/surface creation, sRGB config,
         // and frame acquisition. Servo/WebRender renders directly into surface
         // textures via render_to_view().
-        let rendering_context: Rc<dyn RenderingContext> = Rc::new(
-            WgpuRenderingContext::new(
-                window.clone(),
-                PhysicalSize::new(win_size.width, win_size.height),
-            ),
-        );
+        let rendering_context: Rc<dyn RenderingContext> = Rc::new(WgpuRenderingContext::new(
+            window.clone(),
+            PhysicalSize::new(win_size.width, win_size.height),
+        ));
 
-        info!("Created WgpuRenderingContext ({}x{})", win_size.width, win_size.height);
+        info!(
+            "Created WgpuRenderingContext ({}x{})",
+            win_size.width, win_size.height
+        );
 
         let servo = ServoBuilder::default()
             .event_loop_waker(self.waker.clone())
@@ -246,19 +246,21 @@ impl ApplicationHandler<AppEvent> for App {
                 // Drop the state (and servo) before exiting.
                 self.state = None;
                 event_loop.exit();
-            }
+            },
 
             // ---- Resize ----
             WindowEvent::Resized(new_size) => {
                 state.webview.resize(new_size);
                 state.window.request_redraw();
-            }
+            },
 
             // ---- HiDPI scale change ----
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 state.hidpi_scale = scale_factor;
-                state.webview.set_hidpi_scale_factor(Scale::new(scale_factor as f32));
-            }
+                state
+                    .webview
+                    .set_hidpi_scale_factor(Scale::new(scale_factor as f32));
+            },
 
             // ---- Redraw ----
             WindowEvent::RedrawRequested => {
@@ -267,17 +269,17 @@ impl ApplicationHandler<AppEvent> for App {
                 // presented by the RenderingContext automatically. We just need
                 // to trigger a new frame.
                 state.window.request_redraw();
-            }
+            },
 
             // ---- Mouse ----
             WindowEvent::CursorMoved { position, .. } => {
                 let pt = DevicePoint::new(position.x as f32, position.y as f32);
                 state.cursor_pos.set(pt);
                 state.cursor_in_window.set(true);
-                state.webview.notify_input_event(InputEvent::MouseMove(
-                    MouseMoveEvent::new(pt.into()),
-                ));
-            }
+                state
+                    .webview
+                    .notify_input_event(InputEvent::MouseMove(MouseMoveEvent::new(pt.into())));
+            },
             WindowEvent::CursorLeft { .. } => {
                 state.cursor_in_window.set(false);
                 state
@@ -285,45 +287,62 @@ impl ApplicationHandler<AppEvent> for App {
                     .notify_input_event(InputEvent::MouseLeftViewport(
                         MouseLeftViewportEvent::default(),
                     ));
-            }
-            WindowEvent::MouseInput { state: btn_state, button, .. } => {
+            },
+            WindowEvent::MouseInput {
+                state: btn_state,
+                button,
+                ..
+            } => {
                 let point = state.cursor_pos.get();
                 let servo_button = winit_button_to_servo(button);
                 let action = match btn_state {
                     ElementState::Pressed => MouseButtonAction::Down,
                     ElementState::Released => MouseButtonAction::Up,
                 };
-                state.webview.notify_input_event(InputEvent::MouseButton(
-                    MouseButtonEvent::new(action, servo_button, point.into()),
-                ));
-            }
+                state
+                    .webview
+                    .notify_input_event(InputEvent::MouseButton(MouseButtonEvent::new(
+                        action,
+                        servo_button,
+                        point.into(),
+                    )));
+            },
             WindowEvent::MouseWheel { delta, .. } => {
                 let point = state.cursor_pos.get();
                 let (dx, dy, mode) = match delta {
-                    MouseScrollDelta::LineDelta(x, y) => {
-                        ((x * LINE_WIDTH) as f64, (y * LINE_HEIGHT) as f64, WheelMode::DeltaPixel)
-                    }
+                    MouseScrollDelta::LineDelta(x, y) => (
+                        (x * LINE_WIDTH) as f64,
+                        (y * LINE_HEIGHT) as f64,
+                        WheelMode::DeltaPixel,
+                    ),
                     MouseScrollDelta::PixelDelta(d) => (d.x, d.y, WheelMode::DeltaPixel),
                 };
-                state.webview.notify_input_event(InputEvent::Wheel(WheelEvent::new(
-                    WheelDelta { x: dx, y: dy, z: 0.0, mode },
-                    point.into(),
-                )));
-            }
+                state
+                    .webview
+                    .notify_input_event(InputEvent::Wheel(WheelEvent::new(
+                        WheelDelta {
+                            x: dx,
+                            y: dy,
+                            z: 0.0,
+                            mode,
+                        },
+                        point.into(),
+                    )));
+            },
 
             // ---- Keyboard ----
             WindowEvent::ModifiersChanged(mods) => {
                 state.modifiers.set(mods.state());
-            }
+            },
             WindowEvent::KeyboardInput { event, .. } => {
                 let mods = state.modifiers.get();
                 let keyboard_event = keyutils::keyboard_event_from_winit(&event, mods);
                 state
                     .webview
                     .notify_input_event(InputEvent::Keyboard(keyboard_event));
-            }
+            },
 
-            _ => {}
+            _ => {},
         }
     }
 
@@ -337,14 +356,14 @@ impl ApplicationHandler<AppEvent> for App {
                 if self.frame_ready.swap(false, Ordering::Relaxed) {
                     state.window.request_redraw();
                 }
-            }
+            },
             AppEvent::CursorChanged(icon) => {
                 state.window.set_cursor(icon);
-            }
+            },
             AppEvent::TitleChanged(title) => {
                 let t = title.unwrap_or_else(|| "wgpu-embedder (Servo)".to_string());
                 state.window.set_title(&t);
-            }
+            },
         }
     }
 
@@ -380,7 +399,9 @@ fn main() {
     event_loop.set_control_flow(ControlFlow::Wait);
 
     let proxy = event_loop.create_proxy();
-    let waker = Box::new(WinitWaker { proxy: proxy.clone() });
+    let waker = Box::new(WinitWaker {
+        proxy: proxy.clone(),
+    });
 
     let mut app = App::new(proxy, waker, url);
     event_loop.run_app(&mut app).expect("Event loop failed");

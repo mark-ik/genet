@@ -252,9 +252,9 @@ impl WebRtcControllerBackend for GStreamerWebRtcController {
                 }
             },
             InternalEvent::DescriptionAdded(cb, description_type, ty, remote_offer_generation) => {
-                if description_type == DescriptionType::Remote &&
-                    ty == SdpType::Offer &&
-                    remote_offer_generation == self.remote_offer_generation
+                if description_type == DescriptionType::Remote
+                    && ty == SdpType::Offer
+                    && remote_offer_generation == self.remote_offer_generation
                 {
                     mem::swap(
                         &mut self.pending_remote_mline_info,
@@ -627,8 +627,8 @@ impl GStreamerWebRtcController {
                             }
                             data_channels.remove(&id);
                         }
-                        if !closed_channel &&
-                            register_data_channel(data_channels.clone(), id, channel).is_err()
+                        if !closed_channel
+                            && register_data_channel(data_channels.clone(), id, channel).is_err()
                         {
                             warn!("Could not register data channel {:?}", id);
                             return None;

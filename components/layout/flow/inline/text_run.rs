@@ -245,9 +245,9 @@ impl TextRunSegment {
         self.break_at_start = false;
 
         let text_style = parent_style.get_inherited_text().clone();
-        let can_break_anywhere = text_style.word_break == WordBreak::BreakAll ||
-            text_style.overflow_wrap == OverflowWrap::Anywhere ||
-            text_style.overflow_wrap == OverflowWrap::BreakWord;
+        let can_break_anywhere = text_style.word_break == WordBreak::BreakAll
+            || text_style.overflow_wrap == OverflowWrap::Anywhere
+            || text_style.overflow_wrap == OverflowWrap::BreakWord;
 
         let mut last_slice = self.range.start..self.range.start;
         for break_index in linebreak_iter {
@@ -282,9 +282,9 @@ impl TextRunSegment {
                 // newline.
                 //
                 // An exception to this is if the style tells us that we can break in the middle of words.
-                if text_style.white_space_collapse == WhiteSpaceCollapse::BreakSpaces &&
-                    first_white_space_character != '\n' &&
-                    !can_break_anywhere
+                if text_style.white_space_collapse == WhiteSpaceCollapse::BreakSpaces
+                    && first_white_space_character != '\n'
+                    && !can_break_anywhere
                 {
                     whitespace.start += first_white_space_character.len_utf8();
                     options
@@ -297,10 +297,10 @@ impl TextRunSegment {
 
             // If there's no whitespace and `word-break` is set to `keep-all`, try increasing the slice.
             // TODO: This should only happen for CJK text.
-            if !ends_with_whitespace &&
-                *break_index != self.range.end &&
-                text_style.word_break == WordBreak::KeepAll &&
-                !can_break_anywhere
+            if !ends_with_whitespace
+                && *break_index != self.range.end
+                && text_style.word_break == WordBreak::KeepAll
+                && !can_break_anywhere
             {
                 continue;
             }
@@ -318,8 +318,8 @@ impl TextRunSegment {
             }
 
             options.flags.insert(
-                ShapingFlags::IS_WHITESPACE_SHAPING_FLAG |
-                    ShapingFlags::ENDS_WITH_WHITESPACE_SHAPING_FLAG,
+                ShapingFlags::IS_WHITESPACE_SHAPING_FLAG
+                    | ShapingFlags::ENDS_WITH_WHITESPACE_SHAPING_FLAG,
             );
 
             // If `white-space-collapse: break-spaces` is active, insert a line breaking opportunity
@@ -598,13 +598,13 @@ impl TextRun {
 fn is_cursive_script(script: Script) -> bool {
     matches!(
         script,
-        Script::Arabic |
-            Script::Hanifi_Rohingya |
-            Script::Mandaic |
-            Script::Mongolian |
-            Script::Nko |
-            Script::Phags_Pa |
-            Script::Syriac
+        Script::Arabic
+            | Script::Hanifi_Rohingya
+            | Script::Mandaic
+            | Script::Mongolian
+            | Script::Nko
+            | Script::Phags_Pa
+            | Script::Syriac
     )
 }
 
@@ -623,11 +623,11 @@ fn char_does_not_change_font(character: char) -> bool {
     }
 
     let class = linebreak_property(character);
-    class == XI_LINE_BREAKING_CLASS_CM ||
-        class == XI_LINE_BREAKING_CLASS_GL ||
-        class == XI_LINE_BREAKING_CLASS_ZW ||
-        class == XI_LINE_BREAKING_CLASS_WJ ||
-        class == XI_LINE_BREAKING_CLASS_ZWJ
+    class == XI_LINE_BREAKING_CLASS_CM
+        || class == XI_LINE_BREAKING_CLASS_GL
+        || class == XI_LINE_BREAKING_CLASS_ZW
+        || class == XI_LINE_BREAKING_CLASS_WJ
+        || class == XI_LINE_BREAKING_CLASS_ZWJ
 }
 
 pub(super) fn get_font_for_first_font_for_style(

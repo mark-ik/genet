@@ -545,8 +545,8 @@ impl ReplacedContents {
                 }))]
             },
             ReplacedContentKind::Canvas(canvas_info) => {
-                if self.natural_size.width == Some(Au::zero()) ||
-                    self.natural_size.height == Some(Au::zero())
+                if self.natural_size.width == Some(Au::zero())
+                    || self.natural_size.height == Some(Au::zero())
                 {
                     return vec![];
                 }
