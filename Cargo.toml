@@ -215,7 +215,7 @@ webrender = { version = "0.68", features = ["capture", "wgpu_backend"] }
 webrender_api = "0.68"
 wgpu = "29"
 wgpu-core = "29"
-wgpu-native-texture-interop = { path = "../wgpu-gui-bridge/wgpu-native-texture-interop" }
+wgpu-native-texture-interop = { git = "https://github.com/mark-ik/wgpu-gui-bridge", branch = "servo-webgl-interop" }
 wgpu-types = "29"
 winapi = "0.3"
 windows-sys = "0.61"
@@ -367,9 +367,9 @@ codegen-units = 1
 # tendril = { path = "../html5ever/tendril" }
 
 # For WebRender:
-webrender = { path = "../webrender/webrender" }
-webrender_api = { path = "../webrender/webrender_api" }
-wr_malloc_size_of = { path = "../webrender/wr_malloc_size_of" }
+webrender = { path = "../webrender-wgpu/webrender" }
+webrender_api = { path = "../webrender-wgpu/webrender_api" }
+wr_malloc_size_of = { path = "../webrender-wgpu/wr_malloc_size_of" }
 #
 # Or for mozjs:
 #
