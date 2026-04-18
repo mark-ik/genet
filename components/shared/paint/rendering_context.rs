@@ -512,6 +512,62 @@ impl RenderingContext for SoftwareRenderingContext {
     }
 }
 
+// Phase A: wgpu-first trait split (coexists with legacy `RenderingContext`).
+impl crate::rendering_context_core::RenderingContextCore for SoftwareRenderingContext {
+    fn size(&self) -> PhysicalSize<u32> {
+        self.size.get()
+    }
+
+    fn resize(&self, size: PhysicalSize<u32>) {
+        <Self as RenderingContext>::resize(self, size)
+    }
+
+    fn present(&self) {
+        <Self as RenderingContext>::present(self)
+    }
+
+    fn read_to_image(&self, rect: DeviceIntRect) -> Option<RgbaImage> {
+        self.surfman_rendering_info.read_to_image(rect)
+    }
+
+    fn gl(&self) -> Option<&dyn crate::rendering_context_core::GlCapability> {
+        Some(self)
+    }
+}
+
+impl crate::rendering_context_core::GlCapability for SoftwareRenderingContext {
+    fn make_current(&self) -> Result<(), Error> {
+        self.surfman_rendering_info.make_current()
+    }
+
+    fn gleam_gl_api(&self) -> Rc<dyn gleam::gl::Gl> {
+        self.surfman_rendering_info.gleam_gl.clone()
+    }
+
+    fn glow_gl_api(&self) -> Arc<glow::Context> {
+        self.surfman_rendering_info.glow_gl.clone()
+    }
+
+    fn prepare_for_rendering(&self) {
+        self.surfman_rendering_info.prepare_for_rendering();
+    }
+
+    fn create_texture(
+        &self,
+        surface: Surface,
+    ) -> Option<(SurfaceTexture, u32, UntypedSize2D<i32>)> {
+        self.surfman_rendering_info.create_texture(surface)
+    }
+
+    fn destroy_texture(&self, surface_texture: SurfaceTexture) -> Option<Surface> {
+        self.surfman_rendering_info.destroy_texture(surface_texture)
+    }
+
+    fn connection(&self) -> Connection {
+        self.surfman_rendering_info.device.borrow().connection()
+    }
+}
+
 /// A [`RenderingContext`] that uses the `surfman` library to render to a
 /// `raw-window-handle` identified window. `surfman` will attempt to create an
 /// OpenGL context and surface for this window. This is a simple implementation
@@ -716,6 +772,73 @@ impl RenderingContext for WindowRenderingContext {
 
     fn raw_display_handle(&self) -> Option<raw_window_handle::RawDisplayHandle> {
         Some(self.raw_display_handle)
+    }
+}
+
+// Phase A: wgpu-first trait split (coexists with legacy `RenderingContext`).
+impl crate::rendering_context_core::RenderingContextCore for WindowRenderingContext {
+    fn size(&self) -> PhysicalSize<u32> {
+        self.size.get()
+    }
+
+    fn resize(&self, size: PhysicalSize<u32>) {
+        <Self as RenderingContext>::resize(self, size)
+    }
+
+    fn present(&self) {
+        <Self as RenderingContext>::present(self)
+    }
+
+    fn read_to_image(&self, rect: DeviceIntRect) -> Option<RgbaImage> {
+        self.surfman_context.read_to_image(rect)
+    }
+
+    fn window_handles(&self) -> Option<crate::rendering_context_core::WindowHandles> {
+        Some(crate::rendering_context_core::WindowHandles {
+            window: self.raw_window_handle,
+            display: self.raw_display_handle,
+        })
+    }
+
+    fn refresh_driver(&self) -> Option<Rc<dyn RefreshDriver>> {
+        self.surfman_context.refresh_driver()
+    }
+
+    fn gl(&self) -> Option<&dyn crate::rendering_context_core::GlCapability> {
+        Some(self)
+    }
+}
+
+impl crate::rendering_context_core::GlCapability for WindowRenderingContext {
+    fn make_current(&self) -> Result<(), Error> {
+        self.surfman_context.make_current()
+    }
+
+    fn gleam_gl_api(&self) -> Rc<dyn gleam::gl::Gl> {
+        self.surfman_context.gleam_gl.clone()
+    }
+
+    fn glow_gl_api(&self) -> Arc<glow::Context> {
+        self.surfman_context.glow_gl.clone()
+    }
+
+    fn prepare_for_rendering(&self) {
+        self.surfman_context.prepare_for_rendering();
+    }
+
+    fn create_texture(
+        &self,
+        surface: Surface,
+    ) -> Option<(SurfaceTexture, u32, UntypedSize2D<i32>)> {
+        self.surfman_context.create_texture(surface)
+    }
+
+    fn destroy_texture(&self, surface_texture: SurfaceTexture) -> Option<Surface> {
+        self.surfman_context.destroy_texture(surface_texture)
+    }
+
+    fn connection(&self) -> Connection {
+        self.surfman_context.connection().expect("WindowRenderingContext always has a connection")
     }
 }
 
@@ -1094,6 +1217,72 @@ impl RenderingContext for OffscreenRenderingContext {
 
     fn raw_display_handle(&self) -> Option<raw_window_handle::RawDisplayHandle> {
         self.parent_context.raw_display_handle()
+    }
+}
+
+// Phase A: wgpu-first trait split (coexists with legacy `RenderingContext`).
+// OffscreenRenderingContext is implicitly GL-only today — its parent is
+// a `WindowRenderingContext`, which always has GL capability. All parent
+// delegations use fully-qualified syntax because both the legacy and
+// new traits define the same method names during transition.
+impl crate::rendering_context_core::RenderingContextCore for OffscreenRenderingContext {
+    fn size(&self) -> PhysicalSize<u32> {
+        self.size.get()
+    }
+
+    fn resize(&self, new_size: PhysicalSize<u32>) {
+        <Self as RenderingContext>::resize(self, new_size)
+    }
+
+    fn present(&self) {}
+
+    fn read_to_image(&self, rect: DeviceIntRect) -> Option<RgbaImage> {
+        self.framebuffer.borrow().read_to_image(rect)
+    }
+
+    fn window_handles(&self) -> Option<crate::rendering_context_core::WindowHandles> {
+        <WindowRenderingContext as crate::rendering_context_core::RenderingContextCore>::window_handles(&self.parent_context)
+    }
+
+    fn refresh_driver(&self) -> Option<Rc<dyn RefreshDriver>> {
+        <WindowRenderingContext as crate::rendering_context_core::RenderingContextCore>::refresh_driver(&self.parent_context)
+    }
+
+    fn gl(&self) -> Option<&dyn crate::rendering_context_core::GlCapability> {
+        Some(self)
+    }
+}
+
+impl crate::rendering_context_core::GlCapability for OffscreenRenderingContext {
+    fn make_current(&self) -> Result<(), Error> {
+        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::make_current(&self.parent_context)
+    }
+
+    fn gleam_gl_api(&self) -> Rc<dyn gleam::gl::Gl> {
+        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::gleam_gl_api(&self.parent_context)
+    }
+
+    fn glow_gl_api(&self) -> Arc<glow::Context> {
+        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::glow_gl_api(&self.parent_context)
+    }
+
+    fn prepare_for_rendering(&self) {
+        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::prepare_for_rendering(&self.parent_context)
+    }
+
+    fn create_texture(
+        &self,
+        surface: Surface,
+    ) -> Option<(SurfaceTexture, u32, UntypedSize2D<i32>)> {
+        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::create_texture(&self.parent_context, surface)
+    }
+
+    fn destroy_texture(&self, surface_texture: SurfaceTexture) -> Option<Surface> {
+        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::destroy_texture(&self.parent_context, surface_texture)
+    }
+
+    fn connection(&self) -> Connection {
+        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::connection(&self.parent_context)
     }
 }
 

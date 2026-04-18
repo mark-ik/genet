@@ -244,3 +244,48 @@ impl RenderingContext for WgpuRenderingContext {
         Some(self.queue.clone())
     }
 }
+
+// ---------------------------------------------------------------------------
+// Phase A: wgpu-first trait split (coexists with legacy `RenderingContext`)
+// ---------------------------------------------------------------------------
+
+use crate::rendering_context_core::{RenderingContextCore, WgpuCapability};
+
+impl RenderingContextCore for WgpuRenderingContext {
+    fn size(&self) -> PhysicalSize<u32> {
+        self.size.get()
+    }
+
+    fn resize(&self, size: PhysicalSize<u32>) {
+        <Self as RenderingContext>::resize(self, size)
+    }
+
+    fn present(&self) {
+        <Self as RenderingContext>::present(self)
+    }
+
+    fn read_to_image(&self, _rect: DeviceIntRect) -> Option<RgbaImage> {
+        // TODO: Implement GPU→CPU readback via staging buffer for screenshots.
+        None
+    }
+
+    // `gl()` uses the default `None` — this context has no GL capability.
+
+    fn wgpu(&self) -> Option<&dyn WgpuCapability> {
+        Some(self)
+    }
+}
+
+impl WgpuCapability for WgpuRenderingContext {
+    fn device(&self) -> wgpu::Device {
+        self.device.clone()
+    }
+
+    fn queue(&self) -> wgpu::Queue {
+        self.queue.clone()
+    }
+
+    fn acquire_frame_target(&self) -> Option<wgpu::TextureView> {
+        <Self as RenderingContext>::acquire_wgpu_frame_target(self)
+    }
+}
