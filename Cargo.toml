@@ -377,9 +377,9 @@ codegen-units = 1
 # tendril = { path = "../html5ever/tendril" }
 #
 # For WebRender:
-webrender = { path = "../webrender/webrender" }
-webrender_api = { path = "../webrender/webrender_api" }
-wr_malloc_size_of = { path = "../webrender/wr_malloc_size_of" }
+webrender = { path = "../webrender-wgpu/webrender" }
+webrender_api = { path = "../webrender-wgpu/webrender_api" }
+wr_malloc_size_of = { path = "../webrender-wgpu/wr_malloc_size_of" }
 #
 # Or for mozjs:
 #
