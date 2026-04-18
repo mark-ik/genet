@@ -143,33 +143,6 @@ impl WgpuRenderingContext {
 }
 
 impl RenderingContext for WgpuRenderingContext {
-    fn size(&self) -> PhysicalSize<u32> {
-        self.size.get()
-    }
-
-    fn size2d(&self) -> Size2D<u32, DevicePixel> {
-        let s = self.size.get();
-        Size2D::new(s.width, s.height)
-    }
-
-    fn resize(&self, size: PhysicalSize<u32>) {
-        if size.width == 0 || size.height == 0 {
-            warn!("WgpuRenderingContext: ignoring resize to {size:?} (dimensions must be >= 1)");
-            return;
-        }
-        let mut config = self.surface_config.borrow_mut();
-        config.width = size.width;
-        config.height = size.height;
-        self.surface.configure(&self.device, &config);
-        self.size.set(size);
-    }
-
-    fn present(&self) {
-        if let Some(frame) = self.current_frame.borrow_mut().take() {
-            frame.present();
-        }
-    }
-
     fn prepare_for_rendering(&self) {
         // No-op: wgpu has no implicit context to bind.
     }
@@ -185,11 +158,6 @@ impl RenderingContext for WgpuRenderingContext {
 
     fn glow_gl_api(&self) -> Arc<glow::Context> {
         unreachable!("glow_gl_api() called on WgpuRenderingContext")
-    }
-
-    fn read_to_image(&self, _source_rectangle: DeviceIntRect) -> Option<RgbaImage> {
-        // TODO: Implement GPU→CPU readback via staging buffer for screenshots.
-        None
     }
 
     fn backend_binding(&self) -> RenderingBackendBinding {
@@ -257,11 +225,21 @@ impl RenderingContextCore for WgpuRenderingContext {
     }
 
     fn resize(&self, size: PhysicalSize<u32>) {
-        <Self as RenderingContext>::resize(self, size)
+        if size.width == 0 || size.height == 0 {
+            warn!("WgpuRenderingContext: ignoring resize to {size:?} (dimensions must be >= 1)");
+            return;
+        }
+        let mut config = self.surface_config.borrow_mut();
+        config.width = size.width;
+        config.height = size.height;
+        self.surface.configure(&self.device, &config);
+        self.size.set(size);
     }
 
     fn present(&self) {
-        <Self as RenderingContext>::present(self)
+        if let Some(frame) = self.current_frame.borrow_mut().take() {
+            frame.present();
+        }
     }
 
     fn read_to_image(&self, _rect: DeviceIntRect) -> Option<RgbaImage> {

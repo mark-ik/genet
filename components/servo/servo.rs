@@ -33,6 +33,11 @@ use net::resource_thread::new_resource_threads;
 use net_traits::{ResourceThreads, exit_fetch_thread, start_fetch_thread};
 use paint::{InitialPaintState, Paint};
 pub use paint_api::rendering_context::RenderingContext;
+pub use paint_api::rendering_context_core::{
+    GlCapability, RenderingContextCore, WindowHandles,
+};
+#[cfg(feature = "wgpu_backend")]
+pub use paint_api::rendering_context_core::WgpuCapability;
 use paint_api::{CrossProcessPaintApi, PaintMessage, PaintProxy};
 use profile::{mem as profile_mem, system_reporter, time as profile_time};
 use profile_traits::mem::{MemoryReportResult, ProfilerMsg, Reporter};

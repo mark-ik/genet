@@ -48,6 +48,9 @@ pub use paint::WebRenderDebugOption;
 pub use paint_api::rendering_context::{
     OffscreenRenderingContext, RenderingContext, SoftwareRenderingContext, WindowRenderingContext,
 };
+pub use paint_api::rendering_context_core::{GlCapability, RenderingContextCore, WindowHandles};
+#[cfg(feature = "wgpu_backend")]
+pub use paint_api::rendering_context_core::WgpuCapability;
 // Expose our profile traits for servoshell, so we can instrument code there, but don't
 // add it as an official API.
 #[doc(hidden)]
