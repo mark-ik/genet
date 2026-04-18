@@ -55,33 +55,21 @@ pub enum RenderingBackendBinding {
 
 /// The `RenderingContext` trait defines a set of methods for managing
 /// an OpenGL or GLES rendering context.
-/// Implementors of this trait are responsible for handling the creation,
-/// management, and destruction of the rendering context and its associated
-/// resources.
-pub trait RenderingContext {
+///
+/// Phase A transitional shape: this trait now requires
+/// [`RenderingContextCore`] as a supertrait. Methods that are purely
+/// about presentation / geometry / window handles (`size`, `resize`,
+/// `present`, `read_to_image`, `refresh_driver`, `raw_window_handle`,
+/// `raw_display_handle`) have been moved to [`RenderingContextCore`] —
+/// callers reach them via trait-upcasting (`&dyn RenderingContext`
+/// auto-upcasts to `&dyn RenderingContextCore`). The remaining methods
+/// are the GL-specific and wgpu-specific entry points that subsequent
+/// Phase A commits migrate to `ctx.gl()` / `ctx.wgpu()` accessors,
+/// after which this trait is deleted entirely.
+pub trait RenderingContext: crate::rendering_context_core::RenderingContextCore {
     /// Prepare this [`RenderingContext`] to be rendered upon by Servo. For instance,
     /// by binding a framebuffer to the current OpenGL context.
     fn prepare_for_rendering(&self) {}
-    /// Read the contents of this [`Renderingcontext`] into an in-memory image. If the
-    /// image cannot be read (for instance, if no rendering has taken place yet), then
-    /// `None` is returned.
-    ///
-    /// In a double-buffered [`RenderingContext`] this is expected to read from the back
-    /// buffer. That means that once Servo renders to the context, this should return those
-    /// results, even before [`RenderingContext::present`] is called.
-    fn read_to_image(&self, source_rectangle: DeviceIntRect) -> Option<RgbaImage>;
-    /// Get the current size of this [`RenderingContext`].
-    fn size(&self) -> PhysicalSize<u32>;
-    /// Get the current size of this [`RenderingContext`] as [`Size2D`].
-    fn size2d(&self) -> Size2D<u32, DevicePixel> {
-        let size = self.size();
-        Size2D::new(size.width, size.height)
-    }
-    /// Resizes the rendering surface to the given size.
-    fn resize(&self, size: PhysicalSize<u32>);
-    /// Presents the rendered frame to the screen. In a double-buffered context, this would
-    /// swap buffers.
-    fn present(&self);
     /// Makes the context the current OpenGL context for this thread.
     /// After calling this function, it is valid to use OpenGL rendering
     /// commands.
@@ -104,21 +92,6 @@ pub trait RenderingContext {
     }
     /// The connection to the display server for WebGL. Default to `None`.
     fn connection(&self) -> Option<Connection> {
-        None
-    }
-    /// Return the [`RefreshDriver`] for this [`RenderingContext`]. If `None` is returned,
-    /// then the default timer-based [`RefreshDriver`] will be used.
-    fn refresh_driver(&self) -> Option<Rc<dyn RefreshDriver>> {
-        None
-    }
-
-    /// Return the raw window handle for creating a wgpu surface. Default to `None`.
-    fn raw_window_handle(&self) -> Option<raw_window_handle::RawWindowHandle> {
-        None
-    }
-
-    /// Return the raw display handle for creating a wgpu surface. Default to `None`.
-    fn raw_display_handle(&self) -> Option<raw_window_handle::RawDisplayHandle> {
         None
     }
 
@@ -450,40 +423,6 @@ impl RenderingContext for SoftwareRenderingContext {
         self.surfman_rendering_info.prepare_for_rendering();
     }
 
-    fn read_to_image(&self, source_rectangle: DeviceIntRect) -> Option<RgbaImage> {
-        self.surfman_rendering_info.read_to_image(source_rectangle)
-    }
-
-    fn size(&self) -> PhysicalSize<u32> {
-        self.size.get()
-    }
-
-    fn resize(&self, size: PhysicalSize<u32>) {
-        assert!(
-            size.width > 0 && size.height > 0,
-            "Dimensions must be at least 1x1, got {size:?}",
-        );
-
-        if self.size.get() == size {
-            return;
-        }
-
-        self.size.set(size);
-
-        let device = &mut self.surfman_rendering_info.device.borrow_mut();
-        let context = &mut self.surfman_rendering_info.context.borrow_mut();
-        let size = Size2D::new(size.width as i32, size.height as i32);
-        let _ = self.swap_chain.resize(device, context, size);
-    }
-
-    fn present(&self) {
-        let device = &mut self.surfman_rendering_info.device.borrow_mut();
-        let context = &mut self.surfman_rendering_info.context.borrow_mut();
-        let _ = self
-            .swap_chain
-            .swap_buffers(device, context, PreserveBuffer::No);
-    }
-
     fn make_current(&self) -> Result<(), Error> {
         self.surfman_rendering_info.make_current()
     }
@@ -512,18 +451,38 @@ impl RenderingContext for SoftwareRenderingContext {
     }
 }
 
-// Phase A: wgpu-first trait split (coexists with legacy `RenderingContext`).
+// Phase A: wgpu-first core trait. Authoritative impl for geometry,
+// presentation, and readback; the legacy `impl RenderingContext for
+// SoftwareRenderingContext` above now only carries GL-specific methods.
 impl crate::rendering_context_core::RenderingContextCore for SoftwareRenderingContext {
     fn size(&self) -> PhysicalSize<u32> {
         self.size.get()
     }
 
     fn resize(&self, size: PhysicalSize<u32>) {
-        <Self as RenderingContext>::resize(self, size)
+        assert!(
+            size.width > 0 && size.height > 0,
+            "Dimensions must be at least 1x1, got {size:?}",
+        );
+
+        if self.size.get() == size {
+            return;
+        }
+
+        self.size.set(size);
+
+        let device = &mut self.surfman_rendering_info.device.borrow_mut();
+        let context = &mut self.surfman_rendering_info.context.borrow_mut();
+        let size = Size2D::new(size.width as i32, size.height as i32);
+        let _ = self.swap_chain.resize(device, context, size);
     }
 
     fn present(&self) {
-        <Self as RenderingContext>::present(self)
+        let device = &mut self.surfman_rendering_info.device.borrow_mut();
+        let context = &mut self.surfman_rendering_info.context.borrow_mut();
+        let _ = self
+            .swap_chain
+            .swap_buffers(device, context, PreserveBuffer::No);
     }
 
     fn read_to_image(&self, rect: DeviceIntRect) -> Option<RgbaImage> {
@@ -714,27 +673,6 @@ impl RenderingContext for WindowRenderingContext {
         self.surfman_context.prepare_for_rendering();
     }
 
-    fn read_to_image(&self, source_rectangle: DeviceIntRect) -> Option<RgbaImage> {
-        self.surfman_context.read_to_image(source_rectangle)
-    }
-
-    fn size(&self) -> PhysicalSize<u32> {
-        self.size.get()
-    }
-
-    fn resize(&self, size: PhysicalSize<u32>) {
-        match self.surfman_context.resize_surface(size) {
-            Ok(..) => self.size.set(size),
-            Err(error) => warn!("Error resizing surface: {error:?}"),
-        }
-    }
-
-    fn present(&self) {
-        if let Err(error) = self.surfman_context.present_bound_surface() {
-            warn!("Error presenting surface: {error:?}");
-        }
-    }
-
     fn make_current(&self) -> Result<(), Error> {
         self.surfman_context.make_current()
     }
@@ -761,32 +699,26 @@ impl RenderingContext for WindowRenderingContext {
     fn connection(&self) -> Option<Connection> {
         self.surfman_context.connection()
     }
-
-    fn refresh_driver(&self) -> Option<Rc<dyn RefreshDriver>> {
-        self.surfman_context.refresh_driver()
-    }
-
-    fn raw_window_handle(&self) -> Option<raw_window_handle::RawWindowHandle> {
-        Some(self.raw_window_handle)
-    }
-
-    fn raw_display_handle(&self) -> Option<raw_window_handle::RawDisplayHandle> {
-        Some(self.raw_display_handle)
-    }
 }
 
-// Phase A: wgpu-first trait split (coexists with legacy `RenderingContext`).
+// Phase A: wgpu-first core trait. Authoritative impl for geometry,
+// presentation, readback, window handles, and refresh driver.
 impl crate::rendering_context_core::RenderingContextCore for WindowRenderingContext {
     fn size(&self) -> PhysicalSize<u32> {
         self.size.get()
     }
 
     fn resize(&self, size: PhysicalSize<u32>) {
-        <Self as RenderingContext>::resize(self, size)
+        match self.surfman_context.resize_surface(size) {
+            Ok(..) => self.size.set(size),
+            Err(error) => warn!("Error resizing surface: {error:?}"),
+        }
     }
 
     fn present(&self) {
-        <Self as RenderingContext>::present(self)
+        if let Err(error) = self.surfman_context.present_bound_surface() {
+            warn!("Error presenting surface: {error:?}");
+        }
     }
 
     fn read_to_image(&self, rect: DeviceIntRect) -> Option<RgbaImage> {
@@ -1125,6 +1057,43 @@ impl OffscreenRenderingContext {
 }
 
 impl RenderingContext for OffscreenRenderingContext {
+    fn prepare_for_rendering(&self) {
+        self.framebuffer.borrow().bind();
+    }
+
+    fn make_current(&self) -> Result<(), surfman::Error> {
+        self.parent_context.make_current()
+    }
+
+    fn gleam_gl_api(&self) -> Rc<dyn gleam::gl::Gl> {
+        self.parent_context.gleam_gl_api()
+    }
+
+    fn glow_gl_api(&self) -> Arc<glow::Context> {
+        self.parent_context.glow_gl_api()
+    }
+
+    fn create_texture(
+        &self,
+        surface: Surface,
+    ) -> Option<(SurfaceTexture, u32, UntypedSize2D<i32>)> {
+        self.parent_context.create_texture(surface)
+    }
+
+    fn destroy_texture(&self, surface_texture: SurfaceTexture) -> Option<Surface> {
+        self.parent_context.destroy_texture(surface_texture)
+    }
+
+    fn connection(&self) -> Option<Connection> {
+        self.parent_context.connection()
+    }
+}
+
+// Phase A: wgpu-first core trait. Authoritative impl for geometry,
+// presentation, readback, window handles, and refresh driver.
+// OffscreenRenderingContext is implicitly GL-only today — its parent is
+// a `WindowRenderingContext`, which always has GL capability.
+impl crate::rendering_context_core::RenderingContextCore for OffscreenRenderingContext {
     fn size(&self) -> PhysicalSize<u32> {
         self.size.get()
     }
@@ -1168,70 +1137,6 @@ impl RenderingContext for OffscreenRenderingContext {
             rect,
             new_framebuffer_id,
         );
-    }
-
-    fn prepare_for_rendering(&self) {
-        self.framebuffer.borrow().bind();
-    }
-
-    fn present(&self) {}
-
-    fn make_current(&self) -> Result<(), surfman::Error> {
-        self.parent_context.make_current()
-    }
-
-    fn gleam_gl_api(&self) -> Rc<dyn gleam::gl::Gl> {
-        self.parent_context.gleam_gl_api()
-    }
-
-    fn glow_gl_api(&self) -> Arc<glow::Context> {
-        self.parent_context.glow_gl_api()
-    }
-
-    fn create_texture(
-        &self,
-        surface: Surface,
-    ) -> Option<(SurfaceTexture, u32, UntypedSize2D<i32>)> {
-        self.parent_context.create_texture(surface)
-    }
-
-    fn destroy_texture(&self, surface_texture: SurfaceTexture) -> Option<Surface> {
-        self.parent_context.destroy_texture(surface_texture)
-    }
-
-    fn connection(&self) -> Option<Connection> {
-        self.parent_context.connection()
-    }
-
-    fn read_to_image(&self, source_rectangle: DeviceIntRect) -> Option<RgbaImage> {
-        self.framebuffer.borrow().read_to_image(source_rectangle)
-    }
-
-    fn refresh_driver(&self) -> Option<Rc<dyn RefreshDriver>> {
-        self.parent_context().refresh_driver()
-    }
-
-    fn raw_window_handle(&self) -> Option<raw_window_handle::RawWindowHandle> {
-        self.parent_context.raw_window_handle()
-    }
-
-    fn raw_display_handle(&self) -> Option<raw_window_handle::RawDisplayHandle> {
-        self.parent_context.raw_display_handle()
-    }
-}
-
-// Phase A: wgpu-first trait split (coexists with legacy `RenderingContext`).
-// OffscreenRenderingContext is implicitly GL-only today — its parent is
-// a `WindowRenderingContext`, which always has GL capability. All parent
-// delegations use fully-qualified syntax because both the legacy and
-// new traits define the same method names during transition.
-impl crate::rendering_context_core::RenderingContextCore for OffscreenRenderingContext {
-    fn size(&self) -> PhysicalSize<u32> {
-        self.size.get()
-    }
-
-    fn resize(&self, new_size: PhysicalSize<u32>) {
-        <Self as RenderingContext>::resize(self, new_size)
     }
 
     fn present(&self) {}
