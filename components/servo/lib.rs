@@ -51,6 +51,8 @@ pub use paint_api::rendering_context::{
 pub use paint_api::rendering_context_core::{GlCapability, RenderingContextCore, WindowHandles};
 #[cfg(feature = "wgpu_backend")]
 pub use paint_api::rendering_context_core::WgpuCapability;
+#[cfg(feature = "wgpu_backend")]
+pub use paint_api::wgpu_rendering_context::WgpuRenderingContext;
 // Expose our profile traits for servoshell, so we can instrument code there, but don't
 // add it as an official API.
 #[doc(hidden)]
