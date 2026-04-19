@@ -51,6 +51,8 @@ pub use paint_api::rendering_context::{
 pub use paint_api::rendering_context_core::{GlCapability, RenderingContextCore, WindowHandles};
 #[cfg(feature = "wgpu_backend")]
 pub use paint_api::rendering_context_core::WgpuCapability;
+#[cfg(feature = "wgpu_backend")]
+pub use paint_api::wgpu_rendering_context::WgpuRenderingContext;
 // This should be replaced with an API on ServoBuilder.
 // See <https://github.com/servo/servo/issues/40950>.
 pub use resources;
