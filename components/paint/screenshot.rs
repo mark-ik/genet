@@ -197,8 +197,10 @@ impl ScreenshotTaker {
 
                     DeviceIntRect::from_origin_and_size(Point2D::new(x, y), Size2D::new(w, h))
                 });
-                if let Err(error) = renderer.rendering_context.make_current() {
-                    error!("Failed to make the rendering context current: {error:?}");
+                if let Some(gl) = renderer.rendering_context.gl() {
+                    if let Err(error) = gl.make_current() {
+                        error!("Failed to make the rendering context current: {error:?}");
+                    }
                 }
                 let result = renderer
                     .rendering_context
