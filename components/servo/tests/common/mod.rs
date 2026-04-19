@@ -11,6 +11,7 @@ use std::time::Duration;
 use dpi::PhysicalSize;
 use embedder_traits::EventLoopWaker;
 use paint_api::rendering_context::{RenderingContext, SoftwareRenderingContext};
+use paint_api::rendering_context_core::RenderingContextCore;
 use servo::{
     ConsoleLogLevel, EmbedderControl, InputEvent, JSValue, JavaScriptEvaluationError, LoadStatus,
     MouseButton, MouseButtonAction, MouseButtonEvent, MouseMoveEvent, Preferences, Servo,
@@ -40,7 +41,13 @@ impl ServoTest {
             })
             .expect("Could not create SoftwareRenderingContext"),
         );
-        assert!(rendering_context.make_current().is_ok());
+        assert!(
+            rendering_context
+                .gl()
+                .expect("SoftwareRenderingContext has GL capability")
+                .make_current()
+                .is_ok()
+        );
 
         #[derive(Clone)]
         struct EventLoopWakerImpl(Arc<AtomicBool>);

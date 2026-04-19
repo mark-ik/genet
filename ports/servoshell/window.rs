@@ -131,10 +131,10 @@ impl ServoShellWindow {
             return;
         };
 
-        self.platform_window()
-            .rendering_context()
-            .make_current()
-            .expect("Could not make PlatformWindow RenderingContext current");
+        if let Some(gl) = self.platform_window().rendering_context().gl() {
+            gl.make_current()
+                .expect("Could not make PlatformWindow RenderingContext current");
+        }
         webview.paint();
         self.platform_window().rendering_context().present();
     }
