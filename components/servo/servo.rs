@@ -32,7 +32,6 @@ use net::protocols::ProtocolRegistry;
 use net::resource_thread::new_resource_threads;
 use net_traits::{ResourceThreads, exit_fetch_thread, start_fetch_thread};
 use paint::{InitialPaintState, Paint};
-pub use paint_api::rendering_context::RenderingContext;
 pub use paint_api::rendering_context_core::{
     GlCapability, RenderingContextCore, WindowHandles,
 };

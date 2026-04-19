@@ -18,7 +18,7 @@ use image::RgbaImage;
 use log::warn;
 use webrender_api::units::{DeviceIntRect, DevicePixel};
 
-use crate::rendering_context::{RenderingBackendBinding, RenderingContext, WgpuBinding};
+use crate::rendering_context_core::{RenderingContextCore, WgpuCapability};
 
 /// A pure-wgpu rendering context that owns the GPU device and presentation surface.
 ///
@@ -142,83 +142,6 @@ impl WgpuRenderingContext {
     }
 }
 
-impl RenderingContext for WgpuRenderingContext {
-    fn prepare_for_rendering(&self) {
-        // No-op: wgpu has no implicit context to bind.
-    }
-
-    fn make_current(&self) -> Result<(), surfman::Error> {
-        // No-op: wgpu has no thread-local context switching.
-        Ok(())
-    }
-
-    fn gleam_gl_api(&self) -> Rc<dyn gleam::gl::Gl> {
-        unreachable!("gleam_gl_api() called on WgpuRenderingContext")
-    }
-
-    fn glow_gl_api(&self) -> Arc<glow::Context> {
-        unreachable!("glow_gl_api() called on WgpuRenderingContext")
-    }
-
-    fn backend_binding(&self) -> RenderingBackendBinding {
-        RenderingBackendBinding::Wgpu(WgpuBinding {
-            device: self.device.clone(),
-            queue: self.queue.clone(),
-        })
-    }
-
-    fn acquire_wgpu_frame_target(&self) -> Option<wgpu::TextureView> {
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                // Reconfigure and retry once.
-                let config = self.surface_config.borrow();
-                self.surface.configure(&self.device, &config);
-                match self.surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(f)
-                    | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-                    other => {
-                        warn!(
-                            "WgpuRenderingContext: failed to acquire frame after reconfigure: {other:?}"
-                        );
-                        return None;
-                    },
-                }
-            },
-            other => {
-                warn!("WgpuRenderingContext: surface error: {other:?}");
-                return None;
-            },
-        };
-
-        // Create a non-sRGB view to avoid double-encoding WebRender's output.
-        let config = self.surface_config.borrow();
-        let non_srgb_format = config.format.remove_srgb_suffix();
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(non_srgb_format),
-            ..Default::default()
-        });
-
-        *self.current_frame.borrow_mut() = Some(frame);
-        Some(view)
-    }
-
-    fn wgpu_device(&self) -> Option<wgpu::Device> {
-        Some(self.device.clone())
-    }
-
-    fn wgpu_queue(&self) -> Option<wgpu::Queue> {
-        Some(self.queue.clone())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Phase A: wgpu-first trait split (coexists with legacy `RenderingContext`)
-// ---------------------------------------------------------------------------
-
-use crate::rendering_context_core::{RenderingContextCore, WgpuCapability};
-
 impl RenderingContextCore for WgpuRenderingContext {
     fn size(&self) -> PhysicalSize<u32> {
         self.size.get()
@@ -264,6 +187,39 @@ impl WgpuCapability for WgpuRenderingContext {
     }
 
     fn acquire_frame_target(&self) -> Option<wgpu::TextureView> {
-        <Self as RenderingContext>::acquire_wgpu_frame_target(self)
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(f)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                // Reconfigure and retry once.
+                let config = self.surface_config.borrow();
+                self.surface.configure(&self.device, &config);
+                match self.surface.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(f)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+                    other => {
+                        warn!(
+                            "WgpuRenderingContext: failed to acquire frame after reconfigure: {other:?}"
+                        );
+                        return None;
+                    },
+                }
+            },
+            other => {
+                warn!("WgpuRenderingContext: surface error: {other:?}");
+                return None;
+            },
+        };
+
+        // Create a non-sRGB view to avoid double-encoding WebRender's output.
+        let config = self.surface_config.borrow();
+        let non_srgb_format = config.format.remove_srgb_suffix();
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(non_srgb_format),
+            ..Default::default()
+        });
+
+        *self.current_frame.borrow_mut() = Some(frame);
+        Some(view)
     }
 }

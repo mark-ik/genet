@@ -193,7 +193,7 @@ impl ApplicationHandler<AppEvent> for App {
         // WgpuRenderingContext handles device/queue/surface creation, sRGB config,
         // and frame acquisition. Servo/WebRender renders directly into surface
         // textures via render_to_view().
-        let rendering_context: Rc<dyn RenderingContext> = Rc::new(WgpuRenderingContext::new(
+        let rendering_context: Rc<dyn RenderingContextCore> = Rc::new(WgpuRenderingContext::new(
             window.clone(),
             PhysicalSize::new(win_size.width, win_size.height),
         ));

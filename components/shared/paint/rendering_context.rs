@@ -29,133 +29,6 @@ use webrender_api::units::{DeviceIntRect, DevicePixel};
 #[cfg(feature = "wgpu_backend")]
 use wgpu_native_texture_interop::{HostWgpuContext, InteropBackend};
 
-/// GL-specific handles extracted from a [`RenderingContext`].
-pub struct GlBinding {
-    pub gleam_gl: Rc<dyn gleam::gl::Gl>,
-    pub glow_gl: Arc<glow::Context>,
-}
-
-/// wgpu-specific handles extracted from a [`RenderingContext`].
-#[cfg(feature = "wgpu_backend")]
-pub struct WgpuBinding {
-    /// Clone of the context's device (shares the GPU via wgpu's internal Arc).
-    pub device: wgpu::Device,
-    /// Clone of the context's queue.
-    pub queue: wgpu::Queue,
-}
-
-/// Identifies which rendering backend a [`RenderingContext`] uses.
-///
-/// `Painter` matches on this to decide the WebRender initialization path.
-pub enum RenderingBackendBinding {
-    Gl(GlBinding),
-    #[cfg(feature = "wgpu_backend")]
-    Wgpu(WgpuBinding),
-}
-
-/// The `RenderingContext` trait defines a set of methods for managing
-/// an OpenGL or GLES rendering context.
-///
-/// Phase A transitional shape: this trait now requires
-/// [`RenderingContextCore`] as a supertrait. Methods that are purely
-/// about presentation / geometry / window handles (`size`, `resize`,
-/// `present`, `read_to_image`, `refresh_driver`, `raw_window_handle`,
-/// `raw_display_handle`) have been moved to [`RenderingContextCore`] —
-/// callers reach them via trait-upcasting (`&dyn RenderingContext`
-/// auto-upcasts to `&dyn RenderingContextCore`). The remaining methods
-/// are the GL-specific and wgpu-specific entry points that subsequent
-/// Phase A commits migrate to `ctx.gl()` / `ctx.wgpu()` accessors,
-/// after which this trait is deleted entirely.
-pub trait RenderingContext: crate::rendering_context_core::RenderingContextCore {
-    /// Prepare this [`RenderingContext`] to be rendered upon by Servo. For instance,
-    /// by binding a framebuffer to the current OpenGL context.
-    fn prepare_for_rendering(&self) {}
-    /// Makes the context the current OpenGL context for this thread.
-    /// After calling this function, it is valid to use OpenGL rendering
-    /// commands.
-    fn make_current(&self) -> Result<(), Error>;
-    /// Returns the `gleam` version of the OpenGL or GLES API.
-    fn gleam_gl_api(&self) -> Rc<dyn gleam::gl::Gl>;
-    /// Returns the OpenGL or GLES API.
-    fn glow_gl_api(&self) -> Arc<glow::Context>;
-    /// Creates a texture from a given surface and returns the surface texture,
-    /// the OpenGL texture object, and the size of the surface. Default to `None`.
-    fn create_texture(
-        &self,
-        _surface: Surface,
-    ) -> Option<(SurfaceTexture, u32, UntypedSize2D<i32>)> {
-        None
-    }
-    /// Destroys the texture and returns the surface. Default to `None`.
-    fn destroy_texture(&self, _surface_texture: SurfaceTexture) -> Option<Surface> {
-        None
-    }
-    /// The connection to the display server for WebGL. Default to `None`.
-    fn connection(&self) -> Option<Connection> {
-        None
-    }
-
-    /// Return a shared wgpu device for the wgpu backend. Default to `None`.
-    ///
-    /// When an embedder provides a device and queue, WebRender will use
-    /// `RendererBackend::WgpuShared` instead of creating its own device.
-    /// The embedder clones its `wgpu::Device` handle (which is internally
-    /// Arc-shared) so both sides operate on the same GPU context.
-    #[cfg(feature = "wgpu_backend")]
-    fn wgpu_device(&self) -> Option<wgpu::Device> {
-        None
-    }
-
-    /// Return a shared wgpu queue for the wgpu backend. Default to `None`.
-    #[cfg(feature = "wgpu_backend")]
-    fn wgpu_queue(&self) -> Option<wgpu::Queue> {
-        None
-    }
-
-    /// Return a factory closure that creates a `wgpu::Device` and `wgpu::Queue`
-    /// from a raw hal device.  Default to `None`.
-    ///
-    /// Use this when the embedder holds a raw `wgpu_hal` device (e.g. a
-    /// `hal::OpenDevice<Vulkan>`) and wants WebRender to wrap it using
-    /// [`Adapter::create_device_from_hal`] rather than creating its own
-    /// separate device stack.  The closure is called exactly once during
-    /// `create_webrender_instance_with_backend` and must not be called again.
-    ///
-    /// This corresponds to [`webrender::RendererBackend::WgpuHal`].  If both
-    /// `wgpu_hal_device_factory` and `wgpu_device` are provided, the factory
-    /// takes precedence.
-    #[cfg(feature = "wgpu_backend")]
-    fn wgpu_hal_device_factory(
-        &self,
-    ) -> Option<Box<dyn FnOnce() -> (wgpu::Device, wgpu::Queue) + Send>> {
-        None
-    }
-
-    /// Return the backend binding for this context.
-    ///
-    /// The default implementation returns [`RenderingBackendBinding::Gl`] using
-    /// the GL accessors.  wgpu-backed contexts override this to return
-    /// [`RenderingBackendBinding::Wgpu`].
-    fn backend_binding(&self) -> RenderingBackendBinding {
-        RenderingBackendBinding::Gl(GlBinding {
-            gleam_gl: self.gleam_gl_api(),
-            glow_gl: self.glow_gl_api(),
-        })
-    }
-
-    /// Acquire the next frame target for wgpu rendering.
-    ///
-    /// The context gets the current surface texture, stores it internally
-    /// (needed for [`RenderingContext::present`]), and returns a
-    /// [`wgpu::TextureView`] that WebRender can render into via
-    /// `Renderer::render_to_view()`.
-    ///
-    /// Returns `None` for GL-based contexts.
-    #[cfg(feature = "wgpu_backend")]
-    fn acquire_wgpu_frame_target(&self) -> Option<wgpu::TextureView> {
-        None
-    }
-}
 
 /// A rendering context that uses the Surfman library to create and manage
 /// the OpenGL context and surface. This struct provides the default implementation
@@ -418,42 +291,6 @@ impl Drop for SoftwareRenderingContext {
     }
 }
 
-impl RenderingContext for SoftwareRenderingContext {
-    fn prepare_for_rendering(&self) {
-        self.surfman_rendering_info.prepare_for_rendering();
-    }
-
-    fn make_current(&self) -> Result<(), Error> {
-        self.surfman_rendering_info.make_current()
-    }
-
-    fn gleam_gl_api(&self) -> Rc<dyn gleam::gl::Gl> {
-        self.surfman_rendering_info.gleam_gl.clone()
-    }
-
-    fn glow_gl_api(&self) -> Arc<glow::Context> {
-        self.surfman_rendering_info.glow_gl.clone()
-    }
-
-    fn create_texture(
-        &self,
-        surface: Surface,
-    ) -> Option<(SurfaceTexture, u32, UntypedSize2D<i32>)> {
-        self.surfman_rendering_info.create_texture(surface)
-    }
-
-    fn destroy_texture(&self, surface_texture: SurfaceTexture) -> Option<Surface> {
-        self.surfman_rendering_info.destroy_texture(surface_texture)
-    }
-
-    fn connection(&self) -> Option<Connection> {
-        self.surfman_rendering_info.connection()
-    }
-}
-
-// Phase A: wgpu-first core trait. Authoritative impl for geometry,
-// presentation, and readback; the legacy `impl RenderingContext for
-// SoftwareRenderingContext` above now only carries GL-specific methods.
 impl crate::rendering_context_core::RenderingContextCore for SoftwareRenderingContext {
     fn size(&self) -> PhysicalSize<u32> {
         self.size.get()
@@ -668,41 +505,6 @@ impl WindowRenderingContext {
     }
 }
 
-impl RenderingContext for WindowRenderingContext {
-    fn prepare_for_rendering(&self) {
-        self.surfman_context.prepare_for_rendering();
-    }
-
-    fn make_current(&self) -> Result<(), Error> {
-        self.surfman_context.make_current()
-    }
-
-    fn gleam_gl_api(&self) -> Rc<dyn gleam::gl::Gl> {
-        self.surfman_context.gleam_gl.clone()
-    }
-
-    fn glow_gl_api(&self) -> Arc<glow::Context> {
-        self.surfman_context.glow_gl.clone()
-    }
-
-    fn create_texture(
-        &self,
-        surface: Surface,
-    ) -> Option<(SurfaceTexture, u32, UntypedSize2D<i32>)> {
-        self.surfman_context.create_texture(surface)
-    }
-
-    fn destroy_texture(&self, surface_texture: SurfaceTexture) -> Option<Surface> {
-        self.surfman_context.destroy_texture(surface_texture)
-    }
-
-    fn connection(&self) -> Option<Connection> {
-        self.surfman_context.connection()
-    }
-}
-
-// Phase A: wgpu-first core trait. Authoritative impl for geometry,
-// presentation, readback, window handles, and refresh driver.
 impl crate::rendering_context_core::RenderingContextCore for WindowRenderingContext {
     fn size(&self) -> PhysicalSize<u32> {
         self.size.get()
@@ -931,7 +733,12 @@ impl OffscreenRenderingContext {
             "Dimensions must be at least 1x1, got {size:?}",
         );
 
-        let framebuffer = RefCell::new(Framebuffer::new(parent_context.gleam_gl_api(), size));
+        let framebuffer = RefCell::new(Framebuffer::new(
+            <WindowRenderingContext as crate::rendering_context_core::GlCapability>::gleam_gl_api(
+                &parent_context,
+            ),
+            size,
+        ));
         Self {
             parent_context,
             size: Cell::new(size),
@@ -1008,7 +815,9 @@ impl OffscreenRenderingContext {
         queue: wgpu::Queue,
     ) -> Option<wgpu::Texture> {
         let host = HostWgpuContext::new(device, queue);
-        let gl = self.parent_context.glow_gl_api();
+        let gl = <WindowRenderingContext as crate::rendering_context_core::GlCapability>::glow_gl_api(
+            &self.parent_context,
+        );
         let size = self.size.get();
         let source_fbo = self.framebuffer.borrow().framebuffer_id;
         let surfman_context = &self.parent_context.surfman_context;
@@ -1056,41 +865,6 @@ impl OffscreenRenderingContext {
     }
 }
 
-impl RenderingContext for OffscreenRenderingContext {
-    fn prepare_for_rendering(&self) {
-        self.framebuffer.borrow().bind();
-    }
-
-    fn make_current(&self) -> Result<(), surfman::Error> {
-        self.parent_context.make_current()
-    }
-
-    fn gleam_gl_api(&self) -> Rc<dyn gleam::gl::Gl> {
-        self.parent_context.gleam_gl_api()
-    }
-
-    fn glow_gl_api(&self) -> Arc<glow::Context> {
-        self.parent_context.glow_gl_api()
-    }
-
-    fn create_texture(
-        &self,
-        surface: Surface,
-    ) -> Option<(SurfaceTexture, u32, UntypedSize2D<i32>)> {
-        self.parent_context.create_texture(surface)
-    }
-
-    fn destroy_texture(&self, surface_texture: SurfaceTexture) -> Option<Surface> {
-        self.parent_context.destroy_texture(surface_texture)
-    }
-
-    fn connection(&self) -> Option<Connection> {
-        self.parent_context.connection()
-    }
-}
-
-// Phase A: wgpu-first core trait. Authoritative impl for geometry,
-// presentation, readback, window handles, and refresh driver.
 // OffscreenRenderingContext is implicitly GL-only today — its parent is
 // a `WindowRenderingContext`, which always has GL capability.
 impl crate::rendering_context_core::RenderingContextCore for OffscreenRenderingContext {
@@ -1109,7 +883,9 @@ impl crate::rendering_context_core::RenderingContextCore for OffscreenRenderingC
             return;
         }
 
-        let gl = self.parent_context.gleam_gl_api();
+        let gl = <WindowRenderingContext as crate::rendering_context_core::GlCapability>::gleam_gl_api(
+            &self.parent_context,
+        );
         let new_framebuffer = Framebuffer::new(gl.clone(), new_size);
 
         let old_framebuffer =
@@ -1131,7 +907,9 @@ impl crate::rendering_context_core::RenderingContextCore for OffscreenRenderingC
         let new_framebuffer_id =
             NonZeroU32::new(self.framebuffer.borrow().framebuffer_id).map(NativeFramebuffer);
         Self::blit_framebuffer(
-            &self.glow_gl_api(),
+            &<OffscreenRenderingContext as crate::rendering_context_core::GlCapability>::glow_gl_api(
+                self,
+            ),
             rect,
             old_framebuffer_id,
             rect,
@@ -1172,7 +950,7 @@ impl crate::rendering_context_core::GlCapability for OffscreenRenderingContext {
     }
 
     fn prepare_for_rendering(&self) {
-        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::prepare_for_rendering(&self.parent_context)
+        self.framebuffer.borrow().bind();
     }
 
     fn create_texture(

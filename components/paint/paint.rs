@@ -20,7 +20,7 @@ use euclid::{Scale, Size2D};
 use image::RgbaImage;
 use ipc_channel::ipc::{self};
 use log::{debug, warn};
-use paint_api::rendering_context::RenderingContext;
+use paint_api::rendering_context_core::RenderingContextCore;
 use paint_api::{
     PaintMessage, PaintProxy, PainterSurfmanDetails, PainterSurfmanDetailsMap,
     WebRenderExternalImageIdManager, WebViewTrait,
@@ -219,7 +219,7 @@ impl Paint {
 
     pub fn register_rendering_context(
         &mut self,
-        rendering_context: Rc<dyn RenderingContext>,
+        rendering_context: Rc<dyn RenderingContextCore>,
     ) -> PainterId {
         if let Some(painter_id) = self.painters.iter().find_map(|painter| {
             let painter = painter.borrow();

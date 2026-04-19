@@ -46,7 +46,7 @@ pub use net_traits::CookieSource;
 pub use net_traits::pub_domains::is_reg_domain;
 pub use paint::WebRenderDebugOption;
 pub use paint_api::rendering_context::{
-    OffscreenRenderingContext, RenderingContext, SoftwareRenderingContext, WindowRenderingContext,
+    OffscreenRenderingContext, SoftwareRenderingContext, WindowRenderingContext,
 };
 pub use paint_api::rendering_context_core::{GlCapability, RenderingContextCore, WindowHandles};
 #[cfg(feature = "wgpu_backend")]

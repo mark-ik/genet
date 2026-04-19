@@ -162,7 +162,7 @@ impl PlatformWindow for EmbeddedPlatformWindow {
         None
     }
 
-    fn rendering_context(&self) -> Rc<dyn RenderingContext> {
+    fn rendering_context(&self) -> Rc<dyn RenderingContextCore> {
         self.rendering_context.clone()
     }
 
