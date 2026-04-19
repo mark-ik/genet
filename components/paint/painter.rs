@@ -136,8 +136,8 @@ pub(crate) struct Painter {
 
 impl Drop for Painter {
     fn drop(&mut self) {
-        if self.webrender_gl.is_some() {
-            if let Err(error) = self.rendering_context.make_current() {
+        if let Some(gl) = self.rendering_context.gl() {
+            if let Err(error) = gl.make_current() {
                 error!("Failed to make the rendering context current: {error:?}");
             }
         }
@@ -153,31 +153,22 @@ impl Drop for Painter {
 
 impl Painter {
     pub(crate) fn new(rendering_context: Rc<dyn RenderingContext>, paint: &Paint) -> Self {
-        let is_wgpu = {
-            #[cfg(feature = "wgpu_backend")]
-            {
-                matches!(
-                    rendering_context.backend_binding(),
-                    paint_api::rendering_context::RenderingBackendBinding::Wgpu(..)
-                )
-            }
-            #[cfg(not(feature = "wgpu_backend"))]
-            {
-                false
-            }
-        };
+        // Phase A: GL vs wgpu is now a capability check on the context.
+        // If `gl()` returns `Some`, we have the GL pathway; otherwise
+        // we're running on a wgpu-first context.
+        #[cfg(feature = "wgpu_backend")]
+        let is_wgpu = rendering_context.wgpu().is_some();
+        #[cfg(not(feature = "wgpu_backend"))]
+        let is_wgpu = false;
 
-        let webrender_gl = if is_wgpu {
-            None
-        } else {
-            let gl = rendering_context.gleam_gl_api();
-            // Make sure the gl context is made current.
-            if let Err(err) = rendering_context.make_current() {
+        let webrender_gl = rendering_context.gl().map(|gl| {
+            let api = gl.gleam_gl_api();
+            if let Err(err) = gl.make_current() {
                 warn!("Failed to make the rendering context current: {:?}", err);
             }
-            debug_assert_eq!(gl.get_error(), gleam::gl::NO_ERROR,);
-            Some(gl)
-        };
+            debug_assert_eq!(api.get_error(), gleam::gl::NO_ERROR,);
+            api
+        });
 
         let id_manager = paint.webrender_external_image_id_manager();
         let mut external_image_handlers = Box::new(WebRenderExternalImageHandlers::new(id_manager));
@@ -210,7 +201,9 @@ impl Painter {
             embedder_to_constellation_sender.clone(),
         ));
 
-        rendering_context.prepare_for_rendering();
+        if let Some(gl) = rendering_context.gl() {
+            gl.prepare_for_rendering();
+        }
         let clear_color = servo_config::pref!(shell_background_color_rgba);
         let clear_color = ColorF::new(
             clear_color[0] as f32,
@@ -432,9 +425,9 @@ impl Painter {
     }
 
     pub(crate) fn perform_updates(&mut self) {
-        // The WebXR thread may make a different context current
-        if self.webrender_gl.is_some() {
-            if let Err(err) = self.rendering_context.make_current() {
+        // The WebXR thread may make a different context current.
+        if let Some(gl) = self.rendering_context.gl() {
+            if let Err(err) = gl.make_current() {
                 warn!("Failed to make the rendering context current: {:?}", err);
             }
         }
@@ -561,12 +554,12 @@ impl Painter {
         let refresh_driver = self.refresh_driver.clone();
         refresh_driver.notify_will_paint(self);
 
-        if self.webrender_gl.is_some() {
-            if let Err(error) = self.rendering_context.make_current() {
+        if let Some(gl) = self.rendering_context.gl() {
+            if let Err(error) = gl.make_current() {
                 error!("Failed to make the rendering context current: {error:?}");
             }
             self.assert_no_gl_error();
-            self.rendering_context.prepare_for_rendering();
+            gl.prepare_for_rendering();
         }
 
         time_profile!(
@@ -773,8 +766,8 @@ impl Painter {
     }
 
     pub(crate) fn send_transaction(&mut self, transaction: Transaction) {
-        if self.webrender_gl.is_some() {
-            let _ = self.rendering_context.make_current();
+        if let Some(gl) = self.rendering_context.gl() {
+            let _ = gl.make_current();
         }
         self.webrender_api
             .send_transaction(self.webrender_document, transaction);
@@ -1463,8 +1456,8 @@ impl Painter {
             return;
         }
 
-        if self.webrender_gl.is_some() {
-            if let Err(error) = self.rendering_context.make_current() {
+        if let Some(gl) = self.rendering_context.gl() {
+            if let Err(error) = gl.make_current() {
                 error!("Failed to make the rendering context current: {error:?}");
             }
         }

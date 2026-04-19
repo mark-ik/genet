@@ -235,8 +235,10 @@ impl Paint {
         let painter = Painter::new(rendering_context.clone(), self);
 
         // Surfman connection is required for WebGL swap chains but not for
-        // pure-wgpu embedders that don't expose a GL context.
-        if let Some(connection) = rendering_context.connection() {
+        // pure-wgpu embedders that don't expose a GL context. Phase A:
+        // gated through `GlCapability` rather than legacy `connection()`.
+        if let Some(gl) = rendering_context.gl() {
+            let connection = gl.connection();
             let adapter = connection
                 .create_adapter()
                 .expect("Failed to create adapter");
