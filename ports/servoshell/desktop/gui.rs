@@ -152,9 +152,10 @@ fn configure_fonts() -> FontDefinitions {
 
 impl Drop for Gui {
     fn drop(&mut self) {
-        self.rendering_context
-            .make_current()
-            .expect("Could not make window RenderingContext current");
+        if let Some(gl) = self.rendering_context.gl() {
+            gl.make_current()
+                .expect("Could not make window RenderingContext current");
+        }
         self.context.destroy();
     }
 }
@@ -167,16 +168,12 @@ impl Gui {
         rendering_context: Rc<OffscreenRenderingContext>,
         initial_url: Url,
     ) -> Self {
-        rendering_context
-            .make_current()
+        let gl = rendering_context
+            .gl()
+            .expect("OffscreenRenderingContext always has GL capability");
+        gl.make_current()
             .expect("Could not make window RenderingContext current");
-        let mut context = EguiGlow::new(
-            event_loop,
-            rendering_context.glow_gl_api(),
-            None,
-            None,
-            false,
-        );
+        let mut context = EguiGlow::new(event_loop, gl.glow_gl_api(), None, None, false);
 
         let font_definitions = configure_fonts();
         context.egui_ctx.set_fonts(font_definitions);
@@ -347,9 +344,10 @@ impl Gui {
         window: &ServoShellWindow,
         headed_window: &headed_window::HeadedWindow,
     ) {
-        self.rendering_context
-            .make_current()
-            .expect("Could not make RenderingContext current");
+        if let Some(gl) = self.rendering_context.gl() {
+            gl.make_current()
+                .expect("Could not make RenderingContext current");
+        }
         let Self {
             rendering_context,
             context,
@@ -622,12 +620,13 @@ impl Gui {
         if std::env::var("SERVO_WGPU_BACKEND").is_ok() {
             return;
         }
-        self.rendering_context
-            .make_current()
-            .expect("Could not make RenderingContext current");
-        self.rendering_context
-            .parent_context()
-            .prepare_for_rendering();
+        if let Some(gl) = self.rendering_context.gl() {
+            gl.make_current()
+                .expect("Could not make RenderingContext current");
+        }
+        if let Some(gl) = self.rendering_context.parent_context().gl() {
+            gl.prepare_for_rendering();
+        }
         self.context.paint(window);
         self.rendering_context.parent_context().present();
     }

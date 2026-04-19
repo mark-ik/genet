@@ -179,9 +179,10 @@ impl HeadedWindow {
         }
 
         // Make sure the gl context is made current.
-        window_rendering_context
-            .make_current()
-            .expect("Could not make window RenderingContext current");
+        if let Some(gl) = window_rendering_context.gl() {
+            gl.make_current()
+                .expect("Could not make window RenderingContext current");
+        }
 
         let rendering_context = Rc::new(window_rendering_context.offscreen_context(inner_size));
         let gui = RefCell::new(Gui::new(

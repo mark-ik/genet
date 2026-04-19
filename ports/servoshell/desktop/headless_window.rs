@@ -73,8 +73,10 @@ impl HeadlessWindow {
 
 impl Drop for HeadlessWindow {
     fn drop(&mut self) {
-        if let Err(error) = self.rendering_context.make_current() {
-            error!("Failed to make the rendering context current: {error:?}");
+        if let Some(gl) = self.rendering_context.gl() {
+            if let Err(error) = gl.make_current() {
+                error!("Failed to make the rendering context current: {error:?}");
+            }
         }
     }
 }

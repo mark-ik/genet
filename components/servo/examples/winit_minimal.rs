@@ -8,8 +8,8 @@ use std::rc::Rc;
 
 use euclid::{Scale, Size2D};
 use servo::{
-    InputEvent, RenderingContext, Servo, ServoBuilder, WebView, WebViewBuilder, WheelDelta,
-    WheelEvent, WheelMode, WindowRenderingContext,
+    InputEvent, RenderingContext, RenderingContextCore, Servo, ServoBuilder, WebView,
+    WebViewBuilder, WheelDelta, WheelEvent, WheelMode, WindowRenderingContext,
 };
 use tracing::warn;
 use url::Url;
@@ -73,7 +73,9 @@ impl ApplicationHandler<WakerEvent> for App {
                     .expect("Could not create RenderingContext for window."),
             );
 
-            let _ = rendering_context.make_current();
+            if let Some(gl) = rendering_context.gl() {
+                let _ = gl.make_current();
+            }
 
             let servo = ServoBuilder::default()
                 .event_loop_waker(Box::new(waker.clone()))
