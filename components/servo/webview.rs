@@ -21,7 +21,7 @@ use euclid::{Scale, Size2D};
 use image::RgbaImage;
 use log::debug;
 use paint_api::WebViewTrait;
-use paint_api::rendering_context::RenderingContext;
+use paint_api::rendering_context_core::RenderingContextCore;
 use servo_base::Epoch;
 use servo_base::generic_channel::GenericSender;
 use servo_base::id::WebViewId;
@@ -112,7 +112,7 @@ pub(crate) struct WebViewInner {
     /// See [`Self::grafted_accesskit_tree_id`].
     grafted_accesskit_tree_epoch: Option<Epoch>,
 
-    rendering_context: Rc<dyn RenderingContext>,
+    rendering_context: Rc<dyn RenderingContextCore>,
     user_content_manager: Option<Rc<UserContentManager>>,
     hidpi_scale_factor: Scale<f32, DeviceIndependentPixel, DevicePixel>,
     load_status: LoadStatus,
@@ -948,7 +948,7 @@ impl WebViewTrait for ServoRendererWebView {
 /// Builder for creating a [`WebView`].
 pub struct WebViewBuilder {
     servo: Servo,
-    rendering_context: Rc<dyn RenderingContext>,
+    rendering_context: Rc<dyn RenderingContextCore>,
     delegate: Rc<dyn WebViewDelegate>,
     url: Option<Url>,
     hidpi_scale_factor: Scale<f32, DeviceIndependentPixel, DevicePixel>,
@@ -960,7 +960,7 @@ pub struct WebViewBuilder {
 }
 
 impl WebViewBuilder {
-    pub fn new(servo: &Servo, rendering_context: Rc<dyn RenderingContext>) -> Self {
+    pub fn new(servo: &Servo, rendering_context: Rc<dyn RenderingContextCore>) -> Self {
         Self {
             servo: servo.clone(),
             rendering_context,
@@ -977,7 +977,7 @@ impl WebViewBuilder {
 
     pub(crate) fn new_for_create_request(
         servo: &Servo,
-        rendering_context: Rc<dyn RenderingContext>,
+        rendering_context: Rc<dyn RenderingContextCore>,
         responder: IpcResponder<Option<NewWebViewDetails>>,
     ) -> Self {
         let mut builder = Self::new(servo, rendering_context);

@@ -21,7 +21,7 @@ use webrender_api::units::DevicePoint;
 
 pub struct ServoTest {
     pub servo: Servo,
-    pub rendering_context: Rc<dyn RenderingContext>,
+    pub rendering_context: Rc<dyn RenderingContextCore>,
 }
 
 impl ServoTest {

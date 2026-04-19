@@ -104,7 +104,7 @@ fn test_user_content_manager_for_auxiliary_webviews() {
     let servo_test = ServoTest::new();
     struct WebViewAuxiliaryTestDelegate {
         servo: Servo,
-        rendering_context: Rc<dyn RenderingContext>,
+        rendering_context: Rc<dyn RenderingContextCore>,
         auxiliary_webview: RefCell<Option<WebView>>,
     }
 

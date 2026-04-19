@@ -6,76 +6,65 @@ use std::rc::Rc;
 
 use euclid::default::Size2D;
 use log::debug;
-use paint_api::rendering_context::RenderingContext;
+use paint_api::rendering_context_core::RenderingContextCore;
 use paint_api::{ExternalImageSource, WebRenderExternalImageApi};
-use rustc_hash::FxHashMap;
 use servo_canvas_traits::webgl::{WebGLContextId, WebGLThreads};
-use surfman::chains::{SwapChainAPI, SwapChains, SwapChainsAPI};
+use surfman::chains::SwapChains;
 use surfman::{Device, SurfaceTexture};
 use webgl::webgl_thread::WebGLContextBusyMap;
 
+use crate::webgl_external_image_lifecycle::WebGLExternalImageLocks;
+
 /// Bridge between the webrender::ExternalImage callbacks and the WebGLThreads.
 pub struct WebGLExternalImages {
-    webgl_threads: WebGLThreads,
-    rendering_context: Rc<dyn RenderingContext>,
-    swap_chains: SwapChains<WebGLContextId, Device>,
-    busy_webgl_context_map: WebGLContextBusyMap,
-    locked_front_buffers: FxHashMap<WebGLContextId, SurfaceTexture>,
+    rendering_context: Rc<dyn RenderingContextCore>,
+    locks: WebGLExternalImageLocks<SurfaceTexture>,
 }
 
 impl WebGLExternalImages {
     pub fn new(
         webgl_threads: WebGLThreads,
-        rendering_context: Rc<dyn RenderingContext>,
+        rendering_context: Rc<dyn RenderingContextCore>,
         swap_chains: SwapChains<WebGLContextId, Device>,
         busy_webgl_context_map: WebGLContextBusyMap,
     ) -> Self {
         Self {
-            webgl_threads,
             rendering_context,
-            swap_chains,
-            busy_webgl_context_map,
-            locked_front_buffers: FxHashMap::default(),
+            locks: WebGLExternalImageLocks::new(
+                webgl_threads,
+                swap_chains,
+                busy_webgl_context_map,
+            ),
         }
     }
 
     fn lock_swap_chain(&mut self, id: WebGLContextId) -> Option<(u32, Size2D<i32>)> {
         debug!("... locking chain {:?}", id);
-
-        {
-            let mut busy_webgl_context_map = self.busy_webgl_context_map.write();
-            *busy_webgl_context_map.entry(id).or_default() += 1;
-        }
-
-        let front_buffer = self.swap_chains.get(id)?.take_surface()?;
-        let (surface_texture, gl_texture, size) =
-            self.rendering_context.create_texture(front_buffer)?;
-        self.locked_front_buffers.insert(id, surface_texture);
+        let front_buffer = self.locks.lock_front_buffer(id)?;
+        let gl = self
+            .rendering_context
+            .gl()
+            .expect("GL external image path requires a GL-capable rendering context");
+        let (surface_texture, gl_texture, size) = match gl.create_texture(front_buffer) {
+            Some(texture) => texture,
+            None => {
+                self.locks.abort_lock(id, None);
+                return None;
+            },
+        };
+        self.locks.insert_locked_resource(id, surface_texture);
 
         Some((gl_texture, size))
     }
 
     fn unlock_swap_chain(&mut self, id: WebGLContextId) -> Option<()> {
         debug!("... unlocked chain {:?}", id);
-
-        {
-            let mut busy_webgl_context_map = self.busy_webgl_context_map.write();
-            *busy_webgl_context_map.entry(id).or_insert(1) -= 1;
-        }
-
-        let locked_front_buffer = self.locked_front_buffers.remove(&id)?;
-        let locked_front_buffer = self
+        let gl = self
             .rendering_context
-            .destroy_texture(locked_front_buffer)?;
-
-        self.swap_chains
-            .get(id)
-            .expect("Should always have a SwapChain for a busy WebGLContext")
-            .recycle_surface(locked_front_buffer);
-
-        let _ = self.webgl_threads.finished_rendering_to_context(id);
-
-        Some(())
+            .gl()
+            .expect("GL external image path requires a GL-capable rendering context");
+        self.locks
+            .unlock(id, |locked_front_buffer| gl.destroy_texture(locked_front_buffer))
     }
 }
 

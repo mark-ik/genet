@@ -14,7 +14,7 @@ use embedder_traits::{
     SelectElementOptionOrOptgroup, SelectElementRequest, SimpleDialogRequest, TraversalId,
     WebResourceRequest, WebResourceResponse, WebResourceResponseMsg,
 };
-use paint_api::rendering_context::RenderingContext;
+use paint_api::rendering_context_core::RenderingContextCore;
 use servo_base::generic_channel::{GenericCallback, GenericSender, SendError};
 use servo_base::id::PipelineId;
 use servo_constellation_traits::EmbedderToConstellationMessage;
@@ -863,7 +863,7 @@ pub struct CreateNewWebViewRequest {
 }
 
 impl CreateNewWebViewRequest {
-    pub fn builder(self, rendering_context: Rc<dyn RenderingContext>) -> WebViewBuilder {
+    pub fn builder(self, rendering_context: Rc<dyn RenderingContextCore>) -> WebViewBuilder {
         WebViewBuilder::new_for_create_request(&self.servo, rendering_context, self.responder)
     }
 }

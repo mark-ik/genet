@@ -20,7 +20,7 @@ use log::{debug, error, info, warn};
 use media::WindowGLContext;
 use paint_api::display_list::{PaintDisplayListInfo, ScrollType};
 use paint_api::largest_contentful_paint_candidate::LCPCandidate;
-use paint_api::rendering_context::RenderingContext;
+use paint_api::rendering_context_core::RenderingContextCore;
 use paint_api::viewport_description::ViewportDescription;
 use paint_api::{
     ImageUpdate, PipelineExitSource, SendableFrameTree, SerializableDisplayListPayload,
@@ -75,7 +75,7 @@ use crate::webview_renderer::{PinchZoomResult, ScrollResult, UnknownWebView, Web
 /// with a particular [`RenderingContext`].
 pub(crate) struct Painter {
     /// The [`RenderingContext`] instance that webrender targets, which is the viewport.
-    pub(crate) rendering_context: Rc<dyn RenderingContext>,
+    pub(crate) rendering_context: Rc<dyn RenderingContextCore>,
 
     /// The ID of this painter.
     pub(crate) painter_id: PainterId,
@@ -152,7 +152,7 @@ impl Drop for Painter {
 }
 
 impl Painter {
-    pub(crate) fn new(rendering_context: Rc<dyn RenderingContext>, paint: &Paint) -> Self {
+    pub(crate) fn new(rendering_context: Rc<dyn RenderingContextCore>, paint: &Paint) -> Self {
         // Phase A: GL vs wgpu is now a capability check on the context.
         // If `gl()` returns `Some`, we have the GL pathway; otherwise
         // we're running on a wgpu-first context.
@@ -305,23 +305,20 @@ impl Painter {
             //  1. WgpuHal  — embedder provides a raw-hal device factory (rarest, richest interop)
             //  2. WgpuShared — embedder provides an existing wgpu::Device + Queue
             //  3. Wgpu — WebRender creates its own device, optionally from a window surface
-            let backend = if let Some(factory) = rendering_context.wgpu_hal_device_factory() {
+            let wgpu_cap = rendering_context
+                .wgpu()
+                .expect("wgpu backend requested but RenderingContext has no WgpuCapability");
+            let backend = if let Some(factory) = wgpu_cap.hal_device_factory() {
                 info!("Using wgpu backend with hal device factory (WgpuHal)");
                 webrender::RendererBackend::WgpuHal {
                     device_factory: factory,
                 }
-            } else if let (Some(device), Some(queue)) = (
-                rendering_context.wgpu_device(),
-                rendering_context.wgpu_queue(),
-            ) {
-                info!("Using wgpu backend with shared device (WgpuShared)");
-                webrender::RendererBackend::WgpuShared { device, queue }
             } else {
-                panic!(
-                    "wgpu backend requested but RenderingContext provides neither \
-                     wgpu_device()/wgpu_queue() nor wgpu_hal_device_factory(). \
-                     The embedder must supply a wgpu device via the RenderingContext."
-                );
+                info!("Using wgpu backend with shared device (WgpuShared)");
+                webrender::RendererBackend::WgpuShared {
+                    device: wgpu_cap.device(),
+                    queue: wgpu_cap.queue(),
+                }
             };
 
             webrender::create_webrender_instance_with_backend(
@@ -359,29 +356,24 @@ impl Painter {
         // On the wgpu path, set up the wgpu-native WebGL external image handler
         // that imports WebGL canvas surfaces into wgpu textures via native interop.
         #[cfg(feature = "wgpu_backend")]
-        if is_wgpu {
-            if let (Some(device), Some(queue)) = (
-                rendering_context.wgpu_device(),
-                rendering_context.wgpu_queue(),
+        if let Some(wgpu_cap) = rendering_context.wgpu() {
+            match crate::wgpu_webgl_external_images::WgpuWebGLExternalImages::new(
+                paint.webgl_threads(),
+                paint.swap_chains.clone(),
+                paint.busy_webgl_contexts_map.clone(),
+                wgpu_cap.device(),
+                wgpu_cap.queue(),
             ) {
-                match crate::wgpu_webgl_external_images::WgpuWebGLExternalImages::new(
-                    paint.webgl_threads(),
-                    paint.swap_chains.clone(),
-                    paint.busy_webgl_contexts_map.clone(),
-                    device,
-                    queue,
-                ) {
-                    Ok(handler) => {
-                        webrender_renderer.set_wgpu_external_image_handler(Box::new(handler));
-                        info!("wgpu WebGL external image handler installed");
-                    },
-                    Err(e) => {
-                        log::error!(
-                            "Failed to create wgpu WebGL external image handler: {:?}",
-                            e
-                        );
-                    },
-                }
+                Ok(handler) => {
+                    webrender_renderer.set_wgpu_external_image_handler(Box::new(handler));
+                    info!("wgpu WebGL external image handler installed");
+                },
+                Err(e) => {
+                    log::error!(
+                        "Failed to create wgpu WebGL external image handler: {:?}",
+                        e
+                    );
+                },
             }
         }
 
@@ -577,10 +569,10 @@ impl Painter {
                 }
 
                 #[cfg(feature = "wgpu_backend")]
-                if self.webrender_gl.is_none() {
+                if let Some(wgpu_cap) = self.rendering_context.wgpu() {
                     // Zero-copy wgpu path: acquire a frame target from the
                     // context, render directly into it, then present.
-                    if let Some(frame_view) = self.rendering_context.acquire_wgpu_frame_target() {
+                    if let Some(frame_view) = wgpu_cap.acquire_frame_target() {
                         if let Some(renderer) = self.webrender_renderer.as_mut() {
                             let size = self.rendering_context.size2d().to_i32();
                             renderer.render_to_view(frame_view, size, 0).ok();

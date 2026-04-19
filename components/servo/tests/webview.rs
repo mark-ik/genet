@@ -272,7 +272,7 @@ fn test_cursor_unchanged_input_color() {
 fn test_negative_resize_to_request() {
     let servo_test = ServoTest::new();
     struct WebViewResizeTestDelegate {
-        rendering_context: Rc<dyn RenderingContext>,
+        rendering_context: Rc<dyn RenderingContextCore>,
         popup: RefCell<Option<WebView>>,
         resize_request: Cell<Option<DeviceIntSize>>,
     }
