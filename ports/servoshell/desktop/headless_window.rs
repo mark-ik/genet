@@ -159,7 +159,7 @@ impl PlatformWindow for HeadlessWindow {
         )
     }
 
-    fn rendering_context(&self) -> Rc<dyn RenderingContext> {
+    fn rendering_context(&self) -> Rc<dyn RenderingContextCore> {
         self.rendering_context.clone()
     }
 

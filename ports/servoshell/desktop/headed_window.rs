@@ -1023,7 +1023,7 @@ impl PlatformWindow for HeadedWindow {
         Rc::new(XRWindow { winit_window, pose })
     }
 
-    fn rendering_context(&self) -> Rc<dyn RenderingContext> {
+    fn rendering_context(&self) -> Rc<dyn RenderingContextCore> {
         self.rendering_context.clone()
     }
 

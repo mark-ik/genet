@@ -415,7 +415,7 @@ pub(crate) trait PlatformWindow {
         event_loop: &winit::event_loop::ActiveEventLoop,
     ) -> Rc<dyn servo::webxr::GlWindow>;
     /// This returns [`RenderingContext`] matching the viewport.
-    fn rendering_context(&self) -> Rc<dyn RenderingContext>;
+    fn rendering_context(&self) -> Rc<dyn RenderingContextCore>;
     fn theme(&self) -> servo::Theme {
         servo::Theme::Light
     }

@@ -15,6 +15,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use euclid::default::{Point2D, Rect, Size2D, Transform2D};
 use fonts::FontIdentifier;
@@ -143,6 +144,7 @@ impl VelloDrawTarget {
             return;
         }
         self.scene.push_layer(
+            peniko::Fill::NonZero,
             composition_operation.convert(),
             1.0,
             kurbo::Affine::IDENTITY,
@@ -160,7 +162,8 @@ impl VelloDrawTarget {
         f(self);
         // push all clip layers back
         for path in &self.clips {
-            self.scene.push_clip_layer(kurbo::Affine::IDENTITY, &path.0);
+            self.scene
+                .push_clip_layer(peniko::Fill::NonZero, kurbo::Affine::IDENTITY, &path.0);
         }
     }
 
@@ -208,9 +211,9 @@ impl GenericDrawTarget for VelloDrawTarget {
         let instance = Instance::new(InstanceDescriptor {
             backends,
             flags,
+            display: None,
             backend_options,
             memory_budget_thresholds: MemoryBudgetThresholds::default(),
-            display: None,
         });
         let mut context = vello::util::RenderContext {
             instance,
@@ -230,7 +233,7 @@ impl GenericDrawTarget for VelloDrawTarget {
             },
         )
         .unwrap();
-        device.on_uncaptured_error(Box::new(|error| {
+        device.on_uncaptured_error(Arc::new(|error| {
             log::error!("VELLO WGPU ERROR: {error}");
         }));
         Self::new_with_renderer(device, queue, Rc::new(RefCell::new(renderer)), size)
@@ -247,9 +250,14 @@ impl GenericDrawTarget for VelloDrawTarget {
         }
         self.ensure_drawing();
         let rect: kurbo::Rect = rect.cast().into();
-        let transform = transform.into();
-        self.scene
-            .push_layer(peniko::Compose::Clear, 0.0, transform, &rect);
+        let transform: kurbo::Affine = transform.cast().into();
+        self.scene.push_layer(
+            peniko::Fill::NonZero,
+            peniko::Compose::Clear,
+            0.0,
+            transform,
+            &rect,
+        );
         self.scene.fill(
             peniko::Fill::NonZero,
             transform,
@@ -266,9 +274,13 @@ impl GenericDrawTarget for VelloDrawTarget {
         let rect = kurbo::Rect::from_origin_size(destination, source.size.cast());
 
         self.ignore_clips(|self_| {
-            self_
-                .scene
-                .push_layer(peniko::Compose::Copy, 1.0, kurbo::Affine::IDENTITY, &rect);
+            self_.scene.push_layer(
+                peniko::Fill::NonZero,
+                peniko::Compose::Copy,
+                1.0,
+                kurbo::Affine::IDENTITY,
+                &rect,
+            );
 
             self_.scene.fill(
                 peniko::Fill::NonZero,
@@ -465,8 +477,9 @@ impl GenericDrawTarget for VelloDrawTarget {
         }
     }
 
-    fn push_clip(&mut self, path: &Path, _fill_rule: FillRule, transform: Transform2D<f64>) {
-        self.scene.push_clip_layer(transform.cast().into(), &path.0);
+    fn push_clip(&mut self, path: &Path, fill_rule: FillRule, transform: Transform2D<f64>) {
+        self.scene
+            .push_clip_layer(fill_rule.convert(), transform.cast().into(), &path.0);
         let mut path = path.clone();
         path.transform(transform.cast());
         self.clips.push(path);
@@ -590,12 +603,9 @@ impl GenericDrawTarget for VelloDrawTarget {
                 flags: ImageDescriptorFlags::empty(),
             };
             let data = SerializableImageData::Raw(if let Some(data) = data {
-                let mut data = GenericSharedMemory::from_bytes(data);
-                #[expect(unsafe_code)]
-                unsafe {
-                    pixels::generic_transform_inplace::<1, false, false>(data.deref_mut());
-                };
-                data
+                let mut data = data.to_vec();
+                pixels::generic_transform_inplace::<1, false, false>(data.as_mut_slice());
+                GenericSharedMemory::from_bytes(&data)
             } else {
                 GenericSharedMemory::from_byte(0, size.area() as usize * 4)
             });
@@ -629,17 +639,17 @@ impl GenericDrawTarget for VelloDrawTarget {
     }
 
     fn surface(&mut self) -> Vec<u8> {
-        self.snapshot().to_vec(None, None).0
+        Vec::from(self.snapshot())
     }
 
-    fn create_source_surface_from_data(&self, data: Snapshot) -> Option<Vec<u8>> {
-        let (data, _, _) = data.to_vec(
-            Some(SnapshotAlphaMode::Transparent {
+    fn create_source_surface_from_data(&self, mut data: Snapshot) -> Option<Vec<u8>> {
+        data.transform(
+            SnapshotAlphaMode::Transparent {
                 premultiplied: false,
-            }),
-            Some(SnapshotPixelFormat::RGBA),
+            },
+            SnapshotPixelFormat::RGBA,
         );
-        Some(data)
+        Some(Vec::from(data))
     }
 }
 
@@ -688,7 +698,8 @@ impl VelloDrawTarget {
         self.scene.reset();
         // push all clip layers back
         for path in &self.clips {
-            self.scene.push_clip_layer(kurbo::Affine::IDENTITY, &path.0);
+            self.scene
+                .push_clip_layer(peniko::Fill::NonZero, kurbo::Affine::IDENTITY, &path.0);
         }
     }
 

@@ -128,9 +128,10 @@ pub struct Preferences {
     /// Selects canvas backend
     ///
     /// Available values:
-    /// - ` `/`auto`
-    /// - vello
-    /// - vello_cpu
+    /// - ` `/`auto`: prefer `vello` when Servo is built with that feature,
+    ///   otherwise fall back to `vello_cpu`
+    /// - `vello`: request the GPU backend explicitly
+    /// - `vello_cpu`: force the CPU backend
     pub dom_canvas_backend: String,
     pub dom_clipboardevent_enabled: bool,
     pub dom_composition_event_enabled: bool,

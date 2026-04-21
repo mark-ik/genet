@@ -172,6 +172,7 @@ impl GenericDrawTarget for VelloCPUDrawTarget {
             Some(blend_mode.into()),
             None,
             None,
+            None,
         );
         self.ctx.pop_layer();
     }
@@ -575,7 +576,7 @@ fn paint(style: FillOrStrokeStyle, alpha: f64) -> vello_cpu::PaintType {
                     vello_cpu::ImageSource::Pixmap(pixmap) => Arc::get_mut(pixmap)
                         .expect("pixmap should not be shared with anyone at this point")
                         .multiply_alpha((alpha * 255.0) as u8),
-                    vello_cpu::ImageSource::OpaqueId(_) => unimplemented!(),
+                    vello_cpu::ImageSource::OpaqueId { .. } => unimplemented!(),
                 };
                 vello_cpu::PaintType::Image(image)
             },
