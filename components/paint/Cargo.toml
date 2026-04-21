@@ -16,7 +16,7 @@ path = "lib.rs"
 [features]
 default = ["wgpu_backend"]
 tracing = ["dep:tracing"]
-wgpu_backend = ["paint_api/wgpu_backend", "dep:wgpu", "dep:wgpu-native-texture-interop"]
+wgpu_backend = ["paint_api/wgpu_backend", "dep:servo-wgpu-interop-adapter", "dep:wgpu"]
 webgpu = ["dep:webgpu"]
 webxr = ["dep:webxr", "dep:webxr-api"]
 
@@ -48,6 +48,7 @@ servo-constellation-traits = { workspace = true }
 servo-geometry = { workspace = true }
 servo-tracing = { workspace = true }
 smallvec = { workspace = true }
+servo-wgpu-interop-adapter = { workspace = true, optional = true }
 stylo_traits = { workspace = true }
 surfman = { workspace = true }
 timers = { workspace = true }
@@ -57,7 +58,6 @@ webgpu = { workspace = true, optional = true }
 webrender = { workspace = true }
 webrender_api = { workspace = true }
 wgpu = { workspace = true, optional = true }
-wgpu-native-texture-interop = { workspace = true, optional = true }
 webxr = { workspace = true, optional = true }
 webxr-api = { workspace = true, optional = true }
 wr_malloc_size_of = { workspace = true }

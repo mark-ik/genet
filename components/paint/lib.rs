@@ -31,6 +31,7 @@ mod render_notifier;
 mod screenshot;
 mod touch;
 mod web_content_animation;
+mod webgl_external_image_lifecycle;
 mod webrender_external_images;
 mod webview_renderer;
 #[cfg(feature = "wgpu_backend")]

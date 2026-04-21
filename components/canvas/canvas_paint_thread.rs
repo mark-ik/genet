@@ -297,15 +297,42 @@ enum Canvas {
 }
 
 impl Canvas {
+    #[cfg(feature = "vello")]
+    fn auto(size: Size2D<u64>, paint_api: CrossProcessPaintApi) -> Self {
+        Self::Vello(CanvasData::new(size, paint_api))
+    }
+
+    #[cfg(not(feature = "vello"))]
+    fn auto(size: Size2D<u64>, paint_api: CrossProcessPaintApi) -> Self {
+        Self::VelloCPU(CanvasData::new(size, paint_api))
+    }
+
     fn new(size: Size2D<u64>, paint_api: CrossProcessPaintApi) -> Option<Self> {
-        match servo_config::pref!(dom_canvas_backend)
+        let backend = servo_config::pref!(dom_canvas_backend)
             .to_lowercase()
-            .as_str()
-        {
+            .to_owned();
+
+        let canvas = match backend.as_str() {
+            "" | "auto" => Self::auto(size, paint_api),
             #[cfg(feature = "vello")]
-            "vello" => Some(Self::Vello(CanvasData::new(size, paint_api))),
-            _ => Some(Self::VelloCPU(CanvasData::new(size, paint_api))),
-        }
+            "vello" => Self::Vello(CanvasData::new(size, paint_api)),
+            #[cfg(not(feature = "vello"))]
+            "vello" => {
+                warn!(
+                    "dom.canvas_backend='vello' requested, but Servo was built without the vello feature; falling back to vello_cpu"
+                );
+                Self::VelloCPU(CanvasData::new(size, paint_api))
+            },
+            "vello_cpu" => Self::VelloCPU(CanvasData::new(size, paint_api)),
+            _ => {
+                warn!(
+                    "Unknown dom.canvas_backend value '{backend}', falling back to auto backend selection"
+                );
+                Self::auto(size, paint_api)
+            },
+        };
+
+        Some(canvas)
     }
 
     fn set_image_key(&mut self, image_key: ImageKey) {
