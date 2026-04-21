@@ -41,10 +41,8 @@ use net_traits::request::{
 use net_traits::response::{CacheState, Response, ResponseBody, ResponseType};
 use net_traits::{
     FetchTaskTarget, IncludeSubdomains, NetworkError, ReferrerPolicy, ResourceFetchTiming,
-    ResourceTimingType,
+    ResourceTimingType, get_current_locale,
 };
-use parking_lot::Mutex;
-use servo_arc::Arc as ServoArc;
 use servo_base::id::{TEST_PIPELINE_ID, TEST_WEBVIEW_ID};
 use servo_url::{ImmutableOrigin, ServoUrl};
 use tokio::sync::Mutex as TokioMutex;
@@ -777,9 +775,7 @@ fn test_fetch_with_hsts() {
         file_token: FileTokenCheck::NotRequired,
         request_interceptor: Arc::new(TokioMutex::new(RequestInterceptor::new(embedder_proxy))),
         cancellation_listener: Arc::new(Default::default()),
-        timing: ServoArc::new(Mutex::new(ResourceFetchTiming::new(
-            ResourceTimingType::Navigation,
-        ))),
+        timing: ResourceFetchTiming::new(ResourceTimingType::Navigation).into(),
         protocols: Arc::new(ProtocolRegistry::default()),
         websocket_chan: None,
         ca_certificates: CACertificates::Default,
@@ -843,9 +839,7 @@ fn test_load_adds_host_to_hsts_list_when_url_is_https() {
         file_token: FileTokenCheck::NotRequired,
         request_interceptor: Arc::new(TokioMutex::new(RequestInterceptor::new(embedder_proxy))),
         cancellation_listener: Arc::new(Default::default()),
-        timing: ServoArc::new(Mutex::new(ResourceFetchTiming::new(
-            ResourceTimingType::Navigation,
-        ))),
+        timing: ResourceFetchTiming::new(ResourceTimingType::Navigation).into(),
         protocols: Arc::new(ProtocolRegistry::default()),
         websocket_chan: None,
         ca_certificates: CACertificates::Default,
@@ -914,9 +908,7 @@ fn test_fetch_self_signed() {
         file_token: FileTokenCheck::NotRequired,
         request_interceptor: Arc::new(TokioMutex::new(RequestInterceptor::new(embedder_proxy))),
         cancellation_listener: Arc::new(Default::default()),
-        timing: ServoArc::new(Mutex::new(ResourceFetchTiming::new(
-            ResourceTimingType::Navigation,
-        ))),
+        timing: ResourceFetchTiming::new(ResourceTimingType::Navigation).into(),
         protocols: Arc::new(ProtocolRegistry::default()),
         websocket_chan: None,
         ca_certificates: CACertificates::Default,
@@ -1449,7 +1441,7 @@ fn test_fetch_with_devtools() {
 
     headers.insert(header::ACCEPT, HeaderValue::from_static("*/*"));
 
-    headers.insert(header::ACCEPT_LANGUAGE, HeaderValue::from_static("en-US"));
+    headers.insert(header::ACCEPT_LANGUAGE, get_current_locale().1.clone());
 
     headers.typed_insert::<UserAgent>(DEFAULT_USER_AGENT.parse().unwrap());
 
@@ -1563,9 +1555,7 @@ fn test_fetch_request_intercepted() {
         file_token: FileTokenCheck::NotRequired,
         request_interceptor: Arc::new(TokioMutex::new(RequestInterceptor::new(embedder_proxy))),
         cancellation_listener: Arc::new(Default::default()),
-        timing: ServoArc::new(Mutex::new(ResourceFetchTiming::new(
-            ResourceTimingType::Navigation,
-        ))),
+        timing: ResourceFetchTiming::new(ResourceTimingType::Navigation).into(),
         protocols: Arc::new(ProtocolRegistry::default()),
         websocket_chan: None,
         ca_certificates: CACertificates::Default,

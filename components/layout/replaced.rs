@@ -6,7 +6,6 @@ use app_units::{Au, MAX_AU};
 use data_url::DataUrl;
 use embedder_traits::ViewportDetails;
 use euclid::{Scale, Size2D};
-use html5ever::local_name;
 use layout_api::{IFrameSize, LayoutElement, LayoutImageDestination, LayoutNode, SVGElementData};
 use malloc_size_of_derive::MallocSizeOf;
 use net_traits::image_cache::{Image, ImageOrMetadataAvailable, VectorImage};
@@ -28,6 +27,7 @@ use style::values::computed::image::Image as ComputedImage;
 use style::values::computed::{Content, Context, ToComputedValue};
 use style::values::generics::counters::{GenericContentItem, GenericContentItems};
 use url::Url;
+use web_atoms::local_name;
 use webrender_api::ImageKey;
 
 use crate::cell::ArcRefCell;
@@ -37,7 +37,7 @@ use crate::fragment_tree::{
     BaseFragment, BaseFragmentInfo, CollapsedBlockMargins, Fragment, IFrameFragment, ImageFragment,
 };
 use crate::geom::{LogicalVec2, PhysicalPoint, PhysicalRect, PhysicalSize};
-use crate::layout_box_base::{CacheableLayoutResult, LayoutBoxBase};
+use crate::layout_box_base::{IndependentFormattingContextLayoutResult, LayoutBoxBase};
 use crate::sizing::{
     ComputeInlineContentSizes, InlineContentSizesResult, LazySize, SizeConstraint,
 };
@@ -692,7 +692,7 @@ impl ReplacedContents {
         preferred_aspect_ratio: Option<AspectRatio>,
         base: &LayoutBoxBase,
         lazy_block_size: &LazySize,
-    ) -> CacheableLayoutResult {
+    ) -> IndependentFormattingContextLayoutResult {
         let writing_mode = base.style.writing_mode;
         let inline_size = containing_block_for_children.size.inline;
         let content_block_size = self.content_size(
@@ -706,7 +706,7 @@ impl ReplacedContents {
             block: lazy_block_size.resolve(|| content_block_size),
         }
         .to_physical_size(writing_mode);
-        CacheableLayoutResult {
+        IndependentFormattingContextLayoutResult {
             baselines: Default::default(),
             collapsible_margins_in_children: CollapsedBlockMargins::zero(),
             content_block_size,

@@ -19,7 +19,8 @@ use crate::flexbox::FlexContainer;
 use crate::flow::BlockFormattingContext;
 use crate::fragment_tree::{BaseFragmentInfo, FragmentFlags};
 use crate::layout_box_base::{
-    CacheableLayoutResult, CacheableLayoutResultAndInputs, LayoutBoxBase,
+    IndependentFormattingContextLayoutResult, IndependentFormattingContextLayoutResultAndInputs,
+    LayoutBoxBase, LayoutResultAndInputs,
 };
 use crate::positioned::PositioningContext;
 use crate::replaced::ReplacedContents;
@@ -383,6 +384,10 @@ impl IndependentFormattingContext {
         )
     }
 
+    #[servo_tracing::instrument(
+        name = "IndependentFormattingContext::layout_without_caching",
+        skip_all
+    )]
     fn layout_without_caching(
         &self,
         layout_context: &LayoutContext,
@@ -391,7 +396,7 @@ impl IndependentFormattingContext {
         containing_block: &ContainingBlock,
         preferred_aspect_ratio: Option<AspectRatio>,
         lazy_block_size: &LazySize,
-    ) -> CacheableLayoutResult {
+    ) -> IndependentFormattingContextLayoutResult {
         match &self.contents {
             IndependentFormattingContextContents::Replaced(replaced, widget) => {
                 let mut replaced_layout = replaced.layout(
@@ -442,8 +447,7 @@ impl IndependentFormattingContext {
         }
     }
 
-    #[servo_tracing::instrument(name = "IndependentFormattingContext::layout", skip_all)]
-    pub(crate) fn layout(
+    pub(crate) fn layout_and_is_cached(
         &self,
         layout_context: &LayoutContext,
         positioning_context: &mut PositioningContext,
@@ -451,8 +455,10 @@ impl IndependentFormattingContext {
         containing_block: &ContainingBlock,
         preferred_aspect_ratio: Option<AspectRatio>,
         lazy_block_size: &LazySize,
-    ) -> CacheableLayoutResult {
-        if let Some(cache) = self.base.cached_layout_result.borrow().as_ref() {
+    ) -> (IndependentFormattingContextLayoutResult, bool) {
+        if let Some(LayoutResultAndInputs::IndependentFormattingContext(cache)) =
+            self.base.cached_layout_result.borrow().as_ref()
+        {
             let cache = &**cache;
             if cache.containing_block_for_children_size.inline
                 == containing_block_for_children.size.inline
@@ -461,7 +467,7 @@ impl IndependentFormattingContext {
                     || !cache.result.depends_on_block_constraints)
             {
                 positioning_context.append(cache.positioning_context.clone());
-                return cache.result.clone();
+                return (cache.result.clone(), true);
             }
             #[cfg(feature = "tracing")]
             tracing::debug!(
@@ -482,14 +488,36 @@ impl IndependentFormattingContext {
         );
 
         *self.base.cached_layout_result.borrow_mut() =
-            Some(Box::new(CacheableLayoutResultAndInputs {
-                result: result.clone(),
-                positioning_context: child_positioning_context.clone(),
-                containing_block_for_children_size: containing_block_for_children.size.clone(),
-            }));
+            Some(LayoutResultAndInputs::IndependentFormattingContext(
+                Box::new(IndependentFormattingContextLayoutResultAndInputs {
+                    result: result.clone(),
+                    positioning_context: child_positioning_context.clone(),
+                    containing_block_for_children_size: containing_block_for_children.size.clone(),
+                }),
+            ));
         positioning_context.append(child_positioning_context);
 
-        result
+        (result, false)
+    }
+
+    pub(crate) fn layout(
+        &self,
+        layout_context: &LayoutContext,
+        positioning_context: &mut PositioningContext,
+        containing_block_for_children: &ContainingBlock,
+        containing_block: &ContainingBlock,
+        preferred_aspect_ratio: Option<AspectRatio>,
+        lazy_block_size: &LazySize,
+    ) -> IndependentFormattingContextLayoutResult {
+        self.layout_and_is_cached(
+            layout_context,
+            positioning_context,
+            containing_block_for_children,
+            containing_block,
+            preferred_aspect_ratio,
+            lazy_block_size,
+        )
+        .0
     }
 
     #[inline]

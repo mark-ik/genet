@@ -38,7 +38,7 @@ arboard = "3"
 argon2 = { version = "0.5", features = ["alloc"] }
 arrayvec = "0.7"
 async-tungstenite = { version = "0.34", features = ["tokio-rustls-webpki-roots"] }
-atomic_refcell = "0.1.13"
+atomic_refcell = "0.1.14"
 aws-lc-rs = { version = "1.16", default-features = false, features = ["aws-lc-sys"] }
 backtrace = "0.3"
 base64 = "0.22.1"
@@ -47,6 +47,7 @@ bitflags = "2.11"
 brotli = "8.0.2"
 bytemuck = "1"
 byteorder = "1.5"
+bytes = "1.0"
 cbc = "0.1.2"
 cfg-if = "1.0.4"
 chacha20poly1305 = "0.10"
@@ -106,7 +107,7 @@ icu_properties = "1.5.0"
 icu_segmenter = "1.5.0"
 image = { version = "0.25", default-features = false, features = ["avif", "rayon", "bmp", "gif", "ico", "jpeg", "png", "webp"] }
 imsz = "0.4"
-indexmap = { version = "2.11.4", features = ["std"] }
+indexmap = { version = "2.14.0", features = ["std"] }
 inventory = { version = "0.3.24" }
 ipc-channel = "0.21"
 itertools = "0.14"
@@ -162,12 +163,12 @@ rustls-platform-verifier = "0.6.2"
 sea-query = { version = "=1.0.0-rc.31", default-features = false, features = ["backend-sqlite", "derive"] }
 sea-query-rusqlite = { version = "=0.8.0-rc.15" }
 sec1 = "0.7"
-selectors = { git = "https://github.com/servo/stylo", rev = "96ceb5405bd7ce10c4141c62e860d50745a75547" }
+selectors = { git = "https://github.com/servo/stylo", rev = "a556f4cbd15fc289039261661b049a5dc845cd80" }
 serde = "1.0.228"
 serde_bytes = "0.11"
 serde_core = "1.0.226"
 serde_json = "1.0"
-servo_arc = { git = "https://github.com/servo/stylo", rev = "96ceb5405bd7ce10c4141c62e860d50745a75547" }
+servo_arc = { git = "https://github.com/servo/stylo", rev = "a556f4cbd15fc289039261661b049a5dc845cd80" }
 sha1 = "0.10"
 sha2 = "0.10"
 sha3 = "0.10"
@@ -175,12 +176,12 @@ skrifa = "0.37.0"
 smallvec = { version = "1.15", features = ["serde", "union"] }
 string_cache = "0.9"
 strum = { version = "0.28", features = ["derive"] }
-stylo = { git = "https://github.com/servo/stylo", rev = "96ceb5405bd7ce10c4141c62e860d50745a75547" }
-stylo_atoms = { git = "https://github.com/servo/stylo", rev = "96ceb5405bd7ce10c4141c62e860d50745a75547" }
-stylo_dom = { git = "https://github.com/servo/stylo", rev = "96ceb5405bd7ce10c4141c62e860d50745a75547" }
-stylo_malloc_size_of = { git = "https://github.com/servo/stylo", rev = "96ceb5405bd7ce10c4141c62e860d50745a75547" }
-stylo_static_prefs = { git = "https://github.com/servo/stylo", rev = "96ceb5405bd7ce10c4141c62e860d50745a75547" }
-stylo_traits = { git = "https://github.com/servo/stylo", rev = "96ceb5405bd7ce10c4141c62e860d50745a75547" }
+stylo = { git = "https://github.com/servo/stylo", rev = "a556f4cbd15fc289039261661b049a5dc845cd80" }
+stylo_atoms = { git = "https://github.com/servo/stylo", rev = "a556f4cbd15fc289039261661b049a5dc845cd80" }
+stylo_dom = { git = "https://github.com/servo/stylo", rev = "a556f4cbd15fc289039261661b049a5dc845cd80" }
+stylo_malloc_size_of = { git = "https://github.com/servo/stylo", rev = "a556f4cbd15fc289039261661b049a5dc845cd80" }
+stylo_static_prefs = { git = "https://github.com/servo/stylo", rev = "a556f4cbd15fc289039261661b049a5dc845cd80" }
+stylo_traits = { git = "https://github.com/servo/stylo", rev = "a556f4cbd15fc289039261661b049a5dc845cd80" }
 surfman = { version = "0.12.0", features = ["chains"] }
 syn = { version = "2", default-features = false, features = ["clone-impls", "derive", "parsing"] }
 synstructure = "0.13"
@@ -206,10 +207,10 @@ unicode-segmentation = "1.13.2"
 url = "2.5"
 urlpattern = "0.3"
 utf-8 = "0.7"
-uuid = { version = "1.23.0", features = ["v4", "v5"] }
+uuid = { version = "1.23.1", features = ["v4", "v5"] }
 vello = "0.8"
 vello_cpu = "0.0.7"
-webdriver = "0.53.0"
+webdriver = { version = "0.53.0", default-features = false }
 webpki-roots = "1.0"
 webrender = { version = "0.68", features = ["capture", "wgpu_backend"] }
 webrender_api = "0.68"
@@ -218,13 +219,13 @@ wgpu-core = "29"
 servo-wgpu-interop-adapter = { git = "https://github.com/mark-ik/wgpu-gui-bridge", branch = "servo-webgl-interop" }
 wgpu-native-texture-interop = { git = "https://github.com/mark-ik/wgpu-gui-bridge", branch = "servo-webgl-interop" }
 wgpu-types = "29"
+web_atoms = "0.2"
 winapi = "0.3"
 windows-sys = "0.61"
 winit = "0.30.13"
 wio = "0.2"
 wr_malloc_size_of = "0.2.2"
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
-xi-unicode = "0.3.0"
 xml5ever = "0.39"
 
 ############################################################################################
@@ -289,6 +290,7 @@ servo-media-traits = { version = "0.1.0", path = "components/media/traits" }
 servo-media-webrtc = { version = "0.1.0", path = "components/media/webrtc" }
 servo-tracing = { version = "0.1.0", path = "components/servo_tracing" }
 servo-url = { version = "0.1.0", path = "components/url" }
+servo-wakelock = { version = "0.1.0", path = "components/wakelock" }
 storage = { package = "servo-storage", version = "0.1.0", path = "components/storage" }
 storage_traits = { package = "servo-storage-traits", version = "0.1.0", path = "components/shared/storage" }
 timers = { package = "servo-timers", version = "0.1.0", path = "components/timers" }
@@ -366,10 +368,8 @@ codegen-units = 1
 # web_atoms = { path = "../html5ever/web_atoms" }
 # xml5ever = { path = "../html5ever/xml5ever" }
 # tendril = { path = "../html5ever/tendril" }
-
 gpu-allocator = { path = "support/patches/gpu-allocator" }
 vello = { path = "support/patches/vello" }
-
 # For WebRender:
 webrender = { path = "../webrender-wgpu/webrender" }
 webrender_api = { path = "../webrender-wgpu/webrender_api" }

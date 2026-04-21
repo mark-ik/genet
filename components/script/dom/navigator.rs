@@ -56,7 +56,9 @@ use crate::dom::permissions::Permissions;
 use crate::dom::pluginarray::PluginArray;
 use crate::dom::serviceworkercontainer::ServiceWorkerContainer;
 use crate::dom::servointernals::ServoInternals;
+use crate::dom::storagemanager::StorageManager;
 use crate::dom::types::UserActivation;
+use crate::dom::wakelock::WakeLock;
 #[cfg(feature = "webgpu")]
 use crate::dom::webgpu::gpu::GPU;
 use crate::dom::window::Window;
@@ -126,6 +128,7 @@ pub(crate) struct Navigator {
     permissions: MutNullableDom<Permissions>,
     mediasession: MutNullableDom<MediaSession>,
     clipboard: MutNullableDom<Clipboard>,
+    storage: MutNullableDom<StorageManager>,
     #[cfg(feature = "webgpu")]
     gpu: MutNullableDom<GPU>,
     /// <https://www.w3.org/TR/gamepad/#dfn-hasgamepadgesture>
@@ -133,6 +136,7 @@ pub(crate) struct Navigator {
     has_gamepad_gesture: Cell<bool>,
     servo_internals: MutNullableDom<ServoInternals>,
     user_activation: MutNullableDom<UserActivation>,
+    wake_lock: MutNullableDom<WakeLock>,
 }
 
 impl Navigator {
@@ -153,12 +157,14 @@ impl Navigator {
             permissions: Default::default(),
             mediasession: Default::default(),
             clipboard: Default::default(),
+            storage: Default::default(),
             #[cfg(feature = "webgpu")]
             gpu: Default::default(),
             #[cfg(feature = "gamepad")]
             has_gamepad_gesture: Cell::new(false),
             servo_internals: Default::default(),
             user_activation: Default::default(),
+            wake_lock: Default::default(),
         }
     }
 
@@ -475,6 +481,12 @@ impl NavigatorMethods<crate::DomTypeHolder> for Navigator {
             .or_init(|| Clipboard::new(cx, &self.global()))
     }
 
+    /// <https://storage.spec.whatwg.org/#api>
+    fn Storage(&self, cx: &mut js::context::JSContext) -> DomRoot<StorageManager> {
+        self.storage
+            .or_init(|| StorageManager::new(&self.global(), CanGc::from_cx(cx)))
+    }
+
     /// <https://w3c.github.io/beacon/#sec-processing-model>
     fn SendBeacon(&self, url: USVString, data: Option<BodyInit>, can_gc: CanGc) -> Fallible<bool> {
         let global = self.global();
@@ -609,6 +621,11 @@ impl NavigatorMethods<crate::DomTypeHolder> for Navigator {
     fn UserActivation(&self, can_gc: CanGc) -> DomRoot<UserActivation> {
         self.user_activation
             .or_init(|| UserActivation::new(&self.global(), can_gc))
+    }
+
+    /// <https://w3c.github.io/screen-wake-lock/#dom-navigator-wakelock>
+    fn WakeLock(&self, cx: &mut js::context::JSContext) -> DomRoot<WakeLock> {
+        self.wake_lock.or_init(|| WakeLock::new(cx, &self.global()))
     }
 }
 

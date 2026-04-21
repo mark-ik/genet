@@ -585,6 +585,8 @@ pub(crate) struct Document {
     /// waiting it will not do any new layout until the canvas images are up-to-date in
     /// the renderer.
     waiting_on_canvas_image_updates: Cell<bool>,
+    /// Whether we have already noted that the document element was removed.
+    root_removal_noted: Cell<bool>,
     /// The current rendering epoch, which is used to track updates in the renderer.
     ///
     ///   - Every display list update also advances the Epoch, so that the renderer knows
@@ -695,10 +697,18 @@ impl Document {
             None => {
                 // There is no parent so this is the Document node, so we
                 // behave as if we were called with the document element.
-                let document_element = match self.GetDocumentElement() {
-                    Some(element) => element,
-                    None => return,
+                let Some(document_element) = self.GetDocumentElement() else {
+                    // Trigger update if the document element was removed.
+                    if !self.root_removal_noted.get() {
+                        self.add_restyle_reason(RestyleReason::DOMChanged);
+                        self.root_removal_noted.set(true);
+                    }
+                    return;
                 };
+                // This ensures that if the document element is removed in the future, it
+                // will trigger a new empty display list.
+                self.root_removal_noted.set(false);
+
                 if let Some(dirty_root) = self.dirty_root.get() {
                     // There was an existing dirty root so we mark its
                     // ancestors as dirty until the document element.
@@ -3146,7 +3156,7 @@ impl Document {
     ) {
         // Step 1
         // > Let rootBounds be observer’s root intersection rectangle.
-        let root_bounds = intersection_observer.root_intersection_rectangle(self);
+        let root_bounds = intersection_observer.root_intersection_rectangle();
 
         // Step 2
         // > For each target in observer’s internal [[ObservationTargets]] slot,
@@ -3631,6 +3641,7 @@ impl Document {
             pending_scroll_events: Default::default(),
             rendering_update_reasons: Default::default(),
             waiting_on_canvas_image_updates: Cell::new(false),
+            root_removal_noted: Cell::new(true),
             current_rendering_epoch: Default::default(),
             custom_element_reaction_stack,
             active_sandboxing_flag_set: Cell::new(creation_sandboxing_flag_set),
@@ -4326,20 +4337,18 @@ impl Document {
     }
 
     pub(crate) fn update_animations_post_reflow(&self) {
+        let current_timeline_value = self.current_animation_timeline_value();
         self.animations
-            .do_post_reflow_update(&self.window, self.current_animation_timeline_value());
+            .do_post_reflow_update(&self.window, current_timeline_value);
         self.image_animation_manager
-            .borrow()
-            .maybe_schedule_update_after_layout(
-                &self.window,
-                self.current_animation_timeline_value(),
-            );
+            .borrow_mut()
+            .do_post_reflow_update(&self.window, current_timeline_value);
     }
 
     pub(crate) fn cancel_animations_for_node(&self, node: &Node) {
         self.animations.cancel_animations_for_node(node);
         self.image_animation_manager
-            .borrow()
+            .borrow_mut()
             .cancel_animations_for_node(node);
     }
 
@@ -5226,60 +5235,65 @@ impl DocumentMethods<crate::DomTypeHolder> for Document {
     }
 
     /// <https://dom.spec.whatwg.org/#dom-document-createevent>
-    fn CreateEvent(&self, mut interface: DOMString, can_gc: CanGc) -> Fallible<DomRoot<Event>> {
+    fn CreateEvent(
+        &self,
+        cx: &mut js::context::JSContext,
+        mut interface: DOMString,
+    ) -> Fallible<DomRoot<Event>> {
         interface.make_ascii_lowercase();
         match &*interface.str() {
             "beforeunloadevent" => Ok(DomRoot::upcast(BeforeUnloadEvent::new_uninitialized(
                 &self.window,
-                can_gc,
+                CanGc::from_cx(cx),
             ))),
             "compositionevent" | "textevent" => Ok(DomRoot::upcast(
-                CompositionEvent::new_uninitialized(&self.window, can_gc),
+                CompositionEvent::new_uninitialized(&self.window, CanGc::from_cx(cx)),
             )),
             "customevent" => Ok(DomRoot::upcast(CustomEvent::new_uninitialized(
                 self.window.upcast(),
-                can_gc,
+                CanGc::from_cx(cx),
             ))),
             // FIXME(#25136): devicemotionevent, deviceorientationevent
             // FIXME(#7529): dragevent
-            "events" | "event" | "htmlevents" | "svgevents" => {
-                Ok(Event::new_uninitialized(self.window.upcast(), can_gc))
-            },
+            "events" | "event" | "htmlevents" | "svgevents" => Ok(Event::new_uninitialized(
+                self.window.upcast(),
+                CanGc::from_cx(cx),
+            )),
             "focusevent" => Ok(DomRoot::upcast(FocusEvent::new_uninitialized(
                 &self.window,
-                can_gc,
+                CanGc::from_cx(cx),
             ))),
             "hashchangeevent" => Ok(DomRoot::upcast(HashChangeEvent::new_uninitialized(
                 &self.window,
-                can_gc,
+                CanGc::from_cx(cx),
             ))),
             "keyboardevent" => Ok(DomRoot::upcast(KeyboardEvent::new_uninitialized(
+                cx,
                 &self.window,
-                can_gc,
             ))),
             "messageevent" => Ok(DomRoot::upcast(MessageEvent::new_uninitialized(
                 self.window.upcast(),
-                can_gc,
+                CanGc::from_cx(cx),
             ))),
             "mouseevent" | "mouseevents" => Ok(DomRoot::upcast(MouseEvent::new_uninitialized(
+                cx,
                 &self.window,
-                can_gc,
             ))),
             "storageevent" => Ok(DomRoot::upcast(StorageEvent::new_uninitialized(
                 &self.window,
                 "".into(),
-                can_gc,
+                CanGc::from_cx(cx),
             ))),
             "touchevent" => Ok(DomRoot::upcast(DomTouchEvent::new_uninitialized(
                 &self.window,
-                &TouchList::new(&self.window, &[], can_gc),
-                &TouchList::new(&self.window, &[], can_gc),
-                &TouchList::new(&self.window, &[], can_gc),
-                can_gc,
+                &TouchList::new(&self.window, &[], CanGc::from_cx(cx)),
+                &TouchList::new(&self.window, &[], CanGc::from_cx(cx)),
+                &TouchList::new(&self.window, &[], CanGc::from_cx(cx)),
+                CanGc::from_cx(cx),
             ))),
             "uievent" | "uievents" => Ok(DomRoot::upcast(UIEvent::new_uninitialized(
                 &self.window,
-                can_gc,
+                CanGc::from_cx(cx),
             ))),
             _ => Err(Error::NotSupported(None)),
         }
@@ -6158,8 +6172,8 @@ impl DocumentMethods<crate::DomTypeHolder> for Document {
     }
 
     /// <https://w3c.github.io/editing/docs/execCommand/#querycommandstate()>
-    fn QueryCommandState(&self, command_id: DOMString) -> bool {
-        self.command_state_for_command(command_id)
+    fn QueryCommandState(&self, cx: &mut js::context::JSContext, command_id: DOMString) -> bool {
+        self.command_state_for_command(cx, command_id)
     }
 
     /// <https://w3c.github.io/editing/docs/execCommand/#querycommandvalue()>

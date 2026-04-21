@@ -20,7 +20,9 @@ use content_security_policy::CspList;
 use crossbeam_channel::Sender;
 use devtools_traits::{PageError, ScriptToDevtoolsControlMsg, get_time_stamp};
 use dom_struct::dom_struct;
-use embedder_traits::{EmbedderMsg, JavaScriptEvaluationError, ScriptToEmbedderChan};
+use embedder_traits::{
+    ConsoleLogLevel, EmbedderMsg, JavaScriptEvaluationError, ScriptToEmbedderChan,
+};
 use fonts::FontContext;
 use indexmap::IndexSet;
 use ipc_channel::ipc::{self};
@@ -63,8 +65,8 @@ use servo_base::id::{
     ServiceWorkerId, ServiceWorkerRegistrationId, WebViewId,
 };
 use servo_constellation_traits::{
-    BlobData, BlobImpl, BroadcastChannelMsg, FileBlob, MessagePortImpl, MessagePortMsg,
-    PortMessageTask, ScriptToConstellationChan, ScriptToConstellationMessage,
+    BlobData, BlobImpl, BroadcastChannelMsg, ConstellationInterest, FileBlob, MessagePortImpl,
+    MessagePortMsg, PortMessageTask, ScriptToConstellationChan, ScriptToConstellationMessage,
 };
 use servo_url::{ImmutableOrigin, MutableOrigin, ServoUrl};
 use storage_traits::StorageThreads;
@@ -215,6 +217,12 @@ pub(crate) struct GlobalScope {
 
     /// The broadcast channels state this global, if it is managing any.
     broadcast_channel_state: DomRefCell<BroadcastChannelState>,
+
+    /// Tracks the number of active listeners per constellation interest category.
+    /// When the count transitions from 0 to 1, a RegisterInterest message is sent.
+    /// When it transitions from 1 to 0, an UnregisterInterest message is sent.
+    #[no_trace]
+    constellation_interest_counts: RefCell<HashMap<ConstellationInterest, usize>>,
 
     /// The blobs managed by this global, if any.
     blob_state: DomRefCell<HashMapTracedValues<BlobId, BlobInfo, FxBuildHasher>>,
@@ -767,6 +775,7 @@ impl GlobalScope {
             task_manager: Default::default(),
             message_port_state: DomRefCell::new(MessagePortState::UnManaged),
             broadcast_channel_state: DomRefCell::new(BroadcastChannelState::UnManaged),
+            constellation_interest_counts: RefCell::new(HashMap::new()),
             blob_state: Default::default(),
             eventtarget: EventTarget::new_inherited(),
             registration_map: DomRefCell::new(HashMapTracedValues::new_fx()),
@@ -2474,6 +2483,34 @@ impl GlobalScope {
         self.pipeline_id
     }
 
+    /// Register interest in a notification category. Sends a `RegisterInterest`
+    /// message to the constellation when the first listener is registered.
+    pub(crate) fn register_interest(&self, interest: ConstellationInterest) {
+        let mut counts = self.constellation_interest_counts.borrow_mut();
+        let count = counts.entry(interest).or_insert(0);
+        *count += 1;
+        if *count == 1 {
+            let _ = self
+                .script_to_constellation_chan()
+                .send(ScriptToConstellationMessage::RegisterInterest(interest));
+        }
+    }
+
+    /// Unregister interest in a notification category. Sends an `UnregisterInterest`
+    /// message to the constellation when the last listener is removed.
+    pub(crate) fn unregister_interest(&self, interest: ConstellationInterest) {
+        let mut counts = self.constellation_interest_counts.borrow_mut();
+        if let Some(count) = counts.get_mut(&interest) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                counts.remove(&interest);
+                let _ = self
+                    .script_to_constellation_chan()
+                    .send(ScriptToConstellationMessage::UnregisterInterest(interest));
+            }
+        }
+    }
+
     /// Get the origin for this global scope
     pub(crate) fn origin(&self) -> &MutableOrigin {
         &self.origin
@@ -2719,11 +2756,6 @@ impl GlobalScope {
 
     /// Steps 6-7 of <https://html.spec.whatwg.org/multipage/#report-an-exception>
     pub(crate) fn report_an_error(&self, error_info: ErrorInfo, value: HandleValue, can_gc: CanGc) {
-        error!(
-            "Error at {}:{}:{} {}",
-            error_info.filename, error_info.lineno, error_info.column, error_info.message
-        );
-
         #[cfg(feature = "js_backtrace")]
         LAST_EXCEPTION_BACKTRACE.with(|backtrace| {
             if let Some((js_backtrace, rust_backtrace)) = backtrace.borrow_mut().take() {
@@ -2790,6 +2822,17 @@ impl GlobalScope {
                         },
                     ));
                 }
+                self.send_to_embedder(EmbedderMsg::ShowConsoleApiMessage(
+                    self.webview_id(),
+                    ConsoleLogLevel::Error,
+                    format!(
+                        "Error at {}:{}:{} {}",
+                        error_info.filename,
+                        error_info.lineno,
+                        error_info.column,
+                        error_info.message
+                    ),
+                ));
             }
         }
     }
@@ -2870,13 +2913,11 @@ impl GlobalScope {
                 no_script_rval,
             ));
 
-            if compiled_script.is_null() {
+            let Some(script) = NonNull::new(*compiled_script) else {
                 debug!("error compiling Dom string");
                 report_pending_exception(cx.into(), in_realm, CanGc::from_cx(cx));
                 return Err(JavaScriptEvaluationError::CompilationFailure);
-            }
-
-            let script = NonNull::new(*compiled_script).expect("Can't be null");
+            };
 
             rooted!(&in(cx) let mut value = UndefinedValue());
             let rval = rval.unwrap_or_else(|| value.handle_mut());

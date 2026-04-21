@@ -85,6 +85,7 @@ use construct::InlineFormattingContextBuilder;
 use fonts::{FontMetrics, GlyphStore};
 use icu_locid::LanguageIdentifier;
 use icu_locid::subtags::{Language, language};
+use icu_properties::{self, LineBreak as ICULineBreak};
 use icu_segmenter::{LineBreakOptions, LineBreakStrictness, LineBreakWordOption};
 use inline_box::{InlineBox, InlineBoxContainerState, InlineBoxIdentifier, InlineBoxes};
 use layout_api::{LayoutNode, SharedSelection};
@@ -110,15 +111,11 @@ use style::values::generics::font::LineHeight;
 use style::values::specified::box_::BaselineSource;
 use style::values::specified::text::TextAlignKeyword;
 use style::values::specified::{AlignmentBaseline, TextAlignLast, TextJustify};
-use text_run::{
-    TextRun, XI_LINE_BREAKING_CLASS_GL, XI_LINE_BREAKING_CLASS_WJ, XI_LINE_BREAKING_CLASS_ZWJ,
-    get_font_for_first_font_for_style,
-};
+use text_run::{TextRun, get_font_for_first_font_for_style};
 use unicode_bidi::{BidiInfo, Level};
-use xi_unicode::linebreak_property;
 
 use super::float::{Clear, PlacementAmongFloats};
-use super::{CacheableLayoutResult, IndependentFloatOrAtomicLayoutResult};
+use super::{IndependentFloatOrAtomicLayoutResult, IndependentFormattingContextLayoutResult};
 use crate::cell::{ArcRefCell, WeakRefCell};
 use crate::context::LayoutContext;
 use crate::dom::WeakLayoutBox;
@@ -1932,7 +1929,7 @@ impl InlineFormattingContext {
         containing_block: &ContainingBlock,
         sequential_layout_state: Option<&mut SequentialLayoutState>,
         collapsible_with_parent_start_margin: CollapsibleWithParentStartMargin,
-    ) -> CacheableLayoutResult {
+    ) -> IndependentFormattingContextLayoutResult {
         // Clear any cached inline fragments from previous layouts.
         for inline_box in self.inline_boxes.iter() {
             inline_box.borrow().base.clear_fragments();
@@ -2030,7 +2027,7 @@ impl InlineFormattingContext {
         let (content_block_size, collapsible_margins_in_children, baselines) =
             layout.placement_state.finish();
 
-        CacheableLayoutResult {
+        IndependentFormattingContextLayoutResult {
             fragments: layout.fragments,
             content_block_size,
             collapsible_margins_in_children,
@@ -2935,8 +2932,8 @@ fn char_prevents_soft_wrap_opportunity_when_before_or_after_atomic(character: ch
     if character == '\u{00A0}' {
         return false;
     }
-    let class = linebreak_property(character);
-    class == XI_LINE_BREAKING_CLASS_GL
-        || class == XI_LINE_BREAKING_CLASS_WJ
-        || class == XI_LINE_BREAKING_CLASS_ZWJ
+    matches!(
+        icu_properties::maps::line_break().get(character),
+        ICULineBreak::Glue | ICULineBreak::WordJoiner | ICULineBreak::ZWJ
+    )
 }

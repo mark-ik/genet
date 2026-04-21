@@ -105,10 +105,14 @@ impl Range {
             return;
         }
 
-        for child in self
+        // Make sure to keep track of the tree nodes before, since `callback` might modify
+        // the underyling tree and then the iterator would prematurely stop.
+        let children = self
             .CommonAncestorContainer()
             .traverse_preorder(ShadowIncluding::No)
-        {
+            .collect::<Vec<DomRoot<Node>>>();
+
+        for child in children {
             if self.is_effectively_contained_node(&child) {
                 callback(&child);
             }
@@ -189,7 +193,7 @@ impl Range {
                     BoolOrOptionalString::Bool(bool_)
                         if override_state
                             .command
-                            .current_state(context_object)
+                            .current_state(cx, context_object)
                             .is_some_and(|value| value != bool_) =>
                     {
                         override_state

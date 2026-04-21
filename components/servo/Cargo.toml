@@ -57,6 +57,7 @@ tracing = [
     "layout/tracing",
     "profile_traits/tracing",
     "script/tracing",
+    "net/tracing",
 ]
 vello = ["servo-constellation/vello"]
 wgpu_backend = ["paint/wgpu_backend", "paint_api/wgpu_backend"]
@@ -127,6 +128,7 @@ servo-media-dummy = { workspace = true }
 servo-media-gstreamer = { workspace = true, optional = true }
 servo-tracing = { workspace = true }
 servo-url = { workspace = true }
+servo-wakelock = { workspace = true }
 storage = { workspace = true }
 storage_traits = { workspace = true }
 stylo = { workspace = true }

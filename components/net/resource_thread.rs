@@ -41,7 +41,6 @@ use rustc_hash::FxHashMap;
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
 use serde::{Deserialize, Serialize};
-use servo_arc::Arc as ServoArc;
 use servo_base::generic_channel::{
     self, CallbackSetter, GenericCallback, GenericReceiver, GenericReceiverSet,
     GenericSelectionResult,
@@ -562,6 +561,31 @@ impl ResourceChannelManager {
                     .collect();
                 self.send_cookie_response(cookie_store_id, CookieData::GetAll(cookies));
             },
+            CoreResourceMsg::EmbedderGetCookiesForUrl(operation_id, url, source) => {
+                let mut cookie_jar = http_state.cookie_jar.write();
+                cookie_jar.remove_expired_cookies_for_url(&url);
+                let cookies: Vec<Cookie<'static>> =
+                    cookie_jar.cookies_data_for_url(&url, source).collect();
+                http_state
+                    .embedder_proxy
+                    .send(NetToEmbedderMsg::EmbedderGetCookiesForUrlResponse(
+                        operation_id,
+                        cookies,
+                    ));
+            },
+            CoreResourceMsg::EmbedderSetCookieForUrl(operation_id, url, cookie, source) => {
+                self.resource_manager.set_cookie_for_url(
+                    &url,
+                    cookie.into_inner(),
+                    source,
+                    http_state,
+                );
+                http_state
+                    .embedder_proxy
+                    .send(NetToEmbedderMsg::EmbedderSetCookieForUrlResponse(
+                        operation_id,
+                    ));
+            },
             CoreResourceMsg::NewCookieListener(cookie_store_id, callback, _url) => {
                 // TODO: Use the URL for setting up the actual monitoring
                 self.cookie_listeners.insert(cookie_store_id, callback);
@@ -791,7 +815,7 @@ impl CoreResourceManager {
                 file_token,
                 request_interceptor: Arc::new(TokioMutex::new(request_interceptor)),
                 cancellation_listener,
-                timing: ServoArc::new(Mutex::new(ResourceFetchTiming::new(request.timing_type()))),
+                timing: ResourceFetchTiming::new(request.timing_type()).into(),
                 protocols,
                 websocket_chan: None,
                 ca_certificates,
@@ -883,9 +907,7 @@ impl CoreResourceManager {
                         file_token: FileTokenCheck::NotRequired,
                         request_interceptor: Arc::new(TokioMutex::new(request_interceptor)),
                         cancellation_listener,
-                        timing: ServoArc::new(Mutex::new(ResourceFetchTiming::new(
-                            request.timing_type(),
-                        ))),
+                        timing: ResourceFetchTiming::new(request.timing_type()).into(),
                         protocols: protocols.clone(),
                         websocket_chan: Some(Arc::new(Mutex::new(WebSocketChannel::new(
                             event_sender.clone(),

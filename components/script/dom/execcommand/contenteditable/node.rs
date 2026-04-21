@@ -600,7 +600,7 @@ where
     let new_parent = new_parent.or_else(|| {
         node_list
             .last()
-            .and_then(|first| first.GetNextSibling())
+            .and_then(|last| last.GetNextSibling())
             .filter(|next_of_last| next_of_last.is_editable() && sibling_criteria(next_of_last))
     });
     // Step 8. Otherwise, run new parent instructions, and let new parent be the result.
@@ -643,7 +643,7 @@ where
             let end_offset = range.end_offset();
 
             if end_container == parent_of_new_parent && end_offset == new_parent.index() {
-                range.set_start(&end_container, end_offset + 1);
+                range.set_end(&end_container, end_offset + 1);
             }
         }
     }
@@ -654,7 +654,25 @@ where
         // and the last child of new parent is not a br,
         // call createElement("br") on the ownerDocument of new parent
         // and append the result as the last child of new parent.
-        // TODO
+        if !new_parent.is_inline_node() &&
+            new_parent
+                .rev_children()
+                .find(|child| child.is_visible())
+                .is_some_and(|child| child.is_inline_node()) &&
+            node_list
+                .iter()
+                .find(|node| node.is_visible())
+                .is_some_and(|node| node.is_inline_node()) &&
+            new_parent
+                .children()
+                .last()
+                .is_none_or(|last_child| !last_child.is::<HTMLBRElement>())
+        {
+            let new_br_element = new_parent.owner_document().create_element(cx, "br");
+            if new_parent.AppendChild(cx, new_br_element.upcast()).is_err() {
+                unreachable!("Must always be able to append");
+            }
+        }
         // Step 12.2. For each node in node list, append node as the last child of new parent, preserving ranges.
         for node in node_list {
             move_preserving_ranges(cx, &node, |cx| new_parent.AppendChild(cx, &node));
@@ -666,7 +684,32 @@ where
         // and the last member of node list is not a br,
         // call createElement("br") on the ownerDocument of new parent
         // and insert the result as the first child of new parent.
-        // TODO
+        if !new_parent.is_inline_node() &&
+            new_parent
+                .children()
+                .find(|child| child.is_visible())
+                .is_some_and(|child| child.is_inline_node()) &&
+            node_list
+                .iter()
+                .rev()
+                .find(|node| node.is_visible())
+                .is_some_and(|node| node.is_inline_node()) &&
+            node_list
+                .last()
+                .is_none_or(|last_child| !last_child.is::<HTMLBRElement>())
+        {
+            let new_br_element = new_parent.owner_document().create_element(cx, "br");
+            if new_parent
+                .InsertBefore(
+                    cx,
+                    new_br_element.upcast(),
+                    new_parent.GetFirstChild().as_deref(),
+                )
+                .is_err()
+            {
+                unreachable!("Must always be able to append");
+            }
+        }
         // Step 13.2. For each node in node list, in reverse order,
         // insert node as the first child of new parent, preserving ranges.
         let mut before = new_parent.GetFirstChild();
@@ -706,10 +749,8 @@ where
             }
             // Step 15.2. While new parent's nextSibling has children,
             // append its first child as the last child of new parent, preserving ranges.
-            while let Some(first_of_next) = next_of_new_parent.children().next() {
-                move_preserving_ranges(cx, &first_of_next, |cx| {
-                    new_parent.AppendChild(cx, &first_of_next)
-                });
+            for child in next_of_new_parent.children() {
+                move_preserving_ranges(cx, &child, |cx| new_parent.AppendChild(cx, &child));
             }
             // Step 15.3. Remove new parent's nextSibling from its parent.
             next_of_new_parent.remove_self(cx);
@@ -904,9 +945,11 @@ impl Node {
             && !last_ancestor
                 .upcast::<Node>()
                 .GetParentNode()
-                .is_some_and(|last_ancestor| {
+                .is_some_and(|last_ancestor_parent| {
                     command.are_loosely_equivalent_values(
-                        last_ancestor.effective_command_value(command).as_ref(),
+                        last_ancestor_parent
+                            .effective_command_value(command)
+                            .as_ref(),
                         new_value.as_ref(),
                     )
                 })
@@ -927,7 +970,9 @@ impl Node {
             let has_command_value = command_value.is_some();
             propagated_value = command_value.or(propagated_value);
             // Step 11.4. Let children be the children of current ancestor.
-            let children = current_ancestor_node.children();
+            let children = current_ancestor_node
+                .children()
+                .collect::<Vec<DomRoot<Node>>>();
             // Step 11.5. If the specified command value of current ancestor for command is not null, clear the value of current ancestor.
             if has_command_value {
                 if let Some(html_element) = current_ancestor.downcast::<HTMLElement>() {
@@ -970,6 +1015,84 @@ impl Node {
         }
     }
 
+    /// <https://w3c.github.io/editing/docs/execCommand/#reorder-modifiable-descendants>
+    fn reorder_modifiable_descendants(
+        &self,
+        cx: &mut JSContext,
+        command: &CommandName,
+        new_value: &DOMString,
+    ) {
+        // Step 1. Let candidate equal node.
+        let mut candidate = DomRoot::from_ref(self);
+        // Step 2. While candidate is a modifiable element, and candidate has exactly one child,
+        // and that child is also a modifiable element,
+        // and candidate is not a simple modifiable element or candidate's specified command value
+        // for command is not equivalent to new value, set candidate to its child.
+        loop {
+            if let Some(candidate_element) = candidate.downcast::<Element>() {
+                if candidate_element.is_modifiable_element() &&
+                    candidate.children_count() == 1 &&
+                    (!candidate_element.is_simple_modifiable_element() ||
+                        !command.are_equivalent_values(
+                            candidate_element.specified_command_value(command).as_ref(),
+                            Some(new_value),
+                        ))
+                {
+                    let child = candidate.children().next().expect("Has one child");
+
+                    if let Some(child_element) = child.downcast::<Element>() {
+                        if child_element.is_modifiable_element() {
+                            candidate = child;
+                            continue;
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        // Step 3. If candidate is node, or is not a simple modifiable element,
+        // or its specified command value is not equivalent to new value,
+        // or its effective command value is not loosely equivalent to new value, abort these steps.
+        if *candidate == *self ||
+            !command.are_loosely_equivalent_values(
+                candidate.effective_command_value(command).as_ref(),
+                Some(new_value),
+            )
+        {
+            return;
+        }
+        if let Some(candidate) = candidate.downcast::<Element>() {
+            if !candidate.is_simple_modifiable_element() ||
+                !command.are_equivalent_values(
+                    candidate.specified_command_value(command).as_ref(),
+                    Some(new_value),
+                )
+            {
+                return;
+            }
+        }
+        // Step 4. While candidate has children,
+        // insert the first child of candidate into candidate's parent immediately before candidate, preserving ranges.
+        let parent_of_candidate = candidate
+            .GetParentNode()
+            .expect("Must always have a parent");
+        for child in candidate.children() {
+            move_preserving_ranges(cx, &child, |cx| {
+                parent_of_candidate.InsertBefore(cx, &child, Some(&candidate))
+            });
+        }
+        // Step 5. Insert candidate into node's parent immediately after node.
+        let parent_of_node = self.GetParentNode().expect("Must always have a parent");
+        if parent_of_node
+            .InsertBefore(cx, &candidate, self.GetNextSibling().as_deref())
+            .is_err()
+        {
+            unreachable!("Must always be able to insert");
+        }
+        // Step 6. Append the node as the last child of candidate, preserving ranges.
+        move_preserving_ranges(cx, self, |cx| candidate.AppendChild(cx, self));
+    }
+
     /// <https://w3c.github.io/editing/docs/execCommand/#force-the-value>
     pub(crate) fn force_the_value(
         &self,
@@ -995,9 +1118,13 @@ impl Node {
             NodeOrString::String("span".to_owned()),
         ) {
             // Step 4.1. Reorder modifiable descendants of node's previousSibling.
-            // TODO
+            if let Some(previous) = self.GetPreviousSibling() {
+                previous.reorder_modifiable_descendants(cx, command, new_value);
+            }
             // Step 4.2. Reorder modifiable descendants of node's nextSibling.
-            // TODO
+            if let Some(next) = self.GetNextSibling() {
+                next.reorder_modifiable_descendants(cx, command, new_value);
+            }
             // Step 4.3. Wrap the one-node list consisting of node,
             // with sibling criteria returning true for a simple modifiable element whose
             // specified command value is equivalent to new value and whose effective command value
@@ -1040,19 +1167,22 @@ impl Node {
             NodeOrString::Node(DomRoot::from_ref(self)),
             NodeOrString::String("span".to_owned()),
         ) {
-            for child in self.children() {
-                // Step 7.1. Let children be all children of node, omitting any that are Elements whose
-                // specified command value for command is neither null nor equivalent to new value.
-                if let Some(child_element) = child.downcast::<Element>() {
-                    let specified_value = child_element.specified_command_value(command);
-                    if specified_value.is_some()
-                        && !command.are_equivalent_values(specified_value.as_ref(), Some(new_value))
-                    {
-                        continue;
-                    }
-                }
-                // Step 7.2. Force the value of each node in children,
-                // with command and new value as in this invocation of the algorithm.
+            // Step 7.1. Let children be all children of node, omitting any that are Elements whose
+            // specified command value for command is neither null nor equivalent to new value.
+            let children = self
+                .children()
+                .filter(|child| {
+                    !child.downcast::<Element>().is_some_and(|child_element| {
+                        let specified_value = child_element.specified_command_value(command);
+                        specified_value.is_some() &&
+                            !command
+                                .are_equivalent_values(specified_value.as_ref(), Some(new_value))
+                    })
+                })
+                .collect::<Vec<DomRoot<Node>>>();
+            // Step 7.2. Force the value of each node in children,
+            // with command and new value as in this invocation of the algorithm.
+            for child in children {
                 child.force_the_value(cx, command, Some(new_value));
             }
             // Step 7.3. Abort this algorithm.
@@ -1198,12 +1328,13 @@ impl Node {
             // and the effective command value of "underline" for new parent is not "underline",
             // set the "text-decoration" property of new parent to "underline".
             CommandName::Underline => {
-                if new_value == "underline"
-                    && self
+                if new_value == "underline" &&
+                    new_parent
+                        .upcast::<Node>()
                         .effective_command_value(&CommandName::Underline)
-                        .is_some_and(|value| value == "underline")
+                        .is_none_or(|value| value != "underline")
                 {
-                    CssPropertyName::TextDecorationLine.set_for_element(
+                    CssPropertyName::TextDecoration.set_for_element(
                         cx,
                         new_parent_html_element,
                         new_value.clone(),
@@ -1231,19 +1362,23 @@ impl Node {
             new_parent.remove_self(cx);
             // Step 21.3. Let children be all children of node,
             // omitting any that are Elements whose specified command value for command is neither null nor equivalent to new value.
-            for child in self.children() {
-                if child.downcast::<Element>().is_some_and(|child_element| {
-                    let specified_command_value = child_element.specified_command_value(command);
-                    specified_command_value.is_some()
-                        && !command.are_equivalent_values(
-                            specified_command_value.as_ref(),
-                            Some(new_value),
-                        )
-                }) {
-                    continue;
-                }
-                // Step 21.4. Force the value of each node in children,
-                // with command and new value as in this invocation of the algorithm.
+            let children = self
+                .children()
+                .filter(|child| {
+                    !child.downcast::<Element>().is_some_and(|child_element| {
+                        let specified_command_value =
+                            child_element.specified_command_value(command);
+                        specified_command_value.is_some() &&
+                            !command.are_equivalent_values(
+                                specified_command_value.as_ref(),
+                                Some(new_value),
+                            )
+                    })
+                })
+                .collect::<Vec<DomRoot<Node>>>();
+            // Step 21.4. Force the value of each node in children,
+            // with command and new value as in this invocation of the algorithm.
+            for child in children {
                 child.force_the_value(cx, command, Some(new_value));
             }
         }
@@ -1962,7 +2097,9 @@ impl Node {
             CommandName::Underline => Some("underline".into()).filter(|_| {
                 self.inclusive_ancestors(ShadowIncluding::No).any(|node| {
                     node.downcast::<Element>()
-                        .and_then(|element| CommandName::Underline.resolved_value_for_node(element))
+                        .and_then(|element| {
+                            CssPropertyName::TextDecorationLine.resolved_value_for_node(element)
+                        })
                         .is_some_and(|property| property.contains("underline"))
                 })
             }),

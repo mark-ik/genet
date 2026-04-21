@@ -6,6 +6,7 @@ use html5ever::local_name;
 use js::context::JSContext;
 use script_bindings::inheritance::Castable;
 use style::computed_values::white_space_collapse::T as WhiteSpaceCollapse;
+use style::properties::{LonghandId, PropertyDeclarationId, ShorthandId};
 
 use crate::dom::bindings::codegen::Bindings::DocumentBinding::DocumentMethods;
 use crate::dom::bindings::codegen::Bindings::HTMLElementBinding::HTMLElementMethods;
@@ -28,6 +29,54 @@ impl HTMLElement {
         self.upcast::<Element>().local_name()
     }
 
+    fn remove_value_from_text_decoration(&self, cx: &mut JSContext, value: &str) {
+        let element = self.upcast::<Element>();
+        let mut original_value = String::new();
+        let property;
+
+        // Ensure that style borrow is dropped before writing new value for style
+        {
+            let style_attribute = element.style_attribute().borrow();
+            let Some(declarations) = style_attribute.as_ref() else {
+                return;
+            };
+            let document = element.owner_document();
+            let shared_lock = document.style_shared_lock();
+            let read_lock = shared_lock.read();
+            let style = declarations.read_with(&read_lock);
+
+            // First we need to check if text-decoration is set as shorthand.
+            // If that's not the case, we should only remove underline from text-decoration-line
+            if style
+                .shorthand_to_css(ShorthandId::TextDecoration, &mut original_value)
+                .is_ok()
+            {
+                property = CssPropertyName::TextDecoration;
+            } else if let Some((text_decoration, _)) = style.get(PropertyDeclarationId::Longhand(
+                LonghandId::TextDecorationLine,
+            )) {
+                if text_decoration.to_css(&mut original_value).is_ok() {
+                    property = CssPropertyName::TextDecorationLine;
+                } else {
+                    return;
+                }
+            } else {
+                return;
+            }
+        }
+
+        let new_value = original_value
+            .replace(&format!(" {value} "), " ")
+            .replace(&format!(" {value}"), "")
+            .replace(&format!("{value} "), "")
+            .replace(value, "");
+        if new_value.is_empty() {
+            property.remove_from_element(cx, self);
+        } else {
+            property.set_for_element(cx, self, new_value.into());
+        }
+    }
+
     /// <https://w3c.github.io/editing/docs/execCommand/#clear-the-value>
     pub(crate) fn clear_the_value(&self, cx: &mut JSContext, command: &CommandName) {
         // Step 1. Let command be the current command.
@@ -47,13 +96,13 @@ impl HTMLElement {
             return;
         }
         // Step 4. If element is a simple modifiable element:
+        let node_parent = node.GetParentNode().expect("Must always have a parent");
         if element.is_simple_modifiable_element() {
             // Step 4.1. Let children be the children of element.
             // Step 4.2. For each child in children, insert child into element's parent immediately before element, preserving ranges.
-            let element_parent = node.GetParentNode().expect("Must always have a parent");
             for child in node.children() {
                 move_preserving_ranges(cx, &child, |cx| {
-                    element_parent.InsertBefore(cx, &child, Some(node))
+                    node_parent.InsertBefore(cx, &child, Some(node))
                 });
             }
             // Step 4.3. Remove element from its parent.
@@ -66,20 +115,12 @@ impl HTMLElement {
             // that sets "text-decoration" to some value containing "line-through",
             // delete "line-through" from the value.
             CommandName::Strikethrough => {
-                let property = CssPropertyName::TextDecorationLine;
-                if property.value_for_element(cx, self) == "line-through" {
-                    // TODO: Only remove line-through
-                    property.remove_from_element(cx, self);
-                }
+                self.remove_value_from_text_decoration(cx, "line-through");
             },
             // Step 6. If command is "underline", and element has a style attribute that
             // sets "text-decoration" to some value containing "underline", delete "underline" from the value.
             CommandName::Underline => {
-                let property = CssPropertyName::TextDecorationLine;
-                if property.value_for_element(cx, self) == "underline" {
-                    // TODO: Only remove underline
-                    property.remove_from_element(cx, self);
-                }
+                self.remove_value_from_text_decoration(cx, "underline");
             },
             _ => {},
         }
@@ -87,6 +128,12 @@ impl HTMLElement {
         // unset that property of element.
         if let Some(property) = command.relevant_css_property() {
             property.remove_from_element(cx, self);
+        }
+        // In case we have a completely empty style attribute, we need to completely remove it.
+        // Otherwise, when you call `innerHTML`, it would generate a `style=""`, which is
+        // not what the tests expect. They expect the whole attribute to be removed.
+        if element.has_empty_style_attribute() {
+            element.remove_attribute_by_name(&local_name!("style"), CanGc::from_cx(cx));
         }
         // Step 8. If element is a font element:
         if self.is::<HTMLFontElement>() {
@@ -116,11 +163,11 @@ impl HTMLElement {
         // Step 10. If element's specified command value for command is null,
         // return the empty list.
         if element.specified_command_value(command).is_none() {
-            // TODO
+            return;
         }
         // Step 11. Set the tag name of element to "span",
         // and return the one-node list consisting of the result.
-        // TODO
+        element.set_the_tag_name(cx, "span");
     }
 
     /// There is no specification for this implementation. Instead, it is

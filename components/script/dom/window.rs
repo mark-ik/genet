@@ -181,7 +181,6 @@ use crate::dom::trustedtypes::trustedtypepolicyfactory::TrustedTypePolicyFactory
 use crate::dom::types::{ImageBitmap, MouseEvent, UIEvent};
 use crate::dom::useractivation::UserActivationTimestamp;
 use crate::dom::visualviewport::{VisualViewport, VisualViewportChanges};
-use crate::dom::webgl::webglrenderingcontext::WebGLCommandSender;
 #[cfg(feature = "webgpu")]
 use crate::dom::webgpu::identityhub::IdentityHub;
 use crate::dom::windowproxy::{WindowProxy, WindowProxyHandler};
@@ -677,10 +676,13 @@ impl Window {
         &self.error_reporter
     }
 
-    pub(crate) fn webgl_chan(&self) -> Option<WebGLCommandSender> {
-        self.webgl_chan
-            .as_ref()
-            .map(|chan| WebGLCommandSender::new(chan.clone()))
+    pub(crate) fn webgl_chan(&self) -> Option<WebGLChan> {
+        self.webgl_chan.clone()
+    }
+
+    // TODO: rename the function to webgl_chan after the existing `webgl_chan` function is removed.
+    pub(crate) fn webgl_chan_value(&self) -> Option<WebGLChan> {
+        self.webgl_chan.clone()
     }
 
     #[cfg(feature = "webxr")]
@@ -2850,6 +2852,19 @@ impl Window {
             animations,
             document.current_animation_timeline_value(),
         )
+    }
+
+    /// Query the ancestor node that establishes the containing block for the given node.
+    /// <https://drafts.csswg.org/css-position-3/#def-cb>
+    #[expect(unsafe_code)]
+    pub(crate) fn containing_block_node_query_without_reflow(
+        &self,
+        node: &Node,
+    ) -> Option<DomRoot<Node>> {
+        self.layout
+            .borrow()
+            .query_containing_block(node.to_trusted_node_address())
+            .map(|address| unsafe { from_untrusted_node_address(address) })
     }
 
     /// Query the used padding values for the given node, but do not force a reflow.

@@ -29,8 +29,8 @@ use js::rust::HandleObject;
 use keyboard_types::Modifiers;
 use layout_api::{
     AxesOverflow, BoxAreaType, CSSPixelRectIterator, GenericLayoutData, HTMLCanvasData,
-    HTMLMediaData, LayoutElementType, LayoutNodeType, PhysicalSides, SVGElementData,
-    SharedSelection, TrustedNodeAddress, with_layout_state,
+    HTMLMediaData, LayoutElementType, LayoutNodeType, NodeRenderingType, PhysicalSides,
+    SVGElementData, SharedSelection, TrustedNodeAddress, with_layout_state,
 };
 use libc::{self, c_void, uintptr_t};
 use malloc_size_of::{MallocSizeOf, MallocSizeOfOps};
@@ -45,7 +45,6 @@ use servo_config::pref;
 use servo_url::ServoUrl;
 use smallvec::SmallVec;
 use style::Atom;
-use style::attr::AttrValue;
 use style::context::QuirksMode;
 use style::dom::OpaqueNode;
 use style::dom_apis::{QueryAll, QueryFirst};
@@ -100,9 +99,7 @@ use crate::dom::customelementregistry::{
 use crate::dom::document::{Document, DocumentSource, HasBrowsingContext, IsHTMLDocument};
 use crate::dom::documentfragment::DocumentFragment;
 use crate::dom::documenttype::DocumentType;
-use crate::dom::element::{
-    AttributeMutationReason, CustomElementCreationMode, Element, ElementCreator,
-};
+use crate::dom::element::{CustomElementCreationMode, Element, ElementCreator};
 use crate::dom::event::{Event, EventBubbles, EventCancelable, EventFlags};
 use crate::dom::eventtarget::EventTarget;
 use crate::dom::globalscope::GlobalScope;
@@ -356,12 +353,12 @@ impl Node {
         Node::replace_all(cx, Some(fragment.upcast()), target);
     }
 
-    /// Clear this [`Node`]'s layout data and also clear the layout data of all children.
-    /// Note that this clears layout data from all non-flat tree descendants and flat tree
-    /// descendants.
-    pub(crate) fn remove_layout_boxes_from_subtree(&self, no_gc: &NoGC) {
+    /// Clear style and layout data on this [`Node`] and all descendants. This is used to clean
+    /// up the data when a [`Node`] becomes detached from the flat tree. Note that this
+    /// operates on both DOM and flat tree descendants.
+    pub(crate) fn remove_style_and_layout_data_from_subtree(&self, no_gc: &NoGC) {
         for node in self.traverse_preorder_non_rooting(no_gc, ShadowIncluding::Yes) {
-            node.layout_data.borrow_mut().take();
+            node.clean_up_style_and_layout_data();
         }
     }
 
@@ -634,6 +631,31 @@ impl Node {
                 None => return "ltr".to_owned(),
             }
         }
+    }
+
+    /// Implements the combination of:
+    ///  - <https://html.spec.whatwg.org/multipage/#being-rendered>
+    ///  - <https://html.spec.whatwg.org/multipage/#delegating-its-rendering-to-its-children>
+    pub(crate) fn is_being_rendered_or_delegates_rendering(
+        &self,
+        pseudo_element: Option<PseudoElement>,
+    ) -> bool {
+        matches!(
+            self.owner_window()
+                .layout()
+                .node_rendering_type(self.to_trusted_node_address(), pseudo_element),
+            NodeRenderingType::Rendered | NodeRenderingType::DelegatesRendering
+        )
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/#being-rendered>
+    pub(crate) fn is_being_rendered(&self, pseudo_element: Option<PseudoElement>) -> bool {
+        matches!(
+            self.owner_window()
+                .layout()
+                .node_rendering_type(self.to_trusted_node_address(), pseudo_element),
+            NodeRenderingType::Rendered
+        )
     }
 }
 
@@ -1052,6 +1074,12 @@ impl Node {
         TrustedNodeAddress(self as *const Node as *const libc::c_void)
     }
 
+    /// Return the node that establishes a containing block for this node.
+    pub(crate) fn containing_block_node_without_reflow(&self) -> Option<DomRoot<Node>> {
+        self.owner_window()
+            .containing_block_node_query_without_reflow(self)
+    }
+
     pub(crate) fn padding(&self) -> Option<PhysicalSides> {
         self.owner_window().padding_query_without_reflow(self)
     }
@@ -1066,9 +1094,19 @@ impl Node {
             .box_area_query(self, BoxAreaType::Border, false)
     }
 
+    pub(crate) fn border_box_without_reflow(&self) -> Option<Rect<Au, CSSPixel>> {
+        self.owner_window()
+            .box_area_query_without_reflow(self, BoxAreaType::Border, false)
+    }
+
     pub(crate) fn padding_box(&self) -> Option<Rect<Au, CSSPixel>> {
         self.owner_window()
             .box_area_query(self, BoxAreaType::Padding, false)
+    }
+
+    pub(crate) fn padding_box_without_reflow(&self) -> Option<Rect<Au, CSSPixel>> {
+        self.owner_window()
+            .box_area_query_without_reflow(self, BoxAreaType::Padding, false)
     }
 
     pub(crate) fn border_boxes(&self) -> CSSPixelRectIterator {
@@ -3410,27 +3448,6 @@ impl Node {
         Some(index)
     }
 
-    /// Ensure that for styles, we clone the already-parsed property declaration block.
-    /// This does two things:
-    /// 1. it uses the same fast-path as CSSStyleDeclaration
-    /// 2. it also avoids the CSP checks when cloning (it shouldn't run any when cloning
-    ///    existing valid attributes)
-    fn compute_attribute_value_with_style_fast_path(attr: &Dom<Attr>, elem: &Element) -> AttrValue {
-        if *attr.local_name() == local_name!("style") {
-            if let Some(ref pdb) = *elem.style_attribute().borrow() {
-                let document = elem.owner_document();
-                let shared_lock = document.style_shared_lock();
-                let new_pdb = pdb.read_with(&shared_lock.read()).clone();
-                return AttrValue::Declaration(
-                    (**attr.value()).to_owned(),
-                    ServoArc::new(shared_lock.wrap(new_pdb)),
-                );
-            }
-        }
-
-        attr.value().clone()
-    }
-
     /// <https://dom.spec.whatwg.org/#concept-node-clone>
     pub(crate) fn clone(
         cx: &mut JSContext,
@@ -3579,21 +3596,7 @@ impl Node {
                 let copy_elem = copy.downcast::<Element>().unwrap();
 
                 // Step 2.5. For each attribute of node’s attribute list:
-                for attr in node_elem.attrs().iter() {
-                    // Step 2.5.1. Let copyAttribute be the result of cloning a single node given attribute, document, and null.
-                    let new_value =
-                        Node::compute_attribute_value_with_style_fast_path(attr, node_elem);
-                    // Step 2.5.2. Append copyAttribute to copy.
-                    copy_elem.push_new_attribute(
-                        attr.local_name().clone(),
-                        new_value,
-                        attr.name().clone(),
-                        attr.namespace().clone(),
-                        attr.prefix().cloned(),
-                        AttributeMutationReason::ByCloning,
-                        CanGc::from_cx(cx),
-                    );
-                }
+                node_elem.copy_all_attributes_to_other_element(cx, copy_elem);
             },
             _ => (),
         }

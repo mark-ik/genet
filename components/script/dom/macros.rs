@@ -543,6 +543,41 @@ macro_rules! event_handler(
     )
 );
 
+/// Similar to `event_handler!`, but also registers/unregisters a [`ConstellationInterest`]
+/// with the global scope when the handler is set or cleared.
+/// Use this macro for event handlers whose corresponding events are sent by the constellation
+/// only to interested pipelines.
+macro_rules! registered_event_handler(
+    ($interest:expr, $event_type: ident, $getter: ident, $setter: ident) => (
+        fn $getter(&self) -> Option<::std::rc::Rc<
+            crate::dom::bindings::codegen::Bindings::EventHandlerBinding::EventHandlerNonNull,
+        >> {
+            use crate::dom::bindings::inheritance::Castable;
+            use crate::dom::eventtarget::EventTarget;
+            use crate::script_runtime::CanGc;
+            let eventtarget = self.upcast::<EventTarget>();
+            eventtarget.get_event_handler_common(stringify!($event_type), CanGc::deprecated_note())
+        }
+
+        fn $setter(&self, listener: Option<::std::rc::Rc<
+            crate::dom::bindings::codegen::Bindings::EventHandlerBinding::EventHandlerNonNull,
+        >>) {
+            use crate::dom::bindings::inheritance::Castable;
+            use crate::dom::bindings::reflector::DomGlobal;
+            use crate::dom::eventtarget::EventTarget;
+            let had_handler = self.$getter().is_some();
+            let has_handler = listener.is_some();
+            let eventtarget = self.upcast::<EventTarget>();
+            eventtarget.set_event_handler_common(stringify!($event_type), listener);
+            if !had_handler && has_handler {
+                self.global().register_interest($interest);
+            } else if had_handler && !has_handler {
+                self.global().unregister_interest($interest);
+            }
+        }
+    )
+);
+
 macro_rules! error_event_handler(
     ($event_type: ident, $getter: ident, $setter: ident) => (
         define_event_handler!(
@@ -718,7 +753,10 @@ macro_rules! window_event_handlers(
         event_handler!(popstate, GetOnpopstate, SetOnpopstate);
         event_handler!(rejectionhandled, GetOnrejectionhandled,
                        SetOnrejectionhandled);
-        event_handler!(storage, GetOnstorage, SetOnstorage);
+        registered_event_handler!(
+            servo_constellation_traits::ConstellationInterest::StorageEvent,
+            storage, GetOnstorage, SetOnstorage
+        );
         event_handler!(unhandledrejection, GetOnunhandledrejection,
                        SetOnunhandledrejection);
         event_handler!(unload, GetOnunload, SetOnunload);
@@ -763,7 +801,9 @@ macro_rules! window_event_handlers(
 
 /// DOM struct implementation for simple interfaces inheriting from PerformanceEntry.
 macro_rules! impl_performance_entry_struct(
-    ($binding:ident, $struct:ident, $type:path) => (
+    ($binding:ident, $struct:ident, $type:path,
+        { $( $(#[$attr:meta])* $field_name:ident : $field_type:ty, ),* } // Arguments
+    ) => (
         use servo_base::cross_process_instant::CrossProcessInstant;
         use time::Duration;
 
@@ -778,16 +818,22 @@ macro_rules! impl_performance_entry_struct(
         #[dom_struct]
         pub(crate) struct $struct {
             entry: PerformanceEntry,
+            $( $(#[$attr])* $field_name: $field_type, )*
         }
 
         impl $struct {
-            fn new_inherited(name: DOMString, start_time: CrossProcessInstant, duration: Duration)
-                -> $struct {
+            #[cfg_attr(crown, expect(crown::unrooted_must_root))]
+            fn new_inherited(
+                name: DOMString,
+                start_time: CrossProcessInstant,
+                duration: Duration,
+                $( $field_name: $field_type, )* ) -> $struct {
                 $struct {
                     entry: PerformanceEntry::new_inherited(name,
                                                            $type,
                                                            Some(start_time),
-                                                           duration)
+                                                           duration),
+                    $( $field_name: $field_name, )*
                 }
             }
 
@@ -795,8 +841,15 @@ macro_rules! impl_performance_entry_struct(
             pub(crate) fn new(global: &GlobalScope,
                        name: DOMString,
                        start_time: CrossProcessInstant,
-                       duration: Duration) -> DomRoot<$struct> {
-                let entry = $struct::new_inherited(name, start_time, duration);
+                       duration: Duration,
+                       $( $field_name: $field_type ),*
+                    ) -> DomRoot<$struct> {
+                let entry = $struct::new_inherited(
+                    name,
+                    start_time,
+                    duration,
+                    $( $field_name, )*
+                );
                 reflect_dom_object(Box::new(entry), global, CanGc::deprecated_note())
             }
         }

@@ -107,7 +107,7 @@ function createValueGrip(value, depth = 0) {
                 return { valueType: "null" };
             }
             // Debugger.Object - get preview using registered previewers
-            // <https://firefox-source-docs.mozilla.org/js/Debugger/Debugger.Object.html>
+            // <https://firefox-source-docs.mozilla.org/devtools-user/debugger-api/debugger.object/index.html>
             return {
                 valueType: "object",
                 objectClass: value.class,
@@ -168,6 +168,7 @@ function extractOwnProperties(obj, depth) {
 
 // <https://searchfox.org/mozilla-central/source/devtools/server/actors/object/previewers.js#125>
 previewers.Function.push(function FunctionPreviewer(obj, depth) {
+    const { ownProperties, ownPropertiesLength } = extractOwnProperties(obj, depth);
     let function_details = {
         name: obj.name,
         displayName: obj.displayName,
@@ -177,10 +178,9 @@ previewers.Function.push(function FunctionPreviewer(obj, depth) {
     }
 
     if (depth > 1) {
-        return { kind: "Object", function: function_details };
+        return { kind: "Object", function: function_details, ownPropertiesLength };
     }
 
-    const { ownProperties, ownPropertiesLength } = extractOwnProperties(obj, depth);
     return {
         kind: "Object",
         ownProperties,
@@ -225,11 +225,12 @@ previewers.Array.push(function ArrayPreviewer(obj, depth) {
 // Generic fallback for object previewer
 // <https://searchfox.org/mozilla-central/source/devtools/server/actors/object/previewers.js#856>
 previewers.Object.push(function ObjectPreviewer(obj, depth) {
+    const { ownProperties, ownPropertiesLength } = extractOwnProperties(obj, depth);
+
     if (depth > 1) {
-       return { kind: "Object" };
+       return { kind: "Object", ownPropertiesLength };
     }
 
-    const { ownProperties, ownPropertiesLength } = extractOwnProperties(obj, depth);
     return {
         kind: "Object",
         ownProperties,
@@ -251,7 +252,7 @@ function getPreview(obj, depth) {
 }
 
 // Evaluate some javascript code in the global context of the debuggee
-// <https://firefox-source-docs.mozilla.org/js/Debugger/Debugger.Object.html#executeinglobal-code-options>
+// See executeInGlobal() at <https://firefox-source-docs.mozilla.org/devtools-user/debugger-api/debugger.object/index.html#function-properties-of-the-debugger-object-prototype>
 addEventListener("eval", event => {
     const {code, pipelineId, workerId, frameActorId} = event;
 
@@ -271,12 +272,12 @@ addEventListener("eval", event => {
         completionValue = object.executeInGlobal(code);
     }
 
-    // Completion values: <https://firefox-source-docs.mozilla.org/js/Debugger/Conventions.html#completion-values>
+    // Completion values: <https://firefox-source-docs.mozilla.org/devtools/backend/protocol.html#completion-values>
     let resultValue;
     if (completionValue === null) {
         resultValue = { completionType: "terminated", value: createValueGrip(undefined), hasException: false };
     } else if ("throw" in completionValue) {
-        // <https://firefox-source-docs.mozilla.org/js/Debugger/Debugger.html#adoptdebuggeevalue-value>
+        // See adoptDebuggeeValue() in <https://firefox-source-docs.mozilla.org/devtools-user/debugger-api/debugger/index.html>
         // <https://searchfox.org/firefox-main/source/devtools/server/actors/webconsole/eval-with-debugger.js#312>
         // we probably don't need adoptDebuggeeValue, as we only have one debugger instance for now
         // let value = dbg.adoptDebuggeeValue(completionValue.throw);
@@ -345,7 +346,7 @@ function handlePauseAndRespond(frame, pauseReason) {
 
     let frameActorId = createFrameActor(frame, pipelineId);
 
-    // <https://firefox-source-docs.mozilla.org/js/Debugger/Debugger.Script.html#getoffsetmetadata-offset>
+    // <https://github.com/mozilla-firefox/firefox/blob/63719d122f9214f37fd1d285a91897b8345b88b0/js/src/doc/Debugger/Debugger.Script.md?plain=1#L293-L303>
     const offset = frame.offset;
     const offsetMetadata = frame.script.getOffsetMetadata(offset);
     const frameOffset = {
@@ -361,7 +362,7 @@ function handlePauseAndRespond(frame, pauseReason) {
         pauseReason
     );
 
-    // <https://firefox-source-docs.mozilla.org/js/Debugger/Conventions.html#resumption-values>
+    // <https://web.archive.org/web/20251212212538/https://firefox-source-docs.mozilla.org/js/Debugger/Conventions.html#resumption-values>
     // Return undefined to continue execution normally after resume.
     return undefined;
 }
@@ -412,14 +413,14 @@ addEventListener("setBreakpoint", event => {
     const target = findScriptById(script, scriptId);
     if (target) {
         target.setBreakpoint(offset, {
-            // <https://firefox-source-docs.mozilla.org/js/Debugger/Debugger.Script.html#setbreakpoint-offset-handler>
+            // setBreakpoint(offset, handler) in <https://firefox-source-docs.mozilla.org/devtools-user/debugger-api/debugger.script/index.html#function-properties-of-the-debugger-script-prototype-object>
             // The hit handler receives a Debugger.Frame instance representing the currently executing stack frame.
             hit: (frame) => handlePauseAndRespond(frame, {type_: "breakpoint"})
         });
     }
 });
 
-// <https://firefox-source-docs.mozilla.org/js/Debugger/Debugger.Frame.html>
+// <https://firefox-source-docs.mozilla.org/devtools-user/debugger-api/debugger.frame/index.html>
 addEventListener("interrupt", event => {
     dbg.onEnterFrame = (frame) => handlePauseAndRespond(
         frame,
@@ -528,14 +529,13 @@ addEventListener("resume", event => {
     }
 });
 
-// <https://firefox-source-docs.mozilla.org/js/Debugger/Debugger.Script.html#clearbreakpoint-handler-offset>
+// <https://firefox-source-docs.mozilla.org/devtools-user/debugger-api/debugger.script/index.html#function-properties-of-the-debugger-script-prototype-object>
 // There may be more than one breakpoint at the same offset with different handlers, but we don’t handle that case for now.
 addEventListener("clearBreakpoint", event => {
     const {spidermonkeyId, scriptId, offset} = event;
     const script = sourceIdsToScripts.get(spidermonkeyId);
     const target = findScriptById(script, scriptId);
     if (target) {
-        // <https://firefox-source-docs.mozilla.org/js/Debugger/Debugger.Script.html#clearallbreakpoints-offset>
         // If the instance refers to a JSScript, remove all breakpoints set in this script at that offset.
         target.clearAllBreakpoints(offset);
     }

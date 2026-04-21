@@ -159,15 +159,16 @@ use servo_canvas_traits::canvas::{CanvasId, CanvasMsg};
 use servo_canvas_traits::webgl::WebGLThreads;
 use servo_config::{opts, pref};
 use servo_constellation_traits::{
-    AuxiliaryWebViewCreationRequest, AuxiliaryWebViewCreationResponse, DocumentState,
-    EmbedderToConstellationMessage, IFrameLoadInfo, IFrameLoadInfoWithData, IFrameSizeMsg, Job,
-    LoadData, LogEntry, MessagePortMsg, NavigationHistoryBehavior, PaintMetricEvent,
-    PortMessageTask, PortTransferInfo, SWManagerMsg, SWManagerSenders, ScreenshotReadinessResponse,
-    ScriptToConstellationMessage, ScrollStateUpdate, ServiceWorkerManagerFactory, ServiceWorkerMsg,
-    StructuredSerializedData, TargetSnapshotParams, TraversalDirection, UserContentManagerAction,
-    WindowSizeType,
+    AuxiliaryWebViewCreationRequest, AuxiliaryWebViewCreationResponse, ConstellationInterest,
+    DocumentState, EmbedderToConstellationMessage, IFrameLoadInfo, IFrameLoadInfoWithData,
+    IFrameSizeMsg, Job, LoadData, LogEntry, MessagePortMsg, NavigationHistoryBehavior,
+    PaintMetricEvent, PortMessageTask, PortTransferInfo, SWManagerMsg, SWManagerSenders,
+    ScreenshotReadinessResponse, ScriptToConstellationMessage, ScrollStateUpdate,
+    ServiceWorkerManagerFactory, ServiceWorkerMsg, StructuredSerializedData, TargetSnapshotParams,
+    TraversalDirection, UserContentManagerAction, WindowSizeType,
 };
 use servo_url::{Host, ImmutableOrigin, ServoUrl};
+use servo_wakelock::{WakeLockProvider, WakeLockType};
 use storage_traits::StorageThreads;
 use storage_traits::client_storage::ClientStorageThreadMessage;
 use storage_traits::indexeddb::{IndexedDBThreadMsg, SyncOperation};
@@ -413,6 +414,9 @@ pub struct Constellation<STF, SWF> {
     /// Bookkeeping for BroadcastChannel functionnality.
     broadcast_channels: BroadcastChannels,
 
+    /// Tracks which pipelines have registered interest in each notification category.
+    pipeline_interests: FxHashMap<ConstellationInterest, FxHashSet<PipelineId>>,
+
     /// The set of all the pipelines in the browser.  (See the `pipeline` module
     /// for more details.)
     pipelines: FxHashMap<PipelineId, Pipeline>,
@@ -483,6 +487,13 @@ pub struct Constellation<STF, SWF> {
 
     /// Pipeline ID of the active media session.
     active_media_session: Option<PipelineId>,
+
+    /// Aggregate screen wake lock count across all webviews. The provider is notified
+    /// only when this transitions 0→1 (acquire) or N→0 (release).
+    screen_wake_lock_count: u32,
+
+    /// Provider for OS-level screen wake lock acquisition and release.
+    wake_lock_provider: Box<dyn WakeLockProvider>,
 
     /// The image bytes associated with the BrokenImageIcon embedder resource.
     /// Read during startup and provided to image caches that are created
@@ -581,6 +592,9 @@ pub struct InitialConstellationState {
 
     /// The async runtime.
     pub async_runtime: Box<dyn AsyncRuntime>,
+
+    /// The wake lock provider for acquiring and releasing OS-level screen wake locks.
+    pub wake_lock_provider: Box<dyn WakeLockProvider>,
 }
 
 /// When we are exiting a pipeline, we can either force exiting or not. A normal exit
@@ -703,6 +717,7 @@ where
                     message_ports: Default::default(),
                     message_port_routers: Default::default(),
                     broadcast_channels: Default::default(),
+                    pipeline_interests: Default::default(),
                     pipelines: Default::default(),
                     browsing_contexts: Default::default(),
                     pending_changes: vec![],
@@ -731,6 +746,8 @@ where
                     active_keyboard_modifiers: Modifiers::empty(),
                     hard_fail,
                     active_media_session: None,
+                    screen_wake_lock_count: 0,
+                    wake_lock_provider: state.wake_lock_provider,
                     broken_image_icon_data: broken_image_icon_data.clone(),
                     process_manager: ProcessManager::new(state.mem_profiler_chan),
                     async_runtime: state.async_runtime,
@@ -858,16 +875,11 @@ where
             },
             None => self
                 .browsing_context_group_set
-                .iter()
-                .filter_map(|(_, bc_group)| {
-                    if bc_group
+                .values()
+                .filter(|bc_group| {
+                    bc_group
                         .top_level_browsing_context_set
                         .contains(webview_id)
-                    {
-                        Some(bc_group)
-                    } else {
-                        None
-                    }
                 })
                 .last()
                 .ok_or(
@@ -2004,6 +2016,20 @@ where
                     warn!("Unable to forward DOMMessage for postMessage call");
                 }
             },
+            ScriptToConstellationMessage::RegisterInterest(interest) => {
+                self.pipeline_interests
+                    .entry(interest)
+                    .or_default()
+                    .insert(source_pipeline_id);
+            },
+            ScriptToConstellationMessage::UnregisterInterest(interest) => {
+                if let Some(set) = self.pipeline_interests.get_mut(&interest) {
+                    set.remove(&source_pipeline_id);
+                    if set.is_empty() {
+                        self.pipeline_interests.remove(&interest);
+                    }
+                }
+            },
             ScriptToConstellationMessage::BroadcastStorageEvent(
                 storage,
                 url,
@@ -2093,6 +2119,26 @@ where
                 for event_loop in self.event_loops() {
                     let _ = event_loop.send(ScriptThreadMessage::TriggerGarbageCollection);
                 }
+            },
+            ScriptToConstellationMessage::AcquireWakeLock(type_) => match type_ {
+                WakeLockType::Screen => {
+                    self.screen_wake_lock_count += 1;
+                    if self.screen_wake_lock_count == 1 {
+                        if let Err(e) = self.wake_lock_provider.acquire(type_) {
+                            warn!("Failed to acquire screen wake lock: {e}");
+                        }
+                    }
+                },
+            },
+            ScriptToConstellationMessage::ReleaseWakeLock(type_) => match type_ {
+                WakeLockType::Screen => {
+                    self.screen_wake_lock_count = self.screen_wake_lock_count.saturating_sub(1);
+                    if self.screen_wake_lock_count == 0 {
+                        if let Err(e) = self.wake_lock_provider.release(type_) {
+                            warn!("Failed to release screen wake lock: {e}");
+                        }
+                    }
+                },
             },
         }
     }
@@ -2618,7 +2664,17 @@ where
             );
         }
 
-        for pipeline in self.pipelines.values() {
+        let interested = match self
+            .pipeline_interests
+            .get(&ConstellationInterest::StorageEvent)
+        {
+            Some(set) => set,
+            None => return,
+        }
+        .iter()
+        .filter_map(|interested_id| self.pipelines.get(interested_id));
+
+        for pipeline in interested {
             if pipeline.id == pipeline_id || pipeline.url.origin() != origin {
                 continue;
             }
@@ -2925,6 +2981,12 @@ where
         let Some(pipeline) = self.pipelines.remove(&pipeline_id) else {
             return;
         };
+
+        // Clean up any registered interests for this pipeline.
+        self.pipeline_interests.retain(|_, set| {
+            set.remove(&pipeline_id);
+            !set.is_empty()
+        });
 
         // Now that the Script and Constellation parts of Servo no longer have a reference to
         // this pipeline, tell `Paint` that it has shut down. This is delayed until the

@@ -13,23 +13,25 @@ use std::sync::{Arc, LazyLock};
 
 use app_units::Au;
 use bitflags::bitflags;
-use embedder_traits::{Theme, ViewportDetails};
+use embedder_traits::{
+    EmbedderMsg, ScriptToEmbedderChan, Theme, UntrustedNodeAddress, ViewportDetails,
+};
 use euclid::{Point2D, Rect, Scale, Size2D};
 use fonts::{FontContext, FontContextWebFontMethods, WebFontDocumentContext};
 use fonts_traits::StylesheetWebFontLoadFinishedCallback;
 use icu_locid::subtags::Language;
 use layout_api::{
     AxesOverflow, BoxAreaType, CSSPixelRectIterator, DangerousStyleNode, IFrameSizes, Layout,
-    LayoutConfig, LayoutElement, LayoutFactory, LayoutNode, OffsetParentResponse, PhysicalSides,
-    QueryMsg, ReflowGoal, ReflowPhasesRun, ReflowRequest, ReflowRequestRestyle, ReflowResult,
-    ReflowStatistics, ScrollContainerQueryFlags, ScrollContainerResponse, TrustedNodeAddress,
-    with_layout_state,
+    LayoutConfig, LayoutElement, LayoutFactory, LayoutNode, NodeRenderingType,
+    OffsetParentResponse, PhysicalSides, QueryMsg, ReflowGoal, ReflowPhasesRun, ReflowRequest,
+    ReflowRequestRestyle, ReflowResult, ReflowStatistics, ScrollContainerQueryFlags,
+    ScrollContainerResponse, TrustedNodeAddress, with_layout_state,
 };
 use log::{debug, error, warn};
 use malloc_size_of::{MallocConditionalSizeOf, MallocSizeOf, MallocSizeOfOps};
 use net_traits::image_cache::ImageCache;
 use paint_api::CrossProcessPaintApi;
-use paint_api::display_list::ScrollType;
+use paint_api::display_list::{AxesScrollSensitivity, PaintDisplayListInfo, ScrollType};
 use parking_lot::{Mutex, RwLock};
 use profile_traits::mem::{Report, ReportKind};
 use profile_traits::time::{
@@ -84,12 +86,14 @@ use webrender_api::units::{DevicePixel, LayoutVector2D};
 use crate::accessibility_tree::AccessibilityTree;
 use crate::context::{CachedImageOrError, ImageResolver, LayoutContext};
 use crate::display_list::{DisplayListBuilder, HitTest, PaintTimingHandler, StackingContextTree};
+use crate::dom::NodeExt;
 use crate::query::{
     find_character_offset_in_fragment_descendants, get_the_text_steps, process_box_area_request,
-    process_box_areas_request, process_client_rect_request, process_current_css_zoom_query,
-    process_effective_overflow_query, process_node_scroll_area_request,
-    process_offset_parent_query, process_padding_request, process_resolved_font_style_query,
-    process_resolved_style_request, process_scroll_container_query,
+    process_box_areas_request, process_client_rect_request, process_containing_block_query,
+    process_current_css_zoom_query, process_effective_overflow_query,
+    process_node_scroll_area_request, process_offset_parent_query, process_padding_request,
+    process_resolved_font_style_query, process_resolved_style_request,
+    process_scroll_container_query,
 };
 use crate::traversal::{RecalcStyle, compute_damage_and_rebuild_box_tree};
 use crate::{BoxTree, FragmentTree};
@@ -137,6 +141,9 @@ pub struct LayoutThread {
     /// The channel on which messages can be sent to the time profiler.
     time_profiler_chan: profile_time::ProfilerChan,
 
+    /// The channel to send messages to the Embedder.
+    embedder_chan: ScriptToEmbedderChan,
+
     /// Reference to the script thread image cache.
     image_cache: Arc<dyn ImageCache>,
 
@@ -157,6 +164,9 @@ pub struct LayoutThread {
 
     /// Is this the first reflow in this LayoutThread?
     have_ever_generated_display_list: Cell<bool>,
+
+    /// Whether the last display list we sent was effectively empty.
+    last_display_list_was_empty: Cell<bool>,
 
     /// Whether a new overflow calculation needs to happen due to changes to the fragment
     /// tree. This is set to true every time a restyle requests overflow calculation.
@@ -312,6 +322,42 @@ impl Layout for LayoutThread {
     fn remove_cached_image(&mut self, url: &ServoUrl) {
         let mut resolved_images_cache = self.resolved_images_cache.write();
         resolved_images_cache.remove(url);
+    }
+
+    fn node_rendering_type(
+        &self,
+        node: TrustedNodeAddress,
+        pseudo: Option<PseudoElement>,
+    ) -> NodeRenderingType {
+        with_layout_state(|| {
+            let node = unsafe { ServoLayoutNode::new(&node) };
+
+            // Nodes that are not currently styled are never being rendered.
+            if node
+                .as_element()
+                .is_none_or(|element| element.style_data().is_none())
+            {
+                return NodeRenderingType::NotRendered;
+            }
+
+            let node = match pseudo {
+                Some(pseudo) => node.with_pseudo(pseudo),
+                None => Some(node),
+            };
+            let Some(node) = node else {
+                return NodeRenderingType::NotRendered;
+            };
+            node.rendering_type()
+        })
+    }
+
+    /// Return the node corresponding to the containing block of the provided node.
+    #[servo_tracing::instrument(skip_all)]
+    fn query_containing_block(&self, node: TrustedNodeAddress) -> Option<UntrustedNodeAddress> {
+        with_layout_state(|| {
+            let node = unsafe { ServoLayoutNode::new(&node) };
+            process_containing_block_query(node)
+        })
     }
 
     /// Return the resolved values of this node's padding rect.
@@ -730,11 +776,13 @@ impl LayoutThread {
             is_iframe: config.is_iframe,
             script_chan: config.script_chan.clone(),
             time_profiler_chan: config.time_profiler_chan,
+            embedder_chan: config.embedder_chan.clone(),
             registered_painters: RegisteredPaintersImpl(Default::default()),
             image_cache: config.image_cache,
             font_context: config.font_context,
             have_added_user_agent_stylesheets: false,
             have_ever_generated_display_list: Cell::new(false),
+            last_display_list_was_empty: Cell::new(true),
             device_has_changed: false,
             need_overflow_calculation: Cell::new(false),
             need_new_display_list: Cell::new(false),
@@ -890,8 +938,8 @@ impl LayoutThread {
             // finalise after sending, removing accessibility damage? On fail, retain damage
             // for next reflow, as well as retaining document.needs_accessibility_update.
             let _ = self
-                .script_chan
-                .send(ScriptThreadMessage::AccessibilityTreeUpdate(
+                .embedder_chan
+                .send(EmbedderMsg::AccessibilityTreeUpdate(
                     self.webview_id,
                     tree_update,
                     accessibility_tree.epoch(),
@@ -921,6 +969,9 @@ impl LayoutThread {
             .as_document()
             .unwrap();
         let Some(root_element) = document.root_element() else {
+            if !self.last_display_list_was_empty.get() {
+                return self.clear_layout_trees_and_send_empty_display_list(&reflow_request);
+            }
             debug!("layout: No root node: bailing");
             return None;
         };
@@ -1372,7 +1423,7 @@ impl LayoutThread {
             .collect_unused_webrender_resources(false /* all */);
         self.paint_api
             .remove_unused_font_resources(self.webview_id.into(), keys, instance_keys);
-
+        self.last_display_list_was_empty.set(false);
         self.have_ever_generated_display_list.set(true);
         self.need_new_display_list.set(false);
         self.previously_highlighted_dom_node
@@ -1425,6 +1476,43 @@ impl LayoutThread {
             } else {
                 TimerMetadataReflowType::FirstReflow
             },
+        })
+    }
+
+    /// Clear all cached layout trees and send an empty display list to paint.
+    fn clear_layout_trees_and_send_empty_display_list(
+        &self,
+        reflow_request: &ReflowRequest,
+    ) -> Option<ReflowResult> {
+        // Clear layout trees.
+        self.box_tree.borrow_mut().take();
+        self.fragment_tree.borrow_mut().take();
+        self.stacking_context_tree.borrow_mut().take();
+
+        // Send empty display list.
+        let paint_info = PaintDisplayListInfo::new(
+            reflow_request.viewport_details,
+            Size2D::zero(),
+            self.id.into(),
+            reflow_request.epoch,
+            AxesScrollSensitivity {
+                x: ScrollType::InputEvents | ScrollType::Script,
+                y: ScrollType::InputEvents | ScrollType::Script,
+            },
+            !self.have_ever_generated_display_list.get(),
+        );
+        let mut builder = webrender_api::DisplayListBuilder::new(paint_info.pipeline_id);
+        builder.begin();
+        let (_, empty_display_list) = builder.end();
+
+        self.paint_api
+            .send_display_list(self.webview_id, &paint_info, empty_display_list);
+        self.last_display_list_was_empty.set(true);
+        self.have_ever_generated_display_list.set(true);
+
+        Some(ReflowResult {
+            reflow_phases_run: ReflowPhasesRun::BuiltDisplayList,
+            ..Default::default()
         })
     }
 }

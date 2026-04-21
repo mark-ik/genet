@@ -25,7 +25,7 @@ use app_units::Au;
 use atomic_refcell::AtomicRefCell;
 use background_hang_monitor_api::BackgroundHangMonitorRegister;
 use bitflags::bitflags;
-use embedder_traits::{Cursor, Theme, UntrustedNodeAddress, ViewportDetails};
+use embedder_traits::{Cursor, ScriptToEmbedderChan, Theme, UntrustedNodeAddress, ViewportDetails};
 use euclid::{Point2D, Rect};
 use fonts::{FontContext, TextByteRange, WebFontDocumentContext};
 pub use layout_damage::LayoutDamage;
@@ -252,6 +252,7 @@ pub struct LayoutConfig {
     pub viewport_details: ViewportDetails,
     pub user_stylesheets: Rc<Vec<DocumentStyleSheet>>,
     pub theme: Theme,
+    pub embedder_chan: ScriptToEmbedderChan,
 }
 
 pub trait LayoutFactory: Send + Sync {
@@ -338,6 +339,15 @@ pub trait Layout {
     /// Marks that this layout needs to produce a new display list for rendering updates.
     fn set_needs_new_display_list(&self);
 
+    /// Returns the [`NodeRenderingType`] for this node and pseudo. This is used to determine
+    /// if a node is being rendered, delegating its rendering, or not being rendered at all.
+    fn node_rendering_type(
+        &self,
+        node: TrustedNodeAddress,
+        pseudo: Option<PseudoElement>,
+    ) -> NodeRenderingType;
+
+    fn query_containing_block(&self, node: TrustedNodeAddress) -> Option<UntrustedNodeAddress>;
     fn query_padding(&self, node: TrustedNodeAddress) -> Option<PhysicalSides>;
     fn query_box_area(
         &self,
@@ -430,6 +440,19 @@ pub enum BoxAreaType {
 }
 
 pub type CSSPixelRectIterator = Box<dyn Iterator<Item = Rect<Au, CSSPixel>>>;
+
+/// Whether or not this node is being rendered or delegates rendering according
+/// to the HTML standard.
+#[derive(Copy, Clone)]
+pub enum NodeRenderingType {
+    /// <https://html.spec.whatwg.org/multipage/#being-rendered>
+    Rendered,
+    /// <https://html.spec.whatwg.org/multipage/#delegating-its-rendering-to-its-children>
+    DelegatesRendering,
+    /// If neither of the other two cases are true, this is. The node is effectively not
+    /// taking part in the final layout of the page.
+    NotRendered,
+}
 
 #[derive(Default)]
 pub struct PhysicalSides {
@@ -624,8 +647,13 @@ impl ReflowPhasesRun {
 
 #[derive(Debug, Default)]
 pub struct ReflowStatistics {
+    /// A count of the number of fragments that have been completely rebuilt.
     pub rebuilt_fragment_count: u32,
+    /// A count of the number of fragments that are reused, but have had their style change.
     pub restyle_fragment_count: u32,
+    /// A count of the number of fragments that are reused, but may have had their final
+    /// position change.
+    pub possibly_moved_fragment_count: u32,
 }
 
 /// Information needed for a script-initiated reflow that requires a restyle
