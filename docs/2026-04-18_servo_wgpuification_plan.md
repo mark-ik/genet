@@ -534,6 +534,230 @@ This should be tracked as a branch acceptance criterion rather than discovered o
 - Measurable wins: each phase should name the metric it expects to move, such as code size, allocation count, frame latency, or an eliminated bug class.
 - Attribution: the branch README should carry one short disclosure paragraph describing the branch's AI-assisted development history honestly, neither hidden nor flaunted.
 
+## Near-Term Execution Map
+
+The phase plan above describes the architectural end state. The branch also needs a practical
+near-term map so that current work does not fragment into unrelated backend experiments.
+
+The current branch posture is:
+
+- compositor-side wgpuification is real
+- embedder-side wgpu hosting is real
+- WebGL-to-compositor interop is meaningfully improved
+- Canvas2D is GPU-first by policy when Vello is present
+- lifecycle/publication semantics are still more GL-era than wgpu-era
+
+That means the next work should not be "add more wgpu usage anywhere we can". The next work
+should make ownership, publication, and host APIs as wgpu-shaped as the compositor already is.
+
+### Immediate must-do work
+
+These are the changes that should be treated as the active branch-critical path rather than as
+optional cleanup.
+
+#### A. Unify the render contract
+
+The branch currently has API drift around `paint()`, `render()`, and explicit `present()`.
+
+- The public embedder story should have one canonical verb for "produce the next frame".
+- The wgpu path already presents inside the compositor render flow.
+- Example embedders should not teach contradictory frame ownership rules.
+
+Near-term requirement:
+
+- choose one public render contract
+- make examples and embedder docs conform to it
+- remove the legacy or redundant wording/API surface before more embedders copy it
+
+Expected benefit:
+
+- less embedder confusion
+- clearer ownership of swapchain presentation
+- fewer backend-conditional call sequences in host code
+
+#### B. Finish wgpu readback
+
+`read_to_image()` on the pure-wgpu context is still unfinished.
+
+This is not just tooling polish. Without it:
+
+- screenshots remain asymmetric across backends
+- smoke tests and visual debugging remain weaker on the wgpu-first path
+- headless and test harnesses remain biased toward older render assumptions
+
+Near-term requirement:
+
+- implement staging-buffer readback for the pure-wgpu path
+- make screenshot and validation flows backend-neutral at the `RenderingContextCore` layer
+
+Expected benefit:
+
+- testing parity
+- easier golden-image validation
+- better branch confidence when changing compositor internals
+
+#### C. Replace busy counters with leases
+
+The branch has already centralized WebGL external-image lifecycle handling, but it still relies on
+manual busy increment/decrement choreography.
+
+That should now be treated as transitional machinery, not as the desired model.
+
+Near-term requirement:
+
+- introduce the publication/lease contract from Phase B
+- move pending ownership state to compositor-visible frame state
+- make release semantics explicit instead of inferred from counter discipline
+
+Expected benefit:
+
+- eliminate a real bug class
+- make deletion/waiting semantics cleaner
+- create a reusable model for Canvas, WebGL, and future foreign GPU producers
+
+#### D. Make Canvas2D publish GPU-native outputs
+
+Canvas2D is already moving in the right direction at runtime, but it still behaves too much like
+an image-update subsystem.
+
+Near-term requirement:
+
+- stop treating Vello-backed canvas output as byte-oriented publication in the mainline GPU path
+- introduce a texture/resource-shaped publication model that can fit under the same lease/import
+  abstraction as other GPU producers
+
+Expected benefit:
+
+- less CPU-oriented glue in a GPU-first subsystem
+- cleaner compositor integration
+- a simpler story for future zero-copy composition
+
+#### E. Continue deleting the legacy trait as social reality
+
+The capability split exists, but the branch should not stop at coexistence.
+
+Near-term requirement:
+
+- keep migrating callers toward `RenderingContextCore` plus explicit capabilities
+- remove legacy assumptions from the normal compositor and embedder path
+- treat the old trait as scheduled debt, not as a permanent compatibility layer
+
+Expected benefit:
+
+- less split-brain architecture
+- smaller panic surface
+- clearer proof that Servo can be hosted wgpu-first without pretending GL always exists
+
+### High-leverage follow-ons
+
+These are not all on the critical path for the next patch, but they are likely to produce outsized
+architectural payoff and should be preferred over lower-value cleanup.
+
+#### Make `WgpuShared` the boring default
+
+The branch already supports richer backend shapes such as `WgpuHal`, but the mainstream host
+story should be:
+
+- shared device/queue when the embedder already owns them
+- direct render-to-view when the embedder exposes a frame target
+- zero-copy composite texture access when the embedder wants to sample Servo output itself
+
+This should become the documented happy path rather than a capability hidden inside the branch.
+
+#### Treat `composite_texture()` as a first-class embedder feature
+
+This is more than a convenience API. It is the hook that lets Servo behave like a texture producer
+inside a larger GPU UI or scene graph.
+
+The branch should explicitly support the idea that some embedders will:
+
+- let Servo paint directly to a swapchain view, while others
+- sample Servo output as a texture in a host-controlled composition pass
+
+That split is a strategic strength, not API clutter.
+
+#### Add end-to-end publication tracing
+
+Once leases exist, publication should be observable from:
+
+- producer acquire
+- producer publish
+- compositor import/sample
+- present completion
+- release/recycle
+
+This is the right time to build the diagnostics discipline, before the publication model spreads to
+Canvas and XR.
+
+### Hidden jewels worth pursuing
+
+The following areas are especially promising because they could unlock larger simplifications than
+their current size suggests.
+
+#### 1. Native WebGL -> wgpu external image import
+
+The branch already has a credible WebGL-to-wgpu interop path.
+
+This matters because it proves the branch is not merely "running WebRender on wgpu". It is
+teaching Servo subsystems to exchange GPU-native resources across subsystem boundaries.
+
+This path should be treated as the prototype for broader foreign-resource publication, not as an
+isolated special case.
+
+#### 2. Canvas2D's Vello path
+
+Canvas2D is one of the strongest candidates for full GPU-native publication because:
+
+- the branch already prefers it at runtime
+- it is conceptually producer-shaped
+- its current remaining weakness is mostly the publication model, not the renderer choice
+
+If Canvas residency is unified cleanly, the branch gains a concrete example of a non-WebGL GPU
+producer using the same publication semantics.
+
+#### 3. Pure-wgpu toy embedder coverage
+
+The toy embedder is more than a demo. It is a regression test for architectural honesty.
+
+If a future trait or API change makes the toy embedder harder to express, that should be treated as
+a design regression signal rather than as an acceptable casualty.
+
+#### 4. Pipeline cache and color-space correctness work
+
+Small details such as:
+
+- the pipeline cache directory policy
+- non-sRGB view creation to avoid double encoding
+
+are easy to dismiss as implementation trivia, but they are exactly the kind of details that make a
+backend feel production-shaped rather than merely functional.
+
+These should be preserved and expanded, not treated as branch-local hacks.
+
+### Suggested operating order for the next execution slice
+
+The near-term execution order should be:
+
+1. unify `paint()` / `render()` / `present()` semantics and fix all examples
+2. implement pure-wgpu readback
+3. land the lease/publication contract for external images
+4. convert Canvas2D's mainline GPU publication path to texture/resource-shaped output
+5. continue deleting legacy `RenderingContext` assumptions from the normal path
+
+### Branch-level caution
+
+The branch is now at risk of a specific failure mode:
+
+- compositor path becomes convincingly wgpu-first
+- producer and lifecycle code remain semi-GL-shaped
+- the branch accumulates compatibility abstractions that feel cleaner locally but never converge
+
+That outcome should be treated as failure, even if the branch keeps compiling and gains more
+features.
+
+The standard is not "Servo can use wgpu in more places". The standard is "Servo's mainline render
+and publication model becomes recognizably wgpu-native".
+
 ## Success Criteria for the Branch
 
 The branch should be considered to have reached the next maturity tier when:
