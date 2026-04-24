@@ -47,6 +47,9 @@ For more detailed build instructions, see the Servo Book under [Getting the Code
 
 - Download [`uv`](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer), [`choco`](https://chocolatey.org/install#individual), and [`rustup`](https://win.rustup.rs/)
   - Be sure to select *Quick install via the Visual Studio Community installer*
+- Install [`NASM`](https://www.nasm.us/) and make sure `nasm.exe` is on `PATH`
+  - `aws-lc-sys` requires this on Windows, so standalone crate builds such as `cargo check -p servo-script` will fail without it
+  - If you use Chocolatey: `choco install nasm`
 - In the Visual Studio Installer, ensure the following components are installed:
   - **Windows 10/11 SDK (anything >= 10.0.19041.0)** (`Microsoft.VisualStudio.Component.Windows{10, 11}SDK.{>=19041}`)
   - **MSVC v143 - VS 2022 C++ x64/x86 build tools (Latest)** (`Microsoft.VisualStudio.Component.VC.Tools.x86.x64`)

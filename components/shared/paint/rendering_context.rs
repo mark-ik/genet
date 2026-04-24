@@ -25,7 +25,7 @@ use surfman::{
     GLVersion, NativeContext, NativeWidget, Surface, SurfaceAccess, SurfaceInfo, SurfaceTexture,
     SurfaceType,
 };
-use webrender_api::units::{DeviceIntRect, DevicePixel};
+use webrender_api::units::DeviceIntRect;
 #[cfg(feature = "wgpu_backend")]
 use wgpu_native_texture_interop::{HostWgpuContext, InteropBackend};
 

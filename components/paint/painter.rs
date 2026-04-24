@@ -14,6 +14,7 @@ use embedder_traits::{
     ScreenshotCaptureError, Scroll, ViewportDetails, WebViewPoint, WebViewRect,
 };
 use euclid::{Point2D, Rect, Scale, Size2D};
+#[cfg(not(feature = "wgpu_backend"))]
 use gleam::gl::RENDERER;
 use image::RgbaImage;
 use log::{debug, error, info, warn};
@@ -38,9 +39,9 @@ use servo_constellation_traits::{EmbedderToConstellationMessage, PaintMetricEven
 use servo_geometry::DeviceIndependentPixel;
 use smallvec::SmallVec;
 use style_traits::CSSPixel;
-use webrender::{
-    MemoryReport, ONE_TIME_USAGE_HINT, RenderApi, ShaderPrecacheFlags, Transaction, UploadMethod,
-};
+use webrender::{MemoryReport, RenderApi, Transaction};
+#[cfg(not(feature = "wgpu_backend"))]
+use webrender::{ONE_TIME_USAGE_HINT, ShaderPrecacheFlags, UploadMethod};
 use webrender_api::units::{
     DevicePixel, DevicePoint, LayoutPoint, LayoutRect, LayoutSize, LayoutTransform, LayoutVector2D,
     WorldPoint,
@@ -212,6 +213,7 @@ impl Painter {
             clear_color[3] as f32,
         );
 
+        #[cfg(not(feature = "wgpu_backend"))]
         // Use same texture upload method as Gecko with ANGLE:
         // https://searchfox.org/mozilla-central/source/gfx/webrender_bindings/src/bindings.rs#1215-1219
         let upload_method = match &webrender_gl {
@@ -276,6 +278,7 @@ impl Painter {
             use_optimized_shaders: true,
             resource_override_path: opts::get().shaders_path.clone(),
             debug_flags: webrender::DebugFlags::empty(),
+            #[cfg(not(feature = "wgpu_backend"))]
             precache_flags: if pref!(gfx_precache_shaders) {
                 ShaderPrecacheFlags::FULL_COMPILE
             } else {
@@ -286,6 +289,7 @@ impl Painter {
             allow_texture_swizzling: pref!(gfx_texture_swizzling_enabled),
             enable_dithering: true,
             clear_color,
+            #[cfg(not(feature = "wgpu_backend"))]
             upload_method,
             workers,
             size_of_op: Some(servo_allocator::usable_size),
@@ -340,15 +344,24 @@ impl Painter {
                 unreachable!("wgpu backend not compiled in")
             }
         } else {
-            webrender::create_webrender_instance(
-                webrender_gl
-                    .clone()
-                    .expect("GL backend requires gleam_gl_api()"),
-                notifier,
-                webrender_options,
-                None,
-            )
-            .expect("Unable to initialize WebRender.")
+            #[cfg(feature = "wgpu_backend")]
+            {
+                panic!(
+                    "GL-backed WebRender is not supported on this branch; use a RenderingContext with WgpuCapability"
+                )
+            }
+            #[cfg(not(feature = "wgpu_backend"))]
+            {
+                webrender::create_webrender_instance(
+                    webrender_gl
+                        .clone()
+                        .expect("GL backend requires gleam_gl_api()"),
+                    notifier,
+                    webrender_options,
+                    None,
+                )
+                .expect("Unable to initialize WebRender.")
+            }
         };
 
         webrender_renderer.set_external_image_handler(external_image_handlers);

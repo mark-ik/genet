@@ -9,14 +9,12 @@
 //! path and handles surface presentation.
 
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 use std::sync::Arc;
 
 use dpi::PhysicalSize;
-use euclid::Size2D;
 use image::RgbaImage;
 use log::warn;
-use webrender_api::units::{DeviceIntRect, DevicePixel};
+use webrender_api::units::DeviceIntRect;
 
 use crate::rendering_context_core::{RenderingContextCore, WgpuCapability};
 

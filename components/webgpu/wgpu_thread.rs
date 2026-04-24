@@ -361,15 +361,10 @@ impl WGPU {
                         device_id,
                         compute_pipeline_id,
                         descriptor,
-                        implicit_ids,
+                        implicit_ids: _,
                         async_sender: sender,
                     } => {
                         let global = &self.global;
-                        let bgls = implicit_ids
-                            .as_ref()
-                            .map_or(Vec::with_capacity(0), |(_, bgls)| {
-                                bgls.iter().map(|x| x.to_owned()).collect()
-                            });
                         let (_, error) = global.device_create_compute_pipeline(
                             device_id,
                             &descriptor,
@@ -409,15 +404,10 @@ impl WGPU {
                         device_id,
                         render_pipeline_id,
                         descriptor,
-                        implicit_ids,
+                        implicit_ids: _,
                         async_sender: sender,
                     } => {
                         let global = &self.global;
-                        let bgls = implicit_ids
-                            .as_ref()
-                            .map_or(Vec::with_capacity(0), |(_, bgls)| {
-                                bgls.iter().map(|x| x.to_owned()).collect()
-                            });
                         let (_, error) = global.device_create_render_pipeline(
                             device_id,
                             &descriptor,
