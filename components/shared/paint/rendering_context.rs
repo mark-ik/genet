@@ -29,7 +29,6 @@ use webrender_api::units::DeviceIntRect;
 #[cfg(feature = "wgpu_backend")]
 use wgpu_native_texture_interop::{HostWgpuContext, InteropBackend};
 
-
 /// A rendering context that uses the Surfman library to create and manage
 /// the OpenGL context and surface. This struct provides the default implementation
 /// of the `RenderingContext` trait, handling the creation, management, and destruction
@@ -572,7 +571,9 @@ impl crate::rendering_context_core::GlCapability for WindowRenderingContext {
     }
 
     fn connection(&self) -> Connection {
-        self.surfman_context.connection().expect("WindowRenderingContext always has a connection")
+        self.surfman_context
+            .connection()
+            .expect("WindowRenderingContext always has a connection")
     }
 }
 
@@ -686,9 +687,16 @@ impl Framebuffer {
         // See https://github.com/servo/servo/issues/18606.
         gl.bind_vertex_array(0);
 
+        let mut viewport = [0; 4];
+        #[expect(unsafe_code)]
+        unsafe {
+            gl.get_integer_v(gl::VIEWPORT, &mut viewport);
+        }
+        let gl_y = 0.max(viewport[3] - source_rectangle.max.y);
+
         let mut pixels = gl.read_pixels(
             source_rectangle.min.x,
-            source_rectangle.min.y,
+            gl_y,
             source_rectangle.width(),
             source_rectangle.height(),
             gl::RGBA,
@@ -815,9 +823,10 @@ impl OffscreenRenderingContext {
         queue: wgpu::Queue,
     ) -> Option<wgpu::Texture> {
         let host = HostWgpuContext::new(device, queue);
-        let gl = <WindowRenderingContext as crate::rendering_context_core::GlCapability>::glow_gl_api(
-            &self.parent_context,
-        );
+        let gl =
+            <WindowRenderingContext as crate::rendering_context_core::GlCapability>::glow_gl_api(
+                &self.parent_context,
+            );
         let size = self.size.get();
         let source_fbo = self.framebuffer.borrow().framebuffer_id;
         let surfman_context = &self.parent_context.surfman_context;
@@ -883,9 +892,10 @@ impl crate::rendering_context_core::RenderingContextCore for OffscreenRenderingC
             return;
         }
 
-        let gl = <WindowRenderingContext as crate::rendering_context_core::GlCapability>::gleam_gl_api(
-            &self.parent_context,
-        );
+        let gl =
+            <WindowRenderingContext as crate::rendering_context_core::GlCapability>::gleam_gl_api(
+                &self.parent_context,
+            );
         let new_framebuffer = Framebuffer::new(gl.clone(), new_size);
 
         let old_framebuffer =
@@ -938,15 +948,21 @@ impl crate::rendering_context_core::RenderingContextCore for OffscreenRenderingC
 
 impl crate::rendering_context_core::GlCapability for OffscreenRenderingContext {
     fn make_current(&self) -> Result<(), Error> {
-        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::make_current(&self.parent_context)
+        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::make_current(
+            &self.parent_context,
+        )
     }
 
     fn gleam_gl_api(&self) -> Rc<dyn gleam::gl::Gl> {
-        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::gleam_gl_api(&self.parent_context)
+        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::gleam_gl_api(
+            &self.parent_context,
+        )
     }
 
     fn glow_gl_api(&self) -> Arc<glow::Context> {
-        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::glow_gl_api(&self.parent_context)
+        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::glow_gl_api(
+            &self.parent_context,
+        )
     }
 
     fn prepare_for_rendering(&self) {
@@ -957,15 +973,23 @@ impl crate::rendering_context_core::GlCapability for OffscreenRenderingContext {
         &self,
         surface: Surface,
     ) -> Option<(SurfaceTexture, u32, UntypedSize2D<i32>)> {
-        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::create_texture(&self.parent_context, surface)
+        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::create_texture(
+            &self.parent_context,
+            surface,
+        )
     }
 
     fn destroy_texture(&self, surface_texture: SurfaceTexture) -> Option<Surface> {
-        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::destroy_texture(&self.parent_context, surface_texture)
+        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::destroy_texture(
+            &self.parent_context,
+            surface_texture,
+        )
     }
 
     fn connection(&self) -> Connection {
-        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::connection(&self.parent_context)
+        <WindowRenderingContext as crate::rendering_context_core::GlCapability>::connection(
+            &self.parent_context,
+        )
     }
 }
 
@@ -1063,6 +1087,57 @@ mod test {
 
             let expected_pixel: Rgba<u8> = Rgba([12, 34, 56, 78]);
             assert!(img.pixels().all(|&p| p == expected_pixel));
+        }
+
+        device.destroy_context(&mut context)?;
+
+        Ok(())
+    }
+
+    #[test]
+    #[expect(unsafe_code)]
+    fn test_read_pixels_uses_top_left_coordinates() -> Result<(), Error> {
+        let connection = Connection::new()?;
+        let adapter = connection.create_software_adapter()?;
+        let device = connection.create_device(&adapter)?;
+        let context_descriptor = device.create_context_descriptor(&ContextAttributes {
+            version: GLVersion::new(3, 0),
+            flags: ContextAttributeFlags::empty(),
+        })?;
+        let mut context = device.create_context(&context_descriptor, None)?;
+
+        let gl = match connection.gl_api() {
+            GLApi::GL => unsafe { gl::GlFns::load_with(|s| device.get_proc_address(&context, s)) },
+            GLApi::GLES => unsafe {
+                gl::GlesFns::load_with(|s| device.get_proc_address(&context, s))
+            },
+        };
+
+        device.make_context_current(&context)?;
+
+        {
+            const SIZE: u32 = 16;
+            let framebuffer = Framebuffer::new(gl, PhysicalSize::new(SIZE, SIZE));
+            framebuffer.bind();
+            framebuffer.gl.viewport(0, 0, SIZE as i32, SIZE as i32);
+            framebuffer.gl.clear_color(1.0, 0.0, 0.0, 1.0);
+            framebuffer.gl.clear(gl::COLOR_BUFFER_BIT);
+
+            framebuffer.gl.enable(gl::SCISSOR_TEST);
+            framebuffer
+                .gl
+                .scissor(0, (SIZE / 2) as i32, SIZE as i32, (SIZE / 2) as i32);
+            framebuffer.gl.clear_color(0.0, 1.0, 0.0, 1.0);
+            framebuffer.gl.clear(gl::COLOR_BUFFER_BIT);
+            framebuffer.gl.disable(gl::SCISSOR_TEST);
+
+            let top_half =
+                Box2D::from_origin_and_size(Point2D::zero(), Size2D::new(SIZE, SIZE / 2));
+            let image = framebuffer
+                .read_to_image(top_half.to_i32())
+                .expect("Should have been able to read back the top half.");
+            let expected_pixel: Rgba<u8> = Rgba([0, 255, 0, 255]);
+            assert!(image.pixels().all(|&p| p == expected_pixel));
         }
 
         device.destroy_context(&mut context)?;

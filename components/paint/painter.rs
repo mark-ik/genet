@@ -22,6 +22,8 @@ use media::WindowGLContext;
 use paint_api::display_list::{PaintDisplayListInfo, ScrollType};
 use paint_api::largest_contentful_paint_candidate::LCPCandidate;
 use paint_api::rendering_context_core::RenderingContextCore;
+#[cfg(feature = "wgpu_backend")]
+use paint_api::wgpu_readback::read_texture_to_image;
 use paint_api::viewport_description::ViewportDescription;
 use paint_api::{
     ImageUpdate, PipelineExitSource, SendableFrameTree, SerializableDisplayListPayload,
@@ -43,8 +45,8 @@ use webrender::{MemoryReport, RenderApi, Transaction};
 #[cfg(not(feature = "wgpu_backend"))]
 use webrender::{ONE_TIME_USAGE_HINT, ShaderPrecacheFlags, UploadMethod};
 use webrender_api::units::{
-    DevicePixel, DevicePoint, LayoutPoint, LayoutRect, LayoutSize, LayoutTransform, LayoutVector2D,
-    WorldPoint,
+    DeviceIntRect, DevicePixel, DevicePoint, LayoutPoint, LayoutRect, LayoutSize,
+    LayoutTransform, LayoutVector2D, WorldPoint,
 };
 use webrender_api::{
     self, BuiltDisplayList, BuiltDisplayListDescriptor, ColorF, DirtyRect, DisplayListPayload,
@@ -506,6 +508,33 @@ impl Painter {
         self.webview_renderers.get_mut(&webview_id)
     }
 
+    pub(crate) fn read_to_image(&self, rect: DeviceIntRect) -> Option<RgbaImage> {
+        if let Some(image) = self.rendering_context.read_to_image(rect) {
+            return Some(image);
+        }
+
+        #[cfg(feature = "wgpu_backend")]
+        {
+            let wgpu_cap = self.rendering_context.wgpu()?;
+            let composite_output = self.composite_output()?;
+            let device = wgpu_cap.device();
+            let queue = wgpu_cap.queue();
+            return read_texture_to_image(
+                &device,
+                &queue,
+                &composite_output.texture,
+                composite_output.format(),
+                PhysicalSize::new(composite_output.width, composite_output.height),
+                rect,
+            );
+        }
+
+        #[cfg(not(feature = "wgpu_backend"))]
+        {
+            None
+        }
+    }
+
     /// Whether or not the renderer is waiting on a frame, either because it has been sent
     /// to WebRender and is not ready yet or because the [`FrameDelayer`] is delaying a frame
     /// waiting for asynchronous (canvas) image updates to complete.
@@ -609,6 +638,7 @@ impl Painter {
                         let size = self.rendering_context.size2d().to_i32();
                         renderer.render(size, 0 /* buffer_age */).ok();
                     }
+                    self.rendering_context.present();
                 }
             }
         );

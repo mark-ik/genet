@@ -183,3 +183,8 @@ winit = { workspace = true }
 [[test]]
 name = "multiprocess"
 harness = false
+
+[[example]]
+name = "toy_wgpu_embedder"
+path = "examples/toy_wgpu_embedder.rs"
+required-features = ["wgpu_backend"]

@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use dpi::PhysicalSize;
 use euclid::Scale;
 use log::info;
-use paint_api::rendering_context::RenderingContext;
+use paint_api::rendering_context_core::RenderingContextCore;
 use paint_api::wgpu_rendering_context::WgpuRenderingContext;
 use servo::{
     Cursor, DevicePoint, EventLoopWaker, InputEvent, MouseButton as ServoMouseButton,
@@ -57,14 +57,15 @@ struct EmbedderDelegate {
 #[derive(Debug)]
 enum AppEvent {
     WakeUp,
+    FrameReady,
     CursorChanged(CursorIcon),
     TitleChanged(Option<String>),
 }
 
 impl WebViewDelegate for EmbedderDelegate {
-    fn notify_new_frame_ready(&self, webview: WebView) {
-        webview.render();
+    fn notify_new_frame_ready(&self, _webview: WebView) {
         self.frame_ready.store(true, Ordering::Relaxed);
+        let _ = self.event_proxy.send_event(AppEvent::FrameReady);
     }
 
     fn notify_cursor_changed(&self, _webview: WebView, cursor: Cursor) {
@@ -264,11 +265,8 @@ impl ApplicationHandler<AppEvent> for App {
 
             // ---- Redraw ----
             WindowEvent::RedrawRequested => {
-                // With render_to_view(), Servo/WebRender renders directly into
-                // the surface texture during webview.render(). The frame is
-                // presented by the RenderingContext automatically. We just need
-                // to trigger a new frame.
-                state.window.request_redraw();
+                self.frame_ready.store(false, Ordering::Relaxed);
+                state.webview.render();
             },
 
             // ---- Mouse ----
@@ -353,7 +351,9 @@ impl ApplicationHandler<AppEvent> for App {
         match event {
             AppEvent::WakeUp => {
                 state.servo.spin_event_loop();
-                if self.frame_ready.swap(false, Ordering::Relaxed) {
+            },
+            AppEvent::FrameReady => {
+                if self.frame_ready.load(Ordering::Relaxed) {
                     state.window.request_redraw();
                 }
             },
@@ -370,9 +370,6 @@ impl ApplicationHandler<AppEvent> for App {
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(state) = &self.state {
             state.servo.spin_event_loop();
-            if self.frame_ready.swap(false, Ordering::Relaxed) {
-                state.window.request_redraw();
-            }
         }
     }
 }

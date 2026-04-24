@@ -17,6 +17,7 @@ use log::warn;
 use webrender_api::units::DeviceIntRect;
 
 use crate::rendering_context_core::{RenderingContextCore, WgpuCapability};
+use crate::wgpu_readback::read_texture_to_image;
 
 /// A pure-wgpu rendering context that owns the GPU device and presentation surface.
 ///
@@ -35,6 +36,14 @@ pub struct WgpuRenderingContext {
     size: Cell<PhysicalSize<u32>>,
     /// The current frame's surface texture, stored between acquire and present.
     current_frame: RefCell<Option<wgpu::SurfaceTexture>>,
+    /// A GPU-side copy of the most recently rendered frame for readback.
+    captured_frame: RefCell<Option<CapturedFrame>>,
+}
+
+struct CapturedFrame {
+    texture: wgpu::Texture,
+    size: PhysicalSize<u32>,
+    format: wgpu::TextureFormat,
 }
 
 impl WgpuRenderingContext {
@@ -84,10 +93,15 @@ impl WgpuRenderingContext {
 
         // Configure surface — prefer non-sRGB to avoid double-encoding since
         // WebRender's output is already display-encoded (sRGB).
-        let preferred_format = surface.get_capabilities(&adapter).formats[0];
+        let surface_caps = surface.get_capabilities(&adapter);
+        let preferred_format = surface_caps.formats[0];
         let non_srgb_format = preferred_format.remove_srgb_suffix();
+        let mut surface_usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        if surface_caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
+            surface_usage |= wgpu::TextureUsages::COPY_SRC;
+        }
         let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: surface_usage,
             format: preferred_format,
             width: size.width.max(1),
             height: size.height.max(1),
@@ -111,6 +125,7 @@ impl WgpuRenderingContext {
             surface_config: RefCell::new(surface_config),
             size: Cell::new(size),
             current_frame: RefCell::new(None),
+            captured_frame: RefCell::new(None),
         }
     }
 
@@ -136,7 +151,72 @@ impl WgpuRenderingContext {
             surface_config: RefCell::new(surface_config),
             size: Cell::new(size),
             current_frame: RefCell::new(None),
+            captured_frame: RefCell::new(None),
         }
+    }
+
+    fn snapshot_current_frame(&self, frame: &wgpu::SurfaceTexture) {
+        let config = self.surface_config.borrow();
+        if !config.usage.contains(wgpu::TextureUsages::COPY_SRC) {
+            return;
+        }
+
+        let size = PhysicalSize::new(config.width, config.height);
+        let format = config.format;
+        let mut captured_frame = self.captured_frame.borrow_mut();
+        let needs_new_texture = captured_frame
+            .as_ref()
+            .is_none_or(|existing| existing.size != size || existing.format != format);
+        if needs_new_texture {
+            *captured_frame = Some(CapturedFrame {
+                texture: self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("servo_wgpu_readback_snapshot"),
+                    size: wgpu::Extent3d {
+                        width: size.width,
+                        height: size.height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                }),
+                size,
+                format,
+            });
+        }
+
+        let Some(captured_frame) = captured_frame.as_ref() else {
+            return;
+        };
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("servo_wgpu_snapshot_encoder"),
+            });
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &frame.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &captured_frame.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: size.width,
+                height: size.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
     }
 }
 
@@ -155,17 +235,27 @@ impl RenderingContextCore for WgpuRenderingContext {
         config.height = size.height;
         self.surface.configure(&self.device, &config);
         self.size.set(size);
+        self.captured_frame.borrow_mut().take();
     }
 
     fn present(&self) {
         if let Some(frame) = self.current_frame.borrow_mut().take() {
+            self.snapshot_current_frame(&frame);
             frame.present();
         }
     }
 
-    fn read_to_image(&self, _rect: DeviceIntRect) -> Option<RgbaImage> {
-        // TODO: Implement GPU→CPU readback via staging buffer for screenshots.
-        None
+    fn read_to_image(&self, rect: DeviceIntRect) -> Option<RgbaImage> {
+        let captured_frame = self.captured_frame.borrow();
+        let captured_frame = captured_frame.as_ref()?;
+        read_texture_to_image(
+            &self.device,
+            &self.queue,
+            &captured_frame.texture,
+            captured_frame.format,
+            captured_frame.size,
+            rect,
+        )
     }
 
     // `gl()` uses the default `None` — this context has no GL capability.

@@ -58,24 +58,23 @@ pub(crate) const MINIMUM_WEBVIEW_SIZE: Size2D<i32, DevicePixel> = Size2D::new(1,
 /// ## Rendering Model
 ///
 /// Every [`WebView`] has a [`RenderingContext`]. The embedder manages when
-/// the contents of the [`WebView`] paint to the [`RenderingContext`]. When
-/// a [`WebView`] needs to be painted, for instance, because its contents have changed, Servo will
-/// call [`WebViewDelegate::notify_new_frame_ready`] in order to signal that it is time to repaint
-/// the [`WebView`] using [`WebView::paint`].
+/// the contents of the [`WebView`] render into that context. When a
+/// [`WebView`] needs a new frame, for instance because its contents have
+/// changed, Servo calls [`WebViewDelegate::notify_new_frame_ready`] to tell
+/// the embedder it is time to request a redraw and then call
+/// [`WebView::render`].
 ///
 /// An example of how this flow might work is:
 ///
 /// 1. [`WebViewDelegate::notify_new_frame_ready`] is called. The applications triggers a request
 ///    to repaint the window that contains this [`WebView`].
-/// 2. During window repainting, the application calls [`WebView::paint`] and the contents of the
-///    [`RenderingContext`] are updated.
-/// 3. If the [`RenderingContext`] is double-buffered, the
-///    application then calls [`crate::RenderingContext::present()`] in order to swap the back buffer
-///    to the front, finally displaying the updated [`WebView`] contents.
+/// 2. During window repainting, the application calls [`WebView::render`].
+///    Servo updates the [`RenderingContext`] and presents it when the backend
+///    owns a presentable surface.
 ///
 /// In cases where the [`WebView`] contents have not been updated, but a repaint is necessary, for
-/// instance when repainting a window due to damage, an application may simply perform the final two
-/// steps and Servo will repaint even without first calling the
+/// instance when repainting a window due to damage, an application may simply perform the final
+/// step and Servo will redraw even without first calling the
 /// [`WebViewDelegate::notify_new_frame_ready`] method.
 #[derive(Clone)]
 pub struct WebView(Rc<RefCell<WebViewInner>>);
@@ -394,10 +393,13 @@ impl WebView {
         self.inner().rendering_context.size2d().to_f32()
     }
 
-    /// Trigger WebRender to render the current scene for this WebView.
+    /// Produce the next frame for this [`WebView`].
     ///
-    /// Embedders must call this when [`WebViewDelegate::notify_new_frame_ready`] fires.
-    /// For wgpu embedders, call this before accessing [`WebView::composite_texture`].
+    /// Embedders should call this during redraw after
+    /// [`WebViewDelegate::notify_new_frame_ready`] fires. Servo renders the
+    /// current scene into the [`RenderingContext`] and presents it when the
+    /// backend owns a presentable surface. For wgpu embedders using
+    /// [`WebView::composite_texture`], call this before reading the texture.
     pub fn render(&self) {
         let inner = self.inner();
         inner.servo.paint().render(inner.id);
@@ -670,11 +672,6 @@ impl WebView {
                 Some(self.id()),
                 message,
             ));
-    }
-
-    /// Paint the contents of this [`WebView`] into its `RenderingContext`.
-    pub fn paint(&self) {
-        self.inner().servo.paint().render(self.id());
     }
 
     /// Get the [`UserContentManager`] associated with this [`WebView`].
