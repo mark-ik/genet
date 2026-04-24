@@ -117,7 +117,7 @@ impl GPUAdapter {
         global: &GlobalScope,
         info: AdapterInfo,
         features: &GPUSupportedFeatures,
-        limits: &GPUSupportedLimits,
+        _limits: &GPUSupportedLimits,
         can_gc: CanGc,
     ) -> DomRoot<GPUAdapterInfo> {
         // Step 2. If the vendor is known, set adapterInfo.vendor to the name of adapter’s vendor as

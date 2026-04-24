@@ -26,6 +26,10 @@ use crate::event_loop::NewScriptEventLoopProcessInfo;
 use crate::process_manager::Process;
 use crate::serviceworker::ServiceWorkerUnprivilegedContent;
 
+fn trace_multiprocess_enabled() -> bool {
+    env::var_os("GRAPHSHELL_TRACE_MULTIPROCESS").is_some()
+}
+
 #[derive(Deserialize, Serialize)]
 #[expect(clippy::large_enum_variant)]
 pub enum UnprivilegedContent {
@@ -162,6 +166,18 @@ pub fn spawn_multiprocess(content: UnprivilegedContent) -> Result<Process, IpcEr
     let child = child_process
         .spawn()
         .expect("Failed to start unsandboxed child process!");
+
+    if trace_multiprocess_enabled() {
+        eprintln!(
+            "graphshell_multiprocess_trace role=parent parent_pid={} child_pid={} content_kind={}",
+            process::id(),
+            child.id(),
+            match &content {
+                UnprivilegedContent::ScriptEventLoop(..) => "script_event_loop",
+                UnprivilegedContent::ServiceWorker(..) => "service_worker",
+            }
+        );
+    }
 
     let (_receiver, sender) = server.accept().expect("Server failed to accept.");
     sender.send(content)?;

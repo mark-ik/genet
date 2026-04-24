@@ -403,6 +403,43 @@ Definition of done:
 - the core trait shape is validated against XR lifecycle requirements before stabilization
 - the Phase A reap list removes old compositor-path GL dependencies from the main path
 
+#### Phase A transition-surface policy
+
+During Phase A, not every coexistence artifact is a bug, but every surviving coexistence artifact
+must be explicit.
+
+Allowed temporary transition surfaces are limited to:
+
+- the public capability re-export surface in `components/servo/lib.rs` needed for the
+  multi-embedder compile gate (`servoshell`, Graphshell, and the toy embedder)
+- the coexistence boundary in `components/shared/paint/rendering_context_core.rs` plus the
+  concrete `rendering_context.rs` / `wgpu_rendering_context.rs` implementations while callers are
+  still migrating from legacy GL-first assumptions to `RenderingContextCore` plus explicit
+  capabilities
+- GL-only compatibility branches that are still required by WebGL or WebXR producer paths and are
+  named in the current phase's reap list
+
+Everything else is ordinary cleanup and should be removed rather than normalized.
+
+Concretely:
+
+- an unused import, re-export, helper local, or compatibility alias is not justified merely
+  because the branch is mid-migration
+- if a symbol is intentionally retained for Phase A, it should either be actively used by a
+  compile-gated downstream surface or carry a narrow local allow/comment that names it as a Phase A
+  compatibility surface and points at the reap item that will delete it
+- warnings in files outside the explicit transition surfaces above should be treated as normal
+  cleanup, not as architectural debt the branch is expected to carry
+
+Current Phase A reap list additions:
+
+- remove compositor-path reliance on legacy GL-only helpers once all normal host/render callers use
+  `RenderingContextCore` plus explicit capabilities
+- collapse temporary capability coexistence in Servo paint to the minimum surface needed by active
+  WebGL/WebXR compatibility producers
+- delete compatibility-only re-export or helper surfaces that are not required by the
+  multi-embedder compile gate
+
 ### Phase B. External-image lease and publication model
 
 Deliverables:

@@ -32,11 +32,7 @@ use net::protocols::ProtocolRegistry;
 use net::resource_thread::new_resource_threads;
 use net_traits::{ResourceThreads, exit_fetch_thread, start_fetch_thread};
 use paint::{InitialPaintState, Paint};
-pub use paint_api::rendering_context_core::{
-    GlCapability, RenderingContextCore, WindowHandles,
-};
-#[cfg(feature = "wgpu_backend")]
-pub use paint_api::rendering_context_core::WgpuCapability;
+pub use paint_api::rendering_context_core::RenderingContextCore;
 use paint_api::{CrossProcessPaintApi, PaintMessage, PaintProxy};
 use profile::{mem as profile_mem, system_reporter, time as profile_time};
 use profile_traits::mem::{MemoryReportResult, ProfilerMsg, Reporter};
@@ -44,7 +40,9 @@ use profile_traits::{mem, time};
 use rustc_hash::FxHashMap;
 use script::{JSEngineSetup, ServiceWorkerManager};
 use servo_background_hang_monitor::HangMonitorRegister;
-use servo_base::generic_channel::{GenericCallback, GenericSender, RoutedReceiver};
+use servo_base::generic_channel::{GenericCallback, RoutedReceiver};
+#[cfg(feature = "bluetooth")]
+use servo_base::generic_channel::GenericSender;
 pub use servo_base::id::WebViewId;
 use servo_base::id::{EMBEDDER_PIPELINE_NAMESPACE_ID, PipelineNamespace};
 #[cfg(feature = "bluetooth")]
@@ -1251,6 +1249,14 @@ fn set_logger(script_to_constellation_sender: ScriptToConstellationSender) {
 
 /// Content process entry point.
 pub fn run_content_process(token: String) {
+    if std::env::var_os("GRAPHSHELL_TRACE_MULTIPROCESS").is_some() {
+        eprintln!(
+            "graphshell_multiprocess_trace role=child phase=entered pid={} token_len={}",
+            std::process::id(),
+            token.len()
+        );
+    }
+
     let (unprivileged_content_sender, unprivileged_content_receiver) =
         ipc::channel::<UnprivilegedContent>().unwrap();
     let connection_bootstrap: IpcSender<IpcSender<UnprivilegedContent>> =
@@ -1260,6 +1266,18 @@ pub fn run_content_process(token: String) {
         .unwrap();
 
     let unprivileged_content = unprivileged_content_receiver.recv().unwrap();
+
+    if std::env::var_os("GRAPHSHELL_TRACE_MULTIPROCESS").is_some() {
+        eprintln!(
+            "graphshell_multiprocess_trace role=child phase=received_content pid={} content_kind={}",
+            std::process::id(),
+            match &unprivileged_content {
+                UnprivilegedContent::ScriptEventLoop(..) => "script_event_loop",
+                UnprivilegedContent::ServiceWorker(..) => "service_worker",
+            }
+        );
+    }
+
     opts::initialize_options(unprivileged_content.opts());
     prefs::set(unprivileged_content.prefs().clone());
 
