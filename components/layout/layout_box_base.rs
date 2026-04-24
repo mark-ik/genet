@@ -172,13 +172,13 @@ impl LayoutBoxBase {
             return None;
         };
 
-        if result.containing_block_size != containing_block.size ||
-            result.containing_block_writing_mode != containing_block.style.writing_mode ||
-            result.containing_block_justify_items !=
-                containing_block.style.clone_justify_items().computed.0.0 ||
-            result.collapsible_with_parent_start_margin != collapsible_with_parent_start_margin ||
-            result.ignore_block_margins_for_stretch != ignore_block_margins_for_stretch ||
-            result.has_inline_parent != has_inline_parent
+        if result.containing_block_size != containing_block.size
+            || result.containing_block_writing_mode != containing_block.style.writing_mode
+            || result.containing_block_justify_items
+                != containing_block.style.clone_justify_items().computed.0.0
+            || result.collapsible_with_parent_start_margin != collapsible_with_parent_start_margin
+            || result.ignore_block_margins_for_stretch != ignore_block_margins_for_stretch
+            || result.has_inline_parent != has_inline_parent
         {
             return None;
         }

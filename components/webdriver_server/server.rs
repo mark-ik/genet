@@ -495,9 +495,9 @@ fn build_route<U: 'static + WebDriverExtensionRoute + Send + Sync>(
                         .map(|x| x.trim())
                         .map(|x| x.to_lowercase());
                     match content_type.as_ref().map(|x| x.as_ref()) {
-                        Some("application/x-www-form-urlencoded") |
-                        Some("multipart/form-data") |
-                        Some("text/plain") => {
+                        Some("application/x-www-form-urlencoded")
+                        | Some("multipart/form-data")
+                        | Some("text/plain") => {
                             warn!(
                                 "Rejected POST request with disallowed content type {}",
                                 content_type.unwrap_or_else(|| "".into())

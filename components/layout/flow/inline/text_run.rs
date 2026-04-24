@@ -664,11 +664,11 @@ fn character_cannot_change_font(character: char) -> bool {
 
     matches!(
         icu_properties::maps::line_break().get(character),
-        LineBreak::CombiningMark |
-            LineBreak::Glue |
-            LineBreak::ZWSpace |
-            LineBreak::WordJoiner |
-            LineBreak::ZWJ
+        LineBreak::CombiningMark
+            | LineBreak::Glue
+            | LineBreak::ZWSpace
+            | LineBreak::WordJoiner
+            | LineBreak::ZWJ
     )
 }
 

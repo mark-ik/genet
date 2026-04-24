@@ -598,8 +598,8 @@ impl RegistryEngine for SqliteEngine {
         // otherwise false.
         // It will be false when there’s an internal error.
         let persisted = bucket_mode(shelf.default_bucket_id, &tx)
-            .is_ok_and(|mode| mode == Mode::Persistent) &&
-            tx.commit().is_ok();
+            .is_ok_and(|mode| mode == Mode::Persistent)
+            && tx.commit().is_ok();
 
         Ok(persisted)
     }

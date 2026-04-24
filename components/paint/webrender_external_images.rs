@@ -30,11 +30,7 @@ impl WebGLExternalImages {
     ) -> Self {
         Self {
             rendering_context,
-            locks: WebGLExternalImageLocks::new(
-                webgl_threads,
-                swap_chains,
-                busy_webgl_context_map,
-            ),
+            locks: WebGLExternalImageLocks::new(webgl_threads, swap_chains, busy_webgl_context_map),
         }
     }
 
@@ -63,8 +59,9 @@ impl WebGLExternalImages {
             .rendering_context
             .gl()
             .expect("GL external image path requires a GL-capable rendering context");
-        self.locks
-            .unlock(id, |locked_front_buffer| gl.destroy_texture(locked_front_buffer))
+        self.locks.unlock(id, |locked_front_buffer| {
+            gl.destroy_texture(locked_front_buffer)
+        })
     }
 }
 
