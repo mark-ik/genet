@@ -100,9 +100,9 @@ impl ResourceFetchTiming {
     pub fn set_attribute(&mut self, attribute: ResourceAttribute) {
         let should_attribute_always_be_updated = matches!(
             attribute,
-            ResourceAttribute::FetchStart |
-                ResourceAttribute::ResponseEnd |
-                ResourceAttribute::StartTime(_)
+            ResourceAttribute::FetchStart
+                | ResourceAttribute::ResponseEnd
+                | ResourceAttribute::StartTime(_)
         );
         if !self.timing_check_passed && !should_attribute_always_be_updated {
             return;

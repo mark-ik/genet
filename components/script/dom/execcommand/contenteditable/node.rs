@@ -654,16 +654,16 @@ where
         // and the last child of new parent is not a br,
         // call createElement("br") on the ownerDocument of new parent
         // and append the result as the last child of new parent.
-        if !new_parent.is_inline_node() &&
-            new_parent
+        if !new_parent.is_inline_node()
+            && new_parent
                 .rev_children()
                 .find(|child| child.is_visible())
-                .is_some_and(|child| child.is_inline_node()) &&
-            node_list
+                .is_some_and(|child| child.is_inline_node())
+            && node_list
                 .iter()
                 .find(|node| node.is_visible())
-                .is_some_and(|node| node.is_inline_node()) &&
-            new_parent
+                .is_some_and(|node| node.is_inline_node())
+            && new_parent
                 .children()
                 .last()
                 .is_none_or(|last_child| !last_child.is::<HTMLBRElement>())
@@ -684,17 +684,17 @@ where
         // and the last member of node list is not a br,
         // call createElement("br") on the ownerDocument of new parent
         // and insert the result as the first child of new parent.
-        if !new_parent.is_inline_node() &&
-            new_parent
+        if !new_parent.is_inline_node()
+            && new_parent
                 .children()
                 .find(|child| child.is_visible())
-                .is_some_and(|child| child.is_inline_node()) &&
-            node_list
+                .is_some_and(|child| child.is_inline_node())
+            && node_list
                 .iter()
                 .rev()
                 .find(|node| node.is_visible())
-                .is_some_and(|node| node.is_inline_node()) &&
-            node_list
+                .is_some_and(|node| node.is_inline_node())
+            && node_list
                 .last()
                 .is_none_or(|last_child| !last_child.is::<HTMLBRElement>())
         {
@@ -1030,10 +1030,10 @@ impl Node {
         // for command is not equivalent to new value, set candidate to its child.
         loop {
             if let Some(candidate_element) = candidate.downcast::<Element>() {
-                if candidate_element.is_modifiable_element() &&
-                    candidate.children_count() == 1 &&
-                    (!candidate_element.is_simple_modifiable_element() ||
-                        !command.are_equivalent_values(
+                if candidate_element.is_modifiable_element()
+                    && candidate.children_count() == 1
+                    && (!candidate_element.is_simple_modifiable_element()
+                        || !command.are_equivalent_values(
                             candidate_element.specified_command_value(command).as_ref(),
                             Some(new_value),
                         ))
@@ -1053,8 +1053,8 @@ impl Node {
         // Step 3. If candidate is node, or is not a simple modifiable element,
         // or its specified command value is not equivalent to new value,
         // or its effective command value is not loosely equivalent to new value, abort these steps.
-        if *candidate == *self ||
-            !command.are_loosely_equivalent_values(
+        if *candidate == *self
+            || !command.are_loosely_equivalent_values(
                 candidate.effective_command_value(command).as_ref(),
                 Some(new_value),
             )
@@ -1062,8 +1062,8 @@ impl Node {
             return;
         }
         if let Some(candidate) = candidate.downcast::<Element>() {
-            if !candidate.is_simple_modifiable_element() ||
-                !command.are_equivalent_values(
+            if !candidate.is_simple_modifiable_element()
+                || !command.are_equivalent_values(
                     candidate.specified_command_value(command).as_ref(),
                     Some(new_value),
                 )
@@ -1174,8 +1174,8 @@ impl Node {
                 .filter(|child| {
                     !child.downcast::<Element>().is_some_and(|child_element| {
                         let specified_value = child_element.specified_command_value(command);
-                        specified_value.is_some() &&
-                            !command
+                        specified_value.is_some()
+                            && !command
                                 .are_equivalent_values(specified_value.as_ref(), Some(new_value))
                     })
                 })
@@ -1328,8 +1328,8 @@ impl Node {
             // and the effective command value of "underline" for new parent is not "underline",
             // set the "text-decoration" property of new parent to "underline".
             CommandName::Underline => {
-                if new_value == "underline" &&
-                    new_parent
+                if new_value == "underline"
+                    && new_parent
                         .upcast::<Node>()
                         .effective_command_value(&CommandName::Underline)
                         .is_none_or(|value| value != "underline")
@@ -1368,8 +1368,8 @@ impl Node {
                     !child.downcast::<Element>().is_some_and(|child_element| {
                         let specified_command_value =
                             child_element.specified_command_value(command);
-                        specified_command_value.is_some() &&
-                            !command.are_equivalent_values(
+                        specified_command_value.is_some()
+                            && !command.are_equivalent_values(
                                 specified_command_value.as_ref(),
                                 Some(new_value),
                             )

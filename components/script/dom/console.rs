@@ -252,9 +252,9 @@ fn console_object_from_handle_value(
     if !unsafe { GetBuiltinClass(*cx, object.handle(), &mut object_class as *mut _) } {
         return None;
     }
-    if object_class != ESClass::Object &&
-        object_class != ESClass::Array &&
-        object_class != ESClass::Function
+    if object_class != ESClass::Object
+        && object_class != ESClass::Array
+        && object_class != ESClass::Function
     {
         return None;
     }

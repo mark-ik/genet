@@ -9,8 +9,8 @@
 //! `WebGLExternalImages` when WebRender uses the wgpu backend.
 
 use log::debug;
-use servo_wgpu_interop_adapter::SurfmanSurfaceImporter;
 use servo_canvas_traits::webgl::{WebGLContextId, WebGLThreads};
+use servo_wgpu_interop_adapter::SurfmanSurfaceImporter;
 use surfman::chains::SwapChains;
 use surfman::{Device, Surface};
 use webgl::webgl_thread::WebGLContextBusyMap;
@@ -40,11 +40,7 @@ impl WgpuWebGLExternalImages {
         let importer = SurfmanSurfaceImporter::new(wgpu_device, wgpu_queue)?;
 
         Ok(Self {
-            locks: WebGLExternalImageLocks::new(
-                webgl_threads,
-                swap_chains,
-                busy_webgl_context_map,
-            ),
+            locks: WebGLExternalImageLocks::new(webgl_threads, swap_chains, busy_webgl_context_map),
             importer,
         })
     }

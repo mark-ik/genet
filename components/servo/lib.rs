@@ -48,9 +48,9 @@ pub use paint::WebRenderDebugOption;
 pub use paint_api::rendering_context::{
     OffscreenRenderingContext, SoftwareRenderingContext, WindowRenderingContext,
 };
-pub use paint_api::rendering_context_core::{GlCapability, RenderingContextCore, WindowHandles};
 #[cfg(feature = "wgpu_backend")]
 pub use paint_api::rendering_context_core::WgpuCapability;
+pub use paint_api::rendering_context_core::{GlCapability, RenderingContextCore, WindowHandles};
 #[cfg(feature = "wgpu_backend")]
 pub use paint_api::wgpu_rendering_context::WgpuRenderingContext;
 // This should be replaced with an API on ServoBuilder.

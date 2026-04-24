@@ -1899,9 +1899,9 @@ impl FlexItem<'_> {
             item_inline_axis_is_horizontal == container_main_axis_is_horizontal;
 
         let content_baselines_relative_to_margin_box = content_box_baselines.offset(
-            self.margin.cross_start.auto_is(Au::zero) +
-                self.padding.cross_start +
-                self.border.cross_start,
+            self.margin.cross_start.auto_is(Au::zero)
+                + self.padding.cross_start
+                + self.border.cross_start,
         );
 
         let content_baselines_for_parent_relative_to_margin_box =
