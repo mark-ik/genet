@@ -77,10 +77,19 @@ pub trait RenderingContextCore {
 
     fn present(&self);
 
-    /// Read the current back-buffer into an in-memory image. Backend-neutral:
-    /// GL impls use `glReadPixels`; wgpu impls use a staging buffer +
-    /// map-read (currently stubbed in `WgpuRenderingContext`; tracked as a
-    /// separate follow-on).
+    /// Read a viewport-space rectangle of the current rendered frame into an
+    /// in-memory image.
+    ///
+    /// `rect` uses a top-left origin in device pixels. Backend-specific
+    /// framebuffer coordinates stay internal to the implementation so callers
+    /// do not need GL-specific Y-flips. GL impls translate to `glReadPixels`
+    /// coordinates internally; wgpu impls snapshot the rendered frame and use
+    /// a staging buffer + map-read.
+    ///
+    /// On the pure-wgpu path, the bytes reflect the compositor output as stored
+    /// in the swapchain texture. Depending on the surface format, golden-image
+    /// comparisons may still need tolerance for sRGB encoding and
+    /// premultiplied-alpha differences.
     fn read_to_image(&self, rect: DeviceIntRect) -> Option<RgbaImage>;
 
     // --- Window integration (optional; offscreen contexts return None) ---
@@ -168,10 +177,8 @@ pub trait GlCapability {
     /// texture, the underlying GL texture name, and the size. Used by the
     /// GL external-image import path (WebGL → compositor). `None` if the
     /// backend doesn't support surface-texture wrapping.
-    fn create_texture(
-        &self,
-        surface: Surface,
-    ) -> Option<(SurfaceTexture, u32, UntypedSize2D<i32>)>;
+    fn create_texture(&self, surface: Surface)
+    -> Option<(SurfaceTexture, u32, UntypedSize2D<i32>)>;
 
     /// Release a previously created surface texture and return the
     /// underlying Surfman surface for recycling.

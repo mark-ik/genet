@@ -27,7 +27,7 @@ use log::info;
 use log::warn;
 use servo::{
     DeviceIndependentPixel, DevicePixel, Image, LoadStatus, OffscreenRenderingContext, PixelFormat,
-    RenderingContext, WebView, WebViewId,
+    RenderingContextCore, WebView, WebViewId,
 };
 use url::Url;
 use winit::event::WindowEvent;

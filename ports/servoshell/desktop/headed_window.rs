@@ -23,7 +23,7 @@ use servo::{
     EmbedderControl, EmbedderControlId, ImeEvent, InputEvent, InputEventId, InputEventResult,
     InputMethodControl, Key, KeyState, KeyboardEvent, Modifiers, MouseButton as ServoMouseButton,
     MouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent, MouseMoveEvent, NamedKey,
-    OffscreenRenderingContext, PermissionRequest, RenderingContext, ScreenGeometry, Theme,
+    OffscreenRenderingContext, PermissionRequest, RenderingContextCore, ScreenGeometry, Theme,
     TouchEvent, TouchEventType, TouchId, WebRenderDebugOption, WebView, WebViewId, WheelDelta,
     WheelEvent, WheelMode, WindowRenderingContext, convert_rect_to_css_pixel,
 };

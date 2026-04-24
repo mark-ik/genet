@@ -15,7 +15,7 @@ use euclid::{Point2D, Scale, Size2D};
 use log::error;
 use servo::{
     DeviceIndependentIntRect, DeviceIndependentPixel, DeviceIntPoint, DeviceIntRect, DeviceIntSize,
-    DevicePixel, RenderingContext, ScreenGeometry, SoftwareRenderingContext, WebView,
+    DevicePixel, RenderingContextCore, ScreenGeometry, SoftwareRenderingContext, WebView,
     convert_rect_to_css_pixel,
 };
 use winit::dpi::PhysicalSize;

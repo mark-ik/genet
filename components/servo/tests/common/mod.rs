@@ -131,7 +131,7 @@ impl WebViewDelegate for WebViewDelegateImpl {
 
     fn notify_new_frame_ready(&self, webview: WebView) {
         self.new_frame_ready.set(true);
-        webview.paint();
+        webview.render();
     }
 
     fn notify_load_status_changed(&self, _webview: WebView, status: LoadStatus) {

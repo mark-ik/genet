@@ -184,16 +184,14 @@ impl ScreenshotTaker {
                 let viewport_rect = webview_renderer.rect.to_i32();
                 let viewport_size = viewport_rect.size();
                 let rect = screenshot_request.rect.map_or(viewport_rect, |rect| {
-                    // We need to convert to the bottom-left origin coordinate
-                    // system used by OpenGL
-                    // If dpi > 1, y can be computed to be -1 due to rounding issue, resulting in panic.
-                    // https://github.com/servo/servo/issues/39306#issuecomment-3342204869
-                    let x = rect.min.x as i32;
-                    let y = 0.max(
-                        (viewport_size.height as f32 - rect.min.y - rect.size().height) as i32,
-                    );
-                    let w = (rect.size().width as i32).min(viewport_size.width - x);
-                    let h = (rect.size().height as i32).min(viewport_size.height - y);
+                    let x = (rect.min.x as i32).clamp(0, viewport_size.width);
+                    let y = (rect.min.y as i32).clamp(0, viewport_size.height);
+                    let w = (rect.size().width as i32)
+                        .max(0)
+                        .min(viewport_size.width - x);
+                    let h = (rect.size().height as i32)
+                        .max(0)
+                        .min(viewport_size.height - y);
 
                     DeviceIntRect::from_origin_and_size(Point2D::new(x, y), Size2D::new(w, h))
                 });
@@ -203,7 +201,6 @@ impl ScreenshotTaker {
                     }
                 }
                 let result = renderer
-                    .rendering_context
                     .read_to_image(rect)
                     .ok_or(ScreenshotCaptureError::CouldNotReadImage);
                 callback(result);

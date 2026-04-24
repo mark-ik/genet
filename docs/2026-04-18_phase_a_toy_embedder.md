@@ -233,7 +233,7 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => state.servo.start_shutdown(),
             WindowEvent::RedrawRequested => {
                 if let Some(webview) = state.webview.borrow().as_ref() {
-                    webview.paint();
+                    webview.render();
                 }
             }
             _ => {}

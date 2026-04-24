@@ -28,6 +28,9 @@ pub mod rendering_context;
 pub mod rendering_context_core;
 pub mod viewport_description;
 #[cfg(feature = "wgpu_backend")]
+#[doc(hidden)]
+pub mod wgpu_readback;
+#[cfg(feature = "wgpu_backend")]
 pub mod wgpu_rendering_context;
 
 use std::sync::{Arc, Mutex};

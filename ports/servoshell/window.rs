@@ -12,7 +12,7 @@ use servo::{
     AuthenticationRequest, BluetoothDeviceSelectionRequest, ConsoleLogLevel, Cursor,
     DeviceIndependentIntRect, DeviceIndependentPixel, DeviceIntPoint, DeviceIntSize, DevicePixel,
     EmbedderControl, EmbedderControlId, InputEventId, InputEventResult, MediaSessionEvent,
-    PermissionRequest, RenderingContext, ScreenGeometry, WebView, WebViewBuilder, WebViewId,
+    PermissionRequest, RenderingContextCore, ScreenGeometry, WebView, WebViewBuilder, WebViewId,
 };
 use url::Url;
 
@@ -125,18 +125,13 @@ impl ServoShellWindow {
         webview
     }
 
-    /// Repaint the focused [`WebView`].
+    /// Render the focused [`WebView`].
     pub(crate) fn repaint_webviews(&self) {
         let Some(webview) = self.active_webview() else {
             return;
         };
 
-        if let Some(gl) = self.platform_window().rendering_context().gl() {
-            gl.make_current()
-                .expect("Could not make PlatformWindow RenderingContext current");
-        }
-        webview.paint();
-        self.platform_window().rendering_context().present();
+        webview.render();
     }
 
     /// Whether or not this [`ServoShellWindow`] has any [`WebView`]s.

@@ -160,18 +160,17 @@ impl ApplicationHandler<WakerEvent> for App {
                 for webview in state.webviews.borrow().iter() {
                     webview.resize(size);
                 }
-            }
+            },
             WindowEvent::CloseRequested => {
                 // Servo cleans up through its Drop impl; just exit the loop.
                 event_loop.exit();
-            }
+            },
             WindowEvent::RedrawRequested => {
                 for webview in state.webviews.borrow().iter() {
-                    webview.paint();
+                    webview.render();
                 }
-                state.rendering_context.present();
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 }
