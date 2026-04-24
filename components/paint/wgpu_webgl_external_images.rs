@@ -26,7 +26,9 @@ use crate::webgl_external_image_lifecycle::WebGLExternalImageLocks;
 /// shared texture).
 pub struct WgpuWebGLExternalImages {
     locks: WebGLExternalImageLocks<Surface>,
-    importer: SurfmanSurfaceImporter,
+    importer: Option<SurfmanSurfaceImporter>,
+    wgpu_device: wgpu::Device,
+    wgpu_queue: wgpu::Queue,
 }
 
 impl WgpuWebGLExternalImages {
@@ -36,13 +38,32 @@ impl WgpuWebGLExternalImages {
         busy_webgl_context_map: WebGLContextBusyMap,
         wgpu_device: wgpu::Device,
         wgpu_queue: wgpu::Queue,
-    ) -> Result<Self, surfman::Error> {
-        let importer = SurfmanSurfaceImporter::new(wgpu_device, wgpu_queue)?;
-
-        Ok(Self {
+    ) -> Self {
+        Self {
             locks: WebGLExternalImageLocks::new(webgl_threads, swap_chains, busy_webgl_context_map),
-            importer,
-        })
+            importer: None,
+            wgpu_device,
+            wgpu_queue,
+        }
+    }
+
+    fn importer(&mut self) -> Option<&mut SurfmanSurfaceImporter> {
+        if self.importer.is_none() {
+            match SurfmanSurfaceImporter::new(self.wgpu_device.clone(), self.wgpu_queue.clone()) {
+                Ok(importer) => {
+                    self.importer = Some(importer);
+                },
+                Err(error) => {
+                    log::error!(
+                        "Failed to create wgpu WebGL texture importer on demand: {:?}",
+                        error
+                    );
+                    return None;
+                },
+            }
+        }
+
+        self.importer.as_mut()
     }
 }
 
@@ -58,7 +79,12 @@ impl WgpuExternalImageHandler for WgpuWebGLExternalImages {
         // Take the front buffer from the WebGL swap chain.
         let front_buffer = self.locks.lock_front_buffer(id)?;
 
-        let imported = match self.importer.import_surface_default(front_buffer) {
+        let Some(importer) = self.importer() else {
+            self.locks.abort_lock(id, Some(front_buffer));
+            return None;
+        };
+
+        let imported = match importer.import_surface_default(front_buffer) {
             Ok(imported) => imported,
             Err(failure) => {
                 let (error, surface) = failure.into_parts();

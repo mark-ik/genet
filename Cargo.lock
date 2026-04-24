@@ -5616,6 +5616,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "non-presenting-wgpu-embedder"
+version = "0.1.0"
+dependencies = [
+ "dpi",
+ "euclid",
+ "image",
+ "pollster",
+ "rustls",
+ "servo",
+ "servo-paint-api",
+ "url",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
 name = "noop_proc_macro"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

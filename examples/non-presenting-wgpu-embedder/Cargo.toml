@@ -1,0 +1,24 @@
+[package]
+name = "non-presenting-wgpu-embedder"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "non-presenting-wgpu-embedder"
+path = "src/main.rs"
+
+[dependencies]
+dpi = { workspace = true }
+euclid = { workspace = true }
+image = { workspace = true }
+paint_api = { workspace = true, features = ["wgpu_backend"] }
+pollster = "0.4"
+rustls = { workspace = true, features = ["aws-lc-rs"] }
+servo = { version = "0.1.0", path = "../../components/servo", features = ["wgpu_backend"] }
+url = { workspace = true }
+wgpu = { workspace = true }
+winit = { workspace = true }
