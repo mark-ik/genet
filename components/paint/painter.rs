@@ -372,24 +372,15 @@ impl Painter {
         // that imports WebGL canvas surfaces into wgpu textures via native interop.
         #[cfg(feature = "wgpu_backend")]
         if let Some(wgpu_cap) = rendering_context.wgpu() {
-            match crate::wgpu_webgl_external_images::WgpuWebGLExternalImages::new(
+            let handler = crate::wgpu_webgl_external_images::WgpuWebGLExternalImages::new(
                 paint.webgl_threads(),
                 paint.swap_chains.clone(),
                 paint.busy_webgl_contexts_map.clone(),
                 wgpu_cap.device(),
                 wgpu_cap.queue(),
-            ) {
-                Ok(handler) => {
-                    webrender_renderer.set_wgpu_external_image_handler(Box::new(handler));
-                    info!("wgpu WebGL external image handler installed");
-                },
-                Err(e) => {
-                    log::error!(
-                        "Failed to create wgpu WebGL external image handler: {:?}",
-                        e
-                    );
-                },
-            }
+            );
+            webrender_renderer.set_wgpu_external_image_handler(Box::new(handler));
+            info!("wgpu WebGL external image handler installed");
         }
 
         let webrender_api = webrender_api_sender.create_api_by_client(painter_id.into());
