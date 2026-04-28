@@ -213,7 +213,7 @@ vello = "0.8"
 vello_cpu = "0.0.7"
 webdriver = { version = "0.53.0", default-features = false }
 webpki-roots = "1.0"
-webrender = { version = "0.68", features = ["capture", "wgpu_backend"] }
+webrender = { version = "0.68", features = ["capture", "replay"] }
 webrender_api = "0.68"
 wgpu = "29"
 wgpu-core = "29"
