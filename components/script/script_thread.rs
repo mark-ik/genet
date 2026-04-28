@@ -128,7 +128,7 @@ use crate::dom::csp::{CspReporting, GlobalCspReporting, Violation};
 use crate::dom::customelementregistry::{
     CallbackReaction, CustomElementDefinition, CustomElementReactionStack,
 };
-use crate::dom::document::focus::{FocusInitiator, FocusOperation, FocusableArea};
+use crate::dom::document::focus::FocusableArea;
 use crate::dom::document::{
     Document, DocumentSource, HasBrowsingContext, IsHTMLDocument, RenderingUpdateReason,
 };
@@ -470,6 +470,10 @@ impl ScriptThreadFactory for ScriptThread {
             .name(format!("Script#{script_thread_id}"))
             .stack_size(8 * 1024 * 1024) // 8 MiB stack to be consistent with other browsers.
             .spawn(move || {
+                profile_traits::debug_event!(
+                    "ScriptThread::spawned",
+                    script_thread_id = script_thread_id.to_string()
+                );
                 thread_state::initialize(ThreadState::SCRIPT);
                 PipelineNamespace::install(state.pipeline_namespace_id);
                 ScriptEventLoopId::install(state.id);
@@ -863,6 +867,7 @@ impl ScriptThread {
     }
 
     /// Creates a new script thread.
+    #[servo_tracing::instrument(name = "ScripThread::new", level = "debug", skip_all)]
     pub(crate) fn new(
         state: InitialScriptState,
         layout_factory: Arc<dyn LayoutFactory>,
@@ -1196,7 +1201,7 @@ impl ScriptThread {
             let resized = document.window().run_the_resize_steps(CanGc::from_cx(cx));
 
             // > 9. For each doc of docs, run the scroll steps for doc.
-            document.run_the_scroll_steps(CanGc::from_cx(cx));
+            document.run_the_scroll_steps(cx);
 
             // Media queries is only relevant when there are resizing.
             if resized {
@@ -1247,9 +1252,7 @@ impl ScriptThread {
             // > For each doc of docs, if the focused area of doc is not a focusable area, then run the
             // > focusing steps for doc's viewport, and set doc's relevant global object's navigation API's
             // > focus changed during ongoing navigation to false.
-            document
-                .focus_handler()
-                .perform_focus_fixup_rule(CanGc::from_cx(cx));
+            document.focus_handler().perform_focus_fixup_rule(cx);
 
             // TODO: Perform pending transition operations from
             // https://drafts.csswg.org/css-view-transitions/#perform-pending-transition-operations.
@@ -1761,7 +1764,7 @@ impl ScriptThread {
                 cx,
             ),
             ScriptThreadMessage::UnloadDocument(pipeline_id) => {
-                self.handle_unload_document(pipeline_id, CanGc::from_cx(cx))
+                self.handle_unload_document(cx, pipeline_id)
             },
             ScriptThreadMessage::ResizeInactive(id, new_size) => {
                 self.handle_resize_inactive_msg(id, new_size)
@@ -1819,13 +1822,9 @@ impl ScriptThread {
                 reason,
                 cx,
             ),
-            ScriptThreadMessage::UpdateHistoryState(pipeline_id, history_state_id, url) => self
-                .handle_update_history_state_msg(
-                    pipeline_id,
-                    history_state_id,
-                    url,
-                    CanGc::from_cx(cx),
-                ),
+            ScriptThreadMessage::UpdateHistoryState(pipeline_id, history_state_id, url) => {
+                self.handle_update_history_state_msg(cx, pipeline_id, history_state_id, url)
+            },
             ScriptThreadMessage::RemoveHistoryStates(pipeline_id, history_states) => {
                 self.handle_remove_history_states(pipeline_id, history_states)
             },
@@ -2233,37 +2232,23 @@ impl ScriptThread {
                 )
             },
             DevtoolScriptControlMsg::Eval(code, id, frame_actor_id, reply) => {
-                self.debugger_global.fire_eval(
-                    CanGc::from_cx(cx),
-                    code.into(),
-                    id,
-                    None,
-                    frame_actor_id,
-                    reply,
-                );
+                self.debugger_global
+                    .fire_eval(cx, code.into(), id, None, frame_actor_id, reply);
             },
             DevtoolScriptControlMsg::GetPossibleBreakpoints(spidermonkey_id, result_sender) => {
                 self.debugger_global.fire_get_possible_breakpoints(
-                    CanGc::from_cx(cx),
+                    cx,
                     spidermonkey_id,
                     result_sender,
                 );
             },
             DevtoolScriptControlMsg::SetBreakpoint(spidermonkey_id, script_id, offset) => {
-                self.debugger_global.fire_set_breakpoint(
-                    CanGc::from_cx(cx),
-                    spidermonkey_id,
-                    script_id,
-                    offset,
-                );
+                self.debugger_global
+                    .fire_set_breakpoint(cx, spidermonkey_id, script_id, offset);
             },
             DevtoolScriptControlMsg::ClearBreakpoint(spidermonkey_id, script_id, offset) => {
-                self.debugger_global.fire_clear_breakpoint(
-                    CanGc::from_cx(cx),
-                    spidermonkey_id,
-                    script_id,
-                    offset,
-                );
+                self.debugger_global
+                    .fire_clear_breakpoint(cx, spidermonkey_id, script_id, offset);
             },
             DevtoolScriptControlMsg::Interrupt => {
                 self.debugger_global.fire_interrupt(CanGc::from_cx(cx));
@@ -2278,18 +2263,12 @@ impl ScriptThread {
                 );
             },
             DevtoolScriptControlMsg::GetEnvironment(frame_actor_id, result_sender) => {
-                self.debugger_global.fire_get_environment(
-                    frame_actor_id,
-                    result_sender,
-                    CanGc::from_cx(cx),
-                );
+                self.debugger_global
+                    .fire_get_environment(cx, frame_actor_id, result_sender);
             },
             DevtoolScriptControlMsg::Resume(resume_limit_type, frame_actor_id) => {
-                self.debugger_global.fire_resume(
-                    resume_limit_type,
-                    frame_actor_id,
-                    CanGc::from_cx(cx),
-                );
+                self.debugger_global
+                    .fire_resume(cx, resume_limit_type, frame_actor_id);
                 self.debugger_paused.set(false);
             },
         }
@@ -2357,11 +2336,11 @@ impl ScriptThread {
             },
             WebDriverScriptCommand::ElementClear(element_id, reply) => {
                 webdriver_handlers::handle_element_clear(
+                    cx,
                     &documents,
                     pipeline_id,
                     element_id,
                     reply,
-                    CanGc::from_cx(cx),
                 )
             },
             WebDriverScriptCommand::FindElementsCSSSelector(selector, reply) => {
@@ -2383,20 +2362,20 @@ impl ScriptThread {
             },
             WebDriverScriptCommand::FindElementsTagName(selector, reply) => {
                 webdriver_handlers::handle_find_elements_tag_name(
+                    cx,
                     &documents,
                     pipeline_id,
                     selector,
                     reply,
-                    CanGc::from_cx(cx),
                 )
             },
             WebDriverScriptCommand::FindElementsXpathSelector(selector, reply) => {
                 webdriver_handlers::handle_find_elements_xpath_selector(
+                    cx,
                     &documents,
                     pipeline_id,
                     selector,
                     reply,
-                    CanGc::from_cx(cx),
                 )
             },
             WebDriverScriptCommand::FindElementElementsCSSSelector(selector, element_id, reply) => {
@@ -2423,12 +2402,12 @@ impl ScriptThread {
             ),
             WebDriverScriptCommand::FindElementElementsTagName(selector, element_id, reply) => {
                 webdriver_handlers::handle_find_element_elements_tag_name(
+                    cx,
                     &documents,
                     pipeline_id,
                     element_id,
                     selector,
                     reply,
-                    CanGc::from_cx(cx),
                 )
             },
             WebDriverScriptCommand::FindElementElementsXPathSelector(
@@ -2436,12 +2415,12 @@ impl ScriptThread {
                 element_id,
                 reply,
             ) => webdriver_handlers::handle_find_element_elements_xpath_selector(
+                cx,
                 &documents,
                 pipeline_id,
                 element_id,
                 selector,
                 reply,
-                CanGc::from_cx(cx),
             ),
             WebDriverScriptCommand::FindShadowElementsCSSSelector(
                 selector,
@@ -2481,12 +2460,12 @@ impl ScriptThread {
                 shadow_root_id,
                 reply,
             ) => webdriver_handlers::handle_find_shadow_elements_xpath_selector(
+                cx,
                 &documents,
                 pipeline_id,
                 shadow_root_id,
                 selector,
                 reply,
-                CanGc::from_cx(cx),
             ),
             WebDriverScriptCommand::GetElementShadowRoot(element_id, reply) => {
                 webdriver_handlers::handle_get_element_shadow_root(
@@ -2498,11 +2477,11 @@ impl ScriptThread {
             },
             WebDriverScriptCommand::ElementClick(element_id, reply) => {
                 webdriver_handlers::handle_element_click(
+                    cx,
                     &documents,
                     pipeline_id,
                     element_id,
                     reply,
-                    CanGc::from_cx(cx),
                 )
             },
             WebDriverScriptCommand::GetKnownElement(element_id, reply) => {
@@ -2575,21 +2554,15 @@ impl ScriptThread {
                 webdriver_handlers::handle_get_css(&documents, pipeline_id, node_id, name, reply)
             },
             WebDriverScriptCommand::GetElementRect(node_id, reply) => {
-                webdriver_handlers::handle_get_rect(
-                    &documents,
-                    pipeline_id,
-                    node_id,
-                    reply,
-                    CanGc::from_cx(cx),
-                )
+                webdriver_handlers::handle_get_rect(cx, &documents, pipeline_id, node_id, reply)
             },
             WebDriverScriptCommand::ScrollAndGetBoundingClientRect(node_id, reply) => {
                 webdriver_handlers::handle_scroll_and_get_bounding_client_rect(
+                    cx,
                     &documents,
                     pipeline_id,
                     node_id,
                     reply,
-                    CanGc::from_cx(cx),
                 )
             },
             WebDriverScriptCommand::GetElementText(node_id, reply) => {
@@ -2597,11 +2570,11 @@ impl ScriptThread {
             },
             WebDriverScriptCommand::GetElementInViewCenterPoint(node_id, reply) => {
                 webdriver_handlers::handle_get_element_in_view_center_point(
+                    cx,
                     &documents,
                     pipeline_id,
                     node_id,
                     reply,
-                    CanGc::from_cx(cx),
                 )
             },
             WebDriverScriptCommand::GetParentFrameId(reply) => {
@@ -2615,12 +2588,9 @@ impl ScriptThread {
                     reply,
                 )
             },
-            WebDriverScriptCommand::GetUrl(reply) => webdriver_handlers::handle_get_url(
-                &documents,
-                pipeline_id,
-                reply,
-                CanGc::from_cx(cx),
-            ),
+            WebDriverScriptCommand::GetUrl(reply) => {
+                webdriver_handlers::handle_get_url(&documents, pipeline_id, reply)
+            },
             WebDriverScriptCommand::IsEnabled(element_id, reply) => {
                 webdriver_handlers::handle_is_enabled(&documents, pipeline_id, element_id, reply)
             },
@@ -2636,13 +2606,13 @@ impl ScriptThread {
                 strict_file_interactability,
                 reply,
             ) => webdriver_handlers::handle_will_send_keys(
+                cx,
                 &documents,
                 pipeline_id,
                 element_id,
                 text,
                 strict_file_interactability,
                 reply,
-                CanGc::from_cx(cx),
             ),
             WebDriverScriptCommand::AddLoadStatusSender(_, response_sender) => {
                 webdriver_handlers::handle_add_load_status_sender(
@@ -2868,22 +2838,29 @@ impl ScriptThread {
             return;
         }
 
-        let focusable_area = browsing_context_id
-            .and_then(|browsing_context_id| {
-                document
-                    .iframes()
-                    .get(browsing_context_id)
-                    .map(|iframe| FocusableArea::Node {
-                        node: DomRoot::from_ref(iframe.element.upcast()),
-                        kind: Default::default(),
-                    })
+        // This is separate from the next few lines in order to drop the borrow
+        // on `document.iframes()`.
+        let iframe_element = browsing_context_id.and_then(|browsing_context_id| {
+            document
+                .iframes()
+                .get(browsing_context_id)
+                .map(|iframe| iframe.element.as_rooted())
+        });
+        let focusable_area = iframe_element
+            .map(|iframe_element| {
+                let kind = iframe_element.upcast::<Element>().focusable_area_kind();
+                FocusableArea::IFrameViewport {
+                    iframe_element,
+                    kind,
+                }
             })
             .unwrap_or(FocusableArea::Viewport);
 
-        focus_handler.focus(
-            FocusOperation::Focus(focusable_area),
-            FocusInitiator::Remote,
-            CanGc::from_cx(cx),
+        focus_handler.focus_update_steps(
+            cx,
+            focusable_area.focus_chain(),
+            focus_handler.current_focus_chain(),
+            &focusable_area,
         );
     }
 
@@ -2908,7 +2885,8 @@ impl ScriptThread {
 
         // We ignore unfocus requests for top-level `Document`s as they *always* have focus.
         // Note that this does not take into account system focus.
-        if document.window().is_top_level() {
+        let window = document.window();
+        if window.is_top_level() {
             return;
         }
 
@@ -2922,10 +2900,12 @@ impl ScriptThread {
             );
             return;
         }
-        focus_handler.focus(
-            FocusOperation::Unfocus,
-            FocusInitiator::Remote,
-            CanGc::from_cx(cx),
+
+        focus_handler.focus_update_steps(
+            cx,
+            vec![],
+            focus_handler.current_focus_chain(),
+            &FocusableArea::Viewport,
         );
     }
 
@@ -2990,10 +2970,10 @@ impl ScriptThread {
         }
     }
 
-    fn handle_unload_document(&self, pipeline_id: PipelineId, can_gc: CanGc) {
+    fn handle_unload_document(&self, cx: &mut js::context::JSContext, pipeline_id: PipelineId) {
         let document = self.documents.borrow().find_document(pipeline_id);
         if let Some(document) = document {
-            document.unload(false, can_gc);
+            document.unload(cx, false);
         }
     }
 
@@ -3035,17 +3015,15 @@ impl ScriptThread {
 
     fn handle_update_history_state_msg(
         &self,
+        cx: &mut js::context::JSContext,
         pipeline_id: PipelineId,
         history_state_id: Option<HistoryStateId>,
         url: ServoUrl,
-        can_gc: CanGc,
     ) {
         let Some(window) = self.documents.borrow().find_window(pipeline_id) else {
             return warn!("update history state after pipeline {pipeline_id} closed.",);
         };
-        window
-            .History()
-            .activate_state(history_state_id, url, can_gc);
+        window.History().activate_state(cx, history_state_id, url);
     }
 
     fn handle_remove_history_states(
@@ -3445,13 +3423,10 @@ impl ScriptThread {
             incomplete.load_data.inherited_secure_context,
             incomplete.theme,
             self.this.clone(),
+            metadata.https_state,
         );
-        self.debugger_global.fire_add_debuggee(
-            CanGc::from_cx(cx),
-            window.upcast(),
-            incomplete.pipeline_id,
-            None,
-        );
+        self.debugger_global
+            .fire_add_debuggee(cx, window.upcast(), incomplete.pipeline_id, None);
 
         let mut realm = enter_auto_realm(cx, &*window);
         let cx = &mut realm;
@@ -3561,7 +3536,7 @@ impl ScriptThread {
             document.shared_declarative_refresh_steps(refresh_val.as_bytes());
         }
 
-        document.set_ready_state(DocumentReadyState::Loading, CanGc::from_cx(cx));
+        document.set_ready_state(cx, DocumentReadyState::Loading);
 
         self.documents
             .borrow_mut()
@@ -3610,7 +3585,6 @@ impl ScriptThread {
             ),
         );
 
-        document.set_https_state(metadata.https_state);
         document.set_navigation_start(incomplete.navigation_start);
 
         if is_html_document == IsHTMLDocument::NonHTMLDocument {
@@ -3709,11 +3683,13 @@ impl ScriptThread {
             return;
         }
 
-        let document = self
-            .documents
-            .borrow()
-            .find_document(pipeline_id)
-            .expect("Got pipeline_id from self.documents");
+        let Some(document) = self.documents.borrow().find_document(pipeline_id) else {
+            if active {
+                error!("Trying to set accessibility active on stale document: {pipeline_id}");
+            }
+            return;
+        };
+
         document
             .window()
             .layout()
@@ -3802,6 +3778,7 @@ impl ScriptThread {
 
     /// Instructs the constellation to fetch the document that will be loaded. Stores the InProgressLoad
     /// argument until a notification is received that the fetch is complete.
+    #[servo_tracing::instrument(skip_all)]
     fn pre_page_load(&self, cx: &mut js::context::JSContext, mut incomplete: InProgressLoad) {
         let url_str = incomplete.load_data.url.as_str();
         if url_str == "about:blank" || incomplete.load_data.js_eval_result.is_some() {

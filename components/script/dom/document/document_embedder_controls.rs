@@ -20,7 +20,6 @@ use script_bindings::codegen::GenericBindings::HistoryBinding::HistoryMethods;
 use script_bindings::codegen::GenericBindings::WindowBinding::WindowMethods;
 use script_bindings::inheritance::Castable;
 use script_bindings::root::{Dom, DomRoot};
-use script_bindings::script_runtime::CanGc;
 use servo_base::Epoch;
 use servo_base::generic_channel::GenericSend;
 use servo_constellation_traits::{LoadData, NavigationHistoryBehavior};
@@ -213,13 +212,13 @@ impl DocumentEmbedderControls {
                 ControlElement::ColorInput(input_element),
                 EmbedderControlResponse::ColorPicker(response),
             ) => {
-                input_element.handle_color_picker_response(response, CanGc::from_cx(cx));
+                input_element.handle_color_picker_response(cx, response);
             },
             (
                 ControlElement::FileInput(input_element),
                 EmbedderControlResponse::FilePicker(response),
             ) => {
-                input_element.handle_file_picker_response(response, CanGc::from_cx(cx));
+                input_element.handle_file_picker_response(cx, response);
             },
             (
                 ControlElement::ContextMenu(context_menu_nodes),
@@ -532,7 +531,7 @@ impl Node {
     fn as_text_input(&self) -> Option<DomRoot<Element>> {
         if let Some(input_element) = self
             .downcast::<HTMLInputElement>()
-            .filter(|input_element| input_element.renders_as_text_input_widget())
+            .filter(|input_element| input_element.is_textual_or_password())
         {
             return Some(DomRoot::from_ref(input_element.upcast::<Element>()));
         }

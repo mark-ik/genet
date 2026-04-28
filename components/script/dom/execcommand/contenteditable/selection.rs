@@ -269,12 +269,12 @@ impl Selection {
         // Step 14. If start block is neither a block node nor an editing host,
         // or "span" is not an allowed child of start block,
         // or start block is a td or th, set start block to null.
-        let start_block = if (!start_block.is_block_node() && !start_block.is_editing_host())
-            || !is_allowed_child(
+        let start_block = if (!start_block.is_block_node() && !start_block.is_editing_host()) ||
+            !is_allowed_child(
                 NodeOrString::String("span".to_owned()),
                 NodeOrString::Node(start_block.clone()),
-            )
-            || start_block.is::<HTMLTableCellElement>()
+            ) ||
+            start_block.is::<HTMLTableCellElement>()
         {
             None
         } else {
@@ -299,12 +299,12 @@ impl Selection {
 
         // Step 17. If end block is neither a block node nor an editing host, or "span" is not an allowed child of end block,
         // or end block is a td or th, set end block to null.
-        let end_block = if (!end_block.is_block_node() && !end_block.is_editing_host())
-            || !is_allowed_child(
+        let end_block = if (!end_block.is_block_node() && !end_block.is_editing_host()) ||
+            !is_allowed_child(
                 NodeOrString::String("span".to_owned()),
                 NodeOrString::Node(end_block.clone()),
-            )
-            || end_block.is::<HTMLTableCellElement>()
+            ) ||
+            end_block.is::<HTMLTableCellElement>()
         {
             None
         } else {
@@ -387,11 +387,11 @@ impl Selection {
             // `RootedVec<DomRoot<Node>>`. The type alias here doesn't upset test-tidy,
             // while also providing the necessary information to the compiler to work.
             type DomRootNode = DomRoot<Node>;
-            if node.is_editable()
-                && !(node.is::<HTMLTableSectionElement>()
-                    || node.is::<HTMLTableRowElement>()
-                    || node.is::<HTMLTableCellElement>())
-                && node_list
+            if node.is_editable() &&
+                !(node.is::<HTMLTableSectionElement>() ||
+                    node.is::<HTMLTableRowElement>() ||
+                    node.is::<HTMLTableCellElement>()) &&
+                node_list
                     .last()
                     .is_none_or(|last: &DomRootNode| !last.is_ancestor_of(&node))
             {
@@ -408,10 +408,11 @@ impl Selection {
             node.remove_self(cx);
             // Step 25.3. If the block node of parent has no visible children, and parent is editable or an editing host,
             // call createElement("br") on the context object and append the result as the last child of parent.
-            if parent
-                .block_node_of()
-                .is_some_and(|block_node| block_node.children().all(|child| child.is_invisible()))
-                && parent.is_editable_or_editing_host()
+            if parent.block_node_of().is_some_and(|block_node| {
+                block_node
+                    .children_unrooted(cx.no_gc())
+                    .all(|child| child.is_invisible())
+            }) && parent.is_editable_or_editing_host()
             {
                 let br = context_object.create_element(cx, "br");
                 if parent.AppendChild(cx, br.upcast()).is_err() {
@@ -421,8 +422,8 @@ impl Selection {
             // Step 25.4. If strip wrappers is true or parent is not an inclusive ancestor of start node,
             // while parent is an editable inline node with length 0, let grandparent be the parent of parent,
             // then remove parent from grandparent, then set parent to grandparent.
-            if strip_wrappers == SelectionDeletionStripWrappers::Strip
-                || !parent.is_inclusive_ancestor_of(&start_node)
+            if strip_wrappers == SelectionDeletionStripWrappers::Strip ||
+                !parent.is_inclusive_ancestor_of(&start_node)
             {
                 let mut parent = parent;
                 loop {
@@ -468,8 +469,8 @@ impl Selection {
 
         // Step 30. If block merging is false, or start block or end block is null, or start block is not
         // in the same editing host as end block, or start block and end block are the same:
-        if block_merging == SelectionDeletionBlockMerging::Skip
-            || start_block.as_ref().zip(end_block.as_ref()).is_none_or(
+        if block_merging == SelectionDeletionBlockMerging::Skip ||
+            start_block.as_ref().zip(end_block.as_ref()).is_none_or(
                 |(start_block, end_block)| {
                     start_block == end_block || !start_block.same_editing_host(end_block)
                 },
@@ -512,7 +513,10 @@ impl Selection {
             let mut reference_node = end_block.clone();
             // Step 32.2. While reference node is not a child of start block, set reference node to its parent.
             loop {
-                if start_block.children().all(|child| child != reference_node) {
+                if start_block
+                    .children_unrooted(cx.no_gc())
+                    .all(|child| child != &reference_node)
+                {
                     reference_node = reference_node
                         .GetParentNode()
                         .expect("Must always have a parent, at least start_block");
@@ -538,8 +542,8 @@ impl Selection {
                 // Step 32.4.1. While end block is editable and is the only child of its parent and is not a child of start block,
                 // let parent equal end block, then remove end block from parent, then set end block to parent.
                 loop {
-                    if end_block.is_editable()
-                        && start_block.children().all(|child| child != end_block)
+                    if end_block.is_editable() &&
+                        start_block.children().all(|child| child != end_block)
                     {
                         if let Some(parent) = end_block.GetParentNode() {
                             if parent.children_count() == 1 {
@@ -555,9 +559,9 @@ impl Selection {
                 // Step 32.4.2. If end block is editable and is not an inline node,
                 // and its previousSibling and nextSibling are both inline nodes,
                 // call createElement("br") on the context object and insert it into end block's parent immediately after end block.
-                if end_block.is_editable()
-                    && !end_block.is_inline_node()
-                    && end_block
+                if end_block.is_editable() &&
+                    !end_block.is_inline_node() &&
+                    end_block
                         .GetPreviousSibling()
                         .is_some_and(|previous| previous.is_inline_node())
                 {

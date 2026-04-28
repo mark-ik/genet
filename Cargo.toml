@@ -49,6 +49,7 @@ brotli = "8.0.2"
 bytemuck = "1"
 byteorder = "1.5"
 bytes = "1.0"
+byte-slice-cast = "1.2.3"
 cbc = "0.1.2"
 cfg-if = "1.0.4"
 chacha20poly1305 = "0.10"
@@ -112,10 +113,11 @@ indexmap = { version = "2.14.0", features = ["std"] }
 inventory = { version = "0.3.24" }
 ipc-channel = "0.21"
 itertools = "0.14"
-js = { package = "mozjs", version = "=0.15.8", default-features = false, features = ["libz-sys", "intl"] }
+js = { package = "mozjs", version = "=0.15.11", default-features = false, features = ["libz-sys", "intl"] }
 keyboard-types = { version = "0.8.3", features = ["serde", "webdriver"] }
 kurbo = { version = "0.13", features = ["euclid"] }
 libc = "0.2"
+lru = "0.17"
 log = "0.4.29"
 mach2 = "0.6"
 malloc_size_of_derive = "0.1"
@@ -131,6 +133,7 @@ nix = "0.30"
 nom = "8.0.0"
 nom-rfc8288 = "0.4.0"
 num-bigint-dig = "0.8"
+num-complex = "0.4.6"
 num-derive = "0.4.2"
 num-traits = "0.2"
 num_cpus = "1.17.0"
@@ -151,6 +154,7 @@ postcard = { version = "1.1.3", default-features = false, features = ["use-std"]
 proc-macro2 = "1"
 quote = "1"
 rand = "0.9"
+rangemap = "1.7.1"
 raw-window-handle = "0.6"
 rayon = "1"
 read-fonts = "0.35.0"
@@ -160,29 +164,30 @@ rsa = { version = "0.9.10", features = ["sha1", "sha2"] }
 rustc-hash = "2.1.2"
 rustls = { version = "0.23", default-features = false, features = ["logging", "std", "tls12"] }
 rustls-pki-types = "1.14"
-rustls-platform-verifier = "0.6.2"
+rustls-platform-verifier = "0.7.0"
 sea-query = { version = "=1.0.0-rc.31", default-features = false, features = ["backend-sqlite", "derive"] }
 sea-query-rusqlite = { version = "=0.8.0-rc.15" }
 sec1 = "0.7"
-selectors = { git = "https://github.com/servo/stylo", rev = "a556f4cbd15fc289039261661b049a5dc845cd80" }
+selectors = { git = "https://github.com/servo/stylo", rev = "bfa746c957ce12bf12936e118b78a806d9ae0d66" }
 serde = "1.0.228"
 serde_bytes = "0.11"
 serde_core = "1.0.226"
 serde_json = "1.0"
-servo_arc = { git = "https://github.com/servo/stylo", rev = "a556f4cbd15fc289039261661b049a5dc845cd80" }
+servo_arc = { git = "https://github.com/servo/stylo", rev = "bfa746c957ce12bf12936e118b78a806d9ae0d66" }
 sha1 = "0.10"
 sha2 = "0.10"
 sha3 = "0.10"
+speexdsp-resampler = "0.1.0"
 skrifa = "0.37.0"
 smallvec = { version = "1.15", features = ["serde", "union"] }
 string_cache = "0.9"
 strum = { version = "0.28", features = ["derive"] }
-stylo = { git = "https://github.com/servo/stylo", rev = "a556f4cbd15fc289039261661b049a5dc845cd80" }
-stylo_atoms = { git = "https://github.com/servo/stylo", rev = "a556f4cbd15fc289039261661b049a5dc845cd80" }
-stylo_dom = { git = "https://github.com/servo/stylo", rev = "a556f4cbd15fc289039261661b049a5dc845cd80" }
-stylo_malloc_size_of = { git = "https://github.com/servo/stylo", rev = "a556f4cbd15fc289039261661b049a5dc845cd80" }
-stylo_static_prefs = { git = "https://github.com/servo/stylo", rev = "a556f4cbd15fc289039261661b049a5dc845cd80" }
-stylo_traits = { git = "https://github.com/servo/stylo", rev = "a556f4cbd15fc289039261661b049a5dc845cd80" }
+stylo = { git = "https://github.com/servo/stylo", rev = "bfa746c957ce12bf12936e118b78a806d9ae0d66" }
+stylo_atoms = { git = "https://github.com/servo/stylo", rev = "bfa746c957ce12bf12936e118b78a806d9ae0d66" }
+stylo_dom = { git = "https://github.com/servo/stylo", rev = "bfa746c957ce12bf12936e118b78a806d9ae0d66" }
+stylo_malloc_size_of = { git = "https://github.com/servo/stylo", rev = "bfa746c957ce12bf12936e118b78a806d9ae0d66" }
+stylo_static_prefs = { git = "https://github.com/servo/stylo", rev = "bfa746c957ce12bf12936e118b78a806d9ae0d66" }
+stylo_traits = { git = "https://github.com/servo/stylo", rev = "bfa746c957ce12bf12936e118b78a806d9ae0d66" }
 surfman = { version = "0.12.0", features = ["chains"] }
 syn = { version = "2", default-features = false, features = ["clone-impls", "derive", "parsing"] }
 synstructure = "0.13"
@@ -228,6 +233,7 @@ wio = "0.2"
 wr_malloc_size_of = "0.2.2"
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
 xml5ever = "0.39"
+yuv = { version = "0.8.13", features = ["rayon"] }
 
 ############################################################################################
 ## Workspace-local dependencies

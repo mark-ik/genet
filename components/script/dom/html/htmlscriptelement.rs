@@ -1311,8 +1311,8 @@ impl VirtualMethods for HTMLScriptElement {
         }
     }
 
-    fn unbind_from_tree(&self, context: &UnbindContext, can_gc: CanGc) {
-        self.super_type().unwrap().unbind_from_tree(context, can_gc);
+    fn unbind_from_tree(&self, cx: &mut js::context::JSContext, context: &UnbindContext) {
+        self.super_type().unwrap().unbind_from_tree(cx, context);
 
         if self.marked_as_render_blocking.replace(false) {
             let document = self.owner_document();
@@ -1365,10 +1365,13 @@ impl HTMLScriptElementMethods<crate::DomTypeHolder> for HTMLScriptElement {
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-script-async>
-    fn SetAsync(&self, value: bool, can_gc: CanGc) {
+    fn SetAsync(&self, cx: &mut JSContext, value: bool) {
         self.non_blocking.set(false);
-        self.upcast::<Element>()
-            .set_bool_attribute(&local_name!("async"), value, can_gc);
+        self.upcast::<Element>().set_bool_attribute(
+            &local_name!("async"),
+            value,
+            CanGc::from_cx(cx),
+        );
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-script-defer

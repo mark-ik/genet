@@ -381,6 +381,19 @@
       {}
      ]
     ],
+    "textarea-caret-following-linebreak-last-line.html": [
+     "d005acd011063307b93d74985f3e414ce66828e4",
+     [
+      null,
+      [
+       [
+        "/_mozilla/appearance/textarea-caret-following-linebreak-last-line-ref.html",
+        "=="
+       ]
+      ],
+      {}
+     ]
+    ],
     "textarea-caret-following-linebreak.html": [
      "55bc06e372e9ce8ad4d62d368a644c1f1cd3ffd9",
      [
@@ -8429,6 +8442,10 @@
      "5e70ba743b12012fe3b1116414107cf50ef6a8ab",
      []
     ],
+    "textarea-caret-following-linebreak-last-line-ref.html": [
+     "937a6ec58a30b33d4807f5560fd8c60fff250927",
+     []
+    ],
     "textarea-caret-following-linebreak-ref.html": [
      "f424853f243ff0fe4c43506db800b51afc294113",
      []
@@ -12963,7 +12980,7 @@
      ]
     ],
     "css-property-listing.html": [
-     "c363eb71b5d8be9fcc3c7cd698638b80339a158f",
+     "57de0ad257e4275c2bdca72cd1dba6cda620d5e6",
      [
       null,
       {}
@@ -14323,7 +14340,7 @@
      ]
     ],
     "interfaces.https.html": [
-     "566deaac42e0f430fadcbd28bf4dba751c7ba39a",
+     "decaa2df2047787dbfc4b83d09ce49b117a7a53c",
      [
       null,
       {}

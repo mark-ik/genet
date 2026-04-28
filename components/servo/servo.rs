@@ -71,7 +71,7 @@ use servo_geometry::{
 };
 use servo_media::ServoMedia;
 use servo_media::player::context::GlContext;
-use servo_wakelock::NoOpWakeLockProvider;
+use servo_wakelock::DefaultWakeLockDelegate;
 use storage::new_storage_threads;
 use storage_traits::StorageThreads;
 use style::global_style_data::StyleThreadPool;
@@ -194,6 +194,7 @@ impl ServoInner {
             .and_then(WebView::from_weak_handle)
     }
 
+    #[servo_tracing::instrument(level = "debug", skip_all)]
     fn spin_event_loop(&self) -> bool {
         if self.shutdown_state.get() == ShutdownState::FinishedShuttingDown {
             return false;
@@ -265,6 +266,7 @@ impl ServoInner {
         true
     }
 
+    #[servo_tracing::instrument(level = "debug", skip_all)]
     fn receive_one_message(&self) -> Option<Message> {
         let mut select = crossbeam_channel::Select::new();
         let embedder_receiver_index = select.recv(&self.embedder_receiver);
@@ -834,7 +836,7 @@ impl Drop for ServoInner {
 pub struct Servo(Rc<ServoInner>);
 
 impl Servo {
-    #[servo_tracing::instrument(skip(builder))]
+    #[servo_tracing::instrument(name = "Servo::new", skip(builder))]
     fn new(builder: ServoBuilder) -> Self {
         // Global configuration options, parsed from the command line.
         let opts = builder.opts.map(|opts| *opts);
@@ -930,8 +932,11 @@ impl Servo {
                 protocols.clone(),
             );
 
-        let (private_storage_threads, public_storage_threads) =
-            new_storage_threads(mem_profiler_chan.clone(), opts.config_dir.clone());
+        let (private_storage_threads, public_storage_threads) = new_storage_threads(
+            mem_profiler_chan.clone(),
+            opts.config_dir.clone(),
+            opts.temporary_storage,
+        );
 
         create_constellation(
             embedder_to_constellation_receiver,
@@ -949,6 +954,8 @@ impl Servo {
             public_storage_threads.clone(),
             private_storage_threads.clone(),
         );
+
+        net::connector::prewarm_tls();
 
         if opts::get().multiprocess {
             prefs::add_observer(Box::new(constellation_proxy.clone()));
@@ -1189,7 +1196,7 @@ fn create_constellation(
         wgpu_image_map: paint.webgpu_image_map(),
         async_runtime,
         privileged_urls,
-        wake_lock_provider: Box::new(NoOpWakeLockProvider),
+        wake_lock_provider: Box::new(DefaultWakeLockDelegate),
     };
 
     let layout_factory = Arc::new(LayoutFactoryImpl());

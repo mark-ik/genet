@@ -2,6 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+use std::cmp::Ordering;
+use std::collections::HashSet;
+
 use dom_struct::dom_struct;
 use html5ever::{Namespace, ns};
 use js::context::JSContext;
@@ -14,10 +17,12 @@ use crate::dom::bindings::codegen::Bindings::SanitizerBinding::{
     SanitizerElementWithAttributes, SanitizerMethods, SanitizerPresets,
 };
 use crate::dom::bindings::codegen::UnionTypes::SanitizerConfigOrSanitizerPresets;
+use crate::dom::bindings::domname::is_valid_attribute_local_name;
 use crate::dom::bindings::error::{Error, Fallible};
-use crate::dom::bindings::reflector::{Reflector, reflect_dom_object_with_proto_and_cx};
+use crate::dom::bindings::reflector::{DomGlobal, Reflector, reflect_dom_object_with_proto_and_cx};
 use crate::dom::bindings::root::DomRoot;
 use crate::dom::bindings::str::DOMString;
+use crate::dom::types::Console;
 use crate::dom::window::Window;
 
 #[dom_struct]
@@ -58,8 +63,10 @@ impl Sanitizer {
         // Step 1. Canonicalize configuration with allowCommentsPIsAndDataAttributes.
         configuration.canonicalize(allow_comments_pis_and_data_attributes);
 
-        // TODO:
         // Step 2. If configuration is not valid, then return false.
+        if !configuration.is_valid() {
+            return false;
+        }
 
         // Step 3. Set sanitizer’s configuration to configuration.
         let mut sanitizer_configuration = self.configuration.borrow_mut();
@@ -104,21 +111,743 @@ impl SanitizerMethods<crate::DomTypeHolder> for Sanitizer {
     /// <https://wicg.github.io/sanitizer-api/#dom-sanitizer-get>
     fn Get(&self) -> SanitizerConfig {
         // Step 1. Let config be this’s configuration.
-        let config = self.configuration.borrow_mut();
+        let mut config = self.configuration.borrow_mut();
 
-        // TODO: Step 2 to Step 7
+        // Step 2. Assert: config is valid.
+        assert!(config.is_valid());
 
-        // Step 8. Return config.
+        match &mut config.elements {
+            // Step 3. If config["elements"] exists:
+            Some(config_elements) => {
+                // Step 3.1. For any element of config["elements"]:
+                for element in config_elements.iter_mut() {
+                    // Step 3.1.1. If element["attributes"] exists:
+                    if let Some(element_attributes) = &mut element.attributes_mut() {
+                        // Step 3.1.1.1. Set element["attributes"] to the result of sort in
+                        // ascending order element["attributes"], with attrA being less than item
+                        // attrB.
+                        element_attributes.sort_by(|item_a, item_b| item_a.compare(item_b));
+                    }
+
+                    // Step 3.1.2. If element["removeAttributes"] exists:
+                    if let Some(element_remove_attributes) = &mut element.remove_attributes_mut() {
+                        // Step 3.1.2.1. Set element["removeAttributes"] to the result of sort in
+                        // ascending order element["removeAttributes"], with attrA being less than
+                        // item attrB.
+                        element_remove_attributes.sort_by(|item_a, item_b| item_a.compare(item_b));
+                    }
+                }
+
+                // Step 3.2. Set config["elements"] to the result of sort in ascending order
+                // config["elements"], with elementA being less than item elementB.
+                config_elements.sort_by(|item_a, item_b| item_a.compare(item_b));
+            },
+            // Step 4. Otherwise:
+            None => {
+                // Step 4.1. Set config["removeElements"] to the result of sort in ascending order
+                // config["removeElements"], with elementA being less than item elementB.
+                if let Some(config_remove_elements) = &mut config.removeElements {
+                    config_remove_elements.sort_by(|item_a, item_b| item_a.compare(item_b));
+                }
+            },
+        }
+
+        // Step 5. If config["replaceWithChildrenElements"] exists:
+        if let Some(config_replace_with_children_elements) = &mut config.replaceWithChildrenElements
+        {
+            // Step 5.1.Set config["replaceWithChildrenElements"] to the result of sort in ascending
+            // order config["replaceWithChildrenElements"], with elementA being less than item
+            // elementB.
+            config_replace_with_children_elements.sort_by(|item_a, item_b| item_a.compare(item_b));
+        }
+
+        // TODO:
+        // Step 6. If config["processingInstructions"] exists:
+        // Step 6.1. Set config["processingInstructions"] to the result of sort in ascending order
+        // config["processingInstructions"], with piA["target"] being code unit less than
+        // piB["target"].
+        // Step 7. Otherwise:
+        // Step 7.1. Set config["removeProcessingInstructions"] to the result of sort in ascending
+        // order config["removeProcessingInstructions"], with piA["target"] being code unit less
+        // than piB["target"].
+
+        match &mut config.attributes {
+            // Step 8. If config["attributes"] exists:
+            Some(config_attributes) => {
+                // Step 8.1. Set config["attributes"] to the result of sort in ascending order
+                // config["attributes"], with attrA being less than item attrB.
+                config_attributes.sort_by(|item_a, item_b| item_a.compare(item_b));
+            },
+            // Step 9. Otherwise:
+            None => {
+                // Step 9.1. Set config["removeAttributes"] to the result of sort in ascending order
+                // config["removeAttributes"], with attrA being less than item attrB.
+                if let Some(config_remove_attributes) = &mut config.removeAttributes {
+                    config_remove_attributes.sort_by(|item_a, item_b| item_a.compare(item_b));
+                }
+            },
+        }
+
+        // Step 10. Return config.
         (*config).clone()
+    }
+
+    /// <https://wicg.github.io/sanitizer-api/#dom-sanitizer-allowelement>
+    fn AllowElement(&self, element: SanitizerElementWithAttributes) -> bool {
+        // Step 1. Let configuration be this’s configuration.
+        let mut configuration = self.configuration.borrow_mut();
+
+        // Step 2. Assert: configuration is valid.
+        assert!(configuration.is_valid());
+
+        // Step 3. Set element to the result of canonicalize a sanitizer element with attributes
+        // with element.
+        let mut element = element.canonicalize();
+
+        // Step 4. If configuration["elements"] exists:
+        if configuration.elements.is_some() {
+            // Step 4.1. Set modified to the result of remove element from
+            // configuration["replaceWithChildrenElements"].
+            let modified = if let Some(replace_with_children_elements) =
+                &mut configuration.replaceWithChildrenElements
+            {
+                replace_with_children_elements.remove_item(&element)
+            } else {
+                false
+            };
+
+            // Step 4.2. Comment: We need to make sure the per-element attributes do not overlap
+            // with global attributes.
+
+            match &configuration.attributes {
+                // Step 4.3. If configuration["attributes"] exists:
+                Some(configuration_attributes) => {
+                    // Step 4.3.1. If element["attributes"] exists:
+                    if let Some(element_attributes) = element.attributes_mut() {
+                        // Step 4.3.1.1. Set element["attributes"] to remove duplicates from
+                        // element["attributes"].
+                        element_attributes.remove_duplicates();
+
+                        // Step 4.3.1.2. Set element["attributes"] to the difference of
+                        // element["attributes"] and configuration["attributes"].
+                        element_attributes.difference(configuration_attributes);
+
+                        // Step 4.3.1.3. If configuration["dataAttributes"] is true:
+                        if configuration.dataAttributes == Some(true) {
+                            // Step 4.3.1.3.1. Remove all items item from element["attributes"]
+                            // where item is a custom data attribute.
+                            element_attributes.retain(|attribute| {
+                                !is_custom_data_attribute(
+                                    &attribute.name().str(),
+                                    attribute
+                                        .namespace()
+                                        .map(|namespace| namespace.str())
+                                        .as_deref(),
+                                )
+                            });
+                        }
+                    }
+
+                    // Step 4.3.2. If element["removeAttributes"] exists:
+                    if let Some(element_remove_attributes) = element.remove_attributes_mut() {
+                        // Step 4.3.2.1. set element["removeattributes"] to remove duplicates from
+                        // element["removeattributes"].
+                        element_remove_attributes.remove_duplicates();
+
+                        // Step 4.3.2.2. set element["removeattributes"] to the intersection of
+                        // element["removeattributes"] and configuration["attributes"].
+                        element_remove_attributes.intersection(configuration_attributes);
+                    }
+                },
+                // Step 4.4. Otherwise:
+                None => {
+                    // NOTE: To avoid borrowing `element` again at Step 4.4.1.2 and 4.4.1.3 after
+                    // borrowing `element` mutably at the beginning of Step 4.4.1, we clone
+                    // element["attributes"] first, and call `set_attributes` at the end of Step
+                    // 4.4.1 to put it back into `element`.
+
+                    // Step 4.4.1. If element["attributes"] exists:
+                    if let Some(mut element_attributes) = element.attributes_mut().cloned() {
+                        // Step 4.4.1.1. Set element["attributes"] to remove duplicates from
+                        // element["attributes"].
+                        element_attributes.remove_duplicates();
+
+                        // Step 4.4.1.2. Set element["attributes"] to the difference of
+                        // element["attributes"] and element["removeAttributes"] with default « ».
+                        element_attributes
+                            .difference(element.remove_attributes().unwrap_or_default());
+
+                        // Step 4.4.1.3. Remove element["removeAttributes"].
+                        element.set_remove_attributes(None);
+
+                        // Step 4.4.1.4. Set element["attributes"] to the difference of
+                        // element["attributes"] and configuration["removeAttributes"].
+                        element_attributes.difference(
+                            configuration
+                                .removeAttributes
+                                .as_deref()
+                                .unwrap_or_default(),
+                        );
+
+                        element.set_attributes(Some(element_attributes));
+                    }
+
+                    // Step 4.4.2. If element["removeAttributes"] exists:
+                    if let Some(mut element_remove_attributes) = element.remove_attributes_mut() {
+                        // Step 4.4.2.1. Set element["removeAttributes"] to remove duplicates from
+                        // element["removeAttributes"].
+                        element_remove_attributes = element_remove_attributes.remove_duplicates();
+
+                        // Step 4.4.2.2. Set element["removeAttributes"] to the difference of
+                        // element["removeAttributes"] and configuration["removeAttributes"].
+                        element_remove_attributes.difference(
+                            configuration
+                                .removeAttributes
+                                .as_deref()
+                                .unwrap_or_default(),
+                        );
+                    }
+                },
+            }
+
+            // Step 4.5. If configuration["elements"] does not contain element:
+            let configuration_elements = configuration
+                .elements
+                .as_mut()
+                .expect("Guaranteed by Step 4");
+            if !configuration_elements.contains_item(&element) {
+                // Step 4.5.1. Comment: This is the case with a global allow-list that does not yet
+                // contain element.
+
+                // Step 4.5.2. Append element to configuration["elements"].
+                configuration_elements.push(element.clone());
+
+                // Step 4.5.3. Return true.
+                return true;
+            }
+
+            // Step 4.6. Comment: This is the case with a global allow-list that already contains
+            // element.
+
+            // Step 4.7. Let current element be the item in configuration["elements"] where
+            // item["name"] equals element["name"] and item["namespace"] equals
+            // element["namespace"].
+            let current_element = configuration_elements
+                .iter()
+                .find(|item| {
+                    item.name() == element.name() && item.namespace() == element.namespace()
+                })
+                .expect("Guaranteed by Step 4.5 and Step 4.5.2");
+
+            // Step 4.8. If element equals current element then return modified.
+            if element == *current_element {
+                return modified;
+            }
+
+            // Step 4.9. Remove element from configuration["elements"].
+            configuration_elements.remove_item(&element);
+
+            // Step 4.10. Append element to configuration["elements"]
+            configuration_elements.push(element);
+
+            // Step 4.11. Return true.
+            true
+        }
+        // Step 5. Otherwise:
+        else {
+            // Step 5.1. If element["attributes"] exists or element["removeAttributes"] with default
+            // « » is not empty:
+            if element.attributes().is_some() ||
+                !element.remove_attributes().unwrap_or_default().is_empty()
+            {
+                // Step 5.1.1. The user agent may report a warning to the console that this
+                // operation is not supported.
+                Console::internal_warn(
+                    &self.global(),
+                    "Do not support adding an element with attributes to a sanitizer \
+                        whose configuration[\"elements\"] does not exist."
+                        .into(),
+                );
+
+                // Step 5.1.2. Return false.
+                return false;
+            }
+
+            // Step 5.2. Set modified to the result of remove element from
+            // configuration["replaceWithChildrenElements"].
+            let modified = if let Some(replace_with_children_elements) =
+                &mut configuration.replaceWithChildrenElements
+            {
+                replace_with_children_elements.remove_item(&element)
+            } else {
+                false
+            };
+
+            // Step 5.3. If configuration["removeElements"] does not contain element:
+            if !configuration
+                .removeElements
+                .as_ref()
+                .is_some_and(|configuration_remove_elements| {
+                    configuration_remove_elements.contains_item(&element)
+                })
+            {
+                // Step 5.3.1. Comment: This is the case with a global remove-list that does not
+                // contain element.
+
+                // Step 5.3.2. Return modified.
+                return modified;
+            }
+
+            // Step 5.4. Comment: This is the case with a global remove-list that contains element.
+
+            // Step 5.5. Remove element from configuration["removeElements"].
+            if let Some(configuration_remove_elements) = &mut configuration.removeElements {
+                configuration_remove_elements.remove_item(&element);
+            }
+
+            // Step 5.6. Return true.
+            true
+        }
+    }
+
+    /// <https://wicg.github.io/sanitizer-api/#dom-sanitizer-removeelement>
+    fn RemoveElement(&self, element: SanitizerElement) -> bool {
+        // Remove an element with element and this’s configuration.
+        self.configuration.borrow_mut().remove_element(element)
+    }
+
+    /// <https://wicg.github.io/sanitizer-api/#dom-sanitizer-replaceelementwithchildren>
+    fn ReplaceElementWithChildren(&self, element: SanitizerElement) -> bool {
+        // Step 1. Let configuration be this’s configuration.
+        let mut configuration = self.configuration.borrow_mut();
+
+        // Step 2. Assert: configuration is valid.
+        assert!(configuration.is_valid());
+
+        // Step 3. Set element to the result of canonicalize a sanitizer element with element.
+        let element = element.canonicalize();
+
+        // Step 4. If the built-in non-replaceable elements list contains element:
+        if built_in_non_replaceable_elements_list().contains_item(&element) {
+            // Step 4.1. Return false.
+            return false;
+        }
+
+        // Step 5. If configuration["replaceWithChildrenElements"] contains element:
+        if configuration
+            .replaceWithChildrenElements
+            .as_ref()
+            .is_some_and(|configuration_replace_with_children_elements| {
+                configuration_replace_with_children_elements.contains_item(&element)
+            })
+        {
+            // Step 5.1. Return false.
+            return false;
+        }
+
+        // Step 6. Remove element from configuration["removeElements"].
+        if let Some(configuration_remove_elements) = &mut configuration.removeElements {
+            configuration_remove_elements.remove_item(&element);
+        }
+
+        // Step 7. Remove element from configuration["elements"] list.
+        if let Some(configuration_elements) = &mut configuration.elements {
+            configuration_elements.remove_item(&element);
+        }
+
+        // Step 8. Add element to configuration["replaceWithChildrenElements"].
+        if let Some(configuration_replace_with_children_elements) =
+            &mut configuration.replaceWithChildrenElements
+        {
+            configuration_replace_with_children_elements.add_item(element);
+        } else {
+            configuration.replaceWithChildrenElements = Some(vec![element]);
+        }
+
+        // Step 9. Return true.
+        true
     }
 }
 
 trait SanitizerConfigAlgorithm {
+    /// <https://wicg.github.io/sanitizer-api/#sanitizerconfig-valid>
+    fn is_valid(&self) -> bool;
+
+    /// <https://wicg.github.io/sanitizer-api/#sanitizer-remove-an-element>
+    fn remove_element(&mut self, element: SanitizerElement) -> bool;
+
     /// <https://wicg.github.io/sanitizer-api/#sanitizer-canonicalize-the-configuration>
     fn canonicalize(&mut self, allow_comments_pis_and_data_attributes: bool);
 }
 
 impl SanitizerConfigAlgorithm for SanitizerConfig {
+    /// <https://wicg.github.io/sanitizer-api/#sanitizerconfig-valid>
+    fn is_valid(&self) -> bool {
+        // NOTE: It’s expected that the configuration being passing in has previously been run
+        // through the canonicalize the configuration steps. We will simply assert conditions that
+        // that algorithm should have guaranteed to hold.
+
+        // Step 1. Assert: config["elements"] exists or config["removeElements"] exists.
+        assert!(self.elements.is_some() || self.removeElements.is_some());
+
+        // Step 2. If config["elements"] exists and config["removeElements"] exists, then return
+        // false.
+        if self.elements.is_some() && self.removeElements.is_some() {
+            return false;
+        }
+
+        // TODO:
+        // Step 3. Assert: Either config["processingInstructions"] exists or
+        // config["removeProcessingInstructions"] exists.
+        // Step 4. If config["processingInstructions"] exists and
+        // config["removeProcessingInstructions"] exists, then return false.
+
+        // Step 5. Assert: Either config["attributes"] exists or config["removeAttributes"] exists.
+        assert!(self.attributes.is_some() || self.removeAttributes.is_some());
+
+        // Step 6. If config["attributes"] exists and config["removeAttributes"] exists, then return
+        // false.
+        if self.attributes.is_some() && self.removeAttributes.is_some() {
+            return false;
+        }
+
+        // Step 7. Assert: All SanitizerElementNamespaceWithAttributes, SanitizerElementNamespace,
+        // SanitizerProcessingInstruction, and SanitizerAttributeNamespace items in config are
+        // canonical, meaning they have been run through canonicalize a sanitizer element,
+        // canonicalize a sanitizer processing instruction, or canonicalize a sanitizer attribute,
+        // as appropriate.
+        //
+        // NOTE: This assertion could be done by running the canonicalization again to see if there
+        // is any changes. Since it is expected to canonicalize the configuration before running
+        // this `is_valid` function, we simply skip this assert for the sake of performace.
+
+        match &self.elements {
+            // Step 8. If config["elements"] exists:
+            Some(config_elements) => {
+                // Step 8.1. If config["elements"] has duplicates, then return false.
+                if config_elements.has_duplicates() {
+                    return false;
+                }
+            },
+            // Step 9. Otherwise:
+            None => {
+                // Step 9.1. If config["removeElements"] has duplicates, then return false.
+                if self
+                    .removeElements
+                    .as_ref()
+                    .is_some_and(|config_remove_elements| config_remove_elements.has_duplicates())
+                {
+                    return false;
+                }
+            },
+        }
+
+        // Step 10. If config["replaceWithChildrenElements"] exists and has duplicates, then return
+        // false.
+        if self
+            .replaceWithChildrenElements
+            .as_ref()
+            .is_some_and(|replace_with_children_elements| {
+                replace_with_children_elements.has_duplicates()
+            })
+        {
+            return false;
+        }
+
+        // TODO:
+        // Step 11. If config["processingInstructions"] exists:
+        // Step 11.1. If config["processingInstructions"] has duplicate targets, then return false.
+        // Step 12. Otherwise:
+        // Step 12.1. If config["removeProcessingInstructions"] has duplicate targets, then return
+        // false.
+
+        match &self.attributes {
+            // Step 13. If config["attributes"] exists:
+            Some(config_attributes) => {
+                // Step 13.1. If config["attributes"] has duplicates, then return false.
+                if config_attributes.has_duplicates() {
+                    return false;
+                }
+            },
+            // Step 14. Otherwise:
+            None => {
+                // Step 14.1. If config["removeAttributes"] has duplicates, then return false.
+                if self
+                    .removeAttributes
+                    .as_ref()
+                    .is_some_and(|config_remove_attributes| {
+                        config_remove_attributes.has_duplicates()
+                    })
+                {
+                    return false;
+                }
+            },
+        }
+
+        // Step 15. If config["replaceWithChildrenElements"] exists:
+        if let Some(config_replace_with_children_elements) = &self.replaceWithChildrenElements {
+            // Step 15.1. For each element of config["replaceWithChildrenElements"]:
+            for element in config_replace_with_children_elements {
+                // Step 15.1.1. If the built-in non-replaceable elements list contains element, then
+                // return false.
+                if built_in_non_replaceable_elements_list().contains_item(element) {
+                    return false;
+                }
+            }
+
+            match &self.elements {
+                // Step 15.2. If config["elements"] exists:
+                Some(config_elements) => {
+                    // Step 15.2.1. If the intersection of config["elements"] and
+                    // config["replaceWithChildrenElements"] is not empty, then return false.
+                    if config_elements
+                        .is_intersection_non_empty(config_replace_with_children_elements)
+                    {
+                        return false;
+                    }
+                },
+                // Step 15.3. Otherwise:
+                None => {
+                    // Step 15.3.1. If the intersection of config["removeElements"] and
+                    // config["replaceWithChildrenElements"] is not empty, then return false.
+                    if self
+                        .removeElements
+                        .as_ref()
+                        .is_some_and(|config_remove_elements| {
+                            config_remove_elements
+                                .is_intersection_non_empty(config_replace_with_children_elements)
+                        })
+                    {
+                        return false;
+                    }
+                },
+            }
+        }
+
+        match &self.attributes {
+            // Step 16. If config["attributes"] exists:
+            Some(config_attributes) => {
+                // Step 16.1. Assert: config["dataAttributes"] exists.
+                assert!(self.dataAttributes.is_some());
+
+                // Step 16.2. If config["elements"] exists:
+                if let Some(config_elements) = &self.elements {
+                    // Step 16.2.1. For each element of config["elements"]:
+                    for element in config_elements {
+                        // Step 16.2.1.1. If element["attributes"] exists and element["attributes"]
+                        // has duplicates, then return false.
+                        if element
+                            .attributes()
+                            .is_some_and(|element_attributes| element_attributes.has_duplicates())
+                        {
+                            return false;
+                        }
+
+                        // Step 16.2.1.2. If element["removeAttributes"] exists and
+                        // element["removeAttributes"] has duplicates, then return false.
+                        if element
+                            .remove_attributes()
+                            .is_some_and(|element_remove_attributes| {
+                                element_remove_attributes.has_duplicates()
+                            })
+                        {
+                            return false;
+                        }
+
+                        // Step 16.2.1.3. If the intersection of config["attributes"] and
+                        // element["attributes"] with default « » is not empty, then return false.
+                        if config_attributes
+                            .is_intersection_non_empty(element.attributes().unwrap_or_default())
+                        {
+                            return false;
+                        }
+
+                        // Step 16.2.1.4. If element["removeAttributes"] with default « » is not a
+                        // subset of config["attributes"], then return false.
+                        if !element
+                            .remove_attributes()
+                            .unwrap_or_default()
+                            .iter()
+                            .all(|entry| config_attributes.contains_item(entry))
+                        {
+                            return false;
+                        }
+
+                        // Step 16.2.1.5. If config["dataAttributes"] is true and
+                        // element["attributes"] contains a custom data attribute, then return
+                        // false.
+                        if self.dataAttributes == Some(true) &&
+                            element.attributes().is_some_and(|attributes| {
+                                attributes.iter().any(|attribute| {
+                                    is_custom_data_attribute(
+                                        &attribute.name().str(),
+                                        attribute
+                                            .namespace()
+                                            .map(|namespace| namespace.str())
+                                            .as_deref(),
+                                    )
+                                })
+                            })
+                        {
+                            return false;
+                        }
+                    }
+                }
+
+                // Step 16.3. If config["dataAttributes"] is true and config["attributes"] contains
+                // a custom data attribute, then return false.
+                if self.dataAttributes == Some(true) &&
+                    config_attributes.iter().any(|attribute| {
+                        is_custom_data_attribute(
+                            &attribute.name().str(),
+                            attribute
+                                .namespace()
+                                .map(|namespace| namespace.str())
+                                .as_deref(),
+                        )
+                    })
+                {
+                    return false;
+                }
+            },
+            // Step 17. Otherwise:
+            None => {
+                // Step 17.1. If config["elements"] exists:
+                if let Some(config_elements) = &self.elements {
+                    // Step 17.1.1. For each element of config["elements"]:
+                    for element in config_elements {
+                        // Step 17.1.1.1. If element["attributes"] exists and
+                        // element["removeAttributes"] exists, then return false.
+                        if element.attributes().is_some() && element.remove_attributes().is_some() {
+                            return false;
+                        }
+
+                        // Step 17.1.1.2. If element["attributes"] exist and element["attributes"]
+                        // has duplicates, then return false.
+                        if element
+                            .attributes()
+                            .as_ref()
+                            .is_some_and(|element_attributes| element_attributes.has_duplicates())
+                        {
+                            return false;
+                        }
+
+                        // Step 17.1.1.3. If element["removeAttributes"] exist and
+                        // element["removeAttributes"] has duplicates, then return false.
+                        if element.remove_attributes().as_ref().is_some_and(
+                            |element_remove_attributes| element_remove_attributes.has_duplicates(),
+                        ) {
+                            return false;
+                        }
+
+                        // Step 17.1.1.4. If the intersection of config["removeAttributes"] and
+                        // element["attributes"] with default « » is not empty, then return false.
+                        if self
+                            .removeAttributes
+                            .as_ref()
+                            .is_some_and(|config_remove_attributes| {
+                                config_remove_attributes.is_intersection_non_empty(
+                                    element.attributes().unwrap_or_default(),
+                                )
+                            })
+                        {
+                            return false;
+                        }
+
+                        // Step 17.1.1.5. If the intersection of config["removeAttributes"] and
+                        // element["removeAttributes"] with default « » is not empty, then return
+                        // false.
+                        if self
+                            .removeAttributes
+                            .as_ref()
+                            .is_some_and(|config_remove_attributes| {
+                                config_remove_attributes.is_intersection_non_empty(
+                                    element.remove_attributes().unwrap_or_default(),
+                                )
+                            })
+                        {
+                            return false;
+                        }
+                    }
+                }
+
+                // Step 17.2. If config["dataAttributes"] exists, then return false.
+                if self.dataAttributes.is_some() {
+                    return false;
+                }
+            },
+        }
+
+        // Step 18. Return true.
+        true
+    }
+
+    /// <https://wicg.github.io/sanitizer-api/#sanitizer-remove-an-element>
+    fn remove_element(&mut self, element: SanitizerElement) -> bool {
+        // Step 1. Assert: configuration is valid.
+        assert!(self.is_valid());
+
+        // Step 2. Set element to the result of canonicalize a sanitizer element with element.
+        let element = element.canonicalize();
+
+        // Step 3. Set modified to the result of remove element from
+        // configuration["replaceWithChildrenElements"].
+        let modified = if let Some(configuration_replace_with_children_elements) =
+            &mut self.replaceWithChildrenElements
+        {
+            configuration_replace_with_children_elements.remove_item(&element)
+        } else {
+            false
+        };
+
+        // Step 4. If configuration["elements"] exists:
+        if let Some(configuration_elements) = &mut self.elements {
+            // Step 4.1. If configuration["elements"] contains element:
+            if configuration_elements.contains_item(&element) {
+                // Step 4.1.1. Comment: We have a global allow list and it contains element.
+
+                // Step 4.1.2. Remove element from configuration["elements"].
+                configuration_elements.remove_item(&element);
+
+                // Step 4.1.3. Return true.
+                return true;
+            }
+
+            // Step 4.2. Comment: We have a global allow list and it does not contain element.
+
+            // Step 4.3. Return modified.
+            modified
+        }
+        // Step 5. Otherwise:
+        else {
+            // Step 5.1. If configuration["removeElements"] contains element:
+            if self
+                .removeElements
+                .as_mut()
+                .is_some_and(|configuration_remove_elements| {
+                    configuration_remove_elements.contains_item(&element)
+                })
+            {
+                // Step 5.1.1. Comment: We have a global remove list and it already contains element.
+
+                // Step 5.1.2. Return modified.
+                return modified;
+            }
+
+            // Step 5.2. Comment: We have a global remove list and it does not contain element.
+
+            // Step 5.3. Add element to configuration["removeElements"].
+            if let Some(configuration_remove_elements) = &mut self.removeElements {
+                configuration_remove_elements.add_item(element);
+            } else {
+                self.removeElements = Some(vec![element]);
+            }
+
+            // Step 5.4. Return true.
+            true
+        }
+    }
+
     /// <https://wicg.github.io/sanitizer-api/#sanitizer-canonicalize-the-configuration>
     fn canonicalize(&mut self, allow_comments_pis_and_data_attributes: bool) {
         // Step 1. If neither configuration["elements"] nor configuration["removeElements"] exist,
@@ -414,17 +1143,253 @@ impl NameCanonicalization for SanitizerAttribute {
     }
 }
 
+/// Supporting algorithms on lists of elements and lists of attributes, from the specification.
+trait NameSlice<T>
+where
+    T: NameMember + Canonicalization + Clone,
+{
+    /// <https://wicg.github.io/sanitizer-api/#sanitizerconfig-contains>
+    fn contains_item<S: NameMember>(&self, other: &S) -> bool;
+
+    /// <https://wicg.github.io/sanitizer-api/#sanitizerconfig-has-duplicates>
+    fn has_duplicates(&self) -> bool;
+
+    /// Custom version of the supporting algorithm
+    /// <https://wicg.github.io/sanitizer-api/#sanitizerconfig-intersection> that checks whether the
+    /// intersection is non-empty, returning early if it is non-empty for efficiency.
+    fn is_intersection_non_empty<S>(&self, others: &[S]) -> bool
+    where
+        S: NameMember + Canonicalization + Clone;
+}
+
+impl<T> NameSlice<T> for [T]
+where
+    T: NameMember + Canonicalization + Clone,
+{
+    /// <https://wicg.github.io/sanitizer-api/#sanitizerconfig-contains>
+    fn contains_item<S: NameMember>(&self, other: &S) -> bool {
+        // A Sanitizer name list contains an item if there exists an entry of list that is an
+        // ordered map, and where item["name"] equals entry["name"] and item["namespace"] equals
+        // entry["namespace"].
+        self.iter()
+            .any(|entry| entry.name() == other.name() && entry.namespace() == other.namespace())
+    }
+
+    /// <https://wicg.github.io/sanitizer-api/#sanitizerconfig-has-duplicates>
+    fn has_duplicates(&self) -> bool {
+        // A list list has duplicates, if for any item of list, there is more than one entry in list
+        // where item["name"] is entry["name"] and item["namespace"] is entry["namespace"].
+        let mut used = HashSet::new();
+        self.iter().any(move |entry| {
+            !used.insert((
+                entry.name().to_string(),
+                entry.namespace().map(DOMString::to_string),
+            ))
+        })
+    }
+
+    /// Custom version of the supporting algorithm
+    /// <https://wicg.github.io/sanitizer-api/#sanitizerconfig-intersection> that checks whether the
+    /// intersection is non-empty, returning early if it is non-empty for efficiency.
+    fn is_intersection_non_empty<S>(&self, others: &[S]) -> bool
+    where
+        S: NameMember + Canonicalization + Clone,
+    {
+        // Step 1. Let set A be « [] ».
+        // Step 2. Let set B be « [] ».
+        // Step 3. For each entry of A, append the result of canonicalize a sanitizer name entry to
+        // set A.
+        // Step 4. For each entry of B, append the result of canonicalize a sanitizer name entry to
+        // set B.
+        let a = self.iter().map(|entry| entry.clone().canonicalize());
+        let b = others
+            .iter()
+            .map(|entry| entry.clone().canonicalize())
+            .collect::<Vec<S>>();
+
+        // Step 5. Return the intersection of set A and set B.
+        // NOTE: Instead of returning the intersection itself, return true if the intersection is
+        // non-empty, and false otherwise.
+        a.filter(|entry| {
+            b.iter()
+                .any(|other| entry.name() == other.name() && entry.namespace() == other.namespace())
+        })
+        .any(|_| true)
+    }
+}
+
+/// Supporting algorithms on lists of elements and lists of attributes, from the specification.
+trait NameVec<T>
+where
+    T: NameMember + Canonicalization + Clone,
+{
+    /// <https://wicg.github.io/sanitizer-api/#sanitizerconfig-remove>
+    fn remove_item<S: NameMember>(&mut self, item: &S) -> bool;
+
+    /// <https://wicg.github.io/sanitizer-api/#sanitizerconfig-add>
+    fn add_item(&mut self, name: T);
+
+    /// <https://wicg.github.io/sanitizer-api/#sanitizerconfig-remove-duplicates>
+    fn remove_duplicates(&mut self) -> &mut Self;
+
+    /// Set itself to the set intersection of itself and another list.
+    ///
+    /// <https://infra.spec.whatwg.org/#set-intersection>
+    fn intersection<S>(&mut self, others: &[S])
+    where
+        S: NameMember + Canonicalization + Clone;
+
+    /// <https://infra.spec.whatwg.org/#set-difference>
+    fn difference(&mut self, others: &[T]);
+}
+
+impl<T> NameVec<T> for Vec<T>
+where
+    T: NameMember + Canonicalization + Clone,
+{
+    /// <https://wicg.github.io/sanitizer-api/#sanitizerconfig-remove>
+    fn remove_item<S: NameMember>(&mut self, item: &S) -> bool {
+        // Step 1. Set removed to false.
+        let mut removed = false;
+
+        // Step 2. For each entry of list:
+        // Step 2.1. If item["name"] equals entry["name"] and item["namespace"] equals entry["namespace"]:
+        // Step 2.1.1. Remove item entry from list.
+        // Step 2.1.2. Set removed to true.
+        self.retain(|entry| {
+            let matched = item.name() == entry.name() && item.namespace() == entry.namespace();
+            if matched {
+                removed = true;
+            }
+            !matched
+        });
+
+        // Step 3. Return removed.
+        removed
+    }
+
+    /// <https://wicg.github.io/sanitizer-api/#sanitizerconfig-add>
+    fn add_item(&mut self, name: T) {
+        // Step 1. If list contains name, then return.
+        if self.contains_item(&name) {
+            return;
+        };
+
+        // Step 2. Append name to list.
+        self.push(name);
+    }
+
+    /// <https://wicg.github.io/sanitizer-api/#sanitizerconfig-remove-duplicates>
+    fn remove_duplicates(&mut self) -> &mut Self {
+        // Step 1. Let result be « ».
+        // Step 2. For each entry of list, add entry to result.
+        // Step 3. Return result.
+        self.sort_by(|item_a, item_b| item_a.compare(item_b));
+        self.dedup_by_key(|item| (item.name().clone(), item.namespace().cloned()));
+        self
+    }
+
+    /// Set itself to the set intersection of itself and another list.
+    ///
+    /// <https://infra.spec.whatwg.org/#set-intersection>
+    fn intersection<S>(&mut self, others: &[S])
+    where
+        S: NameMember + Canonicalization + Clone,
+    {
+        // The intersection of ordered sets A and B, is the result of creating a new ordered set set
+        // and, for each item of A, if B contains item, appending item to set.
+        self.retain(|item| {
+            others
+                .iter()
+                .any(|other| other.name() == item.name() && other.namespace() == item.namespace())
+        })
+    }
+
+    /// Set itself to the set difference of itself and another list.
+    ///
+    /// <https://infra.spec.whatwg.org/#set-difference>
+    fn difference(&mut self, others: &[T]) {
+        // The difference of ordered sets A and B, is the result of creating a new ordered set set
+        // and, for each item of A, if B does not contain item, appending item to set.
+        self.retain(|item| {
+            !others
+                .iter()
+                .any(|other| other.name() == item.name() && other.namespace() == item.namespace())
+        })
+    }
+}
+
 /// Helper functions for accessing the "name" and "namespace" members of
 /// [`SanitizerElementWithAttributes`], [`SanitizerElement`] and [`SanitizerAttribute`].
 trait NameMember: Sized {
+    fn name(&self) -> &DOMString;
     fn name_mut(&mut self) -> &mut DOMString;
     fn namespace(&self) -> Option<&DOMString>;
     fn namespace_mut(&mut self) -> Option<&mut DOMString>;
 
     fn set_namespace(&mut self, namespace: Option<&str>);
+
+    // <https://wicg.github.io/sanitizer-api/#sanitizerconfig-less-than-item>
+    fn is_less_than_item(&self, item_b: &Self) -> bool {
+        let item_a = self;
+        match item_a.namespace() {
+            // Step 1. If itemA["namespace"] is null:
+            None => {
+                // Step 1.1. If itemB["namespace"] is not null, then return true.
+                if item_b.namespace().is_some() {
+                    return true;
+                }
+            },
+            // Step 2. Otherwise:
+            Some(item_a_namespace) => {
+                // Step 2.1. If itemB["namespace"] is null, then return false.
+                if item_b.namespace().is_none() {
+                    return false;
+                }
+
+                // Step 2.2. If itemA["namespace"] is code unit less than itemB["namespace"], then
+                // return true.
+                if item_b
+                    .namespace()
+                    .is_some_and(|item_b_namespace| item_a_namespace < item_b_namespace)
+                {
+                    return true;
+                }
+
+                // Step 2.3. If itemA["namespace"] is not itemB["namespace"], then return false.
+                if item_b
+                    .namespace()
+                    .is_some_and(|item_b_namespace| item_a_namespace != item_b_namespace)
+                {
+                    return false;
+                }
+            },
+        }
+
+        // Step 3. Return itemA["name"] is code unit less than itemB["name"].
+        item_a.name() < item_b.name()
+    }
+
+    /// Wrapper of [`NameMember::is_less_than_item`] that returns [`std::cmp::Ordering`].
+    fn compare(&self, other: &Self) -> Ordering {
+        if self.is_less_than_item(other) {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        }
+    }
 }
 
 impl NameMember for SanitizerElementWithAttributes {
+    fn name(&self) -> &DOMString {
+        match self {
+            SanitizerElementWithAttributes::String(name) => name,
+            SanitizerElementWithAttributes::SanitizerElementNamespaceWithAttributes(dictionary) => {
+                &dictionary.parent.name
+            },
+        }
+    }
+
     fn name_mut(&mut self) -> &mut DOMString {
         match self {
             SanitizerElementWithAttributes::String(name) => name,
@@ -476,6 +1441,13 @@ impl NameMember for SanitizerElementWithAttributes {
 }
 
 impl NameMember for SanitizerElement {
+    fn name(&self) -> &DOMString {
+        match self {
+            SanitizerElement::String(name) => name,
+            SanitizerElement::SanitizerElementNamespace(dictionary) => &dictionary.name,
+        }
+    }
+
     fn name_mut(&mut self) -> &mut DOMString {
         match self {
             SanitizerElement::String(name) => name,
@@ -519,6 +1491,13 @@ impl NameMember for SanitizerElement {
 }
 
 impl NameMember for SanitizerAttribute {
+    fn name(&self) -> &DOMString {
+        match self {
+            SanitizerAttribute::String(name) => name,
+            SanitizerAttribute::SanitizerAttributeNamespace(dictionary) => &dictionary.name,
+        }
+    }
+
     fn name_mut(&mut self) -> &mut DOMString {
         match self {
             SanitizerAttribute::String(name) => name,
@@ -564,28 +1543,48 @@ impl NameMember for SanitizerAttribute {
 /// Helper functions for accessing the "attributes" and "removeAttributes" members of
 /// [`SanitizerElementWithAttributes`].
 trait AttributeMember {
-    fn attributes(&self) -> Option<&Vec<SanitizerAttribute>>;
-    fn remove_attributes(&self) -> Option<&Vec<SanitizerAttribute>>;
+    fn attributes(&self) -> Option<&[SanitizerAttribute]>;
+    fn attributes_mut(&mut self) -> Option<&mut Vec<SanitizerAttribute>>;
+    fn remove_attributes(&self) -> Option<&[SanitizerAttribute]>;
+    fn remove_attributes_mut(&mut self) -> Option<&mut Vec<SanitizerAttribute>>;
 
     fn set_attributes(&mut self, attributes: Option<Vec<SanitizerAttribute>>);
     fn set_remove_attributes(&mut self, remove_attributes: Option<Vec<SanitizerAttribute>>);
 }
 
 impl AttributeMember for SanitizerElementWithAttributes {
-    fn attributes(&self) -> Option<&Vec<SanitizerAttribute>> {
+    fn attributes(&self) -> Option<&[SanitizerAttribute]> {
         match self {
             SanitizerElementWithAttributes::String(_) => None,
             SanitizerElementWithAttributes::SanitizerElementNamespaceWithAttributes(dictionary) => {
-                dictionary.attributes.as_ref()
+                dictionary.attributes.as_deref()
             },
         }
     }
 
-    fn remove_attributes(&self) -> Option<&Vec<SanitizerAttribute>> {
+    fn attributes_mut(&mut self) -> Option<&mut Vec<SanitizerAttribute>> {
         match self {
             SanitizerElementWithAttributes::String(_) => None,
             SanitizerElementWithAttributes::SanitizerElementNamespaceWithAttributes(dictionary) => {
-                dictionary.removeAttributes.as_ref()
+                dictionary.attributes.as_mut()
+            },
+        }
+    }
+
+    fn remove_attributes(&self) -> Option<&[SanitizerAttribute]> {
+        match self {
+            SanitizerElementWithAttributes::String(_) => None,
+            SanitizerElementWithAttributes::SanitizerElementNamespaceWithAttributes(dictionary) => {
+                dictionary.removeAttributes.as_deref()
+            },
+        }
+    }
+
+    fn remove_attributes_mut(&mut self) -> Option<&mut Vec<SanitizerAttribute>> {
+        match self {
+            SanitizerElementWithAttributes::String(_) => None,
+            SanitizerElementWithAttributes::SanitizerElementNamespaceWithAttributes(dictionary) => {
+                dictionary.removeAttributes.as_mut()
             },
         }
     }
@@ -933,4 +1932,35 @@ fn built_in_safe_default_configuration() -> SanitizerConfig {
         comments: Some(false),
         dataAttributes: Some(false),
     }
+}
+
+/// <https://wicg.github.io/sanitizer-api/#built-in-non-replaceable-elements-list>
+fn built_in_non_replaceable_elements_list() -> Vec<SanitizerElement> {
+    vec![
+        SanitizerElement::SanitizerElementNamespace(SanitizerElementNamespace {
+            name: "html".into(),
+            namespace: Some(ns!(html).to_string().into()),
+        }),
+        SanitizerElement::SanitizerElementNamespace(SanitizerElementNamespace {
+            name: "svg".into(),
+            namespace: Some(ns!(svg).to_string().into()),
+        }),
+        SanitizerElement::SanitizerElementNamespace(SanitizerElementNamespace {
+            name: "mathml".into(),
+            namespace: Some(ns!(mathml).to_string().into()),
+        }),
+    ]
+}
+
+/// <https://html.spec.whatwg.org/multipage/#custom-data-attribute>
+fn is_custom_data_attribute(name: &str, namespace: Option<&str>) -> bool {
+    // A custom data attribute is an attribute in no namespace whose name starts with the string
+    // "data-", has at least one character after the hyphen, is a valid attribute local name,
+    // and contains no ASCII upper alphas.
+    namespace.is_none() &&
+        name.strip_prefix("data-")
+            .is_some_and(|substring| !substring.is_empty()) &&
+        is_valid_attribute_local_name(name) &&
+        name.chars()
+            .all(|code_point| !code_point.is_ascii_uppercase())
 }

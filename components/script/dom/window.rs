@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::default::Default;
 use std::ffi::c_void;
 use std::io::{Write, stderr, stdout};
+use std::ptr::NonNull;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -33,11 +34,9 @@ use euclid::{Point2D, Rect, Scale, Size2D, Vector2D};
 use fonts::{CspViolationHandler, FontContext, NetworkTimingHandler, WebFontDocumentContext};
 use js::context::JSContext;
 use js::glue::DumpJSStack;
-use js::jsapi::{
-    GCReason, Heap, JS_GC, JSAutoRealm, JSContext as RawJSContext, JSObject, JSPROP_ENUMERATE,
-};
+use js::jsapi::{GCReason, Heap, JS_GC, JSContext as RawJSContext, JSObject, JSPROP_ENUMERATE};
 use js::jsval::{NullValue, UndefinedValue};
-use js::realm::CurrentRealm;
+use js::realm::{AutoRealm, CurrentRealm};
 use js::rust::wrappers::JS_DefineProperty;
 use js::rust::{
     CustomAutoRooter, CustomAutoRooterGuard, HandleObject, HandleValue, MutableHandleObject,
@@ -58,6 +57,7 @@ use net_traits::image_cache::{
     ImageResponse, PendingImageId, PendingImageResponse, RasterizationCompleteResponse,
 };
 use net_traits::request::Referrer;
+use net_traits::response::HttpsState;
 use net_traits::{ResourceFetchTiming, ResourceThreads};
 use num_traits::ToPrimitive;
 use paint_api::{CrossProcessPaintApi, PinchZoomInfos};
@@ -145,7 +145,7 @@ use crate::dom::css::cssstyledeclaration::{
     CSSModificationAccess, CSSStyleDeclaration, CSSStyleOwner,
 };
 use crate::dom::customelementregistry::CustomElementRegistry;
-use crate::dom::document::focus::{FocusInitiator, FocusOperation, FocusableArea};
+use crate::dom::document::focus::FocusableArea;
 use crate::dom::document::{
     AnimationFrameCallback, Document, SameOriginDescendantNavigablesIterator,
 };
@@ -690,9 +690,9 @@ impl Window {
         self.webxr_registry.clone()
     }
 
-    fn new_paint_worklet(&self, can_gc: CanGc) -> DomRoot<Worklet> {
+    fn new_paint_worklet(&self, cx: &mut JSContext) -> DomRoot<Worklet> {
         debug!("Creating new paint worklet.");
-        Worklet::new(self, WorkletGlobalScopeType::Paint, can_gc)
+        Worklet::new(cx, self, WorkletGlobalScopeType::Paint)
     }
 
     pub(crate) fn register_image_cache_listener(
@@ -881,7 +881,7 @@ impl Window {
         // Step 3. Append the following session history traversal steps to traversable:
         // TODO
         // Step 3.2. Unload a document and its descendants given traversable's active document, null, and afterAllUnloads.
-        document.unload(false, CanGc::from_cx(cx));
+        document.unload(cx, false);
         // Step 3.1. Let afterAllUnloads be an algorithm step which destroys traversable.
         self.destroy_top_level_traversable(cx);
     }
@@ -1298,11 +1298,7 @@ impl WindowMethods<crate::DomTypeHolder> for Window {
         // TODO: Implement this.
 
         // Step 4. Run the focusing steps with current.
-        document.focus_handler().focus(
-            FocusOperation::Focus(FocusableArea::Viewport),
-            FocusInitiator::Local,
-            CanGc::from_cx(cx),
-        );
+        document.focus_handler().focus(cx, FocusableArea::Viewport);
 
         // Step 5. If current is a top-level traversable, user agents are encouraged to trigger some
         // sort of notification to indicate to the user that the page is attempting to gain focus.
@@ -2168,11 +2164,11 @@ impl WindowMethods<crate::DomTypeHolder> for Window {
     /// <https://fetch.spec.whatwg.org/#dom-window-fetchlater>
     fn FetchLater(
         &self,
+        cx: &mut js::context::JSContext,
         input: RequestInfo,
         init: RootedTraceableBox<DeferredRequestInit>,
-        can_gc: CanGc,
     ) -> Fallible<DomRoot<FetchLaterResult>> {
-        fetch::FetchLater(self, input, init, can_gc)
+        fetch::FetchLater(cx, self, input, init)
     }
 
     #[cfg(feature = "bluetooth")]
@@ -2229,7 +2225,11 @@ impl WindowMethods<crate::DomTypeHolder> for Window {
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-window-nameditem>
-    fn NamedGetter(&self, name: DOMString) -> Option<NamedPropertyValue> {
+    fn NamedGetter(
+        &self,
+        cx: &mut js::context::JSContext,
+        name: DOMString,
+    ) -> Option<NamedPropertyValue> {
         if name.is_empty() {
             return None;
         }
@@ -2309,10 +2309,10 @@ impl WindowMethods<crate::DomTypeHolder> for Window {
             }
         }
         let collection = HTMLCollection::create(
+            cx,
             self,
             document.upcast(),
             Box::new(WindowNamedGetter { name }),
-            CanGc::deprecated_note(),
         );
         Some(NamedPropertyValue::HTMLCollection(collection))
     }
@@ -2380,14 +2380,13 @@ impl WindowMethods<crate::DomTypeHolder> for Window {
     /// <https://html.spec.whatwg.org/multipage/#dom-structuredclone>
     fn StructuredClone(
         &self,
-        cx: SafeJSContext,
+        cx: &mut JSContext,
         value: HandleValue,
         options: RootedTraceableBox<StructuredSerializeOptions>,
-        can_gc: CanGc,
         retval: MutableHandleValue,
     ) -> Fallible<()> {
         self.as_global_scope()
-            .structured_clone(cx, value, options, retval, can_gc)
+            .structured_clone(cx, value, options, retval)
     }
 
     fn TrustedTypes(&self, cx: &mut JSContext) -> DomRoot<TrustedTypePolicyFactory> {
@@ -2453,9 +2452,8 @@ impl Window {
     }
 
     // https://drafts.css-houdini.org/css-paint-api-1/#paint-worklet
-    pub(crate) fn paint_worklet(&self) -> DomRoot<Worklet> {
-        self.paint_worklet
-            .or_init(|| self.new_paint_worklet(CanGc::deprecated_note()))
+    pub(crate) fn paint_worklet(&self, cx: &mut JSContext) -> DomRoot<Worklet> {
+        self.paint_worklet.or_init(|| self.new_paint_worklet(cx))
     }
 
     pub(crate) fn has_document(&self) -> bool {
@@ -3679,6 +3677,7 @@ impl Window {
         inherited_secure_context: Option<bool>,
         theme: Theme,
         weak_script_thread: Weak<ScriptThread>,
+        initial_https_state: HttpsState,
     ) -> DomRoot<Self> {
         let error_reporter = CSSErrorReporter {
             pipelineid: pipeline_id,
@@ -3704,6 +3703,7 @@ impl Window {
                 inherited_secure_context,
                 unminify_js,
                 Some(font_context),
+                initial_https_state,
             ),
             ongoing_navigation: Default::default(),
             script_chan,
@@ -3872,7 +3872,7 @@ impl Window {
     ) {
         let this = Trusted::new(self);
         let source = Trusted::new(source);
-        let task = task!(post_serialised_message: move || {
+        let task = task!(post_serialised_message: move |cx| {
             let this = this.root();
             let source = source.root();
             let document = this.Document();
@@ -3885,11 +3885,11 @@ impl Window {
             }
 
             // Steps 7.2.-7.5.
-            let cx = this.get_cx();
             let obj = this.reflector().get_jsobject();
-            let _ac = JSAutoRealm::new(*cx, obj.get());
-            rooted!(in(*cx) let mut message_clone = UndefinedValue());
-            if let Ok(ports) = structuredclone::read(this.upcast(), data, message_clone.handle_mut(), CanGc::deprecated_note()) {
+            let mut realm = AutoRealm::new(cx, NonNull::new(obj.get()).unwrap());
+            let cx = &mut *realm;
+            rooted!(&in(cx) let mut message_clone = UndefinedValue());
+            if let Ok(ports) = structuredclone::read(this.upcast(), data, message_clone.handle_mut(), CanGc::from_cx(cx)) {
                 // Step 7.6, 7.7
                 MessageEvent::dispatch_jsval(
                     this.upcast(),
@@ -3898,14 +3898,14 @@ impl Window {
                     Some(&source_origin.ascii_serialization()),
                     Some(&*source),
                     ports,
-                    CanGc::deprecated_note()
+                    CanGc::from_cx(cx),
                 );
             } else {
                 // Step 4, fire messageerror.
                 MessageEvent::dispatch_error(
+                    cx,
                     this.upcast(),
                     this.upcast(),
-                    CanGc::deprecated_note()
                 );
             }
         });

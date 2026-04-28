@@ -72,7 +72,7 @@ use crate::dom::bindings::inheritance::Castable;
 use crate::dom::bindings::num::Finite;
 use crate::dom::bindings::refcounted::Trusted;
 use crate::dom::bindings::reflector::DomGlobal;
-use crate::dom::bindings::root::{Dom, DomRoot, MutNullableDom};
+use crate::dom::bindings::root::{Dom, DomRoot, MutNullableDom, UnrootedDom};
 use crate::dom::bindings::str::{DOMString, USVString};
 use crate::dom::blob::Blob;
 use crate::dom::csp::{GlobalCspReporting, Violation};
@@ -868,7 +868,7 @@ impl HTMLMediaElement {
             self.owner_global()
                 .task_manager()
                 .media_element_task_source()
-                .queue(task!(internal_pause_steps: move || {
+                .queue(task!(internal_pause_steps: move |cx| {
                     let this = this.root();
                     if generation_id != this.generation_id.get() {
                         return;
@@ -876,10 +876,10 @@ impl HTMLMediaElement {
 
                     this.fulfill_in_flight_play_promises(|| {
                         // Step 2.3.1. Fire an event named timeupdate at the element.
-                        this.upcast::<EventTarget>().fire_event(atom!("timeupdate"), CanGc::deprecated_note());
+                        this.upcast::<EventTarget>().fire_event(cx, atom!("timeupdate"));
 
                         // Step 2.3.2. Fire an event named pause at the element.
-                        this.upcast::<EventTarget>().fire_event(atom!("pause"), CanGc::deprecated_note());
+                        this.upcast::<EventTarget>().fire_event(cx, atom!("pause"));
 
                         // Step 2.3.3. Reject pending play promises with promises and an
                         // "AbortError" DOMException.
@@ -912,7 +912,7 @@ impl HTMLMediaElement {
         self.owner_global()
             .task_manager()
             .media_element_task_source()
-            .queue(task!(notify_about_playing: move || {
+            .queue(task!(notify_about_playing: move |cx| {
                 let this = this.root();
                 if generation_id != this.generation_id.get() {
                     return;
@@ -920,7 +920,7 @@ impl HTMLMediaElement {
 
                 this.fulfill_in_flight_play_promises(|| {
                     // Step 2.1. Fire an event named playing at the element.
-                    this.upcast::<EventTarget>().fire_event(atom!("playing"), CanGc::deprecated_note());
+                    this.upcast::<EventTarget>().fire_event(cx, atom!("playing"));
 
                     // Step 2.2. Resolve pending play promises with promises.
                     // Done after running this closure in `fulfill_in_flight_play_promises`.
@@ -973,7 +973,7 @@ impl HTMLMediaElement {
                                 return;
                             }
 
-                            this.upcast::<EventTarget>().fire_event(atom!("loadeddata"), CanGc::from_cx(cx));
+                            this.upcast::<EventTarget>().fire_event(cx, atom!("loadeddata"));
                             // Once the readyState attribute reaches HAVE_CURRENT_DATA, after the
                             // loadeddata event has been fired, set the element's
                             // delaying-the-load-event flag to false.
@@ -1103,13 +1103,13 @@ impl HTMLMediaElement {
             Mode::Attribute((**attribute.value()).to_owned())
         } else if let Some(source) = self
             .upcast::<Node>()
-            .children()
-            .find_map(DomRoot::downcast::<HTMLSourceElement>)
+            .children_unrooted(cx.no_gc())
+            .find_map(UnrootedDom::downcast::<HTMLSourceElement>)
         {
             // Otherwise, if the media element does not have an assigned media provider object and
             // does not have a src attribute, but does have a source element child, then let mode be
             // children and let candidate be the first such source element child in tree order.
-            Mode::Children(source)
+            Mode::Children(source.as_rooted())
         } else {
             // Otherwise, the media element has no assigned media provider object and has neither a
             // src attribute nor a source element child:
@@ -1287,7 +1287,7 @@ impl HTMLMediaElement {
                 }
 
                 let source = trusted_source.root();
-                source.upcast::<EventTarget>().fire_event(atom!("error"), CanGc::from_cx(cx));
+                source.upcast::<EventTarget>().fire_event(cx, atom!("error"));
             }));
 
         // Step 9.children.11. Await a stable state.
@@ -1632,7 +1632,7 @@ impl HTMLMediaElement {
                     this.show_poster.set(true);
 
                     // Step 5. Fire an event named error at the media element.
-                    this.upcast::<EventTarget>().fire_event(atom!("error"), CanGc::from_cx(cx));
+                    this.upcast::<EventTarget>().fire_event(cx, atom!("error"));
 
                     if let Some(ref player) = *this.player.borrow() {
                         if let Err(error) = player.lock().unwrap().stop() {
@@ -1810,7 +1810,7 @@ impl HTMLMediaElement {
                     return;
                 }
 
-                this.upcast::<EventTarget>().fire_event(name, CanGc::from_cx(cx));
+                this.upcast::<EventTarget>().fire_event(cx, name);
             }));
     }
 
@@ -1957,8 +1957,7 @@ impl HTMLMediaElement {
         self.delay_load_event(false, cx);
 
         // Step 5. Fire an event named error at the media element.
-        self.upcast::<EventTarget>()
-            .fire_event(atom!("error"), CanGc::from_cx(cx));
+        self.upcast::<EventTarget>().fire_event(cx, atom!("error"));
 
         // Step 6. Abort the overall resource selection algorithm.
     }
@@ -2293,14 +2292,14 @@ impl HTMLMediaElement {
         self.owner_global()
             .task_manager()
             .media_element_task_source()
-            .queue(task!(reaches_the_end_steps: move || {
+            .queue(task!(reaches_the_end_steps: move |cx| {
                 let this = this.root();
                 if generation_id != this.generation_id.get() {
                     return;
                 }
 
                 // Step 3.1. Fire an event named timeupdate at the media element.
-                this.upcast::<EventTarget>().fire_event(atom!("timeupdate"), CanGc::deprecated_note());
+                this.upcast::<EventTarget>().fire_event(cx, atom!("timeupdate"));
 
                 // Step 3.2. If the media element has ended playback, the direction of playback is
                 // forwards, and paused is false, then:
@@ -2311,7 +2310,7 @@ impl HTMLMediaElement {
                     this.paused.set(true);
 
                     // Step 3.2.2. Fire an event named pause at the media element.
-                    this.upcast::<EventTarget>().fire_event(atom!("pause"), CanGc::deprecated_note());
+                    this.upcast::<EventTarget>().fire_event(cx, atom!("pause"));
 
                     // Step 3.2.3. Take pending play promises and reject pending play promises with
                     // the result and an "AbortError" DOMException.
@@ -2320,7 +2319,7 @@ impl HTMLMediaElement {
                 }
 
                 // Step 3.3. Fire an event named ended at the media element.
-                this.upcast::<EventTarget>().fire_event(atom!("ended"), CanGc::deprecated_note());
+                this.upcast::<EventTarget>().fire_event(cx, atom!("ended"));
             }));
 
         // <https://html.spec.whatwg.org/multipage/#dom-media-have_current_data>
@@ -3014,7 +3013,7 @@ impl HTMLMediaElementMethods<crate::DomTypeHolder> for HTMLMediaElement {
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-media-muted>
-    fn SetMuted(&self, value: bool) {
+    fn SetMuted(&self, _cx: &mut JSContext, value: bool) {
         if self.muted.get() == value {
             return;
         }
@@ -3146,7 +3145,7 @@ impl HTMLMediaElementMethods<crate::DomTypeHolder> for HTMLMediaElement {
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-media-defaultplaybackrate>
-    fn SetDefaultPlaybackRate(&self, value: Finite<f64>) -> ErrorResult {
+    fn SetDefaultPlaybackRate(&self, _cx: &mut JSContext, value: Finite<f64>) -> ErrorResult {
         // If the given value is not supported by the user agent, then throw a "NotSupportedError"
         // DOMException.
         let min_allowed = -64.0;
@@ -3174,7 +3173,7 @@ impl HTMLMediaElementMethods<crate::DomTypeHolder> for HTMLMediaElement {
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-media-playbackrate>
-    fn SetPlaybackRate(&self, value: Finite<f64>) -> ErrorResult {
+    fn SetPlaybackRate(&self, _cx: &mut JSContext, value: Finite<f64>) -> ErrorResult {
         // The attribute is mutable: on setting, the user agent must follow these steps:
 
         // Step 1. If the given value is not supported by the user agent, then throw a
@@ -3229,7 +3228,7 @@ impl HTMLMediaElementMethods<crate::DomTypeHolder> for HTMLMediaElement {
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-media-currenttime>
-    fn SetCurrentTime(&self, time: Finite<f64>) {
+    fn SetCurrentTime(&self, _cx: &mut JSContext, time: Finite<f64>) {
         if self.ready_state.get() == ReadyState::HaveNothing {
             self.default_playback_start_position.set(*time);
         } else {
@@ -3334,7 +3333,7 @@ impl HTMLMediaElementMethods<crate::DomTypeHolder> for HTMLMediaElement {
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-media-volume>
-    fn SetVolume(&self, value: Finite<f64>) -> ErrorResult {
+    fn SetVolume(&self, _cx: &mut JSContext, value: Finite<f64>) -> ErrorResult {
         // If the new value is outside the range 0.0 to 1.0 inclusive, then, on setting, an
         // "IndexSizeError" DOMException must be thrown instead.
         let minimum_volume = 0.0;
@@ -3394,7 +3393,7 @@ impl VirtualMethods for HTMLMediaElement {
                     AttributeMutationReason::ByCloning | AttributeMutationReason::ByParser,
                 ) = mutation
                 {
-                    self.SetMuted(true);
+                    self.SetMuted(cx, true);
                 }
             },
             local_name!("src") => {
@@ -3418,8 +3417,8 @@ impl VirtualMethods for HTMLMediaElement {
     }
 
     /// <https://html.spec.whatwg.org/multipage/#playing-the-media-resource:remove-an-element-from-a-document>
-    fn unbind_from_tree(&self, context: &UnbindContext, can_gc: CanGc) {
-        self.super_type().unwrap().unbind_from_tree(context, can_gc);
+    fn unbind_from_tree(&self, cx: &mut js::context::JSContext, context: &UnbindContext) {
+        self.super_type().unwrap().unbind_from_tree(cx, context);
 
         self.remove_controls();
 
@@ -3906,7 +3905,7 @@ impl FetchResponseListener for HTMLMediaElementFetchListener {
             // Step 1. Fire an event named progress at the media element.
             element
                 .upcast::<EventTarget>()
-                .fire_event(atom!("progress"), CanGc::from_cx(cx));
+                .fire_event(cx, atom!("progress"));
 
             // Step 2. Set the networkState to NETWORK_IDLE and fire an event named suspend at the
             // media element.
@@ -3914,7 +3913,7 @@ impl FetchResponseListener for HTMLMediaElementFetchListener {
 
             element
                 .upcast::<EventTarget>()
-                .fire_event(atom!("suspend"), CanGc::from_cx(cx));
+                .fire_event(cx, atom!("suspend"));
         } else if status.is_err() && element.ready_state.get() != ReadyState::HaveNothing {
             // => "If the connection is interrupted after some media data has been received..."
             element.media_data_processing_fatal_steps(MEDIA_ERR_NETWORK, cx);

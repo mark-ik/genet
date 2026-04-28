@@ -219,14 +219,14 @@ pub(crate) fn Fetch(
 
     // Step 7. Let responseObject be null.
     // NOTE: We do initialize the object earlier earlier so we can use it to track errors
-    let response = Response::new(global, CanGc::from_cx(cx));
+    let response = Response::new(cx, global);
     response
         .Headers(CanGc::from_cx(cx))
         .set_guard(Guard::Immutable);
 
     // Step 2. Let requestObject be the result of invoking the initial value of Request as constructor
     //         with input and init as arguments. If this throws an exception, reject p with it and return p.
-    let request_object = match Request::Constructor(global, None, CanGc::from_cx(cx), input, init) {
+    let request_object = match Request::Constructor(cx, global, None, input, init) {
         Err(e) => {
             response.error_stream(e.clone(), CanGc::from_cx(cx));
             promise.reject_error(e, CanGc::from_cx(cx));
@@ -350,25 +350,28 @@ fn queue_deferred_fetch(
 /// <https://fetch.spec.whatwg.org/#dom-window-fetchlater>
 #[expect(non_snake_case, unsafe_code)]
 pub(crate) fn FetchLater(
+    cx: &mut js::context::JSContext,
     window: &Window,
     input: RequestInfo,
     init: RootedTraceableBox<DeferredRequestInit>,
-    can_gc: CanGc,
 ) -> Fallible<DomRoot<FetchLaterResult>> {
     let global_scope = window.upcast();
     let document = window.Document();
     // Step 1. Let requestObject be the result of invoking the initial value
     // of Request as constructor with input and init as arguments.
-    let request_object = Request::constructor(global_scope, None, can_gc, input, &init.parent)?;
+    let request_object = Request::constructor(cx, global_scope, None, input, &init.parent)?;
     // Step 2. If requestObject’s signal is aborted, then throw signal’s abort reason.
     let signal = request_object.Signal();
     if signal.aborted() {
-        let cx = GlobalScope::get_cx();
-        rooted!(in(*cx) let mut abort_reason = UndefinedValue());
-        signal.Reason(cx, abort_reason.handle_mut());
+        rooted!(&in(cx) let mut abort_reason = UndefinedValue());
+        signal.Reason(cx.into(), abort_reason.handle_mut());
         unsafe {
-            assert!(!JS_IsExceptionPending(*cx));
-            JS_SetPendingException(*cx, abort_reason.handle(), ExceptionStackBehavior::Capture);
+            assert!(!JS_IsExceptionPending(cx.raw_cx()));
+            JS_SetPendingException(
+                cx.raw_cx(),
+                abort_reason.handle(),
+                ExceptionStackBehavior::Capture,
+            );
         }
         return Err(Error::JSFailed);
     }
@@ -398,11 +401,13 @@ pub(crate) fn FetchLater(
     if !url.is_potentially_trustworthy() {
         return Err(Error::Type(c"URL is not trustworthy".to_owned()));
     }
-    // Step 10. If request’s body is not null, and request’s body length is null or zero, then throw a TypeError.
-    if let Some(body) = request.body.as_ref() {
-        if body.len().is_none_or(|len| len == 0) {
-            return Err(Error::Type(c"Body is empty".to_owned()));
-        }
+    // Step 10. If request’s body is not null, and request’s body length is null, then throw a TypeError.
+    if request
+        .body
+        .as_ref()
+        .is_some_and(|body| body.len().is_none())
+    {
+        return Err(Error::Type(c"Body is empty".to_owned()));
     }
     // Step 11. If the available deferred-fetch quota given request’s client and request’s URL’s
     // origin is less than request’s total request length, then throw a "QuotaExceededError" DOMException.
@@ -421,7 +426,11 @@ pub(crate) fn FetchLater(
     // Step 14. Add the following abort steps to requestObject’s signal: Set deferredRecord’s invoke state to "aborted".
     signal.add(&AbortAlgorithm::FetchLater(deferred_record_id));
     // Step 15. Return a new FetchLaterResult whose activated getter steps are to return activated.
-    Ok(FetchLaterResult::new(window, deferred_record_id, can_gc))
+    Ok(FetchLaterResult::new(
+        window,
+        deferred_record_id,
+        CanGc::from_cx(cx),
+    ))
 }
 
 /// <https://fetch.spec.whatwg.org/#deferred-fetch-record-invoke-state>

@@ -95,9 +95,9 @@ impl Request {
 
     // https://fetch.spec.whatwg.org/#dom-request
     pub(crate) fn constructor(
+        cx: &mut js::context::JSContext,
         global: &GlobalScope,
         proto: Option<HandleObject>,
-        can_gc: CanGc,
         mut input: RequestInfo,
         init: &RequestInit,
     ) -> Fallible<DomRoot<Request>> {
@@ -344,7 +344,7 @@ impl Request {
         // TODO
 
         // Step 28. Set this’s request to request.
-        let r = Request::from_net_request(global, proto, request, can_gc);
+        let r = Request::from_net_request(global, proto, request, CanGc::from_cx(cx));
 
         // Step 29. Let signals be « signal » if signal is non-null; otherwise « ».
         let signals = signal.map_or(vec![], |s| vec![s]);
@@ -352,7 +352,9 @@ impl Request {
         // abort signal from signals, using AbortSignal and this’s relevant realm.
         r.signal
             .set(Some(&AbortSignal::create_dependent_abort_signal(
-                signals, global, can_gc,
+                signals,
+                global,
+                CanGc::from_cx(cx),
             )));
 
         // Step 31. Set this’s headers to a new Headers object with this’s relevant realm,
@@ -361,7 +363,7 @@ impl Request {
         // "or_init" looks unclear here, but it always enters the block since r
         // hasn't had any other way to initialize its headers
         r.headers
-            .or_init(|| Headers::for_request(&r.global(), can_gc));
+            .or_init(|| Headers::for_request(&r.global(), CanGc::from_cx(cx)));
 
         // Step 33. If init is not empty, then:
         //
@@ -398,7 +400,8 @@ impl Request {
                 ));
             }
             // Step 32.2. Set this’s headers’s guard to "request-no-cors".
-            r.Headers(can_gc).set_guard(Guard::RequestNoCors);
+            r.Headers(CanGc::from_cx(cx))
+                .set_guard(Guard::RequestNoCors);
         }
 
         match headers_copy {
@@ -410,17 +413,17 @@ impl Request {
                 // but an input with headers is given, set request's
                 // headers as the input's Headers.
                 if let RequestInfo::Request(ref input_request) = input {
-                    r.Headers(can_gc)
-                        .copy_from_headers(input_request.Headers(can_gc))?;
+                    r.Headers(CanGc::from_cx(cx))
+                        .copy_from_headers(input_request.Headers(CanGc::from_cx(cx)))?;
                 }
             },
             // Step 33.5. Otherwise, fill this’s headers with headers.
-            Some(headers_copy) => r.Headers(can_gc).fill(Some(headers_copy))?,
+            Some(headers_copy) => r.Headers(CanGc::from_cx(cx)).fill(Some(headers_copy))?,
         }
 
         // Step 33.5 depending on how we got here
         // Copy the headers list onto the headers of net_traits::Request
-        r.request.borrow_mut().headers = r.Headers(can_gc).get_headers_list();
+        r.request.borrow_mut().headers = r.Headers(CanGc::from_cx(cx)).get_headers_list();
 
         // Step 34. Let inputBody be input’s request’s body if input is a Request object; otherwise null.
         let input_body = if let RequestInfo::Request(ref mut input_request) = input {
@@ -457,7 +460,7 @@ impl Request {
         if let Some(Some(ref input_init_body)) = init.body {
             // Step 37.1. Let bodyWithType be the result of extracting init["body"], with keepalive set to request’s keepalive.
             let mut body_with_type =
-                input_init_body.extract(global, r.request.borrow().keep_alive, can_gc)?;
+                input_init_body.extract(cx, global, r.request.borrow().keep_alive)?;
 
             // Step 37.3. Let type be bodyWithType’s type.
             if let Some(contents) = body_with_type.content_type.take() {
@@ -465,12 +468,12 @@ impl Request {
                 // Step 37.4. If type is non-null and this’s headers’s header list
                 // does not contain `Content-Type`, then append (`Content-Type`, type) to this’s headers.
                 if !r
-                    .Headers(can_gc)
+                    .Headers(CanGc::from_cx(cx))
                     .Has(ByteString::new(ct_header_name.to_vec()))
                     .unwrap()
                 {
                     let ct_header_val = contents.as_bytes();
-                    r.Headers(can_gc).Append(
+                    r.Headers(CanGc::from_cx(cx)).Append(
                         ByteString::new(ct_header_name.to_vec()),
                         ByteString::new(ct_header_val.to_vec()),
                     )?;
@@ -538,16 +541,16 @@ impl Request {
     }
 
     /// <https://fetch.spec.whatwg.org/#concept-request-clone>
-    fn clone_from(r: &Request, can_gc: CanGc) -> Fallible<DomRoot<Request>> {
+    fn clone_from(cx: &mut js::context::JSContext, r: &Request) -> Fallible<DomRoot<Request>> {
         let req = r.request.borrow();
         let url = req.url();
-        let headers_guard = r.Headers(can_gc).get_guard();
+        let headers_guard = r.Headers(CanGc::from_cx(cx)).get_guard();
 
         // Step 1. Let newRequest be a copy of request, except for its body.
         let mut new_req_inner = req.clone();
         let body = new_req_inner.body.take();
 
-        let r_clone = Request::new(&r.global(), None, url, can_gc);
+        let r_clone = Request::new(&r.global(), None, url, CanGc::from_cx(cx));
         *r_clone.request.borrow_mut() = new_req_inner;
 
         // Step 2. If request’s body is non-null, set newRequest’s body
@@ -557,11 +560,11 @@ impl Request {
         }
 
         r_clone
-            .Headers(can_gc)
-            .copy_from_headers(r.Headers(can_gc))?;
-        r_clone.Headers(can_gc).set_guard(headers_guard);
+            .Headers(CanGc::from_cx(cx))
+            .copy_from_headers(r.Headers(CanGc::from_cx(cx)))?;
+        r_clone.Headers(CanGc::from_cx(cx)).set_guard(headers_guard);
 
-        clone_body_stream_for_dom_body(&r.body_stream, &r_clone.body_stream, can_gc)?;
+        clone_body_stream_for_dom_body(cx, &r.body_stream, &r_clone.body_stream)?;
 
         // Step 3. Return newRequest.
         Ok(r_clone)
@@ -612,13 +615,13 @@ fn includes_credentials(input: &ServoUrl) -> bool {
 impl RequestMethods<crate::DomTypeHolder> for Request {
     /// <https://fetch.spec.whatwg.org/#dom-request>
     fn Constructor(
+        cx: &mut js::context::JSContext,
         global: &GlobalScope,
         proto: Option<HandleObject>,
-        can_gc: CanGc,
         input: RequestInfo,
         init: RootedTraceableBox<RequestInit>,
     ) -> Fallible<DomRoot<Request>> {
-        Self::constructor(global, proto, can_gc, input, &init)
+        Self::constructor(cx, global, proto, input, &init)
     }
 
     /// <https://fetch.spec.whatwg.org/#dom-request-method>
@@ -713,20 +716,23 @@ impl RequestMethods<crate::DomTypeHolder> for Request {
     }
 
     /// <https://fetch.spec.whatwg.org/#dom-request-clone>
-    fn Clone(&self, can_gc: CanGc) -> Fallible<DomRoot<Request>> {
+    fn Clone(&self, cx: &mut js::context::JSContext) -> Fallible<DomRoot<Request>> {
         // Step 1. If this is unusable, then throw a TypeError.
         if self.is_unusable() {
             return Err(Error::Type(c"Request is unusable".to_owned()));
         }
 
         // Step 2. Let clonedRequest be the result of cloning this’s request.
-        let cloned_request = Request::clone_from(self, can_gc)?;
+        let cloned_request = Request::clone_from(cx, self)?;
         // Step 3. Assert: this’s signal is non-null.
         let signal = self.signal.get().expect("Should always be initialized");
         // Step 4. Let clonedSignal be the result of creating a dependent
         // abort signal from « this’s signal », using AbortSignal and this’s relevant realm.
-        let cloned_signal =
-            AbortSignal::create_dependent_abort_signal(vec![signal], &self.global(), can_gc);
+        let cloned_signal = AbortSignal::create_dependent_abort_signal(
+            vec![signal],
+            &self.global(),
+            CanGc::from_cx(cx),
+        );
         // Step 5. Let clonedRequestObject be the result of creating a Request object,
         // given clonedRequest, this’s headers’s guard, clonedSignal and this’s relevant realm.
         //

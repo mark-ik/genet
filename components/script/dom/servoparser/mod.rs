@@ -486,7 +486,7 @@ impl ServoParser {
 
         // Step 2.
         self.document
-            .set_ready_state(DocumentReadyState::Interactive, CanGc::from_cx(cx));
+            .set_ready_state(cx, DocumentReadyState::Interactive);
 
         // Step 3.
         self.tokenizer.end(cx);
@@ -494,7 +494,7 @@ impl ServoParser {
 
         // Step 4.
         self.document
-            .set_ready_state(DocumentReadyState::Complete, CanGc::from_cx(cx));
+            .set_ready_state(cx, DocumentReadyState::Complete);
     }
 
     // https://html.spec.whatwg.org/multipage/#active-parser
@@ -756,7 +756,7 @@ impl ServoParser {
 
         // Step 1.
         self.document
-            .set_ready_state(DocumentReadyState::Interactive, CanGc::from_cx(cx));
+            .set_ready_state(cx, DocumentReadyState::Interactive);
 
         // Step 2.
         self.tokenizer.end(cx);
@@ -1169,7 +1169,7 @@ impl ParserContext {
                 None,
             );
             let img = DomRoot::downcast::<HTMLImageElement>(img).unwrap();
-            img.SetSrc(USVString(self.url.to_string()));
+            img.SetSrc(cx, USVString(self.url.to_string()));
             DomRoot::upcast::<Node>(img)
         } else if mime_type.type_() == mime::AUDIO {
             let audio = Element::create(
@@ -1182,8 +1182,8 @@ impl ParserContext {
                 None,
             );
             let audio = DomRoot::downcast::<HTMLMediaElement>(audio).unwrap();
-            audio.SetControls(true);
-            audio.SetSrc(USVString(self.url.to_string()));
+            audio.SetControls(cx, true);
+            audio.SetSrc(cx, USVString(self.url.to_string()));
             DomRoot::upcast::<Node>(audio)
         } else {
             let video = Element::create(
@@ -1196,8 +1196,8 @@ impl ParserContext {
                 None,
             );
             let video = DomRoot::downcast::<HTMLMediaElement>(video).unwrap();
-            video.SetControls(true);
-            video.SetSrc(USVString(self.url.to_string()));
+            video.SetControls(cx, true);
+            video.SetSrc(cx, USVString(self.url.to_string()));
             DomRoot::upcast::<Node>(video)
         };
         // Step 4. Append an element host element for the media, as described below, to the body element.

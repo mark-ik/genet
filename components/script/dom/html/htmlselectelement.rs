@@ -525,7 +525,7 @@ impl HTMLSelectElement {
         self.owner_global()
             .task_manager()
             .user_interaction_task_source()
-            .queue(task!(send_select_update_notification: move || {
+            .queue(task!(send_select_update_notification: move |cx| {
                 let this = this.root();
 
                 // TODO: Step 1. Set the select element's user validity to true.
@@ -533,18 +533,17 @@ impl HTMLSelectElement {
                 // Step 2. Fire an event named input at the select element, with the bubbles and composed
                 // attributes initialized to true.
                 this.upcast::<EventTarget>()
-                    .fire_event_with_params(
+                    .fire_event_with_params(cx,
                         atom!("input"),
                         EventBubbles::Bubbles,
                         EventCancelable::NotCancelable,
                         EventComposed::Composed,
-                        CanGc::deprecated_note(),
                     );
 
                 // Step 3. Fire an event named change at the select element, with the bubbles attribute initialized
                 // to true.
                 this.upcast::<EventTarget>()
-                    .fire_bubbling_event(atom!("change"), CanGc::deprecated_note());
+                    .fire_bubbling_event(cx, atom!("change"));
             }));
     }
 
@@ -645,14 +644,14 @@ impl HTMLSelectElementMethods<crate::DomTypeHolder> for HTMLSelectElement {
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-select-selectedoptions>
-    fn SelectedOptions(&self) -> DomRoot<HTMLCollection> {
+    fn SelectedOptions(&self, cx: &mut JSContext) -> DomRoot<HTMLCollection> {
         self.selected_options.or_init(|| {
             let window = self.owner_window();
             HTMLCollection::new_with_source(
+                cx,
                 &window,
                 self.upcast(),
                 Box::new(SelectedOptionsSource),
-                CanGc::deprecated_note(),
             )
         })
     }
@@ -713,7 +712,7 @@ impl HTMLSelectElementMethods<crate::DomTypeHolder> for HTMLSelectElement {
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-select-value>
-    fn SetValue(&self, value: DOMString, can_gc: CanGc) {
+    fn SetValue(&self, cx: &mut JSContext, value: DOMString) {
         let mut opt_iter = self.list_of_options();
         // Reset until we find an <option> with a matching value
         for opt in opt_iter.by_ref() {
@@ -729,8 +728,8 @@ impl HTMLSelectElementMethods<crate::DomTypeHolder> for HTMLSelectElement {
             opt.set_selectedness(false);
         }
 
-        self.validity_state(can_gc)
-            .perform_validation_and_update(ValidationFlags::VALUE_MISSING, can_gc);
+        self.validity_state(CanGc::from_cx(cx))
+            .perform_validation_and_update(ValidationFlags::VALUE_MISSING, CanGc::from_cx(cx));
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-select-selectedindex>
@@ -867,8 +866,8 @@ impl VirtualMethods for HTMLSelectElement {
             .check_ancestors_disabled_state_for_form_control();
     }
 
-    fn unbind_from_tree(&self, context: &UnbindContext, can_gc: CanGc) {
-        self.super_type().unwrap().unbind_from_tree(context, can_gc);
+    fn unbind_from_tree(&self, cx: &mut JSContext, context: &UnbindContext) {
+        self.super_type().unwrap().unbind_from_tree(cx, context);
 
         let node = self.upcast::<Node>();
         let el = self.upcast::<Element>();
@@ -904,8 +903,8 @@ impl VirtualMethods for HTMLSelectElement {
         }
     }
 
-    fn handle_event(&self, event: &Event, can_gc: CanGc) {
-        self.super_type().unwrap().handle_event(event, can_gc);
+    fn handle_event(&self, cx: &mut js::context::JSContext, event: &Event) {
+        self.super_type().unwrap().handle_event(cx, event);
         if let Some(event) = event.downcast::<FocusEvent>() {
             if *event.upcast::<Event>().type_() != *"blur" {
                 self.owner_document()
@@ -976,7 +975,12 @@ impl Activatable for HTMLSelectElement {
         !self.upcast::<Element>().disabled_state()
     }
 
-    fn activation_behavior(&self, event: &Event, _target: &EventTarget, _can_gc: CanGc) {
+    fn activation_behavior(
+        &self,
+        _cx: &mut js::context::JSContext,
+        event: &Event,
+        _target: &EventTarget,
+    ) {
         if !event.IsTrusted() {
             return;
         }

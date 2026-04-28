@@ -412,7 +412,7 @@ impl Node {
             // This needs to be in its own loop, because unbind_from_tree may
             // rely on the state of IS_IN_DOC of the context node's descendants,
             // e.g. when removing a <form>.
-            vtable_for(node).unbind_from_tree(context, CanGc::from_cx(cx));
+            vtable_for(node).unbind_from_tree(cx, context);
 
             // Step 12 & 14.2. Enqueue disconnected custom element reactions.
             if is_parent_connected {
@@ -1518,10 +1518,10 @@ impl Node {
             // inclusiveDescendant and oldParent.
             // Otherwise, run the moving steps with inclusiveDescendant and null.
             if descendant.deref() == node {
-                vtable_for(&descendant).moving_steps(&context, CanGc::from_cx(cx));
+                vtable_for(&descendant).moving_steps(cx, &context);
             } else {
                 context.old_parent = None;
-                vtable_for(&descendant).moving_steps(&context, CanGc::from_cx(cx));
+                vtable_for(&descendant).moving_steps(cx, &context);
             }
 
             // Step 24.2. If inclusiveDescendant is custom and newParent is connected,
@@ -1745,7 +1745,7 @@ impl Node {
             .to_string()
     }
 
-    pub(crate) fn summarize(&self, can_gc: CanGc) -> NodeInfo {
+    pub(crate) fn summarize(&self, cx: &mut JSContext) -> NodeInfo {
         let USVString(base_uri) = self.BaseURI();
         let node_type = self.NodeType();
         let pipeline = self.owner_window().pipeline_id();
@@ -1766,9 +1766,9 @@ impl Node {
 
         let num_children = if is_shadow_host {
             // Shadow roots count as children
-            self.ChildNodes(can_gc).Length() as usize + 1
+            self.ChildNodes(cx).Length() as usize + 1
         } else {
-            self.ChildNodes(can_gc).Length() as usize
+            self.ChildNodes(cx).Length() as usize
         };
 
         let window = self.owner_window();
@@ -1831,7 +1831,7 @@ impl Node {
         new_child: G,
     ) -> Fallible<DomRoot<HTMLElement>>
     where
-        F: Fn() -> DomRoot<HTMLCollection>,
+        F: Fn(&mut JSContext) -> DomRoot<HTMLCollection>,
         G: Fn(&mut JSContext) -> DomRoot<I>,
         I: DerivedFrom<Node> + DerivedFrom<HTMLElement> + DomObject,
     {
@@ -1846,7 +1846,7 @@ impl Node {
             if index == -1 {
                 self.InsertBefore(cx, tr_node, None)?;
             } else {
-                let items = get_items();
+                let items = get_items(cx);
                 let node = match items
                     .elements_iter()
                     .map(DomRoot::upcast::<Node>)
@@ -1873,7 +1873,7 @@ impl Node {
         is_delete_type: G,
     ) -> ErrorResult
     where
-        F: Fn() -> DomRoot<HTMLCollection>,
+        F: Fn(&mut JSContext) -> DomRoot<HTMLCollection>,
         G: Fn(&Element) -> bool,
     {
         let element = match index {
@@ -1890,7 +1890,7 @@ impl Node {
                     None => return Ok(()),
                 }
             },
-            index => match get_items().Item(index as u32) {
+            index => match get_items(cx).Item(index as u32) {
                 Some(element) => element,
                 None => return Err(Error::IndexSize(None)),
             },
@@ -2882,8 +2882,8 @@ impl Node {
             }
         }
 
-        old_doc.remove_script_and_layout_blocker();
-        document.remove_script_and_layout_blocker();
+        old_doc.remove_script_and_layout_blocker(cx);
+        document.remove_script_and_layout_blocker(cx);
     }
 
     /// <https://dom.spec.whatwg.org/#concept-node-ensure-pre-insertion-validity>
@@ -3252,8 +3252,8 @@ impl Node {
             }),
         );
 
-        parent_document.remove_script_and_layout_blocker();
-        from_document.remove_script_and_layout_blocker();
+        parent_document.remove_script_and_layout_blocker(cx);
+        from_document.remove_script_and_layout_blocker(cx);
     }
 
     /// <https://dom.spec.whatwg.org/#concept-node-replace-all>
@@ -3304,7 +3304,7 @@ impl Node {
             });
             MutationObserver::queue_a_mutation_record(parent, mutation);
         }
-        parent.owner_doc().remove_script_and_layout_blocker();
+        parent.owner_doc().remove_script_and_layout_blocker(cx);
     }
 
     /// <https://dom.spec.whatwg.org/multipage/#string-replace-all>
@@ -3418,7 +3418,7 @@ impl Node {
             });
             MutationObserver::queue_a_mutation_record(parent, mutation);
         }
-        parent.owner_doc().remove_script_and_layout_blocker();
+        parent.owner_doc().remove_script_and_layout_blocker(cx);
     }
 
     /// <https://dom.spec.whatwg.org/#live-range-pre-remove-steps>
@@ -4023,14 +4023,14 @@ impl NodeMethods<crate::DomTypeHolder> for Node {
     }
 
     /// <https://dom.spec.whatwg.org/#dom-node-childnodes>
-    fn ChildNodes(&self, can_gc: CanGc) -> DomRoot<NodeList> {
+    fn ChildNodes(&self, cx: &mut JSContext) -> DomRoot<NodeList> {
         if let Some(list) = self.ensure_rare_data().child_list.get() {
             return list;
         }
 
         let doc = self.owner_doc();
         let window = doc.window();
-        let list = NodeList::new_child_list(window, self, can_gc);
+        let list = NodeList::new_child_list(window, self, CanGc::from_cx(cx));
         self.ensure_rare_data().child_list.set(Some(&list));
         list
     }
@@ -4760,8 +4760,8 @@ impl VirtualMethods for Node {
 
     // This handles the ranges mentioned in steps 2-3 when removing a node.
     /// <https://dom.spec.whatwg.org/#concept-node-remove>
-    fn unbind_from_tree(&self, context: &UnbindContext, can_gc: CanGc) {
-        self.super_type().unwrap().unbind_from_tree(context, can_gc);
+    fn unbind_from_tree(&self, cx: &mut js::context::JSContext, context: &UnbindContext) {
+        self.super_type().unwrap().unbind_from_tree(cx, context);
 
         // Ranges should only drain to the parent from inclusive non-shadow
         // including descendants. If we're in a shadow tree at this point then the
@@ -4773,9 +4773,9 @@ impl VirtualMethods for Node {
         }
     }
 
-    fn moving_steps(&self, context: &MoveContext, can_gc: CanGc) {
+    fn moving_steps(&self, cx: &mut JSContext, context: &MoveContext) {
         if let Some(super_type) = self.super_type() {
-            super_type.moving_steps(context, can_gc);
+            super_type.moving_steps(cx, context);
         }
 
         // Ranges should only drain to the parent from inclusive non-shadow
@@ -4792,7 +4792,7 @@ impl VirtualMethods for Node {
         self.owner_doc().content_and_heritage_changed(self);
     }
 
-    fn handle_event(&self, event: &Event, can_gc: CanGc) {
+    fn handle_event(&self, cx: &mut js::context::JSContext, event: &Event) {
         if event.DefaultPrevented() || event.flags().contains(EventFlags::Handled) {
             return;
         }
@@ -4800,7 +4800,7 @@ impl VirtualMethods for Node {
         if let Some(event) = event.downcast::<KeyboardEvent>() {
             self.owner_document()
                 .event_handler()
-                .run_default_keyboard_event_handler(self, event, can_gc);
+                .run_default_keyboard_event_handler(cx, self, event);
         }
     }
 }

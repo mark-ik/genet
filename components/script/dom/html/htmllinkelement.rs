@@ -485,9 +485,9 @@ impl VirtualMethods for HTMLLinkElement {
         }
     }
 
-    fn unbind_from_tree(&self, context: &UnbindContext, can_gc: CanGc) {
+    fn unbind_from_tree(&self, cx: &mut js::context::JSContext, context: &UnbindContext) {
         if let Some(s) = self.super_type() {
-            s.unbind_from_tree(context, can_gc);
+            s.unbind_from_tree(cx, context);
         }
 
         self.remove_stylesheet();
@@ -936,17 +936,15 @@ impl HTMLLinkElement {
     /// <https://html.spec.whatwg.org/multipage/#link-type-preload:fetch-and-process-the-linked-resource-2>
     pub(crate) fn fire_event_after_response(
         &self,
+        cx: &mut JSContext,
         response: Result<(), NetworkError>,
-        can_gc: CanGc,
     ) {
         // Step 3.1 If response is a network error, fire an event named error at el.
         // Otherwise, fire an event named load at el.
         if response.is_err() {
-            self.upcast::<EventTarget>()
-                .fire_event(atom!("error"), can_gc);
+            self.upcast::<EventTarget>().fire_event(cx, atom!("error"));
         } else {
-            self.upcast::<EventTarget>()
-                .fire_event(atom!("load"), can_gc);
+            self.upcast::<EventTarget>().fire_event(cx, atom!("load"));
         }
     }
 
@@ -1055,8 +1053,7 @@ impl HTMLLinkElement {
                     false => atom!("load"),
                 };
 
-                link.upcast::<EventTarget>()
-                    .fire_event(event, CanGc::from_cx(cx));
+                link.upcast::<EventTarget>().fire_event(cx, event);
             },
         );
     }
@@ -1131,9 +1128,12 @@ impl HTMLLinkElementMethods<crate::DomTypeHolder> for HTMLLinkElement {
     make_getter!(Rel, "rel");
 
     /// <https://html.spec.whatwg.org/multipage/#dom-link-rel>
-    fn SetRel(&self, rel: DOMString, can_gc: CanGc) {
-        self.upcast::<Element>()
-            .set_tokenlist_attribute(&local_name!("rel"), rel, can_gc);
+    fn SetRel(&self, cx: &mut JSContext, rel: DOMString) {
+        self.upcast::<Element>().set_tokenlist_attribute(
+            &local_name!("rel"),
+            rel,
+            CanGc::from_cx(cx),
+        );
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-link-as

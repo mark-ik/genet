@@ -62,7 +62,7 @@ use crate::dom::bindings::root::MutNullableDom;
 use crate::dom::bindings::trace::NoTrace;
 use crate::dom::clipboardevent::ClipboardEventType;
 use crate::dom::document::FireMouseEventType;
-use crate::dom::document::focus::{FocusInitiator, FocusOperation, FocusableArea};
+use crate::dom::document::focus::FocusableArea;
 use crate::dom::event::{EventBubbles, EventCancelable, EventComposed, EventFlags};
 #[cfg(feature = "gamepad")]
 use crate::dom::gamepad::gamepad::{Gamepad, contains_user_gesture};
@@ -408,6 +408,9 @@ impl DocumentEventHandler {
         let document = self.window.Document();
         match &*document.focus_handler().focused_area() {
             FocusableArea::Node { node, .. } => DomRoot::from_ref(node.upcast()),
+            FocusableArea::IFrameViewport { iframe_element, .. } => {
+                DomRoot::from_ref(iframe_element.upcast())
+            },
             FocusableArea::Viewport => document
                 .GetBody()
                 .map(DomRoot::upcast)
@@ -922,11 +925,10 @@ impl DocumentEventHandler {
                     // Note that this differs from the specification, because we are going to look
                     // for the first inclusive ancestor that is click focusable and then focus it.
                     // See documentation for [`Node::find_click_focusable_area`].
-                    self.window.Document().focus_handler().focus(
-                        FocusOperation::Focus(node.find_click_focusable_area()),
-                        FocusInitiator::Local,
-                        CanGc::from_cx(cx),
-                    );
+                    self.window
+                        .Document()
+                        .focus_handler()
+                        .focus(cx, node.find_click_focusable_area());
                 }
 
                 // Step 9. If mbutton is the secondary mouse button, then
@@ -1444,11 +1446,7 @@ impl DocumentEventHandler {
         let document = self.window.Document();
         let composition_event = match event {
             ImeEvent::Dismissed => {
-                document.focus_handler().focus(
-                    FocusOperation::Focus(FocusableArea::Viewport),
-                    FocusInitiator::Local,
-                    CanGc::from_cx(cx),
-                );
+                document.focus_handler().focus(cx, FocusableArea::Viewport);
                 return Default::default();
             },
             ImeEvent::Composition(composition_event) => composition_event,
@@ -1585,7 +1583,7 @@ impl DocumentEventHandler {
             .upcast::<GlobalScope>()
             .task_manager()
             .gamepad_task_source()
-            .queue(task!(gamepad_connected: move || {
+            .queue(task!(gamepad_connected: move |cx| {
                 let window = trusted_window.root();
 
                 let navigator = window.Navigator();
@@ -1599,9 +1597,9 @@ impl DocumentEventHandler {
                     button_bounds,
                     supported_haptic_effects,
                     false,
-                    CanGc::deprecated_note(),
+                    CanGc::from_cx(cx),
                 );
-                navigator.set_gamepad(selected_index as usize, &gamepad, CanGc::deprecated_note());
+                navigator.set_gamepad(selected_index as usize, &gamepad, CanGc::from_cx(cx));
             }));
     }
 
@@ -1613,12 +1611,12 @@ impl DocumentEventHandler {
             .upcast::<GlobalScope>()
             .task_manager()
             .gamepad_task_source()
-            .queue(task!(gamepad_disconnected: move || {
+            .queue(task!(gamepad_disconnected: move |cx| {
                 let window = trusted_window.root();
                 let navigator = window.Navigator();
                 if let Some(gamepad) = navigator.get_gamepad(index) {
                     if window.Document().is_fully_active() {
-                        gamepad.update_connected(false, gamepad.exposed(), CanGc::deprecated_note());
+                        gamepad.update_connected(false, gamepad.exposed(), CanGc::from_cx(cx));
                         navigator.remove_gamepad(index);
                     }
                 }
@@ -1657,9 +1655,9 @@ impl DocumentEventHandler {
                                     let new_gamepad = Trusted::new(&**gamepad);
                                     if window.Document().is_fully_active() {
                                         window.upcast::<GlobalScope>().task_manager().gamepad_task_source().queue(
-                                            task!(update_gamepad_connect: move || {
+                                            task!(update_gamepad_connect: move |cx| {
                                                 let gamepad = new_gamepad.root();
-                                                gamepad.notify_event(GamepadEventType::Connected, CanGc::deprecated_note());
+                                                gamepad.notify_event(GamepadEventType::Connected, CanGc::from_cx(cx));
                                             })
                                         );
                                     }
@@ -1938,19 +1936,19 @@ impl DocumentEventHandler {
 
     pub(crate) fn run_default_keyboard_event_handler(
         &self,
+        cx: &mut js::context::JSContext,
         node: &Node,
         event: &KeyboardEvent,
-        can_gc: CanGc,
     ) {
         if event.upcast::<Event>().type_() != atom!("keydown") {
             return;
         }
 
-        if self.maybe_dispatch_simulated_click(node, event, can_gc) {
+        if self.maybe_dispatch_simulated_click(node, event, CanGc::from_cx(cx)) {
             return;
         }
 
-        if self.maybe_handle_accesskey(event, can_gc) {
+        if self.maybe_handle_accesskey(cx, event) {
             return;
         }
 
@@ -1978,7 +1976,7 @@ impl DocumentEventHandler {
                 // > If the key is the Tab key, the default action MUST be to shift the document focus
                 // > from the currently focused element (if any) to the new focused element, as
                 // > described in Focus Event Types
-                self.sequential_focus_navigation_via_keyboard_event(event, can_gc);
+                self.sequential_focus_navigation_via_keyboard_event(cx, event);
                 return;
             },
             _ => return,
@@ -2002,18 +2000,22 @@ impl DocumentEventHandler {
             .filter(|node| node.is_connected())
     }
 
-    fn sequential_focus_navigation_via_keyboard_event(&self, event: &KeyboardEvent, can_gc: CanGc) {
+    fn sequential_focus_navigation_via_keyboard_event(
+        &self,
+        cx: &mut JSContext,
+        event: &KeyboardEvent,
+    ) {
         let direction = if event.modifiers().contains(Modifiers::SHIFT) {
             SequentialFocusDirection::Backward
         } else {
             SequentialFocusDirection::Forward
         };
 
-        self.sequential_focus_navigation(direction, can_gc);
+        self.sequential_focus_navigation(cx, direction);
     }
 
     /// <<https://html.spec.whatwg.org/multipage/#sequential-focus-navigation:currently-focused-area-of-a-top-level-traversable>
-    fn sequential_focus_navigation(&self, direction: SequentialFocusDirection, can_gc: CanGc) {
+    fn sequential_focus_navigation(&self, cx: &mut JSContext, direction: SequentialFocusDirection) {
         // > When the user requests that focus move from the currently focused area of a top-level
         // > traversable to the next or previous focusable area (e.g., as the default action of
         // > pressing the tab key), or when the user requests that focus sequentially move to a
@@ -2072,7 +2074,7 @@ impl DocumentEventHandler {
 
         // > 6. If candidate is not null, then run the focusing steps for candidate and return.
         if let Some(candidate) = candidate {
-            self.focus_and_scroll_to_element_for_key_event(&candidate, can_gc);
+            self.focus_and_scroll_to_element_for_key_event(cx, &candidate);
             return;
         }
 
@@ -2447,7 +2449,11 @@ impl DocumentEventHandler {
             .or_insert(Dom::from_ref(element));
     }
 
-    fn maybe_handle_accesskey(&self, event: &KeyboardEvent, can_gc: CanGc) -> bool {
+    fn maybe_handle_accesskey(
+        &self,
+        cx: &mut js::context::JSContext,
+        event: &KeyboardEvent,
+    ) -> bool {
         #[cfg(target_os = "macos")]
         let access_key_modifiers = Modifiers::CONTROL | Modifiers::ALT;
         #[cfg(not(target_os = "macos"))]
@@ -2501,15 +2507,13 @@ impl DocumentEventHandler {
 
         // This behavior is unspecified, but all browsers do this. When activating the element it is
         // focused and scrolled into view.
-        self.focus_and_scroll_to_element_for_key_event(html_element.upcast(), can_gc);
-        command.perform_action(can_gc);
+        self.focus_and_scroll_to_element_for_key_event(cx, html_element.upcast());
+        command.perform_action(cx);
         true
     }
 
-    fn focus_and_scroll_to_element_for_key_event(&self, element: &Element, can_gc: CanGc) {
-        element
-            .upcast::<Node>()
-            .run_the_focusing_steps(None, can_gc);
+    fn focus_and_scroll_to_element_for_key_event(&self, cx: &mut JSContext, element: &Element) {
+        element.upcast::<Node>().run_the_focusing_steps(cx, None);
         let scroll_axis = ScrollAxisState {
             position: ScrollLogicalPosition::Center,
             requirement: ScrollRequirement::IfNotVisible,

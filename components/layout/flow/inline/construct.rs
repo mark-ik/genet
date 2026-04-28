@@ -100,6 +100,22 @@ pub(crate) struct InlineFormattingContextBuilder {
 }
 
 impl InlineFormattingContextBuilder {
+    /// <https://drafts.csswg.org/css-text/#white-space>:
+    /// > Except where specified otherwise, white space processing in CSS affects only the document
+    /// > white space characters: spaces (U+0020), tabs (U+0009), and segment breaks.
+    ///
+    /// From <https://github.com/w3c/csswg-drafts/issues/5147#issuecomment-637816669>:
+    /// > HTML clearly treats CR, LF, and CRLF as segment breaks.
+    ///
+    /// Other browsers also consider the form feed character (0x0c) to be document white space, it
+    /// seems.
+    ///
+    /// Taken all together, this is equivalent to the WhatWG Infra Standard's definition of ASCII
+    /// white space.
+    pub(crate) fn is_document_white_space(character: char) -> bool {
+        character.is_ascii_whitespace()
+    }
+
     pub(crate) fn new(info: &NodeAndStyleInfo, context: &LayoutContext) -> Self {
         Self {
             // For the purposes of `text-transform: capitalize` the start of the IFC is a word boundary.
@@ -368,11 +384,11 @@ impl InlineFormattingContextBuilder {
             .inspect(|&character| {
                 character_count += 1;
 
-                self.is_empty = self.is_empty
-                    && match white_space_collapse {
-                        WhiteSpaceCollapse::Collapse => character.is_ascii_whitespace(),
+                self.is_empty = self.is_empty &&
+                    match white_space_collapse {
+                        WhiteSpaceCollapse::Collapse => Self::is_document_white_space(character),
                         WhiteSpaceCollapse::PreserveBreaks => {
-                            character.is_ascii_whitespace() && character != '\n'
+                            Self::is_document_white_space(character) && character != '\n'
                         },
                         WhiteSpaceCollapse::Preserve | WhiteSpaceCollapse::BreakSpaces => false,
                     };
@@ -526,8 +542,8 @@ where
         // > characters are considered collapsible
         // If whitespace is not considered collapsible, it is preserved entirely, which
         // means that we can simply return the input string exactly.
-        if self.white_space_collapse == WhiteSpaceCollapse::Preserve
-            || self.white_space_collapse == WhiteSpaceCollapse::BreakSpaces
+        if self.white_space_collapse == WhiteSpaceCollapse::Preserve ||
+            self.white_space_collapse == WhiteSpaceCollapse::BreakSpaces
         {
             // From <https://drafts.csswg.org/css-text-3/#white-space-processing>:
             // > Carriage returns (U+000D) are treated identically to spaces (U+0020) in all respects.
@@ -550,7 +566,9 @@ where
             // Don't push non-newline whitespace immediately. Instead wait to push it until we
             // know that it isn't followed by a newline. See `push_pending_whitespace_if_needed`
             // above.
-            if character.is_ascii_whitespace() && character != '\n' {
+            if InlineFormattingContextBuilder::is_document_white_space(character) &&
+                character != '\n'
+            {
                 self.inside_white_space = true;
                 continue;
             }
@@ -574,9 +592,9 @@ where
                 // >    collapsible segment break is removed.
                 // > 2. Then any remaining segment break is either transformed into a space (U+0020)
                 // >    or removed depending on the context before and after the break.
-                } else if !self.following_newline
-                    && preserve_segment_break()
-                    && !self.is_leading_trimmed_white_space()
+                } else if !self.following_newline &&
+                    preserve_segment_break() &&
+                    !self.is_leading_trimmed_white_space()
                 {
                     self.inside_white_space = false;
                     self.following_newline = true;
@@ -827,9 +845,9 @@ fn first_letter_range(text: &str) -> Range<usize> {
             State::Lns => {
                 // TODO: Implement support for intervening spaces
                 // <https://drafts.csswg.org/css-pseudo/#first-letter-pattern>
-                if character.is_punctuation()
-                    && !character.is_punctuation_open()
-                    && !character.is_punctuation_dash()
+                if character.is_punctuation() &&
+                    !character.is_punctuation_open() &&
+                    !character.is_punctuation_dash()
                 {
                     state = State::TrailingPunctuation;
                 } else {
@@ -839,9 +857,9 @@ fn first_letter_range(text: &str) -> Range<usize> {
             State::TrailingPunctuation => {
                 // TODO: Implement support for intervening spaces
                 // <https://drafts.csswg.org/css-pseudo/#first-letter-pattern>
-                if character.is_punctuation()
-                    && !character.is_punctuation_open()
-                    && !character.is_punctuation_dash()
+                if character.is_punctuation() &&
+                    !character.is_punctuation_open() &&
+                    !character.is_punctuation_dash()
                 {
                     continue;
                 } else {

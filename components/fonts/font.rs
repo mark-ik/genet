@@ -439,7 +439,7 @@ impl Font {
             debug!("shape_text: Using Harfbuzz.");
             self.shaper
                 .get_or_init(|| Shaper::new(self))
-                .shape_text(self, text, options)
+                .shape_text(text, options)
         };
 
         let shaped_text = Arc::new(glyphs);
@@ -471,7 +471,7 @@ impl Font {
 
     /// Fast path for ASCII text that only needs simple horizontal LTR kerning.
     fn shape_text_fast(&self, text: &str, options: &ShapingOptions) -> GlyphStore {
-        let mut glyph_store = GlyphStore::new(text, text.len(), options);
+        let mut glyph_store = GlyphStore::new(text.len(), options);
         let mut prev_glyph_id = None;
         for (string_byte_offset, byte) in text.bytes().enumerate() {
             let character = byte as char;
@@ -492,7 +492,7 @@ impl Font {
                 advance,
                 offset,
             };
-            glyph.adjust_for_character(character, options, self);
+            glyph.adjust_for_character(character, options);
 
             glyph_store.add_glyph(character, &glyph);
             prev_glyph_id = Some(glyph_id);

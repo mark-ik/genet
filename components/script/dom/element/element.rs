@@ -2783,8 +2783,8 @@ impl ElementMethods<crate::DomTypeHolder> for Element {
     }
 
     /// <https://dom.spec.whatwg.org/#dom-element-id>
-    fn SetId(&self, id: DOMString, can_gc: CanGc) {
-        self.set_atomic_attribute(&local_name!("id"), id, can_gc);
+    fn SetId(&self, cx: &mut JSContext, id: DOMString) {
+        self.set_atomic_attribute(&local_name!("id"), id, CanGc::from_cx(cx));
     }
 
     /// <https://dom.spec.whatwg.org/#dom-element-classname>
@@ -2793,8 +2793,8 @@ impl ElementMethods<crate::DomTypeHolder> for Element {
     }
 
     /// <https://dom.spec.whatwg.org/#dom-element-classname>
-    fn SetClassName(&self, class: DOMString, can_gc: CanGc) {
-        self.set_tokenlist_attribute(&local_name!("class"), class, can_gc);
+    fn SetClassName(&self, cx: &mut JSContext, class: DOMString) {
+        self.set_tokenlist_attribute(&local_name!("class"), class, CanGc::from_cx(cx));
     }
 
     /// <https://dom.spec.whatwg.org/#dom-element-classlist>
@@ -3043,31 +3043,34 @@ impl ElementMethods<crate::DomTypeHolder> for Element {
     }
 
     /// <https://dom.spec.whatwg.org/#dom-element-getelementsbytagname>
-    fn GetElementsByTagName(&self, localname: DOMString, can_gc: CanGc) -> DomRoot<HTMLCollection> {
+    fn GetElementsByTagName(
+        &self,
+        cx: &mut js::context::JSContext,
+        localname: DOMString,
+    ) -> DomRoot<HTMLCollection> {
         let window = self.owner_window();
-        HTMLCollection::by_qualified_name(
-            &window,
-            self.upcast(),
-            LocalName::from(localname),
-            can_gc,
-        )
+        HTMLCollection::by_qualified_name(cx, &window, self.upcast(), LocalName::from(localname))
     }
 
     /// <https://dom.spec.whatwg.org/#dom-element-getelementsbytagnamens>
     fn GetElementsByTagNameNS(
         &self,
+        cx: &mut js::context::JSContext,
         maybe_ns: Option<DOMString>,
         localname: DOMString,
-        can_gc: CanGc,
     ) -> DomRoot<HTMLCollection> {
         let window = self.owner_window();
-        HTMLCollection::by_tag_name_ns(&window, self.upcast(), localname, maybe_ns, can_gc)
+        HTMLCollection::by_tag_name_ns(cx, &window, self.upcast(), localname, maybe_ns)
     }
 
     /// <https://dom.spec.whatwg.org/#dom-element-getelementsbyclassname>
-    fn GetElementsByClassName(&self, classes: DOMString, can_gc: CanGc) -> DomRoot<HTMLCollection> {
+    fn GetElementsByClassName(
+        &self,
+        cx: &mut js::context::JSContext,
+        classes: DOMString,
+    ) -> DomRoot<HTMLCollection> {
         let window = self.owner_window();
-        HTMLCollection::by_class_name(&window, self.upcast(), classes, can_gc)
+        HTMLCollection::by_class_name(cx, &window, self.upcast(), classes)
     }
 
     /// <https://drafts.csswg.org/cssom-view/#dom-element-getclientrects>
@@ -3192,7 +3195,7 @@ impl ElementMethods<crate::DomTypeHolder> for Element {
 
     // https://drafts.csswg.org/cssom-view/#dom-element-scrolltop
     // TODO(stevennovaryo): Need to update the scroll API to follow the spec since it is quite outdated.
-    fn SetScrollTop(&self, y_: f64) {
+    fn SetScrollTop(&self, _cx: &mut JSContext, y_: f64) {
         let behavior = ScrollBehavior::Auto;
 
         // Step 1, 2
@@ -3288,7 +3291,7 @@ impl ElementMethods<crate::DomTypeHolder> for Element {
     }
 
     /// <https://drafts.csswg.org/cssom-view/#dom-element-scrollleft>
-    fn SetScrollLeft(&self, x: f64) {
+    fn SetScrollLeft(&self, _cx: &mut JSContext, x: f64) {
         let behavior = ScrollBehavior::Auto;
 
         // Step 1, 2
@@ -3623,9 +3626,9 @@ impl ElementMethods<crate::DomTypeHolder> for Element {
     }
 
     /// <https://dom.spec.whatwg.org/#dom-parentnode-children>
-    fn Children(&self, can_gc: CanGc) -> DomRoot<HTMLCollection> {
+    fn Children(&self, cx: &mut js::context::JSContext) -> DomRoot<HTMLCollection> {
         let window = self.owner_window();
-        HTMLCollection::children(&window, self.upcast(), can_gc)
+        HTMLCollection::children(cx, &window, self.upcast())
     }
 
     /// <https://dom.spec.whatwg.org/#dom-parentnode-firstelementchild>
@@ -4509,14 +4512,14 @@ impl VirtualMethods for Element {
         }
     }
 
-    fn unbind_from_tree(&self, context: &UnbindContext, can_gc: CanGc) {
-        self.super_type().unwrap().unbind_from_tree(context, can_gc);
+    fn unbind_from_tree(&self, cx: &mut JSContext, context: &UnbindContext) {
+        self.super_type().unwrap().unbind_from_tree(cx, context);
 
         if let Some(f) = self.as_maybe_form_control() {
             // TODO: The valid state of ancestors might be wrong if the form control element
             // has a fieldset ancestor, for instance: `<form><fieldset><input>`,
             // if `<input>` is unbound, `<form><fieldset>` should trigger a call to `update_validity()`.
-            f.unbind_form_control_from_tree(can_gc);
+            f.unbind_form_control_from_tree(CanGc::from_cx(cx));
         }
 
         if !context.tree_is_in_a_document_tree && !context.tree_is_in_a_shadow_tree {
@@ -4527,17 +4530,17 @@ impl VirtualMethods for Element {
 
         let fullscreen = doc.fullscreen_element();
         if fullscreen.as_deref() == Some(self) {
-            doc.exit_fullscreen(can_gc);
+            doc.exit_fullscreen(CanGc::from_cx(cx));
         }
         if let Some(ref value) = *self.id_attribute.borrow() {
             if let Some(ref shadow_root) = self.containing_shadow_root() {
                 // Only unregister the element id if the node was disconnected from it's shadow root
                 // (as opposed to the whole shadow tree being disconnected as a whole)
                 if !self.upcast::<Node>().is_in_a_shadow_tree() {
-                    shadow_root.unregister_element_id(self, value.clone(), can_gc);
+                    shadow_root.unregister_element_id(self, value.clone(), CanGc::from_cx(cx));
                 }
             } else {
-                doc.unregister_element_id(self, value.clone(), can_gc);
+                doc.unregister_element_id(self, value.clone(), CanGc::from_cx(cx));
             }
         }
         if let Some(ref value) = self.name_attribute() {

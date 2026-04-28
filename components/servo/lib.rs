@@ -53,6 +53,10 @@ pub use paint_api::rendering_context_core::WgpuCapability;
 pub use paint_api::rendering_context_core::{GlCapability, RenderingContextCore, WindowHandles};
 #[cfg(feature = "wgpu_backend")]
 pub use paint_api::wgpu_rendering_context::WgpuRenderingContext;
+// Expose our profile traits for servoshell, so we can instrument code there, but don't
+// add it as an official API.
+#[doc(hidden)]
+pub use profile_traits;
 // This should be replaced with an API on ServoBuilder.
 // See <https://github.com/servo/servo/issues/40950>.
 pub use resources;
@@ -64,6 +68,8 @@ pub use servo_config::{opts, pref, prefs};
 pub use servo_geometry::{
     DeviceIndependentIntRect, DeviceIndependentPixel, convert_rect_to_css_pixel,
 };
+#[doc(hidden)]
+pub use servo_tracing;
 pub use servo_url::ServoUrl;
 pub use style::Zero;
 pub use style_traits::CSSPixel;
