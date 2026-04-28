@@ -154,13 +154,13 @@ webxr = { workspace = true, optional = true }
 
 [target.'cfg(not(any(target_os = "android", target_env = "ohos")))'.dependencies]
 arboard = { workspace = true, optional = true }
-webxr = { workspace = true, features = ["glwindow", "headless"] }
+webxr = { workspace = true, features = ["glwindow", "headless"], optional = true }
 
 [target.'cfg(all(not(target_os = "windows"), not(target_os = "ios"), not(target_os = "android"), not(target_env = "ohos"), not(target_arch = "arm"), not(target_arch = "aarch64")))'.dependencies]
 gaol = "0.2.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-webxr = { workspace = true, features = ["glwindow", "headless", "openxr-api"] }
+webxr = { workspace = true, features = ["glwindow", "headless", "openxr-api"], optional = true }
 
 [target.'cfg(target_env = "ohos")'.dependencies]
 servo-media-ohos = { workspace = true }
@@ -187,4 +187,9 @@ harness = false
 [[example]]
 name = "toy_wgpu_embedder"
 path = "examples/toy_wgpu_embedder.rs"
+required-features = ["wgpu_backend"]
+
+[[example]]
+name = "presenting_wgpu_smoke"
+path = "examples/presenting_wgpu_smoke.rs"
 required-features = ["wgpu_backend"]

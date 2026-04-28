@@ -1158,13 +1158,11 @@ impl Painter {
         };
 
         let items_data = display_list_data.items_data;
-        let cache_data = display_list_data.cache_data;
         let spatial_tree = display_list_data.spatial_tree;
 
         let built_display_list = BuiltDisplayList::from_data(
             DisplayListPayload {
                 items_data,
-                cache_data,
                 spatial_tree,
             },
             display_list_descriptor,
