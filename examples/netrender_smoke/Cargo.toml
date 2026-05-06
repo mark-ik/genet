@@ -21,7 +21,11 @@ path = "src/main.rs"
 [workspace]
 
 [dependencies]
+<<<<<<< HEAD
 # Workspace was renamed: webrender-wgpu/ → netrender/.
 netrender = { path = "../../../netrender/netrender" }
+=======
+netrender = { path = "../../../webrender-wgpu/netrender" }
+>>>>>>> 03ad28fb721a2c090401483f4da74c0baf731249
 wgpu = "29"
 pollster = "0.4"

@@ -42,10 +42,18 @@ euclid = { workspace = true, optional = true }
 image = { workspace = true, optional = true }
 paint_api = { workspace = true, features = ["wgpu_backend"], optional = true }
 rustls = { workspace = true, features = ["aws-lc-rs"], optional = true }
+<<<<<<< HEAD
 servo = { version = "0.2.0", path = "../../components/servo", features = ["wgpu_backend"], optional = true }
+=======
+servo = { version = "0.1.0", path = "../../components/servo", features = ["wgpu_backend"], optional = true }
+>>>>>>> 03ad28fb721a2c090401483f4da74c0baf731249
 url = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }
 
 # netrender embedder hookup (optional; enabled by netrender_backend feature).
+<<<<<<< HEAD
 # Workspace was renamed: webrender-wgpu/ → netrender/.
 netrender = { path = "../../../netrender/netrender", optional = true }
+=======
+netrender = { path = "../../../webrender-wgpu/netrender", optional = true }
+>>>>>>> 03ad28fb721a2c090401483f4da74c0baf731249

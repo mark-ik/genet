@@ -117,10 +117,17 @@ impl VirtualMethods for HTMLFontElement {
         Some(self.upcast::<HTMLElement>() as &dyn VirtualMethods)
     }
 
+<<<<<<< HEAD
     fn attribute_affects_presentational_hints(&self, attr: AttrRef<'_>) -> bool {
         if attr.local_name() == &local_name!("color") ||
             attr.local_name() == &local_name!("size") ||
             attr.local_name() == &local_name!("face")
+=======
+    fn attribute_affects_presentational_hints(&self, attr: &Attr) -> bool {
+        if attr.local_name() == &local_name!("color")
+            || attr.local_name() == &local_name!("size")
+            || attr.local_name() == &local_name!("face")
+>>>>>>> 03ad28fb721a2c090401483f4da74c0baf731249
         {
             return true;
         }
