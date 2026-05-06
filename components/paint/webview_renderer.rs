@@ -1048,8 +1048,8 @@ impl WebViewRenderer {
         let device_pixel_ratio = self.device_pixels_per_page_pixel_not_including_pinch_zoom();
         // From <https://www.w3.org/TR/css-viewport-1/#actual-viewport>:
         // This is the viewport you get after processing the viewport <meta> tag.
-        let layout_viewport = self.rect.size().to_f32() /
-            (device_pixel_ratio * Scale::new(self.viewport_description.initial_scale.get()));
+        let layout_viewport = self.rect.size().to_f32()
+            / (device_pixel_ratio * Scale::new(self.viewport_description.initial_scale.get()));
         let _ = self.embedder_to_constellation_sender.send(
             EmbedderToConstellationMessage::ChangeViewportDetails(
                 self.id,

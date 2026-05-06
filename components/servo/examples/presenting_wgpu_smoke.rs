@@ -131,7 +131,8 @@ impl Args {
                         return Err("only one URL may be provided".to_string());
                     }
                     url = Some(
-                        Url::parse(&arg).map_err(|error| format!("invalid URL '{arg}': {error}"))?,
+                        Url::parse(&arg)
+                            .map_err(|error| format!("invalid URL '{arg}': {error}"))?,
                     );
                 },
             }
@@ -224,8 +225,7 @@ impl ApplicationHandler<AppEvent> for App {
         };
 
         let actual_size = window.inner_size();
-        let rendering_context =
-            Rc::new(WgpuRenderingContext::new(window.clone(), actual_size));
+        let rendering_context = Rc::new(WgpuRenderingContext::new(window.clone(), actual_size));
 
         let servo = ServoBuilder::default()
             .event_loop_waker(Box::new(self.waker.clone()))
@@ -295,8 +295,7 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             },
             WindowEvent::CloseRequested => {
-                self.outcome =
-                    Some(Err("window closed before screenshot completed".to_string()));
+                self.outcome = Some(Err("window closed before screenshot completed".to_string()));
                 event_loop.exit();
             },
             _ => {},
@@ -326,18 +325,38 @@ fn check_quadrants(image: &RgbaImage) -> Result<Vec<QuadrantCheck>, String> {
         // RECT family.
         ("TL solid red", Rgba([255, 0, 0, 255]), 80, 60),
         // LINEAR GRADIENT family. Midpoint of #00FF00..#00CC00.
-        ("TR linear-gradient midpoint", Rgba([0, 230, 0, 255]), 240, 60),
+        (
+            "TR linear-gradient midpoint",
+            Rgba([0, 230, 0, 255]),
+            240,
+            60,
+        ),
         // RADIAL GRADIENT family. Centre stop is pure blue.
         ("BL radial-gradient centre", Rgba([0, 0, 255, 255]), 80, 180),
         // CLIP family, inside the rounded shape.
-        ("BR clip inside (ellipse centre)", Rgba([0, 0, 0, 255]), 240, 180),
+        (
+            "BR clip inside (ellipse centre)",
+            Rgba([0, 0, 0, 255]),
+            240,
+            180,
+        ),
         // CLIP family, just inside the child's bounding-box corner — the
         // border-radius clips this point away so the white parent shows.
-        ("BR clip outside (rounded corner)", Rgba([255, 255, 255, 255]), 165, 125),
+        (
+            "BR clip outside (rounded corner)",
+            Rgba([255, 255, 255, 255]),
+            165,
+            125,
+        ),
         // TEXT family edge-of-strip sample: right margin of the text box,
         // unchanged white. Confirms the strip itself rendered (the dark-pixel
         // scan below confirms the glyph rasterized).
-        ("text strip background", Rgba([255, 255, 255, 255]), 315, 245),
+        (
+            "text strip background",
+            Rgba([255, 255, 255, 255]),
+            315,
+            245,
+        ),
     ];
 
     let mut checks = Vec::with_capacity(samples.len());
@@ -496,7 +515,11 @@ fn run() -> Result<(), Box<dyn Error>> {
         message.into()
     })?;
 
-    println!("presenting wgpu smoke OK ({}x{})", image.width(), image.height());
+    println!(
+        "presenting wgpu smoke OK ({}x{})",
+        image.width(),
+        image.height()
+    );
     for check in checks {
         println!(
             "  {}: sample={:?} expected={:?}",

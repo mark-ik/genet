@@ -377,8 +377,8 @@ impl DocumentFocusHandler {
             // because of the popping we do at the start of these steps.
             let related_blur_target = match new_focus_chain.last() {
                 Some(FocusableArea::Node { node, .. })
-                    if index == last_old_focus_chain_entry &&
-                        matches!(entry, FocusableArea::Node { .. }) =>
+                    if index == last_old_focus_chain_entry
+                        && matches!(entry, FocusableArea::Node { .. }) =>
                 {
                     Some(node.upcast())
                 },
@@ -455,8 +455,8 @@ impl DocumentFocusHandler {
             // because of the popping we do at the start of these steps.
             let related_focus_target = match old_focus_chain.last() {
                 Some(FocusableArea::Node { node, .. })
-                    if index == last_new_focus_chain_entry &&
-                        matches!(entry, FocusableArea::Node { .. }) =>
+                    if index == last_new_focus_chain_entry
+                        && matches!(entry, FocusableArea::Node { .. }) =>
                 {
                     Some(node.upcast())
                 },
@@ -821,8 +821,8 @@ impl SequentialFocusNavigationSearch {
 
                 // If the candidate element has a lesser tab index than the current winner,
                 // then it becomes the winner.
-                if compare_tab_indices(candidate_element_tab_index, winning_tab_index) ==
-                    Ordering::Less
+                if compare_tab_indices(candidate_element_tab_index, winning_tab_index)
+                    == Ordering::Less
                 {
                     self.select_new_winner(candidate_element, candidate_element_tab_index);
                 }
@@ -847,8 +847,8 @@ impl SequentialFocusNavigationSearch {
                 // If the candidate element's tab index is not less than the current winner,
                 // then it becomes the new winner. This means that when the tab indices are
                 // equal, we give preference to the last one in DOM order.
-                if compare_tab_indices(candidate_element_tab_index, winning_tab_index) !=
-                    Ordering::Less
+                if compare_tab_indices(candidate_element_tab_index, winning_tab_index)
+                    != Ordering::Less
                 {
                     self.select_new_winner(candidate_element, candidate_element_tab_index);
                 }

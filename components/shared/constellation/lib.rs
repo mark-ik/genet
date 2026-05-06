@@ -26,6 +26,8 @@ use embedder_traits::{
 pub use from_script_message::*;
 use malloc_size_of_derive::MallocSizeOf;
 use paint_api::PinchZoomInfos;
+use paint_types::units::LayoutVector2D;
+use paint_types::{ExternalScrollId, ImageKey};
 use profile_traits::mem::MemoryReportResult;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -36,8 +38,6 @@ use servo_config::prefs::PrefValue;
 use servo_url::{ImmutableOrigin, ServoUrl};
 pub use structured_data::*;
 use strum::IntoStaticStr;
-use webrender_api::units::LayoutVector2D;
-use webrender_api::{ExternalScrollId, ImageKey};
 
 /// Messages to the Constellation from the embedding layer, whether from `ServoRenderer` or
 /// from `libservo` itself.

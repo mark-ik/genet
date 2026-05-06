@@ -13,6 +13,7 @@ use glow::{
     NativeRenderbuffer, NativeSampler, NativeShader, NativeTexture, NativeVertexArray,
 };
 use malloc_size_of_derive::MallocSizeOf;
+use paint_types::ImageKey;
 use pixels::{PixelFormat, SnapshotAlphaMode};
 use serde::{Deserialize, Serialize};
 use servo_base::Epoch;
@@ -24,11 +25,15 @@ use servo_base::generic_channel::GenericSharedMemory;
 /// Result type for send()/recv() calls in in WebGLCommands.
 pub use servo_base::generic_channel::SendResult as WebGLSendResult;
 use servo_base::id::PainterId;
-use webrender_api::ImageKey;
 use webxr_api::{
     ContextId as WebXRContextId, Error as WebXRError, LayerId as WebXRLayerId,
     LayerInit as WebXRLayerInit, SubImages as WebXRSubImages,
 };
+
+pub const TEXTURE_2D: u32 = 0x0DE1;
+pub const FIXED: u32 = 0x140C;
+pub const HALF_FLOAT: u32 = 0x140B;
+pub const TEXTURE_RECTANGLE: u32 = 0x84F5;
 
 /// Helper function that creates a WebGL channel (WebGLSender, WebGLReceiver) to be used in WebGLCommands.
 pub fn webgl_channel<T>() -> Option<(GenericSender<T>, GenericReceiver<T>)>
@@ -38,7 +43,7 @@ where
     servo_base::generic_channel::channel()
 }
 
-/// Entry point channel type used for sending WebGLMsg messages to the WebGL renderer.
+/// Entry point channel type used for sending WebGLMsg messages to a WebGL backend.
 #[derive(Clone, Debug, Deserialize, Serialize, MallocSizeOf)]
 pub struct WebGLChan(pub GenericSender<WebGLMsg>);
 
@@ -49,46 +54,12 @@ impl WebGLChan {
     }
 }
 
-/// Entry point type used in a Script Pipeline to get the WebGLChan to be used in that thread.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct WebGLPipeline(pub WebGLChan);
-
-impl WebGLPipeline {
-    pub fn channel(&self) -> WebGLChan {
-        self.0.clone()
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WebGLCommandBacktrace {
     #[cfg(feature = "webgl_backtrace")]
     pub backtrace: String,
     #[cfg(feature = "webgl_backtrace")]
     pub js_backtrace: Option<String>,
-}
-
-/// WebGL Threading API entry point that lives in the constellation.
-#[derive(Clone)]
-pub struct WebGLThreads(pub GenericSender<WebGLMsg>);
-
-impl WebGLThreads {
-    /// Gets the WebGLThread handle for each script pipeline.
-    pub fn pipeline(&self) -> WebGLPipeline {
-        // This mode creates a single thread, so the existing WebGLChan is just cloned.
-        WebGLPipeline(WebGLChan(self.0.clone()))
-    }
-
-    /// Sends a exit message to close the WebGLThreads and release all WebGLContexts.
-    pub fn exit(&self, sender: GenericSender<()>) -> WebGLSendResult {
-        self.0.send(WebGLMsg::Exit(sender))
-    }
-
-    /// Inform the WebGLThreads that WebRender has finished rendering a particular WebGL context,
-    /// and if it was marked for deletion, it can now be released.
-    pub fn finished_rendering_to_context(&self, context_id: WebGLContextId) -> WebGLSendResult {
-        self.0
-            .send(WebGLMsg::FinishedRenderingToContext(context_id))
-    }
 }
 
 /// WebGL Message API
@@ -123,12 +94,6 @@ pub enum WebGLMsg {
     /// was initiated. The u64 in the second field will be the time the
     /// request is fulfilled
     SwapBuffers(Vec<WebGLContextId>, Option<Epoch>, u64),
-    /// Called when a [`Surface`] is returned from being used in WebRender and isn't
-    /// readily releaseable via the `SwapChain`. This can happen when the context is
-    /// released in the WebGLThread while the contents are being rendered by WebRender.
-    FinishedRenderingToContext(WebGLContextId),
-    /// Frees all resources and closes the thread.
-    Exit(GenericSender<()>),
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, MallocSizeOf, PartialEq, Serialize)]

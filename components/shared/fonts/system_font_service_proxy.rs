@@ -6,14 +6,14 @@ use std::collections::HashMap;
 
 use log::debug;
 use malloc_size_of_derive::MallocSizeOf;
+use paint_types::units::Au;
+use paint_types::{FontInstanceFlags, FontInstanceKey, FontKey, FontVariation};
 use parking_lot::RwLock;
 use profile_traits::mem::ReportsChan;
 use serde::{Deserialize, Serialize};
 use servo_base::generic_channel::{self, GenericSender};
 use servo_base::id::PainterId;
 use style::values::computed::font::SingleFontFamily;
-use webrender_api::units::Au;
-use webrender_api::{FontInstanceFlags, FontInstanceKey, FontKey, FontVariation};
 
 use crate::{FontDescriptor, FontIdentifier, FontTemplate, FontTemplateRef};
 

@@ -307,8 +307,8 @@ impl CommandName {
                 // https://w3c.github.io/editing/docs/execCommand/#the-superscript-command
                 // > or if there is some formattable node effectively contained in
                 // > the active range with effective command value "mixed".
-                if matches!(self, CommandName::Subscript | CommandName::Superscript) &&
-                    effective_command_value == "mixed"
+                if matches!(self, CommandName::Subscript | CommandName::Superscript)
+                    && effective_command_value == "mixed"
                 {
                     at_least_two_different_effective_values = true;
                 }
@@ -501,10 +501,10 @@ impl CommandName {
     pub(crate) fn is_standard_inline_value_command(&self) -> bool {
         matches!(
             self,
-            CommandName::BackColor |
-                CommandName::FontName |
-                CommandName::ForeColor |
-                CommandName::HiliteColor
+            CommandName::BackColor
+                | CommandName::FontName
+                | CommandName::ForeColor
+                | CommandName::HiliteColor
         )
     }
 

@@ -21,6 +21,7 @@ use euclid::default::{Point2D, Rect, Size2D, Transform2D};
 use fonts::FontIdentifier;
 use kurbo::Shape as _;
 use paint_api::SerializableImageData;
+use paint_types::{ImageDescriptor, ImageDescriptorFlags, ImageFormat};
 use pixels::{Snapshot, SnapshotAlphaMode, SnapshotPixelFormat};
 use servo_base::generic_channel::GenericSharedMemory;
 use servo_canvas_traits::canvas::{
@@ -35,7 +36,6 @@ use vello::wgpu::{
     TextureUsages, TextureView, TextureViewDescriptor,
 };
 use vello::{kurbo, peniko};
-use webrender_api::{ImageDescriptor, ImageDescriptorFlags};
 
 use crate::backend::{Convert as _, GenericDrawTarget};
 use crate::canvas_data::Filter;
@@ -596,7 +596,7 @@ impl GenericDrawTarget for VelloDrawTarget {
         let stride = self.padded_byte_width;
         self.map_read(|data| {
             let image_desc = ImageDescriptor {
-                format: webrender_api::ImageFormat::RGBA8,
+                format: ImageFormat::RGBA8,
                 size: size.cast().cast_unit(),
                 stride: data.map(|_| stride as i32),
                 offset: 0,

@@ -13,7 +13,7 @@ use freetype_sys::{
     FT_Pos, FT_Select_Size, FT_Set_Char_Size, FT_Set_Var_Design_Coordinates, FT_UInt,
     FTErrorMethods,
 };
-use webrender_api::FontVariation;
+use paint_types::FontVariation;
 
 use crate::platform::freetype::library_handle::FreeTypeLibraryHandle;
 

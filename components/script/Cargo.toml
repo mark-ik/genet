@@ -76,7 +76,6 @@ euclid = { workspace = true }
 flate2 = { workspace = true }
 fonts = { workspace = true }
 fonts_traits = { workspace = true }
-glow = { workspace = true }
 headers = { workspace = true }
 hkdf = { workspace = true }
 html5ever = { workspace = true }
@@ -112,6 +111,7 @@ p256 = { workspace = true }
 p384 = { workspace = true }
 p521 = { workspace = true }
 paint_api = { workspace = true }
+paint_types = { workspace = true }
 parking_lot = { workspace = true }
 percent-encoding = { workspace = true }
 phf = "0.13"
@@ -166,7 +166,6 @@ uuid = { workspace = true, features = ["serde"] }
 web_atoms = "0.2.4"
 webdriver = { workspace = true }
 webgpu_traits = { workspace = true, optional = true }
-webrender_api = { workspace = true }
 webxr-api = { workspace = true, optional = true }
 wgpu-core = { workspace = true, optional = true }
 wgpu-types = { workspace = true, optional = true }

@@ -19,6 +19,7 @@ use fonts_traits::FontDescriptor;
 use icu_locid::subtags::Language;
 use log::debug;
 use malloc_size_of_derive::MallocSizeOf;
+use paint_types::{FontInstanceFlags, FontInstanceKey, FontVariation};
 use parking_lot::RwLock;
 use read_fonts::tables::os2::{Os2, SelectionFlags};
 use read_fonts::types::Tag;
@@ -34,7 +35,6 @@ use style::values::computed::font::{
 };
 use style::values::computed::{FontStretch, FontStyle, FontSynthesis, FontWeight};
 use unicode_script::Script;
-use webrender_api::{FontInstanceFlags, FontInstanceKey, FontVariation};
 
 use crate::platform::font::{FontTable, PlatformFont};
 use crate::platform::font_list::fallback_font_families;

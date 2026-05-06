@@ -11,6 +11,7 @@ use html5ever::{LocalName, Prefix, local_name, ns};
 use js::error::throw_type_error;
 use js::rust::{HandleObject, HandleValue};
 use layout_api::HTMLCanvasData;
+use paint_types::ImageKey;
 use pixels::{EncodedImageType, Snapshot};
 use rustc_hash::FxHashMap;
 use script_bindings::cell::{DomRefCell, Ref};
@@ -23,7 +24,6 @@ use servo_constellation_traits::ScriptToConstellationMessage;
 use servo_media::streams::MediaStreamType;
 use servo_media::streams::registry::MediaStreamId;
 use style::attr::AttrValue;
-use webrender_api::ImageKey;
 
 use crate::canvas_context::{CanvasContext, RenderingContext};
 use crate::conversions::Convert;

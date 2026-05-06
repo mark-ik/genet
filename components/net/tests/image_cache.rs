@@ -17,10 +17,11 @@ use net_traits::{
     ResourceFetchTiming, ResourceTimingType,
 };
 use paint_api::{CrossProcessPaintApi, PaintMessage};
+use paint_types::units::DeviceIntSize;
+use paint_types::{IdNamespace, ImageKey};
 use servo_base::id::{PipelineId, TEST_PIPELINE_ID, TEST_WEBVIEW_ID};
 use servo_url::ServoUrl;
 use uuid::Uuid;
-use webrender_api::ImageKey;
 
 use crate::mock_origin;
 
@@ -40,7 +41,7 @@ fn create_test_image_cache() -> (Arc<dyn ImageCache>, Receiver<PipelineId>) {
 fn handle_pending_key_requests(cache: &Arc<dyn ImageCache>, receiver: &Receiver<PipelineId>) {
     while let Ok(_pipeline_id) = receiver.try_recv() {
         let keys: Vec<_> = (0..10)
-            .map(|i| ImageKey::new(webrender_api::IdNamespace(42), i as u32))
+            .map(|i| ImageKey::new(IdNamespace(42), i as u32))
             .collect();
         cache.fill_key_cache_with_batch_of_keys(keys);
     }
@@ -558,7 +559,7 @@ fn test_svg_rasterization() {
         break vec_img;
     };
 
-    let size = webrender_api::units::DeviceIntSize::new(100, 100);
+    let size = DeviceIntSize::new(100, 100);
     cache.rasterize_vector_image(vec_img.id, size, None);
 }
 
@@ -610,7 +611,7 @@ fn test_rasterization_listener() {
         break vec_img;
     };
 
-    let size = webrender_api::units::DeviceIntSize::new(100, 100);
+    let size = DeviceIntSize::new(100, 100);
     let notified = Arc::new(AtomicBool::new(false));
     let notified_clone = notified.clone();
 

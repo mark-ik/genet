@@ -21,7 +21,7 @@
 //! Expected: a winit window opens, Servo loads a page, content renders
 //! through the wgpu compositor path. `cargo tree --example
 //! toy_wgpu_embedder | grep surfman` should return empty-ish (Servo
-//! itself still pulls Surfman for WebGL/XR producer paths; the embedder
+//! itself may still pull Surfman for legacy XR producer paths; the embedder
 //! does not).
 
 use std::cell::RefCell;

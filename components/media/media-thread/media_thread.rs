@@ -7,8 +7,8 @@ use std::thread;
 use ipc_channel::ipc::{IpcSender, channel};
 use log::{trace, warn};
 use paint_api::{WebRenderExternalImageIdManager, WebRenderImageHandlerType};
+use paint_types::ExternalImageId;
 use rustc_hash::FxHashMap;
-use webrender_api::ExternalImageId;
 
 /// GL player threading API entry point that lives in the
 /// constellation.

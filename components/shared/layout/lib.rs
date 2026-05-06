@@ -41,6 +41,8 @@ use malloc_size_of::{MallocSizeOf as MallocSizeOfTrait, MallocSizeOfOps, malloc_
 use malloc_size_of_derive::MallocSizeOf;
 use net_traits::image_cache::{ImageCache, ImageCacheFactory, PendingImageId};
 use paint_api::CrossProcessPaintApi;
+use paint_types::units::{DeviceIntSize, LayoutPoint, LayoutVector2D};
+use paint_types::{ExternalScrollId, ImageKey};
 use parking_lot::RwLock;
 use pixels::RasterImage;
 use profile_traits::mem::Report;
@@ -71,8 +73,6 @@ use style::stylist::Stylist;
 use style::thread_state::{self, ThreadState};
 use style::values::computed::Overflow;
 use style_traits::CSSPixel;
-use webrender_api::units::{DeviceIntSize, LayoutPoint, LayoutVector2D};
-use webrender_api::{ExternalScrollId, ImageKey};
 
 pub trait GenericLayoutDataTrait: Any + MallocSizeOfTrait + Send + Sync + 'static {
     fn as_any(&self) -> &dyn Any;
@@ -229,7 +229,7 @@ pub struct PendingRasterizationImage {
 
 #[derive(Clone, Copy, Debug, MallocSizeOf)]
 pub struct MediaFrame {
-    pub image_key: webrender_api::ImageKey,
+    pub image_key: ImageKey,
     pub width: i32,
     pub height: i32,
 }

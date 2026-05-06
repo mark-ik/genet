@@ -4,7 +4,6 @@
 
 //! The interface to the `paint` crate, which helps to break dependency cycles.
 
-use std::collections::HashMap;
 use std::fmt::{Debug, Error, Formatter};
 
 use crossbeam_channel::Sender;
@@ -12,6 +11,7 @@ use embedder_traits::{AnimationState, EventLoopWaker};
 use euclid::{Rect, Scale, Size2D};
 use log::warn;
 use malloc_size_of_derive::MallocSizeOf;
+use paint_types::{DocumentId, FontVariation};
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use servo_base::Epoch;
@@ -19,7 +19,6 @@ use servo_base::id::{PainterId, PipelineId, WebViewId};
 use smallvec::SmallVec;
 use strum::IntoStaticStr;
 use style_traits::CSSPixel;
-use webrender_api::{DocumentId, FontVariation};
 
 pub mod display_list;
 pub mod largest_contentful_paint_candidate;
@@ -31,24 +30,24 @@ pub mod wgpu_readback;
 #[cfg(feature = "wgpu_backend")]
 pub mod wgpu_rendering_context;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use bitflags::bitflags;
 use display_list::PaintDisplayListInfo;
 use embedder_traits::ScreenGeometry;
 use euclid::default::Size2D as UntypedSize2D;
-use profile_traits::mem::{OpaqueSender, ReportsChan};
-use serde::{Deserialize, Serialize};
-use servo_base::generic_channel::{
-    self, GenericCallback, GenericReceiver, GenericSender, GenericSharedMemory,
-};
-pub use webrender_api::ExternalImageSource;
-use webrender_api::units::{DevicePixel, LayoutVector2D, TexelRect};
-use webrender_api::{
+pub use paint_types::ExternalImageSource;
+use paint_types::units::{DevicePixel, LayoutVector2D, TexelRect};
+use paint_types::{
     BuiltDisplayList, BuiltDisplayListDescriptor, ExternalImage, ExternalImageData,
     ExternalImageHandler, ExternalImageId, ExternalScrollId, FontInstanceFlags, FontInstanceKey,
     FontKey, ImageData, ImageDescriptor, ImageKey, NativeFontHandle,
     PipelineId as WebRenderPipelineId,
+};
+use profile_traits::mem::{OpaqueSender, ReportsChan};
+use serde::{Deserialize, Serialize};
+use servo_base::generic_channel::{
+    self, GenericCallback, GenericReceiver, GenericSender, GenericSharedMemory,
 };
 
 use crate::largest_contentful_paint_candidate::LCPCandidate;
@@ -550,7 +549,7 @@ impl CrossProcessPaintApi {
 /// This trait is used to notify lock/unlock messages and get the
 /// required info that WR needs.
 pub trait WebRenderExternalImageApi {
-    fn lock(&mut self, id: u64) -> (ExternalImageSource<'_>, UntypedSize2D<i32>);
+    fn lock(&mut self, id: u64) -> (ExternalImageSource, UntypedSize2D<i32>);
     fn unlock(&mut self, id: u64);
 }
 
@@ -645,7 +644,7 @@ impl ExternalImageHandler for WebRenderExternalImageHandlers {
         key: ExternalImageId,
         _channel_index: u8,
         _is_composited: bool,
-    ) -> ExternalImage<'_> {
+    ) -> ExternalImage {
         let handler_type = self
             .id_manager()
             .get(&key)

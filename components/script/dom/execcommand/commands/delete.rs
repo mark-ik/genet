@@ -96,9 +96,9 @@ pub(crate) fn execute_delete_command(
                 }
                 // Step 4.5. Otherwise, if node has a child with index offset − 1 and that child is not a block node or a br or an img,
                 // set node to that child, then set offset to the length of node.
-                if !(child.is_block_node() ||
-                    child.is::<HTMLBRElement>() ||
-                    child.is::<HTMLImageElement>())
+                if !(child.is_block_node()
+                    || child.is::<HTMLBRElement>()
+                    || child.is::<HTMLImageElement>())
                 {
                     node = child;
                     offset = node.len();
@@ -112,15 +112,16 @@ pub(crate) fn execute_delete_command(
 
     // Step 5. If node is a Text node and offset is not zero, or if node is
     // a block node that has a child with index offset − 1 and that child is a br or hr or img:
-    if (node.is::<Text>() && offset != 0) ||
-        (offset > 0 &&
-            node.is_block_node() &&
-            node.children_unrooted(cx.no_gc())
+    if (node.is::<Text>() && offset != 0)
+        || (offset > 0
+            && node.is_block_node()
+            && node
+                .children_unrooted(cx.no_gc())
                 .nth(offset as usize - 1)
                 .is_some_and(|child| {
-                    child.is::<HTMLBRElement>() ||
-                        child.is::<HTMLHRElement>() ||
-                        child.is::<HTMLImageElement>()
+                    child.is::<HTMLBRElement>()
+                        || child.is::<HTMLHRElement>()
+                        || child.is::<HTMLImageElement>()
                 }))
     {
         // Step 5.1. Call collapse(node, offset) on the context object's selection.
@@ -151,9 +152,10 @@ pub(crate) fn execute_delete_command(
     // Step 7. If node is an li or dt or dd and is the first child of its parent, and offset is zero:
     //
     // TODO: Handle dt or dd
-    if offset == 0 &&
-        node.is::<HTMLLIElement>() &&
-        node.GetParentNode()
+    if offset == 0
+        && node.is::<HTMLLIElement>()
+        && node
+            .GetParentNode()
             .and_then(|parent| parent.children().next())
             .is_some_and(|first| first == node)
     {
@@ -236,15 +238,15 @@ pub(crate) fn execute_delete_command(
 
     // Step 13. If offset is zero; and either the child of start node with index start offset
     // minus one is an hr, or the child is a br whose previousSibling is either a br or not an inline node:
-    if offset == 0 &&
-        (start_offset > 0 &&
-            start_node
+    if offset == 0
+        && (start_offset > 0
+            && start_node
                 .children_unrooted(cx.no_gc())
                 .nth(start_offset as usize - 1)
                 .is_some_and(|child| {
-                    child.is::<HTMLHRElement>() ||
-                        (child.is::<HTMLBRElement>() &&
-                            child.GetPreviousSibling().is_some_and(|previous| {
+                    child.is::<HTMLHRElement>()
+                        || (child.is::<HTMLBRElement>()
+                            && child.GetPreviousSibling().is_some_and(|previous| {
                                 previous.is::<HTMLBRElement>() || !previous.is_inline_node()
                             }))
                 }))

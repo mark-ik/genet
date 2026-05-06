@@ -7,11 +7,11 @@ use std::cell::Cell;
 use dom_struct::dom_struct;
 use euclid::{Scale, Size2D};
 use js::context::JSContext;
+use paint_types::ImageKey;
+use paint_types::units::DevicePixel;
 use script_bindings::reflector::Reflector;
 use servo_url::ServoUrl;
 use style_traits::CSSPixel;
-use webrender_api::ImageKey;
-use webrender_api::units::DevicePixel;
 
 use super::canvas_state::CanvasState;
 use crate::dom::bindings::codegen::Bindings::CanvasRenderingContext2DBinding::{

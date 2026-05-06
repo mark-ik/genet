@@ -29,6 +29,11 @@ use http::{HeaderMap, Method, StatusCode};
 use log::warn;
 use malloc_size_of::malloc_size_of_is_0;
 use malloc_size_of_derive::MallocSizeOf;
+use paint_types::ExternalScrollId;
+use paint_types::units::{
+    DeviceIntPoint, DeviceIntRect, DeviceIntSize, DevicePixel, DevicePoint, DeviceRect,
+    DeviceVector2D, LayoutPoint, LayoutRect, LayoutSize, LayoutVector2D,
+};
 use pixels::SharedRasterImage;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use servo_base::Epoch;
@@ -43,11 +48,6 @@ use style::queries::values::PrefersColorScheme;
 use style_traits::CSSPixel;
 use url::Url;
 use uuid::Uuid;
-use webrender_api::ExternalScrollId;
-use webrender_api::units::{
-    DeviceIntPoint, DeviceIntRect, DeviceIntSize, DevicePixel, DevicePoint, DeviceRect,
-    DeviceVector2D, LayoutPoint, LayoutRect, LayoutSize, LayoutVector2D,
-};
 
 pub use crate::embedder_controls::*;
 pub use crate::input_events::*;

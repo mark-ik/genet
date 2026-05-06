@@ -26,6 +26,8 @@ use malloc_size_of_derive::MallocSizeOf;
 use media::WindowGLContext;
 use net_traits::ResourceThreads;
 use paint_api::{CrossProcessPaintApi, PinchZoomInfos};
+use paint_types::ImageKey;
+use paint_types::units::DevicePixel;
 use pixels::PixelFormat;
 use profile_traits::mem;
 use rustc_hash::FxHashMap;
@@ -39,7 +41,6 @@ use servo_base::id::{
 };
 #[cfg(feature = "bluetooth")]
 use servo_bluetooth_traits::BluetoothRequest;
-use servo_canvas_traits::webgl::WebGLPipeline;
 use servo_config::prefs::PrefValue;
 use servo_constellation_traits::{
     KeyboardScroll, LoadData, NavigationHistoryBehavior, RemoteFocusOperation,
@@ -54,8 +55,6 @@ use style_traits::{CSSPixel, SpeculativePainter};
 use stylo_atoms::Atom;
 #[cfg(feature = "webgpu")]
 use webgpu_traits::WebGPUMsg;
-use webrender_api::ImageKey;
-use webrender_api::units::DevicePixel;
 
 /// The initial data required to create a new `Pipeline` attached to an existing `ScriptThread`.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -398,8 +397,6 @@ pub struct InitialScriptState {
     pub devtools_server_sender: Option<GenericCallback<ScriptToDevtoolsControlMsg>>,
     /// The ID of the pipeline namespace for this script thread.
     pub pipeline_namespace_id: PipelineNamespaceId,
-    /// A channel to the WebGL thread used in this pipeline.
-    pub webgl_chan: Option<WebGLPipeline>,
     /// The XR device registry
     pub webxr_registry: Option<webxr_api::Registry>,
     /// Access to `Paint` across a process boundary.

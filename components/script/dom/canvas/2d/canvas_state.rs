@@ -20,6 +20,7 @@ use icu_locid::subtags::Language;
 use js::context::JSContext;
 use net_traits::image_cache::{ImageCache, ImageResponse};
 use net_traits::request::CorsSettings;
+use paint_types::ImageKey;
 use pixels::{Snapshot, SnapshotAlphaMode, SnapshotPixelFormat};
 use script_bindings::cell::DomRefCell;
 use servo_arc::Arc as ServoArc;
@@ -42,7 +43,6 @@ use style_traits::values::ToCss;
 use style_traits::{CssWriter, ParsingMode};
 use unicode_script::Script;
 use url::Url;
-use webrender_api::ImageKey;
 
 use crate::canvas_context::{CanvasContext, OffscreenRenderingContext, RenderingContext};
 use crate::conversions::Convert;

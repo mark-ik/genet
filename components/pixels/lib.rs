@@ -21,13 +21,13 @@ use image::{
 };
 use log::{debug, error};
 use malloc_size_of_derive::MallocSizeOf;
+use paint_types::units::DeviceIntSize;
+use paint_types::{
+    ImageDescriptor, ImageDescriptorFlags, ImageFormat as WebRenderImageFormat, ImageKey,
+};
 use serde::{Deserialize, Serialize};
 use servo_base::generic_channel::GenericSharedMemory;
 pub use snapshot::*;
-use webrender_api::units::DeviceIntSize;
-use webrender_api::{
-    ImageDescriptor, ImageDescriptorFlags, ImageFormat as WebRenderImageFormat, ImageKey,
-};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, MallocSizeOf, PartialEq, Serialize)]
 pub enum FilterQuality {

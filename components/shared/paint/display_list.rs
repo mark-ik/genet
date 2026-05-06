@@ -11,6 +11,11 @@ use bitflags::bitflags;
 use embedder_traits::ViewportDetails;
 use euclid::SideOffsets2D;
 use malloc_size_of_derive::MallocSizeOf;
+use paint_types::units::{LayoutPixel, LayoutPoint, LayoutRect, LayoutSize, LayoutVector2D};
+use paint_types::{
+    ColorF, ExternalScrollId, PipelineId, PropertyBindingKey, ReferenceFrameKind, ScrollLocation,
+    SpatialId, StickyOffsetBounds, TransformStyle,
+};
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use servo_base::Epoch;
@@ -18,11 +23,6 @@ use servo_base::id::ScrollTreeNodeId;
 use servo_base::print_tree::PrintTree;
 use servo_geometry::FastLayoutTransform;
 use style::values::specified::Overflow;
-use webrender_api::units::{LayoutPixel, LayoutPoint, LayoutRect, LayoutSize, LayoutVector2D};
-use webrender_api::{
-    ColorF, ExternalScrollId, PipelineId, PropertyBindingKey, ReferenceFrameKind, ScrollLocation,
-    SpatialId, StickyOffsetBounds, TransformStyle,
-};
 
 /// A scroll type, describing whether what kind of action originated this scroll request.
 /// This is a bitflag as it is also used to track what kinds of [`ScrollType`]s scroll

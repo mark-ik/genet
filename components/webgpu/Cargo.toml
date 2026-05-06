@@ -18,12 +18,12 @@ arrayvec = { workspace = true, features = ["serde"] }
 euclid = { workspace = true }
 log = { workspace = true }
 paint_api = { workspace = true }
+paint_types = { workspace = true }
 pixels = { workspace = true }
 rustc-hash = { workspace = true }
 servo-base = { workspace = true }
 servo-config = { workspace = true }
 webgpu_traits = { workspace = true }
-webrender_api = { workspace = true }
 wgpu-core = { workspace = true, features = ["serde", "wgsl"] }
 wgpu-types = { workspace = true }
 

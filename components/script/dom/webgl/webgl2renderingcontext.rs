@@ -15,6 +15,7 @@ use js::jsapi::{JSObject, Type};
 use js::jsval::{BooleanValue, DoubleValue, Int32Value, NullValue, ObjectValue, UInt32Value};
 use js::rust::{CustomAutoRooterGuard, HandleObject, MutableHandleValue};
 use js::typedarray::{ArrayBufferView, CreateWith, Float32, Int32Array, Uint32, Uint32Array};
+use paint_types::ImageKey;
 use pixels::{Alpha, Snapshot};
 use script_bindings::conversions::SafeToJSValConvertible;
 use script_bindings::interfaces::WebGL2RenderingContextHelpers;
@@ -26,7 +27,6 @@ use servo_canvas_traits::webgl::{
 };
 use servo_config::pref;
 use url::Host;
-use webrender_api::ImageKey;
 
 use super::validations::types::TexImageTarget;
 use crate::canvas_context::CanvasContext;

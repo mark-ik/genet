@@ -31,9 +31,9 @@ mod platform {
 
     use malloc_size_of_derive::MallocSizeOf;
     use memmap2::Mmap;
+    use paint_types::NativeFontHandle;
     use serde::{Deserialize, Serialize};
     use style::Atom;
-    use webrender_api::NativeFontHandle;
 
     use crate::{FontData, FontDataAndIndex};
 
@@ -99,11 +99,11 @@ mod platform {
     use log::warn;
     use malloc_size_of_derive::MallocSizeOf;
     use memmap2::Mmap;
+    use paint_types::NativeFontHandle;
     use read_fonts::types::NameId;
     use read_fonts::{FileRef, TableProvider};
     use serde::{Deserialize, Serialize};
     use style::Atom;
-    use webrender_api::NativeFontHandle;
 
     use crate::{FontData, FontDataAndIndex};
 
@@ -195,8 +195,8 @@ mod platform {
 
     use dwrote::{FontCollection, FontDescriptor};
     use malloc_size_of_derive::MallocSizeOf;
+    use paint_types::NativeFontHandle;
     use serde::{Deserialize, Serialize};
-    use webrender_api::NativeFontHandle;
 
     use crate::{FontData, FontDataAndIndex};
 

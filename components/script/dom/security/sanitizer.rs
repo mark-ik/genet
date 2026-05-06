@@ -358,8 +358,8 @@ impl SanitizerMethods<crate::DomTypeHolder> for Sanitizer {
         else {
             // Step 5.1. If element["attributes"] exists or element["removeAttributes"] with default
             // « » is not empty:
-            if element.attributes().is_some() ||
-                !element.remove_attributes().unwrap_or_default().is_empty()
+            if element.attributes().is_some()
+                || !element.remove_attributes().unwrap_or_default().is_empty()
             {
                 // Step 5.1.1. The user agent may report a warning to the console that this
                 // operation is not supported.
@@ -486,8 +486,8 @@ impl SanitizerMethods<crate::DomTypeHolder> for Sanitizer {
 
             // Step 4.2. If configuration["dataAttributes"] is true and attribute is a custom data
             // attribute, then return false.
-            if configuration.dataAttributes == Some(true) &&
-                is_custom_data_attribute(
+            if configuration.dataAttributes == Some(true)
+                && is_custom_data_attribute(
                     &attribute.name().str(),
                     attribute
                         .namespace()
@@ -880,8 +880,8 @@ impl SanitizerConfigAlgorithm for SanitizerConfig {
                         // Step 16.2.1.5. If config["dataAttributes"] is true and
                         // element["attributes"] contains a custom data attribute, then return
                         // false.
-                        if self.dataAttributes == Some(true) &&
-                            element.attributes().is_some_and(|attributes| {
+                        if self.dataAttributes == Some(true)
+                            && element.attributes().is_some_and(|attributes| {
                                 attributes.iter().any(|attribute| {
                                     is_custom_data_attribute(
                                         &attribute.name().str(),
@@ -900,8 +900,8 @@ impl SanitizerConfigAlgorithm for SanitizerConfig {
 
                 // Step 16.3. If config["dataAttributes"] is true and config["attributes"] contains
                 // a custom data attribute, then return false.
-                if self.dataAttributes == Some(true) &&
-                    config_attributes.iter().any(|attribute| {
+                if self.dataAttributes == Some(true)
+                    && config_attributes.iter().any(|attribute| {
                         is_custom_data_attribute(
                             &attribute.name().str(),
                             attribute
@@ -2356,10 +2356,12 @@ fn is_custom_data_attribute(name: &str, namespace: Option<&str>) -> bool {
     // A custom data attribute is an attribute in no namespace whose name starts with the string
     // "data-", has at least one character after the hyphen, is a valid attribute local name,
     // and contains no ASCII upper alphas.
-    namespace.is_none() &&
-        name.strip_prefix("data-")
-            .is_some_and(|substring| !substring.is_empty()) &&
-        is_valid_attribute_local_name(name) &&
-        name.chars()
+    namespace.is_none()
+        && name
+            .strip_prefix("data-")
+            .is_some_and(|substring| !substring.is_empty())
+        && is_valid_attribute_local_name(name)
+        && name
+            .chars()
             .all(|code_point| !code_point.is_ascii_uppercase())
 }

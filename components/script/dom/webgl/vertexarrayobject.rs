@@ -7,7 +7,8 @@ use std::cell::Cell;
 use script_bindings::cell::{DomRefCell, Ref};
 use script_bindings::weakref::WeakRef;
 use servo_canvas_traits::webgl::{
-    ActiveAttribInfo, WebGLCommand, WebGLError, WebGLResult, WebGLVersion, WebGLVertexArrayId,
+    ActiveAttribInfo, FIXED, WebGLCommand, WebGLError, WebGLResult, WebGLVersion,
+    WebGLVertexArrayId,
 };
 
 use crate::dom::bindings::codegen::Bindings::WebGL2RenderingContextBinding::WebGL2RenderingContextConstants as constants2;
@@ -131,7 +132,7 @@ impl VertexArrayObject {
             constants::FLOAT => 4,
             constants::INT | constants::UNSIGNED_INT if is_webgl2 => 4,
             constants2::HALF_FLOAT if is_webgl2 => 2,
-            glow::FIXED if is_webgl2 => 4,
+            FIXED if is_webgl2 => 4,
             constants2::INT_2_10_10_10_REV | constants2::UNSIGNED_INT_2_10_10_10_REV
                 if is_webgl2 && size == 4 =>
             {

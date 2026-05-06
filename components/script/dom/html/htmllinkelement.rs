@@ -19,6 +19,7 @@ use net_traits::request::{Destination, Initiator, ParserMetadata, RequestBuilder
 use net_traits::{
     FetchMetadata, FetchResponseMsg, NetworkError, ReferrerPolicy, ResourceFetchTiming,
 };
+use paint_types::units::DeviceIntSize;
 use pixels::PixelFormat;
 use script_bindings::cell::DomRefCell;
 use script_bindings::root::Dom;
@@ -29,7 +30,6 @@ use style::attr::AttrValue;
 use style::media_queries::MediaList as StyleMediaList;
 use style::stylesheets::Stylesheet;
 use stylo_atoms::Atom;
-use webrender_api::units::DeviceIntSize;
 
 use crate::dom::bindings::codegen::Bindings::DOMTokenListBinding::DOMTokenList_Binding::DOMTokenListMethods;
 use crate::dom::bindings::codegen::Bindings::HTMLLinkElementBinding::HTMLLinkElementMethods;

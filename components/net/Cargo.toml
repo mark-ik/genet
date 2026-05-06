@@ -56,6 +56,7 @@ mime_guess = { workspace = true }
 net_traits = { workspace = true }
 nom = { workspace = true }
 paint_api = { workspace = true }
+paint_types = { workspace = true }
 parking_lot = { workspace = true }
 pixels = { workspace = true }
 profile_traits = { workspace = true }
@@ -85,7 +86,6 @@ tungstenite = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 webpki-roots = { workspace = true }
-webrender_api = { workspace = true }
 
 [dev-dependencies]
 servo-default-resources = { workspace = true }

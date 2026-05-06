@@ -16,13 +16,13 @@ use std::sync::{Arc, LazyLock};
 use accesskit::{TreeId, Uuid};
 use malloc_size_of::MallocSizeOfOps;
 use malloc_size_of_derive::MallocSizeOf;
-use parking_lot::Mutex;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use webrender_api::{
+use paint_types::{
     ExternalScrollId, FontInstanceKey, FontKey, IdNamespace, ImageKey,
     PipelineId as WebRenderPipelineId, SpatialTreeItemKey,
 };
+use parking_lot::Mutex;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
 
 use crate::generic_channel::{self, GenericReceiver, GenericSender};
 
@@ -263,7 +263,7 @@ size_of_test!(PipelineId, 8);
 size_of_test!(Option<PipelineId>, 8);
 
 impl PipelineId {
-    pub fn root_scroll_id(&self) -> webrender_api::ExternalScrollId {
+    pub fn root_scroll_id(&self) -> ExternalScrollId {
         ExternalScrollId(0, self.into())
     }
 }

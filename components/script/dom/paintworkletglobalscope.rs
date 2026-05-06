@@ -22,6 +22,7 @@ use js::rust::wrappers2::{
     Call, Construct1, JS_ClearPendingException, JS_IsExceptionPending, NewArrayObject,
 };
 use net_traits::image_cache::ImageCache;
+use paint_types::units::DevicePixel;
 use pixels::PixelFormat;
 use script_bindings::cell::DomRefCell;
 use script_traits::{DrawAPaintImageResult, PaintWorkletError, Painter};
@@ -30,7 +31,6 @@ use servo_config::pref;
 use servo_url::ServoUrl;
 use style_traits::{CSSPixel, SpeculativePainter};
 use stylo_atoms::Atom;
-use webrender_api::units::DevicePixel;
 
 use super::bindings::trace::HashMapTracedValues;
 use crate::dom::bindings::callback::CallbackContainer;

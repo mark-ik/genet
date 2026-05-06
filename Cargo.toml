@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "components/media/examples",
+    "components/shared/paint-types",
     "components/xpath",
     "examples/non-presenting-wgpu-embedder",
     "examples/wgpu-embedder",
@@ -222,7 +223,6 @@ webrender_api = "0.68"
 web_atoms = "0.2"
 wgpu = "29"
 wgpu-core = "29"
-servo-wgpu-interop-adapter = { path = "../wgpu-graft/servo-wgpu-interop-adapter" }
 wgpu-native-texture-interop = { path = "../wgpu-graft/wgpu-native-texture-interop" }
 wgpu-types = "29"
 winapi = "0.3"
@@ -260,6 +260,7 @@ net = { package = "servo-net", version = "=0.2.0", path = "components/net" }
 net_traits = { package = "servo-net-traits", version = "=0.2.0", path = "components/shared/net" }
 paint = { package = "servo-paint", version = "=0.2.0", path = "components/paint" }
 paint_api = { package = "servo-paint-api", version = "=0.2.0", path = "components/shared/paint" }
+paint_types = { package = "servo-paint-types", version = "=0.2.0", path = "components/shared/paint-types" }
 pixels = { package = "servo-pixels", version = "=0.2.0", path = "components/pixels" }
 profile = { package = "servo-profile", version = "=0.2.0", path = "components/profile" }
 profile_traits = { package = "servo-profile-traits", version = "=0.2.0", path = "components/shared/profile" }
@@ -302,7 +303,6 @@ storage = { package = "servo-storage", version = "=0.2.0", path = "components/st
 storage_traits = { package = "servo-storage-traits", version = "=0.2.0", path = "components/shared/storage" }
 timers = { package = "servo-timers", version = "=0.2.0", path = "components/timers" }
 webdriver_server = { package = "servo-webdriver-server", version = "=0.2.0", path = "components/webdriver_server" }
-webgl = { package = "servo-webgl", version = "=0.2.0", path = "components/webgl", default-features = false }
 webgpu = { package = "servo-webgpu", version = "=0.2.0", path = "components/webgpu" }
 webgpu_traits = { package = "servo-webgpu-traits", version = "=0.2.0", path = "components/shared/webgpu" }
 webxr = { package = "servo-webxr", version = "=0.2.0", path = "components/webxr" }
@@ -389,7 +389,6 @@ webrender_api = { path = "support/patches/webrender_api" }
 wr_malloc_size_of = { path = "support/patches/wr_malloc_size_of" }
 
 [patch."https://github.com/mark-ik/wgpu-gui-bridge"]
-servo-wgpu-interop-adapter = { path = "../wgpu-graft/servo-wgpu-interop-adapter" }
 wgpu-native-texture-interop = { path = "../wgpu-graft/wgpu-native-texture-interop" }
 #
 # Or for mozjs:

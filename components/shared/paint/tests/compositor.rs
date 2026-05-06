@@ -8,9 +8,9 @@ use euclid::Size2D;
 use paint_api::display_list::{
     AxesScrollSensitivity, ScrollTree, ScrollType, ScrollableNodeInfo, SpatialTreeNodeInfo,
 };
+use paint_types::units::LayoutVector2D;
+use paint_types::{ExternalScrollId, PipelineId, ScrollLocation};
 use servo_base::id::ScrollTreeNodeId;
-use webrender_api::units::LayoutVector2D;
-use webrender_api::{ExternalScrollId, PipelineId, ScrollLocation};
 
 fn add_mock_scroll_node(tree: &mut ScrollTree) -> (ScrollTreeNodeId, ExternalScrollId) {
     let pipeline_id = PipelineId(0, 0);

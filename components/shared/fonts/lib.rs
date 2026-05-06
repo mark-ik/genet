@@ -17,10 +17,10 @@ pub use font_identifier::*;
 pub use font_template::*;
 use malloc_size_of_derive::MallocSizeOf;
 use num_derive::{NumOps, One, Zero};
+use num_traits::One as _;
 use serde::{Deserialize, Serialize};
 use servo_base::generic_channel::GenericSharedMemory;
 pub use system_font_service_proxy::*;
-use webrender_api::euclid::num::One;
 
 /// An index that refers to a byte offset in a text run. This could
 /// the middle of a glyph.

@@ -19,9 +19,9 @@ image = { workspace = true }
 log = { workspace = true }
 malloc_size_of = { workspace = true }
 malloc_size_of_derive = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
+paint_types = { workspace = true }
+serde = { workspace = true, features = ["derive", "rc"] }
 servo-base = { workspace = true }
-webrender_api = { workspace = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

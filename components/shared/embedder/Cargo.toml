@@ -31,6 +31,7 @@ inventory = { workspace = true }
 log = { workspace = true }
 malloc_size_of = { workspace = true }
 malloc_size_of_derive = { workspace = true }
+paint_types = { workspace = true }
 pixels = { workspace = true }
 rustc-hash = { workspace = true }
 serde = { workspace = true }
@@ -43,4 +44,3 @@ stylo_traits = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 webdriver = { workspace = true }
-webrender_api = { workspace = true }

@@ -30,6 +30,7 @@ malloc_size_of_derive = { workspace = true }
 media = { workspace = true }
 net_traits = { workspace = true }
 paint_api = { workspace = true }
+paint_types = { workspace = true }
 pixels = { workspace = true }
 profile_traits = { workspace = true }
 rustc-hash = { workspace = true }
@@ -45,5 +46,4 @@ strum = { workspace = true }
 stylo_atoms = { workspace = true }
 stylo_traits = { workspace = true }
 webgpu_traits = { workspace = true, optional = true }
-webrender_api = { workspace = true }
 webxr-api = { workspace = true }

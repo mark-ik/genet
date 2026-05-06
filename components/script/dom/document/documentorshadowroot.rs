@@ -9,6 +9,7 @@ use std::fmt;
 use embedder_traits::UntrustedNodeAddress;
 use js::rust::HandleValue;
 use layout_api::ElementsFromPointFlags;
+use paint_types::units::LayoutPoint;
 use rustc_hash::FxBuildHasher;
 use script_bindings::cell::DomRefCell;
 use script_bindings::codegen::GenericBindings::DocumentBinding::DocumentMethods;
@@ -22,7 +23,6 @@ use style::shared_lock::{SharedRwLock as StyleSharedRwLock, SharedRwLockReadGuar
 use style::stylesheets::scope_rule::ImplicitScopeRoot;
 use style::stylesheets::{Stylesheet, StylesheetContents};
 use stylo_atoms::Atom;
-use webrender_api::units::LayoutPoint;
 
 use crate::dom::Document;
 use crate::dom::bindings::codegen::Bindings::NodeBinding::GetRootNodeOptions;

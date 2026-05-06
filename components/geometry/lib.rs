@@ -8,10 +8,9 @@ use app_units::{Au, MAX_AU, MIN_AU};
 use euclid::default::{Point2D as UntypedPoint2D, Rect as UntypedRect, Size2D as UntypedSize2D};
 use euclid::{Box2D, Length, Point2D, Rect, Scale, SideOffsets2D, Size2D, Vector2D};
 use malloc_size_of_derive::MallocSizeOf;
-use webrender::FastTransform;
-use webrender_api::units::{
-    DeviceIntRect, DeviceIntSize, DevicePixel, FramebufferPixel, LayoutPixel, LayoutPoint,
-    LayoutRect, LayoutSize,
+use paint_types::units::{
+    DeviceIntRect, DeviceIntSize, DevicePixel, FramebufferPixel, LayoutPoint, LayoutRect,
+    LayoutSize, LayoutTransform, LayoutVector2D,
 };
 
 // Units for use with euclid::length and euclid::scale_factor.
@@ -47,7 +46,62 @@ pub type DeviceIndependentPoint = Point2D<f32, DeviceIndependentPixel>;
 pub type DeviceIndependentVector2D = Vector2D<f32, DeviceIndependentPixel>;
 pub type DeviceIndependentSize = Size2D<f32, DeviceIndependentPixel>;
 
-pub type FastLayoutTransform = FastTransform<LayoutPixel, LayoutPixel>;
+#[derive(Clone, Copy, Debug, MallocSizeOf, serde::Deserialize, serde::Serialize)]
+pub enum FastLayoutTransform {
+    Offset(LayoutVector2D),
+    Transform {
+        transform: LayoutTransform,
+        inverse: Option<LayoutTransform>,
+    },
+}
+
+impl FastLayoutTransform {
+    pub fn identity() -> Self {
+        Self::Offset(LayoutVector2D::new(0.0, 0.0))
+    }
+
+    pub fn then(&self, other: &Self) -> Self {
+        match (*self, *other) {
+            (Self::Offset(first), Self::Offset(second)) => Self::Offset(first + second),
+            _ => Self::from_transform(self.to_transform().then(&other.to_transform())),
+        }
+    }
+
+    pub fn inverse(&self) -> Option<Self> {
+        match *self {
+            Self::Offset(offset) => Some(Self::Offset(-offset)),
+            Self::Transform { inverse, .. } => inverse.map(Self::from_transform),
+        }
+    }
+
+    pub fn pre_translate(&self, offset: LayoutVector2D) -> Self {
+        Self::Offset(offset).then(self)
+    }
+
+    pub fn then_translate(&self, offset: LayoutVector2D) -> Self {
+        self.then(&Self::Offset(offset))
+    }
+
+    fn from_transform(transform: LayoutTransform) -> Self {
+        Self::Transform {
+            inverse: transform.inverse(),
+            transform,
+        }
+    }
+
+    fn to_transform(&self) -> LayoutTransform {
+        match *self {
+            Self::Offset(offset) => LayoutTransform::translation(offset.x, offset.y, 0.0),
+            Self::Transform { transform, .. } => transform,
+        }
+    }
+}
+
+impl Default for FastLayoutTransform {
+    fn default() -> Self {
+        Self::identity()
+    }
+}
 
 // An Au is an "App Unit" and represents 1/60th of a CSS pixel.  It was
 // originally proposed in 2002 as a standard unit of measure in Gecko.

@@ -22,25 +22,19 @@ use ipc_channel::ipc::{self};
 use log::{debug, warn};
 use paint_api::rendering_context_core::RenderingContextCore;
 use paint_api::{
-    PaintMessage, PaintProxy, PainterSurfmanDetails, PainterSurfmanDetailsMap,
-    WebRenderExternalImageIdManager, WebViewTrait,
+    PaintMessage, PaintProxy, WebRenderExternalImageIdManager, WebViewTrait,
 };
 use profile_traits::mem::{
     ProcessReports, ProfilerRegistration, Report, ReportKind, perform_memory_report,
 };
 use profile_traits::path;
 use profile_traits::time::{self as profile_time};
-use servo_base::generic_channel::{self, GenericSender, RoutedReceiver};
+use servo_base::generic_channel::{GenericSender, RoutedReceiver};
 use servo_base::id::{PainterId, PipelineId, WebViewId};
-use servo_canvas_traits::webgl::{WebGLContextId, WebGLThreads};
 use servo_config::pref;
 use servo_constellation_traits::EmbedderToConstellationMessage;
 use servo_geometry::DeviceIndependentPixel;
 use style_traits::CSSPixel;
-use surfman::Device;
-use surfman::chains::SwapChains;
-use webgl::WebGLComm;
-use webgl::webgl_thread::WebGLContextBusyMap;
 #[cfg(feature = "webgpu")]
 use webgpu::canvas_context::WebGpuExternalImageMap;
 use webrender::{CaptureBits, MemoryReport};
@@ -106,21 +100,6 @@ pub struct Paint {
     /// The [`WebRenderExternalImageIdManager`] used to generate new `ExternalImageId`s.
     webrender_external_image_id_manager: WebRenderExternalImageIdManager,
 
-    /// A [`HashMap`] of [`PainterId`] to the Surfaman types (`Device`, `Adapter`) that
-    /// are specific to a particular [`Painter`].
-    pub(crate) painter_surfman_details_map: PainterSurfmanDetailsMap,
-
-    /// A [`HashMap`] of `WebGLContextId` to a usage count. This count indicates when
-    /// WebRender is still rendering the context. This is used to ensure properly clean
-    /// up of all Surfman `Surface`s.
-    pub(crate) busy_webgl_contexts_map: WebGLContextBusyMap,
-
-    /// The [`WebGLThreads`] for this renderer.
-    webgl_threads: WebGLThreads,
-
-    /// The shared [`SwapChains`] used by [`WebGLThreads`] for this renderer.
-    pub(crate) swap_chains: SwapChains<WebGLContextId, Device>,
-
     /// The channel on which messages can be sent to the time profiler.
     time_profiler_chan: profile_time::ProfilerChan,
 
@@ -167,24 +146,12 @@ impl Paint {
         );
 
         let webrender_external_image_id_manager = WebRenderExternalImageIdManager::default();
-        let painter_surfman_details_map = PainterSurfmanDetailsMap::default();
-        let WebGLComm {
-            webgl_threads,
-            swap_chains,
-            busy_webgl_context_map,
-            #[cfg(feature = "webxr")]
-            webxr_layer_grand_manager,
-        } = WebGLComm::new(
-            state.paint_proxy.cross_process_paint_api.clone(),
-            webrender_external_image_id_manager.clone(),
-            painter_surfman_details_map.clone(),
-        );
-
         // Create the WebXR main thread
         #[cfg(feature = "webxr")]
         let webxr_main_thread = {
             use servo_config::pref;
 
+            let webxr_layer_grand_manager = webxr_api::LayerGrandManager::empty();
             let mut webxr_main_thread = webxr::MainThreadRegistry::new(
                 state.event_loop_waker.clone(),
                 webxr_layer_grand_manager,
@@ -204,12 +171,8 @@ impl Paint {
             paint_receiver: state.receiver,
             embedder_to_constellation_sender: state.embedder_to_constellation_sender.clone(),
             webrender_external_image_id_manager,
-            webgl_threads,
-            swap_chains,
             time_profiler_chan: state.time_profiler_chan,
             _mem_profiler_registration: registration,
-            painter_surfman_details_map,
-            busy_webgl_contexts_map: busy_webgl_context_map,
             #[cfg(feature = "webxr")]
             webxr_main_thread: RefCell::new(webxr_main_thread),
             #[cfg(feature = "webgpu")]
@@ -234,22 +197,6 @@ impl Paint {
 
         let painter = Painter::new(rendering_context.clone(), self);
 
-        // Surfman connection is required for WebGL swap chains but not for
-        // pure-wgpu embedders that don't expose a GL context. Phase A:
-        // gated through `GlCapability` rather than legacy `connection()`.
-        if let Some(gl) = rendering_context.gl() {
-            let connection = gl.connection();
-            let adapter = connection
-                .create_adapter()
-                .expect("Failed to create adapter");
-            let painter_surfman_details = PainterSurfmanDetails {
-                connection,
-                adapter,
-            };
-            self.painter_surfman_details_map
-                .insert(painter.painter_id, painter_surfman_details);
-        }
-
         let painter_id = painter.painter_id;
         self.painters.push(Rc::new(RefCell::new(painter)));
         painter_id
@@ -258,7 +205,6 @@ impl Paint {
     fn remove_painter(&mut self, painter_id: PainterId) {
         self.painters
             .retain(|painter| painter.borrow().painter_id != painter_id);
-        self.painter_surfman_details_map.remove(painter_id);
     }
 
     pub(crate) fn maybe_painter<'a>(&'a self, painter_id: PainterId) -> Option<Ref<'a, Painter>> {
@@ -307,10 +253,6 @@ impl Paint {
             .map(|t| t.texture.clone())
     }
 
-    pub fn webgl_threads(&self) -> WebGLThreads {
-        self.webgl_threads.clone()
-    }
-
     pub fn webrender_external_image_id_manager(&self) -> WebRenderExternalImageIdManager {
         self.webrender_external_image_id_manager.clone()
     }
@@ -347,16 +289,6 @@ impl Paint {
         // Drain paint port, sometimes messages contain channels that are blocking
         // another thread from finishing (i.e. SetFrameTree).
         while self.paint_receiver.try_recv().is_ok() {}
-
-        let (webgl_exit_sender, webgl_exit_receiver) =
-            generic_channel::channel().expect("Failed to create IPC channel!");
-        if !self
-            .webgl_threads
-            .exit(webgl_exit_sender)
-            .is_ok_and(|_| webgl_exit_receiver.recv().is_ok())
-        {
-            warn!("Could not exit WebGLThread.");
-        }
 
         // Tell the profiler, memory profiler, and scrolling timer to shut down.
         if let Ok((sender, receiver)) = ipc::channel() {

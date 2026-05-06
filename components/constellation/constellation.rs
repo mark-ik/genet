@@ -156,7 +156,6 @@ use servo_bluetooth_traits::BluetoothRequest;
 use servo_canvas::canvas_paint_thread::CanvasPaintThread;
 use servo_canvas_traits::ConstellationCanvasMsg;
 use servo_canvas_traits::canvas::{CanvasId, CanvasMsg};
-use servo_canvas_traits::webgl::WebGLThreads;
 use servo_config::{opts, pref};
 use servo_constellation_traits::{
     AuxiliaryWebViewCreationRequest, AuxiliaryWebViewCreationResponse, ConstellationInterest,
@@ -462,9 +461,6 @@ pub struct Constellation<STF, SWF> {
     /// Phantom data that keeps the Rust type system happy.
     phantom: PhantomData<(STF, SWF)>,
 
-    /// Entry point to create and get channels to a WebGLThread.
-    pub(crate) webgl_threads: Option<WebGLThreads>,
-
     /// The XR device registry
     pub(crate) webxr_registry: Option<webxr_api::Registry>,
 
@@ -576,9 +572,6 @@ pub struct InitialConstellationState {
 
     /// A [`WebRenderExternalImageIdManager`] used to lazily start up the WebGPU threads.
     pub webrender_external_image_id_manager: WebRenderExternalImageIdManager,
-
-    /// Entry point to create and get channels to a WebGLThread.
-    pub webgl_threads: Option<WebGLThreads>,
 
     /// The XR device registry
     pub webxr_registry: Option<webxr_api::Registry>,
@@ -737,7 +730,6 @@ where
                         warn!("Randomly closing pipelines using seed {random_pipeline_closure_seed:?}.");
                         (rng, probability)
                     }),
-                    webgl_threads: state.webgl_threads,
                     webxr_registry: state.webxr_registry,
                     canvas: OnceCell::new(),
                     pending_approval_navigations: Default::default(),

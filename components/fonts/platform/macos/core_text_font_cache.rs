@@ -17,8 +17,8 @@ use objc2_core_text::{
     kCTFontVariationAxisIdentifierKey, kCTFontVariationAxisMaximumValueKey,
     kCTFontVariationAxisMinimumValueKey,
 };
+use paint_types::FontVariation;
 use parking_lot::RwLock;
-use webrender_api::FontVariation;
 
 use crate::FontData;
 use crate::platform::font::PlatformFont;

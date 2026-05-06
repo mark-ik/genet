@@ -5,9 +5,9 @@
 //! Common interfaces for Canvas Contexts
 
 use euclid::default::Size2D;
+use paint_types::ImageKey;
 use pixels::Snapshot;
 use script_bindings::root::{Dom, DomRoot};
-use webrender_api::ImageKey;
 
 use crate::dom::bindings::codegen::UnionTypes::HTMLCanvasElementOrOffscreenCanvas as RootedHTMLCanvasElementOrOffscreenCanvas;
 use crate::dom::bindings::inheritance::Castable;

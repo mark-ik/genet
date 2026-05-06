@@ -20,6 +20,7 @@ use js::typedarray::{
     ArrayBufferView, CreateWith, Float32, Float32Array, Int32, Int32Array, TypedArray,
     TypedArrayElementCreator, Uint32Array,
 };
+use paint_types::ImageKey;
 use pixels::{self, Alpha, PixelFormat, Snapshot, SnapshotPixelFormat};
 use script_bindings::cell::{DomRefCell, Ref, RefMut};
 use script_bindings::conversions::SafeToJSValConvertible;
@@ -35,7 +36,6 @@ use servo_canvas_traits::webgl::{
     WebGLSLVersion, WebGLVersion, YAxisTreatment, webgl_channel,
 };
 use servo_config::pref;
-use webrender_api::ImageKey;
 
 use crate::canvas_context::{CanvasContext, HTMLCanvasElementOrOffscreenCanvas};
 use crate::dom::bindings::codegen::Bindings::ANGLEInstancedArraysBinding::ANGLEInstancedArraysConstants;
@@ -243,7 +243,7 @@ impl WebGLRenderingContext {
 
         let webgl_chan = match window.webgl_chan() {
             Some(chan) => chan,
-            None => return Err("WebGL initialization failed early on".into()),
+            None => return Err("WebGL backend is not available".into()),
         };
 
         let (sender, receiver) = webgl_channel().unwrap();
@@ -357,15 +357,15 @@ impl WebGLRenderingContext {
             return false;
         };
 
-        window
-            .webgl_chan()
-            .expect("Where's the WebGL channel?")
-            .send(WebGLMsg::SwapBuffers(
-                vec![self.context_id()],
-                Some(canvas_epoch),
-                0, /* time */
-            ))
-            .is_ok()
+        window.webgl_chan().is_some_and(|webgl_chan| {
+            webgl_chan
+                .send(WebGLMsg::SwapBuffers(
+                    vec![self.context_id()],
+                    Some(canvas_epoch),
+                    0, /* time */
+                ))
+                .is_ok()
+        })
     }
 
     pub(crate) fn webgl_version(&self) -> WebGLVersion {

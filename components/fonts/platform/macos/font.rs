@@ -22,9 +22,9 @@ use objc2_core_text::{
     CTFont, CTFontOrientation, CTFontSymbolicTraits, CTFontTableOptions, CTFontTableTag,
     kCTFontSlantTrait, kCTFontSymbolicTrait, kCTFontWeightTrait, kCTFontWidthTrait,
 };
+use paint_types::{FontInstanceFlags, FontVariation};
 use skrifa::Tag;
 use style::values::computed::font::{FontStretch, FontStyle, FontWeight};
-use webrender_api::{FontInstanceFlags, FontVariation};
 
 use super::core_text_font_cache::CoreTextFontCache;
 use crate::platform::font_list::font_template_for_local_font_descriptor;

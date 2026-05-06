@@ -13,6 +13,7 @@ use euclid::{Point2D, Rect, Size2D};
 use js::context::JSContext;
 use net_traits::CoreResourceMsg;
 use net_traits::filemanager_thread::FileManagerThreadMsg;
+use paint_types::units::{DeviceIntRect, DevicePoint};
 use rustc_hash::FxHashMap;
 use script_bindings::cell::DomRefCell;
 use script_bindings::codegen::GenericBindings::HTMLAnchorElementBinding::HTMLAnchorElementMethods;
@@ -25,7 +26,6 @@ use servo_base::Epoch;
 use servo_base::generic_channel::GenericSend;
 use servo_constellation_traits::{LoadData, NavigationHistoryBehavior};
 use servo_url::ServoUrl;
-use webrender_api::units::{DeviceIntRect, DevicePoint};
 
 use crate::dom::activation::Activatable;
 use crate::dom::bindings::refcounted::Trusted;

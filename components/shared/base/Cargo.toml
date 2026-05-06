@@ -21,13 +21,13 @@ crossbeam-channel = { workspace = true }
 ipc-channel = { workspace = true }
 malloc_size_of = { workspace = true }
 malloc_size_of_derive = { workspace = true }
+paint_types = { workspace = true }
 parking_lot = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 servo-config = { workspace = true }
 time = { workspace = true }
-webrender_api = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
 unicode-segmentation = { workspace = true }

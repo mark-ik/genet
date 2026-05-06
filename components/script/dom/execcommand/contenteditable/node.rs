@@ -146,9 +146,9 @@ where
     // In that case, the spec algorithm would update the selection to the parent of the text node.
     // However, this then breaks the algorithm to compute "effectively contained" nodes. To remedy
     // that, we record the values here and reset them as part of step 2.
-    let end_offsets_if_previously_selected_single_text_node = if active_range.start_container() ==
-        active_range.end_container() &&
-        active_range.start_container().is::<Text>()
+    let end_offsets_if_previously_selected_single_text_node = if active_range.start_container()
+        == active_range.end_container()
+        && active_range.start_container().is::<Text>()
     {
         Some((active_range.start_offset(), active_range.end_offset()))
     } else {
@@ -239,8 +239,8 @@ pub(crate) fn is_allowed_child(child: NodeOrString, parent: NodeOrString) -> boo
     }
     // Step 2. If parent is "script", "style", "plaintext", or "xmp",
     // or an HTML element with local name equal to one of those, and child is not a Text node, return false.
-    if matches!(parent.name(), "script" | "style" | "plaintext" | "xmp") &&
-        child.as_node().is_none_or(|node| !node.is::<Text>())
+    if matches!(parent.name(), "script" | "style" | "plaintext" | "xmp")
+        && child.as_node().is_none_or(|node| !node.is::<Text>())
     {
         return false;
     }
@@ -269,8 +269,8 @@ pub(crate) fn is_allowed_child(child: NodeOrString, parent: NodeOrString) -> boo
             // Step 6. If parent is an HTML element:
             if let Some(parent_element) = parent.downcast::<HTMLElement>() {
                 // Step 6.1. If child is "a", and parent or some ancestor of parent is an a, return false.
-                if child == "a" &&
-                    parent
+                if child == "a"
+                    && parent
                         .inclusive_ancestors(ShadowIncluding::No)
                         .any(|node| node.is::<HTMLAnchorElement>())
                 {
@@ -278,8 +278,8 @@ pub(crate) fn is_allowed_child(child: NodeOrString, parent: NodeOrString) -> boo
                 }
                 // Step 6.2. If child is a prohibited paragraph child name and parent or some ancestor of parent
                 // is an element with inline contents, return false.
-                if PROHIBITED_PARAGRAPH_CHILD_NAMES.contains(&child) &&
-                    parent
+                if PROHIBITED_PARAGRAPH_CHILD_NAMES.contains(&child)
+                    && parent
                         .inclusive_ancestors(ShadowIncluding::No)
                         .any(|node| is_element_with_inline_contents(&node))
                 {
@@ -288,8 +288,8 @@ pub(crate) fn is_allowed_child(child: NodeOrString, parent: NodeOrString) -> boo
                 // Step 6.3. If child is "h1", "h2", "h3", "h4", "h5", or "h6",
                 // and parent or some ancestor of parent is an HTML element with local name
                 // "h1", "h2", "h3", "h4", "h5", or "h6", return false.
-                if matches!(child, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") &&
-                    parent.inclusive_ancestors(ShadowIncluding::No).any(|node| {
+                if matches!(child, "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+                    && parent.inclusive_ancestors(ShadowIncluding::No).any(|node| {
                         node.downcast::<HTMLElement>().is_some_and(|html_element| {
                             matches!(
                                 html_element.local_name(),
@@ -334,20 +334,20 @@ pub(crate) fn is_allowed_child(child: NodeOrString, parent: NodeOrString) -> boo
     // "html", "tbody", "td", "tfoot", "th", "thead", or "tr", return false.
     if matches!(
         child,
-        "body" |
-            "caption" |
-            "col" |
-            "colgroup" |
-            "frame" |
-            "frameset" |
-            "head" |
-            "html" |
-            "tbody" |
-            "td" |
-            "tfoot" |
-            "th" |
-            "thead" |
-            "tr"
+        "body"
+            | "caption"
+            | "col"
+            | "colgroup"
+            | "frame"
+            | "frameset"
+            | "head"
+            | "html"
+            | "tbody"
+            | "td"
+            | "tfoot"
+            | "th"
+            | "thead"
+            | "tr"
     ) {
         return false;
     }
@@ -518,8 +518,8 @@ pub(crate) fn split_the_parent<'a>(cx: &mut JSContext, node_list: &'a [&'a Node]
     // remove the first child of original parent from original parent.
     if node_list
         .last()
-        .is_some_and(|last| last.is_inline_node() && !last.is::<HTMLBRElement>()) &&
-        !original_parent.is_inline_node()
+        .is_some_and(|last| last.is_inline_node() && !last.is::<HTMLBRElement>())
+        && !original_parent.is_inline_node()
     {
         if let Some(first_of_original) = original_parent.children().next() {
             if first_of_original.is::<HTMLBRElement>() {
@@ -684,16 +684,16 @@ where
         // and the last child of new parent is not a br,
         // call createElement("br") on the ownerDocument of new parent
         // and append the result as the last child of new parent.
-        if !new_parent.is_inline_node() &&
-            new_parent
+        if !new_parent.is_inline_node()
+            && new_parent
                 .rev_children()
                 .find(|child| child.is_visible())
-                .is_some_and(|child| child.is_inline_node()) &&
-            node_list
+                .is_some_and(|child| child.is_inline_node())
+            && node_list
                 .iter()
                 .find(|node| node.is_visible())
-                .is_some_and(|node| node.is_inline_node()) &&
-            new_parent
+                .is_some_and(|node| node.is_inline_node())
+            && new_parent
                 .children_unrooted(cx.no_gc())
                 .last()
                 .is_none_or(|last_child| !last_child.is::<HTMLBRElement>())
@@ -714,17 +714,17 @@ where
         // and the last member of node list is not a br,
         // call createElement("br") on the ownerDocument of new parent
         // and insert the result as the first child of new parent.
-        if !new_parent.is_inline_node() &&
-            new_parent
+        if !new_parent.is_inline_node()
+            && new_parent
                 .children_unrooted(cx.no_gc())
                 .find(|child| child.is_visible())
-                .is_some_and(|child| child.is_inline_node()) &&
-            node_list
+                .is_some_and(|child| child.is_inline_node())
+            && node_list
                 .iter()
                 .rev()
                 .find(|node| node.is_visible())
-                .is_some_and(|node| node.is_inline_node()) &&
-            node_list
+                .is_some_and(|node| node.is_inline_node())
+            && node_list
                 .last()
                 .is_none_or(|last_child| !last_child.is::<HTMLBRElement>())
         {
@@ -767,9 +767,9 @@ where
                     .last()
                     .map(|node| node.as_rooted());
                 if let Some(last_child_of_new_parent) = child {
-                    if last_child_of_new_parent.is_inline_node() &&
-                        !last_child_of_new_parent.is::<HTMLBRElement>() &&
-                        next_of_new_parent
+                    if last_child_of_new_parent.is_inline_node()
+                        && !last_child_of_new_parent.is::<HTMLBRElement>()
+                        && next_of_new_parent
                             .children()
                             .next()
                             .is_some_and(|first| first.is_inline_node())
@@ -951,8 +951,8 @@ impl Node {
         // append current ancestor to ancestor list, then set current ancestor to its parent.
         while let Some(ancestor) = current_ancestor {
             let ancestor_node = ancestor.upcast::<Node>();
-            if ancestor_node.is_editable() &&
-                !command.are_loosely_equivalent_values(
+            if ancestor_node.is_editable()
+                && !command.are_loosely_equivalent_values(
                     ancestor_node.effective_command_value(command).as_ref(),
                     new_value.as_ref(),
                 )
@@ -975,8 +975,8 @@ impl Node {
         }
         // Step 10. If the effective command value of command is not loosely equivalent to new value on the parent
         // of the last member of ancestor list, and new value is not null, abort this algorithm.
-        if new_value.is_some() &&
-            !last_ancestor
+        if new_value.is_some()
+            && !last_ancestor
                 .upcast::<Node>()
                 .GetParentNode()
                 .is_some_and(|last_ancestor_parent| {
@@ -1023,8 +1023,8 @@ impl Node {
                 // nor equivalent to propagated value, continue with the next child.
                 if let Some(child_element) = child.downcast::<Element>() {
                     let specified_value = child_element.specified_command_value(command);
-                    if specified_value.is_some() &&
-                        !command.are_equivalent_values(
+                    if specified_value.is_some()
+                        && !command.are_equivalent_values(
                             specified_value.as_ref(),
                             propagated_value.as_ref(),
                         )
@@ -1064,10 +1064,10 @@ impl Node {
         // for command is not equivalent to new value, set candidate to its child.
         loop {
             if let Some(candidate_element) = candidate.downcast::<Element>() {
-                if candidate_element.is_modifiable_element() &&
-                    candidate.children_count() == 1 &&
-                    (!candidate_element.is_simple_modifiable_element() ||
-                        !command.are_equivalent_values(
+                if candidate_element.is_modifiable_element()
+                    && candidate.children_count() == 1
+                    && (!candidate_element.is_simple_modifiable_element()
+                        || !command.are_equivalent_values(
                             candidate_element.specified_command_value(command).as_ref(),
                             Some(new_value),
                         ))
@@ -1087,8 +1087,8 @@ impl Node {
         // Step 3. If candidate is node, or is not a simple modifiable element,
         // or its specified command value is not equivalent to new value,
         // or its effective command value is not loosely equivalent to new value, abort these steps.
-        if *candidate == *self ||
-            !command.are_loosely_equivalent_values(
+        if *candidate == *self
+            || !command.are_loosely_equivalent_values(
                 candidate.effective_command_value(command).as_ref(),
                 Some(new_value),
             )
@@ -1096,8 +1096,8 @@ impl Node {
             return;
         }
         if let Some(candidate) = candidate.downcast::<Element>() {
-            if !candidate.is_simple_modifiable_element() ||
-                !command.are_equivalent_values(
+            if !candidate.is_simple_modifiable_element()
+                || !command.are_equivalent_values(
                     candidate.specified_command_value(command).as_ref(),
                     Some(new_value),
                 )
@@ -1171,12 +1171,12 @@ impl Node {
                     sibling
                         .downcast::<Element>()
                         .is_some_and(|sibling_element| {
-                            sibling_element.is_simple_modifiable_element() &&
-                                command.are_equivalent_values(
+                            sibling_element.is_simple_modifiable_element()
+                                && command.are_equivalent_values(
                                     sibling_element.specified_command_value(command).as_ref(),
                                     Some(new_value),
-                                ) &&
-                                command.are_loosely_equivalent_values(
+                                )
+                                && command.are_loosely_equivalent_values(
                                     sibling.effective_command_value(command).as_ref(),
                                     Some(new_value),
                                 )
@@ -1208,8 +1208,8 @@ impl Node {
                 .filter(|child| {
                     !child.downcast::<Element>().is_some_and(|child_element| {
                         let specified_value = child_element.specified_command_value(command);
-                        specified_value.is_some() &&
-                            !command
+                        specified_value.is_some()
+                            && !command
                                 .are_equivalent_values(specified_value.as_ref(), Some(new_value))
                     })
                 })
@@ -1393,8 +1393,8 @@ impl Node {
             // and the effective command value of "strikethrough" for new parent is not "line-through",
             // set the "text-decoration" property of new parent to "line-through".
             CommandName::Strikethrough => {
-                if new_value == "line-through" &&
-                    new_parent
+                if new_value == "line-through"
+                    && new_parent
                         .upcast::<Node>()
                         .effective_command_value(&CommandName::Strikethrough)
                         .is_none_or(|value| value != "line-through")
@@ -1410,8 +1410,8 @@ impl Node {
             // and the effective command value of "underline" for new parent is not "underline",
             // set the "text-decoration" property of new parent to "underline".
             CommandName::Underline => {
-                if new_value == "underline" &&
-                    new_parent
+                if new_value == "underline"
+                    && new_parent
                         .upcast::<Node>()
                         .effective_command_value(&CommandName::Underline)
                         .is_none_or(|value| value != "underline")
@@ -1429,8 +1429,8 @@ impl Node {
         let new_parent = new_parent.upcast::<Node>();
         move_preserving_ranges(cx, self, |cx| new_parent.AppendChild(cx, self));
         // Step 21. If node is an Element and the effective command value of command for node is not loosely equivalent to new value:
-        if self.is::<Element>() &&
-            !command.are_loosely_equivalent_values(
+        if self.is::<Element>()
+            && !command.are_loosely_equivalent_values(
                 self.effective_command_value(command).as_ref(),
                 Some(new_value),
             )
@@ -1450,8 +1450,8 @@ impl Node {
                     !child.downcast::<Element>().is_some_and(|child_element| {
                         let specified_command_value =
                             child_element.specified_command_value(command);
-                        specified_command_value.is_some() &&
-                            !command.are_equivalent_values(
+                        specified_command_value.is_some()
+                            && !command.are_equivalent_values(
                                 specified_command_value.as_ref(),
                                 Some(new_value),
                             )
@@ -1563,9 +1563,9 @@ impl Node {
     /// <https://w3c.github.io/editing/docs/execCommand/#formattable-node>
     pub(crate) fn is_formattable(&self) -> bool {
         // > A formattable node is an editable visible node that is either a Text node, an img, or a br.
-        self.is_editable() &&
-            self.is_visible() &&
-            (self.is::<Text>() || self.is::<HTMLImageElement>() || self.is::<HTMLBRElement>())
+        self.is_editable()
+            && self.is_visible()
+            && (self.is::<Text>() || self.is::<HTMLImageElement>() || self.is::<HTMLBRElement>())
     }
 
     /// <https://w3c.github.io/editing/docs/execCommand/#block-start-point>
@@ -1784,8 +1784,8 @@ impl Node {
             // value for "white-space" is neither "pre" nor "pre-wrap" and start offset is not zero
             // and the (start offset − 1)st code unit of start node's data is a space (0x0020) or
             // non-breaking space (0x00A0), subtract one from start offset.
-            if start_offset != 0 &&
-                start_node.downcast::<Text>().is_some_and(|text| {
+            if start_offset != 0
+                && start_node.downcast::<Text>().is_some_and(|text| {
                     text.has_whitespace_and_has_parent_with_whitespace_preserve(
                         start_offset - 1,
                         &[&'\u{0020}', &'\u{00A0}'],
@@ -1875,8 +1875,8 @@ impl Node {
         // Step 8. If fix collapsed space is true, then while (start node, start offset)
         // is before (end node, end offset):
         if fix_collapsed_space {
-            while bp_position(&start_node, start_offset, &end_node, end_offset) ==
-                Some(Ordering::Less)
+            while bp_position(&start_node, start_offset, &end_node, end_offset)
+                == Some(Ordering::Less)
             {
                 // Step 8.1. If end node has a child in the same editing host with index end offset − 1,
                 // set end node to that child, then set end offset to end node's length.
@@ -1996,8 +1996,9 @@ impl Node {
         // Step 4. While ref is invisible but not an extraneous line break,
         // and ref does not equal node's parent, set ref to the node before it in tree order.
         loop {
-            if ref_.is_invisible() &&
-                ref_.downcast::<HTMLBRElement>()
+            if ref_.is_invisible()
+                && ref_
+                    .downcast::<HTMLBRElement>()
                     .is_none_or(|br| !br.is_extraneous_line_break())
             {
                 if let Some(parent) = parent.as_ref() {
@@ -2013,8 +2014,9 @@ impl Node {
             break;
         }
         // Step 5. If ref is an editable extraneous line break, remove it from its parent.
-        if ref_.is_editable() &&
-            ref_.downcast::<HTMLBRElement>()
+        if ref_.is_editable()
+            && ref_
+                .downcast::<HTMLBRElement>()
                 .is_some_and(|br| br.is_extraneous_line_break())
         {
             assert!(ref_.has_parent());
@@ -2033,9 +2035,10 @@ impl Node {
         // Step 3. While ref is invisible but not an extraneous line break, and ref does not equal node,
         // set ref to the node before it in tree order.
         loop {
-            if ref_.is_invisible() &&
-                *ref_ != *self &&
-                ref_.downcast::<HTMLBRElement>()
+            if ref_.is_invisible()
+                && *ref_ != *self
+                && ref_
+                    .downcast::<HTMLBRElement>()
                     .is_none_or(|br| !br.is_extraneous_line_break())
             {
                 if let Some(parent_of_ref) = ref_.GetParentNode() {
@@ -2049,8 +2052,9 @@ impl Node {
             break;
         }
         // Step 4. If ref is an editable extraneous line break:
-        if ref_.is_editable() &&
-            ref_.downcast::<HTMLBRElement>()
+        if ref_.is_editable()
+            && ref_
+                .downcast::<HTMLBRElement>()
                 .is_some_and(|br| br.is_extraneous_line_break())
         {
             // Step 4.1. While ref's parent is editable and invisible, set ref to its parent.

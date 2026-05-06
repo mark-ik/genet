@@ -25,35 +25,35 @@ fn is_remove_format_candidate(element: &Element) -> bool {
     // > "samp", "small", "span", "strike", "strong", "sub", "sup", "tt", "u", or "var".
     matches!(
         *element.local_name(),
-        local_name!("abbr") |
-            local_name!("acronym") |
-            local_name!("b") |
-            local_name!("bdi") |
-            local_name!("bdo") |
-            local_name!("big") |
-            local_name!("blink") |
-            local_name!("cite") |
-            local_name!("code") |
-            local_name!("dfn") |
-            local_name!("em") |
-            local_name!("font") |
-            local_name!("i") |
-            local_name!("ins") |
-            local_name!("kbd") |
-            local_name!("mark") |
-            local_name!("nobr") |
-            local_name!("q") |
-            local_name!("s") |
-            local_name!("samp") |
-            local_name!("small") |
-            local_name!("span") |
-            local_name!("strike") |
-            local_name!("strong") |
-            local_name!("sub") |
-            local_name!("sup") |
-            local_name!("tt") |
-            local_name!("u") |
-            local_name!("var")
+        local_name!("abbr")
+            | local_name!("acronym")
+            | local_name!("b")
+            | local_name!("bdi")
+            | local_name!("bdo")
+            | local_name!("big")
+            | local_name!("blink")
+            | local_name!("cite")
+            | local_name!("code")
+            | local_name!("dfn")
+            | local_name!("em")
+            | local_name!("font")
+            | local_name!("i")
+            | local_name!("ins")
+            | local_name!("kbd")
+            | local_name!("mark")
+            | local_name!("nobr")
+            | local_name!("q")
+            | local_name!("s")
+            | local_name!("samp")
+            | local_name!("small")
+            | local_name!("span")
+            | local_name!("strike")
+            | local_name!("strong")
+            | local_name!("sub")
+            | local_name!("sup")
+            | local_name!("tt")
+            | local_name!("u")
+            | local_name!("var")
     )
 }
 

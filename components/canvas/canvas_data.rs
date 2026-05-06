@@ -4,10 +4,10 @@
 
 use euclid::default::{Point2D, Rect, Size2D, Transform2D};
 use paint_api::CrossProcessPaintApi;
+use paint_types::ImageKey;
 use pixels::Snapshot;
 use servo_base::Epoch;
 use servo_canvas_traits::canvas::*;
-use webrender_api::ImageKey;
 
 use crate::backend::GenericDrawTarget;
 

@@ -26,9 +26,9 @@ use ipc_channel::IpcError;
 use ipc_channel::ipc::IpcSender;
 use log::{trace, warn};
 use malloc_size_of_derive::MallocSizeOf;
+use paint_types::Epoch as WebRenderEpoch;
 pub use rope::{Rope, RopeChars, RopeIndex, RopeMovement, RopeSlice};
 use serde::{Deserialize, Serialize};
-use webrender_api::Epoch as WebRenderEpoch;
 
 pub fn read_json_from_file<T>(data: &mut T, config_dir: &Path, filename: &str)
 where

@@ -20,10 +20,10 @@ use dwrote::{
 use euclid::default::{Point2D, Rect, Size2D};
 use fonts_traits::LocalFontIdentifier;
 use log::debug;
+use paint_types::{FontInstanceFlags, FontVariation};
 use read_fonts::TableProvider;
 use skrifa::Tag;
 use style::Zero;
-use webrender_api::{FontInstanceFlags, FontVariation};
 use winapi::shared::minwindef::{BOOL, FALSE};
 use winapi::um::wingdi::FW_SEMIBOLD;
 

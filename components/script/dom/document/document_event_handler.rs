@@ -26,6 +26,7 @@ use js::context::JSContext;
 use js::jsapi::JSAutoRealm;
 use keyboard_types::{Code, Key, KeyState, Modifiers, NamedKey};
 use layout_api::{ScrollContainerQueryFlags, node_id_from_scroll_id};
+use paint_types::ExternalScrollId;
 use rustc_hash::FxHashMap;
 use script_bindings::cell::DomRefCell;
 use script_bindings::codegen::GenericBindings::DocumentBinding::DocumentMethods;
@@ -52,7 +53,6 @@ use servo_constellation_traits::{
 };
 use style::Atom;
 use style_traits::CSSPixel;
-use webrender_api::ExternalScrollId;
 
 use crate::dom::bindings::inheritance::{ElementTypeId, HTMLElementTypeId, NodeTypeId};
 use crate::dom::bindings::refcounted::Trusted;
@@ -121,9 +121,9 @@ impl ClickCountingInfo {
         // Calculate distance between this click and the previous click.
         let line = point_in_frame - previous_point;
         let distance = (line.dot(line) as f64).sqrt();
-        if previous_button != button ||
-            Instant::now().duration_since(previous_time) > double_click_timeout ||
-            distance > double_click_distance_threshold as f64
+        if previous_button != button
+            || Instant::now().duration_since(previous_time) > double_click_timeout
+            || distance > double_click_distance_threshold as f64
         {
             self.count = 0;
             self.time = None;
@@ -318,9 +318,9 @@ impl DocumentEventHandler {
             mem::take(&mut *self.coalesced_wheel_event_ids.borrow_mut());
 
         let mut input_event_outcomes = Vec::with_capacity(
-            pending_input_events.len() +
-                coalesced_move_event_ids.len() +
-                coalesced_wheel_event_ids.len(),
+            pending_input_events.len()
+                + coalesced_move_event_ids.len()
+                + coalesced_wheel_event_ids.len(),
         );
         // TODO: For some of these we still aren't properly calculating whether or not
         // the event was handled or if `preventDefault()` was called on it. Each of
@@ -795,8 +795,8 @@ impl DocumentEventHandler {
         }
 
         // If the element is a label, the activable element is the control element.
-        if node.type_id() ==
-            NodeTypeId::Element(ElementTypeId::HTMLElement(
+        if node.type_id()
+            == NodeTypeId::Element(ElementTypeId::HTMLElement(
                 HTMLElementTypeId::HTMLLabelElement,
             ))
         {
@@ -1428,9 +1428,9 @@ impl DocumentEventHandler {
             keyboard_event.event.key,
             Key::Character(_) | Key::Named(NamedKey::Enter)
         );
-        if keyboard_event.event.state == KeyState::Down &&
-            is_character_value_key &&
-            !keyboard_event.event.is_composing
+        if keyboard_event.event.state == KeyState::Down
+            && is_character_value_key
+            && !keyboard_event.event.is_composing
         {
             // https://w3c.github.io/uievents/#keypress-event-order
             let keypress_event = KeyboardEvent::new_with_platform_keyboard_event(
@@ -2199,8 +2199,8 @@ impl DocumentEventHandler {
                     KeyboardScroll::Home => Vector2D::new(0.0, -current_scroll_offset.y),
                     KeyboardScroll::End => Vector2D::new(
                         0.0,
-                        -current_scroll_offset.y + scrolling_box.content_size().height -
-                            scrolling_box.size().height,
+                        -current_scroll_offset.y + scrolling_box.content_size().height
+                            - scrolling_box.size().height,
                     ),
                     KeyboardScroll::PageDown => {
                         Vector2D::new(0.0, scrolling_box.size().height - 2.0 * LINE_HEIGHT)

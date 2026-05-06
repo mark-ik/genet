@@ -22,9 +22,9 @@ use media::WindowGLContext;
 use paint_api::display_list::{PaintDisplayListInfo, ScrollType};
 use paint_api::largest_contentful_paint_candidate::LCPCandidate;
 use paint_api::rendering_context_core::RenderingContextCore;
+use paint_api::viewport_description::ViewportDescription;
 #[cfg(feature = "wgpu_backend")]
 use paint_api::wgpu_readback::read_texture_to_image;
-use paint_api::viewport_description::ViewportDescription;
 use paint_api::{
     ImageUpdate, PipelineExitSource, SendableFrameTree, SerializableDisplayListPayload,
     SerializableImageData, WebRenderExternalImageHandlers, WebRenderImageHandlerType, WebViewTrait,
@@ -45,8 +45,8 @@ use webrender::{MemoryReport, RenderApi, Transaction};
 #[cfg(not(feature = "wgpu_backend"))]
 use webrender::{ONE_TIME_USAGE_HINT, ShaderPrecacheFlags, UploadMethod};
 use webrender_api::units::{
-    DeviceIntRect, DevicePixel, DevicePoint, LayoutPoint, LayoutRect, LayoutSize,
-    LayoutTransform, LayoutVector2D, WorldPoint,
+    DeviceIntRect, DevicePixel, DevicePoint, LayoutPoint, LayoutRect, LayoutSize, LayoutTransform,
+    LayoutVector2D, WorldPoint,
 };
 use webrender_api::{
     self, BuiltDisplayList, BuiltDisplayListDescriptor, ColorF, DirtyRect, DisplayListPayload,
@@ -64,7 +64,6 @@ use crate::refresh_driver::{AnimationRefreshDriverObserver, BaseRefreshDriver};
 use crate::render_notifier::RenderNotifier;
 use crate::screenshot::ScreenshotTaker;
 use crate::web_content_animation::WebContentAnimator;
-use crate::webrender_external_images::WebGLExternalImages;
 use crate::webview_renderer::{PinchZoomResult, ScrollResult, UnknownWebView, WebViewRenderer};
 
 /// A [`Painter`] is responsible for all of the painting to a particular [`RenderingContext`].
@@ -139,12 +138,6 @@ pub(crate) struct Painter {
 
 impl Drop for Painter {
     fn drop(&mut self) {
-        if let Some(gl) = self.rendering_context.gl() {
-            if let Err(error) = gl.make_current() {
-                error!("Failed to make the rendering context current: {error:?}");
-            }
-        }
-
         self.webrender_api.stop_render_backend();
         self.webrender_api.shut_down(true);
 
@@ -156,34 +149,15 @@ impl Drop for Painter {
 
 impl Painter {
     pub(crate) fn new(rendering_context: Rc<dyn RenderingContextCore>, paint: &Paint) -> Self {
-        // Phase A: GL vs wgpu is now a capability check on the context.
-        // If `gl()` returns `Some`, we have the GL pathway; otherwise
-        // we're running on a wgpu-first context.
         #[cfg(feature = "wgpu_backend")]
         let is_wgpu = rendering_context.wgpu().is_some();
         #[cfg(not(feature = "wgpu_backend"))]
         let is_wgpu = false;
 
-        let webrender_gl = rendering_context.gl().map(|gl| {
-            let api = gl.gleam_gl_api();
-            if let Err(err) = gl.make_current() {
-                warn!("Failed to make the rendering context current: {:?}", err);
-            }
-            debug_assert_eq!(api.get_error(), gleam::gl::NO_ERROR,);
-            api
-        });
+        let webrender_gl: Option<Rc<dyn gleam::gl::Gl>> = None;
 
         let id_manager = paint.webrender_external_image_id_manager();
         let mut external_image_handlers = Box::new(WebRenderExternalImageHandlers::new(id_manager));
-
-        // Set WebRender external image handler for WebGL textures.
-        let image_handler = Box::new(WebGLExternalImages::new(
-            paint.webgl_threads(),
-            rendering_context.clone(),
-            paint.swap_chains.clone(),
-            paint.busy_webgl_contexts_map.clone(),
-        ));
-        external_image_handlers.set_handler(image_handler, WebRenderImageHandlerType::WebGl);
 
         #[cfg(feature = "webgpu")]
         external_image_handlers.set_handler(
@@ -204,9 +178,6 @@ impl Painter {
             embedder_to_constellation_sender.clone(),
         ));
 
-        if let Some(gl) = rendering_context.gl() {
-            gl.prepare_for_rendering();
-        }
         let clear_color = servo_config::pref!(shell_background_color_rgba);
         let clear_color = ColorF::new(
             clear_color[0] as f32,
@@ -363,29 +334,8 @@ impl Painter {
 
         webrender_renderer.set_external_image_handler(external_image_handlers);
 
-        // On the wgpu path, set up the wgpu-native WebGL external image handler
-        // that imports WebGL canvas surfaces into wgpu textures via native interop.
-        #[cfg(feature = "wgpu_backend")]
-        if let Some(wgpu_cap) = rendering_context.wgpu() {
-            let handler = crate::wgpu_webgl_external_images::WgpuWebGLExternalImages::new(
-                paint.webgl_threads(),
-                paint.swap_chains.clone(),
-                paint.busy_webgl_contexts_map.clone(),
-                wgpu_cap.device(),
-                wgpu_cap.queue(),
-            );
-            webrender_renderer.set_wgpu_external_image_handler(Box::new(handler));
-            info!("wgpu WebGL external image handler installed");
-        }
-
         let webrender_api = webrender_api_sender.create_api_by_client(painter_id.into());
         let webrender_document = webrender_api.add_document(rendering_context.size2d().to_i32());
-
-        if let Some(gl) = &webrender_gl {
-            let gl_renderer = gl.get_string(gleam::gl::RENDERER);
-            let gl_version = gl.get_string(gleam::gl::VERSION);
-            info!("Running on {gl_renderer} with OpenGL version {gl_version}");
-        }
 
         let painter = Painter {
             painter_id,
@@ -410,21 +360,10 @@ impl Painter {
                 (*timer_refresh_driver).clone(),
             ),
         };
-        if !is_wgpu {
-            painter.assert_gl_framebuffer_complete();
-            painter.clear_background();
-        }
         painter
     }
 
     pub(crate) fn perform_updates(&mut self) {
-        // The WebXR thread may make a different context current.
-        if let Some(gl) = self.rendering_context.gl() {
-            if let Err(err) = gl.make_current() {
-                warn!("Failed to make the rendering context current: {:?}", err);
-            }
-        }
-
         let mut need_zoom = false;
         let scroll_offset_updates: Vec<_> = self
             .webview_renderers
@@ -573,14 +512,6 @@ impl Painter {
     pub(crate) fn render(&mut self, time_profiler_channel: &ProfilerChan) {
         let refresh_driver = self.refresh_driver.clone();
         refresh_driver.notify_will_paint(self);
-
-        if let Some(gl) = self.rendering_context.gl() {
-            if let Err(error) = gl.make_current() {
-                error!("Failed to make the rendering context current: {error:?}");
-            }
-            self.assert_no_gl_error();
-            gl.prepare_for_rendering();
-        }
 
         time_profile!(
             ProfilerCategory::Painting,
@@ -787,9 +718,6 @@ impl Painter {
     }
 
     pub(crate) fn send_transaction(&mut self, transaction: Transaction) {
-        if let Some(gl) = self.rendering_context.gl() {
-            let _ = gl.make_current();
-        }
         self.webrender_api
             .send_transaction(self.webrender_document, transaction);
     }
@@ -1475,11 +1403,6 @@ impl Painter {
             return;
         }
 
-        if let Some(gl) = self.rendering_context.gl() {
-            if let Err(error) = gl.make_current() {
-                error!("Failed to make the rendering context current: {error:?}");
-            }
-        }
         // Resize the context's surface (GL or wgpu).
         self.rendering_context.resize(new_size);
 

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use dpi::PhysicalSize;
 use image::RgbaImage;
 use log::warn;
-use webrender_api::units::DeviceIntRect;
+use paint_types::units::DeviceIntRect;
 
 use crate::rendering_context_core::{RenderingContextCore, WgpuCapability};
 use crate::wgpu_readback::read_texture_to_image;

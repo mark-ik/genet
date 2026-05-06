@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use atomic_refcell::{AtomicRef, AtomicRefCell};
 use malloc_size_of_derive::MallocSizeOf;
+use paint_types::FontVariation;
 use read_fonts::collections::int_set::Domain;
 use read_fonts::types::Tag;
 use serde::{Deserialize, Serialize};
@@ -16,7 +17,6 @@ use style::computed_values::font_stretch::T as FontStretch;
 use style::computed_values::font_style::T as FontStyle;
 use style::stylesheets::{DocumentStyleSheet, FontFaceRule};
 use style::values::computed::font::FontWeight;
-use webrender_api::FontVariation;
 
 use crate::{CSSFontFaceDescriptors, ComputedFontStyleDescriptor, FontDescriptor, FontIdentifier};
 

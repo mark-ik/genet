@@ -10,7 +10,7 @@ use js::jsapi::JSObject;
 use malloc_size_of::MallocSizeOf;
 use rustc_hash::{FxHashMap, FxHashSet};
 use script_bindings::str::DOMString;
-use servo_canvas_traits::webgl::{GlType, TexFormat, WebGLSLVersion, WebGLVersion};
+use servo_canvas_traits::webgl::{GlType, HALF_FLOAT, TexFormat, WebGLSLVersion, WebGLVersion};
 type GLenum = u32;
 
 use script_bindings::cell::DomRefCell;
@@ -463,7 +463,7 @@ impl WebGLExtensions {
         if type_ == OESTextureHalfFloatConstants::HALF_FLOAT_OES
             && !self.supports_gl_extension("GL_OES_texture_half_float")
         {
-            return glow::HALF_FLOAT;
+            return HALF_FLOAT;
         }
         type_
     }

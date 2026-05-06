@@ -7,12 +7,12 @@ use std::cell::Cell;
 use app_units::Au;
 use euclid::{Rect, Vector2D};
 use layout_api::{AxesOverflow, ScrollContainerQueryFlags};
+use paint_types::units::{LayoutSize, LayoutVector2D};
 use script_bindings::codegen::GenericBindings::WindowBinding::ScrollBehavior;
 use script_bindings::inheritance::Castable;
 use script_bindings::root::DomRoot;
 use style::values::computed::Overflow;
 use style_traits::CSSPixel;
-use webrender_api::units::{LayoutSize, LayoutVector2D};
 
 use crate::dom::bindings::codegen::Bindings::ElementBinding::ScrollLogicalPosition;
 use crate::dom::node::{Node, NodeTraits};

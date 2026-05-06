@@ -24,6 +24,7 @@ mod font_context {
     use icu_locid::subtags::Language;
     use net_traits::{ResourceThreads, start_fetch_thread};
     use paint_api::CrossProcessPaintApi;
+    use paint_types::{FontInstanceKey, FontKey, IdNamespace};
     use parking_lot::Mutex;
     use servo_arc::Arc as ServoArc;
     use servo_base::generic_channel::{self, GenericReceiver};
@@ -36,7 +37,6 @@ mod font_context {
         FontSynthesis, FontWeight, SingleFontFamily,
     };
     use stylo_atoms::Atom;
-    use webrender_api::{FontInstanceKey, FontKey, IdNamespace};
 
     static INIT: Once = Once::new();
 

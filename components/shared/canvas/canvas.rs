@@ -12,13 +12,13 @@ use fonts_traits::{FontDataAndIndex, FontIdentifier};
 use kurbo::{BezPath, ParamCurveNearest as _, PathEl, Point, Shape, Triangle};
 use malloc_size_of::MallocSizeOf;
 use malloc_size_of_derive::MallocSizeOf;
+use paint_types::ImageKey;
 use pixels::SharedSnapshot;
 use serde::{Deserialize, Serialize};
 use servo_base::Epoch;
 use servo_base::generic_channel::GenericSender;
 use strum::{Display, EnumString};
 use style::color::AbsoluteColor;
-use webrender_api::ImageKey;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Path(pub BezPath);

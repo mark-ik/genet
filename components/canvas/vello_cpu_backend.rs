@@ -10,6 +10,7 @@ use euclid::default::{Point2D, Rect, Size2D, Transform2D};
 use fonts::FontIdentifier;
 use kurbo::Shape;
 use paint_api::SerializableImageData;
+use paint_types::{ImageDescriptor, ImageDescriptorFlags, ImageFormat};
 use pixels::{Snapshot, SnapshotAlphaMode, SnapshotPixelFormat};
 use servo_base::generic_channel::GenericSharedMemory;
 use servo_canvas_traits::canvas::{
@@ -17,7 +18,6 @@ use servo_canvas_traits::canvas::{
     LineOptions, Path, ShadowOptions, TextRun,
 };
 use vello_cpu::{kurbo, peniko};
-use webrender_api::{ImageDescriptor, ImageDescriptorFlags};
 
 use crate::backend::{Convert, GenericDrawTarget};
 use crate::canvas_data::Filter;
@@ -459,7 +459,7 @@ impl GenericDrawTarget for VelloCPUDrawTarget {
         &mut self,
     ) -> (ImageDescriptor, SerializableImageData) {
         let image_desc = ImageDescriptor {
-            format: webrender_api::ImageFormat::RGBA8,
+            format: ImageFormat::RGBA8,
             size: self.size().cast().cast_unit(),
             stride: None,
             offset: 0,

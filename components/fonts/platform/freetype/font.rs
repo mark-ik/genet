@@ -15,13 +15,13 @@ use freetype_sys::{
 };
 use log::debug;
 use memmap2::Mmap;
+use paint_types::{FontInstanceFlags, FontVariation};
 use parking_lot::ReentrantMutex;
 use read_fonts::types::Tag;
 use read_fonts::{FontRef, ReadError, TableProvider};
 use servo_arc::Arc;
 use skrifa::attribute::Weight;
 use style::Zero;
-use webrender_api::{FontInstanceFlags, FontVariation};
 
 use super::library_handle::FreeTypeLibraryHandle;
 use crate::FontData;

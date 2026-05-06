@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use dpi::PhysicalSize;
 use image::RgbaImage;
 use log::warn;
-use webrender_api::units::DeviceIntRect;
+use paint_types::units::DeviceIntRect;
 
 fn clamp_readback_rect(
     rect: DeviceIntRect,

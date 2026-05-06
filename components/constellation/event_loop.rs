@@ -103,10 +103,6 @@ impl EventLoop {
             constellation_to_script_receiver: script_port,
             pipeline_namespace_id: constellation.next_pipeline_namespace_id(),
             cross_process_paint_api: constellation.paint_proxy.cross_process_paint_api.clone(),
-            webgl_chan: constellation
-                .webgl_threads
-                .as_ref()
-                .map(|threads| threads.pipeline()),
             webxr_registry: constellation.webxr_registry.clone(),
             player_context: WindowGLContext::get(),
             privileged_urls: constellation.privileged_urls.clone(),

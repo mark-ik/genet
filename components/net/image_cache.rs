@@ -22,6 +22,8 @@ use net_traits::image_cache::{
 use net_traits::request::CorsSettings;
 use net_traits::{FetchMetadata, FetchResponseMsg, FilteredMetadata, NetworkError};
 use paint_api::{CrossProcessPaintApi, ImageUpdate, SerializableImageData};
+use paint_types::ImageKey as WebRenderImageKey;
+use paint_types::units::DeviceIntSize;
 use parking_lot::Mutex;
 use pixels::{CorsStatus, ImageFrame, ImageMetadata, PixelFormat, RasterImage, load_from_memory};
 use profile_traits::mem::{Report, ReportKind};
@@ -32,8 +34,6 @@ use rustc_hash::FxHashMap;
 use servo_base::id::{PipelineId, WebViewId};
 use servo_base::threadpool::ThreadPool;
 use servo_url::{ImmutableOrigin, ServoUrl};
-use webrender_api::ImageKey as WebRenderImageKey;
-use webrender_api::units::DeviceIntSize;
 
 // We bake in rippy.png as a fallback, in case the embedder does not provide a broken
 // image icon resource. This version is 229 bytes, so don't exchange it against

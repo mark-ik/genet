@@ -13,17 +13,17 @@ use log::warn;
 use paint_api::{
     CrossProcessPaintApi, ExternalImageSource, SerializableImageData, WebRenderExternalImageApi,
 };
+use paint_types::units::DeviceIntSize;
+use paint_types::{
+    ExternalImageData, ExternalImageId, ExternalImageType, ImageDescriptor, ImageDescriptorFlags,
+    ImageFormat, ImageKey,
+};
 use pixels::{SharedSnapshot, Snapshot, SnapshotAlphaMode, SnapshotPixelFormat};
 use rustc_hash::FxHashMap;
 use servo_base::Epoch;
 use servo_base::generic_channel::GenericSender;
 use webgpu_traits::{
     ContextConfiguration, PRESENTATION_BUFFER_COUNT, PendingTexture, WebGPUContextId, WebGPUMsg,
-};
-use webrender_api::units::DeviceIntSize;
-use webrender_api::{
-    ExternalImageData, ExternalImageId, ExternalImageType, ImageDescriptor, ImageDescriptorFlags,
-    ImageFormat, ImageKey,
 };
 use wgpu_core::device::HostMap;
 use wgpu_core::global::Global;
@@ -324,7 +324,7 @@ impl WebGpuExternalImages {
 }
 
 impl WebRenderExternalImageApi for WebGpuExternalImages {
-    fn lock(&mut self, id: u64) -> (ExternalImageSource<'_>, Size2D<i32>) {
+    fn lock(&mut self, id: u64) -> (ExternalImageSource, Size2D<i32>) {
         let id = WebGPUContextId(id);
         let presentation = {
             let mut webgpu_contexts = self.image_map.lock().unwrap();
@@ -342,7 +342,7 @@ impl WebRenderExternalImageApi for WebGpuExternalImages {
         };
         let size = mapped_buffer.image_size;
         (
-            ExternalImageSource::RawData(mapped_buffer.slice()),
+            ExternalImageSource::RawData(mapped_buffer.slice().to_vec()),
             size.cast().cast_unit(),
         )
     }

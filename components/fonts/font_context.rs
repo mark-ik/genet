@@ -26,6 +26,7 @@ use net_traits::{
     CoreResourceThread, FetchResponseMsg, ResourceFetchTiming, ResourceThreads, fetch_async,
 };
 use paint_api::CrossProcessPaintApi;
+use paint_types::{FontInstanceFlags, FontInstanceKey, FontKey, FontVariation};
 use parking_lot::{Mutex, RwLock};
 use rustc_hash::FxHashSet;
 use servo_arc::Arc as ServoArc;
@@ -46,7 +47,6 @@ use style::stylesheets::{
 use style::values::computed::font::{FamilyName, FontFamilyNameSyntax, SingleFontFamily};
 use url::Url;
 use uuid::Uuid;
-use webrender_api::{FontInstanceFlags, FontInstanceKey, FontKey, FontVariation};
 
 use crate::font::{Font, FontFamilyDescriptor, FontGroup, FontRef, FontSearchScope};
 use crate::font_store::CrossThreadFontStore;

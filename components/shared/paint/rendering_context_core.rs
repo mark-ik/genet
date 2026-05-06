@@ -18,8 +18,8 @@ use dpi::PhysicalSize;
 use embedder_traits::RefreshDriver;
 use euclid::Size2D;
 use image::RgbaImage;
+use paint_types::units::{DeviceIntRect, DevicePixel};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
-use webrender_api::units::{DeviceIntRect, DevicePixel};
 
 /// Bundled raw window + display handles for creating a platform surface.
 ///

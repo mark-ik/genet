@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use log::{info, warn};
 use paint_api::{CrossProcessPaintApi, WebRenderExternalImageIdManager, WebRenderImageHandlerType};
+use paint_types::ExternalImageId;
 use rustc_hash::FxHashMap;
 use servo_base::generic_channel::{GenericReceiver, GenericSender, GenericSharedMemory};
 use servo_base::id::PipelineId;
@@ -19,7 +20,6 @@ use webgpu_traits::{
     RenderPassId, ShaderCompilationInfo, WebGPU, WebGPUAdapter, WebGPUContextId, WebGPUDevice,
     WebGPUMsg, WebGPUQueue, WebGPURequest, apply_render_command,
 };
-use webrender_api::ExternalImageId;
 use wgc::command::{ComputePass, ComputePassDescriptor, RenderPass};
 use wgc::device::DeviceDescriptor;
 use wgc::id;

@@ -195,11 +195,6 @@ impl ScreenshotTaker {
 
                     DeviceIntRect::from_origin_and_size(Point2D::new(x, y), Size2D::new(w, h))
                 });
-                if let Some(gl) = renderer.rendering_context.gl() {
-                    if let Err(error) = gl.make_current() {
-                        error!("Failed to make the rendering context current: {error:?}");
-                    }
-                }
                 let result = renderer
                     .read_to_image(rect)
                     .ok_or(ScreenshotCaptureError::CouldNotReadImage);

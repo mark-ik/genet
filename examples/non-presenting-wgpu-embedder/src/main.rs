@@ -112,8 +112,7 @@ mod servo_integration {
             }
 
             Ok(Self {
-                output: output
-                    .unwrap_or_else(|| PathBuf::from("non_presenting_wgpu_embedder.png")),
+                output: output.unwrap_or_else(|| PathBuf::from("non_presenting_wgpu_embedder.png")),
                 size,
                 url: url.unwrap_or_else(|| {
                     Url::parse(DEFAULT_URL).expect("default data URL must parse")
@@ -124,7 +123,9 @@ mod servo_integration {
 
     fn parse_window_size(value: &str) -> Result<PhysicalSize<u32>, String> {
         let Some((width, height)) = value.split_once('x') else {
-            return Err(format!("invalid window size '{value}', expected WIDTHxHEIGHT"));
+            return Err(format!(
+                "invalid window size '{value}', expected WIDTHxHEIGHT"
+            ));
         };
         let width = width
             .parse::<u32>()
@@ -240,20 +241,26 @@ mod servo_integration {
                                     parent.display()
                                 ))
                             } else {
-                                image.save(&output).map(|_| output.clone()).map_err(|error| {
+                                image
+                                    .save(&output)
+                                    .map(|_| output.clone())
+                                    .map_err(|error| {
+                                        format!(
+                                            "failed to save screenshot '{}': {error}",
+                                            output.display()
+                                        )
+                                    })
+                            }
+                        } else {
+                            image
+                                .save(&output)
+                                .map(|_| output.clone())
+                                .map_err(|error| {
                                     format!(
                                         "failed to save screenshot '{}': {error}",
                                         output.display()
                                     )
                                 })
-                            }
-                        } else {
-                            image.save(&output).map(|_| output.clone()).map_err(|error| {
-                                format!(
-                                    "failed to save screenshot '{}': {error}",
-                                    output.display()
-                                )
-                            })
                         }
                     },
                     Err(error) => Err(format!("failed to take screenshot: {error:?}")),
@@ -429,9 +436,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     return servo_integration::run();
 
     #[cfg(not(feature = "servo_integration"))]
-    compile_error!(
-        "enable either `servo_integration` (default) or `netrender_backend`"
-    );
+    compile_error!("enable either `servo_integration` (default) or `netrender_backend`");
 }
 
 // ── Phase 1 second receipt: netrender embedder hookup ──────────────────────
@@ -451,7 +456,10 @@ fn netrender_smoke() -> Result<(), Box<dyn std::error::Error>> {
     let handles = netrender::boot()?;
 
     let adapter_info = handles.adapter.get_info();
-    println!("  adapter: {} ({:?})", adapter_info.name, adapter_info.backend);
+    println!(
+        "  adapter: {} ({:?})",
+        adapter_info.name, adapter_info.backend
+    );
 
     let device = handles.device.clone();
     let queue = handles.queue.clone();
@@ -517,11 +525,7 @@ fn netrender_smoke() -> Result<(), Box<dyn std::error::Error>> {
          target: {}x{} {:?}\n\
          frame: 1x full-NDC red brush_solid via Renderer::render\n\
          result: Renderer::render completed without error\n",
-        final_info.name,
-        final_info.backend,
-        DIM,
-        DIM,
-        TARGET_FORMAT,
+        final_info.name, final_info.backend, DIM, DIM, TARGET_FORMAT,
     );
     let log_path = "C:/Users/mark_/Code/repos/webrender-wgpu/netrender-notes/logs/2026-04-30_netrender_embedder_hookup.log";
     std::fs::write(log_path, &log)?;

@@ -5,6 +5,7 @@
 use std::ops::{Deref, RangeInclusive};
 
 use malloc_size_of_derive::MallocSizeOf;
+use paint_types::FontVariation;
 use serde::{Deserialize, Serialize};
 use style::computed_values::font_optical_sizing::T as FontOpticalSizing;
 use style::computed_values::font_variant_caps;
@@ -14,7 +15,6 @@ use style::stylesheets::FontFaceRule;
 use style::values::computed::font::{FixedPoint, FontStyleFixedPoint};
 use style::values::computed::{Au, FontStretch, FontStyle, FontSynthesis, FontWeight};
 use style::values::specified::FontStretch as SpecifiedFontStretch;
-use webrender_api::FontVariation;
 
 /// `FontDescriptor` describes the parameters of a `Font`. It represents rendering a given font
 /// template at a particular size, with a particular font-variant-caps applied, etc. This contrasts

@@ -7,7 +7,9 @@ use std::convert::TryInto;
 use dom_struct::dom_struct;
 use euclid::{Rect, Size2D};
 use js::rust::HandleObject;
-use servo_canvas_traits::webgl::{WebGLCommand, WebGLContextId, WebGLTextureId};
+use servo_canvas_traits::webgl::{
+    TEXTURE_2D, TEXTURE_RECTANGLE, WebGLCommand, WebGLContextId, WebGLTextureId,
+};
 use webxr_api::{ContextId as WebXRContextId, LayerId, LayerInit, Viewport};
 
 use crate::canvas_context::CanvasContext;
@@ -129,9 +131,9 @@ impl XRWebGLLayer {
 
     fn texture_target(&self) -> u32 {
         if cfg!(target_os = "macos") {
-            glow::TEXTURE_RECTANGLE
+            TEXTURE_RECTANGLE
         } else {
-            glow::TEXTURE_2D
+            TEXTURE_2D
         }
     }
 

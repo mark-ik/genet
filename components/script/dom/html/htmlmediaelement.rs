@@ -28,6 +28,10 @@ use net_traits::{
     CoreResourceThread, FetchMetadata, FilteredMetadata, NetworkError, ResourceFetchTiming,
 };
 use paint_api::{CrossProcessPaintApi, ImageUpdate, SerializableImageData};
+use paint_types::{
+    ExternalImageData, ExternalImageId, ExternalImageType, ImageBufferKind, ImageDescriptor,
+    ImageDescriptorFlags, ImageFormat, ImageKey,
+};
 use pixels::RasterImage;
 use script_bindings::assert::assert_in_script;
 use script_bindings::cell::DomRefCell;
@@ -45,10 +49,6 @@ use servo_media::{ClientContextId, ServoMedia, SupportsMediaType};
 use servo_url::ServoUrl;
 use stylo_atoms::Atom;
 use uuid::Uuid;
-use webrender_api::{
-    ExternalImageData, ExternalImageId, ExternalImageType, ImageBufferKind, ImageDescriptor,
-    ImageDescriptorFlags, ImageFormat, ImageKey,
-};
 
 use crate::document_loader::{LoadBlocker, LoadType};
 use crate::dom::audio::audiotrack::AudioTrack;

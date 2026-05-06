@@ -7,6 +7,7 @@ use std::cell::{Cell, RefCell};
 
 use arrayvec::ArrayVec;
 use dom_struct::dom_struct;
+use paint_types::{ImageFormat, ImageKey};
 use pixels::Snapshot;
 use script_bindings::cformat;
 use script_bindings::codegen::GenericBindings::WebGPUBinding::GPUTextureFormat;
@@ -15,7 +16,6 @@ use webgpu_traits::{
     ContextConfiguration, PRESENTATION_BUFFER_COUNT, PendingTexture, WebGPU, WebGPUContextId,
     WebGPURequest,
 };
-use webrender_api::{ImageFormat, ImageKey};
 use wgpu_core::id;
 
 use super::gpuconvert::convert_texture_descriptor;

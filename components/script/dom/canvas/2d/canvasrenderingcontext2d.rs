@@ -5,12 +5,12 @@
 use dom_struct::dom_struct;
 use euclid::default::Size2D;
 use js::context::JSContext;
+use paint_types::ImageKey;
 use pixels::Snapshot;
 use script_bindings::reflector::AssociatedMemory;
 use servo_base::{Epoch, generic_channel};
 use servo_canvas_traits::canvas::{Canvas2dMsg, CanvasId};
 use servo_url::ServoUrl;
-use webrender_api::ImageKey;
 
 use super::canvas_state::CanvasState;
 use crate::canvas_context::{CanvasContext, CanvasHelpers, HTMLCanvasElementOrOffscreenCanvas};

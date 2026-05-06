@@ -26,6 +26,7 @@ malloc_size_of = { workspace = true }
 malloc_size_of_derive = { workspace = true }
 net_traits = { workspace = true }
 paint_api = { workspace = true }
+paint_types = { workspace = true }
 parking_lot = { workspace = true }
 pixels = { workspace = true }
 profile_traits = { workspace = true }
@@ -39,4 +40,3 @@ servo-url = { workspace = true }
 servo_arc = { workspace = true }
 stylo = { workspace = true }
 stylo_traits = { workspace = true }
-webrender_api = { workspace = true }

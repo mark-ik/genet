@@ -7816,13 +7816,11 @@ dependencies = [
  "servo-tracing",
  "servo-url",
  "servo-wakelock",
- "servo-webgl",
  "servo-webgpu",
  "servo-webxr",
  "servo-webxr-api",
  "stylo",
  "stylo_traits",
- "surfman 0.12.0",
  "tokio",
  "tracing",
  "url",
@@ -7888,9 +7886,9 @@ dependencies = [
  "serde_json",
  "servo-config",
  "servo-malloc-size-of",
+ "servo-paint-types",
  "time",
  "unicode-segmentation",
- "webrender_api",
  "windows-sys 0.61.2",
 ]
 
@@ -7940,6 +7938,7 @@ dependencies = [
  "servo-config",
  "servo-fonts",
  "servo-paint-api",
+ "servo-paint-types",
  "servo-pixels",
  "servo-profile-traits",
  "servo-tracing",
@@ -7947,7 +7946,6 @@ dependencies = [
  "tracing",
  "vello 0.8.0",
  "vello_cpu 0.0.7",
- "webrender_api",
 ]
 
 [[package]]
@@ -7963,11 +7961,11 @@ dependencies = [
  "servo-base",
  "servo-fonts-traits",
  "servo-malloc-size-of",
+ "servo-paint-types",
  "servo-pixels",
  "servo-webxr-api",
  "strum",
  "stylo",
- "webrender_api",
 ]
 
 [[package]]
@@ -8062,6 +8060,7 @@ dependencies = [
  "servo-malloc-size-of",
  "servo-net-traits",
  "servo-paint-api",
+ "servo-paint-types",
  "servo-pixels",
  "servo-profile-traits",
  "servo-storage-traits",
@@ -8070,7 +8069,6 @@ dependencies = [
  "servo-webgpu-traits",
  "strum",
  "uuid",
- "webrender_api",
  "wgpu-core",
 ]
 
@@ -8164,6 +8162,7 @@ dependencies = [
  "servo-geometry",
  "servo-hyper-serde",
  "servo-malloc-size-of",
+ "servo-paint-types",
  "servo-pixels",
  "servo-url",
  "strum",
@@ -8172,7 +8171,6 @@ dependencies = [
  "url",
  "uuid",
  "webdriver",
- "webrender_api",
 ]
 
 [[package]]
@@ -8211,6 +8209,7 @@ dependencies = [
  "servo-malloc-size-of",
  "servo-net-traits",
  "servo-paint-api",
+ "servo-paint-types",
  "servo-profile-traits",
  "servo-tracing",
  "servo-url",
@@ -8224,7 +8223,6 @@ dependencies = [
  "unicode-script",
  "url",
  "uuid",
- "webrender_api",
  "winapi",
  "xml",
  "yeslogic-fontconfig-sys",
@@ -8246,11 +8244,11 @@ dependencies = [
  "serde",
  "servo-base",
  "servo-malloc-size-of",
+ "servo-paint-types",
  "servo-profile-traits",
  "servo-url",
  "stylo",
  "uuid",
- "webrender_api",
 ]
 
 [[package]]
@@ -8260,9 +8258,9 @@ dependencies = [
  "app_units",
  "euclid",
  "malloc_size_of_derive",
+ "serde",
  "servo-malloc-size-of",
- "webrender",
- "webrender_api",
+ "servo-paint-types",
 ]
 
 [[package]]
@@ -8367,6 +8365,7 @@ dependencies = [
  "servo-malloc-size-of",
  "servo-net-traits",
  "servo-paint-api",
+ "servo-paint-types",
  "servo-pixels",
  "servo-profile-traits",
  "servo-script-traits",
@@ -8374,7 +8373,6 @@ dependencies = [
  "servo_arc",
  "stylo",
  "stylo_traits",
- "webrender_api",
 ]
 
 [[package]]
@@ -8413,9 +8411,6 @@ dependencies = [
  "url",
  "urlpattern",
  "uuid",
- "webrender",
- "webrender_api",
- "wr_malloc_size_of",
 ]
 
 [[package]]
@@ -8619,7 +8614,7 @@ dependencies = [
  "servo-malloc-size-of",
  "servo-media",
  "servo-paint-api",
- "webrender_api",
+ "servo-paint-types",
 ]
 
 [[package]]
@@ -8706,6 +8701,7 @@ dependencies = [
  "servo-net",
  "servo-net-traits",
  "servo-paint-api",
+ "servo-paint-types",
  "servo-pixels",
  "servo-profile-traits",
  "servo-tracing",
@@ -8723,7 +8719,6 @@ dependencies = [
  "url",
  "uuid",
  "webpki-roots",
- "webrender_api",
 ]
 
 [[package]]
@@ -8755,6 +8750,7 @@ dependencies = [
  "servo-hyper-serde",
  "servo-malloc-size-of",
  "servo-paint-api",
+ "servo-paint-types",
  "servo-pixels",
  "servo-profile-traits",
  "servo-url",
@@ -8763,7 +8759,6 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
- "webrender_api",
 ]
 
 [[package]]
@@ -8793,14 +8788,11 @@ dependencies = [
  "servo-profile-traits",
  "servo-timers",
  "servo-tracing",
- "servo-webgl",
  "servo-webgpu",
  "servo-webxr",
  "servo-webxr-api",
- "servo-wgpu-interop-adapter",
  "smallvec",
  "stylo_traits",
- "surfman 0.12.0",
  "tracing",
  "webrender",
  "webrender_api",
@@ -8830,6 +8822,7 @@ dependencies = [
  "servo-embedder-traits",
  "servo-geometry",
  "servo-malloc-size-of",
+ "servo-paint-types",
  "servo-profile-traits",
  "servo-tracing",
  "servo-url",
@@ -8838,9 +8831,19 @@ dependencies = [
  "stylo",
  "stylo_traits",
  "tracing",
- "webrender_api",
  "wgpu",
  "wgpu-native-texture-interop",
+]
+
+[[package]]
+name = "servo-paint-types"
+version = "0.2.0"
+dependencies = [
+ "app_units",
+ "euclid",
+ "malloc_size_of_derive",
+ "serde",
+ "servo-malloc-size-of",
 ]
 
 [[package]]
@@ -8855,7 +8858,7 @@ dependencies = [
  "serde",
  "servo-base",
  "servo-malloc-size-of",
- "webrender_api",
+ "servo-paint-types",
 ]
 
 [[package]]
@@ -8927,7 +8930,6 @@ dependencies = [
  "encoding_rs",
  "euclid",
  "flate2",
- "glow 0.17.0",
  "headers",
  "hkdf",
  "html5ever",
@@ -8991,6 +8993,7 @@ dependencies = [
  "servo-metrics",
  "servo-net-traits",
  "servo-paint-api",
+ "servo-paint-types",
  "servo-pixels",
  "servo-profile-traits",
  "servo-script-bindings",
@@ -9026,7 +9029,6 @@ dependencies = [
  "uuid",
  "web_atoms",
  "webdriver",
- "webrender_api",
  "wgpu-core",
  "wgpu-types",
  "x25519-dalek",
@@ -9097,6 +9099,7 @@ dependencies = [
  "servo-media-thread",
  "servo-net-traits",
  "servo-paint-api",
+ "servo-paint-types",
  "servo-pixels",
  "servo-profile-traits",
  "servo-storage-traits",
@@ -9106,7 +9109,6 @@ dependencies = [
  "strum",
  "stylo_atoms",
  "stylo_traits",
- "webrender_api",
 ]
 
 [[package]]
@@ -9221,30 +9223,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "servo-webgl"
-version = "0.2.0"
-dependencies = [
- "bitflags 2.11.1",
- "byteorder",
- "crossbeam-channel",
- "euclid",
- "glow 0.17.0",
- "half",
- "itertools 0.14.0",
- "log",
- "parking_lot",
- "rustc-hash 2.1.2",
- "servo-base",
- "servo-canvas-traits",
- "servo-paint-api",
- "servo-pixels",
- "servo-webxr",
- "servo-webxr-api",
- "surfman 0.12.0",
- "webrender_api",
-]
-
-[[package]]
 name = "servo-webgpu"
 version = "0.2.0"
 dependencies = [
@@ -9255,9 +9233,9 @@ dependencies = [
  "servo-base",
  "servo-config",
  "servo-paint-api",
+ "servo-paint-types",
  "servo-pixels",
  "servo-webgpu-traits",
- "webrender_api",
  "wgpu-core",
  "wgpu-types",
 ]
@@ -9267,12 +9245,13 @@ name = "servo-webgpu-traits"
 version = "0.2.0"
 dependencies = [
  "arrayvec",
+ "euclid",
  "malloc_size_of_derive",
  "serde",
  "servo-base",
  "servo-malloc-size-of",
+ "servo-paint-types",
  "servo-pixels",
- "webrender_api",
  "wgpu-core",
  "wgpu-types",
 ]
@@ -9308,22 +9287,6 @@ dependencies = [
  "servo-embedder-traits",
  "servo-malloc-size-of",
  "servo-profile-traits",
-]
-
-[[package]]
-name = "servo-wgpu-interop-adapter"
-version = "0.1.0"
-dependencies = [
- "dpi",
- "euclid",
- "gleam",
- "glow 0.16.0",
- "image",
- "rustls",
- "surfman 0.11.0",
- "wgpu",
- "wgpu-native-texture-interop",
- "winit",
 ]
 
 [[package]]
