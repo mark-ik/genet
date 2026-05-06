@@ -4,6 +4,15 @@
 
 #![deny(unsafe_code)]
 
+//! Servo's rendering subsystem. Post-C2 the WebRender wrapper that
+//! lived here is gone; this crate now holds the C3 scaffold for the
+//! netrender-driven painter.
+//!
+//! See [`docs/2026-05-05_serval_netrender_cut_plan.md`](../../docs/2026-05-05_serval_netrender_cut_plan.md)
+//! for the cut-plan context. Real `netrender::Scene` translation +
+//! `Renderer::render_with_compositor` driving live in the proper C3
+//! follow-up; this scaffold is the compile-clean staging point.
+
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -16,22 +25,9 @@ use servo_constellation_traits::EmbedderToConstellationMessage;
 #[cfg(feature = "webxr")]
 use webxr::WebXrRegistry;
 
-pub use crate::paint::{Paint, WebRenderDebugOption};
+pub use crate::netrender_painter::{Paint, WebRenderDebugOption};
 
-#[macro_use]
-mod tracing;
-
-mod largest_contentful_paint_calculator;
-mod paint;
-mod painter;
-mod pinch_zoom;
-mod pipeline_details;
-mod refresh_driver;
-mod render_notifier;
-mod screenshot;
-mod touch;
-mod web_content_animation;
-mod webview_renderer;
+mod netrender_painter;
 
 /// Data used to initialize the `Paint` subsystem.
 pub struct InitialPaintState {

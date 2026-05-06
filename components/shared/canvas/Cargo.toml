@@ -13,9 +13,6 @@ description.workspace = true
 name = "servo_canvas_traits"
 path = "lib.rs"
 
-[features]
-webgl_backtrace = []
-
 [dependencies]
 crossbeam-channel = { workspace = true }
 euclid = { workspace = true }

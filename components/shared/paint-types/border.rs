@@ -40,6 +40,20 @@ pub struct BorderRadius {
     pub bottom_right: LayoutSize,
 }
 
+impl BorderRadius {
+    pub fn zero() -> Self {
+        Self::default()
+    }
+
+    pub fn is_zero(&self) -> bool {
+        let zero = LayoutSize::zero();
+        self.top_left == zero
+            && self.top_right == zero
+            && self.bottom_left == zero
+            && self.bottom_right == zero
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, MallocSizeOf, PartialEq, Serialize)]
 pub struct NormalBorder {
     pub left: BorderSide,

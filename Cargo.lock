@@ -4610,17 +4610,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mozangle"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "298bc7f83d5cca3789e47779e92cda492b75f11e03995bf558475bd9df2f639b"
-dependencies = [
- "bindgen",
- "cc",
- "walkdir",
-]
-
-[[package]]
 name = "mozjs"
 version = "0.15.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6871,13 +6860,13 @@ dependencies = [
  "itertools 0.14.0",
  "keyboard-types",
  "log",
- "mozangle",
  "parking_lot",
  "rustc-hash 2.1.2",
  "rustls",
  "serde",
  "servo",
  "servo-background-hang-monitor",
+ "servo-background-hang-monitor-api",
  "servo-base",
  "servo-bluetooth",
  "servo-bluetooth-traits",
@@ -6902,6 +6891,7 @@ dependencies = [
  "servo-net-traits",
  "servo-paint",
  "servo-paint-api",
+ "servo-paint-types",
  "servo-profile",
  "servo-profile-traits",
  "servo-script",
@@ -6920,7 +6910,6 @@ dependencies = [
  "tracing",
  "url",
  "webrender",
- "webrender_api",
  "wgpu",
  "winit",
 ]
@@ -7415,6 +7404,7 @@ dependencies = [
  "servo-malloc-size-of",
  "servo-net-traits",
  "servo-paint-api",
+ "servo-paint-types",
  "servo-pixels",
  "servo-profile-traits",
  "servo-script",
@@ -7859,39 +7849,15 @@ dependencies = [
 name = "servo-paint"
 version = "0.2.0"
 dependencies = [
- "bitflags 2.11.1",
  "crossbeam-channel",
- "dpi",
- "euclid",
- "gleam",
- "image",
- "ipc-channel",
- "log",
- "rayon",
- "rustc-hash 2.1.2",
- "servo-allocator",
  "servo-base",
- "servo-canvas-traits",
- "servo-config",
  "servo-constellation-traits",
  "servo-embedder-traits",
- "servo-geometry",
- "servo-malloc-size-of",
- "servo-media-thread",
  "servo-paint-api",
  "servo-profile-traits",
- "servo-timers",
- "servo-tracing",
  "servo-webgpu",
  "servo-webxr",
  "servo-webxr-api",
- "smallvec",
- "stylo_traits",
- "tracing",
- "webrender",
- "webrender_api",
- "wgpu",
- "wr_malloc_size_of",
 ]
 
 [[package]]
@@ -8042,7 +8008,6 @@ dependencies = [
  "mime_guess",
  "ml-dsa",
  "ml-kem",
- "mozangle",
  "mozjs",
  "nom-rfc8288",
  "num-bigint-dig",
@@ -10944,10 +10909,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wr_malloc_size_of"
-version = "0.2.2"
-
-[[package]]
 name = "write16"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11350,3 +11311,7 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core 0.5.1",
 ]
+
+[[patch.unused]]
+name = "wr_malloc_size_of"
+version = "0.2.2"

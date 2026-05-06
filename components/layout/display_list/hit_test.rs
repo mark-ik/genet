@@ -15,8 +15,8 @@ use style::computed_values::pointer_events::T as PointerEvents;
 use style::computed_values::visibility::T as Visibility;
 use style::properties::ComputedValues;
 use style::values::computed::ui::CursorKind;
-use webrender_api::BorderRadius;
-use webrender_api::units::{LayoutPoint, LayoutRect, LayoutSize, RectExt};
+use paint_types::BorderRadius;
+use paint_types::units::{LayoutPoint, LayoutRect, LayoutSize, RectExt};
 
 use crate::display_list::clip::{Clip, ClipId};
 use crate::display_list::stacking_context::StackingContextSection;

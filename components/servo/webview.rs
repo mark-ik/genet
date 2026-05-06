@@ -31,7 +31,7 @@ use servo_geometry::DeviceIndependentPixel;
 use servo_url::ServoUrl;
 use style_traits::CSSPixel;
 use url::Url;
-use webrender_api::units::{DeviceIntRect, DevicePixel, DevicePoint, DeviceSize};
+use paint_types::units::{DeviceIntRect, DevicePixel, DevicePoint, DeviceSize};
 
 use crate::clipboard_delegate::{ClipboardDelegate, DefaultClipboardDelegate};
 #[cfg(feature = "gamepad")]

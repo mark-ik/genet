@@ -11,7 +11,7 @@ use euclid::Point2D;
 use servo::{InputEvent, JSValue, MouseMoveEvent, WebViewBuilder};
 use servo_config::prefs::Preferences;
 use url::Url;
-use webrender_api::units::DevicePoint;
+use paint_types::units::DevicePoint;
 
 use crate::common::{
     ServoTest, WebViewDelegateImpl, click_at_point, evaluate_javascript,

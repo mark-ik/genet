@@ -17,7 +17,7 @@ use servo::{
     MouseButton, MouseButtonAction, MouseButtonEvent, MouseMoveEvent, Preferences, Servo,
     ServoBuilder, SimpleDialog, WebView, WebViewDelegate,
 };
-use webrender_api::units::DevicePoint;
+use paint_types::units::DevicePoint;
 
 pub struct ServoTest {
     pub servo: Servo,

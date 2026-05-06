@@ -78,6 +78,18 @@ pub struct ImageDescriptor {
     pub flags: ImageDescriptorFlags,
 }
 
+impl ImageDescriptor {
+    pub fn new(width: i32, height: i32, format: ImageFormat, flags: ImageDescriptorFlags) -> Self {
+        Self {
+            size: DeviceIntSize::new(width, height),
+            stride: None,
+            format,
+            offset: 0,
+            flags,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, MallocSizeOf, PartialEq, Serialize)]
 pub enum ImageData {
     Raw(Vec<u8>),

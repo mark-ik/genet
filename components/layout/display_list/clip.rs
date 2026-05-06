@@ -10,8 +10,8 @@ use style::values::computed::basic_shape::{BasicShape, ClipPath};
 use style::values::computed::position::Position;
 use style::values::generics::basic_shape::{GenericShapeRadius, ShapeBox, ShapeGeometryBox};
 use style::values::generics::position::GenericPositionOrAuto;
-use webrender_api::BorderRadius;
-use webrender_api::units::{LayoutRect, LayoutSideOffsets, LayoutSize};
+use paint_types::BorderRadius;
+use paint_types::units::{LayoutRect, LayoutSideOffsets, LayoutSize};
 
 use super::{BuilderForBoxFragment, compute_margin_box_radius, normalize_radii};
 
@@ -50,7 +50,7 @@ impl StackingContextTreeClipStore {
 
     pub(crate) fn add(
         &mut self,
-        radii: webrender_api::BorderRadius,
+        radii: BorderRadius,
         rect: LayoutRect,
         parent_scroll_node_id: ScrollTreeNodeId,
         parent_clip_id: ClipId,
@@ -149,7 +149,7 @@ impl StackingContextTreeClipStore {
                         corner.0.height.0.to_used_value(box_height).to_f32_px(),
                     )
                 };
-                let mut radii = webrender_api::BorderRadius {
+                let mut radii = BorderRadius {
                     top_left: corner(&rect.round.top_left),
                     top_right: corner(&rect.round.top_right),
                     bottom_left: corner(&rect.round.bottom_left),
@@ -198,7 +198,7 @@ impl StackingContextTreeClipStore {
                     GenericShapeRadius::Length(_) => horizontal,
                 };
                 let radius = LayoutSize::new(radius, radius);
-                let mut radii = webrender_api::BorderRadius {
+                let mut radii = BorderRadius {
                     top_left: radius,
                     top_right: radius,
                     bottom_left: radius,
@@ -237,7 +237,7 @@ impl StackingContextTreeClipStore {
                     layout_box.max.y,
                 );
 
-                let mut radii = webrender_api::BorderRadius {
+                let mut radii = BorderRadius {
                     top_left: LayoutSize::new(width, height),
                     top_right: LayoutSize::new(width, height),
                     bottom_left: LayoutSize::new(width, height),

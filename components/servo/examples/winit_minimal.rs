@@ -13,7 +13,7 @@ use servo::{
 };
 use tracing::warn;
 use url::Url;
-use webrender_api::units::{DevicePixel, DevicePoint};
+use paint_types::units::{DevicePixel, DevicePoint};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{MouseScrollDelta, WindowEvent};

@@ -79,6 +79,12 @@ impl Default for ExternalScrollId {
     }
 }
 
+impl ExternalScrollId {
+    pub fn is_root(&self) -> bool {
+        self.0 == 0
+    }
+}
+
 #[derive(
     Clone, Copy, Debug, Default, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize,
 )]

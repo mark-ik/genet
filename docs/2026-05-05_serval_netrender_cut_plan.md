@@ -1,14 +1,51 @@
-# serval — netrender cut plan (C1.5 — C4)
+# serval — cut plan (C1.5 — C7)
 
 Companion to the C1 commit (`651a83b62cd`, *cut GL/surfman corpus
 from rendering-context layer*). Captures the imposed shape this fork
-is moving toward, the four cuts left after C1, and the contract
-each cut ends at.
+is moving toward, the cuts left after C1, and the contract each
+cut ends at.
+
+C1.5–C4 are the **netrender cut** (renderer becomes netrender-driven,
+webrender gone). C5–C7 are the **script-optional cut** (browser
+becomes one composition under Pelt, not the engine identity). The
+two phases are sequential: C5 prereqs C2 because layout's
+`webrender_api::*` imports tangle with its `script::*` imports —
+unwinding both at once is harder than unwinding them in order.
 
 Pattern (per the netrender bring-up that succeeded): **rip the
 parallel codepath, fix what breaks, don't try to incrementally
 migrate**. Each cut is "delete the corpus, run cargo check,
 resolve the holes."
+
+---
+
+## Cut status snapshot (2026-05-06)
+
+- **C1** — ✅ landed pre-session. GL/surfman corpus removed.
+- **C1.5** — ✅ landed. WebGL deletion: 45 DOM files + 35 WebIDLs +
+  bindings + canvas surface; `gleam`/`glow`/`mozangle`/`surfman`
+  out of workspace; WebXR confirmed opt-in stub.
+- **C1.6** — ✅ landed pre-session. Pelt shell root + engine-profile
+  seam.
+- **C2** — 🟡 mostly landed. `paint_types` extraction complete;
+  `components/paint/` impl deleted (final cut). Layout
+  webrender_api migration: 6 of 13 files done (mechanical type-
+  only); 7 remaining are DisplayListBuilder-coupled and roll into
+  C3 layout reshape.
+- **C3** — 🟡 paint scaffold landed. `NetrenderPainter` stub
+  compiling; layout reshape is next focused slice (see
+  [2026-05-06_c3_layout_reshape_plan.md](./2026-05-06_c3_layout_reshape_plan.md)).
+- **C4** — ⏸ not started. Compositor adapter; depends on C3 layout
+  reshape.
+- **C5** — ⏸ not started. Cut script dep from layout.
+- **C6** — ✅ code complete. `ScriptingProfile` + NoOp factories;
+  cargo check blocked upstream by C3 paint state, now unblocked
+  post-scaffold.
+- **C7** — ⏸ not started. Cut script dep from servo facade.
+
+Validation baseline (2026-05-06): `cargo check -p pelt` clean (4-6s);
+`cargo check -p servo-paint` clean (1m 23s); `cargo check -p servo`
+reaches `servo-layout` (124 errors, the C3 layout-reshape target).
 
 ---
 
@@ -155,6 +192,53 @@ window instead of proving it only with offscreen readback.
 
 **Done condition for the next cut:** `pelt --engine viewer <static-url>`
 presents visible static document pixels through the netrender/wgpu path.
+
+### C1.6 operating map
+
+**Where we are:** Pelt is a script-free shell lane, not a browser
+compatibility wrapper. It has a real workspace root, a real winit window
+smoke, a wgpu-only chrome crate boundary, and a NetRender offscreen
+paint/readback receipt. This is enough to validate shell/platform/render
+work without touching `components/servo`, `components/script`, or
+SpiderMonkey.
+
+**Where we are headed:** the next proof is visible pixels in the Pelt
+window. The viewer profile should create a wgpu surface for the winit
+window, render a simple NetRender scene into the swapchain target, and
+then grow from a hardcoded scene into static URL/resource loading. Browser
+support comes later as an engine adapter decision, not as the root shell
+identity.
+
+**Fruitful sidequests:**
+
+- Add a small Pelt validation command/script that runs `cargo check -p
+  pelt`, the NetRender smoke, and a `cargo tree -p pelt` denylist for
+  `servo-script`, `mozjs`, `glow`, `surfman`, `webrender`, and
+  `egui_glow`.
+- Sweep stale `ServoShell` naming in product metadata, docs, and comments
+  once the Pelt crates are committed.
+- Make `ShellEngineCapabilities` drive chrome decisions, even while the
+  viewer profile reports most capabilities as false.
+- Keep `pelt-ui-egui` contract-shaped until presentation is real; chrome
+  polish should not outrun the render path.
+- Add a presented-frame screenshot/readback receipt once NetRender draws
+  into the viewer window.
+
+**Pitfalls:**
+
+- Do not rebuild the old browser under the Pelt name. Early imports of
+  `servo::WebView`, `ServoBuilder`, concrete browser delegates, or
+  `script_traits` collapse the seam.
+- Do not treat offscreen readback as presentation. It proves NetRender can
+  paint, not that Pelt can present.
+- Do not let default `wgpu` features sneak GLES/GL helper crates back into
+  the Pelt lane.
+- Do not make `browser` the default profile again. Browser is a future
+  adapter, not the active shell root.
+- Do not make SpiderMonkey setup part of ordinary Pelt validation. It is
+  only for deliberate old-browser-graph checks.
+- Do not forget that the new Pelt crates must be tracked in git; untracked
+  shell crates make every validation result easy to lose.
 
 ---
 
@@ -313,6 +397,17 @@ each slice ends at "compiles."
 
 ## C3 — Build new netrender-driven painter
 
+**Status (2026-05-06):** C3 paint-side scaffold landed —
+`components/paint/` is a compile-clean `NetrenderPainter` stub
+([components/paint/netrender_painter.rs](../components/paint/netrender_painter.rs))
+with the public API surface servo.rs consumes. 11 WebRender-wrapper
+impl files (~5605 LOC) deleted; new scaffold ~145 LOC. Method bodies
+are no-ops or `unimplemented!()` for action paths. Layout-side
+reshape is the next cut — see
+[2026-05-06_c3_layout_reshape_plan.md](./2026-05-06_c3_layout_reshape_plan.md)
+for the focused plan covering the 5 broken layout files (124 errors)
+and the real `NetrenderPainter` translator implementation.
+
 **Why:** C2 deleted `components/paint/` (the webrender wrapper).
 Something has to do paint's job: receive display lists from script
 threads, lower them to `netrender::Scene`, drive
@@ -470,13 +565,196 @@ texture) is enough — platform-specific impls are post-cut work.
 
 ---
 
-## What stays untouched across C1.5–C4
+## C5 — Cut `script` dep from `components/layout`
+
+**Why:** layout still depends on `script` for DOM types via
+`use script::*` imports (17 import sites in `components/layout/`
+today). Until that dep is gone, no script-free composition can
+lay out HTML/CSS — even with paint-types extracted (C2) and the
+netrender painter shipped (C3/C4), `cargo build -p layout` pulls
+SpiderMonkey through script's transitive deps. C5 is the
+load-bearing cut for the script-optional phase.
+
+**Prereq:** C2 must land first. With `webrender_api::*` still
+threaded through layout-DOM glue, the holes from removing the
+script dep are confused with paint-type holes. Unwind paint-types
+first, then script.
+
+**Cuts:**
+
+- `script = { workspace = true }` and `script_traits = { workspace = true }`
+  from `components/layout/Cargo.toml` (lines 48–49).
+- Every `use script::*` and `use script_traits::*` import in
+  `components/layout/`. Each import resolves to either:
+  - **(a)** a trait or data type already in `components/shared/layout/`
+    (`LayoutDom`, `LayoutNode`, `LayoutElement`, etc.) — replace the
+    import.
+  - **(b)** surface that's still concrete in `script` — widen
+    `components/shared/layout/` to expose it through a trait, then
+    replace the import.
+
+**Done condition:** `grep -rn "^use script\(_traits\)\?::"
+components/layout/` returns zero. `cargo check -p layout` succeeds
+without `script`, `script_bindings`, or `mozjs_sys` in the build
+graph.
+
+**Scope:** ~17 import-site fixes plus 1–3 trait-widening edits in
+`shared/layout/`. Multi-day focused work; can be sliced by importing
+module so each slice ends at "compiles."
+
+**Deferred decisions:**
+
+- **Whether `LayoutDom` covers every DOM access path layout needs**
+  — likely no; the script-bound impl exposes more than the trait
+  surface. Widen on demand at C5 time.
+- **Snapshot-style vs handle-style trait** — `shared/layout` is
+  handle-style today (LayoutNode borrows from script's DOM). A
+  snapshot-style intermediate (`Vec<DomItem>`, IPC-shaped) is a
+  possible future cut, not C5 work.
+- **`components/layout/script_layout_glue.rs`-shaped modules** (if
+  any survive) — fold into `shared/layout` or delete.
+
+---
+
+## C6 — Route `ScriptThread::create` through profile-typed factory
+
+**Why:** the constellation pipeline spawn surface is already generic
+([components/constellation/pipeline.rs:75](../components/constellation/pipeline.rs#L75) —
+`fn spawn<STF: ScriptThreadFactory, SWF: ServiceWorkerManagerFactory>`),
+but the concrete picker is hardcoded at
+[components/servo/servo.rs:1314](../components/servo/servo.rs#L1314)
+(`script::ScriptThread::create(...)`). C6 makes that picker
+profile-driven so `EngineProfile::Viewer` doesn't need a working
+`ScriptThread` to start a pipeline.
+
+**Cuts:**
+
+- The concrete `script::ScriptThread::create` call site in
+  `components/servo/servo.rs`. Delete the import + concrete call.
+- Replace with profile-typed dispatch (illustrative-signature-only):
+
+```rust
+let stf: Box<dyn ScriptThreadFactory> = match profile {
+    EngineProfile::Browser  => Box::new(BrowserScriptFactory),
+    EngineProfile::Viewer   |
+    EngineProfile::Static   => Box::new(ViewerNoOpFactory),
+    EngineProfile::Headless => Box::new(HeadlessFactory),
+};
+constellation.spawn(stf, swf, ...);
+```
+
+- New `ViewerNoOpFactory` impl that produces a script-free pipeline
+  (no DOM mutation, no JS, no service workers).
+
+**The shape change:** the engine profile from `pelt-core` reaches
+the constellation spawn site, and which factory runs is a profile
+decision rather than a Cargo decision.
+
+**Done condition:** under `EngineProfile::Viewer`, the constellation
+spawns pipelines without instantiating `script::ScriptThread`.
+`cargo check -p servo` (browser composition) still succeeds with
+the same behavior as before.
+
+**Scope:** ~200–500 LOC (factory enum, viewer no-op impl, dispatch
+edits at the call site). Single-day cut. Can land in either order
+relative to C5, but C5 first is cleaner — otherwise the no-op
+factory has to spawn pipelines whose layout still pulls script.
+
+**Deferred decisions:**
+
+- **Where the factory enum lives** — `pelt-core` (engine-profile-
+  aware), `components/constellation` (locality of dispatch), or a
+  new `components/engine_factory/` crate. Pick at scaffold time.
+- **`ServiceWorkerManagerFactory` in viewer profile** — likely
+  no-op too; service workers require script. Decide alongside.
+- **Headless factory shape** — separate from viewer because
+  headless is automation-shaped (webdriver), not document-viewer-
+  shaped. Defer until headless profile is real.
+
+---
+
+## C7 — Cut `script` dep from `components/servo`
+
+**Why:** [components/servo/Cargo.toml:113](../components/servo/Cargo.toml#L113)
+makes `script = { workspace = true }` a hard dep on the all-up
+facade. Until that's removed or feature-gated, `cargo check -p servo`
+always builds SpiderMonkey, and `EngineProfile::Browser` is the only
+composition that compiles end-to-end. C7 is what makes "browser is
+one composition under Pelt, not the engine identity" real at the
+crate level.
+
+**Prereq:** C5 + C6. Without C5, the viewer composition has no
+working layout under it. Without C6, the spawn site still
+unconditionally instantiates `ScriptThread`.
+
+**Cuts:**
+
+- `script = { workspace = true }` and `script_traits = { workspace = true }`
+  from `components/servo/Cargo.toml` `[dependencies]`. Move to a
+  `script` feature, default-on for the browser composition.
+- Every `use script::*` and `use script_traits::*` import in
+  `components/servo/*.rs`. Holes appear in:
+  - `servo.rs` (engine entry — script_join_handle, init paths)
+  - `webview.rs` (script-coupled lifecycle methods)
+  - `javascript_evaluator.rs` (entirely script-coupled — gate the
+    whole file behind the `script` feature)
+  - delegate plumbing (`servo_delegate.rs`, `webview_delegate.rs`)
+
+**Two shape options:**
+
+- **(a) Cfg-gate inside the same crate.** `components/servo/` keeps
+  current name; script imports go behind `#[cfg(feature = "script")]`.
+  Default features keep the browser composition intact. Low file
+  movement; cfg accumulates.
+- **(b) Split into `components/servo` (script-free facade) +
+  `components/servo-browser` (the script-on composition).** Cleaner
+  separation; more file moves; matches the framing where browser
+  is one named composition.
+
+Recommend (a) for the cut, (b) as later cleanup if cfg
+accumulation gets ugly.
+
+**Done condition:** `cargo check -p servo --no-default-features`
+(or `--features viewer`) succeeds without `mozjs_sys` in the build
+graph. `cargo check -p servo` (default features = browser) still
+works exactly as before. `pelt --engine browser` builds; a future
+`pelt --engine viewer` that composes `servo` instead of running the
+static loop builds without SpiderMonkey.
+
+**Scope:** ~50 cfg-gate sites in `components/servo/*.rs`, plus
+surface-level Cargo work. Multi-day cut. Done last in the C5–C7
+sequence because it depends on C5+C6.
+
+**Deferred decisions:**
+
+- **Cfg-gate (a) vs split-crate (b)** — pick at scaffold time per
+  above.
+- **`javascript_evaluator.rs` fate in script-free composition** —
+  delete from compilation, or stub to return "JS not available"
+  errors. Stub is more compatible with embedder code that
+  unconditionally calls `evaluate_script`; delete is cleaner if
+  embedder code is profile-aware.
+- **`webview.rs` script-coupled methods** (script eval, devtools
+  attach, content-process bind) — feature-gate on the same `script`
+  feature, or split into `WebView` (handle, always available) and
+  `BrowserWebView` (script-coupled methods). Same cfg-vs-split call
+  as the crate-level decision.
+- **Whether `pelt --engine viewer` composes the `servo` crate
+  (script-free) at all, or stays on the current static viewer loop**
+  — not a C7 question; C7 just unblocks the option.
+
+---
+
+## What stays untouched across C1.5–C7
 
 - `components/script/` — content side. Tons of `webrender_api`
   imports today; these are C2 sed targets but the script logic
-  itself doesn't change.
-- `components/layout/` — display-list emission shape changes
-  (C2), but layout algorithms unchanged.
+  itself doesn't change. Untouched by C5–C7 (the script-optional
+  cut removes the dep on script from elsewhere; it doesn't reshape
+  script itself).
+- `components/layout/` — imports change (C2 paint-types, C5
+  shared/layout for DOM trait surface), but layout algorithms
+  unchanged.
 - `components/canvas/` 2D path — kept (only the WebGL canvas
   variants die in C1.5).
 - `components/webgpu/` — independent of C1.5/C2; might reference

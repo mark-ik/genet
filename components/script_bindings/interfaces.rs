@@ -101,10 +101,6 @@ pub trait TestBindingHelpers {
     fn condition_unsatisfied(cx: JSContext, global: HandleObject) -> bool;
 }
 
-pub trait WebGL2RenderingContextHelpers {
-    fn is_webgl2_enabled(cx: JSContext, global: HandleObject) -> bool;
-}
-
 pub trait WindowHelpers {
     fn create_named_properties_object(
         cx: JSContext,

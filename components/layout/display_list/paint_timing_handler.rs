@@ -7,7 +7,7 @@ use paint_api::largest_contentful_paint_candidate::{LCPCandidate, LCPCandidateID
 use servo_geometry::{FastLayoutTransform, au_rect_to_f32_rect, f32_rect_to_au_rect};
 use servo_url::ServoUrl;
 use style_traits::CSSPixel;
-use webrender_api::units::{LayoutRect, LayoutSize};
+use paint_types::units::{LayoutRect, LayoutSize};
 
 use crate::fragment_tree::Tag;
 use crate::query::transform_au_rectangle;

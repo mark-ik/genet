@@ -21,6 +21,7 @@ mod javascript_evaluator;
 mod network_manager;
 mod proxies;
 mod responders;
+mod scripting_profile;
 mod servo;
 mod servo_delegate;
 mod site_data_manager;
@@ -73,11 +74,12 @@ pub use servo_tracing;
 pub use servo_url::ServoUrl;
 pub use style::Zero;
 pub use style_traits::CSSPixel;
-pub use webrender_api::units::{
+pub use paint_types::units::{
     DeviceIntPoint, DeviceIntRect, DeviceIntSize, DevicePixel, DevicePoint, DeviceVector2D,
 };
 
 pub use crate::clipboard_delegate::{ClipboardDelegate, StringRequest};
+pub use crate::scripting_profile::ScriptingProfile;
 #[cfg(feature = "gamepad")]
 pub use crate::gamepad_delegate::{
     GamepadDelegate, GamepadHapticEffectRequest, GamepadHapticEffectRequestType,

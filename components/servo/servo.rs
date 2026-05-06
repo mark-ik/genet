@@ -77,6 +77,7 @@ use storage_traits::StorageThreads;
 use style::global_style_data::StyleThreadPool;
 
 use crate::clipboard_delegate::StringRequest;
+use crate::scripting_profile::{NoOpScriptThread, NoOpServiceWorkerManager, ScriptingProfile};
 #[cfg(feature = "gamepad")]
 use crate::gamepad_delegate::{GamepadHapticEffectRequest, GamepadHapticEffectRequestType};
 use crate::javascript_evaluator::JavaScriptEvaluator;
@@ -953,6 +954,7 @@ impl Servo {
             async_runtime,
             public_storage_threads.clone(),
             private_storage_threads.clone(),
+            builder.scripting_profile,
         );
 
         net::connector::prewarm_tls();
@@ -1154,6 +1156,7 @@ fn create_constellation(
     async_runtime: Box<dyn net_traits::AsyncRuntime>,
     public_storage_threads: StorageThreads,
     private_storage_threads: StorageThreads,
+    scripting_profile: ScriptingProfile,
 ) {
     // Global configuration options, parsed from the command line.
     let opts = opts::get();
@@ -1200,14 +1203,28 @@ fn create_constellation(
 
     let layout_factory = Arc::new(LayoutFactoryImpl());
 
-    Constellation::<script::ScriptThread, script::ServiceWorkerManager>::start(
-        embedder_to_constellation_receiver,
-        initial_state,
-        layout_factory,
-        opts.random_pipeline_closure_probability,
-        opts.random_pipeline_closure_seed,
-        opts.hard_fail,
-    );
+    match scripting_profile {
+        ScriptingProfile::Full => {
+            Constellation::<script::ScriptThread, script::ServiceWorkerManager>::start(
+                embedder_to_constellation_receiver,
+                initial_state,
+                layout_factory,
+                opts.random_pipeline_closure_probability,
+                opts.random_pipeline_closure_seed,
+                opts.hard_fail,
+            );
+        },
+        ScriptingProfile::None => {
+            Constellation::<NoOpScriptThread, NoOpServiceWorkerManager>::start(
+                embedder_to_constellation_receiver,
+                initial_state,
+                layout_factory,
+                opts.random_pipeline_closure_probability,
+                opts.random_pipeline_closure_seed,
+                opts.hard_fail,
+            );
+        },
+    }
 }
 
 // A logger that logs to two downstream loggers.
@@ -1388,6 +1405,7 @@ pub struct ServoBuilder {
     preferences: Option<Box<Preferences>>,
     event_loop_waker: Box<dyn EventLoopWaker>,
     protocol_registry: ProtocolRegistry,
+    scripting_profile: ScriptingProfile,
     #[cfg(feature = "webxr")]
     webxr_registry: Box<dyn webxr::WebXrRegistry>,
 }
@@ -1399,6 +1417,7 @@ impl Default for ServoBuilder {
             preferences: Default::default(),
             event_loop_waker: Box::new(DefaultEventLoopWaker),
             protocol_registry: Default::default(),
+            scripting_profile: ScriptingProfile::default(),
             #[cfg(feature = "webxr")]
             webxr_registry: Box::new(DefaultWebXrRegistry),
         }
@@ -1427,6 +1446,11 @@ impl ServoBuilder {
 
     pub fn protocol_registry(mut self, protocol_registry: ProtocolRegistry) -> Self {
         self.protocol_registry = protocol_registry;
+        self
+    }
+
+    pub fn scripting_profile(mut self, scripting_profile: ScriptingProfile) -> Self {
+        self.scripting_profile = scripting_profile;
         self
     }
 

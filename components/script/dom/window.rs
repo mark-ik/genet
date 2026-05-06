@@ -80,7 +80,6 @@ use servo_base::generic_channel::{self, GenericCallback, GenericSender};
 use servo_base::id::{BrowsingContextId, PipelineId, WebViewId};
 #[cfg(feature = "bluetooth")]
 use servo_bluetooth_traits::BluetoothRequest;
-use servo_canvas_traits::webgl::WebGLChan;
 use servo_config::pref;
 use servo_constellation_traits::{
     LoadData, LoadOrigin, ScreenshotReadinessResponse, ScriptToConstellationChan,
@@ -670,10 +669,6 @@ impl Window {
 
     pub(crate) fn css_error_reporter(&self) -> &CSSErrorReporter {
         &self.error_reporter
-    }
-
-    pub(crate) fn webgl_chan(&self) -> Option<WebGLChan> {
-        None
     }
 
     #[cfg(feature = "webxr")]

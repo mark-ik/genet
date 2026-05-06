@@ -15,7 +15,7 @@ use servo_base::print_tree::PrintTree;
 use servo_url::ServoUrl;
 use style::Zero;
 use style_traits::CSSPixel;
-use webrender_api::{FontInstanceKey, ImageKey};
+use paint_types::{FontInstanceKey, ImageKey};
 
 use super::{
     BaseFragment, BoxFragment, ContainingBlockManager, HoistedSharedFragment, PositioningFragment,

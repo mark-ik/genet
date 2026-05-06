@@ -25,7 +25,6 @@ js_jit = ["js/jit"]
 profilemozjs = ['js/profilemozjs']
 testbinding = ["script_bindings/testbinding"]
 tracing = ["dep:tracing", "script_bindings/tracing"]
-webgl_backtrace = ["servo-canvas-traits/webgl_backtrace"]
 webgpu = [
     "dep:webgpu_traits",
     "dep:wgpu-core",
@@ -173,6 +172,3 @@ x25519-dalek = { workspace = true }
 xml5ever = { workspace = true }
 xpath = { workspace = true }
 zeroize = { workspace = true }
-
-[target.'cfg(not(target_os = "ios"))'.dependencies]
-mozangle = { workspace = true }

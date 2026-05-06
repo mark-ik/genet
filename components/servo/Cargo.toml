@@ -62,10 +62,6 @@ tracing = [
 ]
 vello = ["servo-constellation/vello"]
 wgpu_backend = ["paint/wgpu_backend", "paint_api/wgpu_backend"]
-webgl_backtrace = [
-    "script/webgl_backtrace",
-    "servo-canvas-traits/webgl_backtrace",
-]
 webgpu = [
     "dep:webgpu",
     "script/webgpu",
@@ -82,6 +78,7 @@ webxr = [
 
 [dependencies]
 accesskit = { workspace = true }
+servo-background-hang-monitor-api = { workspace = true }
 bitflags = { workspace = true }
 cookie = { workspace = true }
 crossbeam-channel = { workspace = true }
@@ -101,7 +98,6 @@ layout = { workspace = true }
 layout_api = { workspace = true }
 log = { workspace = true }
 media = { workspace = true }
-mozangle = { workspace = true }
 net = { workspace = true }
 net_traits = { workspace = true }
 paint = { workspace = true }
@@ -136,8 +132,8 @@ tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true, optional = true }
 url = { workspace = true }
 webgpu = { workspace = true, optional = true }
+paint_types = { workspace = true }
 webrender = { workspace = true }
-webrender_api = { workspace = true }
 wgpu = { workspace = true }
 webxr-api = { workspace = true, optional = true }
 

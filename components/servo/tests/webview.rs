@@ -30,7 +30,7 @@ use servo::{
 use servo_config::prefs::Preferences;
 use servo_url::ServoUrl;
 use url::Url;
-use webrender_api::units::{DeviceIntSize, DevicePoint, DeviceVector2D};
+use paint_types::units::{DeviceIntSize, DevicePoint, DeviceVector2D};
 
 use crate::common::{
     ServoTest, WebViewDelegateImpl, click_at_point, evaluate_javascript,

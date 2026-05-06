@@ -28,7 +28,7 @@ use style::values::computed::{Content, Context, ToComputedValue};
 use style::values::generics::counters::{GenericContentItem, GenericContentItems};
 use url::Url;
 use web_atoms::local_name;
-use webrender_api::ImageKey;
+use paint_types::ImageKey;
 
 use crate::cell::ArcRefCell;
 use crate::context::{LayoutContext, LayoutImageCacheResult};

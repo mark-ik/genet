@@ -23,7 +23,7 @@ use servo_url::{ImmutableOrigin, ServoUrl};
 use style::context::SharedStyleContext;
 use style::dom::OpaqueNode;
 use style::values::computed::image::{Gradient, Image};
-use webrender_api::units::{DeviceIntSize, DeviceSize};
+use paint_types::units::{DeviceIntSize, DeviceSize};
 
 pub(crate) type CachedImageOrError = Result<CachedImage, ResolveImageError>;
 
