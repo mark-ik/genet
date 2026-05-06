@@ -19,12 +19,10 @@ use servo_base::id::{PainterId, PipelineId, WebViewId};
 use smallvec::SmallVec;
 use strum::IntoStaticStr;
 use style_traits::CSSPixel;
-use surfman::{Adapter, Connection};
 use webrender_api::{DocumentId, FontVariation};
 
 pub mod display_list;
 pub mod largest_contentful_paint_candidate;
-pub mod rendering_context;
 pub mod rendering_context_core;
 pub mod viewport_description;
 #[cfg(feature = "wgpu_backend")]
@@ -542,34 +540,6 @@ impl CrossProcessPaintApi {
             pipeline_id,
             source,
         ));
-    }
-}
-
-#[derive(Clone)]
-pub struct PainterSurfmanDetails {
-    pub connection: Connection,
-    pub adapter: Adapter,
-}
-
-#[derive(Clone, Default)]
-pub struct PainterSurfmanDetailsMap(Arc<Mutex<HashMap<PainterId, PainterSurfmanDetails>>>);
-
-impl PainterSurfmanDetailsMap {
-    pub fn get(&self, painter_id: PainterId) -> Option<PainterSurfmanDetails> {
-        let map = self.0.lock().expect("poisoned");
-        map.get(&painter_id).cloned()
-    }
-
-    pub fn insert(&self, painter_id: PainterId, details: PainterSurfmanDetails) {
-        let mut map = self.0.lock().expect("poisoned");
-        let existing = map.insert(painter_id, details);
-        assert!(existing.is_none())
-    }
-
-    pub fn remove(&self, painter_id: PainterId) {
-        let mut map = self.0.lock().expect("poisoned");
-        // Details may be absent for pure-wgpu painters that have no surfman connection.
-        map.remove(&painter_id);
     }
 }
 

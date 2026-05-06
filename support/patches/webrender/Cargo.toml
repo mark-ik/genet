@@ -8,12 +8,9 @@ publish = false
 capture = []
 replay = []
 dynamic_freetype = []
-<<<<<<< HEAD
 # Match the workspace.dependencies declaration's feature set so the
 # patched stub satisfies the requested feature list.
 wgpu_backend = []
-=======
->>>>>>> 03ad28fb721a2c090401483f4da74c0baf731249
 
 # Stub replacing the webrender/ directory removed in webrender-wgpu commit
 # c9481b04b (rename: webrender → netrender, 2026-04-30).

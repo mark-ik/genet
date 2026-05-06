@@ -14,7 +14,6 @@ name = "paint_api"
 path = "lib.rs"
 
 [features]
-no-wgl = ["surfman/sm-angle-default"]
 tracing = ["dep:tracing"]
 wgpu_backend = ["dep:wgpu", "dep:pollster", "dep:wgpu-native-texture-interop"]
 
@@ -24,8 +23,6 @@ crossbeam-channel = { workspace = true }
 dpi = { workspace = true }
 embedder_traits = { workspace = true }
 euclid = { workspace = true }
-gleam = { workspace = true }
-glow = { workspace = true }
 image = { workspace = true }
 ipc-channel = { workspace = true }
 log = { workspace = true }
@@ -45,7 +42,6 @@ smallvec = { workspace = true }
 strum = { workspace = true }
 stylo = { workspace = true }
 stylo_traits = { workspace = true }
-surfman = { workspace = true, features = ["sm-x11"] }
 tracing = { workspace = true, optional = true }
 webrender_api = { workspace = true }
 pollster = { version = "0.4", optional = true }

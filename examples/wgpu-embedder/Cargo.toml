@@ -20,9 +20,5 @@ log = { workspace = true }
 paint_api = { workspace = true, features = ["wgpu_backend"] }
 # Use same feature set as `cargo check -p servo` (default features) to reuse
 # cached build artifacts and avoid a full mozjs rebuild.
-<<<<<<< HEAD
 servo = { version = "0.2.0", path = "../../components/servo", features = ["wgpu_backend"] }
-=======
-servo = { version = "0.1.0", path = "../../components/servo", features = ["wgpu_backend"] }
->>>>>>> 03ad28fb721a2c090401483f4da74c0baf731249
 winit = { workspace = true }

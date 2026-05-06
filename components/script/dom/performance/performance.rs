@@ -88,8 +88,8 @@ impl PerformanceEntryList {
             .entries
             .iter()
             .filter(|e| {
-                name.as_ref().is_none_or(|name_| *e.name() == *name_)
-                    && entry_type
+                name.as_ref().is_none_or(|name_| *e.name() == *name_) &&
+                    entry_type
                         .as_ref()
                         .is_none_or(|type_| e.entry_type() == *type_)
             })
@@ -541,7 +541,6 @@ impl Performance {
                 // TODO: These aren't all fields because servo doesn't support some of them yet
                 if matches!(
                     &*name.str(),
-<<<<<<< HEAD
                     "navigationStart" |
                         "unloadEventStart" |
                         "unloadEventEnd" |
@@ -554,17 +553,6 @@ impl Performance {
                         "redirectStart" |
                         "redirectEnd" |
                         "secureConnectionStart"
-=======
-                    "navigationStart"
-                        | "unloadEventStart"
-                        | "unloadEventEnd"
-                        | "domInteractive"
-                        | "domContentLoadedEventStart"
-                        | "domContentLoadedEventEnd"
-                        | "domComplete"
-                        | "loadEventStart"
-                        | "loadEventEnd"
->>>>>>> 03ad28fb721a2c090401483f4da74c0baf731249
                 ) {
                     self.convert_a_name_to_a_timestamp(&name.str())
                 }
@@ -756,8 +744,8 @@ impl PerformanceMethods<crate::DomTypeHolder> for Performance {
                         // Step 2.3.2 Let duration be the value returned by running the convert a mark to a timestamp
                         // algorithm passing in duration.
                         let duration = self
-                            .convert_a_mark_to_a_timestamp(&StringOrDouble::Double(duration))?
-                            - self.time_origin;
+                            .convert_a_mark_to_a_timestamp(&StringOrDouble::Double(duration))? -
+                            self.time_origin;
 
                         // Step 2.3.3 Let end time be start plus duration.
                         start + duration
@@ -790,8 +778,8 @@ impl PerformanceMethods<crate::DomTypeHolder> for Performance {
                     // Step 3.2.1 Let duration be the value returned by running the convert a mark to a timestamp
                     // algorithm passing in duration.
                     let duration = self
-                        .convert_a_mark_to_a_timestamp(&StringOrDouble::Double(duration))?
-                        - self.time_origin;
+                        .convert_a_mark_to_a_timestamp(&StringOrDouble::Double(duration))? -
+                        self.time_origin;
 
                     // Step 3.2.2 Let end be the value returned by running the convert a mark to a timestamp algorithm
                     // passing in end.
