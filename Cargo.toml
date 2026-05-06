@@ -377,14 +377,17 @@ codegen-units = 1
 # tendril = { path = "../html5ever/tendril" }
 gpu-allocator = { path = "support/patches/gpu-allocator" }
 vello = { path = "support/patches/vello" }
-# For WebRender:
-webrender = { path = "../webrender-wgpu/webrender" }
+# For WebRender / netrender:
+# webrender/ was renamed to netrender/ in webrender-wgpu c9481b04b (2026-04-30).
+# The stub below restores workspace loadability; painter.rs wgpu_backend port
+# to create_netrender_instance is a separate lane.
+webrender = { path = "support/patches/webrender" }
 webrender_api = { path = "../webrender-wgpu/webrender_api" }
 wr_malloc_size_of = { path = "../webrender-wgpu/wr_malloc_size_of" }
 
 [patch."https://github.com/mark-ik/wgpu-gui-bridge"]
-servo-wgpu-interop-adapter = { path = "../wgpu-gui-bridge/servo-wgpu-interop-adapter" }
-wgpu-native-texture-interop = { path = "../wgpu-gui-bridge/wgpu-native-texture-interop" }
+servo-wgpu-interop-adapter = { path = "../wgpu-graft/servo-wgpu-interop-adapter" }
+wgpu-native-texture-interop = { path = "../wgpu-graft/wgpu-native-texture-interop" }
 #
 # Or for mozjs:
 #
