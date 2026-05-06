@@ -271,9 +271,9 @@ impl Element {
                 HTMLElementTypeId::HTMLFontElement,
             ))
         ) {
-            return only_attribute == &local_name!("color") ||
-                only_attribute == &local_name!("face") ||
-                only_attribute == &local_name!("size");
+            return only_attribute == &local_name!("color")
+                || only_attribute == &local_name!("face")
+                || only_attribute == &local_name!("size");
         }
 
         if only_attribute != &local_name!("style") {
@@ -336,10 +336,10 @@ impl Element {
                     return matches!(
                         text_decoration,
                         PropertyDeclaration::TextDecorationLine(
-                            TextDecorationLine::LINE_THROUGH |
-                                TextDecorationLine::UNDERLINE |
-                                TextDecorationLine::OVERLINE |
-                                TextDecorationLine::NONE
+                            TextDecorationLine::LINE_THROUGH
+                                | TextDecorationLine::UNDERLINE
+                                | TextDecorationLine::OVERLINE
+                                | TextDecorationLine::NONE
                         )
                     );
                 }

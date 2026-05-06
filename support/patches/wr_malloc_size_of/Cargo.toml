@@ -1,0 +1,12 @@
+[package]
+name = "wr_malloc_size_of"
+version = "0.2.2"
+edition = "2021"
+publish = false
+
+# Stub replacing the wr_malloc_size_of/ crate that lived in the
+# webrender-wgpu workspace (renamed to netrender, dropped
+# wr_malloc_size_of as a separate crate).
+#
+# Restores workspace loadability for servo-wgpu while consumers
+# get migrated.
