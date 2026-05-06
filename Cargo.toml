@@ -6,10 +6,13 @@ members = [
     "components/xpath",
     "examples/non-presenting-wgpu-embedder",
     "examples/wgpu-embedder",
-    "ports/servoshell",
+    "ports/pelt-core",
+    "ports/pelt-desktop",
+    "ports/pelt-ui-egui",
+    "ports/pelt",
     "tests/unit/*",
 ]
-default-members = ["ports/servoshell"]
+default-members = ["ports/pelt"]
 exclude = [".cargo", "support/crown"]
 
 [workspace.package]
@@ -147,6 +150,10 @@ p256 = { version = "0.13", features = ["ecdh"] }
 p384 = { version = "0.13", features = ["ecdh"] }
 p521 = { version = "0.13", features = ["ecdh"] }
 parking_lot = { version = "0.12", features = ["serde"] }
+pelt-core = { version = "=0.2.0", path = "ports/pelt-core" }
+pelt-desktop = { version = "=0.2.0", path = "ports/pelt-desktop" }
+pelt-ui-egui = { version = "=0.2.0", path = "ports/pelt-ui-egui" }
+netrender = { path = "../netrender/netrender" }
 peniko = "0.6"
 percent-encoding = "2.3"
 pkcs8 = { version = "0.10", features = ["rand_core"] }

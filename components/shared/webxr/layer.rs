@@ -86,6 +86,28 @@ impl<GL: GLTypes> LayerGrandManager<GL> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct EmptyLayerGrandManager;
+
+impl<GL: 'static + GLTypes> LayerGrandManager<GL> {
+    pub fn empty() -> Self {
+        Self::new(EmptyLayerGrandManager)
+    }
+}
+
+impl<GL: 'static + GLTypes> LayerGrandManagerAPI<GL> for EmptyLayerGrandManager {
+    fn create_layer_manager(
+        &self,
+        _factory: LayerManagerFactory<GL>,
+    ) -> Result<LayerManager, Error> {
+        Err(Error::NoMatchingDevice)
+    }
+
+    fn clone_layer_grand_manager(&self) -> LayerGrandManager<GL> {
+        LayerGrandManager::new(*self)
+    }
+}
+
 pub trait LayerManagerAPI<GL: GLTypes> {
     fn create_layer(
         &mut self,

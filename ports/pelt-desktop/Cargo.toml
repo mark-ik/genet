@@ -1,0 +1,28 @@
+[package]
+name = "pelt-desktop"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description.workspace = true
+
+[lib]
+name = "pelt_desktop"
+path = "lib.rs"
+bench = false
+
+[features]
+default = []
+netrender = ["dep:netrender", "dep:wgpu"]
+
+[dependencies]
+netrender = { workspace = true, optional = true }
+pelt-core = { workspace = true }
+wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"], optional = true }
+winit = { workspace = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)', 'cfg(llvm_pgo)'] }

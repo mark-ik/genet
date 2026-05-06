@@ -8,10 +8,6 @@ use std::num::{NonZeroU32, NonZeroU64};
 use std::ops::Deref;
 
 use euclid::default::{Rect, Size2D};
-use glow::{
-    self as gl, NativeBuffer, NativeFence, NativeFramebuffer, NativeProgram, NativeQuery,
-    NativeRenderbuffer, NativeSampler, NativeShader, NativeTexture, NativeVertexArray,
-};
 use malloc_size_of_derive::MallocSizeOf;
 use paint_types::ImageKey;
 use pixels::{PixelFormat, SnapshotAlphaMode};
@@ -29,6 +25,180 @@ use webxr_api::{
     ContextId as WebXRContextId, Error as WebXRError, LayerId as WebXRLayerId,
     LayerInit as WebXRLayerInit, SubImages as WebXRSubImages,
 };
+
+mod gl {
+    pub const ACTIVE_TEXTURE: u32 = 0x84E0;
+    pub const ALIASED_LINE_WIDTH_RANGE: u32 = 0x846E;
+    pub const ALIASED_POINT_SIZE_RANGE: u32 = 0x846D;
+    pub const ALPHA: u32 = 0x1906;
+    pub const ALPHA_BITS: u32 = 0x0D55;
+    pub const BLEND_COLOR: u32 = 0x8005;
+    pub const BLEND_DST_ALPHA: u32 = 0x80CA;
+    pub const BLEND_DST_RGB: u32 = 0x80C8;
+    pub const BLEND_EQUATION_ALPHA: u32 = 0x883D;
+    pub const BLEND_EQUATION_RGB: u32 = 0x8009;
+    pub const BLEND_SRC_ALPHA: u32 = 0x80CB;
+    pub const BLEND_SRC_RGB: u32 = 0x80C9;
+    pub const BLUE_BITS: u32 = 0x0D54;
+    pub const BYTE: u32 = 0x1400;
+    pub const COLOR_CLEAR_VALUE: u32 = 0x0C22;
+    pub const COLOR_WRITEMASK: u32 = 0x0C23;
+    pub const COMPRESSED_RGB_S3TC_DXT1_EXT: u32 = 0x83F0;
+    pub const COMPRESSED_RGBA_S3TC_DXT1_EXT: u32 = 0x83F1;
+    pub const COMPRESSED_RGBA_S3TC_DXT3_EXT: u32 = 0x83F2;
+    pub const COMPRESSED_RGBA_S3TC_DXT5_EXT: u32 = 0x83F3;
+    pub const CULL_FACE_MODE: u32 = 0x0B45;
+    pub const DEPTH24_STENCIL8: u32 = 0x88F0;
+    pub const DEPTH32F_STENCIL8: u32 = 0x8CAD;
+    pub const DEPTH_BITS: u32 = 0x0D56;
+    pub const DEPTH_CLEAR_VALUE: u32 = 0x0B73;
+    pub const DEPTH_COMPONENT: u32 = 0x1902;
+    pub const DEPTH_COMPONENT16: u32 = 0x81A5;
+    pub const DEPTH_COMPONENT24: u32 = 0x81A6;
+    pub const DEPTH_COMPONENT32F: u32 = 0x8CAC;
+    pub const DEPTH_FUNC: u32 = 0x0B74;
+    pub const DEPTH_RANGE: u32 = 0x0B70;
+    pub const DEPTH_STENCIL: u32 = 0x84F9;
+    pub const DEPTH_WRITEMASK: u32 = 0x0B72;
+    pub const FLOAT: u32 = 0x1406;
+    pub const FLOAT_32_UNSIGNED_INT_24_8_REV: u32 = 0x8DAD;
+    pub const FRAGMENT_SHADER_DERIVATIVE_HINT: u32 = 0x8B8B;
+    pub const FRONT_FACE: u32 = 0x0B46;
+    pub const GENERATE_MIPMAP_HINT: u32 = 0x8192;
+    pub const GREEN_BITS: u32 = 0x0D53;
+    pub const HALF_FLOAT_OES: u32 = 0x8D61;
+    pub const INT: u32 = 0x1404;
+    pub const LINE_WIDTH: u32 = 0x0B21;
+    pub const LUMINANCE: u32 = 0x1909;
+    pub const LUMINANCE_ALPHA: u32 = 0x190A;
+    pub const MAX_TEXTURE_MAX_ANISOTROPY_EXT: u32 = 0x84FF;
+    pub const MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS: u32 = 0x8C8A;
+    pub const MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS: u32 = 0x8C8B;
+    pub const MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS: u32 = 0x8C80;
+    pub const MAX_VIEWPORT_DIMS: u32 = 0x0D3A;
+    pub const PACK_ROW_LENGTH: u32 = 0x0D02;
+    pub const PACK_SKIP_PIXELS: u32 = 0x0D04;
+    pub const PACK_SKIP_ROWS: u32 = 0x0D03;
+    pub const POLYGON_OFFSET_FACTOR: u32 = 0x8038;
+    pub const POLYGON_OFFSET_UNITS: u32 = 0x2A00;
+    pub const R11F_G11F_B10F: u32 = 0x8C3A;
+    pub const R16F: u32 = 0x822D;
+    pub const R16I: u32 = 0x8233;
+    pub const R16UI: u32 = 0x8234;
+    pub const R32F: u32 = 0x822E;
+    pub const R32I: u32 = 0x8235;
+    pub const R32UI: u32 = 0x8236;
+    pub const R8: u32 = 0x8229;
+    pub const R8I: u32 = 0x8231;
+    pub const R8UI: u32 = 0x8232;
+    pub const R8_SNORM: u32 = 0x8F94;
+    pub const RASTERIZER_DISCARD: u32 = 0x8C89;
+    pub const RED: u32 = 0x1903;
+    pub const RED_BITS: u32 = 0x0D52;
+    pub const RED_INTEGER: u32 = 0x8D94;
+    pub const RG: u32 = 0x8227;
+    pub const RG16F: u32 = 0x822F;
+    pub const RG16I: u32 = 0x8239;
+    pub const RG16UI: u32 = 0x823A;
+    pub const RG32F: u32 = 0x8230;
+    pub const RG32I: u32 = 0x823B;
+    pub const RG32UI: u32 = 0x823C;
+    pub const RG8: u32 = 0x822B;
+    pub const RG8I: u32 = 0x8237;
+    pub const RG8UI: u32 = 0x8238;
+    pub const RG8_SNORM: u32 = 0x8F95;
+    pub const RGB: u32 = 0x1907;
+    pub const RGB10_A2: u32 = 0x8059;
+    pub const RGB10_A2UI: u32 = 0x906F;
+    pub const RGB16F: u32 = 0x881B;
+    pub const RGB16I: u32 = 0x8D89;
+    pub const RGB16UI: u32 = 0x8D77;
+    pub const RGB32F: u32 = 0x8815;
+    pub const RGB32I: u32 = 0x8D83;
+    pub const RGB32UI: u32 = 0x8D71;
+    pub const RGB565: u32 = 0x8D62;
+    pub const RGB5_A1: u32 = 0x8057;
+    pub const RGB8: u32 = 0x8051;
+    pub const RGB8I: u32 = 0x8D8F;
+    pub const RGB8UI: u32 = 0x8D7D;
+    pub const RGB8_SNORM: u32 = 0x8F96;
+    pub const RGB9_E5: u32 = 0x8C3D;
+    pub const RGBA: u32 = 0x1908;
+    pub const RGBA16F: u32 = 0x881A;
+    pub const RGBA16I: u32 = 0x8D88;
+    pub const RGBA16UI: u32 = 0x8D76;
+    pub const RGBA32F: u32 = 0x8814;
+    pub const RGBA32I: u32 = 0x8D82;
+    pub const RGBA32UI: u32 = 0x8D70;
+    pub const RGBA4: u32 = 0x8056;
+    pub const RGBA8: u32 = 0x8058;
+    pub const RGBA8I: u32 = 0x8D8E;
+    pub const RGBA8UI: u32 = 0x8D7C;
+    pub const RGBA8_SNORM: u32 = 0x8F97;
+    pub const RGBA_INTEGER: u32 = 0x8D99;
+    pub const RGB_INTEGER: u32 = 0x8D98;
+    pub const RG_INTEGER: u32 = 0x8228;
+    pub const SAMPLES: u32 = 0x80A9;
+    pub const SAMPLE_BUFFERS: u32 = 0x80A8;
+    pub const SAMPLE_COVERAGE_INVERT: u32 = 0x80AB;
+    pub const SAMPLE_COVERAGE_VALUE: u32 = 0x80AA;
+    pub const SCISSOR_BOX: u32 = 0x0C10;
+    pub const SHORT: u32 = 0x1402;
+    pub const SRGB8: u32 = 0x8C41;
+    pub const SRGB8_ALPHA8: u32 = 0x8C43;
+    pub const STENCIL_BACK_FAIL: u32 = 0x8801;
+    pub const STENCIL_BACK_FUNC: u32 = 0x8800;
+    pub const STENCIL_BACK_PASS_DEPTH_FAIL: u32 = 0x8802;
+    pub const STENCIL_BACK_PASS_DEPTH_PASS: u32 = 0x8803;
+    pub const STENCIL_BACK_REF: u32 = 0x8CA3;
+    pub const STENCIL_BACK_VALUE_MASK: u32 = 0x8CA4;
+    pub const STENCIL_BACK_WRITEMASK: u32 = 0x8CA5;
+    pub const STENCIL_BITS: u32 = 0x0D57;
+    pub const STENCIL_CLEAR_VALUE: u32 = 0x0B91;
+    pub const STENCIL_FAIL: u32 = 0x0B94;
+    pub const STENCIL_FUNC: u32 = 0x0B92;
+    pub const STENCIL_PASS_DEPTH_FAIL: u32 = 0x0B95;
+    pub const STENCIL_PASS_DEPTH_PASS: u32 = 0x0B96;
+    pub const STENCIL_REF: u32 = 0x0B97;
+    pub const STENCIL_VALUE_MASK: u32 = 0x0B93;
+    pub const STENCIL_WRITEMASK: u32 = 0x0B98;
+    pub const SUBPIXEL_BITS: u32 = 0x0D50;
+    pub const TEXTURE_BASE_LEVEL: u32 = 0x813C;
+    pub const TEXTURE_COMPARE_FUNC: u32 = 0x884D;
+    pub const TEXTURE_COMPARE_MODE: u32 = 0x884C;
+    pub const TEXTURE_IMMUTABLE_FORMAT: u32 = 0x912F;
+    pub const TEXTURE_IMMUTABLE_LEVELS: u32 = 0x82DF;
+    pub const TEXTURE_MAG_FILTER: u32 = 0x2800;
+    pub const TEXTURE_MAX_ANISOTROPY_EXT: u32 = 0x84FE;
+    pub const TEXTURE_MAX_LEVEL: u32 = 0x813D;
+    pub const TEXTURE_MAX_LOD: u32 = 0x813B;
+    pub const TEXTURE_MIN_FILTER: u32 = 0x2801;
+    pub const TEXTURE_MIN_LOD: u32 = 0x813A;
+    pub const TEXTURE_WRAP_R: u32 = 0x8072;
+    pub const TEXTURE_WRAP_S: u32 = 0x2802;
+    pub const TEXTURE_WRAP_T: u32 = 0x2803;
+    pub const TRANSFORM_FEEDBACK_ACTIVE: u32 = 0x8E24;
+    pub const TRANSFORM_FEEDBACK_BINDING: u32 = 0x8E25;
+    pub const TRANSFORM_FEEDBACK_BUFFER_SIZE: u32 = 0x8C85;
+    pub const TRANSFORM_FEEDBACK_BUFFER_START: u32 = 0x8C84;
+    pub const TRANSFORM_FEEDBACK_PAUSED: u32 = 0x8E23;
+    pub const UNPACK_IMAGE_HEIGHT: u32 = 0x806E;
+    pub const UNPACK_ROW_LENGTH: u32 = 0x0CF2;
+    pub const UNPACK_SKIP_IMAGES: u32 = 0x806D;
+    pub const UNPACK_SKIP_PIXELS: u32 = 0x0CF4;
+    pub const UNPACK_SKIP_ROWS: u32 = 0x0CF3;
+    pub const UNSIGNED_BYTE: u32 = 0x1401;
+    pub const UNSIGNED_INT: u32 = 0x1405;
+    pub const UNSIGNED_INT_10F_11F_11F_REV: u32 = 0x8C3B;
+    pub const UNSIGNED_INT_24_8: u32 = 0x84FA;
+    pub const UNSIGNED_INT_2_10_10_10_REV: u32 = 0x8368;
+    pub const UNSIGNED_INT_5_9_9_9_REV: u32 = 0x8C3E;
+    pub const UNSIGNED_SHORT: u32 = 0x1403;
+    pub const UNSIGNED_SHORT_4_4_4_4: u32 = 0x8033;
+    pub const UNSIGNED_SHORT_5_5_5_1: u32 = 0x8034;
+    pub const UNSIGNED_SHORT_5_6_5: u32 = 0x8363;
+    pub const VIEWPORT: u32 = 0x0BA2;
+}
 
 pub const TEXTURE_2D: u32 = 0x0DE1;
 pub const FIXED: u32 = 0x140C;
@@ -639,43 +809,18 @@ macro_rules! define_resource_id {
             }
         }
     };
-    ($name:ident, $type:tt, $glow:tt) => {
-        impl $name {
-            #[inline]
-            pub fn glow(self) -> $glow {
-                $glow(self.0)
-            }
-
-            #[inline]
-            pub fn from_glow(glow: $glow) -> Self {
-                Self(glow.0)
-            }
-        }
-        define_resource_id!($name, $type);
-    };
 }
 
-define_resource_id!(WebGLBufferId, u32, NativeBuffer);
-define_resource_id!(WebGLFramebufferId, u32, NativeFramebuffer);
-define_resource_id!(WebGLRenderbufferId, u32, NativeRenderbuffer);
-define_resource_id!(WebGLTextureId, u32, NativeTexture);
-define_resource_id!(WebGLProgramId, u32, NativeProgram);
-define_resource_id!(WebGLQueryId, u32, NativeQuery);
-define_resource_id!(WebGLSamplerId, u32, NativeSampler);
-define_resource_id!(WebGLShaderId, u32, NativeShader);
+define_resource_id!(WebGLBufferId, u32);
+define_resource_id!(WebGLFramebufferId, u32);
+define_resource_id!(WebGLRenderbufferId, u32);
+define_resource_id!(WebGLTextureId, u32);
+define_resource_id!(WebGLProgramId, u32);
+define_resource_id!(WebGLQueryId, u32);
+define_resource_id!(WebGLSamplerId, u32);
+define_resource_id!(WebGLShaderId, u32);
 define_resource_id!(WebGLSyncId, u64);
-impl WebGLSyncId {
-    #[inline]
-    pub fn glow(&self) -> NativeFence {
-        NativeFence(self.0.get() as _)
-    }
-
-    #[inline]
-    pub fn from_glow(glow: NativeFence) -> Self {
-        Self::maybe_new(glow.0 as _).expect("Glow should have valid fence")
-    }
-}
-define_resource_id!(WebGLVertexArrayId, u32, NativeVertexArray);
+define_resource_id!(WebGLVertexArrayId, u32);
 define_resource_id!(WebXRLayerManagerId, u32);
 
 #[derive(
@@ -968,7 +1113,6 @@ macro_rules! gl_enums {
     }
 }
 
-// TODO(sagudev): These should come from glow
 mod gl_ext_constants {
     pub const COMPRESSED_RGB_ETC1_WEBGL: u32 = 0x8D64;
 

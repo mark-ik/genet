@@ -1,0 +1,26 @@
+[package]
+name = "pelt-ui-egui"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description.workspace = true
+
+[lib]
+name = "pelt_ui_egui"
+path = "lib.rs"
+bench = false
+
+[features]
+default = []
+wgpu-renderer = ["dep:egui-wgpu"]
+
+[dependencies]
+egui-wgpu = { version = "0.34.2", default-features = false, optional = true }
+pelt-core = { workspace = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)', 'cfg(llvm_pgo)'] }

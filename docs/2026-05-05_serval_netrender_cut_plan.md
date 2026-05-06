@@ -14,7 +14,7 @@ resolve the holes."
 
 ## The imposed shape
 
-```
+```text
 serval display-list lowering
         ↓ emits
     netrender::Scene (SceneOp painter order)
@@ -46,6 +46,115 @@ depends on C3 (the painter is what calls the Compositor). C1.5 can
 slot in at any natural break.
 
 **Recommended order:** C2 → C3 → C4 → (C1.5 anywhere).
+
+---
+
+## Windows validation note
+
+For narrow migration slices, prefer crate checks that do not reach
+`components/servo` / `components/script` when possible. Examples:
+`cargo check -p servo-paint-api`, `cargo check -p servo-canvas-traits`,
+`cargo check -p servo-webxr`, and similar leaf or shared crates. These
+avoid the SpiderMonkey native build path and keep iteration cheap.
+
+The old ServoShell browser launcher was different: `components/servo`
+depends on `servo-script`, and `servo-script` depends on the `js` /
+`mozjs_sys` stack. That route is no longer the active shell validation
+root for Serval/Pelt work.
+
+Pelt validation should stay on the script-free path:
+
+```bat
+cd /d C:\Users\mark_\Code\repos\serval
+cargo check -p pelt
+cargo run -p pelt -- --engine viewer --netrender-smoke about:blank
+```
+
+Only use the native SpiderMonkey setup when deliberately testing the old
+browser-engine crate graph. The least-painful Windows path observed for
+that route is:
+
+```bat
+"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\LaunchDevCmd.bat" -arch=x64
+cd /d C:\Users\mark_\Code\repos\serval
+set LINKER=link.exe
+set HOST_LINKER=link.exe
+cargo clean -p mozjs_sys
+cargo check -p servo
+```
+
+Notes:
+
+- Do not start with a full `cargo clean`; the workspace target directory
+  can be very large. Use `cargo clean -p mozjs_sys` only after changing
+  the native build environment.
+- Servo's Windows bootstrap expects repo-local MozTools at
+  `target/dependencies/moztools/4.0`. `mach bootstrap` should populate
+  that path; a direct Cargo workflow can also use the Servo build-deps
+  `moztools-4.0.zip` package in that layout.
+- Visual Studio must include the C++ build tools, Windows SDK, and ATL
+  component. Running from the Build Tools developer prompt avoids
+  `mozjs_sys` accidentally selecting a Visual Studio instance without
+  ATL headers.
+- If a slice needs the old browser crate graph, treat that as a
+  deliberate engine test, not as Pelt validation.
+
+---
+
+## C1.6 — Pelt shell root and engine-profile seam
+
+**Why:** the shell root is **Pelt**, not ServoShell. Pelt is the place
+for windows, input, tabs, dialogs, prefs, webdriver command routing,
+protocol UI, and platform integration. The old all-up Servo browser
+launcher is not retained as the active compatibility target; keeping it
+would preserve the exact GL/JS/browser coupling this cut is meant to
+break.
+
+**Current landed scaffold:**
+
+- `ports/pelt-core/` defines `EngineProfile`, `ShellEngine`,
+  capability reporting, and deferred `viewer` / `static` / `headless`
+  profiles.
+- `ports/pelt-desktop/` is the destination crate for winit/platform
+  windows, input translation, native dialogs, filesystem integration,
+  and platform event-loop glue. It now owns the script-free static
+  viewer loop and creates a real winit window.
+- `ports/pelt-ui-egui/` is the destination crate for chrome/tabs/
+  location/dev UI. Its renderer backend is wgpu-only; there is no
+  `egui_glow`, `chrome-glow`, or GL compatibility lane.
+- `ports/pelt/` is the active package, library, and binary. The
+  workspace default member is `ports/pelt`, and the old `ports/servoshell`
+  path has been removed from the active workspace.
+- The `pelt` default feature set is `viewer-netrender` +
+  `chrome-wgpu`. It does not depend on the all-up `servo` facade,
+  `servo-script`, `mozjs_sys`, `egui_glow`, or GL window chrome.
+- The Pelt/NetRender lane disables default `wgpu` backend features and
+  enables native `dx12` / `metal` / `vulkan` / `wgsl` explicitly. This
+  keeps `glow`, GLES, EGL, and WGL helper crates out of the active Pelt
+  Cargo tree.
+- `pelt --engine browser` is rejected. Browser becomes a future engine
+  adapter decision, not a preserved launcher root.
+- `cargo check -p pelt` compiles the script-free entrypoint without
+  building `servo-script` or `mozjs_sys`.
+- `cargo run -p pelt -- --engine viewer --netrender-smoke about:blank`
+  boots NetRender through the script-free Pelt desktop lane,
+  renders a 64x64 `netrender::Scene` through `Renderer::render_vello`,
+  reads pixels back, and then runs the same first-redraw window loop.
+  Current receipt: `painted_pixels=4096`, `created_window=true`,
+  `redraws=1`.
+
+**What this does not solve yet:** Pelt still only proves NetRender with
+offscreen readback plus a separate winit redraw. It does not present the
+NetRender output into the viewer window yet, and it does not provide a
+browser engine adapter.
+
+**Next cut:** move the remaining browser-owned window/webview state into
+the Pelt crates, register shell protocols in the viewer profile, load
+static resources, and present the NetRender output in the actual viewer
+window instead of proving it only with offscreen readback.
+
+**Done condition for the next cut:** `pelt --engine viewer <static-url>`
+presents visible static document pixels through the netrender/wgpu path.
 
 ---
 
@@ -102,6 +211,7 @@ prove the stubs can't satisfy real consumers).
 **The shape change:**
 
 webrender_api's role in current servo-wgpu is two-fold:
+
 1. **Type definitions** consumed by script/dom/layout for
    display-list construction (`ImageKey`, `ColorF`, `BorderRadius`,
    `units::DeviceIntSize`, `MixBlendMode`, `FontKey`,

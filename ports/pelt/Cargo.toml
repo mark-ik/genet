@@ -1,0 +1,37 @@
+[package]
+name = "pelt"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description.workspace = true
+
+[lib]
+name = "pelt"
+path = "lib.rs"
+bench = false
+
+[[bin]]
+name = "pelt"
+path = "main.rs"
+bench = false
+
+[lints.rust]
+# These are not official flags but still used for testing and pgo.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)', 'cfg(llvm_pgo)'] }
+
+[features]
+default = ["viewer-netrender", "chrome-wgpu"]
+viewer-engine = ["dep:pelt-desktop"]
+viewer-netrender = ["viewer-engine", "pelt-desktop/netrender"]
+chrome-wgpu = ["dep:pelt-ui-egui", "pelt-ui-egui/wgpu-renderer"]
+
+[dependencies]
+cfg-if = { workspace = true }
+pelt-core = { workspace = true }
+pelt-desktop = { workspace = true, optional = true }
+pelt-ui-egui = { workspace = true, optional = true }
+windows-sys = { workspace = true, features = ["Win32_Graphics_Gdi", "Win32_System_Console"] }
