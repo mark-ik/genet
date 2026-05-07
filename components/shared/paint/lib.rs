@@ -23,6 +23,7 @@ use style_traits::CSSPixel;
 pub mod display_list;
 pub mod largest_contentful_paint_candidate;
 pub mod rendering_context_core;
+pub mod serval_display_list;
 pub mod viewport_description;
 #[cfg(feature = "wgpu_backend")]
 #[doc(hidden)]
@@ -33,21 +34,20 @@ pub mod wgpu_rendering_context;
 use std::sync::Arc;
 
 use bitflags::bitflags;
-use display_list::PaintDisplayListInfo;
 use embedder_traits::ScreenGeometry;
 use euclid::default::Size2D as UntypedSize2D;
 pub use paint_types::ExternalImageSource;
 use paint_types::units::{DevicePixel, LayoutVector2D, TexelRect};
 use paint_types::{
-    BuiltDisplayList, BuiltDisplayListDescriptor, ExternalImage, ExternalImageData,
-    ExternalImageHandler, ExternalImageId, ExternalScrollId, FontInstanceFlags, FontInstanceKey,
-    FontKey, ImageData, ImageDescriptor, ImageKey, NativeFontHandle,
-    PipelineId as WebRenderPipelineId,
+    ExternalImage, ExternalImageData, ExternalImageHandler, ExternalImageId, ExternalScrollId,
+    FontInstanceFlags, FontInstanceKey, FontKey, ImageData, ImageDescriptor, ImageKey,
+    NativeFontHandle, PipelineId as WebRenderPipelineId,
 };
+use serval_display_list::ServalDisplayList;
 use profile_traits::mem::{OpaqueSender, ReportsChan};
 use serde::{Deserialize, Serialize};
 use servo_base::generic_channel::{
-    self, GenericCallback, GenericReceiver, GenericSender, GenericSharedMemory,
+    self, GenericCallback, GenericSender, GenericSharedMemory,
 };
 
 use crate::largest_contentful_paint_candidate::LCPCandidate;
@@ -105,8 +105,6 @@ pub enum PaintMessage {
     /// they have fully shut it down, to avoid recreating it due to any subsequent
     /// messages.
     PipelineExited(WebViewId, PipelineId, PipelineExitSource),
-    /// Inform WebRender of the existence of this pipeline.
-    SendInitialTransaction(WebViewId, WebRenderPipelineId),
     /// Scroll the given node ([`ExternalScrollId`]) by the provided delta. This
     /// will only adjust the node's scroll position and will *not* do panning in
     /// the pinch zoom viewport.
@@ -129,16 +127,15 @@ pub enum PaintMessage {
         /// The new [`Epoch`] value.
         epoch: Epoch,
     },
-    /// Inform WebRender of a new display list for the given pipeline.
+    /// Inform the painter of a new display list for the given pipeline.
+    /// Post-C3, the payload is the netrender-shaped
+    /// [`serval_display_list::ServalDisplayList`] which the painter
+    /// translates into `netrender::SceneOp`s.
     SendDisplayList {
         /// The [`WebViewId`] that this display list belongs to.
         webview_id: WebViewId,
-        /// A descriptor of this display list used to construct this display list from raw data.
-        display_list_descriptor: BuiltDisplayListDescriptor,
-        /// A [`GenericReceiver`] used to send the [`PaintDisplayListInfo`].
-        display_list_info_receiver: GenericReceiver<PaintDisplayListInfo>,
-        /// A [`GenericReceiver`] used to send the serialized  version of `DisplayListPayload.
-        display_list_data_receiver: GenericReceiver<SerializableDisplayListPayload>,
+        /// The display list itself.
+        display_list: ServalDisplayList,
     },
     /// Ask the renderer to generate a frame for the current set of display lists
     /// from the given `PainterId`s that have been sent to the renderer.
@@ -214,18 +211,6 @@ pub struct CompositionPipeline {
     pub webview_id: WebViewId,
 }
 
-/// A serializable version of `DisplayListPayload`.
-#[derive(Serialize, Deserialize)]
-pub struct SerializableDisplayListPayload {
-    /// Serde encoded bytes of the display list' `DisplayItems` and their supporting data.
-    #[serde(with = "serde_bytes")]
-    pub items_data: Vec<u8>,
-
-    /// Serde encoded `SpatialTreeItem` structs.
-    #[serde(with = "serde_bytes")]
-    pub spatial_tree: Vec<u8>,
-}
-
 /// A mechanism to send messages from ScriptThread to the parent process' WebRender instance.
 #[derive(Clone, Deserialize, MallocSizeOf, Serialize)]
 pub struct CrossProcessPaintApi(GenericCallback<PaintMessage>);
@@ -256,16 +241,6 @@ impl CrossProcessPaintApi {
         })
         .unwrap();
         Self(callback)
-    }
-
-    /// Inform WebRender of the existence of this pipeline.
-    pub fn send_initial_transaction(&self, webview_id: WebViewId, pipeline: WebRenderPipelineId) {
-        if let Err(e) = self
-            .0
-            .send(PaintMessage::SendInitialTransaction(webview_id, pipeline))
-        {
-            warn!("Error sending initial transaction: {}", e);
-        }
     }
 
     /// Scroll the given node ([`ExternalScrollId`]) by the provided delta. This
@@ -332,41 +307,18 @@ impl CrossProcessPaintApi {
         }
     }
 
-    /// Inform WebRender of a new display list for the given pipeline.
-    /// We send the `PaintDisplayListInfo` and `DisplayListPayload` separately to not overwhelm
-    /// the ipc_channel (see <https://github.com/servo/servo/pull/36484>)
+    /// Inform the painter of a new display list for the given pipeline.
+    /// Post-C3, the payload is the netrender-shaped
+    /// [`serval_display_list::ServalDisplayList`]; serde handles
+    /// serialization end-to-end so no out-of-band channels are
+    /// needed.
     #[servo_tracing::instrument(skip_all)]
-    pub fn send_display_list(
-        &self,
-        webview_id: WebViewId,
-        display_list_info: &PaintDisplayListInfo,
-        list: BuiltDisplayList,
-    ) {
-        let (display_list_data, display_list_descriptor) = list.into_data();
-        let (display_list_data_sender, display_list_data_receiver) =
-            generic_channel::channel().unwrap();
-        let (display_list_info_sender, display_list_info_receiver) =
-            generic_channel::channel().unwrap();
+    pub fn send_display_list(&self, webview_id: WebViewId, display_list: ServalDisplayList) {
         if let Err(e) = self.0.send(PaintMessage::SendDisplayList {
             webview_id,
-            display_list_descriptor,
-            display_list_info_receiver,
-            display_list_data_receiver,
+            display_list,
         }) {
             warn!("Error sending display list: {}", e);
-        }
-
-        if let Err(error) = display_list_info_sender.send(display_list_info.clone()) {
-            warn!("Error sending display list info: {error}. Not sending the rest");
-            return;
-        }
-        let display_list_data = SerializableDisplayListPayload {
-            items_data: display_list_data.items_data,
-            spatial_tree: display_list_data.spatial_tree,
-        };
-
-        if let Err(error) = display_list_data_sender.send(display_list_data) {
-            warn!("Error sending display list: {error}");
         }
     }
 

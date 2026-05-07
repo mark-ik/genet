@@ -4,8 +4,11 @@ use serde::{Deserialize, Serialize};
 use crate::color::ColorF;
 use crate::units::{LayoutSideOffsets, LayoutSize};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize,
+)]
 pub enum BorderStyle {
+    #[default]
     None,
     Solid,
     Double,
