@@ -29,7 +29,7 @@ use image::RgbaImage;
 use log::warn;
 use netrender::Scene;
 use paint_api::display_list::PaintDisplayListInfo;
-use paint_api::rendering_context_core::{RenderingContextCore, WgpuCapability};
+use paint_api::rendering_context_core::RenderingContextCore;
 use paint_api::{PaintMessage, PaintProxy, WebRenderExternalImageIdManager, WebViewTrait};
 use paint_types::PipelineId;
 use paint_types::units::{DevicePixel, DevicePoint};
@@ -157,6 +157,62 @@ impl Paint {
 
     pub fn receiver(&self) -> &RoutedReceiver<PaintMessage> {
         &self.paint_receiver
+    }
+
+    /// Test-only constructor — wires up minimal stub `PaintProxy` /
+    /// `RoutedReceiver` / `ShutdownState` so integration tests can
+    /// drive `handle_messages` + `render` + `composite_texture`
+    /// without standing up the full `InitialPaintState` (which needs
+    /// time + memory profiler chans, constellation senders, a real
+    /// `EventLoopWaker`, etc.).
+    ///
+    /// Production embedders construct via [`Paint::new`] with the
+    /// real `InitialPaintState`. This shortcut exists for the
+    /// 5.5b "Paint::render driven by a test" done-condition probe
+    /// and isn't intended for production use.
+    pub fn new_for_test() -> Rc<RefCell<Self>> {
+        use embedder_traits::EventLoopWaker;
+
+        struct NoopWaker;
+        impl EventLoopWaker for NoopWaker {
+            fn clone_box(&self) -> Box<dyn EventLoopWaker> {
+                Box::new(NoopWaker)
+            }
+            fn wake(&self) {}
+        }
+
+        // RoutedReceiver<T> is a type alias for
+        // crossbeam_channel::Receiver<Result<T, ipc_channel::IpcError>>,
+        // so the unbounded() Sender / Receiver pair already matches
+        // the PaintProxy + Paint shape — no wrapping needed.
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let cross_process_paint_api = paint_api::CrossProcessPaintApi::dummy();
+        let paint_proxy = PaintProxy {
+            sender,
+            cross_process_paint_api,
+            event_loop_waker: Box::new(NoopWaker),
+        };
+        let paint_receiver: RoutedReceiver<PaintMessage> = receiver;
+        let shutdown_state = Rc::new(Cell::new(embedder_traits::ShutdownState::NotShuttingDown));
+
+        Rc::new(RefCell::new(Self {
+            paint_proxy,
+            paint_receiver,
+            shutdown_state,
+            webrender_external_image_id_manager: WebRenderExternalImageIdManager::default(),
+            pipelines: RefCell::new(FxHashMap::default()),
+            dirty_webviews: RefCell::new(Vec::new()),
+            webviews: RefCell::new(FxHashMap::default()),
+            rendering_contexts: RefCell::new(FxHashMap::default()),
+            next_painter_id: Cell::new(0),
+            renderers: RefCell::new(FxHashMap::default()),
+            webview_to_pipeline: RefCell::new(FxHashMap::default()),
+            compositor: RefCell::new(Box::new(WgpuMasterCaptureBackend::new())),
+            #[cfg(feature = "webgpu")]
+            wgpu_image_map: Default::default(),
+            #[cfg(feature = "webxr")]
+            webxr_registry: None,
+        }))
     }
 
     /// Drain a batch of `PaintMessage`s. C3 Step 7 routes
@@ -373,7 +429,7 @@ impl Paint {
     /// Drive a render for the given webview. Looks up the latest
     /// translated `Scene` for the webview's pipeline, hands it to
     /// `netrender::Renderer::render_with_compositor`, and lets the
-    /// `StubCompositor` stash the master texture for
+    /// `WgpuMasterCaptureBackend` stash the master texture for
     /// [`Paint::composite_texture`].
     ///
     /// No-op if any of: the webview has no pipeline yet (no
@@ -381,7 +437,7 @@ impl Paint {
     /// rendering context, or the rendering context didn't expose a
     /// `WgpuCapability` at registration time (so no Renderer was
     /// built). The C4 milestone leaves per-platform OS handoff to a
-    /// follow-up; the StubCompositor satisfies the trait shape and
+    /// follow-up; the WgpuMasterCaptureBackend satisfies the trait shape and
     /// makes the master texture readable end-to-end.
     pub fn render(&self, webview_id: WebViewId) {
         let painter_id = PainterId::from(webview_id);
@@ -444,6 +500,19 @@ impl Paint {
     /// whatever the new compositor reports via `last_master`.
     pub fn install_compositor(&self, boxed_compositor: Box<dyn PaintCompositor>) {
         *self.compositor.borrow_mut() = boxed_compositor;
+    }
+
+    /// Install a pre-built `netrender::Renderer` under `painter_id`,
+    /// bypassing the [`Self::register_rendering_context`] flow that
+    /// constructs one from a `RenderingContext`'s `WgpuCapability`.
+    ///
+    /// Intended for **integration tests** that drive `Paint::render`
+    /// without a real rendering context — the test boots wgpu via
+    /// `netrender::boot()` (or builds the handles itself), constructs
+    /// the Renderer directly, and installs it under a known
+    /// `PainterId`. Production embedders use `register_rendering_context`.
+    pub fn install_renderer(&self, painter_id: PainterId, renderer: netrender::Renderer) {
+        self.renderers.borrow_mut().insert(painter_id, renderer);
     }
 
     /// Set the embedder-side hidpi scale for a webview.
