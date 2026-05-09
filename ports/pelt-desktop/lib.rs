@@ -557,7 +557,12 @@ struct MacosCALayerPresentApp {
 #[cfg(all(feature = "macos-present", target_vendor = "apple"))]
 struct MacosPresentState {
     renderer: netrender::Renderer,
-    compositor: paint::ServoCompositor<paint::MacosCALayerBackend>,
+    /// `Box<dyn paint::PaintCompositor>` rather than the concrete
+    /// `ServoCompositor<MacosCALayerBackend>` because we construct
+    /// it via `default_compositor_for_window`, which returns the
+    /// erased shape so the same factory call works on every
+    /// platform.
+    compositor: Box<dyn paint::PaintCompositor>,
 }
 
 /// Build a Metal-forced [`netrender::WgpuHandles`].
@@ -639,45 +644,18 @@ impl winit::application::ApplicationHandler for MacosCALayerPresentApp {
         };
         self.window_id = Some(window.id());
 
-        // 2. NSView from raw-window-handle's AppKit variant
-        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        let handle = match window.window_handle() {
+        // 2. Display + window handles for the factory.
+        use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+        let display_handle = match window.display_handle() {
+            Ok(h) => h.as_raw(),
+            Err(err) => return self.fail(event_loop, format!("display_handle: {err}")),
+        };
+        let window_handle = match window.window_handle() {
             Ok(h) => h.as_raw(),
             Err(err) => return self.fail(event_loop, format!("window_handle: {err}")),
         };
-        let RawWindowHandle::AppKit(appkit) = handle else {
-            return self.fail(
-                event_loop,
-                format!("expected AppKit RawWindowHandle, got {handle:?}"),
-            );
-        };
 
-        // 3. setWantsLayer + extract the NSView's backing CALayer.
-        // winit's NSView is layer-backed by default on Big Sur+, but
-        // setWantsLayer makes the contract explicit.
-        use objc2::rc::Retained;
-        use objc2_app_kit::NSView;
-        let ns_view: Retained<NSView> = match unsafe {
-            Retained::retain(appkit.ns_view.as_ptr() as *mut NSView)
-        } {
-            Some(v) => v,
-            None => return self.fail(event_loop, "failed to retain NSView".into()),
-        };
-        ns_view.setWantsLayer(true);
-        let layer = match ns_view.layer() {
-            Some(l) => l,
-            None => {
-                return self.fail(
-                    event_loop,
-                    "NSView.layer returned nil after setWantsLayer; \
-                     view is not layer-backed"
-                        .into(),
-                );
-            },
-        };
-        let layer_ptr = Retained::as_ptr(&layer) as *mut std::ffi::c_void;
-
-        // 4. wgpu instance/adapter/device/queue, forced to Metal.
+        // 3. wgpu instance/adapter/device/queue, forced to Metal.
         let handles = match build_metal_handles() {
             Ok(h) => h,
             Err(err) => return self.fail(event_loop, format!("wgpu Metal boot: {err}")),
@@ -698,22 +676,23 @@ impl winit::application::ApplicationHandler for MacosCALayerPresentApp {
             },
         };
 
-        // 5-6. host context + MacosCALayerBackend
+        // 4. Host context + factory-built compositor. The factory
+        // owns the per-platform AppKit/UiKit -> CALayer extraction
+        // (see `paint::compositor_factory`); pelt-desktop just hands
+        // it the raw-window-handle pieces and gets back a
+        // `Box<dyn PaintCompositor>` already wrapping the right
+        // backend for the host OS.
         let host = paint::HostWgpuContext::new(device, queue);
-        // SAFETY: layer_ptr was obtained from a `Retained<CALayer>`
-        // we hold on the stack via `ns_view.layer()`. The backend
-        // retains its own reference internally, so the embedder's
-        // reference (the `Retained<CALayer>` `layer` we drop at
-        // function end) is independent of the backend's copy.
-        let backend = match unsafe { paint::MacosCALayerBackend::new(&host, layer_ptr) } {
-            Ok(b) => b,
+        let compositor = match paint::default_compositor_for_window(
+            host,
+            display_handle,
+            window_handle,
+        ) {
+            Ok(c) => c,
             Err(err) => {
-                return self.fail(event_loop, format!("MacosCALayerBackend::new: {err}"));
+                return self.fail(event_loop, format!("default_compositor_for_window: {err}"));
             },
         };
-
-        // 7. ServoCompositor over the backend
-        let compositor = paint::ServoCompositor::new(host, backend);
 
         self.state = Some(MacosPresentState {
             renderer,
@@ -722,10 +701,6 @@ impl winit::application::ApplicationHandler for MacosCALayerPresentApp {
 
         window.request_redraw();
         self.window = Some(window);
-        // Drop our local `layer` reference here — backend retained
-        // its own copy in `MacosCALayerBackend::new`.
-        drop(layer);
-        drop(ns_view);
     }
 
     fn window_event(
@@ -744,24 +719,53 @@ impl winit::application::ApplicationHandler for MacosCALayerPresentApp {
                 let Some(state) = self.state.as_mut() else {
                     return;
                 };
+                let Some(window) = self.window.as_ref() else {
+                    return;
+                };
+
+                // winit on macOS sometimes fires one more
+                // RedrawRequested after `event_loop.exit()` is
+                // called, before the loop actually unwinds. Without
+                // this guard, `frames_presented` ticks past
+                // `config.frames` and the outcome reports e.g.
+                // `frames=61` for a configured 60. Cheap to ignore.
+                if self.frames_presented >= self.config.frames {
+                    return;
+                }
 
                 // 8a. synthetic scene — single red rect filling the
                 // viewport so we can visually confirm the present.
-                let mut scene =
-                    netrender::Scene::new(self.config.width, self.config.height);
+                // Render at backing-pixel resolution: config.width/
+                // height are logical points; multiply by the
+                // window's scale_factor so the master matches the
+                // CAMetalLayer's drawableSize at full Retina
+                // density. Without this, the master is logical-
+                // resolution and the OS upscales it 2x on Retina,
+                // producing a blurry red.
+                let scale = window.scale_factor();
+                let backing_w = (self.config.width as f64 * scale).round() as u32;
+                let backing_h = (self.config.height as f64 * scale).round() as u32;
+                let mut scene = netrender::Scene::new(backing_w, backing_h);
                 scene.push_rect(
                     0.0,
                     0.0,
-                    self.config.width as f32,
-                    self.config.height as f32,
+                    backing_w as f32,
+                    backing_h as f32,
                     [1.0, 0.0, 0.0, 1.0],
                 );
 
-                // 8b. render through the CAMetalLayer
+                // 8b. render through the CAMetalLayer.
+                // `&mut *state.compositor` is `&mut dyn
+                // PaintCompositor`; rustc 1.86+ trait upcasting (via
+                // `PaintCompositor: Compositor`) lets it coerce to
+                // the `&mut dyn Compositor` `render_with_compositor`
+                // wants. Same pattern Paint::render uses internally
+                // (see `components/paint/netrender_painter.rs:468`).
+                let pc: &mut dyn paint::PaintCompositor = &mut *state.compositor;
                 state.renderer.render_with_compositor(
                     &scene,
                     wgpu::TextureFormat::Rgba8Unorm,
-                    &mut state.compositor,
+                    pc,
                     netrender::peniko::Color::new([0.0, 0.0, 0.0, 0.0]),
                 );
 

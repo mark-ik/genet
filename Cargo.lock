@@ -5522,10 +5522,6 @@ name = "pelt-desktop"
 version = "0.2.0"
 dependencies = [
  "netrender",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "objc2-quartz-core 0.3.2",
  "pelt-core",
  "pollster",
  "raw-window-handle",
@@ -7816,6 +7812,7 @@ dependencies = [
  "netrender",
  "netrender_device",
  "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
  "objc2-metal 0.3.2",

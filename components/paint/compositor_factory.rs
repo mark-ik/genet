@@ -82,22 +82,88 @@ pub fn default_compositor_for_window(
         return Ok(Box::new(compositor));
     }
 
-    #[cfg(target_vendor = "apple")]
+    // NSView and UIView are NOT CALayers — they *have* a backing
+    // CALayer accessible via the `layer` property. The previous
+    // version of this code cast the view pointer to CALayer*
+    // directly, which type-puns NSView as CALayer (different
+    // Objective-C classes) and would crash the moment
+    // `MacosCALayerBackend::new` called CALayer methods on it.
+    //
+    // The branches below extract the actual CALayer per platform:
+    //   - macOS: AppKit. `setWantsLayer:YES` makes the contract
+    //     explicit even though winit defaults layer-backed views
+    //     since Big Sur.
+    //   - iOS / tvOS / visionOS: UIKit. UIViews are always
+    //     layer-backed; `[ui_view layer]` returns directly.
+    //
+    // The local `Retained<CALayer>` is dropped at the end of this
+    // function — `MacosCALayerBackend::new` retains its own copy
+    // internally, so the embedder reference (from the raw window
+    // handle) is independent of the backend's.
+    #[cfg(target_os = "macos")]
     {
-        let layer_ptr: *mut std::ffi::c_void = match window {
-            RawWindowHandle::AppKit(view) => view.ns_view.as_ptr() as *mut _,
-            RawWindowHandle::UiKit(view) => view.ui_view.as_ptr() as *mut _,
-            other => {
-                return Err(format!(
-                    "default_compositor_for_window (apple): expected AppKit / \
-                     UiKit RawWindowHandle, got {other:?}"
-                )
-                .into());
-            },
+        use objc2::rc::Retained;
+        use objc2_app_kit::NSView;
+        let RawWindowHandle::AppKit(appkit) = window else {
+            return Err(format!(
+                "default_compositor_for_window (macos): expected AppKit \
+                 RawWindowHandle, got {window:?}"
+            )
+            .into());
         };
-        // SAFETY: layer_ptr is non-null (raw-window-handle's NonNull
-        // pointers are non-null by construction); embedder owns the
-        // underlying NSView/UIView lifetime.
+        // SAFETY: raw-window-handle hands us a NonNull NSView
+        // pointer; the embedder owns the NSView lifetime.
+        let ns_view: Retained<NSView> = unsafe {
+            Retained::retain(appkit.ns_view.as_ptr() as *mut NSView)
+                .ok_or_else(|| -> BoxedFactoryError { "failed to retain NSView".into() })?
+        };
+        ns_view.setWantsLayer(true);
+        let layer = ns_view.layer().ok_or_else(|| -> BoxedFactoryError {
+            "NSView.layer returned nil after setWantsLayer; view is not layer-backed".into()
+        })?;
+        let layer_ptr = Retained::as_ptr(&layer) as *mut std::ffi::c_void;
+        // SAFETY: layer_ptr is the live `Retained<CALayer>` we just
+        // got from `ns_view.layer()`; backend retains its own
+        // reference. AppKit guarantees `[ns_view layer]` returns
+        // a CALayer (or subclass), so the cast is type-correct.
+        let backend = unsafe { crate::MacosCALayerBackend::new(&host, layer_ptr) }
+            .map_err(|e| Box::new(e) as BoxedFactoryError)?;
+        let compositor = crate::ServoCompositor::new(host, backend);
+        // `layer` and `ns_view` drop here; backend holds its own
+        // CALayer reference.
+        drop(layer);
+        drop(ns_view);
+        return Ok(Box::new(compositor));
+    }
+
+    #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "visionos"))]
+    {
+        use objc2::msg_send;
+        use objc2::runtime::AnyObject;
+        let RawWindowHandle::UiKit(uikit) = window else {
+            return Err(format!(
+                "default_compositor_for_window (uikit): expected UiKit \
+                 RawWindowHandle, got {window:?}"
+            )
+            .into());
+        };
+        // UIView is always layer-backed; `[ui_view layer]` returns
+        // a `CALayer*`. We use raw `msg_send!` rather than adding
+        // an `objc2-ui-kit` dep just for the one method call.
+        // SAFETY: raw-window-handle hands us a NonNull UIView
+        // pointer; the embedder owns the UIView lifetime.
+        let layer_ptr: *mut std::ffi::c_void = unsafe {
+            let ui_view = uikit.ui_view.as_ptr() as *mut AnyObject;
+            let layer: *mut AnyObject = msg_send![ui_view, layer];
+            if layer.is_null() {
+                return Err("UIView.layer returned nil".into());
+            }
+            layer as *mut std::ffi::c_void
+        };
+        // SAFETY: layer_ptr is a `CALayer*` returned by UIKit. The
+        // UIView (held by the embedder) retains its layer, so the
+        // pointer remains valid as long as the embedder keeps the
+        // view alive — same lifetime contract as the macOS path.
         let backend = unsafe { crate::MacosCALayerBackend::new(&host, layer_ptr) }
             .map_err(|e| Box::new(e) as BoxedFactoryError)?;
         let compositor = crate::ServoCompositor::new(host, backend);

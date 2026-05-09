@@ -136,16 +136,25 @@ unsafe impl Send for MacosCALayerBackend {}
 
 impl MacosCALayerBackend {
     /// Construct a backend over the embedder-supplied root layer.
-    /// `root_layer` is a raw pointer to a `CALayer` (or `NSView` —
-    /// pass its `view.layer` if the embedder hands an NSView). The
-    /// pointer must outlive the backend; the caller is responsible
-    /// for retaining it on their side.
+    ///
+    /// `root_layer` must be a raw pointer to a **`CALayer`**, not an
+    /// `NSView` or `UIView`. Views are not CALayers — they have a
+    /// backing CALayer accessible via the `layer` property.
+    /// Embedders that hold an NSView/UIView should call its
+    /// `[view layer]` (after `setWantsLayer:YES` for AppKit, which
+    /// `[crate::compositor_factory::default_compositor_for_window]`
+    /// does for them) and pass the result here.
+    ///
+    /// The pointer must outlive the backend; the caller is
+    /// responsible for retaining the underlying CALayer on their
+    /// side. The backend retains its own reference internally, so
+    /// the caller's reference is independent of the backend's copy.
     ///
     /// # Safety
     ///
-    /// `root_layer` must point to a valid `CALayer` instance. The
-    /// returned backend retains the layer; the caller's reference is
-    /// not consumed.
+    /// `root_layer` must point to a valid `CALayer` (or subclass)
+    /// instance. The returned backend retains the layer; the
+    /// caller's reference is not consumed.
     pub unsafe fn new(
         host: &HostWgpuContext,
         root_layer: *mut std::ffi::c_void,
@@ -204,6 +213,14 @@ impl MacosCALayerBackend {
             layer.setAutoresizingMask(
                 CAAutoresizingMask::LayerWidthSizable | CAAutoresizingMask::LayerHeightSizable,
             );
+            // Inherit contentsScale from the parent so the
+            // CAMetalLayer presents at the screen's backing pixel
+            // density. AppKit sets the parent layer's contentsScale
+            // to the host display's `backingScaleFactor`
+            // automatically; programmatically-added sublayers
+            // default to 1.0 and would render at half-resolution on
+            // Retina without this inheritance.
+            layer.setContentsScale(parent_layer.contentsScale());
             layer
         };
         parent_layer.addSublayer(&metal_layer);

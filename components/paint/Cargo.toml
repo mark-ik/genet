@@ -62,3 +62,10 @@ objc2-core-foundation = { workspace = true }
 objc2-foundation = { workspace = true }
 objc2-quartz-core = { workspace = true }
 objc2-metal = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# AppKit-only — used by `compositor_factory.rs` to extract the
+# NSView's `CALayer` from `RawWindowHandle::AppKit`. Not in the
+# `cfg(target_vendor = "apple")` block above because AppKit is a
+# Mac-only framework; iOS / iPadOS go through UIKit instead.
+objc2-app-kit = { workspace = true }
