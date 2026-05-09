@@ -402,7 +402,17 @@ impl<B: OsCompositorBackend> Compositor for ServoCompositor<B> {
                 None => continue, // unreachable in practice — we just inserted
             };
 
-            if layer.dirty {
+            // OR target-side reallocation into the content-side
+            // `dirty` signal per path-(b′) §4: netrender's `dirty`
+            // tracks *content* changes (tile_intersection, newly_
+            // declared, bounds_changed, absent_last_frame); the
+            // consumer is responsible for adding *target-side*
+            // signals, of which "the destination texture was just
+            // (re)allocated and is uninitialized" is the canonical
+            // one. Without this OR-in, a `declare` failure on
+            // frame N followed by success on a clean (non-dirty)
+            // frame N+1 presents an uninitialized destination.
+            if layer.dirty || needs_alloc {
                 encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: frame.master,
