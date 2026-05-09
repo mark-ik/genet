@@ -262,19 +262,114 @@ impl<B: OsCompositorBackend> Compositor for ServoCompositor<B> {
     fn present_frame(&mut self, frame: PresentedFrame<'_>) {
         // Step 1 — present the master through the OS compositor.
         // Backends that don't override `present_master` get a no-op
-        // and the StubCompositor-shaped behavior persists for them.
+        // (the WgpuMasterCaptureBackend default-impl behavior).
         self.backend.present_master(frame.master);
 
-        // Step 2 — per-`SurfaceKey` blit + present. C4 milestone: not
-        // wired yet. The flow when it lands:
-        //  1. for each layer in frame.layers: lookup or allocate a
-        //     destination texture in `self.destinations`, sized to the
-        //     layer's source_rect.
-        //  2. encode `copy_texture_to_texture(frame.master[rect] →
-        //     destination)` via `frame.handles.queue`.
-        //  3. for each backend-recognised platform handle, hand the
-        //     native texture to the OS via
-        //     `self.backend.present(key, transform, clip, opacity)`.
-        let _ = (&self.host, &frame.layers);
+        // Step 2 — per-`SurfaceKey` blit + present. For each
+        // `LayerPresent`:
+        //  1. ensure `self.destinations[key]` is sized to the layer's
+        //     `source_rect_in_master` (allocate or reallocate as
+        //     needed; backend.declare on (re)alloc, backend.destroy
+        //     before reallocation so any per-key OS resources get
+        //     reclaimed).
+        //  2. if `dirty`, encode `copy_texture_to_texture(master[rect]
+        //     → destination)` on a wgpu encoder built off
+        //     `frame.handles.device`.
+        //  3. hand the destination's native handle to the OS
+        //     compositor via `backend.present(key, transform, clip,
+        //     opacity)`.
+        // Submit the (single) encoder once after all layers are
+        // recorded.
+        if frame.layers.is_empty() {
+            return;
+        }
+
+        let mut encoder =
+            frame
+                .handles
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("ServoCompositor::present_frame layer blits"),
+                });
+        let mut recorded_any = false;
+
+        for layer in frame.layers {
+            let [x0, y0, x1, y1] = layer.source_rect_in_master;
+            let w = x1.saturating_sub(x0);
+            let h = y1.saturating_sub(y0);
+            if w == 0 || h == 0 {
+                continue;
+            }
+
+            let needs_alloc = match self.destinations.get(&layer.key) {
+                Some(t) => {
+                    let s = t.size();
+                    s.width != w || s.height != h
+                },
+                None => true,
+            };
+            if needs_alloc {
+                if self.destinations.contains_key(&layer.key) {
+                    self.backend.destroy(layer.key);
+                    self.destinations.remove(&layer.key);
+                }
+                let dest = frame.handles.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("ServoCompositor surface destination"),
+                    size: wgpu::Extent3d {
+                        width: w,
+                        height: h,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: frame.master.format(),
+                    usage: wgpu::TextureUsages::COPY_DST
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                });
+                self.backend.declare(layer.key, &self.host, &dest);
+                self.destinations.insert(layer.key, dest);
+            }
+
+            let dest = match self.destinations.get(&layer.key) {
+                Some(d) => d,
+                None => continue, // unreachable in practice — we just inserted
+            };
+
+            if layer.dirty {
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: frame.master,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d { x: x0, y: y0, z: 0 },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: dest,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: w,
+                        height: h,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                recorded_any = true;
+            }
+
+            self.backend
+                .present(layer.key, layer.world_transform, layer.clip, layer.opacity);
+        }
+
+        if recorded_any {
+            frame.handles.queue.submit([encoder.finish()]);
+        }
+        // Otherwise the encoder is dropped without a submit — fine,
+        // wgpu just discards the empty command buffer.
+
+        let _ = &self.host;
     }
 }
