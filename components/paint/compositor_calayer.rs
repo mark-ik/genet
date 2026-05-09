@@ -42,31 +42,38 @@
 //!
 //! ## Synchronization
 //!
-//! Cross-queue: netrender submits on wgpu's hidden `MTLCommandQueue`,
-//! and this backend allocates its own `MTLCommandQueue` for the
-//! per-frame blit. wgpu-hal 29 does **not** expose its Metal queue
-//! (only `Queue::queue_from_raw` is public; see
-//! `wgpu-hal-29.0.3/src/metal/mod.rs:459-481`), so a GPU-side
-//! `encodeWaitForEvent` between the two queues is not available.
-//! Today the consumer CPU-waits via [`wgpu::Device::poll`] in
-//! [`MacosCALayerBackend::present_master`]. The `MTLSharedEvent`
-//! field is reserved for a future GPU-side wait once `wgpu-hal`
-//! grows a queue accessor or we adopt a wgpu-side blit path that
-//! lives on netrender's queue.
+//! The master->drawable copy runs on wgpu's queue (the same queue
+//! netrender's vello submits to), so it gets natural FIFO ordering
+//! against vello's render submit — no fence dance, no
+//! `device.poll(Wait)` CPU stall, no own-`MTLCommandQueue`
+//! allocation. `[drawable present]` (the no-arg
+//! `MTLDrawable::present`) waits on the drawable's pending GPU
+//! writes per Apple's `MTLDrawable` docs, sidestepping the wgpu-
+//! hal `MTLCommandQueue` accessor that would otherwise be needed
+//! to put `presentDrawable:` on the same Metal command buffer as
+//! the blit.
 //!
 //! ## Status
 //!
-//! **Master path landed.** Construction (`new`) extracts the
-//! `MTLDevice` from the wgpu-hal Metal device, attaches a
-//! `CAMetalLayer` to the embedder root layer, and allocates the
-//! per-backend `MTLCommandQueue` + `MTLSharedEvent`. The per-frame
-//! body in `present_master` syncs `drawableSize` to the master,
-//! CPU-waits the wgpu submit, and blits the master into
-//! `nextDrawable().texture` via an `MTLBlitCommandEncoder`. The
-//! per-`SurfaceKey` `declare`/`destroy`/`present` paths (for
-//! declared compositor surfaces) are still stubs — they're not
-//! exercised by the current single-master smoke and land with the
-//! per-surface CALayer/IOSurface plumbing later.
+//! **Master path landed.** `new` extracts the `MTLDevice` from
+//! the wgpu-hal Metal device, attaches a `CAMetalLayer`
+//! (`BGRA8Unorm`, Apple-blessed) to the embedder root layer, and
+//! allocates a reusable `wgpu::util::TextureBlitter` for the
+//! per-frame `Rgba8Unorm` master -> `Bgra8Unorm` drawable format
+//! conversion. `present_master` syncs `drawableSize`, imports the
+//! drawable's `MTLTexture` into wgpu via `texture_from_raw` +
+//! `create_texture_from_hal::<Metal>`, runs the `TextureBlitter`
+//! copy on wgpu's queue, submits, and presents the drawable.
+//!
+//! **Per-`SurfaceKey` path landed.** `declare` allocates an
+//! `IOSurface` (`'RGBA'` FourCC for blit-format-match against the
+//! `Rgba8Unorm` master), wraps it as an `MTLTexture` via
+//! `MTLDevice::newTextureWithDescriptor:iosurface:plane:`, hands
+//! to wgpu via `create_texture_from_hal::<Metal>`, creates a
+//! per-surface `CALayer` with `contents = IOSurface`, and adds it
+//! as a sublayer. `present` applies `transform` / `clip` /
+//! `opacity` to the per-surface CALayer; `destroy` unparents the
+//! sublayer.
 
 #![allow(unsafe_code)]
 #![allow(dead_code)]
@@ -84,8 +91,7 @@ use objc2_io_surface::{
     kIOSurfaceWidth, IOSurfaceRef,
 };
 use objc2_metal::{
-    MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLDevice,
-    MTLPixelFormat, MTLSharedEvent, MTLStorageMode, MTLTexture, MTLTextureDescriptor,
+    MTLDevice, MTLDrawable, MTLPixelFormat, MTLStorageMode, MTLTexture, MTLTextureDescriptor,
     MTLTextureUsage,
 };
 use objc2_quartz_core::{CAAutoresizingMask, CALayer, CAMetalDrawable, CAMetalLayer};
@@ -109,29 +115,34 @@ use netrender_device::compositor::SurfaceKey;
 ///   (currently unused for the same-queue path; reserved for the
 ///   multi-queue future).
 pub struct MacosCALayerBackend {
-    /// Cloned wgpu device handle. Held so `present_master` can
-    /// `poll(PollType::Wait)` to flush netrender's submit before
-    /// our own `MTLCommandQueue` reads the master texture.
+    /// Cloned wgpu device handle. Used for:
+    ///   - allocating per-frame `CommandEncoder`s in `present_master`
+    ///   - the per-`SurfaceKey` `declare` path's
+    ///     `create_texture_from_hal` import of IOSurface-backed
+    ///     MTLTextures.
     /// `wgpu::Device` is `Arc`-shared internally so the clone is
     /// cheap.
     wgpu_device: wgpu::Device,
+    /// Cloned wgpu queue. The per-frame master->drawable copy
+    /// submits on this queue, getting natural FIFO ordering against
+    /// netrender's vello submit (which also runs on this queue).
+    /// No `device.poll(Wait)` CPU stall, no MTLSharedEvent, no own
+    /// MTLCommandQueue.
+    wgpu_queue: wgpu::Queue,
+    /// Reusable format-converting copy from `Rgba8Unorm` master to
+    /// `Bgra8Unorm` drawable. Vello hardcodes `Rgba8Unorm` as its
+    /// storage-binding format and explicitly recommends a
+    /// `TextureBlitter` to format-convert at the
+    /// surface/drawable boundary (vello/src/lib.rs:466-473);
+    /// CAMetalLayer documents `BGRA8Unorm` as a supported
+    /// `pixelFormat` value, `RGBA8Unorm` is not on the list.
+    /// Allocated once at backend construction and reused per frame.
+    master_to_drawable_blitter: wgpu::util::TextureBlitter,
     metal_device: Retained<ProtocolObject<dyn MTLDevice>>,
-    metal_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     metal_layer: Retained<CAMetalLayer>,
     /// Embedder-supplied root layer; we hold a reference so the
     /// `metal_layer` sublayer attachment outlives the backend.
     parent_layer: Retained<CALayer>,
-    /// `MTLSharedEvent` producer/consumer fence. Reserved for the
-    /// future GPU-side wait (`encodeWaitForEvent:value:`) once
-    /// `wgpu-hal::metal::Queue` exposes its `MTLCommandQueue` so the
-    /// netrender producer can `encodeSignalEvent` on the shared
-    /// queue. Today the cross-queue sync is CPU-side via
-    /// `wgpu::Device::poll` in `present_master`.
-    shared_event: Retained<ProtocolObject<dyn MTLSharedEvent>>,
-    /// Monotonically-increasing event value the producer signals at
-    /// after netrender's submit completes. Currently unused;
-    /// reserved for the GPU-side wait path noted on `shared_event`.
-    next_event_value: std::cell::Cell<u64>,
     surfaces: FxHashMap<SurfaceKey, CALayerSurface>,
 }
 
@@ -217,31 +228,20 @@ impl MacosCALayerBackend {
         };
 
         // Configure CAMetalLayer for the wgpu Metal device.
+        // `BGRA8Unorm` is on Apple's documented
+        // `CAMetalLayer.pixelFormat` allow-list (alongside
+        // `BGRA8Unorm_sRGB` / `RGBA16Float` / etc.). Vello's
+        // master is `Rgba8Unorm` (its compute pipeline's
+        // storage-binding format is hardcoded — see
+        // `vello/src/lib.rs:474`), so we use a
+        // `wgpu::util::TextureBlitter` per-frame in
+        // `present_master` to format-convert master → drawable.
+        // Vello's own docs explicitly recommend `TextureBlitter`
+        // for this conversion at the surface boundary.
         //
-        // **Pixel-format note (accepted contract violation).**
-        // Apple's documented `CAMetalLayer.pixelFormat` allow-list
-        // is `BGRA8Unorm` / `BGRA8Unorm_sRGB` / `RGBA16Float` /
-        // `RGB10A2Unorm` / `BGR10A2Unorm` (+ iOS XR variants);
-        // `RGBA8Unorm` is *not* on the list. We use it anyway
-        // because vello 0.8's compute pipeline hardcodes
-        // `Rgba8Unorm` as the storage-texture-binding format, and
-        // `MTLBlitCommandEncoder copyFromTexture:toTexture:`
-        // requires identical src/dst formats — going BGRA on the
-        // drawable would mandate a format-converting render pass
-        // (~80-150 LOC of swizzle-shader plumbing). macOS 11+
-        // permits RGBA8Unorm CAMetalLayer in practice (verified by
-        // smoke); pre-11 macOS would reject it. The right long-
-        // term fix is either:
-        //   1. vello growing first-class `Bgra8Unorm` storage
-        //      target support (upstream task);
-        //   2. inserting a swizzle render-pass between master and
-        //      drawable here.
-        // Until then, this is a known contract violation gated to
-        // macOS 11+ tooling targets.
-        //
-        // `framebufferOnly: false` is required because we blit into
-        // the drawable's texture rather than rendering through a
-        // `MTLRenderPassDescriptor`.
+        // `framebufferOnly: false` is required because the
+        // TextureBlitter renders into the drawable's texture (it
+        // uses a render pass), not just present-only access.
         //
         // Frame + autoresizing: a freshly-allocated CALayer has
         // `frame == {0,0,0,0}`, which would make the sublayer
@@ -252,7 +252,7 @@ impl MacosCALayerBackend {
         let metal_layer: Retained<CAMetalLayer> = {
             let layer = CAMetalLayer::new();
             layer.setDevice(Some(&*metal_device));
-            layer.setPixelFormat(MTLPixelFormat::RGBA8Unorm);
+            layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
             layer.setFramebufferOnly(false);
             layer.setFrame(parent_layer.bounds());
             layer.setAutoresizingMask(
@@ -270,22 +270,18 @@ impl MacosCALayerBackend {
         };
         parent_layer.addSublayer(&metal_layer);
 
-        let metal_queue: Retained<ProtocolObject<dyn MTLCommandQueue>> = metal_device
-            .newCommandQueue()
-            .ok_or(BackendError::QueueAlloc)?;
-
-        let shared_event: Retained<ProtocolObject<dyn MTLSharedEvent>> = metal_device
-            .newSharedEvent()
-            .ok_or(BackendError::SharedEventAlloc)?;
+        // Allocate the master->drawable format-converting copy
+        // once. Reused per frame in `present_master`.
+        let master_to_drawable_blitter =
+            wgpu::util::TextureBlitter::new(&host.device, wgpu::TextureFormat::Bgra8Unorm);
 
         Ok(Self {
             wgpu_device: host.device.clone(),
+            wgpu_queue: host.queue.clone(),
+            master_to_drawable_blitter,
             metal_device,
-            metal_queue,
             metal_layer,
             parent_layer,
-            shared_event,
-            next_event_value: std::cell::Cell::new(0),
             surfaces: FxHashMap::default(),
         })
     }
@@ -295,24 +291,25 @@ impl MacosCALayerBackend {
     /// Per-frame flow:
     /// 1. Sync `metal_layer.drawableSize` to the master dims so the
     ///    OS doesn't resample.
-    /// 2. CPU-wait for netrender's submit via `wgpu::Device::poll`
-    ///    (wgpu-hal Metal does not expose its `MTLCommandQueue`, so
-    ///    a GPU-side `encodeWaitForEvent` is not available; the
-    ///    `shared_event` field is reserved for that future path).
-    /// 3. Acquire `nextDrawable`.
-    /// 4. Pull the master's `MTLTexture` via `wgpu::Texture::as_hal`.
-    /// 5. Encode `copyFromTexture:toTexture:` on a fresh
-    ///    `MTLBlitCommandEncoder`, present the drawable, commit.
+    /// 2. Acquire `nextDrawable` and pull its `MTLTexture`.
+    /// 3. Import the drawable's `MTLTexture` into wgpu via
+    ///    `wgpu::hal::metal::Device::texture_from_raw` +
+    ///    `Device::create_texture_from_hal::<Metal>`.
+    /// 4. Encode the master->drawable copy with
+    ///    `wgpu::util::TextureBlitter::copy` — handles the
+    ///    `Rgba8Unorm` master to `Bgra8Unorm` drawable format
+    ///    conversion via its built-in fragment-shader-based blit.
+    /// 5. Submit on wgpu's queue. Submit is FIFO-ordered against
+    ///    netrender's vello submit (same queue), so no fence /
+    ///    `device.poll(Wait)` stall is needed.
+    /// 6. Call `[drawable present]` (the no-arg `MTLDrawable::present`).
+    ///    Apple's docs guarantee the OS waits for the drawable's
+    ///    pending GPU writes (which the wgpu submit registered as
+    ///    pending) before displaying — sidesteps the wgpu-hal
+    ///    `MTLCommandQueue`-accessor block that would otherwise
+    ///    require us to put `presentDrawable:` on the same command
+    ///    buffer as the blit.
     pub fn present_master(&mut self, master: &Texture) -> Result<(), BackendError> {
-        // Reserve event value for the future GPU-side wait path.
-        // CPU sync is used today; the advance preserves the value
-        // protocol for consumers of `next_event_value`.
-        let _producer_value = {
-            let v = self.next_event_value.get();
-            self.next_event_value.set(v + 1);
-            v + 1
-        };
-
         let size = master.size();
         if size.width == 0 || size.height == 0 {
             return Ok(());
@@ -329,59 +326,87 @@ impl MacosCALayerBackend {
             self.metal_layer.setDrawableSize(target_size);
         }
 
-        // Block until netrender's submit is GPU-complete.
-        // `wgpu-hal::metal::Queue` does not expose its underlying
-        // `MTLCommandQueue` (only `queue_from_raw` is public — see
-        // `wgpu-hal-29.0.3/src/metal/mod.rs:459-481`), so a GPU-side
-        // `encodeWaitForEvent` between netrender's queue and ours is
-        // not available. CPU-wait is the simplest correct sync; the
-        // smoke runs at low cadence so the stall is invisible.
-        self.wgpu_device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| BackendError::Poll(format!("{e:?}")))?;
-
         // Acquire the next drawable. Blocks if the layer's pool is
         // exhausted (`maximumDrawableCount` defaults to 3).
         let drawable: Retained<ProtocolObject<dyn CAMetalDrawable>> = self
             .metal_layer
             .nextDrawable()
             .ok_or(BackendError::NoDrawable)?;
-        let drawable_texture: Retained<ProtocolObject<dyn MTLTexture>> = drawable.texture();
+        let drawable_mtl_texture: Retained<ProtocolObject<dyn MTLTexture>> = drawable.texture();
 
-        // Pull the master's `MTLTexture` via wgpu-hal Metal.
-        // `raw_handle()` returns a borrowed `&ProtocolObject` whose
-        // lifetime is tied to `master_hal`; we use it inline for the
-        // blit and explicitly drop the hal handle after.
-        let master_hal = unsafe {
-            master
-                .as_hal::<wgpu::wgc::api::Metal>()
-                .ok_or(BackendError::NoHalDevice)?
+        // Import the drawable's `MTLTexture` into wgpu so the
+        // `TextureBlitter` (which speaks wgpu) can render into it.
+        // `raw_handle` -> `texture_from_raw` -> `create_texture_from_hal`
+        // is the same import path the per-`SurfaceKey` IOSurface
+        // helper uses; here the underlying texture is the
+        // CAMetalLayer's per-frame drawable instead of an
+        // IOSurface-backed allocation.
+        //
+        // SAFETY: drawable_mtl_texture is a fresh, valid MTLTexture
+        // returned by `[CAMetalDrawable texture]`. It's retained by
+        // `drawable` for the duration of this function. The wgpu
+        // wrapper takes its own retain via `texture_from_raw`'s
+        // `Retained` argument (we clone the retained handle for it).
+        let drawable_wgpu = unsafe {
+            let hal_texture = wgpu::hal::metal::Device::texture_from_raw(
+                drawable_mtl_texture.clone(),
+                wgpu::TextureFormat::Bgra8Unorm,
+                objc2_metal::MTLTextureType::Type2D,
+                1,
+                1,
+                wgpu::hal::CopyExtent {
+                    width: size.width,
+                    height: size.height,
+                    depth: 1,
+                },
+            );
+            self.wgpu_device.create_texture_from_hal::<wgpu::wgc::api::Metal>(
+                hal_texture,
+                &wgpu::TextureDescriptor {
+                    label: Some("MacosCALayerBackend drawable view"),
+                    size: wgpu::Extent3d {
+                        width: size.width,
+                        height: size.height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Bgra8Unorm,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                },
+            )
         };
-        let master_texture: &ProtocolObject<dyn MTLTexture> = master_hal.raw_handle();
+        let master_view = master.create_view(&wgpu::TextureViewDescriptor::default());
+        let drawable_view = drawable_wgpu.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Allocate command buffer + blit encoder, copy master →
-        // drawable, present, commit.
-        let command_buffer = self
-            .metal_queue
-            .commandBuffer()
-            .ok_or(BackendError::CommandBufferAlloc)?;
-        let blit_encoder = command_buffer
-            .blitCommandEncoder()
-            .ok_or(BackendError::BlitEncoderAlloc)?;
-        unsafe {
-            blit_encoder.copyFromTexture_toTexture(master_texture, &*drawable_texture);
-        }
-        blit_encoder.endEncoding();
+        // Encode the format-converting copy and submit on wgpu's
+        // queue (same queue netrender's vello submits to → FIFO
+        // ordering, no fence needed).
+        let mut encoder =
+            self.wgpu_device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("MacosCALayerBackend::present_master master->drawable"),
+                });
+        self.master_to_drawable_blitter.copy(
+            &self.wgpu_device,
+            &mut encoder,
+            &master_view,
+            &drawable_view,
+        );
+        self.wgpu_queue.submit([encoder.finish()]);
 
-        // `presentDrawable` takes an `MTLDrawable` reference;
-        // `CAMetalDrawable: MTLDrawable`, so upcast via
-        // `ProtocolObject::from_ref`.
+        // `[drawable present]` (no-arg `MTLDrawable::present`)
+        // schedules the drawable for display at the next refresh
+        // tick. Per Apple's `MTLDrawable` docs, the OS waits for
+        // any pending GPU writes to the drawable's texture to
+        // complete before display — covering our just-submitted
+        // wgpu blit — so no explicit fence wiring is needed.
         let drawable_obj: &ProtocolObject<dyn objc2_metal::MTLDrawable> =
             ProtocolObject::from_ref(&*drawable);
-        command_buffer.presentDrawable(drawable_obj);
-        command_buffer.commit();
+        drawable_obj.present();
 
-        drop(master_hal);
         Ok(())
     }
 }

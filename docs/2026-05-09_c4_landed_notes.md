@@ -104,21 +104,27 @@ Validation env at [`.cargo-check-logs/cargo-check-env.ps1`](../.cargo-check-logs
    opacity over the master CAMetalLayer (olive blends where master
    red shows through, pure green where master green is occluded).
 2. **macOS `CAMetalLayer.pixelFormat` documented contract
-   violation — blocked on either vello upstream or a swizzle
-   render pass.** Apple's `CAMetalLayer.pixelFormat` allow-list is
-   `BGRA8Unorm` / `BGRA8Unorm_sRGB` / `RGBA16Float` /
-   `RGB10A2Unorm` / `BGR10A2Unorm` (+ iOS XR variants); we use
-   `RGBA8Unorm` because vello 0.8's compute pipeline hardcodes
-   `Rgba8Unorm` as the storage-texture-binding format and
-   `MTLBlitCommandEncoder copyFromTexture:toTexture:` requires
-   identical src/dst formats — going BGRA on the drawable would
-   need either (a) vello first-class `Bgra8Unorm` storage targets
-   (upstream task) or (b) a swizzle render-pass between master
-   and drawable (~80-150 LOC). macOS 11+ permits
-   `RGBA8Unorm` in practice (verified by the smoke); pre-11 macOS
-   would reject. Long inline note in
-   [components/paint/compositor_calayer.rs](../components/paint/compositor_calayer.rs)'s
-   `MacosCALayerBackend::new` documents the situation.
+   violation — ✅ landed (2026-05-09).** Master path on macOS now
+   uses `BGRA8Unorm` for the `CAMetalLayer.pixelFormat` (on
+   Apple's documented allow-list) with a per-frame
+   `wgpu::util::TextureBlitter` doing the `Rgba8Unorm` master ->
+   `Bgra8Unorm` drawable format conversion. Vello's master stays
+   `Rgba8Unorm` (its compute pipeline's hardcoded storage-binding
+   format); vello's own
+   [`render_to_texture`](https://github.com/linebender/vello/blob/02c2501/vello/src/lib.rs#L474)
+   doc recommends `TextureBlitter` for exactly this conversion at
+   the surface boundary. Bonus side-effect: the previous
+   `device.poll(Wait)` CPU stall is gone — `TextureBlitter::copy`
+   runs on wgpu's queue (same queue netrender's vello submits to),
+   so the master->drawable copy is naturally FIFO-ordered against
+   vello's render submit; `[drawable present]` (the no-arg
+   `MTLDrawable::present`) waits on the drawable's pending GPU
+   writes per Apple's docs, sidestepping the wgpu-hal queue
+   accessor block listed in (3) for the master path. The own-
+   `MTLCommandQueue` + `MTLSharedEvent` plumbing is removed.
+   Per-`SurfaceKey` IOSurface destinations stay `Rgba8Unorm` —
+   `CALayer.contents = IOSurface` reads bytes per the IOSurface's
+   declared format and 'RGBA' is supported there in practice.
 
 3. **macOS GPU-side cross-queue sync — blocked on upstream
    wgpu-hal.** Today's `MacosCALayerBackend::present_master`
@@ -160,13 +166,13 @@ Validation env at [`.cargo-check-logs/cargo-check-env.ps1`](../.cargo-check-logs
    the remaining `cargo check -p servo` cost on Mac is the
    SpiderMonkey native build, not Rust-side method gaps.
 
-(1) is ✅. (2) is a documented contract violation, gated to
-macOS 11+; correctness-only, visually working in practice. (3) is
-upstream-blocked, performance-only, no visual gap. (4) gates D3
-✅ on Linux. (5) is ✅ as well. None gate the netrender-side
+(1) is ✅. (2) is ✅ as well. (3) was a wait-and-see deferred to
+(2)'s landing — the master-path sync is now FIFO-ordered without
+the wgpu-hal queue accessor; future per-`SurfaceKey` GPU sync
+upgrades may still want it, but no longer block anything visible.
+(4) gates D3 ✅ on Linux. (5) is ✅. None gate the netrender-side
 roadmap — netrender's 5.4 already shipped, and serval's 5.5b
-done-condition is now satisfied on **both Windows and macOS**
-(modulo the `CAMetalLayer.pixelFormat` note in (2)).
+done-condition is now satisfied on **both Windows and macOS**.
 
 ---
 
