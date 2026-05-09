@@ -11,6 +11,7 @@ Companion to:
 - [2026-05-05_serval_netrender_cut_plan.md](./2026-05-05_serval_netrender_cut_plan.md) — overall cut plan
 - [2026-05-08_c3_landed_notes.md](./2026-05-08_c3_landed_notes.md) — C3 (translator + per-pipeline scenes), C4's prerequisite
 - [2026-05-05_compositor_handoff_path_b_prime.md](./2026-05-05_compositor_handoff_path_b_prime.md) — netrender's path-(b′) design + the shared 5.5a/5.5b framing
+- [2026-05-09_interop_lineage.md](./2026-05-09_interop_lineage.md) — provenance of the direction-neutral interop primitives (slint → graft → scrying → serval) consumed by the C4 backends
 
 ---
 

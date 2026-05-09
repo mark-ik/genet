@@ -5,27 +5,16 @@
 //! Direction-neutral wgpu/native interop primitives for serval's C4
 //! compositor adapter.
 //!
-//! ## Why this lives here (and not in `wgpu-native-texture-interop`)
+//! ## Provenance
 //!
-//! `wgpu-native-texture-interop` (WNTI) ships a sibling set of types
-//! oriented toward the **import** direction (system-webview producer
-//! → wgpu consumer). C4's [`crate::compositor`] needs the **export**
-//! direction (netrender producer → OS-compositor consumer), which
-//! requires a different sync-trait shape:
-//!
-//! - WNTI's [`InteropSynchronizer::producer_complete`] takes a
-//!   `&NativeFrame` (an enum of producer-side handles) and
-//!   `consumer_ready` takes a `&ImportedTexture`. Neither fits the
-//!   export path — there is no `NativeFrame` from a producer; the
-//!   producer is netrender's own wgpu queue.
-//! - The remaining direction-neutral pieces (`InteropBackend`,
-//!   `HostWgpuContext`, `SyncMechanism`, the platform fence
-//!   wrappers) are small enough to host inline rather than depend on
-//!   WNTI for them.
-//!
-//! Per project policy: serval doesn't shape WNTI to fit its needs;
-//! the surface here mirrors WNTI's where it makes sense and diverges
-//! where the export direction does.
+//! These primitives are the slint-example → `wgpu-graft` →
+//! `scrying` → serval lineage; the direction-neutral pieces
+//! survived four iterations and an export/import direction
+//! reversal. See
+//! [`docs/2026-05-09_interop_lineage.md`](../../../docs/2026-05-09_interop_lineage.md)
+//! for the full story and for why the WNTI / scrying
+//! `InteropSynchronizer` trait shape doesn't fit the export
+//! direction.
 //!
 //! ## What's here
 //!
@@ -38,9 +27,8 @@
 //! - [`InteropError`] — error enum.
 //! - [`Dx12FenceSynchronizer`] — Windows-only. Wraps a
 //!   `D3D12_FENCE_FLAG_SHARED` fence with `advance` / `current_value`
-//!   inherent methods. Direction-neutral; the trait dance is handled
-//!   externally so `OsCompositorBackend` impls can call into the
-//!   fence without an import-shaped wrapper.
+//!   inherent methods. Mac and Linux synchronizer wrappers are
+//!   pending — see the lineage brief.
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -68,8 +56,9 @@ pub enum InteropBackend {
 
 /// Detect which wgpu backend a `wgpu::Device` is running on.
 ///
-/// Mirrors `wgpu-native-texture-interop`'s detect_backend; structurally
-/// identical because both use the same `as_hal::<api::*>()` probe.
+/// Structurally the same `as_hal::<api::*>()` probe used in the
+/// graft / scrying iterations of this primitive (see
+/// [`docs/2026-05-09_interop_lineage.md`](../../../docs/2026-05-09_interop_lineage.md)).
 pub fn detect_backend(device: &wgpu::Device) -> InteropBackend {
     unsafe {
         // wgpu::wgc::api::Vulkan is only compiled in when the hal
@@ -195,9 +184,8 @@ mod windows_dx12;
 pub use windows_dx12::Dx12FenceSynchronizer;
 
 // Vulkan / Metal counterparts will land alongside their respective
-// `OsCompositorBackend` impls. Trait shape is intentionally not
-// declared here — `OsCompositorBackend` itself owns the per-frame
-// fence dance, and per-platform synchronizers expose inherent methods
-// that the backend impl calls into directly. This avoids the
-// import-coupled-trait mistake that WNTI's `InteropSynchronizer`
-// shape forces consumers into.
+// `OsCompositorBackend` impls. No trait shape here — backends call
+// into per-platform synchronizers via inherent methods, so the
+// import-direction-coupled `InteropSynchronizer` trait the upstream
+// iterations carried doesn't apply. See the lineage brief at
+// `docs/2026-05-09_interop_lineage.md` for the full reasoning.

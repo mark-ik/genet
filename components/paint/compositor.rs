@@ -30,15 +30,13 @@
 //! [`Compositor`] impl on the consumer side. The direction-neutral
 //! interop primitives ([`InteropBackend`], [`HostWgpuContext`],
 //! [`SyncMechanism`], the platform fence wrappers) live in
-//! [`crate::interop`], extracted from `wgpu-native-texture-interop`'s
-//! patterns but with no dep on it — WNTI's synchronizer trait shape
-//! is import-direction-coupled (`&NativeFrame` / `&ImportedTexture`)
-//! and doesn't fit the export path; rebuilding the small
-//! direction-neutral foundation in serval is cleaner than adapting
-//! around WNTI's import-shaped trait.
+//! [`crate::interop`] — see
+//! [`docs/2026-05-09_interop_lineage.md`](../../docs/2026-05-09_interop_lineage.md)
+//! for the slint → graft → scrying → serval provenance and the
+//! export-direction trait-shape reasoning.
 //!
 //! See [`docs/2026-05-05_serval_netrender_cut_plan.md`](../../docs/2026-05-05_serval_netrender_cut_plan.md)
-//! § C4 for the design.
+//! § C4 for the cut design.
 
 use std::collections::HashMap;
 

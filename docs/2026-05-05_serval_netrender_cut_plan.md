@@ -548,6 +548,12 @@ new sibling crate `components/compositor/` for clarity).
 **Status (2026-05-09):** done-condition met on Windows; Mac + Linux
 need on-device smoke receipts. See
 [2026-05-09_c4_landed_notes.md](./2026-05-09_c4_landed_notes.md).
+The direction-neutral interop primitives the per-platform backends
+build on top of are documented in
+[2026-05-09_interop_lineage.md](./2026-05-09_interop_lineage.md)
+(slint → graft → scrying → serval lineage; explains why the
+import-direction `InteropSynchronizer` trait was dropped on the
+export side).
 
 **Done condition (cut milestone — D3.5a, ✅):** `Compositor` impl
 exists on the serval side; the master texture reaches it through
