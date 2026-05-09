@@ -40,6 +40,7 @@ netrender = { workspace = true }
 netrender_device = { workspace = true }
 paint_api = { workspace = true, features = ["wgpu_backend"] }
 paint_types = { workspace = true }
+raw-window-handle = { workspace = true }
 profile_traits = { workspace = true }
 rustc-hash = { workspace = true }
 servo-base = { workspace = true }

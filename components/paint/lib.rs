@@ -37,6 +37,9 @@ pub use crate::compositor::{
     OsCompositorBackend, PaintCompositor, ServoCompositor, StubCompositor,
     WgpuMasterCaptureBackend,
 };
+pub use crate::compositor_factory::{
+    BoxedFactoryError, default_compositor_for_window, default_compositor_for_window_or_capture,
+};
 #[cfg(target_os = "windows")]
 pub use crate::compositor_dxgi::{BackendError as WindowsDxgiBackendError, WindowsDxgiBackend};
 #[cfg(target_vendor = "apple")]
@@ -60,6 +63,7 @@ mod compositor_calayer;
 #[cfg(target_os = "windows")]
 #[allow(unsafe_code)]
 mod compositor_dxgi;
+mod compositor_factory;
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 mod compositor_wayland;
