@@ -58,6 +58,7 @@ windows = { workspace = true }
 [target.'cfg(target_vendor = "apple")'.dependencies]
 # C4 macOS compositor backend (compositor_calayer.rs).
 objc2 = { workspace = true }
+objc2-core-foundation = { workspace = true }
 objc2-foundation = { workspace = true }
 objc2-quartz-core = { workspace = true }
 objc2-metal = { workspace = true }

@@ -32,6 +32,11 @@ chrome-wgpu = ["dep:pelt-ui-egui", "pelt-ui-egui/wgpu-renderer"]
 # in through `pelt-desktop`. Inner code is `cfg(target_os = "windows")`
 # gated so the feature still builds on non-Windows hosts.
 windows-present = ["viewer-engine", "pelt-desktop/windows-present"]
+# C4 headed-presentation smoke on macOS / iOS. Pulls serval's
+# `MacosCALayerBackend` in through `pelt-desktop`. Inner code is
+# `cfg(target_vendor = "apple")` gated so the feature still builds
+# on non-Apple hosts.
+macos-present = ["viewer-engine", "pelt-desktop/macos-present"]
 
 [dependencies]
 cfg-if = { workspace = true }

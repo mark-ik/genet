@@ -24,6 +24,22 @@ netrender = ["dep:netrender", "dep:wgpu"]
 # windows-present` works on non-Windows hosts (the inner code is
 # `cfg(target_os = "windows")` gated).
 windows-present = ["netrender", "dep:paint", "dep:raw-window-handle", "dep:windows", "dep:pollster"]
+# Headed presentation through serval's `MacosCALayerBackend`. Drives
+# the netrender renderer through the C4 CAMetalLayer attached to a
+# winit window's NSView. macOS/iOS-only at runtime; the feature gate
+# is platform-agnostic so `cargo check --features macos-present`
+# works on non-Apple hosts (the inner code is `cfg(target_vendor =
+# "apple")` gated).
+macos-present = [
+    "netrender",
+    "dep:paint",
+    "dep:raw-window-handle",
+    "dep:pollster",
+    "dep:objc2",
+    "dep:objc2-app-kit",
+    "dep:objc2-foundation",
+    "dep:objc2-quartz-core",
+]
 
 [dependencies]
 netrender = { workspace = true, optional = true }
@@ -40,6 +56,16 @@ winit = { workspace = true }
 # to paint's WindowsDxgiBackend constructor. Same workspace `windows`
 # version paint depends on.
 windows = { workspace = true, optional = true }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+# Apple-only deps used by the `macos-present` feature's
+# `run_macos_calayer_present_smoke` to extract the NSView's CALayer
+# from winit's `RawWindowHandle::AppKit` and hand it to paint's
+# `MacosCALayerBackend::new`.
+objc2 = { workspace = true, optional = true }
+objc2-app-kit = { workspace = true, optional = true }
+objc2-foundation = { workspace = true, optional = true }
+objc2-quartz-core = { workspace = true, optional = true }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)', 'cfg(llvm_pgo)'] }

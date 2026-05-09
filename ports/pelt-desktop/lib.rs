@@ -448,6 +448,348 @@ impl winit::application::ApplicationHandler for WindowsDxgiPresentApp {
     }
 }
 
+/// Outcome of [`run_macos_calayer_present_smoke`]. Mirrors the
+/// Windows-DXGI version — observable state from the macOS CAMetalLayer
+/// present path so callers can assert on it without inspecting on-
+/// screen pixels.
+#[cfg(feature = "macos-present")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MacosCALayerPresentSmokeOutcome {
+    pub width: u32,
+    pub height: u32,
+    pub frames_presented: u32,
+    pub created_window: bool,
+}
+
+/// Configuration for [`run_macos_calayer_present_smoke`]. `frames` is
+/// the number of redraw-presents to fire before exiting the loop;
+/// `1` is enough to validate the construction + present path.
+#[cfg(feature = "macos-present")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MacosCALayerPresentSmokeConfig {
+    pub title: String,
+    pub width: u32,
+    pub height: u32,
+    pub frames: u32,
+}
+
+#[cfg(feature = "macos-present")]
+impl Default for MacosCALayerPresentSmokeConfig {
+    fn default() -> Self {
+        Self {
+            title: "pelt — macos-calayer present smoke".into(),
+            width: 800,
+            height: 600,
+            // ~1s at 60Hz; long enough to actually see the window
+            // before auto-exit. Bump higher on ProMotion (120Hz)
+            // displays where 60 frames is ~0.5s. Path validation is
+            // satisfied at frames=1 — this default trades smoke
+            // speed for visual confirmability.
+            frames: 60,
+        }
+    }
+}
+
+/// Headed presentation smoke test on macOS — opens a winit window,
+/// extracts the NSView's `CALayer`, constructs a
+/// [`paint::MacosCALayerBackend`] over netrender's wgpu Metal device,
+/// and renders + presents `frames` frames of a synthetic red scene
+/// through a `CAMetalLayer` attached to the view.
+///
+/// On non-Apple targets this returns
+/// `Err("macos-present requires target_vendor = \"apple\"")` without
+/// touching winit so the feature still type-checks portably.
+///
+/// Runtime path on macOS:
+///   1. winit `EventLoop::new` + window create
+///   2. `RawWindowHandle::AppKit` → NSView pointer
+///   3. NSView `setWantsLayer:YES` → `[ns_view layer]` for the
+///      embedder root `CALayer`
+///   4. `wgpu::Instance` forced to `Backends::METAL`
+///   5. `paint::HostWgpuContext::new(device, queue)`
+///   6. `paint::MacosCALayerBackend::new(&host, layer_ptr)` builds
+///      the `CAMetalLayer` sublayer + per-backend `MTLCommandQueue`
+///   7. `paint::ServoCompositor::new(host, backend)`
+///   8. Per `RedrawRequested`:
+///        a. build a `netrender::Scene` directly (a single coloured
+///           rect for now)
+///        b. `renderer.render_with_compositor(scene, format, &mut
+///           servo_compositor, base)` — netrender renders the master,
+///           the backend blits it into the drawable + presents
+///   9. Loop exits after `config.frames` redraws or window close.
+#[cfg(feature = "macos-present")]
+pub fn run_macos_calayer_present_smoke(
+    config: MacosCALayerPresentSmokeConfig,
+) -> Result<MacosCALayerPresentSmokeOutcome, String> {
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        let _ = config;
+        return Err("macos-present requires target_vendor = \"apple\"".into());
+    }
+
+    #[cfg(target_vendor = "apple")]
+    {
+        let event_loop = winit::event_loop::EventLoop::new()
+            .map_err(|error| format!("could not create event loop: {error}"))?;
+        let mut app = MacosCALayerPresentApp::new(config);
+        event_loop
+            .run_app(&mut app)
+            .map_err(|error| format!("present-smoke event loop failed: {error}"))?;
+        if let Some(error) = app.error {
+            return Err(error);
+        }
+        app.outcome
+            .ok_or_else(|| "present smoke ended without an outcome".into())
+    }
+}
+
+#[cfg(all(feature = "macos-present", target_vendor = "apple"))]
+struct MacosCALayerPresentApp {
+    config: MacosCALayerPresentSmokeConfig,
+    window: Option<winit::window::Window>,
+    window_id: Option<winit::window::WindowId>,
+    state: Option<MacosPresentState>,
+    frames_presented: u32,
+    outcome: Option<MacosCALayerPresentSmokeOutcome>,
+    error: Option<String>,
+}
+
+#[cfg(all(feature = "macos-present", target_vendor = "apple"))]
+struct MacosPresentState {
+    renderer: netrender::Renderer,
+    compositor: paint::ServoCompositor<paint::MacosCALayerBackend>,
+}
+
+/// Build a Metal-forced [`netrender::WgpuHandles`].
+///
+/// `netrender::boot()` lets wgpu pick a backend; on macOS hosts that
+/// is reliably Metal, but [`paint::MacosCALayerBackend`] requires
+/// Metal explicitly. Force the choice here for symmetry with
+/// [`build_dx12_handles`].
+#[cfg(all(feature = "macos-present", target_vendor = "apple"))]
+fn build_metal_handles() -> Result<netrender::WgpuHandles, String> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::METAL,
+        flags: wgpu::InstanceFlags::default(),
+        memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+        backend_options: wgpu::BackendOptions::default(),
+        display: None,
+    });
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    }))
+    .map_err(|err| format!("request_adapter: {err}"))?;
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("pelt macos-present device"),
+        required_features: wgpu::Features::empty(),
+        required_limits: wgpu::Limits {
+            max_inter_stage_shader_variables: 28,
+            ..Default::default()
+        },
+        ..Default::default()
+    }))
+    .map_err(|err| format!("request_device: {err}"))?;
+    Ok(netrender::WgpuHandles {
+        instance,
+        adapter,
+        device,
+        queue,
+    })
+}
+
+#[cfg(all(feature = "macos-present", target_vendor = "apple"))]
+impl MacosCALayerPresentApp {
+    fn new(config: MacosCALayerPresentSmokeConfig) -> Self {
+        Self {
+            config,
+            window: None,
+            window_id: None,
+            state: None,
+            frames_presented: 0,
+            outcome: None,
+            error: None,
+        }
+    }
+
+    fn fail(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, message: String) {
+        self.error = Some(message);
+        event_loop.exit();
+    }
+}
+
+#[cfg(all(feature = "macos-present", target_vendor = "apple"))]
+impl winit::application::ApplicationHandler for MacosCALayerPresentApp {
+    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+
+        // 1. winit window
+        let attributes = winit::window::WindowAttributes::default()
+            .with_title(self.config.title.clone())
+            .with_inner_size(winit::dpi::LogicalSize::new(
+                self.config.width as f64,
+                self.config.height as f64,
+            ));
+        let window = match event_loop.create_window(attributes) {
+            Ok(w) => w,
+            Err(err) => return self.fail(event_loop, format!("create_window: {err}")),
+        };
+        self.window_id = Some(window.id());
+
+        // 2. NSView from raw-window-handle's AppKit variant
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let handle = match window.window_handle() {
+            Ok(h) => h.as_raw(),
+            Err(err) => return self.fail(event_loop, format!("window_handle: {err}")),
+        };
+        let RawWindowHandle::AppKit(appkit) = handle else {
+            return self.fail(
+                event_loop,
+                format!("expected AppKit RawWindowHandle, got {handle:?}"),
+            );
+        };
+
+        // 3. setWantsLayer + extract the NSView's backing CALayer.
+        // winit's NSView is layer-backed by default on Big Sur+, but
+        // setWantsLayer makes the contract explicit.
+        use objc2::rc::Retained;
+        use objc2_app_kit::NSView;
+        let ns_view: Retained<NSView> = match unsafe {
+            Retained::retain(appkit.ns_view.as_ptr() as *mut NSView)
+        } {
+            Some(v) => v,
+            None => return self.fail(event_loop, "failed to retain NSView".into()),
+        };
+        ns_view.setWantsLayer(true);
+        let layer = match ns_view.layer() {
+            Some(l) => l,
+            None => {
+                return self.fail(
+                    event_loop,
+                    "NSView.layer returned nil after setWantsLayer; \
+                     view is not layer-backed"
+                        .into(),
+                );
+            },
+        };
+        let layer_ptr = Retained::as_ptr(&layer) as *mut std::ffi::c_void;
+
+        // 4. wgpu instance/adapter/device/queue, forced to Metal.
+        let handles = match build_metal_handles() {
+            Ok(h) => h,
+            Err(err) => return self.fail(event_loop, format!("wgpu Metal boot: {err}")),
+        };
+        let device = handles.device.clone();
+        let queue = handles.queue.clone();
+        let renderer = match netrender::create_netrender_instance(
+            handles,
+            netrender::NetrenderOptions {
+                tile_cache_size: Some(64),
+                enable_vello: true,
+                ..Default::default()
+            },
+        ) {
+            Ok(r) => r,
+            Err(err) => {
+                return self.fail(event_loop, format!("create_netrender_instance: {err:?}"));
+            },
+        };
+
+        // 5-6. host context + MacosCALayerBackend
+        let host = paint::HostWgpuContext::new(device, queue);
+        // SAFETY: layer_ptr was obtained from a `Retained<CALayer>`
+        // we hold on the stack via `ns_view.layer()`. The backend
+        // retains its own reference internally, so the embedder's
+        // reference (the `Retained<CALayer>` `layer` we drop at
+        // function end) is independent of the backend's copy.
+        let backend = match unsafe { paint::MacosCALayerBackend::new(&host, layer_ptr) } {
+            Ok(b) => b,
+            Err(err) => {
+                return self.fail(event_loop, format!("MacosCALayerBackend::new: {err}"));
+            },
+        };
+
+        // 7. ServoCompositor over the backend
+        let compositor = paint::ServoCompositor::new(host, backend);
+
+        self.state = Some(MacosPresentState {
+            renderer,
+            compositor,
+        });
+
+        window.request_redraw();
+        self.window = Some(window);
+        // Drop our local `layer` reference here — backend retained
+        // its own copy in `MacosCALayerBackend::new`.
+        drop(layer);
+        drop(ns_view);
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        window_id: winit::window::WindowId,
+        event: winit::event::WindowEvent,
+    ) {
+        if Some(window_id) != self.window_id {
+            return;
+        }
+
+        match event {
+            winit::event::WindowEvent::CloseRequested => event_loop.exit(),
+            winit::event::WindowEvent::RedrawRequested => {
+                let Some(state) = self.state.as_mut() else {
+                    return;
+                };
+
+                // 8a. synthetic scene — single red rect filling the
+                // viewport so we can visually confirm the present.
+                let mut scene =
+                    netrender::Scene::new(self.config.width, self.config.height);
+                scene.push_rect(
+                    0.0,
+                    0.0,
+                    self.config.width as f32,
+                    self.config.height as f32,
+                    [1.0, 0.0, 0.0, 1.0],
+                );
+
+                // 8b. render through the CAMetalLayer
+                state.renderer.render_with_compositor(
+                    &scene,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    &mut state.compositor,
+                    netrender::peniko::Color::new([0.0, 0.0, 0.0, 0.0]),
+                );
+
+                self.frames_presented += 1;
+
+                if self.frames_presented >= self.config.frames {
+                    event_loop.exit();
+                } else if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            },
+            _ => {},
+        }
+    }
+
+    fn exiting(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+        if self.outcome.is_some() {
+            return;
+        }
+        self.outcome = Some(MacosCALayerPresentSmokeOutcome {
+            width: self.config.width,
+            height: self.config.height,
+            frames_presented: self.frames_presented,
+            created_window: self.window_id.is_some(),
+        });
+    }
+}
+
 pub fn run_static_viewer(config: StaticViewerConfig) -> Result<StaticViewerOutcome, String> {
     match config.profile.windowing {
         WindowingMode::Headless => Ok(StaticViewerOutcome {
