@@ -126,22 +126,28 @@ Validation env at [`.cargo-check-logs/cargo-check-env.ps1`](../.cargo-check-logs
    skeleton — `wl_subsurface` placement + commit, `dmabuf` import
    path need a Wayland session (Mutter or Sway) to validate.
 4. **C4 tail — `components/servo/webview.rs` `Paint`-method
-   gaps.** 20 errors remain in webview.rs binding to `Paint`
-   methods that don't exist yet (`add_webview`, `remove_webview`,
-   `render`, `composite_texture`, `register_rendering_context`,
-   `resize_rendering_context`, `set_hidpi_scale_factor`, et al.).
-   Most resolve trivially (forward to existing `Paint` methods);
-   a few (`request_screenshot`, `capture_webrender`) need a small
-   amount of new surface area. Plus the unresolved imports
-   `paint_api::rendering_context` and
-   `paint_api::rendering_context_core::GlCapability` in
-   [components/servo/lib.rs:49,54](../components/servo/lib.rs).
+   gaps — ✅ landed (closed prior to this doc revision).** Every
+   method `webview.rs` calls on `Paint` (`add_webview`,
+   `remove_webview`, `render`, `composite_texture`,
+   `register_rendering_context`, `resize_rendering_context`,
+   `set_hidpi_scale_factor`, `show_webview`, `hide_webview`,
+   `notify_scroll_event`, `notify_input_event`, `set_page_zoom`,
+   `page_zoom`, `adjust_pinch_zoom`, `pinch_zoom`,
+   `device_pixels_per_page_pixel`, `capture_webrender`,
+   `request_screenshot`, `toggle_webrender_debug`) now exists in
+   [components/paint/netrender_painter.rs](../components/paint/netrender_painter.rs).
+   The previously-flagged `paint_api::rendering_context*` imports
+   in [components/servo/lib.rs:49,54](../components/servo/lib.rs)
+   are present and re-export cleanly. `cargo check -p servo` on
+   the Rust type-check level passes against the netrender Paint;
+   the remaining `cargo check -p servo` cost on Mac is the
+   SpiderMonkey native build, not Rust-side method gaps.
 
 (1) is ✅. (2) is upstream-blocked, performance-only, no visual
-gap. (3) gates D3 ✅ on Linux. (4) gates `cargo check -p servo`
-clean. None gate the netrender-side roadmap — netrender's 5.4
-already shipped, and serval's 5.5b done-condition is now
-satisfied on **both Windows and macOS**.
+gap. (3) gates D3 ✅ on Linux. (4) is ✅ as well. None gate the
+netrender-side roadmap — netrender's 5.4 already shipped, and
+serval's 5.5b done-condition is now satisfied on **both Windows
+and macOS**.
 
 ---
 
