@@ -83,15 +83,49 @@ Validation env at [`.cargo-check-logs/cargo-check-env.ps1`](../.cargo-check-logs
 
 ## Remaining gaps before C4 is universally ✅
 
-1. **macOS smoke receipt.** `MacosCALayerBackend` compiles in tree
-   but has no live receipt — the per-frame body's `IOSurface`
-   handoff and `CAMetalLayer` attach paths need a Mac box.
-   Recommended trigger: pelt grows a `--macos-present-smoke`
-   counterpart to the Windows one.
-2. **Linux smoke receipt.** `WaylandSubsurfaceBackend` same story
-   — `wl_subsurface` placement + commit, `dmabuf` import path
-   need a Wayland session (Mutter or Sway) to validate.
-3. **C4 tail — `components/servo/webview.rs` `Paint`-method
+1. **macOS smoke receipt — ✅ landed (2026-05-09).**
+   `MacosCALayerBackend::new` now constructs end-to-end (extracts
+   `MTLDevice` via wgpu-hal, attaches `CAMetalLayer` to the
+   embedder NSView's CALayer with frame matched + autoresizing,
+   contentsScale inherited for HiDPI). `present_master` syncs
+   `drawableSize`, CPU-waits the wgpu submit via
+   `Device::poll(PollType::wait_indefinitely())`, blits master ->
+   `nextDrawable.texture` via `MTLBlitCommandEncoder`, presents +
+   commits. The per-`SurfaceKey` `declare`/`destroy`/`present`
+   paths are also wired: `declare` allocates an `IOSurface` (RGBA8
+   FourCC `'RGBA'`), wraps as an `MTLTexture` via
+   `newTextureWithDescriptor:iosurface:plane:`, hands to wgpu via
+   `Device::create_texture_from_hal::<Metal>` (pure objc2 path —
+   no `metal-rs`), creates a per-surface `CALayer` with
+   `contents = IOSurface`, and adds it as a sublayer; `present`
+   applies `transform`/`clip`/`opacity` to the per-surface
+   `CALayer`. Visual receipt: `pelt --macos-present-surfaces-smoke`
+   shows the per-surface CALayer correctly compositing at 50%
+   opacity over the master CAMetalLayer (olive blends where master
+   red shows through, pure green where master green is occluded).
+2. **macOS GPU-side cross-queue sync — blocked on upstream
+   wgpu-hal.** Today's `MacosCALayerBackend::present_master`
+   CPU-stalls via `wgpu::Device::poll(Wait)` because wgpu-hal 29's
+   `metal::Queue` does not expose its underlying
+   `MTLCommandQueue` (only `Queue::queue_from_raw` is public —
+   see `wgpu-hal-29.0.3/src/metal/mod.rs:459-481`). Without queue
+   access we can neither inject an `encodeSignalEvent:value:` into
+   netrender's submit (so an `MTLSharedEvent` GPU-wait isn't an
+   option) nor route the present command buffer onto the same
+   queue as the wgpu blit. The drawable-import path (importing the
+   `CAMetalDrawable.texture` into wgpu) doesn't help on its own —
+   it shifts the blit onto wgpu's queue but `presentDrawable:`
+   still wants a Metal command buffer ordered after, on a queue we
+   own. **Upstream task:** add a `pub fn raw_queue(&self) ->
+   &Retained<ProtocolObject<dyn MTLCommandQueue>>` accessor to
+   `wgpu_hal::metal::Queue` (mirrors the existing `Device::raw_device()`
+   shape). Once that lands, the GPU-side wait is ~80–150 LOC.
+   Until then the CPU stall is invisible at smoke cadence (~1ms
+   on a 60Hz path) and the right thing to keep.
+3. **Linux smoke receipt.** `WaylandSubsurfaceBackend` is still a
+   skeleton — `wl_subsurface` placement + commit, `dmabuf` import
+   path need a Wayland session (Mutter or Sway) to validate.
+4. **C4 tail — `components/servo/webview.rs` `Paint`-method
    gaps.** 20 errors remain in webview.rs binding to `Paint`
    methods that don't exist yet (`add_webview`, `remove_webview`,
    `render`, `composite_texture`, `register_rendering_context`,
@@ -103,11 +137,11 @@ Validation env at [`.cargo-check-logs/cargo-check-env.ps1`](../.cargo-check-logs
    `paint_api::rendering_context_core::GlCapability` in
    [components/servo/lib.rs:49,54](../components/servo/lib.rs).
 
-The first two gate D3 ✅ on those platforms; the third gates
-`cargo check -p servo` clean. None gate the netrender-side
-roadmap — netrender's 5.4 already shipped, and serval's 5.5b
-done-condition is now satisfied for the platform with a working
-smoke.
+(1) is ✅. (2) is upstream-blocked, performance-only, no visual
+gap. (3) gates D3 ✅ on Linux. (4) gates `cargo check -p servo`
+clean. None gate the netrender-side roadmap — netrender's 5.4
+already shipped, and serval's 5.5b done-condition is now
+satisfied on **both Windows and macOS**.
 
 ---
 

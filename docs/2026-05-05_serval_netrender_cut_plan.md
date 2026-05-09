@@ -35,15 +35,19 @@ resolve the holes."
   painter (`translate_display_list` + per-pipeline `Scene`s +
   3 passing unit tests). `cargo check -p servo-layout` clean.
   See [2026-05-08_c3_landed_notes.md](./2026-05-08_c3_landed_notes.md).
-- **C4** — ✅ done-condition met (2026-05-09). `ServoCompositor`
-  adapter + per-platform OS-handoff backends shipped on Windows;
-  macOS + Linux backend skeletons in tree (need on-device smoke
-  receipts). D3.5b now satisfied: `present_frame` iterates
-  `frame.layers`, `default_compositor_for_window` factory is
-  cfg-gated, and `paint_render_e2e` drives `Paint::render` end
-  to end (3/3 passing on Windows). The 20 `Paint`-method gaps
-  in `components/servo/webview.rs` and the missing
-  `paint_api::rendering_context*` imports in
+- **C4** — ✅ done-condition met on Windows + macOS (2026-05-09).
+  `ServoCompositor` adapter + per-platform OS-handoff backends
+  shipped on Windows (DXGI Composition) and macOS (CALayer +
+  IOSurface, both master path and per-`SurfaceKey` declared
+  surfaces); Linux `WaylandSubsurfaceBackend` skeleton in tree
+  pending an on-device session. D3.5b satisfied: `present_frame`
+  iterates `frame.layers`, `default_compositor_for_window`
+  factory is cfg-gated, `paint_render_e2e` drives `Paint::render`
+  end to end (3/3 passing on Windows), and `pelt
+  --macos-present-surfaces-smoke` visually confirms per-surface
+  CALayer compositing at 50% opacity over the master on macOS.
+  The 20 `Paint`-method gaps in `components/servo/webview.rs`
+  and the missing `paint_api::rendering_context*` imports in
   `components/servo/lib.rs` are next.
 - **C5** — ⏸ not started. Cut script dep from layout.
 - **C6** — ✅ code complete. `ScriptingProfile` + NoOp factories.
