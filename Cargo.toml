@@ -141,6 +141,11 @@ objc2 = "0.6.4"
 objc2-core-foundation = "0.3.2"
 objc2-core-graphics = "0.3.2"
 objc2-core-text = "0.3.2"
+# C4 macOS compositor backend deps. Used by `compositor_calayer.rs`.
+objc2-foundation = "0.3.2"
+objc2-quartz-core = "0.3.2"
+objc2-metal = "0.3.2"
+objc2-io-surface = "0.3.2"
 ocb3 = "0.1.0"
 openxr = "0.20"
 p256 = { version = "0.13", features = ["ecdh"] }
@@ -151,6 +156,7 @@ pelt-core = { version = "=0.2.0", path = "ports/pelt-core" }
 pelt-desktop = { version = "=0.2.0", path = "ports/pelt-desktop" }
 pelt-ui-egui = { version = "=0.2.0", path = "ports/pelt-ui-egui" }
 netrender = { path = "../netrender/netrender" }
+netrender_device = { path = "../netrender/netrender_device" }
 peniko = "0.6"
 percent-encoding = "2.3"
 pkcs8 = { version = "0.10", features = ["rand_core"] }
@@ -228,6 +234,16 @@ wgpu = "29"
 wgpu-core = "29"
 wgpu-native-texture-interop = { path = "../wgpu-graft/wgpu-native-texture-interop" }
 wgpu-types = "29"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_DirectComposition",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Security",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+] }
 winapi = "0.3"
 windows-sys = "0.61"
 winit = "0.30.13"
