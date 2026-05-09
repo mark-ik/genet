@@ -19,7 +19,7 @@ resolve the holes."
 
 ---
 
-## Cut status snapshot (2026-05-08)
+## Cut status snapshot (2026-05-09)
 
 - **C1** — ✅ landed pre-session. GL/surfman corpus removed.
 - **C1.5** — ✅ landed. WebGL deletion: 45 DOM files + 35 WebIDLs +
@@ -35,19 +35,26 @@ resolve the holes."
   painter (`translate_display_list` + per-pipeline `Scene`s +
   3 passing unit tests). `cargo check -p servo-layout` clean.
   See [2026-05-08_c3_landed_notes.md](./2026-05-08_c3_landed_notes.md).
-- **C4** — 🟡 next. ServoCompositor adapter (impl
-  `netrender_device::Compositor`) + closes the 20 `Paint`-method
-  gaps in `components/servo/webview.rs` and the missing
+- **C4** — ✅ done-condition met (2026-05-09). `ServoCompositor`
+  adapter + per-platform OS-handoff backends shipped on Windows;
+  macOS + Linux backend skeletons in tree (need on-device smoke
+  receipts). D3.5b now satisfied: `present_frame` iterates
+  `frame.layers`, `default_compositor_for_window` factory is
+  cfg-gated, and `paint_render_e2e` drives `Paint::render` end
+  to end (3/3 passing on Windows). The 20 `Paint`-method gaps
+  in `components/servo/webview.rs` and the missing
   `paint_api::rendering_context*` imports in
-  `components/servo/lib.rs`.
+  `components/servo/lib.rs` are next.
 - **C5** — ⏸ not started. Cut script dep from layout.
 - **C6** — ✅ code complete. `ScriptingProfile` + NoOp factories.
 - **C7** — ⏸ not started. Cut script dep from servo facade.
 
-Validation baseline (2026-05-08): `cargo check -p servo-layout`
-clean; `cargo check -p servo-paint` clean; `cargo test -p servo-paint`
-3/3 translator tests pass. `cargo check -p servo` reaches
-`components/servo/webview.rs` with 20 errors (C4 target).
+Validation baseline (2026-05-09): `cargo check -p servo-layout`
+clean; `cargo check -p servo-paint` clean; `cargo test -p servo-paint
+--test paint_render_e2e` 3/3 pass; `cargo test -p servo-paint`
+3/3 translator tests pass. `cargo check -p servo` still reaches
+`components/servo/webview.rs` with the same `Paint`-method gaps
+(those bind to a later C4-tail commit, post-D3.5b).
 
 ---
 
@@ -538,16 +545,39 @@ struct StubCompositor { /* fullscreen single-surface fallback */ }
 **Cuts:** none — C4 is net new code in `components/paint/` (or a
 new sibling crate `components/compositor/` for clarity).
 
-**Done condition:** A `<div>` renders into a serval-owned
-native texture; on macOS, a CALayer presents that texture; on
-Windows, a DXGI Composition Visual; on Linux, a Wayland
-subsurface. For the cut milestone, the **StubCompositor** (single
-fullscreen surface, blits master directly to the swapchain
-texture) is enough — platform-specific impls are post-cut work.
+**Status (2026-05-09):** done-condition met on Windows; Mac + Linux
+need on-device smoke receipts. See
+[2026-05-09_c4_landed_notes.md](./2026-05-09_c4_landed_notes.md).
+
+**Done condition (cut milestone — D3.5a, ✅):** `Compositor` impl
+exists on the serval side; the master texture reaches it through
+`Renderer::render_with_compositor`. A capturing fallback
+(`WgpuMasterCaptureBackend`, formerly `StubCompositor`) is the
+default; embedders that don't install a per-platform backend still
+see a populated master. At least one per-platform backend exists
+with working construction (Windows DXGI Composition is the
+reference). `Paint::render` actually drives the renderer +
+compositor (was a stub during the C3 cut).
+
+**Done condition (full — D3.5b, ✅ on Windows):** A `<div>` renders
+into a serval-owned native texture; on macOS, a CALayer presents
+that texture; on Windows, a DXGI Composition Visual; on Linux, a
+Wayland subsurface. Per-`SurfaceKey` declared compositor surfaces
+work — `frame.layers` is iterated and each layer's native handle
+is routed via `OsCompositorBackend::present`. Per-platform default
+install — `default_compositor_for_window` factory dispatches by
+`cfg(target_os = …)`, falling back to the capturing backend on
+unknown platforms or via the `_or_capture` variant. End-to-end
+test that drives `Paint::render` directly
+(`paint_render_e2e_drives_full_embedder_path`) — passes on Windows.
+Per-platform smoke receipts are required to flip Mac + Linux from
+🟡 to ✅: Windows is real (pelt's `--windows-present-smoke`
+validates DCOMP composition swapchain present); macOS + Linux
+skeletons exist in tree but need a Mac and a Linux box respectively.
 
 **Scope:**
 
-- Trait + ServoCompositor + StubCompositor: ~300 lines.
+- Trait + ServoCompositor + WgpuMasterCaptureBackend: ~300 lines.
 - Per-platform OS handoff: ~300-500 lines each. Windows DXGI is
   most documented; macOS CALayer well-understood; Wayland
   subsurfaces require live testing.
