@@ -358,27 +358,25 @@ impl OsCompositorBackend for MacosCALayerBackend {
         }
     }
 
-    fn declare(&mut self, _key: SurfaceKey, _host: &HostWgpuContext, _native: &Texture) {
-        // FIXME(C4 follow-up): allocate IOSurface-backed MTLTexture
-        // for the surface, create a CALayer, set its `contents` to
-        // the IOSurface, addSublayer to root.
-    }
+    // `declare` and `present` inherit the trait defaults until the
+    // per-`SurfaceKey` CALayer path is wired (allocate IOSurface-
+    // backed MTLTexture, create a CALayer with `contents` set to
+    // the IOSurface, addSublayer to the parent; on present apply
+    // transform/clip/opacity to the per-surface CALayer and kick a
+    // CATransaction). The default `declare` does plain wgpu
+    // allocation, which is the right starting point for any
+    // backend that hasn't yet wired its per-surface OS handoff.
 
     fn destroy(&mut self, key: SurfaceKey) {
+        // Mirrors the per-surface CALayer cleanup that lands when
+        // `declare` is wired: remove the per-surface layer from the
+        // tree if one exists. Today `surfaces` is never populated
+        // (declare uses the default plain-alloc path), so this is a
+        // no-op in practice — kept so future per-surface impl
+        // doesn't need to redefine cleanup.
         if let Some(surface) = self.surfaces.remove(&key) {
             surface.layer.removeFromSuperlayer();
         }
-    }
-
-    fn present(
-        &mut self,
-        _key: SurfaceKey,
-        _transform: [f32; 6],
-        _clip: Option<[f32; 4]>,
-        _opacity: f32,
-    ) {
-        // FIXME(C4 follow-up): apply transform/clip/opacity to the
-        // per-surface CALayer, kick a CATransaction.
     }
 }
 

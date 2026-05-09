@@ -435,21 +435,45 @@ impl OsCompositorBackend for WindowsDxgiBackend {
         }
     }
 
-    fn declare(&mut self, key: SurfaceKey, _host: &HostWgpuContext, native: &Texture) {
-        // FIXME(C4): real impl:
-        //  1. Create an IDCompositionVisual for `key`
-        //  2. Add it as a child of root_visual
-        //  3. Hold native as the destination texture
-        let visual = unsafe { self.dcomp_device.CreateVisual().ok() };
-        if let Some(visual) = visual {
-            self.surfaces.insert(
-                key,
-                DxgiSurface {
-                    visual,
-                    destination: native.clone(),
-                },
-            );
-        }
+    fn declare(
+        &mut self,
+        key: SurfaceKey,
+        host: &crate::interop::HostWgpuContext,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Result<wgpu::Texture, crate::compositor::BoxedBackendError> {
+        // Allocate the destination wgpu texture (same shape the
+        // trait default uses). Then do the OS-side bookkeeping:
+        // create an `IDCompositionVisual` for `key`, store it
+        // alongside the destination so the future per-surface
+        // `present` path can apply transform/clip/opacity to it.
+        // Visual is not yet attached to `root_visual` — that
+        // happens when the per-surface present path is wired.
+        let destination = host.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("WindowsDxgiBackend surface destination"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let visual = unsafe { self.dcomp_device.CreateVisual() }
+            .map_err(|e| Box::new(BackendError::DComp(format!("CreateVisual: {e}"))))?;
+        self.surfaces.insert(
+            key,
+            DxgiSurface {
+                visual,
+                destination: destination.clone(),
+            },
+        );
+        Ok(destination)
     }
 
     fn destroy(&mut self, key: SurfaceKey) {
@@ -459,16 +483,10 @@ impl OsCompositorBackend for WindowsDxgiBackend {
         self.surfaces.remove(&key);
     }
 
-    fn present(
-        &mut self,
-        _key: SurfaceKey,
-        _transform: [f32; 6],
-        _clip: Option<[f32; 4]>,
-        _opacity: f32,
-    ) {
-        // FIXME(C4): apply transform/clip/opacity to the per-surface
-        // visual and Commit. Skeleton currently drops the call.
-    }
+    // `present` inherits the trait default no-op until the
+    // per-`SurfaceKey` DCOMP path is wired (transform/clip/opacity
+    // applied to the per-surface IDCompositionVisual, plus a
+    // `Commit`).
 }
 
 /// Errors raised by [`WindowsDxgiBackend::new`].

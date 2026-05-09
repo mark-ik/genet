@@ -183,26 +183,86 @@ pub trait OsCompositorBackend: Send {
         SyncMechanism::None
     }
 
-    /// Allocate a per-surface destination texture and register it
-    /// with the OS compositor. `host` provides the wgpu device the
-    /// destination texture should be allocated on.
-    fn declare(&mut self, key: SurfaceKey, host: &HostWgpuContext, native: &Texture);
+    /// Allocate (or reallocate) the destination texture for `key`,
+    /// and perform any OS-side bookkeeping needed to register it
+    /// with the OS compositor (creating a CALayer /
+    /// `IDCompositionVisual` / `wl_subsurface` / etc.).
+    ///
+    /// Returns the destination wgpu texture the
+    /// [`ServoCompositor`] wrapper will encode the per-frame
+    /// `copy_texture_to_texture(master[rect] -> dest)` blit into.
+    /// Lifetime of the texture is owned by the wrapper (stored in
+    /// the per-`SurfaceKey` destination map); `destroy` is the
+    /// signal to release any per-key OS resources the backend
+    /// allocated alongside.
+    ///
+    /// The default implementation creates a plain wgpu texture
+    /// sized to `width x height` of `format`, with no OS-side
+    /// registration. This is enough for the
+    /// [`WgpuMasterCaptureBackend`] embedder route and is the right
+    /// starting point for any backend that has not yet wired its
+    /// per-`SurfaceKey` OS handoff. Per-platform backends that
+    /// need IOSurface-backed allocation (macOS), shared-handle
+    /// textures (Windows), dmabuf import (Linux Wayland), or
+    /// per-surface OS resources (CALayer / `IDCompositionVisual` /
+    /// `wl_subsurface`) override this method.
+    fn declare(
+        &mut self,
+        _key: SurfaceKey,
+        host: &HostWgpuContext,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Result<wgpu::Texture, BoxedBackendError> {
+        Ok(host.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("OsCompositorBackend default destination"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        }))
+    }
 
     /// Drop a previously-declared surface. After this, the OS
     /// compositor no longer references the surface.
-    fn destroy(&mut self, key: SurfaceKey);
+    ///
+    /// Default is a no-op for backends that don't allocate
+    /// per-surface OS resources alongside the wgpu destination
+    /// texture.
+    fn destroy(&mut self, _key: SurfaceKey) {}
 
     /// Hand the surface's native texture to the OS compositor with
     /// the given world transform / clip / opacity. This corresponds
     /// to one entry in netrender's `present_frame` `layers` slice.
+    ///
+    /// Default is a no-op for backends that have not yet wired
+    /// per-`SurfaceKey` presentation. Such backends still see the
+    /// master path through `present_master`; declared surfaces
+    /// simply don't receive a per-surface handoff.
     fn present(
         &mut self,
-        key: SurfaceKey,
-        transform: [f32; 6],
-        clip: Option<[f32; 4]>,
-        opacity: f32,
-    );
+        _key: SurfaceKey,
+        _transform: [f32; 6],
+        _clip: Option<[f32; 4]>,
+        _opacity: f32,
+    ) {
+    }
 }
+
+/// Boxed error returned by [`OsCompositorBackend::declare`].
+/// Backends that fail allocation (out-of-memory, OS handle
+/// exhaustion, IOSurface/CALayer creation failure) box their
+/// concrete error into this shape so the trait surface stays free
+/// of platform-specific error types. `ServoCompositor` logs and
+/// skips the layer on `Err`.
+pub type BoxedBackendError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// Production compositor wrapper. Holds an [`OsCompositorBackend`], a
 /// [`HostWgpuContext`] for GPU encode access, and a per-`SurfaceKey`
@@ -313,23 +373,30 @@ impl<B: OsCompositorBackend> Compositor for ServoCompositor<B> {
                     self.backend.destroy(layer.key);
                     self.destinations.remove(&layer.key);
                 }
-                let dest = frame.handles.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("ServoCompositor surface destination"),
-                    size: wgpu::Extent3d {
-                        width: w,
-                        height: h,
-                        depth_or_array_layers: 1,
+                // Backend owns allocation now: it can choose plain
+                // wgpu (the default impl), IOSurface-backed (Mac),
+                // shared-handle (Windows), dmabuf (Linux), etc., and
+                // do its OS-side bookkeeping (CALayer /
+                // IDCompositionVisual / wl_subsurface) in the same
+                // call. On declare failure, log and skip the layer
+                // — the master path still presented; only this
+                // particular declared surface is missed for the
+                // frame.
+                match self
+                    .backend
+                    .declare(layer.key, &self.host, w, h, frame.master.format())
+                {
+                    Ok(dest) => {
+                        self.destinations.insert(layer.key, dest);
                     },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: frame.master.format(),
-                    usage: wgpu::TextureUsages::COPY_DST
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                });
-                self.backend.declare(layer.key, &self.host, &dest);
-                self.destinations.insert(layer.key, dest);
+                    Err(err) => {
+                        log::warn!(
+                            "[ServoCompositor] backend.declare({:?}, {w}x{h}) failed: {err}",
+                            layer.key,
+                        );
+                        continue;
+                    },
+                }
             }
 
             let dest = match self.destinations.get(&layer.key) {

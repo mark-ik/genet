@@ -170,28 +170,24 @@ impl OsCompositorBackend for WaylandSubsurfaceBackend {
         }
     }
 
-    fn declare(&mut self, _key: SurfaceKey, _host: &HostWgpuContext, _native: &Texture) {
-        // FIXME(C4 follow-up): create a wl_subsurface for `key`,
-        // sync mode Desync, position from caller.
-    }
+    // `declare` and `present` inherit the trait defaults until the
+    // per-`SurfaceKey` Wayland path is wired (create a
+    // `wl_subsurface` for `key` with sync-mode Desync; on present
+    // apply transform via viewporter `wp_viewport.set_destination`,
+    // clip via the surface's input region, opacity via the
+    // alpha-modifier protocol if available). The default `declare`
+    // does plain wgpu allocation, which is the right starting
+    // point for any backend that hasn't yet wired its per-surface
+    // OS handoff.
 
     fn destroy(&mut self, key: SurfaceKey) {
-        // FIXME(C4 follow-up): destroy wl_subsurface, release any
-        // attached wl_buffer.
+        // Mirrors the per-subsurface cleanup that lands when
+        // `declare` is wired (destroy `wl_subsurface`, release any
+        // attached `wl_buffer`). Today `surfaces` is never
+        // populated (declare uses the default plain-alloc path), so
+        // this is a no-op in practice — kept so future per-surface
+        // impl doesn't need to redefine cleanup.
         self.surfaces.remove(&key);
-    }
-
-    fn present(
-        &mut self,
-        _key: SurfaceKey,
-        _transform: [f32; 6],
-        _clip: Option<[f32; 4]>,
-        _opacity: f32,
-    ) {
-        // FIXME(C4 follow-up): apply transform via
-        // viewporter (wp_viewport.set_destination), clip via the
-        // surface's input region, opacity via the alpha-modifier
-        // protocol if available.
     }
 }
 
