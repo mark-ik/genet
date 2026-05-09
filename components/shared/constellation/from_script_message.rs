@@ -327,6 +327,8 @@ pub struct Job {
     pub referrer: ServoUrl,
     /// Various data needed to process job.
     pub scope_things: Option<ScopeThings>,
+    /// <https://w3c.github.io/ServiceWorker/#job-storage-key>
+    pub storage_key: ImmutableOrigin,
 }
 
 impl Job {
@@ -338,6 +340,7 @@ impl Job {
         client: GenericCallback<JobResult>,
         referrer: ServoUrl,
         scope_things: Option<ScopeThings>,
+        storage_key: ImmutableOrigin,
     ) -> Job {
         Job {
             job_type,
@@ -346,6 +349,7 @@ impl Job {
             client,
             referrer,
             scope_things,
+            storage_key,
         }
     }
 }

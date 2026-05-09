@@ -13,11 +13,11 @@ use script_bindings::codegen::GenericBindings::VisualViewportBinding::VisualView
 use script_bindings::codegen::GenericBindings::WindowBinding::WindowMethods;
 use script_bindings::inheritance::Castable;
 use script_bindings::num::Finite;
+use script_bindings::reflector::reflect_dom_object;
 use script_bindings::root::{Dom, DomRoot};
 use script_bindings::script_runtime::CanGc;
 use style_traits::CSSPixel;
 
-use crate::dom::bindings::reflector::reflect_dom_object;
 use crate::dom::eventtarget::EventTarget;
 use crate::dom::window::Window;
 

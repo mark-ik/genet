@@ -12,6 +12,11 @@ use js::rust::{HandleObject, HandleValue};
 use pixels::{EncodedImageType, Snapshot};
 use rustc_hash::FxHashMap;
 use script_bindings::cell::{DomRefCell, Ref};
+<<<<<<< HEAD
+=======
+use script_bindings::inheritance::Castable;
+use script_bindings::reflector::{DomObject, reflect_dom_object_with_proto_and_cx};
+>>>>>>> ee0cf303f3bb3b983bc783e4cd64840cc556c62d
 use script_bindings::weakref::WeakRef;
 use servo_base::id::{OffscreenCanvasId, OffscreenCanvasIndex};
 use servo_constellation_traits::{BlobImpl, TransferableOffscreenCanvas};
@@ -24,7 +29,7 @@ use crate::dom::bindings::codegen::Bindings::OffscreenCanvasBinding::{
 use crate::dom::bindings::codegen::UnionTypes::HTMLCanvasElementOrOffscreenCanvas as RootedHTMLCanvasElementOrOffscreenCanvas;
 use crate::dom::bindings::error::{Error, Fallible};
 use crate::dom::bindings::refcounted::{Trusted, TrustedPromise};
-use crate::dom::bindings::reflector::{DomGlobal, DomObject, reflect_dom_object_with_proto_and_cx};
+use crate::dom::bindings::reflector::DomGlobal;
 use crate::dom::bindings::root::{Dom, DomRoot};
 use crate::dom::bindings::structuredclone::StructuredData;
 use crate::dom::bindings::transferable::Transferable;

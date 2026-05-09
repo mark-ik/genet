@@ -8,6 +8,11 @@ use std::f64::consts::{FRAC_PI_2, PI};
 use std::rc::Rc;
 use std::{mem, ptr};
 
+<<<<<<< HEAD
+=======
+use script_bindings::reflector::reflect_dom_object;
+use servo_base::cross_process_instant::CrossProcessInstant;
+>>>>>>> ee0cf303f3bb3b983bc783e4cd64840cc556c62d
 use dom_struct::dom_struct;
 use euclid::{RigidTransform3D, Transform3D, Vector3D};
 use ipc_channel::ipc::IpcReceiver;
@@ -51,7 +56,7 @@ use crate::dom::bindings::error::{Error, ErrorResult};
 use crate::dom::bindings::inheritance::Castable;
 use crate::dom::bindings::num::Finite;
 use crate::dom::bindings::refcounted::Trusted;
-use crate::dom::bindings::reflector::{reflect_dom_object, DomGlobal};
+use crate::dom::bindings::reflector::{DomGlobal};
 use crate::dom::bindings::root::{Dom, DomRoot, MutDom, MutNullableDom};
 use crate::dom::bindings::utils::to_frozen_array;
 use crate::dom::event::Event;

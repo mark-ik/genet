@@ -7,9 +7,13 @@ use std::cell::Cell;
 use dom_struct::dom_struct;
 use euclid::{Scale, Size2D};
 use js::context::JSContext;
+<<<<<<< HEAD
 use paint_types::ImageKey;
 use paint_types::units::DevicePixel;
 use script_bindings::reflector::Reflector;
+=======
+use script_bindings::reflector::{Reflector, reflect_dom_object};
+>>>>>>> ee0cf303f3bb3b983bc783e4cd64840cc556c62d
 use servo_url::ServoUrl;
 use style_traits::CSSPixel;
 
@@ -23,7 +27,7 @@ use crate::dom::bindings::codegen::UnionTypes::StringOrCanvasGradientOrCanvasPat
 use crate::dom::bindings::error::{ErrorResult, Fallible};
 use crate::dom::bindings::inheritance::Castable;
 use crate::dom::bindings::num::Finite;
-use crate::dom::bindings::reflector::{DomGlobal as _, reflect_dom_object};
+use crate::dom::bindings::reflector::DomGlobal as _;
 use crate::dom::bindings::root::DomRoot;
 use crate::dom::bindings::str::DOMString;
 use crate::dom::canvasgradient::CanvasGradient;
