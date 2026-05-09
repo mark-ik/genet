@@ -482,24 +482,29 @@ impl OsCompositorBackend for MacosCALayerBackend {
             return;
         };
 
-        // Transform: 2D affine `[a, b, c, d, tx, ty]` per
-        // `LayerPresent.world_transform` (column-major). Maps to
-        // `CGAffineTransform { a, b, c, d, tx, ty }` 1:1 — both are
-        // column-major 2D affines.
+        // World coordinates are pixels; CALayer's coordinate space
+        // is points. `setAffineTransform`'s linear part (a/b/c/d)
+        // is unitless rotation/scale and passes through unchanged,
+        // but the translation (tx, ty) must be converted to points
+        // via `contentsScale`. netrender composes the surface's
+        // `bounds.origin` into `world_transform.tx/ty` already
+        // (see `netrender::vello_tile_rasterizer::build_layer_presents`),
+        // so this single conversion places the per-surface CALayer
+        // at its declared world-position without a separate origin
+        // application step.
+        let scale = self.parent_layer.contentsScale();
         surface.layer.setAffineTransform(objc2_core_foundation::CGAffineTransform {
             a: transform[0] as f64,
             b: transform[1] as f64,
             c: transform[2] as f64,
             d: transform[3] as f64,
-            tx: transform[4] as f64,
-            ty: transform[5] as f64,
+            tx: transform[4] as f64 / scale,
+            ty: transform[5] as f64 / scale,
         });
 
         // Clip: `Some([min_x, min_y, max_x, max_y])` becomes the
         // layer's `bounds` + `masksToBounds`. `None` clears the mask
-        // so the full layer composites. World coordinates are
-        // pixels; convert to layer-local points via contentsScale.
-        let scale = self.parent_layer.contentsScale();
+        // so the full layer composites.
         match clip {
             Some([x0, y0, x1, y1]) => {
                 surface.layer.setMasksToBounds(true);
