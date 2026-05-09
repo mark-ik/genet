@@ -192,13 +192,20 @@ What's *missing* compared to WNTI — and why that's fine:
 - No `thiserror` dep — `InteropError` impls `Display` + `Error` by
   hand (the enum is small).
 
-Serval's `components/paint` does not depend on WNTI; only the
-`windows` crate (Windows-only target dep) is added. Re-exports
-surface from
+Serval's `components/paint` does not import any WNTI symbol; only
+the `windows` crate (Windows-only target dep) is added directly.
+Re-exports surface from
 [`components/paint/lib.rs`](../components/paint/lib.rs):
 `HostWgpuContext`, `InteropBackend`, `InteropError`, `SyncMechanism`,
 `OsCompositorBackend`, `ServoCompositor`, `StubCompositor`,
 `Dx12FenceSynchronizer` (cfg `windows`).
+
+(Note added 2026-05-09: at C3 time, `paint_api`'s `wgpu_backend`
+feature still listed `wgpu-native-texture-interop` as an optional
+dep, which `components/paint`'s `paint_api` activation pulled into
+the lockfile transitively. No Rust source touched it; the dep was
+removed during D3.5b cleanup. See
+[2026-05-09_c4_landed_notes.md](./2026-05-09_c4_landed_notes.md).)
 
 ## Known follow-ups (post-C4)
 
