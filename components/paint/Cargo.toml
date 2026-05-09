@@ -20,17 +20,43 @@ wgpu_backend = []
 webgpu = ["dep:webgpu"]
 webxr = ["dep:webxr", "dep:webxr-api"]
 
+[dev-dependencies]
+euclid = { workspace = true }
+servo-geometry = { workspace = true }
+stylo_traits = { workspace = true }
+
 [lints.clippy]
 unwrap_used = "deny"
 panic = "deny"
 
 [dependencies]
 crossbeam-channel = { workspace = true }
+dpi = { workspace = true }
 embedder_traits = { workspace = true }
-paint_api = { workspace = true }
+euclid = { workspace = true }
+image = { workspace = true }
+log = { workspace = true }
+netrender = { workspace = true }
+netrender_device = { workspace = true }
+paint_api = { workspace = true, features = ["wgpu_backend"] }
+paint_types = { workspace = true }
 profile_traits = { workspace = true }
+rustc-hash = { workspace = true }
 servo-base = { workspace = true }
 servo-constellation-traits = { workspace = true }
+servo-geometry = { workspace = true }
+stylo_traits = { workspace = true }
+wgpu = { workspace = true }
 webgpu = { workspace = true, optional = true }
 webxr = { workspace = true, optional = true }
 webxr-api = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+# C4 macOS compositor backend (compositor_calayer.rs).
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true }
+objc2-quartz-core = { workspace = true }
+objc2-metal = { workspace = true }

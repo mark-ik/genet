@@ -13,6 +13,13 @@
 //! `Renderer::render_with_compositor` driving live in the proper C3
 //! follow-up; this scaffold is the compile-clean staging point.
 
+// The interop module is the only place where this crate touches
+// platform-native APIs (D3D12 fence creation, wgpu-hal `as_hal`
+// access). The crate-level `deny(unsafe_code)` is preserved
+// everywhere else.
+#[allow(unsafe_code)]
+pub mod interop;
+
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -25,9 +32,39 @@ use servo_constellation_traits::EmbedderToConstellationMessage;
 #[cfg(feature = "webxr")]
 use webxr::WebXrRegistry;
 
+#[allow(deprecated)]
+pub use crate::compositor::{
+    OsCompositorBackend, PaintCompositor, ServoCompositor, StubCompositor,
+    WgpuMasterCaptureBackend,
+};
+#[cfg(target_os = "windows")]
+pub use crate::compositor_dxgi::{BackendError as WindowsDxgiBackendError, WindowsDxgiBackend};
+#[cfg(target_vendor = "apple")]
+pub use crate::compositor_calayer::{
+    BackendError as MacosCALayerBackendError, MacosCALayerBackend,
+};
+#[cfg(target_os = "linux")]
+pub use crate::compositor_wayland::{
+    BackendError as WaylandSubsurfaceBackendError, WaylandSubsurfaceBackend,
+};
+pub use crate::interop::{HostWgpuContext, InteropBackend, InteropError, SyncMechanism};
+#[cfg(target_os = "windows")]
+pub use crate::interop::Dx12FenceSynchronizer;
 pub use crate::netrender_painter::{Paint, WebRenderDebugOption};
+pub use crate::translator::translate_display_list;
 
+mod compositor;
+#[cfg(target_vendor = "apple")]
+#[allow(unsafe_code)]
+mod compositor_calayer;
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+mod compositor_dxgi;
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+mod compositor_wayland;
 mod netrender_painter;
+mod translator;
 
 /// Data used to initialize the `Paint` subsystem.
 pub struct InitialPaintState {
