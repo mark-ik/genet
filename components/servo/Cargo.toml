@@ -34,7 +34,6 @@ bluetooth = [
 clipboard = ["dep:arboard"]
 crown = ["script/crown"]
 debugmozjs = ["script/debugmozjs"]
-dynamic_freetype = ["webrender/dynamic_freetype"]
 gamepad = [
     "script/gamepad",
     "servo-constellation/gamepad",
@@ -133,7 +132,6 @@ tracing = { workspace = true, optional = true }
 url = { workspace = true }
 webgpu = { workspace = true, optional = true }
 paint_types = { workspace = true }
-webrender = { workspace = true }
 wgpu = { workspace = true }
 webxr-api = { workspace = true, optional = true }
 

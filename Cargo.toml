@@ -227,12 +227,9 @@ vello = "0.8"
 vello_cpu = "0.0.7"
 webdriver = { version = "0.53.0", default-features = false }
 webpki-roots = "1.0"
-webrender = { version = "0.68", features = ["capture", "wgpu_backend"] }
-webrender_api = "0.68"
 web_atoms = "0.2"
 wgpu = "29"
 wgpu-core = "29"
-wgpu-native-texture-interop = { path = "../wgpu-graft/wgpu-native-texture-interop" }
 wgpu-types = "29"
 windows = { version = "0.62", features = [
     "Win32_Foundation",
@@ -248,7 +245,6 @@ winapi = "0.3"
 windows-sys = "0.61"
 winit = "0.30.13"
 wio = "0.2"
-wr_malloc_size_of = "0.2.2"
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
 xml5ever = "0.39"
 yuv = { version = "0.8.14", features = ["rayon"] }
@@ -403,12 +399,7 @@ vello = { path = "support/patches/vello" }
 # webrender, webrender_api, and wr_malloc_size_of as separate crates. Local
 # stubs in support/patches/ restore workspace loadability while consumers
 # are migrated to netrender's surface (post-cut C2-C4 work).
-webrender = { path = "support/patches/webrender" }
-webrender_api = { path = "support/patches/webrender_api" }
-wr_malloc_size_of = { path = "support/patches/wr_malloc_size_of" }
 
-[patch."https://github.com/mark-ik/wgpu-gui-bridge"]
-wgpu-native-texture-interop = { path = "../wgpu-graft/wgpu-native-texture-interop" }
 #
 # Or for mozjs:
 #

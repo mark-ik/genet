@@ -15,7 +15,7 @@ path = "lib.rs"
 
 [features]
 tracing = ["dep:tracing"]
-wgpu_backend = ["dep:wgpu", "dep:pollster", "dep:wgpu-native-texture-interop"]
+wgpu_backend = ["dep:wgpu", "dep:pollster"]
 
 [dependencies]
 bitflags = { workspace = true }
@@ -46,4 +46,3 @@ stylo_traits = { workspace = true }
 tracing = { workspace = true, optional = true }
 pollster = { version = "0.4", optional = true }
 wgpu = { workspace = true, optional = true }
-wgpu-native-texture-interop = { workspace = true, optional = true }

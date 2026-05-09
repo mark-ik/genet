@@ -67,7 +67,6 @@ unicode-script = { workspace = true }
 unicode_categories = { workspace = true }
 url = { workspace = true }
 paint_types = { workspace = true }
-webrender_api = { workspace = true }
 
 [dev-dependencies]
 num-traits = { workspace = true }
