@@ -84,11 +84,58 @@ pub trait RenderingContextCore {
     }
 }
 
+/// **C4 stub.** Pre-cut, `GlCapability` was a trait exposing a GL
+/// context (`make_current` / swap buffers). The C1 cut deleted the
+/// GL/surfman corpus; this name is reinstated only as a stub so that
+/// the post-cut servo facade and integration tests still type-check
+/// at their import-points. The trait has no methods worth calling
+/// post-cut; consumers should migrate to [`WgpuCapability`].
+pub trait GlCapability {
+    /// No-op. Pre-cut this made the GL context current on the
+    /// calling thread; post-cut there is no GL context.
+    fn make_current(&self) -> Result<(), &'static str> {
+        Ok(())
+    }
+}
+
+/// Concrete-type companion to the [`GlCapability`] stub trait so the
+/// `&dyn GlCapability`-shaped pre-cut return position can be honored
+/// without a heap-allocated trait object.
+pub struct GlCapabilityHandle<'a> {
+    _phantom: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> GlCapabilityHandle<'a> {
+    pub fn new() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<'a> Default for GlCapabilityHandle<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<'a> GlCapability for GlCapabilityHandle<'a> {}
+
 /// Capability surface for wgpu-backed rendering contexts. Accessed via
 /// [`RenderingContextCore::wgpu`]. Holding an `&dyn WgpuCapability`
 /// proves at the type level that the context can drive a wgpu compositor.
 #[cfg(feature = "wgpu_backend")]
 pub trait WgpuCapability {
+    /// Clone of the context's wgpu instance. Required to construct
+    /// `netrender_device::WgpuHandles` so the netrender renderer can
+    /// drive the same GPU as the swapchain. `Instance` is internally
+    /// `Arc`-shared, so cloning is cheap.
+    fn instance(&self) -> wgpu::Instance;
+
+    /// Clone of the context's wgpu adapter. Paired with `instance()`
+    /// for `WgpuHandles`.
+    fn adapter(&self) -> wgpu::Adapter;
+
     /// Clone of the context's wgpu device. The device handle is internally
     /// `Arc`-shared, so cloning is cheap and returned handles operate on
     /// the same GPU context.

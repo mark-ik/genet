@@ -22,6 +22,7 @@ use style_traits::CSSPixel;
 
 pub mod display_list;
 pub mod largest_contentful_paint_candidate;
+pub mod rendering_context;
 pub mod rendering_context_core;
 pub mod serval_display_list;
 pub mod viewport_description;
@@ -130,12 +131,18 @@ pub enum PaintMessage {
     /// Inform the painter of a new display list for the given pipeline.
     /// Post-C3, the payload is the netrender-shaped
     /// [`serval_display_list::ServalDisplayList`] which the painter
-    /// translates into `netrender::SceneOp`s.
+    /// translates into `netrender::SceneOp`s. `paint_info` carries the
+    /// scroll-tree, epoch, and reference-frame metadata that the
+    /// painter consumes for hit-testing, scrolling, and frame cadence.
     SendDisplayList {
         /// The [`WebViewId`] that this display list belongs to.
         webview_id: WebViewId,
-        /// The display list itself.
+        /// The display list itself (paint-order op stream).
         display_list: ServalDisplayList,
+        /// Scroll-tree, epoch, viewport, root reference frame, caret
+        /// property binding, and other layout-side metadata the
+        /// painter needs to drive netrender per frame.
+        paint_info: display_list::PaintDisplayListInfo,
     },
     /// Ask the renderer to generate a frame for the current set of display lists
     /// from the given `PainterId`s that have been sent to the renderer.
@@ -309,14 +316,22 @@ impl CrossProcessPaintApi {
 
     /// Inform the painter of a new display list for the given pipeline.
     /// Post-C3, the payload is the netrender-shaped
-    /// [`serval_display_list::ServalDisplayList`]; serde handles
-    /// serialization end-to-end so no out-of-band channels are
-    /// needed.
+    /// [`serval_display_list::ServalDisplayList`] plus the paint-side
+    /// metadata bundle in [`display_list::PaintDisplayListInfo`]
+    /// (scroll-tree, epoch, reference-frame ids, caret property
+    /// binding, viewport details). Serde handles serialization
+    /// end-to-end.
     #[servo_tracing::instrument(skip_all)]
-    pub fn send_display_list(&self, webview_id: WebViewId, display_list: ServalDisplayList) {
+    pub fn send_display_list(
+        &self,
+        webview_id: WebViewId,
+        display_list: ServalDisplayList,
+        paint_info: display_list::PaintDisplayListInfo,
+    ) {
         if let Err(e) = self.0.send(PaintMessage::SendDisplayList {
             webview_id,
             display_list,
+            paint_info,
         }) {
             warn!("Error sending display list: {}", e);
         }

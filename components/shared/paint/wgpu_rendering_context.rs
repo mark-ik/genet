@@ -25,9 +25,7 @@ use crate::wgpu_readback::read_texture_to_image;
 /// clone of the device/queue via [`RenderingContext::backend_binding`] and renders
 /// into frame targets provided by [`RenderingContext::acquire_wgpu_frame_target`].
 pub struct WgpuRenderingContext {
-    #[allow(dead_code)]
     instance: wgpu::Instance,
-    #[allow(dead_code)]
     adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -266,6 +264,14 @@ impl RenderingContextCore for WgpuRenderingContext {
 }
 
 impl WgpuCapability for WgpuRenderingContext {
+    fn instance(&self) -> wgpu::Instance {
+        self.instance.clone()
+    }
+
+    fn adapter(&self) -> wgpu::Adapter {
+        self.adapter.clone()
+    }
+
     fn device(&self) -> wgpu::Device {
         self.device.clone()
     }

@@ -37,29 +37,16 @@ use paint_types::units::{
     LayoutVector2D,
 };
 use paint_types::{
-    BorderRadius, BorderStyle, ColorF, ExtendMode, ExternalScrollId, FontInstanceKey, GradientStop,
-    ImageKey, ImageRendering, MixBlendMode, PipelineId, RepeatMode, TransformStyle,
+    BorderRadius, BorderStyle, BoxShadowClipMode, ColorF, ExtendMode, ExternalScrollId,
+    FontInstanceKey, GradientStop, ImageKey, ImageRendering, LineStyle, MixBlendMode, PipelineId,
+    ReferenceFrameKind, RepeatMode, SpatialId, SpatialTreeItemKey, StickyOffsetBounds,
+    TransformStyle,
 };
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
 // Opaque palette indices
 // =============================================================================
-
-/// Index into [`ServalDisplayList::spatial_nodes`]. The root scroll
-/// frame is always at index 0; pipelines push additional spatial
-/// nodes (scroll frames, sticky frames, reference frames) and refer
-/// to them by id on subsequent items.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize)]
-pub struct SpatialId(pub u32);
-
-impl SpatialId {
-    pub const ROOT: SpatialId = SpatialId(0);
-
-    pub fn is_root(&self) -> bool {
-        self.0 == 0
-    }
-}
 
 /// Index into [`ServalDisplayList::clip_defs`]. Sentinel
 /// [`ClipChainId::INVALID`] marks "no clip applied"; layout's
@@ -167,25 +154,12 @@ pub struct StickyMargins {
     pub left: Option<f32>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, MallocSizeOf, PartialEq, Serialize)]
-pub struct StickyOffsetBounds {
-    pub min: f32,
-    pub max: f32,
-}
-
 #[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
 pub struct ReferenceFrameDef {
     pub parent: SpatialId,
     pub origin: LayoutPoint,
     pub transform: ReferenceFrameId,
     pub kind: ReferenceFrameKind,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, MallocSizeOf, PartialEq, Serialize)]
-pub enum ReferenceFrameKind {
-    #[default]
-    Transform,
-    Perspective,
 }
 
 /// One declared clip in [`ServalDisplayList::clip_defs`]. Items
@@ -233,9 +207,9 @@ pub struct ClipChainDef {
 
 #[derive(Clone, Copy, Debug, Deserialize, MallocSizeOf, PartialEq, Serialize)]
 pub struct CommonItemPlacement {
-    pub bounds: LayoutRect,
-    pub clip: ClipChainId,
-    pub spatial: SpatialId,
+    pub clip_rect: LayoutRect,
+    pub clip_chain_id: ClipChainId,
+    pub spatial_id: SpatialId,
     pub flags: PrimitiveFlags,
 }
 
@@ -264,15 +238,6 @@ pub struct LineItem {
     pub style: LineStyle,
     pub orientation: LineOrientation,
     pub wavy_thickness: f32,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, MallocSizeOf, PartialEq, Serialize)]
-pub enum LineStyle {
-    #[default]
-    Solid,
-    Dotted,
-    Dashed,
-    Wavy,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, MallocSizeOf, PartialEq, Serialize)]
@@ -347,32 +312,18 @@ pub struct BorderItem {
 
 #[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
 pub enum BorderDetails {
-    Normal(NormalBorderDetails),
+    Normal(paint_types::NormalBorder),
     NinePatch(NinePatchBorderDetails),
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, MallocSizeOf, PartialEq, Serialize)]
-pub struct NormalBorderDetails {
-    pub left: BorderSide,
-    pub right: BorderSide,
-    pub top: BorderSide,
-    pub bottom: BorderSide,
-    pub radius: BorderRadius,
-    pub do_aa: bool,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, MallocSizeOf, PartialEq, Serialize)]
-pub struct BorderSide {
-    pub color: ColorF,
-    pub style: BorderStyle,
-}
+pub use paint_types::border::BorderSide;
 
 #[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
 pub struct NinePatchBorderDetails {
     pub source: NinePatchBorderSource,
     pub width: i32,
     pub height: i32,
-    pub slice: LayoutSideOffsets,
+    pub slice: paint_types::units::DeviceIntSideOffsets,
     pub fill: bool,
     pub repeat_horizontal: RepeatMode,
     pub repeat_vertical: RepeatMode,
@@ -380,7 +331,7 @@ pub struct NinePatchBorderDetails {
 
 #[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
 pub enum NinePatchBorderSource {
-    Image(ImageKey),
+    Image(ImageKey, ImageRendering),
     Gradient(GradientPayload),
     RadialGradient(RadialGradientPayload),
     ConicGradient(ConicGradientPayload),
@@ -396,13 +347,6 @@ pub struct BoxShadowItem {
     pub spread_radius: f32,
     pub border_radius: BorderRadius,
     pub clip_mode: BoxShadowClipMode,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, MallocSizeOf, PartialEq, Serialize)]
-pub enum BoxShadowClipMode {
-    #[default]
-    Outset,
-    Inset,
 }
 
 #[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
@@ -616,11 +560,19 @@ impl ServalDisplayList {
         id
     }
 
-    /// Register a spatial node; returns the [`SpatialId`].
+    /// Register a spatial node; returns the [`SpatialId`]. The id's
+    /// numeric component indexes into [`Self::spatial_nodes`]; the
+    /// pipeline component echoes [`Self::pipeline_id`] so consumers can
+    /// disambiguate cross-pipeline ids.
     pub fn define_spatial_node(&mut self, def: SpatialNodeDef) -> SpatialId {
-        let id = SpatialId(self.spatial_nodes.len() as u32);
+        let id = SpatialId(self.spatial_nodes.len() as u64, self.pipeline_id);
         self.spatial_nodes.push(def);
         id
+    }
+
+    /// The root reference frame for this pipeline. Always index 0.
+    pub fn root_spatial_id(&self) -> SpatialId {
+        SpatialId(0, self.pipeline_id)
     }
 
     /// Register a transform; returns the [`ReferenceFrameId`]. Index 0
@@ -638,6 +590,549 @@ impl ServalDisplayList {
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
+}
+
+// =============================================================================
+// Webrender-shaped compatibility layer
+// =============================================================================
+//
+// During the C3 cut, layout-side code (`components/layout/display_list/`) is
+// being retargeted from the webrender_api `DisplayListBuilder` API to direct
+// `ServalDisplayItem` construction. Until that retargeting completes, the
+// compat surface below lets the layout call sites continue to invoke a
+// `wr`-shaped API (push_rect / push_image / define_clip_rect / etc) while
+// the bodies push proper `ServalDisplayItem` variants.
+//
+// Most bodies here are first-cut stubs that emit reasonable defaults; the
+// proper translation lands as part of Step 4 in
+// `docs/2026-05-06_c3_layout_reshape_plan.md`.
+
+/// Stub stand-in for webrender's `ComplexClipRegion`. Used by
+/// `define_clip_rounded_rect`. Drops the optional rounded-rect mode in
+/// favor of always-clip semantics for the first cut.
+#[derive(Clone, Copy, Debug)]
+pub struct ComplexClipRegion {
+    pub rect: LayoutRect,
+    pub radii: BorderRadius,
+    pub mode: ClipMode,
+}
+
+/// Stub stand-in for webrender's `Shadow`. Mirrors `ShadowItem` in
+/// content; kept as a separate type so the layout-side type-checks
+/// against the historical `wr::Shadow` shape.
+#[derive(Clone, Copy, Debug)]
+pub struct Shadow {
+    pub offset: LayoutVector2D,
+    pub color: ColorF,
+    pub blur_radius: f32,
+}
+
+/// Bundled (spatial_id, clip_chain_id) pair, as the webrender
+/// `SpaceAndClipInfo` expressed it. Layout passes one of these to
+/// `push_iframe` / `push_shadow`.
+#[derive(Clone, Copy, Debug)]
+pub struct SpaceAndClipInfo {
+    pub spatial_id: SpatialId,
+    pub clip_chain_id: ClipChainId,
+}
+
+/// Stub for webrender's `HasScrollLinkedEffect`. Layout uses it as an
+/// opaque marker on `define_scroll_frame`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum HasScrollLinkedEffect {
+    Yes,
+    #[default]
+    No,
+}
+
+// Re-export paint_types' versions under the historical webrender name
+// `PropertyBinding` for source-compat with layout call sites.
+pub use paint_types::PropertyBindingKey;
+pub use paint_types::property::PropertyValue as PropertyBinding;
+
+/// Layout-side `ClipId`. Returned by `define_clip_rect` /
+/// `define_clip_rounded_rect`; consumed by `define_clip_chain`. The
+/// painter side does not yet act on these directly — they're recorded
+/// in the `clip_defs` palette.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct WrClipId(pub u32);
+
+impl ServalDisplayList {
+    // ----- structural ops -----------------------------------------------
+
+    /// Webrender DisplayListBuilder mimicry: noop. ServalDisplayList is
+    /// ready-to-fill from `new`; no explicit begin step is needed.
+    pub fn begin(&mut self) {}
+
+    /// Webrender DisplayListBuilder mimicry: returns `((), ())` matching
+    /// the shape that layout's old `let (_, empty_display_list) = builder.end()`
+    /// destructured. The "built" display list is `self`; layout retains
+    /// the whole struct after this call.
+    pub fn end(&mut self) -> ((), ()) {
+        ((), ())
+    }
+
+    /// No-op. Original webrender call enabled serialized display-list
+    /// dump on the next `finalize`. Netrender doesn't use that channel.
+    pub fn dump_serialized_display_list(&mut self) {}
+
+    // ----- primitive pushes ---------------------------------------------
+
+    pub fn push_rect(
+        &mut self,
+        common: &CommonItemPlacement,
+        bounds: LayoutRect,
+        color: ColorF,
+    ) {
+        let placement = CommonItemPlacement {
+            clip_rect: bounds,
+            ..*common
+        };
+        self.push(ServalDisplayItem::Rect(RectItem { placement, color }));
+    }
+
+    pub fn push_rect_with_animation(
+        &mut self,
+        common: &CommonItemPlacement,
+        bounds: LayoutRect,
+        color: PropertyBinding<ColorF>,
+    ) {
+        let resolved_color = match color {
+            PropertyBinding::Value(c) | PropertyBinding::Binding(_, c) => c,
+        };
+        let placement = CommonItemPlacement {
+            clip_rect: bounds,
+            ..*common
+        };
+        self.push(ServalDisplayItem::RectWithAnimation(RectAnimItem {
+            placement,
+            color: resolved_color,
+            animation: None,
+        }));
+    }
+
+    pub fn push_image(
+        &mut self,
+        common: &CommonItemPlacement,
+        bounds: LayoutRect,
+        image_rendering: ImageRendering,
+        alpha_type: AlphaType,
+        image_key: ImageKey,
+        color: ColorF,
+    ) {
+        let placement = CommonItemPlacement {
+            clip_rect: bounds,
+            ..*common
+        };
+        self.push(ServalDisplayItem::Image(ImageItem {
+            placement,
+            image_key,
+            image_rendering,
+            alpha_type,
+            color,
+        }));
+    }
+
+    pub fn push_repeating_image(
+        &mut self,
+        common: &CommonItemPlacement,
+        bounds: LayoutRect,
+        stretch_size: LayoutSize,
+        tile_spacing: LayoutSize,
+        image_rendering: ImageRendering,
+        alpha_type: AlphaType,
+        image_key: ImageKey,
+        color: ColorF,
+    ) {
+        let placement = CommonItemPlacement {
+            clip_rect: bounds,
+            ..*common
+        };
+        self.push(ServalDisplayItem::RepeatingImage(RepeatingImageItem {
+            placement,
+            image_key,
+            stretch_size,
+            tile_spacing,
+            image_rendering,
+            alpha_type,
+            color,
+        }));
+    }
+
+    pub fn push_text(
+        &mut self,
+        common: &CommonItemPlacement,
+        bounds: LayoutRect,
+        glyphs: &[GlyphInstance],
+        font_instance: FontInstanceKey,
+        color: ColorF,
+        glyph_options: Option<GlyphOptions>,
+    ) {
+        let placement = CommonItemPlacement {
+            clip_rect: bounds,
+            ..*common
+        };
+        self.push(ServalDisplayItem::Text(TextItem {
+            placement,
+            font_instance,
+            color,
+            glyphs: glyphs.to_vec(),
+            glyph_options,
+        }));
+    }
+
+    pub fn push_line(
+        &mut self,
+        common: &CommonItemPlacement,
+        area: &LayoutRect,
+        wavy_thickness: f32,
+        orientation: LineOrientation,
+        color: &ColorF,
+        style: LineStyle,
+    ) {
+        let placement = CommonItemPlacement {
+            clip_rect: *area,
+            ..*common
+        };
+        self.push(ServalDisplayItem::Line(LineItem {
+            placement,
+            color: *color,
+            style,
+            orientation,
+            wavy_thickness,
+        }));
+    }
+
+    pub fn push_border(
+        &mut self,
+        common: &CommonItemPlacement,
+        bounds: LayoutRect,
+        widths: LayoutSideOffsets,
+        details: BorderDetails,
+    ) {
+        let placement = CommonItemPlacement {
+            clip_rect: bounds,
+            ..*common
+        };
+        self.push(ServalDisplayItem::Border(BorderItem {
+            placement,
+            widths,
+            details,
+        }));
+    }
+
+    pub fn push_box_shadow(
+        &mut self,
+        common: &CommonItemPlacement,
+        box_bounds: LayoutRect,
+        offset: LayoutVector2D,
+        color: ColorF,
+        blur_radius: f32,
+        spread_radius: f32,
+        border_radius: BorderRadius,
+        clip_mode: BoxShadowClipMode,
+    ) {
+        self.push(ServalDisplayItem::BoxShadow(BoxShadowItem {
+            placement: *common,
+            box_bounds,
+            offset,
+            color,
+            blur_radius,
+            spread_radius,
+            border_radius,
+            clip_mode,
+        }));
+    }
+
+    pub fn push_shadow(
+        &mut self,
+        _info: &SpaceAndClipInfo,
+        shadow: Shadow,
+        _should_inflate: bool,
+    ) {
+        self.push(ServalDisplayItem::PushShadow(ShadowItem {
+            offset: shadow.offset,
+            color: shadow.color,
+            blur_radius: shadow.blur_radius,
+        }));
+    }
+
+    pub fn pop_all_shadows(&mut self) {
+        self.push(ServalDisplayItem::PopAllShadows);
+    }
+
+    pub fn push_gradient(
+        &mut self,
+        common: &CommonItemPlacement,
+        bounds: LayoutRect,
+        gradient: GradientPayload,
+        tile_size: LayoutSize,
+        tile_spacing: LayoutSize,
+    ) {
+        let placement = CommonItemPlacement {
+            clip_rect: bounds,
+            ..*common
+        };
+        self.push(ServalDisplayItem::Gradient(GradientItem {
+            placement,
+            gradient,
+            tile_size,
+            tile_spacing,
+        }));
+    }
+
+    pub fn push_radial_gradient(
+        &mut self,
+        common: &CommonItemPlacement,
+        bounds: LayoutRect,
+        gradient: RadialGradientPayload,
+        tile_size: LayoutSize,
+        tile_spacing: LayoutSize,
+    ) {
+        let placement = CommonItemPlacement {
+            clip_rect: bounds,
+            ..*common
+        };
+        self.push(ServalDisplayItem::RadialGradient(RadialGradientItem {
+            placement,
+            gradient,
+            tile_size,
+            tile_spacing,
+        }));
+    }
+
+    pub fn push_conic_gradient(
+        &mut self,
+        common: &CommonItemPlacement,
+        bounds: LayoutRect,
+        gradient: ConicGradientPayload,
+        tile_size: LayoutSize,
+        tile_spacing: LayoutSize,
+    ) {
+        let placement = CommonItemPlacement {
+            clip_rect: bounds,
+            ..*common
+        };
+        self.push(ServalDisplayItem::ConicGradient(ConicGradientItem {
+            placement,
+            gradient,
+            tile_size,
+            tile_spacing,
+        }));
+    }
+
+    pub fn push_iframe(
+        &mut self,
+        bounds: LayoutRect,
+        _clip_rect: LayoutRect,
+        info: &SpaceAndClipInfo,
+        pipeline_id: PipelineId,
+        ignore_missing_pipeline: bool,
+    ) {
+        let placement = CommonItemPlacement {
+            clip_rect: bounds,
+            clip_chain_id: info.clip_chain_id,
+            spatial_id: info.spatial_id,
+            flags: PrimitiveFlags::empty(),
+        };
+        self.push(ServalDisplayItem::Iframe(IframeItem {
+            placement,
+            pipeline_id,
+            ignore_missing_pipeline,
+        }));
+    }
+
+    pub fn push_hit_test(
+        &mut self,
+        bounds: LayoutRect,
+        clip: ClipChainId,
+        spatial: SpatialId,
+        flags: PrimitiveFlags,
+        tag: (u64, u16),
+    ) {
+        let placement = CommonItemPlacement {
+            clip_rect: bounds,
+            clip_chain_id: clip,
+            spatial_id: spatial,
+            flags,
+        };
+        let combined_tag = ((tag.0 as u64) << 16) | (tag.1 as u64);
+        self.push(ServalDisplayItem::HitTest(HitTestItem {
+            placement,
+            tag: combined_tag,
+        }));
+    }
+
+    // ----- stacking-context / reference-frame ---------------------------
+
+    #[expect(clippy::too_many_arguments)]
+    pub fn push_stacking_context(
+        &mut self,
+        origin: LayoutPoint,
+        spatial: SpatialId,
+        flags: PrimitiveFlags,
+        clip: Option<ClipChainId>,
+        transform_style: TransformStyle,
+        mix_blend_mode: MixBlendMode,
+        filters: &[FilterOp],
+        _filter_datas: &[()],
+        _filter_primitives: &[()],
+        raster_space: RasterSpace,
+        sc_flags: StackingContextFlags,
+        _snapshot: Option<()>,
+    ) {
+        let placement = CommonItemPlacement {
+            clip_rect: LayoutRect::zero(),
+            clip_chain_id: clip.unwrap_or(ClipChainId::INVALID),
+            spatial_id: spatial,
+            flags,
+        };
+        self.push(ServalDisplayItem::PushStackingContext(StackingContextItem {
+            placement,
+            origin,
+            transform_style,
+            mix_blend_mode,
+            filters: filters.to_vec(),
+            flags: sc_flags,
+            raster_space,
+        }));
+    }
+
+    pub fn pop_stacking_context(&mut self) {
+        self.push(ServalDisplayItem::PopStackingContext);
+    }
+
+    pub fn push_reference_frame(
+        &mut self,
+        origin: LayoutPoint,
+        parent_spatial_id: SpatialId,
+        _transform_style: TransformStyle,
+        transform: PropertyBinding<LayoutTransform>,
+        kind: ReferenceFrameKind,
+        _key: SpatialTreeItemKey,
+    ) -> SpatialId {
+        let transform_value = match transform {
+            PropertyBinding::Value(t) | PropertyBinding::Binding(_, t) => t,
+        };
+        let transform_id = self.define_transform(transform_value);
+        let new_spatial = self.define_spatial_node(SpatialNodeDef::ReferenceFrame(
+            ReferenceFrameDef {
+                parent: parent_spatial_id,
+                origin,
+                transform: transform_id,
+                kind,
+            },
+        ));
+        self.push(ServalDisplayItem::PushReferenceFrame(ReferenceFramePushItem {
+            origin,
+            transform_id,
+            kind,
+            spatial_id: new_spatial,
+        }));
+        new_spatial
+    }
+
+    pub fn pop_reference_frame(&mut self) {
+        self.push(ServalDisplayItem::PopReferenceFrame);
+    }
+
+    // ----- clip / scroll palette ----------------------------------------
+
+    pub fn define_clip_rect(&mut self, spatial: SpatialId, rect: LayoutRect) -> WrClipId {
+        let id = self.clip_defs.len() as u32;
+        self.clip_defs
+            .push(ClipDef::Rect(ClipRectDef { spatial, rect }));
+        WrClipId(id)
+    }
+
+    pub fn define_clip_rounded_rect(
+        &mut self,
+        spatial: SpatialId,
+        region: ComplexClipRegion,
+    ) -> WrClipId {
+        let id = self.clip_defs.len() as u32;
+        self.clip_defs.push(ClipDef::RoundedRect(ClipRoundedRectDef {
+            spatial,
+            rect: region.rect,
+            radius: region.radii,
+            mode: region.mode,
+        }));
+        WrClipId(id)
+    }
+
+    pub fn define_clip_chain<I: IntoIterator<Item = WrClipId>>(
+        &mut self,
+        parent: Option<ClipChainId>,
+        clips: I,
+    ) -> ClipChainId {
+        // First-cut: chain semantics collapse to the last clip in the
+        // iterator, parented to whatever was passed in. Recorded in the
+        // clip palette so the painter can read it back; no per-clip-chain
+        // hierarchy materialized yet.
+        let parent = parent.unwrap_or(ClipChainId::INVALID);
+        let mut last = parent;
+        for WrClipId(id) in clips {
+            let chain_id = self.clip_defs.len() as u32;
+            self.clip_defs.push(ClipDef::Chain(ClipChainDef {
+                parent: last,
+                clip: ClipChainId(id),
+            }));
+            last = ClipChainId(chain_id);
+        }
+        last
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    pub fn define_scroll_frame(
+        &mut self,
+        parent: SpatialId,
+        external_id: ExternalScrollId,
+        content_rect: LayoutRect,
+        clip_rect: LayoutRect,
+        external_scroll_offset: LayoutVector2D,
+        _scroll_offset_generation: u64,
+        _has_scroll_linked_effect: HasScrollLinkedEffect,
+        _key: SpatialTreeItemKey,
+    ) -> SpatialId {
+        self.define_spatial_node(SpatialNodeDef::ScrollFrame(ScrollFrameDef {
+            parent,
+            external_id,
+            content_rect,
+            clip_rect,
+            external_scroll_offset,
+        }))
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    pub fn define_sticky_frame(
+        &mut self,
+        parent: SpatialId,
+        frame_rect: LayoutRect,
+        margins: euclid::SideOffsets2D<Option<f32>, paint_types::units::LayoutPixel>,
+        vertical_offset_bounds: paint_types::StickyOffsetBounds,
+        horizontal_offset_bounds: paint_types::StickyOffsetBounds,
+        _previously_applied_offset: LayoutVector2D,
+        _key: SpatialTreeItemKey,
+        _transform: Option<PropertyBinding<LayoutTransform>>,
+    ) -> SpatialId {
+        self.define_spatial_node(SpatialNodeDef::StickyFrame(StickyFrameDef {
+            parent,
+            frame_rect,
+            margins: StickyMargins {
+                top: margins.top,
+                right: margins.right,
+                bottom: margins.bottom,
+                left: margins.left,
+            },
+            vertical_offset_bounds,
+            horizontal_offset_bounds,
+        }))
+    }
+
+    /// No-op stub. Webrender accepted gradient stops as a separate
+    /// stream; in the netrender shape stops live inline on the
+    /// `GradientPayload` so this helper has no work to do.
+    pub fn push_stops(&mut self, _stops: &[GradientStop]) {}
 }
 
 impl fmt::Display for ServalDisplayList {
@@ -680,12 +1175,13 @@ mod tests {
             DeviceIntSize::new(800, 600),
             PipelineId::default(),
         );
+        let root = list.root_spatial_id();
         let id1 = list.define_clip(ClipDef::Rect(ClipRectDef {
-            spatial: SpatialId::ROOT,
+            spatial: root,
             rect: LayoutRect::zero(),
         }));
         let id2 = list.define_clip(ClipDef::Rect(ClipRectDef {
-            spatial: SpatialId::ROOT,
+            spatial: root,
             rect: LayoutRect::zero(),
         }));
         assert_eq!(id1, ClipChainId(0));
@@ -698,12 +1194,6 @@ mod tests {
         assert!(f.contains(PrimitiveFlags::HIT_TESTABLE));
         assert!(f.contains(PrimitiveFlags::ANTIALIASED));
         assert!(!f.contains(PrimitiveFlags::IS_BACKFACE));
-    }
-
-    #[test]
-    fn spatial_id_root_round_trip() {
-        assert!(SpatialId::ROOT.is_root());
-        assert!(!SpatialId(1).is_root());
     }
 
     #[test]
