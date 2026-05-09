@@ -58,10 +58,11 @@ windows = { workspace = true }
 [target.'cfg(target_vendor = "apple")'.dependencies]
 # C4 macOS compositor backend (compositor_calayer.rs).
 objc2 = { workspace = true }
-objc2-core-foundation = { workspace = true }
+objc2-core-foundation = { workspace = true, features = ["CFBase", "CFDictionary", "CFString", "CFNumber"] }
 objc2-foundation = { workspace = true }
+objc2-io-surface = { workspace = true }
 objc2-quartz-core = { workspace = true }
-objc2-metal = { workspace = true }
+objc2-metal = { workspace = true, features = ["MTLDevice", "MTLTexture", "MTLAllocation", "MTLResource", "objc2-io-surface"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # AppKit-only — used by `compositor_factory.rs` to extract the

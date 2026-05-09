@@ -71,12 +71,22 @@
 #![allow(unsafe_code)]
 #![allow(dead_code)]
 
+use std::ffi::c_void;
+
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_core_foundation::CGSize;
+use objc2_core_foundation::{
+    kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFDictionary, CFNumber,
+    CFNumberType, CFRetained, CGPoint, CGRect, CGSize,
+};
+use objc2_io_surface::{
+    kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight, kIOSurfacePixelFormat,
+    kIOSurfaceWidth, IOSurfaceRef,
+};
 use objc2_metal::{
     MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLDevice,
-    MTLPixelFormat, MTLSharedEvent, MTLTexture,
+    MTLPixelFormat, MTLSharedEvent, MTLStorageMode, MTLTexture, MTLTextureDescriptor,
+    MTLTextureUsage,
 };
 use objc2_quartz_core::{CAAutoresizingMask, CALayer, CAMetalDrawable, CAMetalLayer};
 use rustc_hash::FxHashMap;
@@ -125,11 +135,29 @@ pub struct MacosCALayerBackend {
     surfaces: FxHashMap<SurfaceKey, CALayerSurface>,
 }
 
-/// Per-`SurfaceKey` CALayer node. Holds the layer for declared
-/// compositor surfaces (iframes, video, will-change islands).
+/// Per-`SurfaceKey` CALayer node. Holds everything keyed to a
+/// declared compositor surface (iframes, video, will-change
+/// islands):
+///
+/// - `layer`: a `CALayer` (sublayer of `parent_layer`) whose
+///   `contents` is set to the IOSurface; the OS compositor
+///   composites pixels directly from the shared memory.
+/// - `iosurface`: the underlying shared memory the
+///   destination `MTLTexture` is backed by. Held for refcount
+///   ownership; CoreAnimation also retains it via
+///   `layer.contents`.
+/// - `_mtl_texture`: the IOSurface-backed `MTLTexture` we handed
+///   to wgpu via `texture_from_raw`. wgpu's
+///   `create_texture_from_hal` retains its own copy, but we keep a
+///   reference here in case the wgpu side ever drops first.
+/// - `_destination_format`: format we created the wgpu wrapper at;
+///   stashed for future format-change detection if/when we grow
+///   reallocation logic.
 struct CALayerSurface {
     layer: Retained<CALayer>,
-    destination: Texture,
+    iosurface: CFRetained<IOSurfaceRef>,
+    _mtl_texture: Retained<ProtocolObject<dyn MTLTexture>>,
+    _destination_format: wgpu::TextureFormat,
 }
 
 unsafe impl Send for MacosCALayerBackend {}
@@ -358,30 +386,316 @@ impl OsCompositorBackend for MacosCALayerBackend {
         }
     }
 
-    // `declare` and `present` inherit the trait defaults until the
-    // per-`SurfaceKey` CALayer path is wired (allocate IOSurface-
-    // backed MTLTexture, create a CALayer with `contents` set to
-    // the IOSurface, addSublayer to the parent; on present apply
-    // transform/clip/opacity to the per-surface CALayer and kick a
-    // CATransaction). The default `declare` does plain wgpu
-    // allocation, which is the right starting point for any
-    // backend that hasn't yet wired its per-surface OS handoff.
+    fn declare(
+        &mut self,
+        key: SurfaceKey,
+        host: &HostWgpuContext,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Result<wgpu::Texture, crate::compositor::BoxedBackendError> {
+        // Currently only `Rgba8Unorm` is supported — the master
+        // format the netrender smoke selects. BGRA8 / wide-gamut /
+        // HDR support follows the master format story; lift this
+        // when those land.
+        if format != wgpu::TextureFormat::Rgba8Unorm {
+            return Err(Box::new(BackendError::UnsupportedFormat(format!(
+                "{format:?} (only Rgba8Unorm is supported today)"
+            ))));
+        }
+
+        // 1. Allocate IOSurface (shared memory the OS compositor +
+        //    Metal both read).
+        let iosurface = create_iosurface_rgba8(width, height)
+            .map_err(|e| Box::new(BackendError::IOSurface(format!("{e}"))))?;
+
+        // 2. Wrap as a Metal texture so wgpu can render into it.
+        let mtl_texture = iosurface_to_mtl_texture(&self.metal_device, &iosurface, width, height)
+            .map_err(|e| Box::new(BackendError::MtlTextureFromIOSurface(format!("{e}"))))?;
+
+        // 3. Hand the MTLTexture to wgpu via wgpu-hal's
+        //    `texture_from_raw`. The returned `wgpu::Texture` is a
+        //    handle into the same MTLTexture; wgpu's `copy_*` and
+        //    render-pass APIs work against it normally.
+        let dest = wgpu_texture_from_iosurface_mtl(host, mtl_texture.clone(), width, height, format);
+
+        // 4. Create a per-surface CALayer; set `contents` to the
+        //    IOSurface so the OS compositor reads pixels directly
+        //    from shared memory (no draw step).
+        let layer = unsafe {
+            let l = CALayer::new();
+            l.setContentsScale(self.parent_layer.contentsScale());
+            // CALayer.contents accepts `Option<&AnyObject>`; an
+            // IOSurface is an `AnyObject` via its `__IOSurfaceRef`
+            // type-encoding. Cast through the raw pointer.
+            let iosurface_obj: *mut objc2::runtime::AnyObject =
+                CFRetained::as_ptr(&iosurface).as_ptr() as *mut _;
+            l.setContents(Some(&*iosurface_obj));
+            l
+        };
+
+        // Frame the per-surface CALayer at its declared bounds. The
+        // wrapper computes bounds-relative position; here we set the
+        // raw frame against the parent. `present` overrides this on
+        // each frame from the `transform` arg, so this is just the
+        // initial position.
+        layer.setFrame(CGRect {
+            origin: CGPoint { x: 0.0, y: 0.0 },
+            size: CGSize {
+                width: width as f64 / self.parent_layer.contentsScale(),
+                height: height as f64 / self.parent_layer.contentsScale(),
+            },
+        });
+
+        self.parent_layer.addSublayer(&layer);
+
+        self.surfaces.insert(
+            key,
+            CALayerSurface {
+                layer,
+                iosurface,
+                _mtl_texture: mtl_texture,
+                _destination_format: format,
+            },
+        );
+
+        Ok(dest)
+    }
 
     fn destroy(&mut self, key: SurfaceKey) {
-        // Mirrors the per-surface CALayer cleanup that lands when
-        // `declare` is wired: remove the per-surface layer from the
-        // tree if one exists. Today `surfaces` is never populated
-        // (declare uses the default plain-alloc path), so this is a
-        // no-op in practice — kept so future per-surface impl
-        // doesn't need to redefine cleanup.
         if let Some(surface) = self.surfaces.remove(&key) {
             surface.layer.removeFromSuperlayer();
         }
     }
+
+    fn present(
+        &mut self,
+        key: SurfaceKey,
+        transform: [f32; 6],
+        clip: Option<[f32; 4]>,
+        opacity: f32,
+    ) {
+        let Some(surface) = self.surfaces.get(&key) else {
+            log::warn!(
+                "[MacosCALayerBackend] present({key:?}) called before declare; skipping"
+            );
+            return;
+        };
+
+        // Transform: 2D affine `[a, b, c, d, tx, ty]` per
+        // `LayerPresent.world_transform` (column-major). Maps to
+        // `CGAffineTransform { a, b, c, d, tx, ty }` 1:1 — both are
+        // column-major 2D affines.
+        surface.layer.setAffineTransform(objc2_core_foundation::CGAffineTransform {
+            a: transform[0] as f64,
+            b: transform[1] as f64,
+            c: transform[2] as f64,
+            d: transform[3] as f64,
+            tx: transform[4] as f64,
+            ty: transform[5] as f64,
+        });
+
+        // Clip: `Some([min_x, min_y, max_x, max_y])` becomes the
+        // layer's `bounds` + `masksToBounds`. `None` clears the mask
+        // so the full layer composites. World coordinates are
+        // pixels; convert to layer-local points via contentsScale.
+        let scale = self.parent_layer.contentsScale();
+        match clip {
+            Some([x0, y0, x1, y1]) => {
+                surface.layer.setMasksToBounds(true);
+                surface.layer.setBounds(CGRect {
+                    origin: CGPoint {
+                        x: x0 as f64 / scale,
+                        y: y0 as f64 / scale,
+                    },
+                    size: CGSize {
+                        width: (x1 - x0) as f64 / scale,
+                        height: (y1 - y0) as f64 / scale,
+                    },
+                });
+            },
+            None => {
+                surface.layer.setMasksToBounds(false);
+            },
+        }
+
+        surface.layer.setOpacity(opacity);
+    }
+}
+
+// =============================================================================
+// IOSurface plumbing for per-`SurfaceKey` declared compositor surfaces
+// =============================================================================
+
+/// FourCC `'RGBA'` packed big-endian as a 32-bit integer. Used as
+/// `kIOSurfacePixelFormat` value for the IOSurface storage we
+/// allocate.
+const IOSURFACE_FOURCC_RGBA: i32 =
+    ((b'R' as i32) << 24) | ((b'G' as i32) << 16) | ((b'B' as i32) << 8) | (b'A' as i32);
+
+/// Build a CFNumber wrapping a 32-bit signed integer. Helper for
+/// the IOSurface-properties dictionary.
+fn cf_number_i32(value: i32) -> Option<CFRetained<CFNumber>> {
+    unsafe {
+        CFNumber::new(
+            None,
+            CFNumberType::SInt32Type,
+            &value as *const _ as *const c_void,
+        )
+    }
+}
+
+/// Allocate an RGBA8-formatted IOSurface of `width x height` pixels.
+///
+/// The IOSurface is shared memory readable by both the OS
+/// compositor (via `CALayer.contents`) and Metal (via
+/// `MTLDevice::newTextureWithDescriptor:iosurface:plane:`).
+///
+/// Pixel format is `'RGBA'` (FourCC `0x52474241`) with 4 bytes per
+/// pixel and a row stride of `width * 4`. `Rgba8Unorm` is the master
+/// format the netrender smoke selects, so this matches without a
+/// format-conversion blit.
+fn create_iosurface_rgba8(
+    width: u32,
+    height: u32,
+) -> Result<CFRetained<IOSurfaceRef>, &'static str> {
+    let bytes_per_element: i32 = 4;
+    let bytes_per_row: i32 = (width as i32)
+        .checked_mul(bytes_per_element)
+        .ok_or("IOSurface bytes_per_row overflow")?;
+
+    let cf_width = cf_number_i32(width as i32).ok_or("CFNumberCreate(width) failed")?;
+    let cf_height = cf_number_i32(height as i32).ok_or("CFNumberCreate(height) failed")?;
+    let cf_bpr = cf_number_i32(bytes_per_row).ok_or("CFNumberCreate(bytes_per_row) failed")?;
+    let cf_bpe =
+        cf_number_i32(bytes_per_element).ok_or("CFNumberCreate(bytes_per_element) failed")?;
+    let cf_pf = cf_number_i32(IOSURFACE_FOURCC_RGBA)
+        .ok_or("CFNumberCreate(pixel_format) failed")?;
+
+    // Build a 5-entry CFDictionary with the IOSurface property keys.
+    // Using `CFDictionary::new` (the raw CFDictionaryCreate
+    // wrapper); pairs of `*const c_void` — cast keys / values
+    // through `as_ptr`.
+    //
+    // SAFETY: the `kIOSurface*` extern statics are CFString
+    // singletons exported by IOSurface.framework; reading them is
+    // sound but requires an `unsafe` block per Rust's extern-static
+    // rule.
+    let keys: [*const c_void; 5] = unsafe {
+        [
+            (&**kIOSurfaceWidth) as *const _ as *const c_void,
+            (&**kIOSurfaceHeight) as *const _ as *const c_void,
+            (&**kIOSurfaceBytesPerRow) as *const _ as *const c_void,
+            (&**kIOSurfaceBytesPerElement) as *const _ as *const c_void,
+            (&**kIOSurfacePixelFormat) as *const _ as *const c_void,
+        ]
+    };
+    let values: [*const c_void; 5] = [
+        CFRetained::as_ptr(&cf_width).as_ptr() as *const c_void,
+        CFRetained::as_ptr(&cf_height).as_ptr() as *const c_void,
+        CFRetained::as_ptr(&cf_bpr).as_ptr() as *const c_void,
+        CFRetained::as_ptr(&cf_bpe).as_ptr() as *const c_void,
+        CFRetained::as_ptr(&cf_pf).as_ptr() as *const c_void,
+    ];
+    let dict = unsafe {
+        CFDictionary::new(
+            None,
+            keys.as_ptr() as *mut _,
+            values.as_ptr() as *mut _,
+            keys.len() as isize,
+            &kCFTypeDictionaryKeyCallBacks,
+            &kCFTypeDictionaryValueCallBacks,
+        )
+    }
+    .ok_or("CFDictionaryCreate failed")?;
+
+    // Hand the properties dict to IOSurfaceRef::new (the
+    // non-deprecated wrapper around IOSurfaceCreate). The dict is
+    // borrowed for the call only.
+    let surface = unsafe { IOSurfaceRef::new(&dict) }
+        .ok_or("IOSurfaceCreate returned nil")?;
+    drop(dict);
+    Ok(surface)
+}
+
+/// Wrap an existing IOSurface as a Metal texture (`MTLTexture`)
+/// usable as a copy / render-pass destination.
+///
+/// Returns the new `MTLTexture` retained; caller is responsible for
+/// keeping it alive while wgpu / CALayer reference the underlying
+/// IOSurface.
+fn iosurface_to_mtl_texture(
+    metal_device: &ProtocolObject<dyn MTLDevice>,
+    iosurface: &IOSurfaceRef,
+    width: u32,
+    height: u32,
+) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, &'static str> {
+    let descriptor = unsafe {
+        MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+            MTLPixelFormat::RGBA8Unorm,
+            width as usize,
+            height as usize,
+            false,
+        )
+    };
+    descriptor.setUsage(MTLTextureUsage::ShaderRead | MTLTextureUsage::RenderTarget);
+    // `Shared` for IOSurface backing — the surface is allocated in
+    // shared memory and visible to the OS compositor; `Private`
+    // would refuse the IOSurface attachment.
+    descriptor.setStorageMode(MTLStorageMode::Shared);
+
+    metal_device
+        .newTextureWithDescriptor_iosurface_plane(&descriptor, iosurface, 0)
+        .ok_or("newTextureWithDescriptor:iosurface:plane: returned nil")
+}
+
+/// Hand an IOSurface-backed `MTLTexture` to wgpu via wgpu-hal's
+/// `texture_from_raw` -> `create_texture_from_hal` pipeline. The
+/// returned `wgpu::Texture` is a regular handle into the same
+/// underlying storage; `copy_texture_to_texture` and render-pass
+/// APIs work against it normally.
+fn wgpu_texture_from_iosurface_mtl(
+    host: &HostWgpuContext,
+    mtl_texture: Retained<ProtocolObject<dyn MTLTexture>>,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+) -> wgpu::Texture {
+    unsafe {
+        let hal_texture = wgpu::hal::metal::Device::texture_from_raw(
+            mtl_texture,
+            format,
+            objc2_metal::MTLTextureType::Type2D,
+            1,
+            1,
+            wgpu::hal::CopyExtent {
+                width,
+                height,
+                depth: 1,
+            },
+        );
+        host.device.create_texture_from_hal::<wgpu::wgc::api::Metal>(
+            hal_texture,
+            &wgpu::TextureDescriptor {
+                label: Some("MacosCALayerBackend IOSurface destination"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+        )
+    }
 }
 
 /// Errors raised by [`MacosCALayerBackend::new`] /
-/// [`MacosCALayerBackend::present_master`].
+/// [`MacosCALayerBackend::present_master`] / `declare`.
 #[derive(Debug)]
 pub enum BackendError {
     /// The supplied host wgpu context is not running on Metal.
@@ -404,6 +718,13 @@ pub enum BackendError {
     CommandBufferAlloc,
     /// `MTLCommandBuffer::blitCommandEncoder` returned `nil`.
     BlitEncoderAlloc,
+    /// `declare` was called with an unsupported `wgpu::TextureFormat`.
+    UnsupportedFormat(String),
+    /// IOSurface creation failed (CFDictionary construction or
+    /// `IOSurfaceCreate` itself).
+    IOSurface(String),
+    /// `MTLDevice::newTextureWithDescriptor:iosurface:plane:` failed.
+    MtlTextureFromIOSurface(String),
     /// A path that hasn't been wired yet — see the named area.
     Unwired(&'static str),
 }
@@ -430,6 +751,16 @@ impl std::fmt::Display for BackendError {
             Self::BlitEncoderAlloc => {
                 f.write_str("MacosCALayerBackend: blitCommandEncoder returned nil")
             },
+            Self::UnsupportedFormat(fmt) => {
+                write!(f, "MacosCALayerBackend: unsupported destination format: {fmt}")
+            },
+            Self::IOSurface(reason) => {
+                write!(f, "MacosCALayerBackend: IOSurface creation failed: {reason}")
+            },
+            Self::MtlTextureFromIOSurface(reason) => write!(
+                f,
+                "MacosCALayerBackend: MTLDevice::newTextureWithDescriptor:iosurface:plane: failed: {reason}",
+            ),
             Self::Unwired(area) => write!(f, "MacosCALayerBackend: not yet wired: {area}"),
         }
     }
