@@ -217,11 +217,28 @@ impl MacosCALayerBackend {
         };
 
         // Configure CAMetalLayer for the wgpu Metal device.
-        // `RGBA8Unorm` matches the master format the netrender smoke
-        // selects (`Renderer::render_with_compositor` is called with
-        // `wgpu::TextureFormat::Rgba8Unorm`); same-format both sides
-        // lets `MTLBlitCommandEncoder copyFromTexture:toTexture:`
-        // succeed without a render-graph format conversion.
+        //
+        // **Pixel-format note (accepted contract violation).**
+        // Apple's documented `CAMetalLayer.pixelFormat` allow-list
+        // is `BGRA8Unorm` / `BGRA8Unorm_sRGB` / `RGBA16Float` /
+        // `RGB10A2Unorm` / `BGR10A2Unorm` (+ iOS XR variants);
+        // `RGBA8Unorm` is *not* on the list. We use it anyway
+        // because vello 0.8's compute pipeline hardcodes
+        // `Rgba8Unorm` as the storage-texture-binding format, and
+        // `MTLBlitCommandEncoder copyFromTexture:toTexture:`
+        // requires identical src/dst formats — going BGRA on the
+        // drawable would mandate a format-converting render pass
+        // (~80-150 LOC of swizzle-shader plumbing). macOS 11+
+        // permits RGBA8Unorm CAMetalLayer in practice (verified by
+        // smoke); pre-11 macOS would reject it. The right long-
+        // term fix is either:
+        //   1. vello growing first-class `Bgra8Unorm` storage
+        //      target support (upstream task);
+        //   2. inserting a swizzle render-pass between master and
+        //      drawable here.
+        // Until then, this is a known contract violation gated to
+        // macOS 11+ tooling targets.
+        //
         // `framebufferOnly: false` is required because we blit into
         // the drawable's texture rather than rendering through a
         // `MTLRenderPassDescriptor`.
@@ -394,10 +411,15 @@ impl OsCompositorBackend for MacosCALayerBackend {
         height: u32,
         format: wgpu::TextureFormat,
     ) -> Result<wgpu::Texture, crate::compositor::BoxedBackendError> {
-        // Currently only `Rgba8Unorm` is supported — the master
-        // format the netrender smoke selects. BGRA8 / wide-gamut /
-        // HDR support follows the master format story; lift this
-        // when those land.
+        // Currently only `Rgba8Unorm` is supported — vello 0.8's
+        // compute pipeline hardcodes that as its storage-texture
+        // binding format, so the master is `Rgba8Unorm` and the
+        // per-surface IOSurface-backed destination must match for
+        // `copy_texture_to_texture` to succeed (same-format src/dst
+        // requirement). See the pixel-format note in
+        // `MacosCALayerBackend::new` for the BGRA-vs-RGBA story.
+        // Wide-gamut / HDR support follows the master format
+        // story; lift this when those land.
         if format != wgpu::TextureFormat::Rgba8Unorm {
             return Err(Box::new(BackendError::UnsupportedFormat(format!(
                 "{format:?} (only Rgba8Unorm is supported today)"
@@ -533,8 +555,11 @@ impl OsCompositorBackend for MacosCALayerBackend {
 // =============================================================================
 
 /// FourCC `'RGBA'` packed big-endian as a 32-bit integer. Used as
-/// `kIOSurfacePixelFormat` value for the IOSurface storage we
-/// allocate.
+/// the `kIOSurfacePixelFormat` value for the IOSurface storage we
+/// allocate. Matches vello 0.8's hardcoded `Rgba8Unorm` storage-
+/// binding format (so the master can be blitted into the IOSurface
+/// without a format-converting pass). See the pixel-format note in
+/// `MacosCALayerBackend::new` for the BGRA-vs-RGBA story.
 const IOSURFACE_FOURCC_RGBA: i32 =
     ((b'R' as i32) << 24) | ((b'G' as i32) << 16) | ((b'B' as i32) << 8) | (b'A' as i32);
 
@@ -557,9 +582,11 @@ fn cf_number_i32(value: i32) -> Option<CFRetained<CFNumber>> {
 /// `MTLDevice::newTextureWithDescriptor:iosurface:plane:`).
 ///
 /// Pixel format is `'RGBA'` (FourCC `0x52474241`) with 4 bytes per
-/// pixel and a row stride of `width * 4`. `Rgba8Unorm` is the master
-/// format the netrender smoke selects, so this matches without a
-/// format-conversion blit.
+/// pixel and a row stride of `width * 4`. `Rgba8Unorm` is the
+/// master format vello 0.8 produces (storage-binding format
+/// hardcoded), so this matches the master without a format-
+/// converting blit. See the pixel-format note in
+/// `MacosCALayerBackend::new` for the BGRA-vs-RGBA story.
 fn create_iosurface_rgba8(
     width: u32,
     height: u32,

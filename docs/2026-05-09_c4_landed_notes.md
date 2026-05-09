@@ -103,7 +103,24 @@ Validation env at [`.cargo-check-logs/cargo-check-env.ps1`](../.cargo-check-logs
    shows the per-surface CALayer correctly compositing at 50%
    opacity over the master CAMetalLayer (olive blends where master
    red shows through, pure green where master green is occluded).
-2. **macOS GPU-side cross-queue sync — blocked on upstream
+2. **macOS `CAMetalLayer.pixelFormat` documented contract
+   violation — blocked on either vello upstream or a swizzle
+   render pass.** Apple's `CAMetalLayer.pixelFormat` allow-list is
+   `BGRA8Unorm` / `BGRA8Unorm_sRGB` / `RGBA16Float` /
+   `RGB10A2Unorm` / `BGR10A2Unorm` (+ iOS XR variants); we use
+   `RGBA8Unorm` because vello 0.8's compute pipeline hardcodes
+   `Rgba8Unorm` as the storage-texture-binding format and
+   `MTLBlitCommandEncoder copyFromTexture:toTexture:` requires
+   identical src/dst formats — going BGRA on the drawable would
+   need either (a) vello first-class `Bgra8Unorm` storage targets
+   (upstream task) or (b) a swizzle render-pass between master
+   and drawable (~80-150 LOC). macOS 11+ permits
+   `RGBA8Unorm` in practice (verified by the smoke); pre-11 macOS
+   would reject. Long inline note in
+   [components/paint/compositor_calayer.rs](../components/paint/compositor_calayer.rs)'s
+   `MacosCALayerBackend::new` documents the situation.
+
+3. **macOS GPU-side cross-queue sync — blocked on upstream
    wgpu-hal.** Today's `MacosCALayerBackend::present_master`
    CPU-stalls via `wgpu::Device::poll(Wait)` because wgpu-hal 29's
    `metal::Queue` does not expose its underlying
@@ -122,10 +139,10 @@ Validation env at [`.cargo-check-logs/cargo-check-env.ps1`](../.cargo-check-logs
    shape). Once that lands, the GPU-side wait is ~80–150 LOC.
    Until then the CPU stall is invisible at smoke cadence (~1ms
    on a 60Hz path) and the right thing to keep.
-3. **Linux smoke receipt.** `WaylandSubsurfaceBackend` is still a
+4. **Linux smoke receipt.** `WaylandSubsurfaceBackend` is still a
    skeleton — `wl_subsurface` placement + commit, `dmabuf` import
    path need a Wayland session (Mutter or Sway) to validate.
-4. **C4 tail — `components/servo/webview.rs` `Paint`-method
+5. **C4 tail — `components/servo/webview.rs` `Paint`-method
    gaps — ✅ landed (closed prior to this doc revision).** Every
    method `webview.rs` calls on `Paint` (`add_webview`,
    `remove_webview`, `render`, `composite_texture`,
@@ -143,11 +160,13 @@ Validation env at [`.cargo-check-logs/cargo-check-env.ps1`](../.cargo-check-logs
    the remaining `cargo check -p servo` cost on Mac is the
    SpiderMonkey native build, not Rust-side method gaps.
 
-(1) is ✅. (2) is upstream-blocked, performance-only, no visual
-gap. (3) gates D3 ✅ on Linux. (4) is ✅ as well. None gate the
-netrender-side roadmap — netrender's 5.4 already shipped, and
-serval's 5.5b done-condition is now satisfied on **both Windows
-and macOS**.
+(1) is ✅. (2) is a documented contract violation, gated to
+macOS 11+; correctness-only, visually working in practice. (3) is
+upstream-blocked, performance-only, no visual gap. (4) gates D3
+✅ on Linux. (5) is ✅ as well. None gate the netrender-side
+roadmap — netrender's 5.4 already shipped, and serval's 5.5b
+done-condition is now satisfied on **both Windows and macOS**
+(modulo the `CAMetalLayer.pixelFormat` note in (2)).
 
 ---
 

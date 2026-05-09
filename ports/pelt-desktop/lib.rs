@@ -595,6 +595,13 @@ fn build_metal_handles() -> Result<netrender::WgpuHandles, String> {
         force_fallback_adapter: false,
     }))
     .map_err(|err| format!("request_adapter: {err}"))?;
+    // No optional features: vello's compute pipeline binds its
+    // storage texture as `Rgba8Unorm`-format-expected (vello 0.8's
+    // bind-group descriptor hardcodes the storage texture format),
+    // so the master must be `Rgba8Unorm` regardless of what the OS
+    // compositor wants downstream. See the BGRA-vs-RGBA note in
+    // [compositor_calayer.rs](../../components/paint/compositor_calayer.rs)
+    // for the macOS path's accepted contract violation.
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("pelt macos-present device"),
         required_features: wgpu::Features::empty(),
