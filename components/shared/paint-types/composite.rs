@@ -19,6 +19,7 @@ pub enum MixBlendMode {
     Saturation,
     Color,
     Luminosity,
+    PlusLighter,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize)]

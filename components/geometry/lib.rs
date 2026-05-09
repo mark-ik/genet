@@ -82,17 +82,37 @@ impl FastLayoutTransform {
         self.then(&Self::Offset(offset))
     }
 
-    fn from_transform(transform: LayoutTransform) -> Self {
+    pub fn from_transform(transform: LayoutTransform) -> Self {
         Self::Transform {
             inverse: transform.inverse(),
             transform,
         }
     }
 
-    fn to_transform(&self) -> LayoutTransform {
+    pub fn to_transform(&self) -> LayoutTransform {
         match *self {
             Self::Offset(offset) => LayoutTransform::translation(offset.x, offset.y, 0.0),
             Self::Transform { transform, .. } => transform,
+        }
+    }
+
+    /// Project a point in this frame down to a 2D layout point. For pure
+    /// offsets the projection is exact (translation only); for full 3D
+    /// transforms it delegates to euclid's `Transform3D::transform_point2d`.
+    pub fn project_point2d(&self, point: LayoutPoint) -> Option<LayoutPoint> {
+        match *self {
+            Self::Offset(offset) => Some(point + offset),
+            Self::Transform { transform, .. } => transform.transform_point2d(point),
+        }
+    }
+
+    /// True when the transform's backface (negative determinant after the
+    /// 3D-to-2D projection) is the side facing the viewer. Pure offsets
+    /// preserve orientation, so always return `false` for them.
+    pub fn is_backface_visible(&self) -> bool {
+        match *self {
+            Self::Offset(_) => false,
+            Self::Transform { transform, .. } => transform.is_backface_visible(),
         }
     }
 }
@@ -100,6 +120,12 @@ impl FastLayoutTransform {
 impl Default for FastLayoutTransform {
     fn default() -> Self {
         Self::identity()
+    }
+}
+
+impl From<LayoutTransform> for FastLayoutTransform {
+    fn from(transform: LayoutTransform) -> Self {
+        Self::from_transform(transform)
     }
 }
 

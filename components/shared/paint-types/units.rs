@@ -65,3 +65,32 @@ where
         self.size.width > T::default() && self.size.height > T::default()
     }
 }
+
+/// Corner accessors for `euclid::Box2D`. Box2D stores `min` (top-left) and
+/// `max` (bottom-right) corners directly; the cross corners need to be
+/// constructed from those. Mirrors webrender's `LayoutRect` ergonomics
+/// without pulling webrender_api back in.
+pub trait BoxCorners<T, U> {
+    fn top_left(&self) -> euclid::Point2D<T, U>;
+    fn top_right(&self) -> euclid::Point2D<T, U>;
+    fn bottom_left(&self) -> euclid::Point2D<T, U>;
+    fn bottom_right(&self) -> euclid::Point2D<T, U>;
+}
+
+impl<T, U> BoxCorners<T, U> for euclid::Box2D<T, U>
+where
+    T: Copy,
+{
+    fn top_left(&self) -> euclid::Point2D<T, U> {
+        self.min
+    }
+    fn top_right(&self) -> euclid::Point2D<T, U> {
+        euclid::Point2D::new(self.max.x, self.min.y)
+    }
+    fn bottom_left(&self) -> euclid::Point2D<T, U> {
+        euclid::Point2D::new(self.min.x, self.max.y)
+    }
+    fn bottom_right(&self) -> euclid::Point2D<T, U> {
+        self.max
+    }
+}
