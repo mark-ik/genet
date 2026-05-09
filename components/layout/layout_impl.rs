@@ -80,8 +80,9 @@ use style::{Zero, driver};
 use style_traits::{CSSPixel, SpeculativePainter};
 use stylo_atoms::Atom;
 use url::Url;
-use webrender_api::ExternalScrollId;
-use webrender_api::units::{DevicePixel, LayoutVector2D};
+use paint_api::serval_display_list::ServalDisplayList;
+use paint_types::ExternalScrollId;
+use paint_types::units::{DevicePixel, LayoutVector2D};
 
 use crate::accessibility_tree::AccessibilityTree;
 use crate::context::{CachedImageOrError, ImageResolver, LayoutContext};
@@ -569,7 +570,7 @@ impl Layout for LayoutThread {
     #[servo_tracing::instrument(skip_all)]
     fn query_elements_from_point(
         &self,
-        point: webrender_api::units::LayoutPoint,
+        point: paint_types::units::LayoutPoint,
         flags: layout_api::ElementsFromPointFlags,
     ) -> Vec<layout_api::ElementsFromPointResult> {
         with_layout_state(|| {
@@ -734,10 +735,12 @@ impl Layout for LayoutThread {
 
 impl LayoutThread {
     fn new(config: LayoutConfig) -> LayoutThread {
-        // Let webrender know about this pipeline by sending an empty display list.
-        config
-            .paint_api
-            .send_initial_transaction(config.webview_id, config.id.into());
+        // The webrender-era `send_initial_transaction` is gone in the
+        // netrender cut. Pipeline registration is now lazy on the
+        // painter side: the first `PaintMessage::SendDisplayList` for
+        // a given `PipelineId` allocates the per-pipeline state in
+        // `Paint`, so layout has no separate "I'm here" signal to
+        // emit on construction.
 
         let mut font = Font::initial_values();
         let default_font_size = pref!(fonts_default_size);
@@ -1392,8 +1395,8 @@ impl LayoutThread {
         );
         self.paint_api.send_display_list(
             self.webview_id,
-            &stacking_context_tree.paint_info,
             built_display_list,
+            stacking_context_tree.paint_info.clone(),
         );
 
         if paint_timing_handler.did_lcp_candidate_update() {
@@ -1491,12 +1494,13 @@ impl LayoutThread {
             },
             !self.have_ever_generated_display_list.get(),
         );
-        let mut builder = webrender_api::DisplayListBuilder::new(paint_info.pipeline_id);
-        builder.begin();
-        let (_, empty_display_list) = builder.end();
+        let empty_display_list = ServalDisplayList::new(
+            paint_types::units::DeviceIntSize::zero(),
+            paint_info.pipeline_id,
+        );
 
         self.paint_api
-            .send_display_list(self.webview_id, &paint_info, empty_display_list);
+            .send_display_list(self.webview_id, empty_display_list, paint_info);
         self.last_display_list_was_empty.set(true);
         self.have_ever_generated_display_list.set(true);
 

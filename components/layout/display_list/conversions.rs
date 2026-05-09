@@ -3,6 +3,9 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use app_units::Au;
+use paint_api::serval_display_list::FilterOp;
+use paint_types::units::{self, LayoutVector2D};
+use paint_types::{ImageRendering, LineStyle, MixBlendMode, RepeatMode, TransformStyle};
 use style::color::AbsoluteColor;
 use style::computed_values::background_blend_mode::SingleComputedValue as BackgroundBlendMode;
 use style::computed_values::image_rendering::T as ComputedImageRendering;
@@ -11,12 +14,15 @@ use style::computed_values::text_decoration_style::T as ComputedTextDecorationSt
 use style::computed_values::transform_style::T as ComputedTransformStyle;
 use style::values::computed::Filter as ComputedFilter;
 use style::values::specified::border::BorderImageRepeatKeyword;
-use webrender_api::{
-    FilterOp, ImageRendering, LineStyle, MixBlendMode, RepeatMode, Shadow, TransformStyle, units,
-};
 
 use crate::geom::{PhysicalPoint, PhysicalRect, PhysicalSides, PhysicalSize};
 
+/// Trait for converting layout-side types into the paint-side types
+/// that the [`paint_api::serval_display_list`] module consumes.
+///
+/// Named `ToWebRender` historically; the trait name is retained for
+/// source-compatibility with the many callers in this crate. The
+/// underlying types are paint-types now, not webrender_api.
 pub trait ToWebRender {
     type Type;
     fn to_webrender(&self) -> Self::Type;
@@ -31,20 +37,20 @@ impl FilterToWebRender for ComputedFilter {
     type Type = FilterOp;
     fn to_webrender(&self, current_color: &AbsoluteColor) -> Self::Type {
         match *self {
-            ComputedFilter::Blur(radius) => FilterOp::Blur(radius.px(), radius.px()),
+            ComputedFilter::Blur(radius) => FilterOp::Blur(radius.px()),
             ComputedFilter::Brightness(amount) => FilterOp::Brightness(amount.0),
             ComputedFilter::Contrast(amount) => FilterOp::Contrast(amount.0),
             ComputedFilter::Grayscale(amount) => FilterOp::Grayscale(amount.0),
             ComputedFilter::HueRotate(angle) => FilterOp::HueRotate(angle.degrees()),
             ComputedFilter::Invert(amount) => FilterOp::Invert(amount.0),
-            ComputedFilter::Opacity(amount) => FilterOp::Opacity(amount.0.into(), amount.0),
+            ComputedFilter::Opacity(amount) => FilterOp::Opacity(amount.0),
             ComputedFilter::Saturate(amount) => FilterOp::Saturate(amount.0),
             ComputedFilter::Sepia(amount) => FilterOp::Sepia(amount.0),
-            ComputedFilter::DropShadow(ref shadow) => FilterOp::DropShadow(Shadow {
+            ComputedFilter::DropShadow(ref shadow) => FilterOp::DropShadow {
                 blur_radius: shadow.blur.px(),
-                offset: units::LayoutVector2D::new(shadow.horizontal.px(), shadow.vertical.px()),
+                offset: LayoutVector2D::new(shadow.horizontal.px(), shadow.vertical.px()),
                 color: super::rgba(shadow.color.clone().resolve_to_absolute(current_color)),
-            }),
+            },
             // Statically check that Url is impossible.
             ComputedFilter::Url(ref url) => match *url {},
         }

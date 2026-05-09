@@ -34,10 +34,21 @@ use style::values::generics::transform::{self, GenericRotate, GenericScale, Gene
 use style::values::specified::TransformStyle;
 use style::values::specified::box_::DisplayOutside;
 use style_traits::CSSPixel;
-use webrender_api::units::{LayoutPoint, LayoutRect, LayoutTransform, LayoutVector2D};
-use webrender_api::{self as wr, BorderRadius};
-use wr::StickyOffsetBounds;
-use wr::units::{LayoutPixel, LayoutSize};
+use paint_types::units::{
+    self, LayoutPixel, LayoutPoint, LayoutRect, LayoutSize, LayoutTransform, LayoutVector2D,
+};
+use paint_types::{BorderRadius, StickyOffsetBounds};
+
+mod wr {
+    pub use paint_api::serval_display_list::{
+        FilterOp, RasterSpace, ServalDisplayList as DisplayListBuilder, StackingContextFlags,
+    };
+    pub use paint_types::units;
+    pub use paint_types::{
+        BorderRadius, ColorF, ExternalScrollId, MixBlendMode, PipelineId, ReferenceFrameKind,
+        SpatialId, StickyOffsetBounds, TransformStyle,
+    };
+}
 
 use super::ClipId;
 use super::clip::StackingContextTreeClipStore;
@@ -609,10 +620,7 @@ impl StackingContext {
             .map(|filter| FilterToWebRender::to_webrender(filter, &current_color))
             .collect();
         if effects.opacity != 1.0 {
-            filters.push(wr::FilterOp::Opacity(
-                effects.opacity.into(),
-                effects.opacity,
-            ));
+            filters.push(wr::FilterOp::Opacity(effects.opacity));
         }
 
         // TODO(jdm): WebRender now requires us to create stacking context items
@@ -1758,25 +1766,11 @@ impl BoxFragment {
         let transform = self.calculate_transform_matrix(&border_rect);
         let perspective = self.calculate_perspective_matrix(&border_rect);
         let (reference_frame_transform, reference_frame_kind) = match (transform, perspective) {
-            (None, Some(perspective)) => (
-                perspective,
-                wr::ReferenceFrameKind::Perspective {
-                    scrolling_relative_to: None,
-                },
-            ),
-            (Some(transform), None) => (
-                transform,
-                wr::ReferenceFrameKind::Transform {
-                    is_2d_scale_translation: false,
-                    should_snap: false,
-                    paired_with_perspective: false,
-                },
-            ),
+            (None, Some(perspective)) => (perspective, wr::ReferenceFrameKind::Perspective),
+            (Some(transform), None) => (transform, wr::ReferenceFrameKind::Transform),
             (Some(transform), Some(perspective)) => (
                 perspective.then(&transform),
-                wr::ReferenceFrameKind::Perspective {
-                    scrolling_relative_to: None,
-                },
+                wr::ReferenceFrameKind::Perspective,
             ),
             (None, None) => unreachable!(),
         };

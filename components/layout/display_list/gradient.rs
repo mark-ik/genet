@@ -12,12 +12,17 @@ use style::values::computed::{Angle, AngleOrPercentage, Color, LengthPercentage,
 use style::values::generics::image::{
     Circle, ColorStop, Ellipse, GradientFlags, GradientItem, ShapeExtent,
 };
-use webrender_api::units::LayoutPixel;
-use webrender_api::{
-    self as wr, ConicGradient as WebRenderConicGradient, Gradient as WebRenderLinearGradient,
-    RadialGradient as WebRenderRadialGradient, units,
+use paint_api::serval_display_list::{
+    ConicGradientPayload as WebRenderConicGradient, GradientPayload as WebRenderLinearGradient,
+    RadialGradientPayload as WebRenderRadialGradient,
 };
-use wr::ColorF;
+use paint_types::ColorF;
+use paint_types::units::{self, LayoutPixel};
+
+mod wr {
+    pub use paint_types::{ColorF, ExtendMode, GradientStop};
+    pub use paint_types::units;
+}
 
 pub(super) enum WebRenderGradient {
     Linear(WebRenderLinearGradient),
@@ -178,12 +183,13 @@ pub(super) fn build_linear(
     } else {
         wr::ExtendMode::Clamp
     };
-    WebRenderGradient::Linear(builder.wr().create_gradient(
+    let _ = builder;
+    WebRenderGradient::Linear(WebRenderLinearGradient {
         start_point,
         end_point,
-        stops,
         extend_mode,
-    ))
+        stops,
+    })
 }
 
 /// <https://drafts.csswg.org/css-images-3/#radial-gradients>
@@ -282,12 +288,13 @@ pub(super) fn build_radial(
     } else {
         wr::ExtendMode::Clamp
     };
-    WebRenderGradient::Radial(builder.wr().create_radial_gradient(
+    let _ = builder;
+    WebRenderGradient::Radial(WebRenderRadialGradient {
         center,
-        radii,
-        stops,
+        radius: radii,
         extend_mode,
-    ))
+        stops,
+    })
 }
 
 /// <https://drafts.csswg.org/css-images-4/#conic-gradients>
@@ -319,12 +326,13 @@ fn build_conic(
     } else {
         wr::ExtendMode::Clamp
     };
-    WebRenderGradient::Conic(builder.wr().create_conic_gradient(
+    let _ = builder;
+    WebRenderGradient::Conic(WebRenderConicGradient {
         center,
-        angle.radians(),
-        stops,
+        angle: angle.radians(),
         extend_mode,
-    ))
+        stops,
+    })
 }
 
 fn conic_gradient_items_to_color_stops(

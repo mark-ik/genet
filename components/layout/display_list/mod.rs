@@ -38,16 +38,45 @@ use style::values::generics::color::ColorOrAuto;
 use style::values::generics::rect::Rect as StyleRect;
 use style::values::specified::text::TextDecorationLine;
 use style_traits::{CSSPixel as StyloCSSPixel, DevicePixel as StyloDevicePixel};
-use webrender_api::units::{
-    DeviceIntSize, DevicePixel, LayoutPixel, LayoutPoint, LayoutRect, LayoutSideOffsets, LayoutSize,
+use paint_api::serval_display_list::{
+    BorderDetails, ClipChainId, ClipMode, CommonItemPlacement,
+    CommonItemPlacement as CommonItemProperties, ComplexClipRegion, GlyphInstance,
+    NinePatchBorderDetails as NinePatchBorder, NinePatchBorderSource, PrimitiveFlags,
+    PropertyBinding, PropertyBindingKey, RasterSpace, ServalDisplayItem, ServalDisplayList,
+    StackingContextFlags,
 };
-use webrender_api::{
-    self as wr, BorderDetails, BorderRadius, BorderSide, BoxShadowClipMode, BuiltDisplayList,
-    ClipChainId, ClipMode, ColorF, CommonItemProperties, ComplexClipRegion, GlyphInstance,
-    NinePatchBorder, NinePatchBorderSource, NormalBorder, PrimitiveFlags, PropertyBinding,
-    PropertyBindingKey, RasterSpace, SpatialId, SpatialTreeItemKey, StackingContextFlags, units,
+use paint_types::border::BorderSide;
+use paint_types::units::{
+    self, DeviceIntSize, DevicePixel, LayoutPixel, LayoutPoint, LayoutRect, LayoutSideOffsets,
+    LayoutSize, LayoutVector2D,
 };
-use wr::units::LayoutVector2D;
+use paint_types::{
+    BorderRadius, BoxShadowClipMode, ColorF, ImageRendering, MixBlendMode, NormalBorder,
+    RepeatMode, SpatialId, SpatialTreeItemKey,
+};
+
+/// Local source-compat shim for the historical `wr::*` references.
+/// Aggregates paint-types primitives, paint_api display-list types,
+/// and a small set of layout-internal aliases that replace
+/// webrender-only types (`DisplayListBuilder` → `ServalDisplayList`,
+/// `CommonItemProperties` → `CommonItemPlacement`).
+mod wr {
+    pub use paint_api::serval_display_list::{
+        AlphaType, BorderDetails, ClipChainId, ClipMode,
+        CommonItemPlacement as CommonItemProperties, ComplexClipRegion, FilterOp, GlyphInstance,
+        HasScrollLinkedEffect, LineOrientation, NinePatchBorderDetails as NinePatchBorder,
+        NinePatchBorderSource, PrimitiveFlags, PropertyBinding, PropertyBindingKey, RasterSpace,
+        ServalDisplayList as DisplayListBuilder, Shadow, SpaceAndClipInfo, StackingContextFlags,
+    };
+    pub use paint_types::border::BorderSide;
+    pub use paint_types::units;
+    pub use paint_types::{
+        BorderRadius, BorderStyle, BoxShadowClipMode, ColorF, ExtendMode, ExternalScrollId,
+        GradientStop, ImageRendering, LineStyle, MixBlendMode, NormalBorder, PipelineId,
+        ReferenceFrameKind, RepeatMode, SpatialId, SpatialTreeItemKey, StickyOffsetBounds,
+        TransformStyle,
+    };
+}
 
 use crate::cell::ArcRefCell;
 use crate::context::{ImageResolver, ResolvedImage};
@@ -179,18 +208,22 @@ impl DisplayListBuilder<'_> {
         debug: &DiagnosticsLogging,
         paint_timing_handler: &mut PaintTimingHandler,
         reflow_statistics: &mut ReflowStatistics,
-    ) -> BuiltDisplayList {
-        // Build the rest of the display list which inclues all of the WebRender primitives.
+    ) -> ServalDisplayList {
+        // Build the display list. Post-C3 this is a netrender-shaped
+        // `ServalDisplayList`; the painter (in `components/paint/`)
+        // translates each item into one or more `netrender::SceneOp`s.
         let paint_info = &mut stacking_context_tree.paint_info;
         let pipeline_id = paint_info.pipeline_id;
+        let viewport_device_size = {
+            let css = paint_info.viewport_details.size;
+            DeviceIntSize::new(css.width.round() as i32, css.height.round() as i32)
+        };
         let mut webrender_display_list_builder =
-            webrender_api::DisplayListBuilder::new(pipeline_id);
+            ServalDisplayList::new(viewport_device_size, pipeline_id);
         webrender_display_list_builder.begin();
 
-        // `dump_serialized_display_list` doesn't actually print anything. It sets up
-        // the display list for printing the serialized version when `finalize()` is called.
-        // We need to call this before adding any display items so that they are printed
-        // during `finalize()`.
+        // No-op under netrender; preserved for source-compat with the
+        // historical "dump serialized DL on next finalize" path.
         if debug.display_list {
             webrender_display_list_builder.dump_serialized_display_list();
         }
@@ -228,9 +261,9 @@ impl DisplayListBuilder<'_> {
         builder.wr().push_hit_test(
             viewport_rect,
             ClipChainId::INVALID,
-            SpatialId::root_reference_frame(pipeline_id),
-            PrimitiveFlags::default(),
-            (0, 0), /* tag */
+            SpatialId(0, pipeline_id),
+            PrimitiveFlags::empty(),
+            (0u64, 0u16), /* tag */
         );
 
         // Paint the canvas’ background (if any) before/under everything else
@@ -242,7 +275,8 @@ impl DisplayListBuilder<'_> {
             .build_display_list(&mut builder);
         builder.paint_dom_inspector_highlight();
 
-        webrender_display_list_builder.end().1
+        webrender_display_list_builder.end();
+        webrender_display_list_builder
     }
 
     fn wr(&mut self) -> &mut wr::DisplayListBuilder {
@@ -283,8 +317,9 @@ impl DisplayListBuilder<'_> {
         let mut scroll_tree = std::mem::take(&mut self.paint_info.scroll_tree);
         let mut mapping = Vec::with_capacity(scroll_tree.nodes.len());
 
-        mapping.push(SpatialId::root_reference_frame(self.pipeline_id()));
-        mapping.push(SpatialId::root_scroll_node(self.pipeline_id()));
+        let pid = self.pipeline_id();
+        mapping.push(SpatialId(0, pid));
+        mapping.push(SpatialId(1, pid));
 
         let pipeline_id = self.pipeline_id();
         let pipeline_tag = ((pipeline_id.0 as u64) << 32) | pipeline_id.1 as u64;
@@ -308,7 +343,7 @@ impl DisplayListBuilder<'_> {
                         info.origin,
                         *parent_spatial_node_id,
                         info.transform_style,
-                        PropertyBinding::Value(*info.transform.to_transform()),
+                        PropertyBinding::Value(info.transform.to_transform()),
                         info.kind,
                         spatial_tree_item_key,
                     );
@@ -437,28 +472,28 @@ impl DisplayListBuilder<'_> {
             return;
         };
 
-        const CONTENT_BOX_HIGHLIGHT_COLOR: webrender_api::ColorF = webrender_api::ColorF {
+        const CONTENT_BOX_HIGHLIGHT_COLOR: paint_types::ColorF = paint_types::ColorF {
             r: 0.23,
             g: 0.7,
             b: 0.87,
             a: 0.5,
         };
 
-        const PADDING_BOX_HIGHLIGHT_COLOR: webrender_api::ColorF = webrender_api::ColorF {
+        const PADDING_BOX_HIGHLIGHT_COLOR: paint_types::ColorF = paint_types::ColorF {
             r: 0.49,
             g: 0.3,
             b: 0.7,
             a: 0.5,
         };
 
-        const BORDER_BOX_HIGHLIGHT_COLOR: webrender_api::ColorF = webrender_api::ColorF {
+        const BORDER_BOX_HIGHLIGHT_COLOR: paint_types::ColorF = paint_types::ColorF {
             r: 0.2,
             g: 0.2,
             b: 0.2,
             a: 0.5,
         };
 
-        const MARGIN_BOX_HIGHLIGHT_COLOR: webrender_api::ColorF = webrender_api::ColorF {
+        const MARGIN_BOX_HIGHLIGHT_COLOR: paint_types::ColorF = paint_types::ColorF {
             r: 1.,
             g: 0.93,
             b: 0.,
@@ -480,9 +515,9 @@ impl DisplayListBuilder<'_> {
         // Highlight margin, border and padding
         if let Some(box_fragment) = highlight.maybe_box_fragment {
             let mut paint_highlight =
-                |color: webrender_api::ColorF,
+                |color: paint_types::ColorF,
                  fragment_relative_bounds: PhysicalRect<Au>,
-                 widths: webrender_api::units::LayoutSideOffsets| {
+                 widths: paint_types::units::LayoutSideOffsets| {
                     if widths.is_zero() {
                         return;
                     }
@@ -503,7 +538,7 @@ impl DisplayListBuilder<'_> {
                         right: border_style,
                         bottom: border_style,
                         left: border_style,
-                        radius: webrender_api::BorderRadius::default(),
+                        radius: paint_types::BorderRadius::default(),
                         do_aa: true,
                     });
 
@@ -1129,7 +1164,8 @@ impl Fragment {
             // there is currently only a single thing that animates in this way (the caret).
             // This code should be updated if we ever add more paint-side animations.
             let pipeline_id: PipelineId = builder.paint_info.pipeline_id.into();
-            let property_binding_key = PropertyBindingKey::new(pipeline_id.into());
+            let property_binding_key: PropertyBindingKey<ColorF> =
+                PropertyBindingKey::new(pipeline_id.into());
             builder.paint_info.caret_property_binding = Some((property_binding_key, caret_color));
             PropertyBinding::Binding(property_binding_key, caret_color)
         } else {
@@ -1427,7 +1463,7 @@ impl<'a> BuilderForBoxFragment<'a> {
                 spatial_id,
                 PrimitiveFlags::empty(),
                 None,
-                webrender_api::TransformStyle::Flat,
+                paint_types::TransformStyle::Flat,
                 blend_mode.to_webrender(),
                 &[],
                 &[],

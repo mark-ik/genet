@@ -14,8 +14,18 @@ use style::values::computed::background::BackgroundSize as Size;
 use style::values::specified::background::{
     BackgroundRepeat as RepeatXY, BackgroundRepeatKeyword as Repeat,
 };
-use webrender_api::{self as wr, units};
-use wr::ClipChainId;
+use paint_api::serval_display_list::ClipChainId;
+use paint_types::units;
+
+mod wr {
+    pub use paint_api::serval_display_list::{
+        ClipChainId, CommonItemPlacement as CommonItemProperties,
+    };
+    pub use paint_types::units;
+    pub use paint_types::{
+        BorderRadius, ColorF, ExtendMode, ImageRendering, MixBlendMode, RepeatMode,
+    };
+}
 
 use crate::replaced::NaturalSizes;
 

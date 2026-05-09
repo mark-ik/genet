@@ -16,7 +16,7 @@ use style::computed_values::visibility::T as Visibility;
 use style::properties::ComputedValues;
 use style::values::computed::ui::CursorKind;
 use paint_types::BorderRadius;
-use paint_types::units::{LayoutPoint, LayoutRect, LayoutSize, RectExt};
+use paint_types::units::{BoxCorners, LayoutPoint, LayoutRect, LayoutSize, RectExt};
 
 use crate::display_list::clip::{Clip, ClipId};
 use crate::display_list::stacking_context::StackingContextSection;
