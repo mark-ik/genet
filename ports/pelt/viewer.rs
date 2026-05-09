@@ -15,6 +15,8 @@ pub(crate) fn main() {
     let mut engine_profile = EngineProfile::Viewer;
     let mut url = None;
     let mut netrender_smoke = false;
+    #[cfg(feature = "windows-present")]
+    let mut windows_present_smoke = false;
 
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -39,6 +41,10 @@ pub(crate) fn main() {
             },
             "--netrender-smoke" => {
                 netrender_smoke = true;
+            },
+            #[cfg(feature = "windows-present")]
+            "--windows-present-smoke" => {
+                windows_present_smoke = true;
             },
             value if value.starts_with('-') => {
                 eprintln!("unsupported script-free viewer option: {value}");
@@ -73,6 +79,12 @@ pub(crate) fn main() {
         run_optional_netrender_smoke();
     }
 
+    #[cfg(feature = "windows-present")]
+    if windows_present_smoke {
+        run_optional_windows_present_smoke();
+        return;
+    }
+
     let config = StaticViewerConfig::new(engine.profile(), WindowingMode::Headed, url);
     match run_static_viewer(config) {
         Ok(outcome) => {
@@ -94,6 +106,26 @@ fn run_optional_netrender_smoke() {
             println!(
                 "pelt netrender smoke rendered {}x{} painted_pixels={}",
                 outcome.width, outcome.height, outcome.painted_pixels
+            );
+        },
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        },
+    }
+}
+
+#[cfg(feature = "windows-present")]
+fn run_optional_windows_present_smoke() {
+    let config = pelt_desktop::WindowsDxgiPresentSmokeConfig::default();
+    match pelt_desktop::run_windows_dxgi_present_smoke(config) {
+        Ok(outcome) => {
+            println!(
+                "pelt windows-present smoke {}x{} frames={} created_window={}",
+                outcome.width,
+                outcome.height,
+                outcome.frames_presented,
+                outcome.created_window
             );
         },
         Err(error) => {
@@ -125,6 +157,7 @@ Script-free Pelt validation entrypoint.
 Options:
     --engine <browser|viewer|static|headless>
     --netrender-smoke
+    --windows-present-smoke   (requires --features windows-present, target_os = \"windows\")
     --version
     -h, --help"
     );

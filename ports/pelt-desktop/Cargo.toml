@@ -17,12 +17,29 @@ bench = false
 [features]
 default = []
 netrender = ["dep:netrender", "dep:wgpu"]
+# Headed presentation through serval's `WindowsDxgiBackend`. Drives
+# the netrender renderer through the C4 DCOMP composition swapchain
+# attached to a winit window's HWND. Windows-only at runtime; the
+# feature gate is platform-agnostic so `cargo check --features
+# windows-present` works on non-Windows hosts (the inner code is
+# `cfg(target_os = "windows")` gated).
+windows-present = ["netrender", "dep:paint", "dep:raw-window-handle", "dep:windows", "dep:pollster"]
 
 [dependencies]
 netrender = { workspace = true, optional = true }
+paint = { workspace = true, optional = true }
 pelt-core = { workspace = true }
+pollster = { version = "0.4", optional = true }
+raw-window-handle = { workspace = true, optional = true }
 wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"], optional = true }
 winit = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Windows-only types (HWND) used by the `windows-present` feature's
+# `run_windows_dxgi_present_smoke` to bridge winit's RawWindowHandle
+# to paint's WindowsDxgiBackend constructor. Same workspace `windows`
+# version paint depends on.
+windows = { workspace = true, optional = true }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)', 'cfg(llvm_pgo)'] }

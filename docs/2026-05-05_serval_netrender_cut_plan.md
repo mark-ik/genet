@@ -19,7 +19,7 @@ resolve the holes."
 
 ---
 
-## Cut status snapshot (2026-05-06)
+## Cut status snapshot (2026-05-08)
 
 - **C1** — ✅ landed pre-session. GL/surfman corpus removed.
 - **C1.5** — ✅ landed. WebGL deletion: 45 DOM files + 35 WebIDLs +
@@ -27,25 +27,27 @@ resolve the holes."
   out of workspace; WebXR confirmed opt-in stub.
 - **C1.6** — ✅ landed pre-session. Pelt shell root + engine-profile
   seam.
-- **C2** — 🟡 mostly landed. `paint_types` extraction complete;
-  `components/paint/` impl deleted (final cut). Layout
-  webrender_api migration: 6 of 13 files done (mechanical type-
-  only); 7 remaining are DisplayListBuilder-coupled and roll into
-  C3 layout reshape.
-- **C3** — 🟡 paint scaffold landed. `NetrenderPainter` stub
-  compiling; layout reshape is next focused slice (see
-  [2026-05-06_c3_layout_reshape_plan.md](./2026-05-06_c3_layout_reshape_plan.md)).
-- **C4** — ⏸ not started. Compositor adapter; depends on C3 layout
-  reshape.
+- **C2** — ✅ landed. `paint_types` extraction; `components/paint/`
+  impl deleted; layout `webrender_api` migration completed via
+  C3 reshape.
+- **C3** — ✅ landed (2026-05-08). Layout reshape, paint_info
+  plumbing through `PaintMessage::SendDisplayList`, and Step 7
+  painter (`translate_display_list` + per-pipeline `Scene`s +
+  3 passing unit tests). `cargo check -p servo-layout` clean.
+  See [2026-05-08_c3_landed_notes.md](./2026-05-08_c3_landed_notes.md).
+- **C4** — 🟡 next. ServoCompositor adapter (impl
+  `netrender_device::Compositor`) + closes the 20 `Paint`-method
+  gaps in `components/servo/webview.rs` and the missing
+  `paint_api::rendering_context*` imports in
+  `components/servo/lib.rs`.
 - **C5** — ⏸ not started. Cut script dep from layout.
-- **C6** — ✅ code complete. `ScriptingProfile` + NoOp factories;
-  cargo check blocked upstream by C3 paint state, now unblocked
-  post-scaffold.
+- **C6** — ✅ code complete. `ScriptingProfile` + NoOp factories.
 - **C7** — ⏸ not started. Cut script dep from servo facade.
 
-Validation baseline (2026-05-06): `cargo check -p pelt` clean (4-6s);
-`cargo check -p servo-paint` clean (1m 23s); `cargo check -p servo`
-reaches `servo-layout` (124 errors, the C3 layout-reshape target).
+Validation baseline (2026-05-08): `cargo check -p servo-layout`
+clean; `cargo check -p servo-paint` clean; `cargo test -p servo-paint`
+3/3 translator tests pass. `cargo check -p servo` reaches
+`components/servo/webview.rs` with 20 errors (C4 target).
 
 ---
 
