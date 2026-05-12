@@ -412,7 +412,7 @@ compositor."
 - `Paint::render` actually drives the renderer + compositor (was a
   stub during the C3 cut).
 
-**Done condition (5.5b) — required to flip D3 to ✅ — ✅ SHIPPED on Windows:**
+**Done condition (5.5b) — required to flip D3 to ✅ — 🟡 parity tail open:**
 
 - Per-`SurfaceKey` declared-compositor-surfaces work — `frame.layers`
   is iterated in `ServoCompositor::present_frame`, per-layer
@@ -437,10 +437,12 @@ compositor."
   `composite_texture(painter_id)`. ✅ 3/3 passing. Landed in
   `paint: D3.5b — Paint::render e2e integration test`.
 - Each per-platform backend has its per-frame body wired and a smoke
-  receipt — Windows is real (pelt's `--windows-present-smoke`
-  validates DCOMP composition swapchain present); macOS + Linux
-  skeletons need a Mac and a Linux box respectively. **Remaining
-  gap.**
+  receipt. macOS is real for both master and declared surfaces via
+  `--macos-present-surfaces-smoke`. Windows is real for the DCOMP
+  composition swapchain master path via `--windows-present-smoke`, but
+  still needs the per-`SurfaceKey` DCOMP `present` override and a
+  matching `--windows-present-surfaces-smoke`. Linux still needs a live
+  Wayland session. **Remaining gap.**
 
 ---
 

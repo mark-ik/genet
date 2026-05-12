@@ -1,10 +1,10 @@
 # C4 — landed notes
 
 C4 (the netrender `Compositor` adapter, OS-handoff backends, and
-the `Paint::render` path that drives both) is done on Windows.
-This doc captures what shipped under the cut-milestone (D3.5a) and
-done-condition (D3.5b) framing, the validation receipts, and what
-remains before C4 is universally green (Mac + Linux smoke).
+the `Paint::render` path that drives both) is landed, with one
+Windows parity tail still open. This doc captures what shipped under
+the cut-milestone (D3.5a) and done-condition (D3.5b) framing, the
+validation receipts, and what remains before C4 is universally green.
 
 Companion to:
 
@@ -34,9 +34,11 @@ status snapshot can stay honest:
   `Paint::render` (not just renderer + compositor in isolation);
   per-platform backends each have a live smoke receipt.
 
-D3.5a and three of the four D3.5b items are landed on Windows.
-The fourth — Mac + Linux on-device smoke — is platform-bound
-and will be picked up when the work moves to a Mac.
+D3.5a and the shared D3.5b plumbing are landed. macOS now has both
+master and per-`SurfaceKey` smoke coverage. Windows has the DCOMP
+master path, but its per-`SurfaceKey` `present` body still inherits
+the trait default no-op and needs the matching Pelt smoke mode.
+Linux remains platform-bound on a live Wayland session.
 
 ---
 
@@ -47,17 +49,17 @@ and will be picked up when the work moves to a Mac.
 | File | Change |
 | --- | --- |
 | [components/paint/compositor.rs](../components/paint/compositor.rs) | `WgpuMasterCaptureBackend` (renamed from `StubCompositor`; deprecated alias retained), `OsCompositorBackend` trait, `ServoCompositor<B>` wrapper holding a `HostWgpuContext` + per-`SurfaceKey` destination texture pool. Default `present_master` no-op for embedder-route capture; per-platform backends override. |
-| [components/paint/compositor_dxgi.rs](../components/paint/compositor_dxgi.rs) | `WindowsDxgiBackend`. DXGI Composition swapchain, `IDCompositionVisual` per surface, `IDCompositionTarget` rooted at the embedder HWND. Holds per-frame `Dx12FenceSynchronizer` so producer / consumer queues coordinate without round-tripping CPU. |
-| [components/paint/compositor_calayer.rs](../components/paint/compositor_calayer.rs) | `MacosCALayerBackend` skeleton. Constructor accepts an `NSView`/`UIView` raw pointer, walks `objc2-quartz-core` to attach a `CAMetalLayer` (per-surface) under it. Per-frame body declared but unverified — needs Mac smoke. |
+| [components/paint/compositor_dxgi.rs](../components/paint/compositor_dxgi.rs) | `WindowsDxgiBackend`. DXGI Composition swapchain, master `IDCompositionVisual`, `IDCompositionTarget` rooted at the embedder HWND, and per-`SurfaceKey` visual bookkeeping. Master `present_master` is wired; per-`SurfaceKey` `present` remains the parity tail. |
+| [components/paint/compositor_calayer.rs](../components/paint/compositor_calayer.rs) | `MacosCALayerBackend`. Constructor accepts an `NSView`/`UIView` raw pointer, attaches a `CAMetalLayer`, imports the drawable into wgpu for master presentation, and allocates per-surface IOSurface/CALayer destinations. Master and per-`SurfaceKey` paths are smoke-tested on macOS. |
 | [components/paint/compositor_wayland.rs](../components/paint/compositor_wayland.rs) | `WaylandSubsurfaceBackend` skeleton. Constructor accepts `wl_display` + `wl_surface` raw pointers, allocates per-`SurfaceKey` `wl_subsurface`. Per-frame body declared but unverified — needs Linux smoke. |
 | [components/paint/interop/](../components/paint/interop/) | Direction-neutral foundation extracted from `wgpu-native-texture-interop` patterns: `HostWgpuContext`, `InteropBackend`, `SyncMechanism`, `InteropError`, `Dx12FenceSynchronizer` (Windows-only). Per-platform synchronizers live as inherent impls — no import-direction-coupled trait. WNTI itself was finally cut from the dep graph during D3.5b cleanup (it had been a stale `paint_api` `wgpu_backend` feature flag carryover from pre-C3 work; nothing in `components/` or `ports/` ever imported it). |
 | [components/paint/netrender_painter.rs](../components/paint/netrender_painter.rs) | `Paint::render(webview_id)` walks `webview_to_pipeline` → `pipelines[pid].scene` → `renderer.render_with_compositor(scene, format, &mut compositor, base)`. `Paint::composite_texture(painter_id)` reads through `WgpuMasterCaptureBackend::last_master`. `install_compositor` accepts `Box<dyn PaintCompositor>`; trait upcasting (rustc 1.86+) lets `&mut **compositor` flow into `Renderer::render_with_compositor`. |
 
-### D3.5b — done condition (Windows)
+### D3.5b — shared done-condition plumbing
 
 | Commit | Change |
 | --- | --- |
-| `paint: D3.5b — ServoCompositor::present_frame iterates layers` | Per-`SurfaceKey` destination wgpu textures allocated lazily, sized to `source_rect_in_master`; `backend.declare/destroy` fires on (re)alloc; `copy_texture_to_texture` encodes the master→layer copy via wgpu 29's `TexelCopyTextureInfo` shape; submit goes through `frame.handles.queue`; `backend.present(key, transform, clip, opacity)` drives the OS surface. Encoder is single-shot per frame; only submitted when at least one layer was dirty. |
+| `paint: D3.5b — ServoCompositor::present_frame iterates layers` | Per-`SurfaceKey` destination wgpu textures allocated lazily, sized to `source_rect_in_master`; `backend.declare/destroy` fires on (re)alloc; `copy_texture_to_texture` encodes the master→layer copy via wgpu 29's `TexelCopyTextureInfo` shape; submit goes through `frame.handles.queue`; `backend.present(key, transform, clip, opacity)` is called for each layer. Encoder is single-shot per frame; only submitted when at least one layer was dirty. macOS overrides `present`; Windows still needs the DXGI override. |
 | `paint: D3.5b — default_compositor_for_window factory` | New [components/paint/compositor_factory.rs](../components/paint/compositor_factory.rs). `default_compositor_for_window(host, display, window) -> Result<Box<dyn PaintCompositor>, BoxedFactoryError>` cfg-dispatches to `WindowsDxgiBackend` / `MacosCALayerBackend` / `WaylandSubsurfaceBackend` wrapped in `ServoCompositor`, falling back to `WgpuMasterCaptureBackend` on unknown platforms. `default_compositor_for_window_or_capture(...)` logs and falls back instead of erroring — for embedders that just want pixels. Adds `raw-window-handle` to servo-paint deps. |
 | `paint: D3.5b — Paint::render e2e integration test` | New [components/paint/tests/paint_render_e2e.rs](../components/paint/tests/paint_render_e2e.rs). Three tests covering the embedder-facing path the production loop walks: full success (`paint_render_e2e_drives_full_embedder_path`), unknown-webview no-op (`paint_render_unknown_webview_is_noop`), and per-frame master replacement (`paint_render_replaces_captured_master_per_frame`). Adds two test-only constructors on `Paint`: `new_for_test()` (skips `InitialPaintState`, uses `NoopWaker` + unbounded crossbeam channel + dummy `CrossProcessPaintApi`) and `install_renderer(painter_id, renderer)` (sidesteps `register_rendering_context`'s `WgpuCapability` path so the test can inject a `netrender::Renderer` built from `boot()` / `create_netrender_instance`). |
 
@@ -73,8 +75,9 @@ and will be picked up when the work moves to a Mac.
   now superseded by `paint_render_e2e` for embedder-path coverage
   but kept as a tighter regression net.
 - pelt `--windows-present-smoke about:blank` — DCOMP composition
-  swapchain present validates the Windows OS-handoff body
-  end-to-end (swapchain → IDCompositionVisual → desktop).
+  swapchain present validates the Windows master OS-handoff body
+  end-to-end (swapchain → IDCompositionVisual → desktop). This does
+  not yet exercise per-`SurfaceKey` DCOMP visuals.
 
 Validation env at [`.cargo-check-logs/cargo-check-env.ps1`](../.cargo-check-logs/cargo-check-env.ps1)
 (clang-cl + `-utf-8` + NASM + MOZILLABUILD + VS 2022 vcvars).
@@ -83,15 +86,26 @@ Validation env at [`.cargo-check-logs/cargo-check-env.ps1`](../.cargo-check-logs
 
 ## Remaining gaps before C4 is universally ✅
 
+0. **Windows per-surface DCOMP parity.** `WindowsDxgiBackend::declare`
+  already creates an `IDCompositionVisual` per `SurfaceKey` and stores
+  it with the destination texture, but `WindowsDxgiBackend` still
+  inherits the trait default no-op for `present(key, transform, clip,
+  opacity)`. Wire that body so the per-surface visual is attached under
+  the root, displays the declared surface destination, receives the
+  transform/clip/opacity state, and commits through DCOMP. Add a Pelt
+  `--windows-present-surfaces-smoke` mode mirroring the macOS smoke
+  (red master, green declared surface, 50% opacity) so parity has a
+  visible receipt.
+
 1. **macOS smoke receipt — ✅ landed (2026-05-09).**
    `MacosCALayerBackend::new` now constructs end-to-end (extracts
-   `MTLDevice` via wgpu-hal, attaches `CAMetalLayer` to the
-   embedder NSView's CALayer with frame matched + autoresizing,
-   contentsScale inherited for HiDPI). `present_master` syncs
-   `drawableSize`, CPU-waits the wgpu submit via
-   `Device::poll(PollType::wait_indefinitely())`, blits master ->
-   `nextDrawable.texture` via `MTLBlitCommandEncoder`, presents +
-   commits. The per-`SurfaceKey` `declare`/`destroy`/`present`
+  `MTLDevice` via wgpu-hal, attaches `CAMetalLayer` to the
+  embedder NSView's CALayer with frame matched + autoresizing,
+  contentsScale inherited for HiDPI). `present_master` syncs
+  `drawableSize`, imports `nextDrawable.texture` into wgpu, runs the
+  master -> drawable `TextureBlitter` copy on the same queue as
+  netrender's submit, and calls `[drawable present]`. The
+  per-`SurfaceKey` `declare`/`destroy`/`present`
    paths are also wired: `declare` allocates an `IOSurface` (RGBA8
    FourCC `'RGBA'`), wraps as an `MTLTexture` via
    `newTextureWithDescriptor:iosurface:plane:`, hands to wgpu via
@@ -126,25 +140,15 @@ Validation env at [`.cargo-check-logs/cargo-check-env.ps1`](../.cargo-check-logs
    `CALayer.contents = IOSurface` reads bytes per the IOSurface's
    declared format and 'RGBA' is supported there in practice.
 
-3. **macOS GPU-side cross-queue sync — blocked on upstream
-   wgpu-hal.** Today's `MacosCALayerBackend::present_master`
-   CPU-stalls via `wgpu::Device::poll(Wait)` because wgpu-hal 29's
-   `metal::Queue` does not expose its underlying
-   `MTLCommandQueue` (only `Queue::queue_from_raw` is public —
-   see `wgpu-hal-29.0.3/src/metal/mod.rs:459-481`). Without queue
-   access we can neither inject an `encodeSignalEvent:value:` into
-   netrender's submit (so an `MTLSharedEvent` GPU-wait isn't an
-   option) nor route the present command buffer onto the same
-   queue as the wgpu blit. The drawable-import path (importing the
-   `CAMetalDrawable.texture` into wgpu) doesn't help on its own —
-   it shifts the blit onto wgpu's queue but `presentDrawable:`
-   still wants a Metal command buffer ordered after, on a queue we
-   own. **Upstream task:** add a `pub fn raw_queue(&self) ->
-   &Retained<ProtocolObject<dyn MTLCommandQueue>>` accessor to
-   `wgpu_hal::metal::Queue` (mirrors the existing `Device::raw_device()`
-   shape). Once that lands, the GPU-side wait is ~80–150 LOC.
-   Until then the CPU stall is invisible at smoke cadence (~1ms
-   on a 60Hz path) and the right thing to keep.
+3. **macOS GPU-side cross-queue sync — deferred unless needed.** The
+  master path no longer needs a CPU stall: the drawable texture is
+  imported into wgpu, `TextureBlitter::copy` runs on the same queue as
+  netrender's vello submit, and `[drawable present]` waits for pending
+  GPU writes to the drawable. Future per-`SurfaceKey` sync upgrades may
+  still want upstream wgpu-hal access to the underlying Metal queue
+  (for example a `raw_queue()` accessor mirroring
+  `Device::raw_device()`), but that no longer blocks the visible smoke
+  path.
 4. **Linux smoke receipt.** `WaylandSubsurfaceBackend` is still a
    skeleton — `wl_subsurface` placement + commit, `dmabuf` import
    path need a Wayland session (Mutter or Sway) to validate.
@@ -166,13 +170,13 @@ Validation env at [`.cargo-check-logs/cargo-check-env.ps1`](../.cargo-check-logs
    the remaining `cargo check -p servo` cost on Mac is the
    SpiderMonkey native build, not Rust-side method gaps.
 
-(1) is ✅. (2) is ✅ as well. (3) was a wait-and-see deferred to
-(2)'s landing — the master-path sync is now FIFO-ordered without
-the wgpu-hal queue accessor; future per-`SurfaceKey` GPU sync
-upgrades may still want it, but no longer block anything visible.
-(4) gates D3 ✅ on Linux. (5) is ✅. None gate the netrender-side
-roadmap — netrender's 5.4 already shipped, and serval's 5.5b
-done-condition is now satisfied on **both Windows and macOS**.
+(0) is the active Windows/macOS parity lane. (1) is ✅. (2) is ✅ as
+well. (3) was a wait-and-see deferred to (2)'s landing — the
+master-path sync is now FIFO-ordered without the wgpu-hal queue
+accessor; future per-`SurfaceKey` GPU sync upgrades may still want it,
+but no longer block anything visible. (4) gates D3 ✅ on Linux. (5) is
+✅. Once (0) lands, the remaining roadmap should move to C5/C7 while
+Linux stays externally gated.
 
 ---
 

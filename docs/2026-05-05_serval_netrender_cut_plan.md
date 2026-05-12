@@ -19,7 +19,7 @@ resolve the holes."
 
 ---
 
-## Cut status snapshot (2026-05-09)
+## Cut status snapshot (2026-05-11)
 
 - **C1** — ✅ landed pre-session. GL/surfman corpus removed.
 - **C1.5** — ✅ landed. WebGL deletion: 45 DOM files + 35 WebIDLs +
@@ -35,30 +35,101 @@ resolve the holes."
   painter (`translate_display_list` + per-pipeline `Scene`s +
   3 passing unit tests). `cargo check -p servo-layout` clean.
   See [2026-05-08_c3_landed_notes.md](./2026-05-08_c3_landed_notes.md).
-- **C4** — ✅ done-condition met on Windows + macOS (2026-05-09).
-  `ServoCompositor` adapter + per-platform OS-handoff backends
-  shipped on Windows (DXGI Composition) and macOS (CALayer +
-  IOSurface, both master path and per-`SurfaceKey` declared
-  surfaces); Linux `WaylandSubsurfaceBackend` skeleton in tree
-  pending an on-device session. D3.5b satisfied: `present_frame`
-  iterates `frame.layers`, `default_compositor_for_window`
-  factory is cfg-gated, `paint_render_e2e` drives `Paint::render`
-  end to end (3/3 passing on Windows), and `pelt
-  --macos-present-surfaces-smoke` visually confirms per-surface
-  CALayer compositing at 50% opacity over the master on macOS.
-  The 20 `Paint`-method gaps in `components/servo/webview.rs`
-  and the missing `paint_api::rendering_context*` imports in
-  `components/servo/lib.rs` are next.
+- **C4** — 🟡 landed with one Windows parity tail (2026-05-11).
+  `ServoCompositor` adapter + shared `present_frame` routing are in
+  tree; `paint_render_e2e` drives `Paint::render` end to end (3/3
+  passing on Windows), and `default_compositor_for_window` is
+  cfg-gated. macOS has both the master CAMetalLayer path and the
+  per-`SurfaceKey` CALayer/IOSurface path validated by `pelt
+  --macos-present-surfaces-smoke`. Windows has the DXGI Composition
+  master path validated by `pelt --windows-present-smoke`, but its
+  per-`SurfaceKey` `OsCompositorBackend::present` still inherits the
+  trait no-op; close that before calling Windows/macOS parity done.
+  Linux `WaylandSubsurfaceBackend` remains externally gated on a live
+  Wayland session. The prior 20 `Paint`-method gaps in
+  `components/servo/webview.rs` and the missing
+  `paint_api::rendering_context*` imports in `components/servo/lib.rs`
+  are closed in the C4 tail.
 - **C5** — ⏸ not started. Cut script dep from layout.
 - **C6** — ✅ code complete. `ScriptingProfile` + NoOp factories.
 - **C7** — ⏸ not started. Cut script dep from servo facade.
 
-Validation baseline (2026-05-09): `cargo check -p servo-layout`
+Validation baseline (2026-05-11): `cargo check -p servo-layout`
 clean; `cargo check -p servo-paint` clean; `cargo test -p servo-paint
 --test paint_render_e2e` 3/3 pass; `cargo test -p servo-paint`
-3/3 translator tests pass. `cargo check -p servo` still reaches
-`components/servo/webview.rs` with the same `Paint`-method gaps
-(those bind to a later C4-tail commit, post-D3.5b).
+3/3 translator tests pass. The `components/servo/webview.rs` Paint
+method gaps called out in the older snapshot are no longer the active
+tail; the active C4 parity tail is Windows per-surface DCOMP present +
+matching Pelt smoke coverage.
+
+---
+
+## Next work lanes (2026-05-11)
+
+### Lane 1 — Windows per-surface presentation parity
+
+**Goal:** make Windows match macOS for declared compositor surfaces,
+not just the master/full-window path.
+
+**Why first:** C4 is otherwise easy to overstate. macOS proves both
+`present_master` and per-`SurfaceKey` `present`; Windows only proves
+the DXGI Composition swapchain master path today. Closing this before
+C5 keeps the netrender cut cleanly separated from the script-optional
+cut.
+
+**Work:**
+
+- Implement `WindowsDxgiBackend::present(key, transform, clip,
+  opacity)` in `components/paint/compositor_dxgi.rs` instead of
+  inheriting the trait default no-op.
+- In the Windows `declare` path, finish whatever DCOMP content bridge
+  the per-key visual needs. The code already creates and stores an
+  `IDCompositionVisual` per `SurfaceKey`; the parity lane should make
+  that visual show the declared surface destination, attach it under
+  the root visual, and keep the root/master visual ordering explicit.
+- Apply the layer transform, clip, and opacity to the per-surface
+  `IDCompositionVisual`, matching the semantics exercised by
+  `MacosCALayerBackend::present`.
+- Commit the DCOMP tree after per-surface updates. If the commit can be
+  coalesced with `present_master`, document the ordering; otherwise do
+  the straightforward per-frame `Commit` first.
+- Add `WindowsDxgiPresentSmokeConfig::declare_subsurface` and a Pelt
+  `--windows-present-surfaces-smoke` mode mirroring the macOS smoke:
+  red master, green top-left declared surface, 50% opacity, window held
+  open long enough for visual confirmation.
+
+**Done condition:** `pelt --windows-present-surfaces-smoke` visibly
+composites the declared surface above the master through DCOMP, and the
+normal checks still pass:
+
+```bat
+cargo check -p servo-paint
+cargo test -p servo-paint --test paint_render_e2e
+cargo run -p pelt --features windows-present -- --engine viewer --windows-present-surfaces-smoke about:blank
+```
+
+### Lane 2 — Remaining cut-plan work
+
+**Goal:** resume the script-optional cut after Windows/macOS compositor
+parity is honest.
+
+**Order:**
+
+1. Update this snapshot and the C4 landed notes once Lane 1 lands.
+2. Start C5: cut `script` and `script_traits` out of
+   `components/layout`, widening `components/shared/layout` only where
+   layout still needs concrete DOM access.
+3. Reconfirm C6 remains code-complete after C5's trait changes
+   (`ScriptingProfile` + NoOp factories should not regain a hard script
+   edge).
+4. Start C7: feature-gate or split the script-backed portions of
+   `components/servo` so a script-free viewer composition can type-check
+   without `mozjs_sys`, while default browser behavior stays intact.
+
+**Deferred / externally gated:** macOS GPU-side per-surface sync can
+wait for upstream `wgpu-hal` queue access if it becomes necessary;
+Linux Wayland presentation needs hardware/session coverage that is not
+available on the current X11-only Linux box.
 
 ---
 
@@ -549,8 +620,11 @@ struct StubCompositor { /* fullscreen single-surface fallback */ }
 **Cuts:** none — C4 is net new code in `components/paint/` (or a
 new sibling crate `components/compositor/` for clarity).
 
-**Status (2026-05-09):** done-condition met on Windows; Mac + Linux
-need on-device smoke receipts. See
+**Status (2026-05-11):** shared C4 plumbing is landed; macOS has
+master + per-`SurfaceKey` smoke coverage; Windows has the master DCOMP
+smoke but still needs the per-`SurfaceKey` DCOMP `present` body and a
+matching `--windows-present-surfaces-smoke`; Linux still needs an
+on-device Wayland smoke receipt. See
 [2026-05-09_c4_landed_notes.md](./2026-05-09_c4_landed_notes.md).
 The direction-neutral interop primitives the per-platform backends
 build on top of are documented in
@@ -569,21 +643,20 @@ with working construction (Windows DXGI Composition is the
 reference). `Paint::render` actually drives the renderer +
 compositor (was a stub during the C3 cut).
 
-**Done condition (full — D3.5b, ✅ on Windows):** A `<div>` renders
-into a serval-owned native texture; on macOS, a CALayer presents
-that texture; on Windows, a DXGI Composition Visual; on Linux, a
-Wayland subsurface. Per-`SurfaceKey` declared compositor surfaces
-work — `frame.layers` is iterated and each layer's native handle
-is routed via `OsCompositorBackend::present`. Per-platform default
-install — `default_compositor_for_window` factory dispatches by
-`cfg(target_os = …)`, falling back to the capturing backend on
-unknown platforms or via the `_or_capture` variant. End-to-end
-test that drives `Paint::render` directly
-(`paint_render_e2e_drives_full_embedder_path`) — passes on Windows.
-Per-platform smoke receipts are required to flip Mac + Linux from
-🟡 to ✅: Windows is real (pelt's `--windows-present-smoke`
-validates DCOMP composition swapchain present); macOS + Linux
-skeletons exist in tree but need a Mac and a Linux box respectively.
+**Done condition (full — D3.5b, 🟡):** A `<div>` renders into a
+serval-owned native texture; on macOS, a CALayer presents that texture;
+on Windows, a DXGI Composition Visual; on Linux, a Wayland subsurface.
+Per-`SurfaceKey` declared compositor surfaces work when `frame.layers`
+is iterated and each layer's native handle is routed via
+`OsCompositorBackend::present`. Per-platform default install —
+`default_compositor_for_window` factory dispatches by
+`cfg(target_os = …)`, falling back to the capturing backend on unknown
+platforms or via the `_or_capture` variant. End-to-end test that drives
+`Paint::render` directly (`paint_render_e2e_drives_full_embedder_path`)
+passes on Windows. macOS is green for declared surfaces via
+`--macos-present-surfaces-smoke`; Windows still needs the equivalent
+per-surface DCOMP body + `--windows-present-surfaces-smoke`; Linux
+still needs a live Wayland session.
 
 **Scope:**
 

@@ -35,11 +35,13 @@
 //!
 //! ## Status
 //!
-//! This is a **skeleton**: types, construction, and the trait wiring
-//! are real and compile. The per-frame DCOMP commit + master-blit
-//! body is currently a `// FIXME(C4)` stub. It lands as a focused
-//! follow-up (separate from the current cut), at which point the
-//! `StubCompositor` can be retired on Windows.
+//! The master/full-window DCOMP path is wired: `present_master` copies
+//! the netrender master texture into the composition swapchain,
+//! presents it, and commits the root visual tree. The remaining parity
+//! tail is per-[`SurfaceKey`] presentation: `declare` creates and
+//! stores a child [`IDCompositionVisual`], but `present` still inherits
+//! the trait default no-op until transform/clip/opacity and visual-tree
+//! routing are wired for each declared surface.
 
 #![allow(unsafe_code)]
 
