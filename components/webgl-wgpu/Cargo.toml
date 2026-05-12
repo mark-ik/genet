@@ -1,0 +1,22 @@
+[package]
+name = "servo-webgl-wgpu"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description.workspace = true
+
+[lib]
+name = "webgl_wgpu"
+path = "lib.rs"
+
+[dependencies]
+naga = { version = "29", default-features = false, features = ["glsl-in", "wgsl-out"] }
+paint_api = { workspace = true, features = ["wgpu_backend"] }
+wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"] }
+
+[dev-dependencies]
+pollster = "0.4"
