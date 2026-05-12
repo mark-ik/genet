@@ -45,4 +45,4 @@ stylo = { workspace = true }
 stylo_traits = { workspace = true }
 tracing = { workspace = true, optional = true }
 pollster = { version = "0.4", optional = true }
-wgpu = { workspace = true, optional = true }
+wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"], optional = true }

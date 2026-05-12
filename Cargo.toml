@@ -6,6 +6,7 @@ members = [
     "components/xpath",
     "examples/non-presenting-wgpu-embedder",
     "examples/wgpu-embedder",
+    "components/webgl-wgpu",
     "ports/pelt-core",
     "ports/pelt-desktop",
     "ports/pelt-ui-egui",
@@ -321,6 +322,7 @@ timers = { package = "servo-timers", version = "=0.2.0", path = "components/time
 webdriver_server = { package = "servo-webdriver-server", version = "=0.2.0", path = "components/webdriver_server" }
 webgpu = { package = "servo-webgpu", version = "=0.2.0", path = "components/webgpu" }
 webgpu_traits = { package = "servo-webgpu-traits", version = "=0.2.0", path = "components/shared/webgpu" }
+webgl_wgpu = { package = "servo-webgl-wgpu", version = "=0.2.0", path = "components/webgl-wgpu" }
 webxr = { package = "servo-webxr", version = "=0.2.0", path = "components/webxr" }
 webxr-api = { package = "servo-webxr-api", version = "=0.2.0", path = "components/shared/webxr" }
 xpath = { package = "servo-xpath", version = "=0.2.0", path = "components/xpath" }
