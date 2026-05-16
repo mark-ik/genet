@@ -81,6 +81,35 @@ Each batch is its own commit; each commit ends with `cargo check -p serval-layou
 
 Done condition for P2.3: `serval-layout`'s public API covers what `serval-static-html` needs to layout a parsed `StaticDocument`.
 
+#### Reality check 2026-05-16: file-order was based on names, not contents
+
+After landing batch 1a (`cell.rs`, 90 lines, the one genuinely portable file) and reading the next candidates' actual contents:
+
+- `geom.rs` (692 lines) names `crate::ContainingBlock` and `crate::sizing::Size` in real `impl` blocks, plus `style::*` / `style_traits::CSSPixel`. Not pure data.
+- `layout_box_base.rs` (328 lines) has the deepest internal coupling of any layout file: 10+ `crate::` imports including `dom`, `flow`, `formatting_contexts`, `fragment_tree`, `positioned`, `sizing`. Worst possible "first batch."
+- `sizing.rs` (852 lines, where `Size` lives) depends on `crate::style_ext`, `crate::layout_box_base`, `crate::ConstraintSpace`. Its own dep chain into the rest of layout.
+
+Only `cell.rs` is genuinely leaf in the live dep graph. Past that, everything is interconnected through `crate::` paths. The file-order I wrote above was based on file *names* (sounds like math/data → must be portable); the real dep graph is denser.
+
+This invalidates the "each batch is a separate commit with `cargo check` green at every step" sub-rule, because most single-file batches would require stubbing or forward-declaring half of layout — producing increasingly contorted intermediate states. Three viable strategies:
+
+**Strategy 1 — Cluster by layer.** Port multiple files together as one logical layer per commit (e.g., "geometry + ContainingBlock + Size as a single 'core geometry/sizing types' batch"). Each commit still has `cargo check -p serval-layout` green; commits are larger but the dependency-graph reality is honored. Maybe 6–10 commits total for P2.3. Bisect-friendly *between layers*, not between files.
+
+**Strategy 2 — Jump-ship single-commit port.** Move all of `components/layout/` to `components/serval-layout/` in one operation; fix what breaks; one commit when done. The "rip the parallel codepath, fix what breaks" model the netrender cut used. Mark's documented preference for prototypes ([feedback_jump_ship_over_migration_for_prototypes]). One big commit; less bisect-able mid-port, but the audit canary is binary — either the final state is script-free or it isn't. Faster.
+
+**Strategy 3 — Selective port: minimum static layout only.** Port only the files static-profile layout needs (block + inline + text + float; skip table/, flexbox/, grid where possible; skip `query.rs`, `accessibility_tree.rs` for now). Smaller surface than 1 or 2; the cut decisions become real work. Aligns with the W3C-knockout pattern from the audit. Lands less code, but each piece is more deliberately scoped.
+
+**Recommended: strategy 3 with strategy-2 mechanics for the porting itself.** Move the files we want; delete the rest; fix what breaks. One commit for the bulk port; follow-up commits for finishing touches (test wiring, naming cleanups). Rationale: the static profile genuinely doesn't need table/grid/flexbox/etc., and the W3C-knockout pattern says delete-now-rebuild-later. The bulk-port mechanic matches the prototype-stage feedback.
+
+Outstanding choice: do we port `flexbox/` (modern CSS-essential, even for "simple" pages with `display: flex`) or skip it as a P2.3 cut? Block + inline + float is the genuinely minimum substrate; flex is heavily used in real-world pages. Likely answer: port flex, skip table + grid + taffy.
+
+Per-file `cargo check`-green-at-each-step is **abandoned** in favor of "cargo check green at the end of the bulk port" plus "audit canary green at the end." Bisect granularity moves from per-file to per-layer-or-per-port-stage.
+
+#### P2.3 batch checkpoints (status)
+
+- ✅ **Batch 1a (2026-05-16):** `cell.rs` ported. `serval-layout` builds; audit canary empty.
+- ⏸ **Pending strategy call (Mark):** which of strategies 1 / 2 / 3 — and whether flexbox makes the cut.
+
 **P2.4 — Delete `components/layout/` and `components/script/` from disk.** Same commit series. No "keep around just in case" — two layout implementations is worse than one. The serval audit snapshot's dead-on-disk list (`components/net`, `components/devtools`, `components/storage`, etc.) can come along in a sweep, but `layout/` and `script/` are the load-bearing ones for this phase.
 
 ### P3 — Static HTML first-pixel smoke
