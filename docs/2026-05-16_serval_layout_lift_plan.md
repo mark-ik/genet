@@ -108,7 +108,58 @@ Per-file `cargo check`-green-at-each-step is **abandoned** in favor of "cargo ch
 #### P2.3 batch checkpoints (status)
 
 - ✅ **Batch 1a (2026-05-16):** `cell.rs` ported. `serval-layout` builds; audit canary empty.
-- ⏸ **Pending strategy call (Mark):** which of strategies 1 / 2 / 3 — and whether flexbox makes the cut.
+- 🔴 **Strategy 3 + jump-ship mechanics + flex-in + W3C-scavenge picked (Mark, 2026-05-16). First attempt reverted — see "P2.3 attempt findings" below.**
+
+#### P2.3 attempt findings (2026-05-16) — the real refactor is generic propagation
+
+First attempt: bulk-moved all of `components/layout/` (minus `table/`, `taffy/`, `tests/tables.rs`, the `layout_provider.rs` stub) into `components/serval-layout/`, ported the Cargo.toml (drop `script` + `taffy`, add `layout_dom_api`), dropped the `mod table` / `mod taffy` / `mod layout_provider` declarations from `lib.rs`, replaced the layout_provider stub with an empty placeholder.
+
+**`cargo check -p serval-layout` after the bulk move: 25 errors.** Sorted by class:
+
+- 15× `unresolved import crate::layout_provider::*` (the `Servo*Layout*` re-export stub was deleted; every file that imported through it now fails).
+- 5× `unresolved import crate::table::*` (table module is gone; references remain).
+- 4× `unresolved import crate::taffy::*` (taffy module is gone; references remain).
+- 1× unrelated borrow error in `replaced.rs` (likely pre-existing latent issue).
+
+**Surface-level error count is small. The cascading work behind it is large.** The `crate::layout_provider::*` imports name four concrete types — `ServoLayoutNode<'dom>`, `ServoLayoutElement<'dom>`, `ServoDangerousStyleElement<'dom>`, `ServoDangerousStyleDocument<'dom>` — which the layout crate uses as **concrete types** throughout: function signatures (`fn foo(node: &ServoLayoutNode<'dom>)`), trait impl heads (`impl<'dom> NodeExt<'dom> for ServoLayoutNode<'dom>`), and field types.
+
+The path-C design says these become a `LayoutDomAdapter<'a, D> { dom: &'a D, id: D::NodeId }` wrapper over `layout_dom_api::LayoutDom`. But that wrapper is **generic over `D`**. Every layout type that currently mentions `ServoLayoutNode` either:
+
+1. Becomes generic over `D: LayoutDom` (and its associated `LayoutNode` impl), propagating `D` through `Layout<D>`, `BoxTree<D>`, `Fragment<D>`, etc. Stylo's `TElement` shim is a per-D adapter struct in `serval-layout`.
+2. Or: stays concrete by picking a single `D` at lift time (e.g., `serval-static-dom::StaticDocument`), which defeats the abstraction (layout becomes coupled to one DOM impl; reader-mode head can't reuse it).
+
+**Choice (1) is the path-C commitment.** It's mechanical but invasive: every `ServoLayoutNode<'dom>` reference becomes `N: LayoutNode<'dom>` generic, every `impl<'dom> Trait for ServoLayoutNode<'dom>` becomes `impl<'dom, N: LayoutNode<'dom>> Trait for N`. The trait surface from `layout_api::LayoutNode` (which `layout_dom_api::LayoutDom`-backed adapters will satisfy via `LayoutDomAdapter`'s impl) is what we're constraining over.
+
+**Why the bulk-port-then-fix model alone isn't enough.** Once the four `Servo*Layout*` type names disappear, the per-file edits to swap them for generic parameters are not just 15 import fixes — they're sweeping changes to function and impl signatures throughout the crate. Without doing those, `unimplemented!()` stubs only push the cascade onto the trait impls, which themselves call methods that need real bodies.
+
+Today's attempt was reverted to keep `main` audit-clean. File moves can be reproduced quickly next session; the deep work is the generic propagation sweep.
+
+#### P2.3 strategy revision — paired moves
+
+The revised plan for P2.3, paired with the file moves:
+
+1. **Pre-move sweep**: in `components/layout/` (or right after the move, before re-attempting cargo check), do a search-and-replace pass on the four `Servo*Layout*` type names:
+   - `ServoLayoutNode<'dom>` → `N` where N is a new generic parameter `N: LayoutNode<'dom>`
+   - `ServoLayoutElement<'dom>` → `E: LayoutElement<'dom>`
+   - `ServoDangerousStyleElement<'dom>` / `ServoDangerousStyleDocument<'dom>` → corresponding trait constraints
+   - Every function and impl head that mentions them gets the generic parameter added.
+   This is the bulk of the refactor work. Mechanical, search-and-replace-amenable with care.
+2. **`LayoutDomAdapter` in `serval-layout`**: define `LayoutDomAdapter<'a, D: LayoutDom>` that impls `layout_api::LayoutNode<'dom>` / `LayoutElement<'dom>` / etc. by delegating to `LayoutDom` primitives. This is the bridge from `layout_dom_api` to `layout_api`. Stylo's `TElement` adapter (`StyleElement<'a, D>`) is the same pattern applied to the foreign Stylo traits.
+3. **`Layout<D>` top-level type**: the public layout entry point becomes parameterized over D. `serval-static-html` picks `D = StaticDocument` and constructs `Layout<StaticDocument>`.
+4. **Dead-code cleanup**: cut/stub paint worklets, animation rules, restyle dirty-bits where the static profile won't reach them (per W3C-knockout pattern and the Stylo paper probe findings).
+5. **`accessibility_tree.rs` + `query.rs`** are kept as "W3C goods" per Mark's direction — they get the same generic-propagation treatment.
+
+Scope estimate: 1–2 focused days. Single-session ambition is unrealistic given the breadth of touch sites (17 layout files reference `Servo*Layout*` types, ~98 total references). Realistic next session: pick **either** the bulk move + generic-propagation sweep as one large WIP commit, **or** start with `LayoutDomAdapter` definition + a small subset of layout files (e.g., just `fragment_tree/` since it's output-shaped and less DOM-touching).
+
+#### Per-session checkpoint protocol
+
+To make P2.3 sessions resumable:
+
+- Each session starts from a known-green `main` (audit-clean, `cargo check --workspace` green).
+- Each session ends by either:
+  - Landing a green commit on `main` (substantive progress).
+  - Committing a WIP branch (`wip/p2.3-…`) with notes on what's broken and what was done. Never land broken state on `main`.
+- The lift plan's status block + `wip/` branch list is the source of truth for "where are we."
 
 **P2.4 — Delete `components/layout/` and `components/script/` from disk.** Same commit series. No "keep around just in case" — two layout implementations is worse than one. The serval audit snapshot's dead-on-disk list (`components/net`, `components/devtools`, `components/storage`, etc.) can come along in a sweep, but `layout/` and `script/` are the load-bearing ones for this phase.
 
