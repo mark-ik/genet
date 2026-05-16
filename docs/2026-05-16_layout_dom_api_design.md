@@ -8,6 +8,7 @@ Supersedes [2026-05-13_p2_layout_dom_provider_design.md](./2026-05-13_p2_layout_
 
 - 2026-05-16 (initial): proposed; for review.
 - 2026-05-16 (revised, post-review): incorporates codex review. Changes: hot primitives (`element_name` / `attribute` / `text`) added as first-class trait methods, not only `NodeKind` + attrs-slice; `children` split into `dom_children` and `flat_children` to disambiguate DOM-vs-flat-tree traversal Servo distinguishes today; visitor methods use `ControlFlow` so `Stop` actually propagates (the original `Walk::Stop` sketch had a real bug — child returning Stop only returned from its own walk call, parent loop continued); new "foreign trait adapters" section explicitly designs in a `StyleElement<'a, D>` escape hatch for Stylo / `selectors::Element`; "wider applicability" reframed from mandate to candidate house pattern; `StaticDocument` Sync caveat corrected (it's Vec-backed; the `Rc<RefCell<…>>` is only in the parser sink). The framing is now **ID-first core API + traversal helpers**, not "universal visitor religion."
+- 2026-05-16 (post-probe): paper probe against `selectors::Element` and `style::dom::TElement` at servo/stylo rev `572ecba2d160`. Confirmed adapter pattern holds. Two trait-shape changes: (1) `prev_sibling` / `next_sibling` added as direct primitives on `LayoutDom` (selector matching can't pay O(siblings) per access); (2) `StyleElement` adapter shape is `(dom, id, style_storage_ref, atom_storage_ref)`, not just `(dom, id)` — the extra state lives in `serval-layout`, not `layout_dom_api`. Computed-style-access open question resolved by the probe.
 
 ---
 
@@ -87,6 +88,14 @@ pub trait LayoutDom {
 
     fn document(&self) -> Self::NodeId;
     fn parent(&self, id: Self::NodeId) -> Option<Self::NodeId>;
+
+    /// Previous sibling in DOM order. Hot on selector matching paths
+    /// (`prev_sibling_element` in `selectors::Element`); deriving it from
+    /// `dom_children(parent)` would be O(siblings) per call.
+    fn prev_sibling(&self, id: Self::NodeId) -> Option<Self::NodeId>;
+
+    /// Next sibling in DOM order. See `prev_sibling`.
+    fn next_sibling(&self, id: Self::NodeId) -> Option<Self::NodeId>;
 
     /// DOM-tree children (parse-order, ignores shadow trees).
     fn dom_children(&self, id: Self::NodeId) -> impl Iterator<Item = Self::NodeId> + '_;
@@ -185,13 +194,19 @@ Notes on the sketch:
 
 Stylo's `style::dom::TElement` and `selectors::Element` traits both want **typed element handles** with shape `T: Element { type Impl: SelectorImpl; ... }`. They cannot be expressed against a `(dom, NodeId)` pair directly — they predate the ID-first design and need a handle that carries enough state to satisfy `Copy` plus per-method calls without an extra `dom` argument.
 
-The design **expects** this and provides an adapter pattern:
+The design **expects** this and provides an adapter pattern. The actual adapter shape (informed by the paper probe — see appendix) carries more state than just `(dom, id)`:
 
 ```rust
 // In serval-layout (not in layout_dom_api).
 pub struct StyleElement<'a, D: LayoutDom> {
     dom: &'a D,
     id: D::NodeId,
+    /// Cascaded style data side-table, keyed by NodeId. Layout owns the
+    /// cascade output; DOM doesn't carry it. `borrow_data()` reads from here.
+    style: &'a StyleStorage<D::NodeId>,
+    /// Atom-interned attribute storage for id/class lookups Stylo demands as
+    /// `&WeakAtom`. Backed by lazy interning over the DOM's string attrs.
+    atoms: &'a AtomStorage<D::NodeId>,
 }
 
 impl<'a, D: LayoutDom> selectors::Element for StyleElement<'a, D> {
@@ -203,13 +218,16 @@ impl<'a, D: LayoutDom> selectors::Element for StyleElement<'a, D> {
     fn parent_element(&self) -> Option<Self> {
         self.dom
             .parent(self.id)
-            .map(|pid| StyleElement { dom: self.dom, id: pid })
+            .map(|pid| self.with_id(pid))
+    }
+    fn prev_sibling_element(&self) -> Option<Self> {
+        self.dom.prev_sibling(self.id).map(|p| self.with_id(p))
     }
     // ... etc.
 }
 ```
 
-Same pattern for `style::dom::TElement` and the rest of the Stylo trait family.
+Same pattern for `style::dom::TElement` and the rest of the Stylo trait family. Methods that mutate element state (e.g., `apply_selector_flags`, the `unsafe fn set_dirty_descendants`) no-op for the static profile (no incremental restyle); the scripted profile will need real implementations.
 
 **Pattern A as adapter, not as architecture.** This is a feature, not a violation:
 
@@ -218,7 +236,30 @@ Same pattern for `style::dom::TElement` and the rest of the Stylo trait family.
 - The handle types live in `serval-layout` (or wherever Stylo is consumed), not in `layout_dom_api` — so the DOM crate stays usable by reader-mode, serialization, etc., that don't need Stylo.
 - If Stylo's trait shape changes upstream, only `serval-layout`'s adapter changes; the DOM crate doesn't move.
 
-The same escape hatch is available for any other foreign trait that wants typed handles (devtools' inspector protocol, an a11y tree API that demands `aria_*` typed accessors, etc.). The rule: foreign trait wants pattern A → write an adapter struct over `(dom, id)`, don't reshape `LayoutDom`.
+The same escape hatch is available for any other foreign trait that wants typed handles (devtools' inspector protocol, an a11y tree API that demands `aria_*` typed accessors, etc.). The rule: foreign trait wants pattern A → write an adapter struct over `(dom, id, [per-consumer state])`, don't reshape `LayoutDom`.
+
+### Stylo probe results (appendix, 2026-05-16)
+
+A paper probe against `selectors::Element` and `style::dom::TElement` at servo/stylo rev `572ecba2d160` (the workspace pin) confirmed the adapter pattern holds, with three substantive findings:
+
+**Finding 1: sibling primitives are required on `LayoutDom`.** `selectors::Element` exposes `prev_sibling_element` / `next_sibling_element` / `first_element_child` on the hot path. Computing siblings indirectly (`dom.parent(id) → dom.dom_children(parent).find(...)`) is O(siblings); selector matching can't pay that per descendant. Added `prev_sibling` and `next_sibling` as direct primitives on `LayoutDom` (see updated trait sketch above).
+
+**Finding 2: the adapter carries non-trivial side state.** Beyond `(dom, id)`, the Stylo adapter needs:
+
+- A **style storage side-table** keyed by `NodeId`, owned by `serval-layout`. `TElement::borrow_data() -> Option<AtomicRefCell<ElementData>>` reads from here; the cascade writes to it. This stays out of `layout_dom_api` by design — DOM doesn't carry cascade output.
+- **Atom-interned id/class storage**, also keyed by `NodeId`. Stylo's `id() -> Option<&WeakAtom>` and `each_class<F>` require atoms, not strings. Interning happens at parse time (eager) or first lookup (lazy); decided at P2.2 implementation time. Also stays out of `layout_dom_api` — the bare DOM stores strings; atom views are a Stylo-consumer concern.
+
+This means the adapter struct is meatier than the original "just `(dom, id)`" framing suggested — it's `StyleElement<'a, D> { dom, id, style: &'a StyleStorage, atoms: &'a AtomStorage }` — but all of the extra state still lives in `serval-layout`, not in `layout_dom_api`. The architectural separation holds.
+
+**Finding 3: stateful trait methods are mostly no-op-friendly for the static profile.** Stylo's incremental restyle protocol (`has_dirty_descendants`, `set_dirty_descendants`, `has_snapshot`, `handled_snapshot`, `apply_selector_flags`) all mutate per-element bits during restyle. Static profile doesn't restyle — it computes style once per layout pass. These methods can no-op (returning `false` for queries, doing nothing for mutators). Trait shape is satisfied; behavior is correct for the static profile. Scripted profile, when it lands, needs real implementations; that's a P4 problem.
+
+**Methods that need real shape decisions before P2.3, not just no-ops:**
+
+- `style_attribute() -> Option<ArcBorrow<Locked<PropertyDeclarationBlock>>>` — element's parsed inline `style="..."`. Static profile parses lazily on first access; needs an LRU or per-element cache. Lives in `serval-layout`, not `layout_dom_api`.
+- `each_attr_name<F>` — iterates attribute names as `&LocalName`. The DOM's `attributes(id)` iterator yields `AttributeView<'_>`; the adapter projects this into `LocalName`-shaped callbacks. Mechanical, but needs the `LocalName` type to be reachable from the adapter, which means `serval-layout` depends on `stylo_atoms` (already in workspace deps).
+- `state() -> ElementState` — DOM element state bits (hover, focus, disabled, etc.). Static profile: all zero. No interaction means no state.
+
+**Probe verdict:** the adapter pattern is viable. The DOM crate stays Stylo-free; the consumer-side adapter is real implementation work but it's where the work belongs. No architectural retreat. Real prototype (compiling adapter against the actual Stylo trait surface) is deferred to P2.3 when serval-layout actually consumes Stylo — at this stage, the paper probe is enough to confirm we're not designing around an impossible shape.
 
 ### Caveats and cost
 
@@ -278,7 +319,7 @@ Still open:
 1. **Mutation surface.** This sketch is read-only. Scripted DOM needs mutation (innerHTML, appendChild, etc.). Decide later whether mutation goes in a `LayoutDomMut: LayoutDom` extension trait or in a separate trait. Static profile doesn't care; defer to when scripted lands.
 2. **Crate name spelling.** `layout-dom-api` is the working choice (matches `layout_api`, `paint_api`, `script_traits` precedent — package name hyphenated, Rust import underscored). Confirm at scaffold time.
 3. **Pseudo-elements / shadow / template traversal.** Beyond `dom_children` and `flat_children`, fullweb layout cares about `::before` / `::after` synthetics, shadow trees, template contents. Add these as named flavors (`pseudo_children`, `shadow_children`) when the first non-static profile needs them, not now. Static profile doesn't have any of these.
-4. **Computed-style access.** Stylo computes style; layout reads it. Whether `LayoutDom` exposes a `style(id)` primitive or whether style lives in a separate side table keyed by `NodeId` is a P2.3 question — decide when the style-cascade port batch arrives.
+4. ~~Computed-style access.~~ Resolved by the 2026-05-16 Stylo probe (see appendix): side-table in `serval-layout`, keyed by `NodeId`, not a `LayoutDom` primitive. `StyleElement` adapter carries `&'a StyleStorage<NodeId>` reference. Same pattern for atom-interned id/class storage. Keeps `layout_dom_api` Stylo-free; consumers that don't care about style (reader-mode, serialization) don't pay for it.
 
 ---
 
@@ -286,7 +327,7 @@ Still open:
 
 Codex review (2026-05-16) addressed; the revisions above incorporate every actionable point. Items still in this checklist are for any further reviewer:
 
-- [ ] Is the foreign-trait-adapter escape hatch genuinely sufficient for Stylo's `TElement`, or are there Stylo trait methods (e.g., `pseudo_element_originating_element`) that demand state the `(dom, id)` adapter can't carry? Verify by prototyping `StyleElement` against a current Stylo `TElement` definition before committing to the API.
+- [x] Is the foreign-trait-adapter escape hatch genuinely sufficient for Stylo's `TElement`, or are there Stylo trait methods (e.g., `pseudo_element_originating_element`) that demand state the `(dom, id)` adapter can't carry? **Answered by the 2026-05-16 paper probe** (see appendix). Adapter holds; carries more state than the original sketch implied (style storage + atom storage references), all in `serval-layout`. Real compiling prototype deferred to P2.3 when Stylo is actually consumed.
 - [ ] Is the recursion-bound walk default acceptable, or should we ship the explicit-stack version from day one? Pathological deeply-nested HTML can blow stack; mitigation is feasible later, but easier now if the visitor surface stays simple.
 - [ ] Are the exit criteria (when we'd revert to pattern A) tight enough that we'd actually notice and act? Currently: NodeKind match becomes measured hot path, lift cost >30% over pattern-A baseline, Stylo can't bridge, or scripted-DOM Sync pushes us into a corner. Add more if there are blind spots.
 - [ ] Is netrender's display list shape known well enough today to predict whether the candidate pattern applies there? If not, hold off on declaring fit; revisit when the netrender internal rewrite stabilizes.
