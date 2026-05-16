@@ -14,6 +14,9 @@ use html5ever::interface::ElemName;
 use html5ever::interface::tree_builder::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
 use html5ever::tendril::{StrTendril, TendrilSink};
 use html5ever::{Attribute, LocalName, Namespace, QualName, parse_document};
+use layout_dom_api::{
+    AttributeView, LayoutDom, NodeKind as LayoutDomNodeKind,
+};
 
 /// Stable identifier for a node in a [`StaticDocument`].
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -140,6 +143,99 @@ pub enum StaticNodeKind {
         /// Processing instruction contents.
         contents: String,
     },
+}
+
+impl LayoutDom for StaticDocument {
+    type NodeId = StaticNodeId;
+
+    fn document(&self) -> StaticNodeId {
+        self.document
+    }
+
+    fn parent(&self, id: StaticNodeId) -> Option<StaticNodeId> {
+        self.nodes[id.0].parent
+    }
+
+    fn prev_sibling(&self, id: StaticNodeId) -> Option<StaticNodeId> {
+        let parent = self.nodes[id.0].parent?;
+        let siblings = &self.nodes[parent.0].children;
+        let idx = siblings.iter().position(|&s| s == id)?;
+        if idx == 0 {
+            None
+        } else {
+            siblings.get(idx - 1).copied()
+        }
+    }
+
+    fn next_sibling(&self, id: StaticNodeId) -> Option<StaticNodeId> {
+        let parent = self.nodes[id.0].parent?;
+        let siblings = &self.nodes[parent.0].children;
+        let idx = siblings.iter().position(|&s| s == id)?;
+        siblings.get(idx + 1).copied()
+    }
+
+    fn dom_children(
+        &self,
+        id: StaticNodeId,
+    ) -> impl Iterator<Item = StaticNodeId> + '_ {
+        self.nodes[id.0].children.iter().copied()
+    }
+
+    fn kind(&self, id: StaticNodeId) -> LayoutDomNodeKind {
+        match &self.nodes[id.0].kind {
+            StaticNodeKind::Document => LayoutDomNodeKind::Document,
+            StaticNodeKind::Doctype { .. } => LayoutDomNodeKind::Doctype,
+            StaticNodeKind::Element { .. } => LayoutDomNodeKind::Element,
+            StaticNodeKind::Text(_) => LayoutDomNodeKind::Text,
+            StaticNodeKind::Comment(_) => LayoutDomNodeKind::Comment,
+            StaticNodeKind::ProcessingInstruction { .. } => {
+                LayoutDomNodeKind::ProcessingInstruction
+            },
+        }
+    }
+
+    fn element_name(&self, id: StaticNodeId) -> Option<&QualName> {
+        match &self.nodes[id.0].kind {
+            StaticNodeKind::Element { name, .. } => Some(name),
+            _ => None,
+        }
+    }
+
+    fn attribute(
+        &self,
+        id: StaticNodeId,
+        ns: &Namespace,
+        local: &LocalName,
+    ) -> Option<&str> {
+        let StaticNodeKind::Element { attrs, .. } = &self.nodes[id.0].kind else {
+            return None;
+        };
+        attrs
+            .iter()
+            .find(|a| &a.name.ns == ns && &a.name.local == local)
+            .map(|a| a.value.as_ref())
+    }
+
+    fn attributes(
+        &self,
+        id: StaticNodeId,
+    ) -> impl Iterator<Item = AttributeView<'_>> + '_ {
+        let attrs = match &self.nodes[id.0].kind {
+            StaticNodeKind::Element { attrs, .. } => Some(attrs.as_slice()),
+            _ => None,
+        };
+        attrs.into_iter().flatten().map(|a| AttributeView {
+            name: &a.name,
+            value: a.value.as_ref(),
+        })
+    }
+
+    fn text(&self, id: StaticNodeId) -> Option<&str> {
+        match &self.nodes[id.0].kind {
+            StaticNodeKind::Text(s) | StaticNodeKind::Comment(s) => Some(s),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -414,7 +510,10 @@ impl TreeSink for StaticTreeSink {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::ControlFlow;
+
     use html5ever::{local_name, ns};
+    use layout_dom_api::{Descent, LayoutDom, NodeKind as LayoutDomNodeKind, NodeVisitor};
 
     use super::*;
 
@@ -430,5 +529,113 @@ mod tests {
         };
         assert_eq!(name.ns, ns!(html));
         assert_eq!(name.local, local_name!("html"));
+    }
+
+    #[test]
+    fn layout_dom_walk_visits_expected_nodes() {
+        let document = StaticDocument::parse("<html><body><p>Hello</p></body></html>");
+
+        struct Recorder {
+            seen: Vec<String>,
+        }
+
+        impl NodeVisitor<StaticDocument> for Recorder {
+            type Stop = ();
+
+            fn enter(
+                &mut self,
+                dom: &StaticDocument,
+                id: StaticNodeId,
+            ) -> ControlFlow<Self::Stop, Descent> {
+                match dom.kind(id) {
+                    LayoutDomNodeKind::Element => {
+                        let name = dom.element_name(id).expect("element has name");
+                        self.seen.push(format!("element:{}", name.local));
+                    },
+                    LayoutDomNodeKind::Text => {
+                        let text = dom.text(id).expect("text has content");
+                        self.seen.push(format!("text:{}", text));
+                    },
+                    _ => {},
+                }
+                ControlFlow::Continue(Descent::Descend)
+            }
+        }
+
+        let mut recorder = Recorder { seen: Vec::new() };
+        let result = document.walk(&mut recorder);
+        assert!(matches!(result, ControlFlow::Continue(())));
+
+        assert!(recorder.seen.iter().any(|s| s == "element:html"));
+        assert!(recorder.seen.iter().any(|s| s == "element:body"));
+        assert!(recorder.seen.iter().any(|s| s == "element:p"));
+        assert!(recorder.seen.iter().any(|s| s == "text:Hello"));
+    }
+
+    #[test]
+    fn layout_dom_walk_bails_on_break() {
+        let document = StaticDocument::parse("<html><body><p>one</p><p>two</p></body></html>");
+
+        struct StopAtFirstP {
+            count: usize,
+        }
+
+        impl NodeVisitor<StaticDocument> for StopAtFirstP {
+            type Stop = StaticNodeId;
+
+            fn enter(
+                &mut self,
+                dom: &StaticDocument,
+                id: StaticNodeId,
+            ) -> ControlFlow<Self::Stop, Descent> {
+                if let LayoutDomNodeKind::Element = dom.kind(id) {
+                    let name = dom.element_name(id).unwrap();
+                    if name.local == local_name!("p") {
+                        self.count += 1;
+                        if self.count == 1 {
+                            return ControlFlow::Break(id);
+                        }
+                    }
+                }
+                ControlFlow::Continue(Descent::Descend)
+            }
+        }
+
+        let mut v = StopAtFirstP { count: 0 };
+        let result = document.walk(&mut v);
+        assert!(matches!(result, ControlFlow::Break(_)));
+        assert_eq!(v.count, 1, "walk should have stopped at the first <p>");
+    }
+
+    #[test]
+    fn layout_dom_siblings() {
+        let document = StaticDocument::parse(
+            "<html><body><p id=\"a\"></p><p id=\"b\"></p><p id=\"c\"></p></body></html>",
+        );
+
+        // Walk down to body, then check sibling navigation on its children.
+        let body = {
+            let mut found = None;
+            for child in document.dom_children(document.document_element().unwrap()) {
+                if let Some(name) = document.element_name(child) {
+                    if name.local == local_name!("body") {
+                        found = Some(child);
+                        break;
+                    }
+                }
+            }
+            found.expect("body present")
+        };
+
+        let mut ps: Vec<StaticNodeId> = document.dom_children(body).collect();
+        ps.retain(|id| document.kind(*id) == LayoutDomNodeKind::Element);
+        assert_eq!(ps.len(), 3);
+
+        assert_eq!(document.prev_sibling(ps[0]), None);
+        assert_eq!(document.next_sibling(ps[0]), Some(ps[1]));
+        assert_eq!(document.prev_sibling(ps[1]), Some(ps[0]));
+        assert_eq!(document.next_sibling(ps[1]), Some(ps[2]));
+        assert_eq!(document.prev_sibling(ps[2]), Some(ps[1]));
+        assert_eq!(document.next_sibling(ps[2]), None);
     }
 }

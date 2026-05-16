@@ -1,5 +1,5 @@
 [package]
-name = "serval-static-dom"
+name = "layout-dom-api"
 version.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -7,11 +7,11 @@ edition.workspace = true
 publish.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "Script-free static DOM provider for low Serval profiles."
+description = "Profile-neutral DOM trait consumed by serval-layout and other read-only DOM walkers (reader-mode, serialization, selectors)."
 
 [lib]
+name = "layout_dom_api"
 path = "lib.rs"
 
 [dependencies]
-html5ever = { workspace = true }
-layout_dom_api = { workspace = true }
+markup5ever = { workspace = true }

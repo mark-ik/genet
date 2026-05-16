@@ -8,6 +8,7 @@ members = [
     "components/serval-layout",
     "components/serval-static-dom",
     "components/serval-static-html",
+    "components/shared/layout-dom",
     "ports/pelt-core",
     "ports/pelt-desktop",
     "ports/pelt-ui-egui",
@@ -284,6 +285,7 @@ fonts_traits = { package = "servo-fonts-traits", version = "=0.2.0", path = "com
 hyper_serde = { package = "servo-hyper-serde", version = "=0.2.0", path = "components/hyper_serde" }
 jstraceable_derive = { package = "servo-jstraceable-derive", version = "=0.2.0", path = "components/jstraceable_derive" }
 layout_api = { package = "servo-layout-api", version = "=0.2.0", path = "components/shared/layout" }
+layout_dom_api = { package = "layout-dom-api", version = "=0.2.0", path = "components/shared/layout-dom" }
 malloc_size_of = { package = "servo-malloc-size-of", version = "=0.2.0", path = "components/malloc_size_of" }
 media = { package = "servo-media-thread", version = "=0.2.0", path = "components/media/media-thread" }
 metrics = { package = "servo-metrics", version = "=0.2.0", path = "components/metrics" }
