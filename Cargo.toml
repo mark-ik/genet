@@ -5,6 +5,7 @@ members = [
     "components/shared/paint-types",
     "components/xpath",
     "components/webgl-wgpu",
+    "components/serval-layout",
     "components/serval-static-dom",
     "components/serval-static-html",
     "ports/pelt-core",
