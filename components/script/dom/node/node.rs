@@ -2141,15 +2141,10 @@ impl<'dom> LayoutDom<'dom, Node> {
     }
 
     pub(crate) fn is_text_node_for_layout(&self) -> bool {
-<<<<<<< HEAD
-        self.type_id_for_layout()
-            == NodeTypeId::CharacterData(CharacterDataTypeId::Text(TextTypeId::Text))
-=======
         matches!(
             self.type_id_for_layout(),
             NodeTypeId::CharacterData(CharacterDataTypeId::Text(..))
         )
->>>>>>> ee0cf303f3bb3b983bc783e4cd64840cc556c62d
     }
 
     #[inline]

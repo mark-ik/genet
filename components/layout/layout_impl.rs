@@ -21,17 +21,21 @@ use fonts::{FontContext, FontContextWebFontMethods, WebFontDocumentContext};
 use fonts_traits::StylesheetWebFontLoadFinishedCallback;
 use icu_locid::subtags::Language;
 use layout_api::{
-    AxesOverflow, BoxAreaType, CSSPixelRectIterator, DangerousStyleNode, IFrameSizes, Layout,
-    LayoutConfig, LayoutElement, LayoutFactory, LayoutNode, NodeRenderingType,
-    OffsetParentResponse, PhysicalSides, QueryMsg, ReflowGoal, ReflowPhasesRun, ReflowRequest,
-    ReflowRequestRestyle, ReflowResult, ReflowStatistics, ScrollContainerQueryFlags,
-    ScrollContainerResponse, TrustedNodeAddress, with_layout_state,
+    AxesOverflow, BoxAreaType, CSSPixelRectIterator, DangerousStyleNode, DrawAPaintImageResult,
+    IFrameSizes, Layout, LayoutConfig, LayoutElement, LayoutFactory, LayoutHostServices,
+    LayoutNode, NodeRenderingType, OffsetParentResponse, PaintWorkletError, Painter, PhysicalSides,
+    QueryMsg, ReflowGoal, ReflowPhasesRun, ReflowRequest, ReflowRequestRestyle, ReflowResult,
+    ReflowStatistics, ScrollContainerQueryFlags, ScrollContainerResponse, TrustedNodeAddress,
+    with_layout_state,
 };
 use log::{debug, error, warn};
 use malloc_size_of::{MallocConditionalSizeOf, MallocSizeOf, MallocSizeOfOps};
 use net_traits::image_cache::ImageCache;
 use paint_api::CrossProcessPaintApi;
 use paint_api::display_list::{AxesScrollSensitivity, PaintDisplayListInfo, ScrollType};
+use paint_api::serval_display_list::ServalDisplayList;
+use paint_types::ExternalScrollId;
+use paint_types::units::{DevicePixel, LayoutVector2D};
 use parking_lot::{Mutex, RwLock};
 use profile_traits::mem::{Report, ReportKind};
 use profile_traits::time::{
@@ -39,13 +43,11 @@ use profile_traits::time::{
 };
 use profile_traits::{path, time_profile};
 use rustc_hash::FxHashMap;
-use script::layout_dom::{
+use crate::layout_provider::{
     ServoDangerousStyleDocument, ServoDangerousStyleElement, ServoLayoutElement, ServoLayoutNode,
 };
-use script_traits::{DrawAPaintImageResult, PaintWorkletError, Painter, ScriptThreadMessage};
 use servo_arc::Arc as ServoArc;
 use servo_base::Epoch;
-use servo_base::generic_channel::GenericSender;
 use servo_base::id::{PipelineId, WebViewId};
 use servo_config::opts::{self, DiagnosticsLogging, DiagnosticsLoggingOption};
 use servo_config::pref;
@@ -80,9 +82,6 @@ use style::{Zero, driver};
 use style_traits::{CSSPixel, SpeculativePainter};
 use stylo_atoms::Atom;
 use url::Url;
-use paint_api::serval_display_list::ServalDisplayList;
-use paint_types::ExternalScrollId;
-use paint_types::units::{DevicePixel, LayoutVector2D};
 
 use crate::accessibility_tree::AccessibilityTree;
 use crate::context::{CachedImageOrError, ImageResolver, LayoutContext};
@@ -136,8 +135,8 @@ pub struct LayoutThread {
     /// Is the current reflow of an iframe, as opposed to a root window?
     is_iframe: bool,
 
-    /// The channel on which messages can be sent to the script thread.
-    script_chan: GenericSender<ScriptThreadMessage>,
+    /// Services layout calls back into its owning profile/host.
+    host_services: Arc<dyn LayoutHostServices>,
 
     /// The channel on which messages can be sent to the time profiler.
     time_profiler_chan: profile_time::ProfilerChan,
@@ -767,7 +766,7 @@ impl LayoutThread {
             webview_id: config.webview_id,
             url: config.url,
             is_iframe: config.is_iframe,
-            script_chan: config.script_chan.clone(),
+            host_services: config.host_services.clone(),
             time_profiler_chan: config.time_profiler_chan,
             embedder_chan: config.embedder_chan.clone(),
             registered_painters: RegisteredPaintersImpl(Default::default()),
@@ -827,13 +826,11 @@ impl LayoutThread {
             return;
         }
 
-        let locked_script_channel = Mutex::new(self.script_chan.clone());
+        let host_services = Arc::clone(&self.host_services);
         let pipeline_id = self.id;
         let web_font_finished_loading_callback = move |succeeded: bool| {
             if succeeded {
-                let _ = locked_script_channel
-                    .lock()
-                    .send(ScriptThreadMessage::WebFontLoaded(pipeline_id));
+                host_services.web_font_loaded(pipeline_id);
             }
         };
 

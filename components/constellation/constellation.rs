@@ -120,7 +120,7 @@ use fonts::SystemFontServiceProxy;
 use ipc_channel::IpcError;
 use ipc_channel::router::ROUTER;
 use keyboard_types::{Key, KeyState, Modifiers, NamedKey};
-use layout_api::{LayoutFactory, ScriptThreadFactory};
+use layout_api::LayoutFactory;
 use log::{debug, error, info, trace, warn};
 use media::WindowGLContext;
 use net::image_cache::ImageCacheFactoryImpl;
@@ -138,7 +138,7 @@ use rand::{Rng, SeedableRng};
 use rustc_hash::{FxHashMap, FxHashSet};
 use script_traits::{
     ConstellationInputEvent, DiscardBrowsingContext, DocumentActivity, NewPipelineInfo,
-    ProgressiveWebMetricType, ScriptThreadMessage, UpdatePipelineIdReason,
+    ProgressiveWebMetricType, ScriptThreadFactory, ScriptThreadMessage, UpdatePipelineIdReason,
 };
 use servo_background_hang_monitor::HangMonitorRegister;
 use servo_base::generic_channel::{

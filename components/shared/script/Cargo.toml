@@ -25,6 +25,7 @@ embedder_traits = { workspace = true }
 euclid = { workspace = true }
 fonts_traits = { workspace = true }
 keyboard-types = { workspace = true }
+layout_api = { workspace = true }
 malloc_size_of = { workspace = true }
 malloc_size_of_derive = { workspace = true }
 media = { workspace = true }
@@ -36,6 +37,7 @@ profile_traits = { workspace = true }
 rustc-hash = { workspace = true }
 serde = { workspace = true }
 servo-base = { workspace = true }
+servo-background-hang-monitor-api = { workspace = true }
 servo-bluetooth-traits = { workspace = true, optional = true }
 servo-canvas-traits = { workspace = true }
 servo-config = { workspace = true }

@@ -10,8 +10,10 @@
 #![deny(unsafe_code)]
 
 use std::fmt;
+use std::sync::Arc;
+use std::thread::JoinHandle;
 
-use crossbeam_channel::RecvTimeoutError;
+use background_hang_monitor_api::BackgroundHangMonitorRegister;
 use devtools_traits::ScriptToDevtoolsControlMsg;
 use embedder_traits::user_contents::{UserContentManagerId, UserContents};
 use embedder_traits::{
@@ -19,16 +21,16 @@ use embedder_traits::{
     JavaScriptEvaluationId, MediaSessionActionType, PaintHitTestResult, ScriptToEmbedderChan,
     Theme, ViewportDetails, WebDriverScriptCommand,
 };
-use euclid::{Scale, Size2D};
 use fonts_traits::SystemFontServiceProxySender;
 use keyboard_types::Modifiers;
+use layout_api::LayoutFactory;
+pub use layout_api::{DrawAPaintImageResult, PaintWorkletError, Painter};
 use malloc_size_of_derive::MallocSizeOf;
 use media::WindowGLContext;
 use net_traits::ResourceThreads;
+use net_traits::image_cache::ImageCacheFactory;
 use paint_api::{CrossProcessPaintApi, PinchZoomInfos};
 use paint_types::ImageKey;
-use paint_types::units::DevicePixel;
-use pixels::PixelFormat;
 use profile_traits::mem;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -51,8 +53,6 @@ use servo_url::{ImmutableOrigin, ServoUrl};
 use storage_traits::StorageThreads;
 use storage_traits::webstorage_thread::WebStorageType;
 use strum::IntoStaticStr;
-use style_traits::{CSSPixel, SpeculativePainter};
-use stylo_atoms::Atom;
 #[cfg(feature = "webgpu")]
 use webgpu_traits::WebGPUMsg;
 
@@ -409,54 +409,13 @@ pub struct InitialScriptState {
     pub user_contents_for_manager_id: FxHashMap<UserContentManagerId, UserContents>,
 }
 
-/// Errors from executing a paint worklet
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum PaintWorkletError {
-    /// Execution timed out.
-    Timeout,
-    /// No such worklet.
-    WorkletNotFound,
-}
-
-impl From<RecvTimeoutError> for PaintWorkletError {
-    fn from(_: RecvTimeoutError) -> PaintWorkletError {
-        PaintWorkletError::Timeout
-    }
-}
-
-/// Execute paint code in the worklet thread pool.
-pub trait Painter: SpeculativePainter {
-    /// <https://drafts.css-houdini.org/css-paint-api/#draw-a-paint-image>
-    fn draw_a_paint_image(
-        &self,
-        size: Size2D<f32, CSSPixel>,
-        zoom: Scale<f32, CSSPixel, DevicePixel>,
-        properties: Vec<(Atom, String)>,
-        arguments: Vec<String>,
-    ) -> Result<DrawAPaintImageResult, PaintWorkletError>;
-}
-
-impl fmt::Debug for dyn Painter {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.debug_tuple("Painter")
-            .field(&format_args!(".."))
-            .finish()
-    }
-}
-
-/// The result of executing paint code: the image together with any image URLs that need to be loaded.
-///
-/// TODO: this should return a WR display list. <https://github.com/servo/servo/issues/17497>
-#[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
-pub struct DrawAPaintImageResult {
-    /// The image height
-    pub width: u32,
-    /// The image width
-    pub height: u32,
-    /// The image format
-    pub format: PixelFormat,
-    /// The image drawn, or None if an invalid paint image was drawn
-    pub image_key: Option<ImageKey>,
-    /// Drawing the image might have requested loading some image URLs.
-    pub missing_image_urls: Vec<ServoUrl>,
+/// Factory for creating a `ScriptThread`.
+pub trait ScriptThreadFactory {
+    /// Create a `ScriptThread`.
+    fn create(
+        state: InitialScriptState,
+        layout_factory: Arc<dyn LayoutFactory>,
+        image_cache_factory: Arc<dyn ImageCacheFactory>,
+        background_hang_monitor_register: Box<dyn BackgroundHangMonitorRegister>,
+    ) -> JoinHandle<()>;
 }

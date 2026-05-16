@@ -319,15 +319,9 @@ impl DocumentEventHandler {
             mem::take(&mut *self.coalesced_wheel_event_ids.borrow_mut());
 
         let mut input_event_outcomes = Vec::with_capacity(
-<<<<<<< HEAD
-            pending_input_events.len()
-                + coalesced_move_event_ids.len()
-                + coalesced_wheel_event_ids.len(),
-=======
             pending_input_events.len() +
                 coalesced_mouse_move_event_ids.len() +
                 coalesced_wheel_event_ids.len(),
->>>>>>> ee0cf303f3bb3b983bc783e4cd64840cc556c62d
         );
         // TODO: For some of these we still aren't properly calculating whether or not
         // the event was handled or if `preventDefault()` was called on it. Each of

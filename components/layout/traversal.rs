@@ -9,7 +9,7 @@ use bitflags::Flags;
 use layout_api::{
     DangerousStyleElement, DangerousStyleNode, LayoutDamage, LayoutElement, LayoutNode,
 };
-use script::layout_dom::ServoLayoutNode;
+use crate::layout_provider::ServoLayoutNode;
 use style::context::{SharedStyleContext, StyleContext};
 use style::data::ElementData;
 use style::dom::{NodeInfo, TElement, TNode};

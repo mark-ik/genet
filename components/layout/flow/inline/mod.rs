@@ -96,7 +96,7 @@ use line::{
 };
 use line_breaker::LineBreaker;
 use malloc_size_of_derive::MallocSizeOf;
-use script::layout_dom::ServoLayoutNode;
+use crate::layout_provider::ServoLayoutNode;
 use servo_arc::Arc as ServoArc;
 use style::Zero;
 use style::computed_values::line_break::T as LineBreak;

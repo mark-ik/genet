@@ -15,7 +15,7 @@ use layout_api::{
     ScrollContainerQueryFlags, ScrollContainerResponse,
 };
 use paint_api::display_list::ScrollTree;
-use script::layout_dom::ServoLayoutNode;
+use crate::layout_provider::ServoLayoutNode;
 use servo_arc::Arc as ServoArc;
 use servo_geometry::{FastLayoutTransform, au_rect_to_f32_rect, f32_rect_to_au_rect};
 use servo_url::ServoUrl;

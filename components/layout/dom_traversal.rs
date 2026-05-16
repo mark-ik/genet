@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use layout_api::{
     LayoutElement, LayoutElementType, LayoutNode, LayoutNodeType, PseudoElementChain,
 };
-use script::layout_dom::ServoLayoutNode;
+use crate::layout_provider::ServoLayoutNode;
 use servo_arc::Arc as ServoArc;
 use style::dom::NodeInfo;
 use style::properties::ComputedValues;

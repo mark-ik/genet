@@ -8,7 +8,7 @@ use euclid::default::Size2D as UntypedSize2D;
 use layout_api::{AxesOverflow, LayoutElement, LayoutNode};
 use malloc_size_of_derive::MallocSizeOf;
 use paint_api::display_list::AxesScrollSensitivity;
-use script::layout_dom::ServoLayoutNode;
+use crate::layout_provider::ServoLayoutNode;
 use style::values::computed::Overflow;
 use style_traits::CSSPixel;
 

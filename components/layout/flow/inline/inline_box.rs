@@ -8,7 +8,7 @@ use app_units::Au;
 use fonts::FontRef;
 use layout_api::LayoutNode;
 use malloc_size_of_derive::MallocSizeOf;
-use script::layout_dom::ServoLayoutNode;
+use crate::layout_provider::ServoLayoutNode;
 use servo_arc::Arc as ServoArc;
 use style::context::SharedStyleContext;
 use style::properties::ComputedValues;

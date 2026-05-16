@@ -9,7 +9,7 @@ use accesskit::Role;
 use layout_api::{LayoutElement, LayoutNode, LayoutNodeType};
 use log::trace;
 use rustc_hash::{FxHashMap, FxHashSet};
-use script::layout_dom::ServoLayoutNode;
+use crate::layout_provider::ServoLayoutNode;
 use servo_base::Epoch;
 use style::dom::{NodeInfo, OpaqueNode};
 use web_atoms::{LocalName, local_name};

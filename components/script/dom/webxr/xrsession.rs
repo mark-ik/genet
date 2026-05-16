@@ -8,11 +8,7 @@ use std::f64::consts::{FRAC_PI_2, PI};
 use std::rc::Rc;
 use std::{mem, ptr};
 
-<<<<<<< HEAD
-=======
 use script_bindings::reflector::reflect_dom_object;
-use servo_base::cross_process_instant::CrossProcessInstant;
->>>>>>> ee0cf303f3bb3b983bc783e4cd64840cc556c62d
 use dom_struct::dom_struct;
 use euclid::{RigidTransform3D, Transform3D, Vector3D};
 use ipc_channel::ipc::IpcReceiver;

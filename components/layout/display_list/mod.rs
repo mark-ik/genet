@@ -222,17 +222,11 @@ impl DisplayListBuilder<'_> {
             ServalDisplayList::new(viewport_device_size, pipeline_id);
         webrender_display_list_builder.begin();
 
-<<<<<<< HEAD
-        // No-op under netrender; preserved for source-compat with the
-        // historical "dump serialized DL on next finalize" path.
-        if debug.display_list {
-=======
         // `dump_serialized_display_list` doesn't actually print anything. It sets up
         // the display list for printing the serialized version when `finalize()` is called.
         // We need to call this before adding any display items so that they are printed
         // during `finalize()`.
         if debug.is_enabled(DiagnosticsLoggingOption::DisplayList) {
->>>>>>> ee0cf303f3bb3b983bc783e4cd64840cc556c62d
             webrender_display_list_builder.dump_serialized_display_list();
         }
 
@@ -1093,15 +1087,9 @@ impl Fragment {
         let mut start_advance = None;
         let mut end_advance = None;
         for glyph_store in fragment.glyphs.iter() {
-<<<<<<< HEAD
-            let glyph_store_character_count = glyph_store.total_characters();
-            if current_character_index + glyph_store_character_count
-                < shared_selection.character_range.start
-=======
             let glyph_store_character_count = glyph_store.character_count();
             if current_character_index + glyph_store_character_count <
                 shared_selection.character_range.start
->>>>>>> ee0cf303f3bb3b983bc783e4cd64840cc556c62d
             {
                 current_advance += glyph_store.total_advance()
                     + (justification_adjustment * glyph_store.total_word_separators() as i32);

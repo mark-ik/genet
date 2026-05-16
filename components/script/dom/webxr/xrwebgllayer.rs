@@ -7,14 +7,10 @@ use std::convert::TryInto;
 use dom_struct::dom_struct;
 use euclid::{Rect, Size2D};
 use js::rust::HandleObject;
-<<<<<<< HEAD
+use script_bindings::reflector::reflect_dom_object_with_proto;
 use servo_canvas_traits::webgl::{
     TEXTURE_2D, TEXTURE_RECTANGLE, WebGLCommand, WebGLContextId, WebGLTextureId,
 };
-=======
-use script_bindings::reflector::reflect_dom_object_with_proto;
-use servo_canvas_traits::webgl::{WebGLCommand, WebGLContextId, WebGLTextureId};
->>>>>>> ee0cf303f3bb3b983bc783e4cd64840cc556c62d
 use webxr_api::{ContextId as WebXRContextId, LayerId, LayerInit, Viewport};
 
 use crate::canvas_context::CanvasContext;

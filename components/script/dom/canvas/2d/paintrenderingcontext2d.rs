@@ -7,13 +7,9 @@ use std::cell::Cell;
 use dom_struct::dom_struct;
 use euclid::{Scale, Size2D};
 use js::context::JSContext;
-<<<<<<< HEAD
 use paint_types::ImageKey;
 use paint_types::units::DevicePixel;
-use script_bindings::reflector::Reflector;
-=======
 use script_bindings::reflector::{Reflector, reflect_dom_object};
->>>>>>> ee0cf303f3bb3b983bc783e4cd64840cc556c62d
 use servo_url::ServoUrl;
 use style_traits::CSSPixel;
 

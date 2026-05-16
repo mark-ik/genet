@@ -10,7 +10,7 @@ use layout_api::{
     LayoutNodeType as ScriptLayoutNodeType, NodeRenderingType, SVGElementData,
 };
 use malloc_size_of_derive::MallocSizeOf;
-use script::layout_dom::ServoLayoutNode;
+use crate::layout_provider::ServoLayoutNode;
 use servo_arc::Arc as ServoArc;
 use smallvec::SmallVec;
 use style::context::SharedStyleContext;

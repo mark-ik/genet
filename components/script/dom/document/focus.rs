@@ -982,20 +982,11 @@ impl SequentialFocusNavigationSearch {
 
                 // If the candidate element has a lesser tab index than the current winner,
                 // then it becomes the winner.
-<<<<<<< HEAD
-                if compare_tab_indices(candidate_element_tab_index, winning_tab_index)
-                    == Ordering::Less
-                {
-                    self.select_new_winner(candidate_element, candidate_element_tab_index);
-                }
-                Continue::Yes
-=======
                 let should_select =
                     compare_tab_indices(candidate_element_tab_index, winning_tab_index) ==
                         Ordering::Less;
 
                 (should_select, Continue::Yes)
->>>>>>> ee0cf303f3bb3b983bc783e4cd64840cc556c62d
             },
             SequentialFocusDirection::Backward => {
                 // If moving backward the last element with an equal tab index that precedes
@@ -1014,19 +1005,10 @@ impl SequentialFocusNavigationSearch {
                 // If the candidate element's tab index is not less than the current winner,
                 // then it becomes the new winner. This means that when the tab indices are
                 // equal, we give preference to the last one in DOM order.
-<<<<<<< HEAD
-                if compare_tab_indices(candidate_element_tab_index, winning_tab_index)
-                    != Ordering::Less
-                {
-                    self.select_new_winner(candidate_element, candidate_element_tab_index);
-                }
-                Continue::Yes
-=======
                 let should_select =
                     compare_tab_indices(candidate_element_tab_index, winning_tab_index) !=
                         Ordering::Less;
                 (should_select, Continue::Yes)
->>>>>>> ee0cf303f3bb3b983bc783e4cd64840cc556c62d
             },
         }
     }

@@ -17,7 +17,7 @@ use net_traits::image_cache::{
 };
 use parking_lot::{Mutex, RwLock};
 use pixels::RasterImage;
-use script::layout_dom::ServoLayoutNode;
+use crate::layout_provider::ServoLayoutNode;
 use servo_base::id::PainterId;
 use servo_url::{ImmutableOrigin, ServoUrl};
 use style::context::SharedStyleContext;

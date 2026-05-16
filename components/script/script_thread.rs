@@ -56,7 +56,7 @@ use js::jsapi::{GCReason, JS_GC, JSContext as UnsafeJSContext};
 use js::jsval::UndefinedValue;
 use js::rust::ParentRuntime;
 use js::rust::wrappers2::{JS_AddInterruptCallback, SetWindowProxyClass};
-use layout_api::{LayoutConfig, LayoutFactory, RestyleReason, ScriptThreadFactory};
+use layout_api::{LayoutConfig, LayoutFactory, LayoutHostServices, RestyleReason};
 use media::WindowGLContext;
 use metrics::MAX_TASK_NS;
 use net_traits::image_cache::{ImageCache, ImageCacheFactory, ImageCacheResponseMessage};
@@ -76,7 +76,7 @@ use script_bindings::cell::DomRefCell;
 use script_bindings::script_runtime::{JSContext, temp_cx};
 use script_traits::{
     ConstellationInputEvent, DiscardBrowsingContext, DocumentActivity, InitialScriptState,
-    NewPipelineInfo, Painter, ProgressiveWebMetricType, ScriptThreadMessage,
+    NewPipelineInfo, Painter, ProgressiveWebMetricType, ScriptThreadFactory, ScriptThreadMessage,
     UpdatePipelineIdReason,
 };
 use servo_arc::Arc as ServoArc;
@@ -87,13 +87,8 @@ use servo_base::id::{
     TEST_WEBVIEW_ID, WebViewId,
 };
 use servo_base::{Epoch, generic_channel};
-<<<<<<< HEAD
-use servo_config::{opts, pref, prefs};
-=======
-use servo_canvas_traits::webgl::WebGLPipeline;
 use servo_config::opts::{self, DiagnosticsLoggingOption};
 use servo_config::{pref, prefs};
->>>>>>> ee0cf303f3bb3b983bc783e4cd64840cc556c62d
 use servo_constellation_traits::{
     LoadData, LoadOrigin, NavigationHistoryBehavior, RemoteFocusOperation,
     ScreenshotReadinessResponse, ScriptToConstellationChan, ScriptToConstellationMessage,
@@ -224,6 +219,18 @@ impl Drop for ScriptUserInteractingGuard {
 struct ScriptThreadUserContents {
     user_scripts: Rc<Vec<UserScript>>,
     user_stylesheets: Rc<Vec<DocumentStyleSheet>>,
+}
+
+struct ScriptLayoutHostServices {
+    script_sender: GenericSender<ScriptThreadMessage>,
+}
+
+impl LayoutHostServices for ScriptLayoutHostServices {
+    fn web_font_loaded(&self, pipeline_id: PipelineId) {
+        let _ = self
+            .script_sender
+            .send(ScriptThreadMessage::WebFontLoaded(pipeline_id));
+    }
 }
 
 impl From<UserContents> for ScriptThreadUserContents {
@@ -3384,7 +3391,9 @@ impl ScriptThread {
             webview_id: incomplete.webview_id,
             url: final_url.clone(),
             is_iframe: incomplete.parent_info.is_some(),
-            script_chan: self.senders.constellation_sender.clone(),
+            host_services: Arc::new(ScriptLayoutHostServices {
+                script_sender: self.senders.constellation_sender.clone(),
+            }),
             image_cache: image_cache.clone(),
             font_context: font_context.clone(),
             time_profiler_chan: self.senders.time_profiler_sender.clone(),

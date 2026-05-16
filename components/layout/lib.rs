@@ -20,6 +20,7 @@ mod fragment_tree;
 pub mod geom;
 mod layout_box_base;
 mod layout_impl;
+mod layout_provider;
 mod taffy;
 #[macro_use]
 mod construct_modern;

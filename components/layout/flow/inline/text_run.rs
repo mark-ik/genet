@@ -347,14 +347,7 @@ impl TextRunSegment {
                 continue;
             }
 
-<<<<<<< HEAD
-            options.flags.insert(
-                ShapingFlags::IS_WHITESPACE_SHAPING_FLAG
-                    | ShapingFlags::ENDS_WITH_WHITESPACE_SHAPING_FLAG,
-            );
 
-=======
->>>>>>> ee0cf303f3bb3b983bc783e4cd64840cc556c62d
             // If `white-space-collapse: break-spaces` is active, insert a line breaking opportunity
             // between each white space character in the white space that we trimmed off.
             if text_style.white_space_collapse == WhiteSpaceCollapse::BreakSpaces {

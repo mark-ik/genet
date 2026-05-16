@@ -5,7 +5,7 @@
 use app_units::Au;
 use layout_api::LayoutNode;
 use malloc_size_of_derive::MallocSizeOf;
-use script::layout_dom::{ServoDangerousStyleElement, ServoLayoutNode};
+use crate::layout_provider::{ServoDangerousStyleElement, ServoLayoutNode};
 use servo_arc::Arc;
 use style::context::SharedStyleContext;
 use style::logical_geometry::Direction;

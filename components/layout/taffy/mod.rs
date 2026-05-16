@@ -7,7 +7,7 @@ use std::fmt;
 
 use app_units::Au;
 use malloc_size_of_derive::MallocSizeOf;
-use script::layout_dom::ServoLayoutNode;
+use crate::layout_provider::ServoLayoutNode;
 use servo_arc::Arc;
 use style::context::SharedStyleContext;
 use style::properties::ComputedValues;

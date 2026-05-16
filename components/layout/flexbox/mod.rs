@@ -4,7 +4,7 @@
 
 use geom::{FlexAxis, MainStartCrossStart};
 use malloc_size_of_derive::MallocSizeOf;
-use script::layout_dom::ServoLayoutNode;
+use crate::layout_provider::ServoLayoutNode;
 use servo_arc::Arc as ServoArc;
 use style::context::SharedStyleContext;
 use style::logical_geometry::WritingMode;

@@ -10,7 +10,7 @@ use inline::InlineFormattingContext;
 use layout_api::LayoutNode;
 use malloc_size_of_derive::MallocSizeOf;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
-use script::layout_dom::ServoLayoutNode;
+use crate::layout_provider::ServoLayoutNode;
 use servo_arc::Arc;
 use style::Zero;
 use style::computed_values::clear::T as StyleClear;

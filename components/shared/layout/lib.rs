@@ -15,19 +15,19 @@ mod layout_node;
 mod pseudo_element_chain;
 
 use std::any::Any;
+use std::fmt;
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicIsize;
-use std::thread::JoinHandle;
 use std::time::Duration;
 
 use app_units::Au;
 use atomic_refcell::AtomicRefCell;
-use background_hang_monitor_api::BackgroundHangMonitorRegister;
 use bitflags::bitflags;
+use crossbeam_channel::RecvTimeoutError;
 use embedder_traits::{Cursor, ScriptToEmbedderChan, Theme, UntrustedNodeAddress, ViewportDetails};
-use euclid::{Point2D, Rect};
+use euclid::{Point2D, Rect, Scale, Size2D};
 use fonts::{FontContext, TextByteRange, WebFontDocumentContext};
 pub use layout_damage::LayoutDamage;
 pub use layout_dom::{
@@ -39,21 +39,19 @@ pub use layout_node::{DangerousStyleNode, LayoutNode};
 use libc::c_void;
 use malloc_size_of::{MallocSizeOf as MallocSizeOfTrait, MallocSizeOfOps, malloc_size_of_is_0};
 use malloc_size_of_derive::MallocSizeOf;
-use net_traits::image_cache::{ImageCache, ImageCacheFactory, PendingImageId};
+use net_traits::image_cache::{ImageCache, PendingImageId};
 use paint_api::CrossProcessPaintApi;
-use paint_types::units::{DeviceIntSize, LayoutPoint, LayoutVector2D};
+use paint_types::units::{DeviceIntSize, DevicePixel, LayoutPoint, LayoutVector2D};
 use paint_types::{ExternalScrollId, ImageKey};
 use parking_lot::RwLock;
-use pixels::RasterImage;
+use pixels::{PixelFormat, RasterImage};
 use profile_traits::mem::Report;
 use profile_traits::time;
 pub use pseudo_element_chain::PseudoElementChain;
 use rustc_hash::FxHashMap;
-use script_traits::{InitialScriptState, Painter, ScriptThreadMessage};
 use serde::{Deserialize, Serialize};
 use servo_arc::Arc as ServoArc;
 use servo_base::Epoch;
-use servo_base::generic_channel::GenericSender;
 use servo_base::id::{BrowsingContextId, PipelineId, WebViewId};
 use servo_url::{ImmutableOrigin, ServoUrl};
 use style::Atom;
@@ -72,7 +70,7 @@ use style::stylesheets::{DocumentStyleSheet, Stylesheet};
 use style::stylist::Stylist;
 use style::thread_state::{self, ThreadState};
 use style::values::computed::Overflow;
-use style_traits::CSSPixel;
+use style_traits::{CSSPixel, SpeculativePainter};
 
 pub trait GenericLayoutDataTrait: Any + MallocSizeOfTrait + Send + Sync + 'static {
     fn as_any(&self) -> &dyn Any;
@@ -244,12 +242,74 @@ pub struct HTMLMediaData {
     pub metadata: Option<MediaMetadata>,
 }
 
+pub trait LayoutHostServices: Send + Sync {
+    fn web_font_loaded(&self, pipeline_id: PipelineId);
+}
+
+pub struct NoOpLayoutHostServices;
+
+impl LayoutHostServices for NoOpLayoutHostServices {
+    fn web_font_loaded(&self, _pipeline_id: PipelineId) {}
+}
+
+/// Errors from executing a paint worklet.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum PaintWorkletError {
+    /// Execution timed out.
+    Timeout,
+    /// No such worklet.
+    WorkletNotFound,
+}
+
+impl From<RecvTimeoutError> for PaintWorkletError {
+    fn from(_: RecvTimeoutError) -> PaintWorkletError {
+        PaintWorkletError::Timeout
+    }
+}
+
+/// Execute paint code in the worklet thread pool.
+pub trait Painter: SpeculativePainter {
+    /// <https://drafts.css-houdini.org/css-paint-api/#draw-a-paint-image>
+    fn draw_a_paint_image(
+        &self,
+        size: Size2D<f32, CSSPixel>,
+        zoom: Scale<f32, CSSPixel, DevicePixel>,
+        properties: Vec<(Atom, String)>,
+        arguments: Vec<String>,
+    ) -> Result<DrawAPaintImageResult, PaintWorkletError>;
+}
+
+impl fmt::Debug for dyn Painter {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.debug_tuple("Painter")
+            .field(&format_args!(".."))
+            .finish()
+    }
+}
+
+/// The result of executing paint code: the image together with any image URLs that need to be loaded.
+///
+/// TODO: this should return a WR display list. <https://github.com/servo/servo/issues/17497>
+#[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
+pub struct DrawAPaintImageResult {
+    /// The image height.
+    pub width: u32,
+    /// The image width.
+    pub height: u32,
+    /// The image format.
+    pub format: PixelFormat,
+    /// The image drawn, or None if an invalid paint image was drawn.
+    pub image_key: Option<ImageKey>,
+    /// Drawing the image might have requested loading some image URLs.
+    pub missing_image_urls: Vec<ServoUrl>,
+}
+
 pub struct LayoutConfig {
     pub id: PipelineId,
     pub webview_id: WebViewId,
     pub url: ServoUrl,
     pub is_iframe: bool,
-    pub script_chan: GenericSender<ScriptThreadMessage>,
+    pub host_services: Arc<dyn LayoutHostServices>,
     pub image_cache: Arc<dyn ImageCache>,
     pub font_context: Arc<FontContext>,
     pub time_profiler_chan: time::ProfilerChan,
@@ -420,19 +480,6 @@ pub trait Layout {
 
     /// See [Self::needs_accessibility_update()].
     fn set_needs_accessibility_update(&self);
-}
-
-/// This trait is part of `layout_api` because it depends on both `script_traits`
-/// and also `LayoutFactory` from this crate. If it was in `script_traits` there would be a
-/// circular dependency.
-pub trait ScriptThreadFactory {
-    /// Create a `ScriptThread`.
-    fn create(
-        state: InitialScriptState,
-        layout_factory: Arc<dyn LayoutFactory>,
-        image_cache_factory: Arc<dyn ImageCacheFactory>,
-        background_hang_monitor_register: Box<dyn BackgroundHangMonitorRegister>,
-    ) -> JoinHandle<()>;
 }
 
 /// Type of the area of CSS box for query.
