@@ -1,8 +1,13 @@
-# layout_dom_api — crate location & trait shape (design, for review)
+# layout_dom_api — crate location & trait shape (design)
 
-**Status (2026-05-16):** proposed; for review. Resolves the first two open decisions in [2026-05-16_serval_layout_lift_plan.md](./2026-05-16_serval_layout_lift_plan.md) (path C, P2.2): where `LayoutDom` lives, and what shape its trait takes.
+**Status (2026-05-16, revised):** decision adopted following a review pass. Resolves the first two open decisions in [2026-05-16_serval_layout_lift_plan.md](./2026-05-16_serval_layout_lift_plan.md) (path C, P2.2): where `LayoutDom` lives, and what shape its trait takes.
 
 Supersedes [2026-05-13_p2_layout_dom_provider_design.md](./2026-05-13_p2_layout_dom_provider_design.md), which described the equivalent seam inside the now-dead `components/layout/` crate.
+
+**Revision history:**
+
+- 2026-05-16 (initial): proposed; for review.
+- 2026-05-16 (revised, post-review): incorporates codex review. Changes: hot primitives (`element_name` / `attribute` / `text`) added as first-class trait methods, not only `NodeKind` + attrs-slice; `children` split into `dom_children` and `flat_children` to disambiguate DOM-vs-flat-tree traversal Servo distinguishes today; visitor methods use `ControlFlow` so `Stop` actually propagates (the original `Walk::Stop` sketch had a real bug — child returning Stop only returned from its own walk call, parent loop continued); new "foreign trait adapters" section explicitly designs in a `StyleElement<'a, D>` escape hatch for Stylo / `selectors::Element`; "wider applicability" reframed from mandate to candidate house pattern; `StaticDocument` Sync caveat corrected (it's Vec-backed; the `Rc<RefCell<…>>` is only in the parser sink). The framing is now **ID-first core API + traversal helpers**, not "universal visitor religion."
 
 ---
 
@@ -73,52 +78,94 @@ Of these, **petgraph is the easiest read** and **rustc HIR is the closest produc
 ```rust
 // In components/shared/layout-dom/lib.rs
 
+use std::ops::ControlFlow;
+
 pub trait LayoutDom {
     type NodeId: Copy + Eq + Hash + Debug + 'static;
 
-    fn document(&self) -> Self::NodeId;
-    fn kind(&self, id: Self::NodeId) -> NodeKind<'_>;
-    fn parent(&self, id: Self::NodeId) -> Option<Self::NodeId>;
-    fn children(&self, id: Self::NodeId) -> impl Iterator<Item = Self::NodeId> + '_;
+    // --- identity / structure ---
 
-    // Default walk over the C primitives. Backends override if they want
-    // backend-driven traversal (parallel layout pass, prefetching, etc.).
-    fn walk<V: NodeVisitor<Self>>(&self, visitor: &mut V) {
+    fn document(&self) -> Self::NodeId;
+    fn parent(&self, id: Self::NodeId) -> Option<Self::NodeId>;
+
+    /// DOM-tree children (parse-order, ignores shadow trees).
+    fn dom_children(&self, id: Self::NodeId) -> impl Iterator<Item = Self::NodeId> + '_;
+
+    /// Flat-tree children (slot-assigned for shadow hosts, otherwise DOM order).
+    /// Backends without shadow DOM default this to `dom_children`.
+    fn flat_children(&self, id: Self::NodeId) -> impl Iterator<Item = Self::NodeId> + '_ {
+        self.dom_children(id)
+    }
+
+    // --- kind & hot primitives ---
+
+    fn kind(&self, id: Self::NodeId) -> NodeKind;
+
+    /// Element name when `id` is an element, else `None`. Hot on selector/style paths.
+    fn element_name(&self, id: Self::NodeId) -> Option<&QualName>;
+
+    /// Attribute lookup by namespace + local name. Hot on selector/style paths.
+    /// Avoid `attrs() -> &[Attribute]` for selector matching — backends may store
+    /// attrs in a column store; full-slice exposure forces a materialization.
+    fn attribute(&self, id: Self::NodeId, ns: &Namespace, local: &LocalName) -> Option<&str>;
+
+    /// Iterate attributes for serialization / introspection (cold).
+    fn attributes(&self, id: Self::NodeId) -> impl Iterator<Item = AttributeView<'_>> + '_;
+
+    /// Text content when `id` is a text or comment node, else `None`.
+    fn text(&self, id: Self::NodeId) -> Option<&str>;
+
+    // --- traversal ---
+
+    /// Default walk over the C primitives, descending via `dom_children`.
+    /// Backends override if they want backend-driven traversal (parallel layout
+    /// pass, prefetching, etc.) or flat-tree-shaped descent.
+    fn walk<V: NodeVisitor<Self>>(&self, visitor: &mut V) -> ControlFlow<V::Stop> {
         walk_subtree(self, self.document(), visitor)
     }
 }
 
-pub enum NodeKind<'a> {
+pub enum NodeKind {
     Document,
-    Doctype { name: &'a str, public_id: &'a str, system_id: &'a str },
-    Element(ElementView<'a>),
-    Text(&'a str),
-    Comment(&'a str),
-    ProcessingInstruction { target: &'a str, data: &'a str },
+    Doctype,
+    Element,
+    Text,
+    Comment,
+    ProcessingInstruction,
 }
 
-pub struct ElementView<'a> {
+pub struct AttributeView<'a> {
     pub name: &'a QualName,
-    pub attrs: &'a [Attribute],
+    pub value: &'a str,
 }
 
 pub trait NodeVisitor<D: LayoutDom + ?Sized> {
-    fn enter(&mut self, dom: &D, id: D::NodeId) -> Walk { Walk::Descend }
-    fn exit(&mut self, dom: &D, id: D::NodeId) {}
+    /// Early-termination payload. Use `()` when you don't need a typed bail value;
+    /// use `core::convert::Infallible` when you can't bail at all.
+    type Stop;
+
+    fn enter(&mut self, _dom: &D, _id: D::NodeId) -> ControlFlow<Self::Stop, Descent> {
+        ControlFlow::Continue(Descent::Descend)
+    }
+    fn exit(&mut self, _dom: &D, _id: D::NodeId) -> ControlFlow<Self::Stop> {
+        ControlFlow::Continue(())
+    }
 }
 
-pub enum Walk { Descend, Skip, Stop }
+pub enum Descent { Descend, Skip }
 
-fn walk_subtree<D, V>(dom: &D, root: D::NodeId, v: &mut V)
-where D: LayoutDom + ?Sized, V: NodeVisitor<D>
+pub fn walk_subtree<D, V>(dom: &D, root: D::NodeId, v: &mut V) -> ControlFlow<V::Stop>
+where
+    D: LayoutDom + ?Sized,
+    V: NodeVisitor<D>,
 {
-    match v.enter(dom, root) {
-        Walk::Skip | Walk::Stop => return,
-        Walk::Descend => {
-            for child in dom.children(root) {
-                walk_subtree(dom, child, v);
+    match v.enter(dom, root)? {
+        Descent::Skip => ControlFlow::Continue(()),
+        Descent::Descend => {
+            for child in dom.dom_children(root) {
+                walk_subtree(dom, child, v)?;
             }
-            v.exit(dom, root);
+            v.exit(dom, root)
         }
     }
 }
@@ -126,10 +173,52 @@ where D: LayoutDom + ?Sized, V: NodeVisitor<D>
 
 Notes on the sketch:
 
-- `NodeKind<'a>` borrows from the backing store; no allocation per node access. `ElementView<'a>` carries the hot fields; the cold ones (template contents, integration-point flags) get separate accessor methods if needed.
-- `walk` has a default impl; the simplest backend (StaticDocument's Rc-tree) gets it for free.
-- Visitor methods default to "descend" + "no-op exit" — empty visitors that just want to count nodes are one-liners.
-- The recursion bound is the DOM depth; pathological inputs (deeply nested HTML) bottom out in the default walker. If that becomes a real problem, the default impl can switch to an explicit stack. Out of scope for first cut.
+- **Hot primitives first-class.** `element_name`, `attribute`, `text` are direct trait methods, not derived from `NodeKind` + an attrs slice. Selector/style matching reads attributes on the hot path; forcing every match site to call `kind()` and pattern-match before reaching attrs would pessimize. Backends with column-stored attributes can implement `attribute()` as a keyed lookup without materializing a full slice.
+- **`NodeKind` is a small enum, not a payload-carrying one.** Callers that want details call the specific accessor (`element_name`, `text`, etc.). Avoids the `NodeKind<'_>` lifetime that the original sketch carried, and keeps the cold-path `attributes` iterator separate from the hot-path `attribute` lookup.
+- **`dom_children` and `flat_children` separate.** Servo distinguishes these today (`LayoutNode::dom_children()` vs `flat_tree_children()`). Shadow-DOM-aware layout cares; static profile does not. `flat_children` defaults to `dom_children`; backends without shadow trees pay nothing.
+- **`ControlFlow` for traversal.** `NodeVisitor::Stop` is the early-termination type. `ControlFlow<Self::Stop, Descent>` from `enter` means "Break(stop_value)" propagates up through `walk_subtree`'s `?` operator, terminating the whole walk. The original `Walk::Stop` sketch was buggy: returning `Stop` from a child only returned from the child's `walk_subtree`; the parent loop continued. Fixed.
+- **Fallibility first-class.** `Self::Stop` is generic, so visitors can carry typed errors out of the walk (`type Stop = SerializationError` for a serializer, `type Stop = Infallible` for a node-counter). Avoids the "now we need a fallible variant" refactor later.
+- **`walk` default impl** descends via `dom_children`. Backends that want flat-tree descent override `walk` (not `flat_children`-only — the default needs to be visible to readers as "DOM order").
+- The recursion bound is DOM depth. Pathological deeply-nested HTML bottoms out in the default walker. If that becomes a real problem, switch the default to an explicit stack. Out of scope for first cut.
+
+### Foreign trait adapters (the escape hatch)
+
+Stylo's `style::dom::TElement` and `selectors::Element` traits both want **typed element handles** with shape `T: Element { type Impl: SelectorImpl; ... }`. They cannot be expressed against a `(dom, NodeId)` pair directly — they predate the ID-first design and need a handle that carries enough state to satisfy `Copy` plus per-method calls without an extra `dom` argument.
+
+The design **expects** this and provides an adapter pattern:
+
+```rust
+// In serval-layout (not in layout_dom_api).
+pub struct StyleElement<'a, D: LayoutDom> {
+    dom: &'a D,
+    id: D::NodeId,
+}
+
+impl<'a, D: LayoutDom> selectors::Element for StyleElement<'a, D> {
+    type Impl = ServalSelectorImpl;
+
+    fn opaque(&self) -> selectors::OpaqueElement {
+        selectors::OpaqueElement::new(&self.id)
+    }
+    fn parent_element(&self) -> Option<Self> {
+        self.dom
+            .parent(self.id)
+            .map(|pid| StyleElement { dom: self.dom, id: pid })
+    }
+    // ... etc.
+}
+```
+
+Same pattern for `style::dom::TElement` and the rest of the Stylo trait family.
+
+**Pattern A as adapter, not as architecture.** This is a feature, not a violation:
+
+- The public `layout_dom_api` surface stays ID-first.
+- Stylo / selectors get handle-shaped types they already know how to consume.
+- The handle types live in `serval-layout` (or wherever Stylo is consumed), not in `layout_dom_api` — so the DOM crate stays usable by reader-mode, serialization, etc., that don't need Stylo.
+- If Stylo's trait shape changes upstream, only `serval-layout`'s adapter changes; the DOM crate doesn't move.
+
+The same escape hatch is available for any other foreign trait that wants typed handles (devtools' inspector protocol, an a11y tree API that demands `aria_*` typed accessors, etc.). The rule: foreign trait wants pattern A → write an adapter struct over `(dom, id)`, don't reshape `LayoutDom`.
 
 ### Caveats and cost
 
@@ -137,7 +226,7 @@ Notes on the sketch:
 2. **Lift cost from pattern-A code is higher than a pattern-A trait would impose.** Estimate: P2.3 takes 10–20% more time than a straight port. Mitigation: the port is batch-by-batch anyway; each batch absorbs the shape change in isolation.
 3. **Pattern-A's "this handle is definitely an Element" type safety is lost.** Mitigation: `kind()` returns an enum; `Walk::Skip` lets visitors bail early on non-matching nodes. The matches in traversal code are unavoidable anyway (you're checking node type before doing per-kind work in either pattern).
 4. **Random access patterns work fine** because IDs are first-class. `querySelector` returns an `Option<NodeId>`; hit testing returns a `NodeId`; caller does `dom.kind(id)` to dispatch.
-5. **`Send + Sync` decisions are pushed down to the impl.** `LayoutDom` doesn't require either; per-backend choice. `StaticDocument` is `!Sync` (Rc-tree). A future scripted DOM will need to be `Sync` if `LayoutHostServices` keeps its Sync bound — but that's a problem for whenever scripted lands, not now. See the P1 fallout in the strategy doc for the historical version of this Sync conversation.
+5. **`Send + Sync` decisions are pushed down to the impl.** `LayoutDom` doesn't require either; per-backend choice. `StaticDocument` (in `serval-static-dom`) is `Vec<StaticNode>`-backed; the `Rc<RefCell<…>>` in the parser code lives in `StaticTreeSink` and is gone by the time `TreeSink::finish` returns the document. The finished document is `Send + Sync` (all field types are). A future scripted DOM will need to be `Sync` if `LayoutHostServices` keeps its Sync bound, and that's the load-bearing case — the P1 fallout addendum in the strategy doc captures the historical version of that Sync conversation. Deferred to P4.
 
 ### Exit criteria — when we'd abandon this and switch to pattern A
 
@@ -152,36 +241,53 @@ Reversal is straightforward — `layout_dom_api` is a young crate, callers are f
 
 ---
 
-## Wider applicability (informational, not part of this decision)
+## Wider applicability — candidate house pattern (informational)
 
-If this pattern works for `LayoutDom`, the same hybrid (opaque IDs + visitor with default walk) is a candidate for other identity-vs-walk APIs in the ecosystem:
+If this pattern carries its weight in `layout_dom_api`, it becomes a **candidate** house pattern for owned tree/graph APIs in the ecosystem. **Not a mandate.** Each candidate site has its own shape, and the fit varies:
 
-- *serval-layout's fragment tree* — IDs for hit-testing, visitor for paint emission.
-- *netrender's display list* — IDs for layer/clip references, visitor for the render pass.
-- *mere's panel registry* — already ID-based; gain a visitor for "walk all panels" if useful.
-- *mere/graphshell graph crate* — IDs + visitor matches petgraph and the prior graphshell work.
-- *eidetic's content store* — IDs already; visitor would make `walk all stored content` streamable.
+- *serval-layout's fragment tree* — strong fit. IDs for hit-testing, visitor for paint emission. Same identity-vs-walk split as DOM.
+- *mere/graphshell graph crate* — strong fit. Already ID-keyed in spirit (NodeIndex/EdgeIndex). Visitor pattern matches petgraph's prior art, which the graph crate effectively already follows.
+- *eidetic's content store* — strong fit. Content addressable by hash/ID already; a visitor for "walk all stored content of kind X" would be streamable, paged, async-friendly.
+- *mere's panel registry* — moderate fit. Already ID-based for identity (panel summons by `PanelId`). Whether a visitor adds value depends on whether "walk all panels" is a real operation; if the registry is mostly point-lookups, just stay ID-keyed without a visitor.
+- *netrender's display list* — **uncertain fit, depends on shape.** If the display list is tree-shaped or resource-ID-shaped (clip chains, reference frames, stacking contexts as addressable entities), the pattern fits. If it's a compact command stream (a `Vec<DisplayItem>` walked linearly without IDs into specific items), pattern B alone — or even no formal pattern at all, just iterate the slice — fits better than the hybrid. Decide when netrender's internal display-list rewrite stabilizes; don't force the pattern there speculatively.
 
-The hidden win: a **consistent decision rule** for new APIs across the ecosystem — "Identity operation? Add a method on the owning struct keyed by ID. Walk? Add a visitor trait with a default impl over the IDs." Reduces design churn at every new crate.
+The candidate decision rule, when introducing a new tree/graph-shaped API:
 
-This is not a commitment for those crates yet. Validate the pattern in `layout_dom_api` first; if it carries its weight, propose extending it elsewhere.
+1. Are identity operations a real part of the surface? If yes, opaque IDs.
+2. Is there a dominant "walk all" mode? If yes, visitor with default impl over the IDs.
+3. Are foreign traits in the consumer set (Stylo-shaped libraries that want typed handles)? If yes, write adapters at the consumer; don't reshape the core API.
+4. Is the data shape actually a compact command stream / iterator-y? Then the pattern doesn't apply; just expose a slice or iterator.
+
+Validate `layout_dom_api` first. If it pays its costs (10–20% extra lift, plus the foreign-adapter overhead), propose extending to fragment tree next; then judge each subsequent crate on its own shape.
 
 ---
 
-## Open questions for review
+## Open questions
 
-1. **NodeKind shape.** Should `ElementView` include attrs inline (`attrs: &[Attribute]`) or expose an `attrs(id) -> impl Iterator`? Inline is simpler; iterator scales better if a backend stores attrs in a separate column.
-2. **Attribute lookup.** `LayoutDom::attribute(id, name)` as a primitive, or build it from `ElementView::attrs`? Stylo's selector matching reads attributes hot — primitive form may matter for perf.
-3. **Mutation surface.** This sketch is read-only. Scripted DOM needs mutation (innerHTML, appendChild, etc.). Decide later whether mutation goes in a `LayoutDomMut: LayoutDom` extension trait or in a separate trait. Static profile doesn't care.
-4. **Crate name.** `layout-dom-api` vs. `layout-dom` vs. `serval-layout-dom`. Following the existing pattern (`layout_api`, `paint_api`, `script_traits`) — pick `layout-dom-api`. Package name uses hyphens; Rust import `use layout_dom_api::...` uses underscores.
-5. **Where the default `walk` impl lives.** Free function (`pub fn walk_subtree<D: LayoutDom>(...)`) or default method on the trait? Default method is more discoverable; free function is more flexible. Lean default method.
+Resolved in the revision pass:
+
+- ~~NodeKind shape (payload-carrying vs. plain enum + accessors).~~ Resolved: plain enum, hot accessors (`element_name`, `attribute`, `text`) are first-class trait methods, cold `attributes()` iterator separate.
+- ~~Attribute lookup primitive vs. derived from slice.~~ Resolved: primitive (`attribute(id, ns, local)`), with `attributes()` iterator for cold serialization/introspection paths.
+- ~~Where the default `walk` impl lives.~~ Resolved: default trait method, with `walk_subtree` exposed as `pub fn` for callers that want explicit subtree walking.
+- ~~Traversal flavor (single `children` vs. `dom_children` + `flat_children`).~~ Resolved: split, with `flat_children` defaulting to `dom_children` so backends without shadow trees pay nothing.
+- ~~Visitor early-termination shape.~~ Resolved: `ControlFlow<Self::Stop, Descent>`. Carries typed bail values; fixes the `Walk::Stop` propagation bug.
+- ~~Foreign trait integration (Stylo, selectors).~~ Resolved: adapter struct `StyleElement<'a, D> { dom, id }` in `serval-layout`, implementing `selectors::Element` / `TElement` over the ID-keyed core API. Pattern A as escape hatch, not architecture.
+
+Still open:
+
+1. **Mutation surface.** This sketch is read-only. Scripted DOM needs mutation (innerHTML, appendChild, etc.). Decide later whether mutation goes in a `LayoutDomMut: LayoutDom` extension trait or in a separate trait. Static profile doesn't care; defer to when scripted lands.
+2. **Crate name spelling.** `layout-dom-api` is the working choice (matches `layout_api`, `paint_api`, `script_traits` precedent — package name hyphenated, Rust import underscored). Confirm at scaffold time.
+3. **Pseudo-elements / shadow / template traversal.** Beyond `dom_children` and `flat_children`, fullweb layout cares about `::before` / `::after` synthetics, shadow trees, template contents. Add these as named flavors (`pseudo_children`, `shadow_children`) when the first non-static profile needs them, not now. Static profile doesn't have any of these.
+4. **Computed-style access.** Stylo computes style; layout reads it. Whether `LayoutDom` exposes a `style(id)` primitive or whether style lives in a separate side table keyed by `NodeId` is a P2.3 question — decide when the style-cascade port batch arrives.
 
 ---
 
 ## Review checklist
 
-- [ ] Are the three plausible consumers (reader-mode, serialization, querySelector) real enough to justify a separate `layout_dom_api` crate, or should we wait for one to actually exist?
-- [ ] Are petgraph and rustc HIR sufficient prior art, or do we want to mock up a minimal `serval-static-dom` impl against this trait first to see how it feels?
-- [ ] Is the 10–20% lift-cost premium worth the wins (backing-store independence, async/wasm, no handle proliferation)?
-- [ ] Is the `Send + Sync` question genuinely deferrable to "whenever scripted lands," or does it shape the trait now?
-- [ ] Are the exit criteria (when we'd revert to pattern A) tight enough that we'd actually notice and act?
+Codex review (2026-05-16) addressed; the revisions above incorporate every actionable point. Items still in this checklist are for any further reviewer:
+
+- [ ] Is the foreign-trait-adapter escape hatch genuinely sufficient for Stylo's `TElement`, or are there Stylo trait methods (e.g., `pseudo_element_originating_element`) that demand state the `(dom, id)` adapter can't carry? Verify by prototyping `StyleElement` against a current Stylo `TElement` definition before committing to the API.
+- [ ] Is the recursion-bound walk default acceptable, or should we ship the explicit-stack version from day one? Pathological deeply-nested HTML can blow stack; mitigation is feasible later, but easier now if the visitor surface stays simple.
+- [ ] Are the exit criteria (when we'd revert to pattern A) tight enough that we'd actually notice and act? Currently: NodeKind match becomes measured hot path, lift cost >30% over pattern-A baseline, Stylo can't bridge, or scripted-DOM Sync pushes us into a corner. Add more if there are blind spots.
+- [ ] Is netrender's display list shape known well enough today to predict whether the candidate pattern applies there? If not, hold off on declaring fit; revisit when the netrender internal rewrite stabilizes.
+- [ ] Should `layout_dom_api` ship with a minimal `serval-static-dom` impl alongside (to validate the trait against a real backing store) or land empty and have `serval-static-dom`'s impl follow in the next commit? Lean toward "ship impl together" — an unvalidated trait is a guess.
