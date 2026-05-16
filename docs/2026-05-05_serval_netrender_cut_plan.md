@@ -6,11 +6,14 @@ is moving toward, the cuts left after C1, and the contract each
 cut ends at.
 
 C1.5–C4 are the **netrender cut** (renderer becomes netrender-driven,
-webrender gone). C5–C7 are the **script-optional cut** (browser
-becomes one composition under Pelt, not the engine identity). The
-two phases are sequential: C5 prereqs C2 because layout's
-`webrender_api::*` imports tangle with its `script::*` imports —
-unwinding both at once is harder than unwinding them in order.
+webrender gone). C5–C7 started as the **script-optional cut**, but the
+target has sharpened: Serval should compile as a profile ladder from a
+Blitz-like static HTML shape up to fullweb, not as one hard browser
+composition with runtime no-ops. The canonical C5/C7 implementation plan
+now lives in
+[2026-05-12_serval_profile_ladder_plan.md](./2026-05-12_serval_profile_ladder_plan.md).
+C5 and C7 remain continuity labels here, but their detailed work is
+spun out into that plan.
 
 Pattern (per the netrender bring-up that succeeded): **rip the
 parallel codepath, fix what breaks, don't try to incrementally
@@ -19,7 +22,7 @@ resolve the holes."
 
 ---
 
-## Cut status snapshot (2026-05-11)
+## Cut status snapshot (2026-05-12)
 
 - **C1** — ✅ landed pre-session. GL/surfman corpus removed.
 - **C1.5** — ✅ landed. WebGL deletion: 45 DOM files + 35 WebIDLs +
@@ -35,38 +38,58 @@ resolve the holes."
   painter (`translate_display_list` + per-pipeline `Scene`s +
   3 passing unit tests). `cargo check -p servo-layout` clean.
   See [2026-05-08_c3_landed_notes.md](./2026-05-08_c3_landed_notes.md).
-- **C4** — 🟡 landed with one Windows parity tail (2026-05-11).
+- **C4** — ✅ code-complete for Windows/macOS compositor parity
+  (2026-05-12).
   `ServoCompositor` adapter + shared `present_frame` routing are in
   tree; `paint_render_e2e` drives `Paint::render` end to end (3/3
   passing on Windows), and `default_compositor_for_window` is
   cfg-gated. macOS has both the master CAMetalLayer path and the
   per-`SurfaceKey` CALayer/IOSurface path validated by `pelt
-  --macos-present-surfaces-smoke`. Windows has the DXGI Composition
-  master path validated by `pelt --windows-present-smoke`, but its
-  per-`SurfaceKey` `OsCompositorBackend::present` still inherits the
-  trait no-op; close that before calling Windows/macOS parity done.
-  Linux `WaylandSubsurfaceBackend` remains externally gated on a live
-  Wayland session. The prior 20 `Paint`-method gaps in
+  --macos-present-surfaces-smoke`. Windows now has the DXGI
+  Composition master path plus per-`SurfaceKey` child-visual path in
+  code: `WindowsDxgiBackend::declare` creates the DCOMP child visual,
+  transform, clip, and composition swapchain; `present` copies the
+  keyed destination into that swapchain, applies transform/clip/opacity,
+  presents it, and commits. The matching Pelt smoke is
+  `--windows-present-surfaces-smoke`. Linux
+  `WaylandSubsurfaceBackend` remains externally gated on a live Wayland
+  session. The prior 20 `Paint`-method gaps in
   `components/servo/webview.rs` and the missing
   `paint_api::rendering_context*` imports in `components/servo/lib.rs`
   are closed in the C4 tail.
-- **C5** — ⏸ not started. Cut script dep from layout.
+- **C5** — ⏸ spun out. Now covered by profile-ladder P1–P3:
+  split layout host services from script messages, remove script from
+  `layout` / `layout_api`, and add a static HTML document provider.
 - **C6** — ✅ code complete. `ScriptingProfile` + NoOp factories.
-- **C7** — ⏸ not started. Cut script dep from servo facade.
+- **C7** — ⏸ spun out. Now covered by profile-ladder P5–P6:
+  introduce profile facade packages and keep the low-profile document
+  pipeline separate from the fullweb constellation path.
 
-Validation baseline (2026-05-11): `cargo check -p servo-layout`
-clean; `cargo check -p servo-paint` clean; `cargo test -p servo-paint
---test paint_render_e2e` 3/3 pass; `cargo test -p servo-paint`
-3/3 translator tests pass. The `components/servo/webview.rs` Paint
-method gaps called out in the older snapshot are no longer the active
-tail; the active C4 parity tail is Windows per-surface DCOMP present +
-matching Pelt smoke coverage.
+Validation baseline (2026-05-12): `cargo check -p pelt-desktop
+--features windows-present` clean; `cargo check -p pelt --features
+windows-present` clean; `cargo check -p pelt-desktop --features
+windows-present --target x86_64-pc-windows-msvc` clean; `cargo check
+-p pelt --features windows-present --target x86_64-pc-windows-msvc`
+clean. All checks still report the pre-existing `servo-paint`
+dead-code warnings for `paint_info` and `next_painter_id`. The headed
+Windows per-surface smoke now runs to completion on the Windows desktop
+session (`cargo run -p pelt --features windows-present -- --engine
+viewer --windows-present-surfaces-smoke about:blank`, outcome:
+`frames=2 created_window=true declared_subsurface=true`) and was
+visually confirmed with a red master surface plus a green top-left
+declared DCOMP child visual. The Windows smoke requests an 800x600
+physical client area so the DCOMP master and declared child visual cover
+the intended surface on DPI-scaled displays. Linux still needs a live
+Wayland smoke.
 
 ---
 
-## Next work lanes (2026-05-11)
+## Next work lanes (2026-05-12)
 
 ### Lane 1 — Windows per-surface presentation parity
+
+**Status:** landed in code on 2026-05-12; headed Windows smoke runs to
+completion and the declared child visual was visually confirmed.
 
 **Goal:** make Windows match macOS for declared compositor surfaces,
 not just the master/full-window path.
@@ -74,57 +97,58 @@ not just the master/full-window path.
 **Why first:** C4 is otherwise easy to overstate. macOS proves both
 `present_master` and per-`SurfaceKey` `present`; Windows only proves
 the DXGI Composition swapchain master path today. Closing this before
-C5 keeps the netrender cut cleanly separated from the script-optional
-cut.
+the profile ladder keeps renderer parity separated from profile/facade
+work.
 
-**Work:**
+**Work landed:**
 
-- Implement `WindowsDxgiBackend::present(key, transform, clip,
-  opacity)` in `components/paint/compositor_dxgi.rs` instead of
-  inheriting the trait default no-op.
-- In the Windows `declare` path, finish whatever DCOMP content bridge
-  the per-key visual needs. The code already creates and stores an
-  `IDCompositionVisual` per `SurfaceKey`; the parity lane should make
-  that visual show the declared surface destination, attach it under
-  the root visual, and keep the root/master visual ordering explicit.
-- Apply the layer transform, clip, and opacity to the per-surface
-  `IDCompositionVisual`, matching the semantics exercised by
-  `MacosCALayerBackend::present`.
-- Commit the DCOMP tree after per-surface updates. If the commit can be
-  coalesced with `present_master`, document the ordering; otherwise do
-  the straightforward per-frame `Commit` first.
-- Add `WindowsDxgiPresentSmokeConfig::declare_subsurface` and a Pelt
-  `--windows-present-surfaces-smoke` mode mirroring the macOS smoke:
-  red master, green top-left declared surface, 50% opacity, window held
-  open long enough for visual confirmation.
+- `ServoCompositor::present_frame` now submits all layer blits before
+  invoking backend per-surface `present`, so a backend that copies the
+  destination during `present` observes the freshly-written texture.
+- `WindowsDxgiBackend::declare` allocates a COPY_DST/COPY_SRC wgpu
+  destination, creates a DCOMP child visual, attaches a composition
+  swapchain as that visual's content, installs a matrix transform and
+  rectangle clip, and inserts the child above the master root visual.
+- `WindowsDxgiBackend::present` applies transform/clip/opacity, copies
+  the keyed destination into the child swapchain backbuffer, presents
+  that swapchain, and commits the DCOMP tree.
+- `WindowsDxgiPresentSmokeConfig::declare_subsurface` plus Pelt
+  `--windows-present-surfaces-smoke` mirror the macOS smoke: red
+  master, green top-left declared surface, 50% opacity, window held
+  open for visual confirmation.
 
-**Done condition:** `pelt --windows-present-surfaces-smoke` visibly
-composites the declared surface above the master through DCOMP, and the
-normal checks still pass:
+**Receipt:** `pelt --windows-present-surfaces-smoke` launches the
+Windows DCOMP declared-surface path, exits cleanly, and shows the green
+declared surface composited above the red master:
 
 ```bat
-cargo check -p servo-paint
-cargo test -p servo-paint --test paint_render_e2e
 cargo run -p pelt --features windows-present -- --engine viewer --windows-present-surfaces-smoke about:blank
 ```
 
-### Lane 2 — Remaining cut-plan work
+### Lane 2 — Serval profile ladder
 
-**Goal:** resume the script-optional cut after Windows/macOS compositor
-parity is honest.
+**Goal:** resume the script-optional work as a profile-ladder
+implementation after Windows/macOS compositor parity is honest. The
+profile ladder makes Serval compile from `serval-static-html` through
+`serval-fullweb`; it does not bolt Blitz onto a separate engine.
 
 **Order:**
 
 1. Update this snapshot and the C4 landed notes once Lane 1 lands.
-2. Start C5: cut `script` and `script_traits` out of
-   `components/layout`, widening `components/shared/layout` only where
-   layout still needs concrete DOM access.
-3. Reconfirm C6 remains code-complete after C5's trait changes
-   (`ScriptingProfile` + NoOp factories should not regain a hard script
-   edge).
-4. Start C7: feature-gate or split the script-backed portions of
-   `components/servo` so a script-free viewer composition can type-check
-   without `mozjs_sys`, while default browser behavior stays intact.
+2. Start profile-ladder P0/P1: add dependency gates and split layout
+   host services from `ScriptThreadMessage`.
+3. Complete the old C5 through profile-ladder P2/P3: remove `script`
+   from layout/layout_api, then add the static HTML document provider.
+4. Reconfirm C6 remains useful after the profile split. It should select
+   runtime factories, but must not hide a compile-time hard dependency on
+   `script`.
+5. Complete the old C7 through profile-ladder P5/P6: add profile facade
+   packages and keep the low-profile document pipeline separate from the
+   fullweb constellation path.
+
+See
+[2026-05-12_serval_profile_ladder_plan.md](./2026-05-12_serval_profile_ladder_plan.md)
+for the detailed slice plan, package graph, gates, and pitfalls.
 
 **Deferred / externally gated:** macOS GPU-side per-surface sync can
 wait for upstream `wgpu-hal` queue access if it becomes necessary;
@@ -620,11 +644,11 @@ struct StubCompositor { /* fullscreen single-surface fallback */ }
 **Cuts:** none — C4 is net new code in `components/paint/` (or a
 new sibling crate `components/compositor/` for clarity).
 
-**Status (2026-05-11):** shared C4 plumbing is landed; macOS has
+**Status (2026-05-12):** shared C4 plumbing is landed; macOS has
 master + per-`SurfaceKey` smoke coverage; Windows has the master DCOMP
-smoke but still needs the per-`SurfaceKey` DCOMP `present` body and a
-matching `--windows-present-surfaces-smoke`; Linux still needs an
-on-device Wayland smoke receipt. See
+path plus per-`SurfaceKey` child-visual code and matching
+`--windows-present-surfaces-smoke`; Linux still needs an on-device
+Wayland smoke receipt. See
 [2026-05-09_c4_landed_notes.md](./2026-05-09_c4_landed_notes.md).
 The direction-neutral interop primitives the per-platform backends
 build on top of are documented in
@@ -654,9 +678,11 @@ is iterated and each layer's native handle is routed via
 platforms or via the `_or_capture` variant. End-to-end test that drives
 `Paint::render` directly (`paint_render_e2e_drives_full_embedder_path`)
 passes on Windows. macOS is green for declared surfaces via
-`--macos-present-surfaces-smoke`; Windows still needs the equivalent
-per-surface DCOMP body + `--windows-present-surfaces-smoke`; Linux
-still needs a live Wayland session.
+`--macos-present-surfaces-smoke`; Windows has the equivalent
+per-surface DCOMP body plus a clean headed
+`--windows-present-surfaces-smoke` run and visual confirmation of the
+green child visual above the red master; Linux still needs a live
+Wayland session.
 
 **Scope:**
 
@@ -682,52 +708,30 @@ still needs a live Wayland session.
 
 ## C5 — Cut `script` dep from `components/layout`
 
-**Why:** layout still depends on `script` for DOM types via
-`use script::*` imports (17 import sites in `components/layout/`
-today). Until that dep is gone, no script-free composition can
-lay out HTML/CSS — even with paint-types extracted (C2) and the
-netrender painter shipped (C3/C4), `cargo build -p layout` pulls
-SpiderMonkey through script's transitive deps. C5 is the
-load-bearing cut for the script-optional phase.
+**Status:** spun out into
+[2026-05-12_serval_profile_ladder_plan.md](./2026-05-12_serval_profile_ladder_plan.md).
 
-**Prereq:** C2 must land first. With `webrender_api::*` still
-threaded through layout-DOM glue, the holes from removing the
-script dep are confused with paint-type holes. Unwind paint-types
-first, then script.
+C5 is still the continuity label for cutting script out of layout, but
+the implementation is no longer just "replace imports until
+`cargo check -p layout` works." The sharpened target is a Serval static
+HTML profile whose package graph can lay out and paint HTML/CSS without
+`script`, `script_traits`, `script_bindings`, or `mozjs`.
 
-**Cuts:**
+The new C5 shape is profile-ladder P1–P3:
 
-- `script = { workspace = true }` and `script_traits = { workspace = true }`
-  from `components/layout/Cargo.toml` (lines 48–49).
-- Every `use script::*` and `use script_traits::*` import in
-  `components/layout/`. Each import resolves to either:
-  - **(a)** a trait or data type already in `components/shared/layout/`
-    (`LayoutDom`, `LayoutNode`, `LayoutElement`, etc.) — replace the
-    import.
-  - **(b)** surface that's still concrete in `script` — widen
-    `components/shared/layout/` to expose it through a trait, then
-    replace the import.
+- **P1:** replace `LayoutConfig::script_chan:
+  GenericSender<ScriptThreadMessage>` with a profile-neutral layout host
+  service trait.
+- **P2:** remove `script` / `script_traits` from
+  `components/layout` and `components/shared/layout`, and move
+  `ScriptThreadFactory` out of `layout_api`.
+- **P3:** add a static HTML document provider that parses with
+  `html5ever`, implements the layout input contract, and renders through
+  `servo-layout` -> `servo-paint` -> NetRender.
 
-**Done condition:** `grep -rn "^use script\(_traits\)\?::"
-components/layout/` returns zero. `cargo check -p layout` succeeds
-without `script`, `script_bindings`, or `mozjs_sys` in the build
-graph.
-
-**Scope:** ~17 import-site fixes plus 1–3 trait-widening edits in
-`shared/layout/`. Multi-day focused work; can be sliced by importing
-module so each slice ends at "compiles."
-
-**Deferred decisions:**
-
-- **Whether `LayoutDom` covers every DOM access path layout needs**
-  — likely no; the script-bound impl exposes more than the trait
-  surface. Widen on demand at C5 time.
-- **Snapshot-style vs handle-style trait** — `shared/layout` is
-  handle-style today (LayoutNode borrows from script's DOM). A
-  snapshot-style intermediate (`Vec<DomItem>`, IPC-shaped) is a
-  possible future cut, not C5 work.
-- **`components/layout/script_layout_glue.rs`-shaped modules** (if
-  any survive) — fold into `shared/layout` or delete.
+**Done condition:** `cargo check -p servo-layout` succeeds without
+script in its normal library graph, and `cargo check -p
+serval-static-html` proves the Blitz-like minimum Serval profile.
 
 ---
 
@@ -771,9 +775,9 @@ spawns pipelines without instantiating `script::ScriptThread`.
 the same behavior as before.
 
 **Scope:** ~200–500 LOC (factory enum, viewer no-op impl, dispatch
-edits at the call site). Single-day cut. Can land in either order
-relative to C5, but C5 first is cleaner — otherwise the no-op
-factory has to spawn pipelines whose layout still pulls script.
+edits at the call site). Single-day cut. Can land before or after the
+profile-ladder P1/P2 work, but it only becomes meaningful once layout no
+longer pulls script.
 
 **Deferred decisions:**
 
@@ -790,73 +794,28 @@ factory has to spawn pipelines whose layout still pulls script.
 
 ## C7 — Cut `script` dep from `components/servo`
 
-**Why:** [components/servo/Cargo.toml:113](../components/servo/Cargo.toml#L113)
-makes `script = { workspace = true }` a hard dep on the all-up
-facade. Until that's removed or feature-gated, `cargo check -p servo`
-always builds SpiderMonkey, and `EngineProfile::Browser` is the only
-composition that compiles end-to-end. C7 is what makes "browser is
-one composition under Pelt, not the engine identity" real at the
-crate level.
+**Status:** spun out into
+[2026-05-12_serval_profile_ladder_plan.md](./2026-05-12_serval_profile_ladder_plan.md).
 
-**Prereq:** C5 + C6. Without C5, the viewer composition has no
-working layout under it. Without C6, the spawn site still
-unconditionally instantiates `ScriptThread`.
+C7 is still the continuity label for cutting script out of the all-up
+facade, but the target is now stricter than "`cargo check -p servo
+--no-default-features` somehow works." The target is named profile
+packages whose dependency graphs prove that browser/fullweb is one
+composition, not Serval's minimum identity.
 
-**Cuts:**
+The new C7 shape is profile-ladder P5–P6:
 
-- `script = { workspace = true }` and `script_traits = { workspace = true }`
-  from `components/servo/Cargo.toml` `[dependencies]`. Move to a
-  `script` feature, default-on for the browser composition.
-- Every `use script::*` and `use script_traits::*` import in
-  `components/servo/*.rs`. Holes appear in:
-  - `servo.rs` (engine entry — script_join_handle, init paths)
-  - `webview.rs` (script-coupled lifecycle methods)
-  - `javascript_evaluator.rs` (entirely script-coupled — gate the
-    whole file behind the `script` feature)
-  - delegate plumbing (`servo_delegate.rs`, `webview_delegate.rs`)
+- **P5:** introduce profile facade packages such as
+  `serval-static-html` and `serval-fullweb`, keeping the default
+  fullweb/browser behavior intact while giving the static profile its
+  own dependency witness.
+- **P6:** keep the low-profile document pipeline direct at first
+  (`parse -> layout -> paint -> NetRender`) instead of forcing static
+  HTML through the script-heavy `components/constellation` path.
 
-**Two shape options:**
-
-- **(a) Cfg-gate inside the same crate.** `components/servo/` keeps
-  current name; script imports go behind `#[cfg(feature = "script")]`.
-  Default features keep the browser composition intact. Low file
-  movement; cfg accumulates.
-- **(b) Split into `components/servo` (script-free facade) +
-  `components/servo-browser` (the script-on composition).** Cleaner
-  separation; more file moves; matches the framing where browser
-  is one named composition.
-
-Recommend (a) for the cut, (b) as later cleanup if cfg
-accumulation gets ugly.
-
-**Done condition:** `cargo check -p servo --no-default-features`
-(or `--features viewer`) succeeds without `mozjs_sys` in the build
-graph. `cargo check -p servo` (default features = browser) still
-works exactly as before. `pelt --engine browser` builds; a future
-`pelt --engine viewer` that composes `servo` instead of running the
-static loop builds without SpiderMonkey.
-
-**Scope:** ~50 cfg-gate sites in `components/servo/*.rs`, plus
-surface-level Cargo work. Multi-day cut. Done last in the C5–C7
-sequence because it depends on C5+C6.
-
-**Deferred decisions:**
-
-- **Cfg-gate (a) vs split-crate (b)** — pick at scaffold time per
-  above.
-- **`javascript_evaluator.rs` fate in script-free composition** —
-  delete from compilation, or stub to return "JS not available"
-  errors. Stub is more compatible with embedder code that
-  unconditionally calls `evaluate_script`; delete is cleaner if
-  embedder code is profile-aware.
-- **`webview.rs` script-coupled methods** (script eval, devtools
-  attach, content-process bind) — feature-gate on the same `script`
-  feature, or split into `WebView` (handle, always available) and
-  `BrowserWebView` (script-coupled methods). Same cfg-vs-split call
-  as the crate-level decision.
-- **Whether `pelt --engine viewer` composes the `servo` crate
-  (script-free) at all, or stays on the current static viewer loop**
-  — not a C7 question; C7 just unblocks the option.
+**Done condition:** the static profile package checks without
+`script`, `script_bindings`, or `mozjs`; the existing default `servo`
+fullweb/browser build still checks and behaves as before.
 
 ---
 
@@ -864,11 +823,10 @@ sequence because it depends on C5+C6.
 
 - `components/script/` — content side. Tons of `webrender_api`
   imports today; these are C2 sed targets but the script logic
-  itself doesn't change. Untouched by C5–C7 (the script-optional
-  cut removes the dep on script from elsewhere; it doesn't reshape
-  script itself).
-- `components/layout/` — imports change (C2 paint-types, C5
-  shared/layout for DOM trait surface), but layout algorithms
+  itself doesn't change. Untouched by the profile-ladder work except as
+  a fullweb provider of the extracted layout/script contracts.
+- `components/layout/` — imports change (C2 paint-types, profile-ladder
+  P1/P2 shared layout contract work), but layout algorithms remain
   unchanged.
 - `components/canvas/` 2D path — kept (only the WebGL canvas
   variants die in C1.5).
@@ -876,8 +834,9 @@ sequence because it depends on C5+C6.
   webrender_api types for ExternalImageId etc. (C2 migrates
   those).
 - `components/constellation/`, `components/script_bindings/`,
-  `components/net/`, `components/storage/`, etc. — pure servo
-  components untouched by the cut.
+  `components/net/`, `components/storage/`, etc. — fullweb components
+  stay intact. The profile ladder should let lower profiles bypass them
+  before it tries to reshape them.
 - `RenderingContextCore` + `WgpuRenderingContext` (the trait
   split work that C1 preserved) — these are the foundation C3/C4
   build on top of.
