@@ -13,13 +13,25 @@ description = "Profile-neutral layout engine for serval; consumes any LayoutDom-
 path = "lib.rs"
 
 [dependencies]
+app_units = { workspace = true }
 atomic_refcell = { workspace = true }
+euclid = { workspace = true }
+html5ever = { workspace = true }
 layout_api = { workspace = true }
 layout_dom_api = { workspace = true }
 malloc_size_of = { workspace = true }
 malloc_size_of_derive = { workspace = true }
+net_traits = { workspace = true }
 paint_types = { workspace = true }
+pixels = { workspace = true }
+selectors = { workspace = true }
+servo_arc = { workspace = true }
+servo-base = { workspace = true }
+servo-url = { workspace = true }
+stylo = { workspace = true }
+stylo_atoms = { workspace = true }
+stylo_dom = { workspace = true }
+stylo_traits = { workspace = true }
 
 [dev-dependencies]
-html5ever = { workspace = true }
 serval-static-dom = { path = "../serval-static-dom" }

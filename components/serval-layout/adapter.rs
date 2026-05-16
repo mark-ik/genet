@@ -57,8 +57,8 @@ use layout_dom_api::LayoutDom;
 /// per the Stylo paper-probe findings in
 /// `docs/2026-05-16_layout_dom_api_design.md`.
 pub struct LayoutDomAdapter<'a, D: LayoutDom> {
-    dom: &'a D,
-    id: D::NodeId,
+    pub(crate) dom: &'a D,
+    pub(crate) id: D::NodeId,
 }
 
 impl<'a, D: LayoutDom> LayoutDomAdapter<'a, D> {

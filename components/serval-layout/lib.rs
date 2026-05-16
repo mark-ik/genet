@@ -12,6 +12,10 @@
 //! per `docs/2026-05-16_serval_layout_lift_plan.md` (P2.3).
 
 mod adapter;
+// `adapter_stylo.rs` exists as an in-progress draft of the Stylo trait
+// impls; it is intentionally **not** mod-declared here yet because its
+// method signatures haven't been reconciled against the actual stylo
+// trait surface. See the file's header for next-session strategy.
 mod cell;
 
 pub use adapter::{LayoutDomAdapter, LayoutDomBundle};

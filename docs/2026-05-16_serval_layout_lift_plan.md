@@ -109,6 +109,8 @@ Per-file `cargo check`-green-at-each-step is **abandoned** in favor of "cargo ch
 
 - ✅ **Batch 1a (2026-05-16):** `cell.rs` ported. `serval-layout` builds; audit canary empty.
 - 🔴 **Strategy 3 + jump-ship mechanics + flex-in + W3C-scavenge picked (Mark, 2026-05-16). First attempt reverted — see "P2.3 attempt findings" below.**
+- ✅ **P2.3 step 0 (2026-05-16):** `LayoutDomAdapter<'a, D>` scaffold landed. Structural methods backed by `LayoutDom`; three smoke tests pass; audit canary clean. Trait impls deferred.
+- 🟡 **Adapter Stylo-trait impls (2026-05-16):** first-pass `adapter_stylo.rs` written from memory; signatures partly wrong (made-up methods, wrong return types, missing `Hash` / `AttributeProvider` impls, etc.). File preserved in repo as in-progress draft, **not mod-declared** so the build stays green. See its header for the exact errors and the next-session strategy (read script-side reference impls in full, adapt method-by-method).
 
 #### P2.3 attempt findings (2026-05-16) — the real refactor is generic propagation
 
@@ -150,6 +152,38 @@ The revised plan for P2.3, paired with the file moves:
 5. **`accessibility_tree.rs` + `query.rs`** are kept as "W3C goods" per Mark's direction — they get the same generic-propagation treatment.
 
 Scope estimate: 1–2 focused days. Single-session ambition is unrealistic given the breadth of touch sites (17 layout files reference `Servo*Layout*` types, ~98 total references). Realistic next session: pick **either** the bulk move + generic-propagation sweep as one large WIP commit, **or** start with `LayoutDomAdapter` definition + a small subset of layout files (e.g., just `fragment_tree/` since it's output-shaped and less DOM-touching).
+
+#### LayoutDomAdapter trait-impl approach (lesson from 2026-05-16)
+
+When wiring `LayoutDomAdapter` to satisfy `layout_api`'s `LayoutNode<'dom>` / `LayoutElement<'dom>` / `DangerousStyleNode<'dom>` / `DangerousStyleElement<'dom>` (which transitively requires `style::dom::{NodeInfo, TNode, TDocument, TShadowRoot, TElement, AttributeProvider}` and `selectors::Element`):
+
+**Don't write from memory.** The trait surface is ~125 methods across 8+ traits. Writing from memory produces high error rates on:
+
+- Made-up methods that don't exist on the trait.
+- Wrong return types (`Option<&AtomIdent>` vs. `Option<&WeakAtom>` for `id`; `style::data::AtomicRef` (private) vs. `ElementDataRef` for `borrow_data`).
+- Wrong crate paths (`dom::ElementState` is actually `stylo_dom::ElementState`; `ElementSelectorFlags` lives in `selectors::matching`, not `style::dom`).
+- Missing super-trait impls (TElement requires `Hash + AttributeProvider`, not just `SelectorsElement`).
+- Wrong associated-type references (`Self::ConcreteShadowRoot` should be `<Self::ConcreteNode as TNode>::ConcreteShadowRoot`).
+
+**Do read the reference impls side-by-side.** The script-side reference impls are:
+
+- `components/script/layout_dom/servo_layout_node.rs` (332 lines) — LayoutNode + TNode impls.
+- `components/script/layout_dom/servo_layout_element.rs` (258 lines) — LayoutElement impl.
+- `components/script/layout_dom/servo_dangerous_style_node.rs` (151 lines) — DangerousStyleNode + TNode impls.
+- `components/script/layout_dom/servo_dangerous_style_element.rs` (933 lines) — DangerousStyleElement + TElement + selectors::Element + AttributeProvider impls. The big one.
+- `components/script/layout_dom/servo_dangerous_style_document.rs` (100 lines) — TDocument impl.
+- `components/script/layout_dom/servo_dangerous_style_shadow_root.rs` (56 lines) — TShadowRoot impl.
+
+The script-side reference takes ~1830 lines total. Our `LayoutDomAdapter` will be shorter because:
+
+- Single type for all four bundle slots (script splits into ServoLayoutNode / Element / DangerousNode / DangerousElement; our adapter dispatches on `kind()`).
+- Static profile stubs many cascade-side methods with `unimplemented!()` (paint worklets, atom-interned id/class, restyle dirty bits) until the cascade lights up later.
+
+Realistic length for `adapter_stylo.rs` + `adapter_layout_api.rs`: 800–1200 lines combined, of which ~70% is signature boilerplate matching the reference, ~25% is structural method bodies dispatching through `LayoutDom`, ~5% is `unimplemented!()` panics.
+
+**Per-trait order matters because of associated-type cycles.** TNode requires `ConcreteElement: TElement`, TElement requires `ConcreteNode: TNode<ConcreteElement = Self>`. Both must be impl'd before either trait bound resolves. Write all the trait impls in one file, run `cargo check`, fix the resulting errors against the reference impl. Don't try to land traits one at a time.
+
+**In-progress draft.** `components/serval-layout/adapter_stylo.rs` exists from the 2026-05-16 first-pass attempt; it's in the repo but **not mod-declared in `lib.rs`** (so the build stays green). Its file header enumerates the specific signature errors from the first pass. Next session can either: (a) treat it as a starting structural template (the file *shape* — which traits are impl'd, the LayoutDom-dispatch pattern for structural methods — is mostly right even where signatures aren't), and rewrite each impl block against the script reference; or (b) delete it and start fresh from the script reference. Either is valid.
 
 #### Per-session checkpoint protocol
 
