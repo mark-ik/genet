@@ -16,7 +16,7 @@ bench = false
 
 [features]
 default = []
-netrender = ["dep:netrender", "dep:wgpu"]
+netrender = ["dep:netrender", "dep:webgl_wgpu", "dep:wgpu"]
 # Headed presentation through serval's `WindowsDxgiBackend`. Drives
 # the netrender renderer through the C4 DCOMP composition swapchain
 # attached to a winit window's HWND. Windows-only at runtime; the
@@ -46,6 +46,7 @@ paint = { workspace = true, optional = true }
 pelt-core = { workspace = true }
 pollster = { version = "0.4", optional = true }
 raw-window-handle = { workspace = true, optional = true }
+webgl_wgpu = { workspace = true, optional = true }
 wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"], optional = true }
 winit = { workspace = true }
 
