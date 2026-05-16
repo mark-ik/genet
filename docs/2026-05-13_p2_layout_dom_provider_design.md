@@ -1,5 +1,19 @@
 # P2 Layout DOM Provider Design
 
+**Status (2026-05-16):** historical. Describes the layout-provider seam inside
+`components/layout/`, which became dead-on-disk in the 2026-05-15 audit. The
+profile-neutral DOM trait now lives in a new `layout-dom-api` crate per path C
+of the lift plan. Active docs:
+
+- [2026-05-16_serval_layout_lift_plan.md](./2026-05-16_serval_layout_lift_plan.md) — path C implementation plan.
+- [2026-05-16_layout_dom_api_design.md](./2026-05-16_layout_dom_api_design.md) — `LayoutDom` trait location and shape.
+
+Below is preserved as the prior-art record of how the seam was framed when the
+implementation target was the live `servo-layout` crate. Don't use it as a
+forward reference.
+
+---
+
 Companion to [2026-05-12_serval_profile_ladder_plan.md](./2026-05-12_serval_profile_ladder_plan.md).
 Tracks the concrete implementation of P2 ("remove script from servo-layout") from that plan.
 

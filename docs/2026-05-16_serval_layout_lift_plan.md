@@ -3,6 +3,7 @@
 Implementation plan for path C of the profile ladder: lift the portable parts of dead-on-disk `components/layout/` into a new `serval-layout` workspace crate, with `serval-static-dom` as the first DOM provider plugged in behind a profile-neutral `LayoutDom` trait.
 
 **Anchors:**
+
 - Strategy: [2026-05-12_serval_profile_ladder_plan.md](./2026-05-12_serval_profile_ladder_plan.md) (profile ladder framing — still canonical as strategy).
 - State: [2026-05-16_workspace_audit_snapshot.md](./2026-05-16_workspace_audit_snapshot.md) (the audit that moved servo-layout / servo-script to dead-on-disk).
 - Phase mechanics that have shipped: see "Implementation checkpoint - 2026-05-12" inside the strategy doc.
@@ -35,7 +36,7 @@ Cross-checking the lift against the strategic anchors:
 | Blitz convergence | The end shape (Stylo + Taffy + serval-internal box/fragment trees + display list emission) is the same general shape as Blitz's `packages/dom + packages/stylo + packages/taffy_layout + packages/paint`. A side-by-side audit becomes meaningful once the lift is done. |
 | Glass-HQ/gpui host via PlatformSurface | Orthogonal — layout emits display lists; PlatformSurface is downstream of paint. No coupling. |
 | Wasm/browser target (eventually) | Lift must stay wasm-friendly. Don't pull native-only sync primitives or threading assumptions into `serval-layout`. Audit `Send + Sync` decisions explicitly. |
-| Vanilla Windows build (audit baseline) | Hard requirement. Every batch must end with `cargo tree -p serval-static-html | rg "mozjs\|script_traits"` returning empty. |
+| Vanilla Windows build (audit baseline) | Hard requirement. Every batch must end with the profile-gate canary (`cargo tree` piped through `rg "mozjs\|script_traits"`) returning empty. |
 | Mere ecosystem fit (inker routes to serval) | Strengthened — inker can carry a "profile preference" payload to serval per route once the profiles are real packages. |
 | W3C-capability-knockout pattern | Apply during lift: paint worklets (CSS Houdini Painter), WebXR layout integration, service-worker hooks all get stubbed or deleted, not ported. |
 
@@ -187,10 +188,9 @@ Last command's emptiness is the load-bearing check: the dead crates are *gone fr
 
 ## Open decisions
 
-These get answered as work proceeds, not now:
-
-1. **Where does `LayoutDom` live?** `layout_api` (current `layout_provider.rs` direction) or a new `layout_dom_api` crate. Decide at P2.2 based on whether `layout_api`'s other contents (Painter, etc.) want to come along or split off.
-2. **Parley wiring timing.** P2.3 step 5 (port `flow/inline/*`) or a follow-up phase. Affects whether the first-pixel smoke uses parley or the existing inline-text path.
-3. **Stylo version anchor.** Pin to a specific servo-stylo SHA or follow main. Affects upgrade cadence and stability.
-4. **`LayoutHostServices` Send + Sync** — keep the bound or relax. Resolved at P4, not before.
-5. **`layout_api` shape after the lift** — keep as one crate or split into static-profile-needed vs. fullweb-only. Resolved at the "layout_api cleanup pass" sidequest.
+1. **Where does `LayoutDom` live?** **Resolved (pending review):** new `layout-dom-api` crate (not `layout_api`). Plausible additional consumers — reader-mode/extract head, DOM serialization, querySelector helpers — clear the bar from the lift plan. See [2026-05-16_layout_dom_api_design.md](./2026-05-16_layout_dom_api_design.md).
+2. **`LayoutDom` trait shape.** **Resolved (pending review):** hybrid pattern — opaque `NodeId` lookups (pattern C foundation) with a default `walk` impl over a `NodeVisitor` trait (pattern B layered on top), no per-node-kind handle types. Real-world references: `petgraph::visit`, `rustc_hir::intravisit::Visitor`, `tree-sitter`'s cursor API, `html5ever::TreeSink`. See the same design doc for rationale, sketch, and exit criteria.
+3. **Parley wiring timing.** P2.3 step 5 (port `flow/inline/*`) or a follow-up phase. Affects whether the first-pixel smoke uses parley or the existing inline-text path.
+4. **Stylo version anchor.** Pin to a specific servo-stylo SHA or follow main. Affects upgrade cadence and stability.
+5. **`LayoutHostServices` Send + Sync** — keep the bound or relax. Resolved at P4, not before.
+6. **`layout_api` shape after the lift** — keep as one crate or split into static-profile-needed vs. fullweb-only. Resolved at the "layout_api cleanup pass" sidequest.
