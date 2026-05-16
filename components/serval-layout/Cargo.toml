@@ -15,6 +15,11 @@ path = "lib.rs"
 [dependencies]
 atomic_refcell = { workspace = true }
 layout_api = { workspace = true }
+layout_dom_api = { workspace = true }
 malloc_size_of = { workspace = true }
 malloc_size_of_derive = { workspace = true }
 paint_types = { workspace = true }
+
+[dev-dependencies]
+html5ever = { workspace = true }
+serval-static-dom = { path = "../serval-static-dom" }

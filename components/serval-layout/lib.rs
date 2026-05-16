@@ -11,6 +11,8 @@
 //! The lift from dead-on-disk `components/layout/` lands here batch-by-batch
 //! per `docs/2026-05-16_serval_layout_lift_plan.md` (P2.3).
 
+mod adapter;
 mod cell;
 
+pub use adapter::{LayoutDomAdapter, LayoutDomBundle};
 pub use cell::ArcRefCell;
