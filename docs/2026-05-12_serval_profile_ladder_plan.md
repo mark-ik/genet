@@ -1,6 +1,19 @@
 # serval profile ladder plan
 
-Status: P0/P1 implemented; P2 partially implemented, 2026-05-12.
+**Status (2026-05-16):** This doc remains canonical for the *strategic* framing
+of the profile ladder. The *implementation* direction has been superseded by
+the 2026-05-15 audit, which moved `components/layout/` and `components/script/`
+to dead-on-disk. Active implementation plan: [2026-05-16_serval_layout_lift_plan.md](./2026-05-16_serval_layout_lift_plan.md)
+(path C: lift portable layout into a new `serval-layout` crate). Workspace
+state: [2026-05-16_workspace_audit_snapshot.md](./2026-05-16_workspace_audit_snapshot.md).
+
+Sections below describe the original P0–P7 phases; their *names* still apply,
+but the *mechanics* of P1/P2/P3 are reframed in the lift plan. The P1 fallout
+addendum at the bottom is **historical** — the affected adapter
+(`ScriptLayoutHostServices` in `components/script/script_thread.rs`) is in
+dead-on-disk code and not compiled.
+
+---
 
 This plan spins the old C5 / C7 "script-optional" cuts out of
 [2026-05-05_serval_netrender_cut_plan.md](./2026-05-05_serval_netrender_cut_plan.md)
