@@ -9,6 +9,8 @@
 //! Consumes any `LayoutDom`-shaped DOM (initially [`serval-static-dom`]; later
 //! a scripted-DOM adapter) and emits `ServalDisplayList` for the paint stage.
 //! The lift from dead-on-disk `components/layout/` lands here batch-by-batch
-//! per `docs/2026-05-16_serval_layout_lift_plan.md`. P2.1 is the scaffold;
-//! subsequent batches port geometry, display-list emission, fragment tree,
-//! flow, inline, and so on.
+//! per `docs/2026-05-16_serval_layout_lift_plan.md` (P2.3).
+
+mod cell;
+
+pub use cell::ArcRefCell;
