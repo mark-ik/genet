@@ -15,8 +15,11 @@ pub(crate) fn main() {
     let mut engine_profile = EngineProfile::Viewer;
     let mut url = None;
     let mut netrender_smoke = false;
+    let mut webgl_wgpu_smoke = false;
     #[cfg(feature = "windows-present")]
     let mut windows_present_smoke = false;
+    #[cfg(feature = "windows-present")]
+    let mut windows_present_surfaces_smoke = false;
     #[cfg(feature = "macos-present")]
     let mut macos_present_smoke = false;
     #[cfg(feature = "macos-present")]
@@ -46,9 +49,16 @@ pub(crate) fn main() {
             "--netrender-smoke" => {
                 netrender_smoke = true;
             },
+            "--webgl-wgpu-smoke" => {
+                webgl_wgpu_smoke = true;
+            },
             #[cfg(feature = "windows-present")]
             "--windows-present-smoke" => {
                 windows_present_smoke = true;
+            },
+            #[cfg(feature = "windows-present")]
+            "--windows-present-surfaces-smoke" => {
+                windows_present_surfaces_smoke = true;
             },
             #[cfg(feature = "macos-present")]
             "--macos-present-smoke" => {
@@ -91,9 +101,20 @@ pub(crate) fn main() {
         run_optional_netrender_smoke();
     }
 
+    if webgl_wgpu_smoke {
+        run_optional_webgl_wgpu_smoke();
+        return;
+    }
+
     #[cfg(feature = "windows-present")]
     if windows_present_smoke {
         run_optional_windows_present_smoke();
+        return;
+    }
+
+    #[cfg(feature = "windows-present")]
+    if windows_present_surfaces_smoke {
+        run_optional_windows_present_surfaces_smoke();
         return;
     }
 
@@ -139,17 +160,63 @@ fn run_optional_netrender_smoke() {
     }
 }
 
+fn run_optional_webgl_wgpu_smoke() {
+    match pelt_desktop::run_webgl_wgpu_smoke() {
+        Ok(outcome) => {
+            println!(
+                "pelt webgl-wgpu smoke rendered {}x{} painted_pixels={} canvas_center={:?} overlay_center={:?}",
+                outcome.width,
+                outcome.height,
+                outcome.painted_pixels,
+                outcome.canvas_center,
+                outcome.overlay_center
+            );
+        },
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        },
+    }
+}
+
 #[cfg(feature = "windows-present")]
 fn run_optional_windows_present_smoke() {
     let config = pelt_desktop::WindowsDxgiPresentSmokeConfig::default();
     match pelt_desktop::run_windows_dxgi_present_smoke(config) {
         Ok(outcome) => {
             println!(
-                "pelt windows-present smoke {}x{} frames={} created_window={}",
+                "pelt windows-present smoke {}x{} frames={} created_window={} declared_subsurface={}",
                 outcome.width,
                 outcome.height,
                 outcome.frames_presented,
-                outcome.created_window
+                outcome.created_window,
+                outcome.declared_subsurface
+            );
+        },
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        },
+    }
+}
+
+#[cfg(feature = "windows-present")]
+fn run_optional_windows_present_surfaces_smoke() {
+    let config = pelt_desktop::WindowsDxgiPresentSmokeConfig {
+        title: "pelt — windows-dxgi present smoke (with declared surface)".into(),
+        declare_subsurface: true,
+        frames: 0,
+        ..pelt_desktop::WindowsDxgiPresentSmokeConfig::default()
+    };
+    match pelt_desktop::run_windows_dxgi_present_smoke(config) {
+        Ok(outcome) => {
+            println!(
+                "pelt windows-present surfaces smoke {}x{} frames={} created_window={} declared_subsurface={}",
+                outcome.width,
+                outcome.height,
+                outcome.frames_presented,
+                outcome.created_window,
+                outcome.declared_subsurface
             );
         },
         Err(error) => {
@@ -166,10 +233,7 @@ fn run_optional_macos_present_smoke() {
         Ok(outcome) => {
             println!(
                 "pelt macos-present smoke {}x{} frames={} created_window={}",
-                outcome.width,
-                outcome.height,
-                outcome.frames_presented,
-                outcome.created_window
+                outcome.width, outcome.height, outcome.frames_presented, outcome.created_window
             );
         },
         Err(error) => {
@@ -202,10 +266,7 @@ fn run_optional_macos_present_surfaces_smoke() {
         Ok(outcome) => {
             println!(
                 "pelt macos-present surfaces smoke {}x{} frames={} created_window={}",
-                outcome.width,
-                outcome.height,
-                outcome.frames_presented,
-                outcome.created_window
+                outcome.width, outcome.height, outcome.frames_presented, outcome.created_window
             );
         },
         Err(error) => {
@@ -237,7 +298,9 @@ Script-free Pelt validation entrypoint.
 Options:
     --engine <browser|viewer|static|headless>
     --netrender-smoke
+    --webgl-wgpu-smoke
     --windows-present-smoke            (requires --features windows-present, target_os = \"windows\")
+    --windows-present-surfaces-smoke   (same as --windows-present-smoke + a declared compositor surface)
     --macos-present-smoke              (requires --features macos-present, target_vendor = \"apple\")
     --macos-present-surfaces-smoke     (same as --macos-present-smoke + a declared compositor surface)
     --version

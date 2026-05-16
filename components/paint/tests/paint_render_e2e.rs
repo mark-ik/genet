@@ -59,10 +59,8 @@ const VIEWPORT: u32 = 256;
 
 fn synthesize_one_rect_display_list() -> (ServalDisplayList, PaintDisplayListInfo, PipelineId) {
     let pid = PipelineId::default();
-    let mut list = ServalDisplayList::new(
-        DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32),
-        pid,
-    );
+    let mut list =
+        ServalDisplayList::new(DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32), pid);
     list.push(ServalDisplayItem::Rect(RectItem {
         placement: CommonItemPlacement {
             clip_rect: LayoutRect::new(

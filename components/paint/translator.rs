@@ -21,8 +21,8 @@
 
 use log::warn;
 use netrender::{
-    GradientKind, GradientStop as NrGradientStop, NO_CLIP, Scene, SceneBlendMode, SceneClip,
-    SceneGradient, SceneLayer, Transform,
+    ExternalTexturePlacement, GradientKind, GradientStop as NrGradientStop, NO_CLIP, Scene,
+    SceneBlendMode, SceneClip, SceneGradient, SceneLayer, Transform,
 };
 use paint_api::display_list::PaintDisplayListInfo;
 use paint_api::serval_display_list::{
@@ -30,6 +30,21 @@ use paint_api::serval_display_list::{
     ServalDisplayList,
 };
 use paint_types::ColorF;
+
+#[derive(Clone, Debug)]
+pub(crate) struct ExternalTextureDraw {
+    pub texture_key: u64,
+    pub placement: ExternalTexturePlacement,
+    /// Number of ordinary NetRender ops emitted before this external
+    /// texture draw. The renderer uses this to restore painter order
+    /// without forcing the texture through Vello's atlas path.
+    pub scene_op_boundary: usize,
+}
+
+pub(crate) struct TranslatedDisplayList {
+    pub scene: Scene,
+    pub external_textures: Vec<ExternalTextureDraw>,
+}
 
 /// Translate a [`ServalDisplayList`] (plus its per-pipeline metadata)
 /// into a [`netrender::Scene`] the renderer can rasterize.
@@ -45,9 +60,17 @@ pub fn translate_display_list(
     list: &ServalDisplayList,
     paint_info: &PaintDisplayListInfo,
 ) -> Scene {
+    translate_display_list_with_external_textures(list, paint_info).scene
+}
+
+pub(crate) fn translate_display_list_with_external_textures(
+    list: &ServalDisplayList,
+    paint_info: &PaintDisplayListInfo,
+) -> TranslatedDisplayList {
     let viewport_w = list.viewport.width.max(0) as u32;
     let viewport_h = list.viewport.height.max(0) as u32;
     let mut scene = Scene::new(viewport_w, viewport_h);
+    let mut external_textures = Vec::new();
 
     // The transforms palette is appended onto the Scene's transform
     // stack (Scene reserves index 0 as identity, mirroring
@@ -88,7 +111,18 @@ pub fn translate_display_list(
                 // (paint-side) to map `ImageKey` → `netrender::ImageKey`.
                 // First cut: log + emit a transparent fallback so the
                 // tree shape is preserved.
-                warn!("[netrender translator] image / repeating image not yet wired; emitting transparent fallback");
+                warn!(
+                    "[netrender translator] image / repeating image not yet wired; emitting transparent fallback"
+                );
+            },
+            ServalDisplayItem::ExternalTexture(texture) => {
+                let (x0, y0, x1, y1) = rect_corners(&texture.placement.clip_rect);
+                external_textures.push(ExternalTextureDraw {
+                    texture_key: texture.texture_key,
+                    placement: ExternalTexturePlacement::new([x0, y0, x1, y1])
+                        .with_opacity(texture.opacity),
+                    scene_op_boundary: scene.ops.len(),
+                });
             },
             ServalDisplayItem::Text(text) => {
                 // Glyph-run translation needs the painter's `FontRegistry`
@@ -110,7 +144,9 @@ pub fn translate_display_list(
                 // painter needs renderer access (held at Paint level,
                 // not Scene level) to do this, so the integration
                 // lands when the painter holds a `Renderer` handle.
-                warn!("[netrender translator] box-shadow / text-shadow deferred (needs renderer.build_box_shadow_mask)");
+                warn!(
+                    "[netrender translator] box-shadow / text-shadow deferred (needs renderer.build_box_shadow_mask)"
+                );
             },
             ServalDisplayItem::PopAllShadows => {
                 // Counterpart to PushShadow; no-op until shadow stack
@@ -124,7 +160,9 @@ pub fn translate_display_list(
                 // composited via `declare_compositor_surface` (native
                 // compositor route) or as an image (in-process route).
                 // First cut: deferred.
-                warn!("[netrender translator] iframe deferred (needs cross-pipeline scene composition)");
+                warn!(
+                    "[netrender translator] iframe deferred (needs cross-pipeline scene composition)"
+                );
             },
             ServalDisplayItem::PushStackingContext(sc) => {
                 let layer = stacking_context_to_layer(sc, transform_id_offset);
@@ -151,7 +189,10 @@ pub fn translate_display_list(
         }
     }
 
-    scene
+    TranslatedDisplayList {
+        scene,
+        external_textures,
+    }
 }
 
 // =============================================================================
@@ -172,9 +213,7 @@ fn serval_to_scene_transform(t: &paint_types::units::LayoutTransform) -> Transfo
     // 4x4 column-major. Project field-by-field.
     Transform {
         m: [
-            t.m11, t.m12, t.m13, t.m14,
-            t.m21, t.m22, t.m23, t.m24,
-            t.m31, t.m32, t.m33, t.m34,
+            t.m11, t.m12, t.m13, t.m14, t.m21, t.m22, t.m23, t.m24, t.m31, t.m32, t.m33, t.m34,
             t.m41, t.m42, t.m43, t.m44,
         ],
     }
@@ -219,10 +258,7 @@ fn mix_blend_mode_to_scene(mode: paint_types::MixBlendMode) -> SceneBlendMode {
     }
 }
 
-fn emit_border_first_cut(
-    scene: &mut Scene,
-    border: &paint_api::serval_display_list::BorderItem,
-) {
+fn emit_border_first_cut(scene: &mut Scene, border: &paint_api::serval_display_list::BorderItem) {
     let rect = &border.placement.clip_rect;
     let widths = &border.widths;
     use paint_api::serval_display_list::BorderDetails;
@@ -277,10 +313,7 @@ fn emit_border_first_cut(
     let _ = sides.do_aa;
 }
 
-fn emit_linear_gradient(
-    scene: &mut Scene,
-    item: &paint_api::serval_display_list::GradientItem,
-) {
+fn emit_linear_gradient(scene: &mut Scene, item: &paint_api::serval_display_list::GradientItem) {
     let rect = &item.placement.clip_rect;
     let g: &GradientPayload = &item.gradient;
     scene.push_gradient(SceneGradient {
@@ -289,7 +322,12 @@ fn emit_linear_gradient(
         x1: rect.max.x,
         y1: rect.max.y,
         kind: GradientKind::Linear,
-        params: [g.start_point.x, g.start_point.y, g.end_point.x, g.end_point.y],
+        params: [
+            g.start_point.x,
+            g.start_point.y,
+            g.end_point.x,
+            g.end_point.y,
+        ],
         stops: gradient_stops(&g.stops),
         transform_id: 0,
         clip_rect: NO_CLIP,
@@ -375,7 +413,11 @@ mod tests {
         }
     }
 
-    fn paint_info(viewport_w: f32, viewport_h: f32, pipeline_id: PipelineId) -> PaintDisplayListInfo {
+    fn paint_info(
+        viewport_w: f32,
+        viewport_h: f32,
+        pipeline_id: PipelineId,
+    ) -> PaintDisplayListInfo {
         use embedder_traits::ViewportDetails;
         use euclid::Scale;
         use paint_api::display_list::AxesScrollSensitivity;
@@ -436,15 +478,17 @@ mod tests {
         use paint_types::TransformStyle;
 
         let mut list = ServalDisplayList::new(DeviceIntSize::new(800, 600), pipeline());
-        list.push(ServalDisplayItem::PushStackingContext(StackingContextItem {
-            placement: placement(LayoutRect::zero()),
-            origin: paint_types::units::LayoutPoint::zero(),
-            transform_style: TransformStyle::Flat,
-            mix_blend_mode: paint_types::MixBlendMode::Normal,
-            filters: vec![FilterOp::Opacity(0.5)],
-            flags: StackingContextFlags::empty(),
-            raster_space: RasterSpace::Screen,
-        }));
+        list.push(ServalDisplayItem::PushStackingContext(
+            StackingContextItem {
+                placement: placement(LayoutRect::zero()),
+                origin: paint_types::units::LayoutPoint::zero(),
+                transform_style: TransformStyle::Flat,
+                mix_blend_mode: paint_types::MixBlendMode::Normal,
+                filters: vec![FilterOp::Opacity(0.5)],
+                flags: StackingContextFlags::empty(),
+                raster_space: RasterSpace::Screen,
+            },
+        ));
         list.push(ServalDisplayItem::PopStackingContext);
         let info = paint_info(800.0, 600.0, pipeline());
         let scene = translate_display_list(&list, &info);

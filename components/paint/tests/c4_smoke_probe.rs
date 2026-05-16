@@ -44,7 +44,11 @@ fn placement(rect: LayoutRect, pid: PipelineId) -> CommonItemPlacement {
     }
 }
 
-fn paint_info_for(viewport_w: f32, viewport_h: f32, pipeline_id: PipelineId) -> PaintDisplayListInfo {
+fn paint_info_for(
+    viewport_w: f32,
+    viewport_h: f32,
+    pipeline_id: PipelineId,
+) -> PaintDisplayListInfo {
     PaintDisplayListInfo::new(
         ViewportDetails {
             size: Size2D::new(viewport_w, viewport_h),
@@ -64,16 +68,11 @@ fn paint_info_for(viewport_w: f32, viewport_h: f32, pipeline_id: PipelineId) -> 
 /// Synthesize a single-rect display list (the `<div>` analog).
 fn one_rect_list() -> (ServalDisplayList, PaintDisplayListInfo) {
     let pid = PipelineId::default();
-    let mut list = ServalDisplayList::new(
-        DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32),
-        pid,
-    );
+    let mut list =
+        ServalDisplayList::new(DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32), pid);
     list.push(ServalDisplayItem::Rect(RectItem {
         placement: placement(
-            LayoutRect::new(
-                LayoutPoint::new(40.0, 40.0),
-                LayoutPoint::new(216.0, 216.0),
-            ),
+            LayoutRect::new(LayoutPoint::new(40.0, 40.0), LayoutPoint::new(216.0, 216.0)),
             pid,
         ),
         color: ColorF {
@@ -159,10 +158,7 @@ fn c4_smoke_probe_empty_scene_still_produces_master() {
     .expect("create_netrender_instance");
 
     let pid = PipelineId::default();
-    let list = ServalDisplayList::new(
-        DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32),
-        pid,
-    );
+    let list = ServalDisplayList::new(DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32), pid);
     let info = paint_info_for(VIEWPORT as f32, VIEWPORT as f32, pid);
     let scene = translate_display_list(&list, &info);
     assert_eq!(scene.ops.len(), 0);

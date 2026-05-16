@@ -44,12 +44,10 @@ use paint_types::{
     FontInstanceFlags, FontInstanceKey, FontKey, ImageData, ImageDescriptor, ImageKey,
     NativeFontHandle, PipelineId as WebRenderPipelineId,
 };
-use serval_display_list::ServalDisplayList;
 use profile_traits::mem::{OpaqueSender, ReportsChan};
 use serde::{Deserialize, Serialize};
-use servo_base::generic_channel::{
-    self, GenericCallback, GenericSender, GenericSharedMemory,
-};
+use serval_display_list::ServalDisplayList;
+use servo_base::generic_channel::{self, GenericCallback, GenericSender, GenericSharedMemory};
 
 use crate::largest_contentful_paint_candidate::LCPCandidate;
 use crate::viewport_description::ViewportDescription;

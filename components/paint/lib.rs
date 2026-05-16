@@ -34,25 +34,24 @@ use webxr::WebXrRegistry;
 
 #[allow(deprecated)]
 pub use crate::compositor::{
-    OsCompositorBackend, PaintCompositor, ServoCompositor, StubCompositor,
-    WgpuMasterCaptureBackend,
+    OsCompositorBackend, PaintCompositor, ServoCompositor, StubCompositor, WgpuMasterCaptureBackend,
 };
-pub use crate::compositor_factory::{
-    BoxedFactoryError, default_compositor_for_window, default_compositor_for_window_or_capture,
-};
-#[cfg(target_os = "windows")]
-pub use crate::compositor_dxgi::{BackendError as WindowsDxgiBackendError, WindowsDxgiBackend};
 #[cfg(target_vendor = "apple")]
 pub use crate::compositor_calayer::{
     BackendError as MacosCALayerBackendError, MacosCALayerBackend,
+};
+#[cfg(target_os = "windows")]
+pub use crate::compositor_dxgi::{BackendError as WindowsDxgiBackendError, WindowsDxgiBackend};
+pub use crate::compositor_factory::{
+    BoxedFactoryError, default_compositor_for_window, default_compositor_for_window_or_capture,
 };
 #[cfg(target_os = "linux")]
 pub use crate::compositor_wayland::{
     BackendError as WaylandSubsurfaceBackendError, WaylandSubsurfaceBackend,
 };
-pub use crate::interop::{HostWgpuContext, InteropBackend, InteropError, SyncMechanism};
 #[cfg(target_os = "windows")]
 pub use crate::interop::Dx12FenceSynchronizer;
+pub use crate::interop::{HostWgpuContext, InteropBackend, InteropError, SyncMechanism};
 pub use crate::netrender_painter::{Paint, WebRenderDebugOption};
 pub use crate::translator::translate_display_list;
 

@@ -24,6 +24,7 @@ webxr = ["dep:webxr", "dep:webxr-api"]
 euclid = { workspace = true }
 servo-geometry = { workspace = true }
 stylo_traits = { workspace = true }
+webgl_wgpu = { workspace = true }
 
 [lints.clippy]
 unwrap_used = "deny"

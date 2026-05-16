@@ -21,8 +21,8 @@ use std::rc::Rc;
 
 use dpi::PhysicalSize;
 use embedder_traits::{
-    InputEventAndId, InputEventId, InputEventResult, ScreenshotCaptureError, Scroll,
-    ShutdownState, ViewportDetails, WebViewPoint, WebViewRect,
+    InputEventAndId, InputEventId, InputEventResult, ScreenshotCaptureError, Scroll, ShutdownState,
+    ViewportDetails, WebViewPoint, WebViewRect,
 };
 use euclid::Scale;
 use image::RgbaImage;
@@ -41,7 +41,9 @@ use style_traits::CSSPixel;
 
 use crate::InitialPaintState;
 use crate::compositor::{PaintCompositor, WgpuMasterCaptureBackend};
-use crate::translator::translate_display_list;
+use crate::translator::{ExternalTextureDraw, translate_display_list_with_external_textures};
+
+mod test_support;
 
 /// Carried over from the WebRender era for source compatibility with
 /// the `servo` crate's `pub use paint::WebRenderDebugOption` re-export.
@@ -65,6 +67,9 @@ pub struct PipelineState {
     /// Layout-side metadata bundle. Carries the scroll-tree, epoch,
     /// caret property binding, and root reference frame id.
     pub paint_info: PaintDisplayListInfo,
+    /// Same-device external textures that should be overlaid into the
+    /// rendered frame after the ordinary Scene paints.
+    pub(crate) external_textures: Vec<ExternalTextureDraw>,
 }
 
 /// `Paint` is Servo's rendering subsystem. In the netrender-driven
@@ -127,6 +132,10 @@ pub struct Paint {
     /// [`crate::WindowsDxgiBackend`]) via
     /// [`Paint::install_compositor`].
     compositor: RefCell<Box<dyn PaintCompositor>>,
+    /// Same-device producer textures keyed by display-list external
+    /// texture items. GPU handles stay in-process; display lists carry
+    /// only stable keys.
+    external_textures: RefCell<FxHashMap<u64, wgpu::Texture>>,
     #[cfg(feature = "webgpu")]
     wgpu_image_map: webgpu::canvas_context::WebGpuExternalImageMap,
     #[cfg(feature = "webxr")]
@@ -148,6 +157,7 @@ impl Paint {
             renderers: RefCell::new(FxHashMap::default()),
             webview_to_pipeline: RefCell::new(FxHashMap::default()),
             compositor: RefCell::new(Box::new(WgpuMasterCaptureBackend::new())),
+            external_textures: RefCell::new(FxHashMap::default()),
             #[cfg(feature = "webgpu")]
             wgpu_image_map: Default::default(),
             #[cfg(feature = "webxr")]
@@ -157,62 +167,6 @@ impl Paint {
 
     pub fn receiver(&self) -> &RoutedReceiver<PaintMessage> {
         &self.paint_receiver
-    }
-
-    /// Test-only constructor — wires up minimal stub `PaintProxy` /
-    /// `RoutedReceiver` / `ShutdownState` so integration tests can
-    /// drive `handle_messages` + `render` + `composite_texture`
-    /// without standing up the full `InitialPaintState` (which needs
-    /// time + memory profiler chans, constellation senders, a real
-    /// `EventLoopWaker`, etc.).
-    ///
-    /// Production embedders construct via [`Paint::new`] with the
-    /// real `InitialPaintState`. This shortcut exists for the
-    /// 5.5b "Paint::render driven by a test" done-condition probe
-    /// and isn't intended for production use.
-    pub fn new_for_test() -> Rc<RefCell<Self>> {
-        use embedder_traits::EventLoopWaker;
-
-        struct NoopWaker;
-        impl EventLoopWaker for NoopWaker {
-            fn clone_box(&self) -> Box<dyn EventLoopWaker> {
-                Box::new(NoopWaker)
-            }
-            fn wake(&self) {}
-        }
-
-        // RoutedReceiver<T> is a type alias for
-        // crossbeam_channel::Receiver<Result<T, ipc_channel::IpcError>>,
-        // so the unbounded() Sender / Receiver pair already matches
-        // the PaintProxy + Paint shape — no wrapping needed.
-        let (sender, receiver) = crossbeam_channel::unbounded();
-        let cross_process_paint_api = paint_api::CrossProcessPaintApi::dummy();
-        let paint_proxy = PaintProxy {
-            sender,
-            cross_process_paint_api,
-            event_loop_waker: Box::new(NoopWaker),
-        };
-        let paint_receiver: RoutedReceiver<PaintMessage> = receiver;
-        let shutdown_state = Rc::new(Cell::new(embedder_traits::ShutdownState::NotShuttingDown));
-
-        Rc::new(RefCell::new(Self {
-            paint_proxy,
-            paint_receiver,
-            shutdown_state,
-            webrender_external_image_id_manager: WebRenderExternalImageIdManager::default(),
-            pipelines: RefCell::new(FxHashMap::default()),
-            dirty_webviews: RefCell::new(Vec::new()),
-            webviews: RefCell::new(FxHashMap::default()),
-            rendering_contexts: RefCell::new(FxHashMap::default()),
-            next_painter_id: Cell::new(0),
-            renderers: RefCell::new(FxHashMap::default()),
-            webview_to_pipeline: RefCell::new(FxHashMap::default()),
-            compositor: RefCell::new(Box::new(WgpuMasterCaptureBackend::new())),
-            #[cfg(feature = "webgpu")]
-            wgpu_image_map: Default::default(),
-            #[cfg(feature = "webxr")]
-            webxr_registry: None,
-        }))
     }
 
     /// Drain a batch of `PaintMessage`s. C3 Step 7 routes
@@ -234,10 +188,15 @@ impl Paint {
                 paint_info,
             } => {
                 let pipeline_id = display_list.pipeline_id;
-                let scene = translate_display_list(&display_list, &paint_info);
+                let translated =
+                    translate_display_list_with_external_textures(&display_list, &paint_info);
                 self.pipelines.borrow_mut().insert(
                     pipeline_id,
-                    PipelineState { scene, paint_info },
+                    PipelineState {
+                        scene: translated.scene,
+                        paint_info,
+                        external_textures: translated.external_textures,
+                    },
                 );
                 self.webview_to_pipeline
                     .borrow_mut()
@@ -393,11 +352,7 @@ impl Paint {
 
     /// Add a webview handle to the painter. Stored under the supplied
     /// id for later input / scroll / zoom / show / hide operations.
-    pub fn add_webview(
-        &self,
-        view: Box<dyn WebViewTrait>,
-        viewport_details: ViewportDetails,
-    ) {
+    pub fn add_webview(&self, view: Box<dyn WebViewTrait>, viewport_details: ViewportDetails) {
         let id = view.id();
         let hidpi_scale = Scale::new(viewport_details.hidpi_scale_factor.0);
         self.webviews.borrow_mut().insert(
@@ -454,10 +409,30 @@ impl Paint {
         };
 
         let pipelines = self.pipelines.borrow();
-        let scene = match pipelines.get(&pipeline_id) {
-            Some(state) => &state.scene,
+        let state = match pipelines.get(&pipeline_id) {
+            Some(state) => state,
             None => return,
         };
+        let scene = &state.scene;
+        let registered_external_textures = self.external_textures.borrow();
+        let mut external_views = Vec::new();
+        for external in &state.external_textures {
+            let Some(texture) = registered_external_textures.get(&external.texture_key) else {
+                continue;
+            };
+            external_views.push((
+                texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                external.placement,
+                external.scene_op_boundary,
+            ));
+        }
+        let external_composites: Vec<_> = external_views
+            .iter()
+            .map(|(view, placement, scene_op_boundary)| {
+                netrender::ExternalTextureComposite::new(view, *placement)
+                    .with_scene_op_boundary(*scene_op_boundary)
+            })
+            .collect();
 
         let mut compositor = self.compositor.borrow_mut();
         // Double-deref past the RefMut + Box to get
@@ -466,12 +441,22 @@ impl Paint {
         // trait `render_with_compositor` accepts). Trait upcasting
         // stable since rustc 1.86.
         let pc: &mut dyn PaintCompositor = &mut **compositor;
-        renderer.render_with_compositor(
-            scene,
-            wgpu::TextureFormat::Rgba8Unorm,
-            pc,
-            netrender::peniko::Color::TRANSPARENT,
-        );
+        if external_composites.is_empty() {
+            renderer.render_with_compositor(
+                scene,
+                wgpu::TextureFormat::Rgba8Unorm,
+                pc,
+                netrender::peniko::Color::TRANSPARENT,
+            );
+        } else {
+            renderer.render_with_compositor_and_external_textures(
+                scene,
+                wgpu::TextureFormat::Rgba8Unorm,
+                pc,
+                netrender::peniko::Color::TRANSPARENT,
+                &external_composites,
+            );
+        }
     }
 
     /// Hand back the most recently presented composite texture for the
@@ -502,17 +487,10 @@ impl Paint {
         *self.compositor.borrow_mut() = boxed_compositor;
     }
 
-    /// Install a pre-built `netrender::Renderer` under `painter_id`,
-    /// bypassing the [`Self::register_rendering_context`] flow that
-    /// constructs one from a `RenderingContext`'s `WgpuCapability`.
-    ///
-    /// Intended for **integration tests** that drive `Paint::render`
-    /// without a real rendering context — the test boots wgpu via
-    /// `netrender::boot()` (or builds the handles itself), constructs
-    /// the Renderer directly, and installs it under a known
-    /// `PainterId`. Production embedders use `register_rendering_context`.
-    pub fn install_renderer(&self, painter_id: PainterId, renderer: netrender::Renderer) {
-        self.renderers.borrow_mut().insert(painter_id, renderer);
+    /// Register or replace a same-device producer texture referenced
+    /// by `ServalDisplayItem::ExternalTexture`.
+    pub fn install_external_texture(&self, key: u64, texture: wgpu::Texture) {
+        self.external_textures.borrow_mut().insert(key, texture);
     }
 
     /// Set the embedder-side hidpi scale for a webview.
@@ -523,8 +501,7 @@ impl Paint {
     ) {
         if let Some(state) = self.webviews.borrow_mut().get_mut(&webview_id) {
             state.hidpi_scale = scale;
-            state.viewport_details.hidpi_scale_factor =
-                Scale::new(scale.0);
+            state.viewport_details.hidpi_scale_factor = Scale::new(scale.0);
         }
     }
 
@@ -567,11 +544,7 @@ impl Paint {
     ///
     /// First-cut: returns `false` to signal "nothing handled" so the
     /// embedder's pending-event queue path takes over.
-    pub fn notify_input_event(
-        &self,
-        _webview_id: WebViewId,
-        _event: InputEventAndId,
-    ) -> bool {
+    pub fn notify_input_event(&self, _webview_id: WebViewId, _event: InputEventAndId) -> bool {
         false
     }
 

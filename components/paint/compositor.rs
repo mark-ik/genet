@@ -169,7 +169,6 @@ pub trait OsCompositorBackend: Send {
     /// every platform to implement).
     fn present_master(&mut self, _master: &Texture) {}
 
-
     /// Which wgpu/native graphics backend this implementation targets.
     /// `ServoCompositor` cross-checks against the
     /// [`HostWgpuContext::backend`] at construction.
@@ -350,6 +349,7 @@ impl<B: OsCompositorBackend> Compositor for ServoCompositor<B> {
                     label: Some("ServoCompositor::present_frame layer blits"),
                 });
         let mut recorded_any = false;
+        let mut presents = Vec::with_capacity(frame.layers.len());
 
         for layer in frame.layers {
             let [x0, y0, x1, y1] = layer.source_rect_in_master;
@@ -435,8 +435,7 @@ impl<B: OsCompositorBackend> Compositor for ServoCompositor<B> {
                 recorded_any = true;
             }
 
-            self.backend
-                .present(layer.key, layer.world_transform, layer.clip, layer.opacity);
+            presents.push((layer.key, layer.world_transform, layer.clip, layer.opacity));
         }
 
         if recorded_any {
@@ -444,6 +443,10 @@ impl<B: OsCompositorBackend> Compositor for ServoCompositor<B> {
         }
         // Otherwise the encoder is dropped without a submit — fine,
         // wgpu just discards the empty command buffer.
+
+        for (key, world_transform, clip, opacity) in presents {
+            self.backend.present(key, world_transform, clip, opacity);
+        }
 
         let _ = &self.host;
     }

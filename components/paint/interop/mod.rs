@@ -160,13 +160,13 @@ impl fmt::Display for InteropError {
         match self {
             Self::BackendMismatch { expected, actual } => {
                 write!(f, "backend mismatch: expected {expected}, found {actual}")
-            }
+            },
             Self::Dx12(msg) => write!(f, "D3D12 interop failed: {msg}"),
             Self::Vulkan(msg) => write!(f, "Vulkan interop failed: {msg}"),
             Self::Metal(msg) => write!(f, "Metal interop failed: {msg}"),
             Self::UnsupportedSynchronization(m) => {
                 write!(f, "unsupported synchronization mechanism: {m:?}")
-            }
+            },
         }
     }
 }
