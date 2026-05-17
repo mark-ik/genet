@@ -292,11 +292,19 @@ What this means concretely for `serval-layout`:
 
 ---
 
-## Publishing observables: the FragmentQuery + InteractionQuery surface
+## Publishing observables: query surfaces (all planes)
 
-Per Mark's correction: **don't expose raw layout internals as a permanent ABI.** Internal plane storage (IndexVec, FxHashMap, the `Fragment` struct shape, line-box representation) is implementation detail and should evolve freely. Consumers (apparatus, host, scroll-to-anchor, selection highlight, `getBoundingClientRect` when scripted lands) speak a query-surface trait.
+**Universal rule (per Mark's correction):** don't expose raw plane internals as a permanent ABI. Internal storage of *every* plane — Style, Layout, Fragment — is `pub(crate)` inside `serval-layout`. Public surface is the cross-engine query-trait family (`SemanticQuery`, `FragmentQuery`, `InteractionQuery`, `LoadingQuery`, plus the optional `HtmlSemanticExt` for Serval) defined in the cross-engine vocab crate (see [Hekate doc](./2026-05-17_hekate_lanes_observables.md)).
 
-`serval-layout` implements the cross-engine `FragmentQuery` trait (defined in the engine-observables crate; see [Hekate doc](./2026-05-17_hekate_lanes_observables.md)) over its internal FragmentPlane + StylePlane data:
+This applies to *every* plane:
+
+- `StylePlane`: `pub(crate)`. Public reads through accessor methods on the document (e.g., `computed_style(node) -> Option<&ComputedValues>`) or through whatever subset is part of the eventual cross-engine `StyleQuery` trait (if one materializes — TBD; the static profile may not need cross-engine StyleQuery at all).
+- `LayoutPlane`: `pub(crate)`. Not directly observable externally; its data feeds FragmentPlane.
+- `FragmentPlane`: `pub(crate)`. Public ABI is `FragmentQuery` (hit-test, box-model, anchor lookup, source-range mapping, selection rects, generation/epoch).
+
+Internal storage shape (IndexVec / FxHashMap, Fragment struct layout, line-box representation, etc.) evolves freely without breaking consumers.
+
+`serval-layout` implements the cross-engine query traits over its plane data:
 
 ```rust
 // In serval-layout/src/fragment/query.rs:
@@ -334,7 +342,13 @@ impl<D: LayoutDom> FragmentQuery for LaidOutDoc<'_, D> {
 
 The plane structs (`StylePlane`, `LayoutPlane`, `FragmentPlane`) stay `pub(crate)` inside `serval-layout`. The public surface is the trait impls.
 
-Same pattern for `InteractionQuery` (focus, selection, affordances, activation targets) — `serval-layout`'s impl reads StylePlane + FragmentPlane internally; the public ABI is the trait.
+Same pattern for the other cross-engine traits:
+
+- `InteractionQuery` — focus, selection, affordances, activation targets. Impl reads StylePlane + FragmentPlane internally.
+- `SemanticQuery` + `HtmlSemanticExt` — title, headings, links, anchors, language; plus DOM-ish element-query for the HTML extension. Impl reads the underlying `D: LayoutDom` directly (with help from StylePlane for visibility filtering).
+- `LoadingQuery` — provided by the lane wrapper (`serval-static-html` / `serval-fullweb`), not `serval-layout` itself. `serval-layout` is post-load; the lane facade owns the network adapter.
+
+This means apparatus, mere, and the host can consume any of these trait surfaces uniformly across lanes (Nematic, Serval, system-webview) without knowing which engine produced the data. That's the multi-lane-host architecture from the Hekate doc, applied here.
 
 ---
 
