@@ -21,7 +21,6 @@ layout_api = { workspace = true }
 layout_dom_api = { workspace = true }
 malloc_size_of = { workspace = true }
 malloc_size_of_derive = { workspace = true }
-net_traits = { workspace = true }
 paint_types = { workspace = true }
 pixels = { workspace = true }
 selectors = { workspace = true }

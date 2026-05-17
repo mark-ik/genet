@@ -18,5 +18,5 @@ mod adapter;
 // trait surface. See the file's header for next-session strategy.
 mod cell;
 
-pub use adapter::{LayoutDomAdapter, LayoutDomBundle};
+pub use adapter::NodeRef;
 pub use cell::ArcRefCell;

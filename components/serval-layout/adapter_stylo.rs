@@ -6,31 +6,45 @@
 //!
 //! First-pass attempt at the Stylo trait impls (NodeInfo / TNode /
 //! TDocument / TShadowRoot / TElement / selectors::Element /
-//! AttributeProvider) for `LayoutDomAdapter`. The trait signatures here
-//! are partly wrong — written from memory + incomplete trait reading
-//! rather than side-by-side with the script-side reference impls.
+//! AttributeProvider) for `NodeRef`. Written from memory; signatures
+//! are partly wrong. Preserved as a structural starting point — the
+//! *shape* of the file (which trait impls go where, the
+//! method-name-to-LayoutDom mapping for structural methods) is
+//! mostly right even where the signatures aren't.
 //!
-//! ## Next-session strategy
+//! ## Architectural direction (planes architecture, 2026-05-17)
 //!
-//! 1. Read `components/script/layout_dom/servo_dangerous_style_node.rs`
-//!    (151 lines) and `servo_dangerous_style_element.rs` (933 lines) in
-//!    full. These are the canonical reference for what TElement /
-//!    TNode actually demand, including the exact signatures Rust will
-//!    accept for things like `BorrowedLocalName`,
-//!    `<Self::ConcreteNode as TNode>::ConcreteShadowRoot`,
-//!    `ElementDataRef<'_>` (vs. style::data::AtomicRef), etc.
-//! 2. Adapt each method body to use `LayoutDom` primitives where the
-//!    operation is structural; use `unimplemented!()` /
-//!    `unreachable!()` only where the static profile genuinely doesn't
-//!    exercise it (paint worklets, atom-interned id/class, restyle
-//!    dirty bits, etc.).
-//! 3. Add `Hash` and `AttributeProvider` impls in adapter.rs (they're
-//!    TElement super-traits but unrelated to the Stylo trait surface).
-//! 4. Once cargo check is green on this file alone, mod-declare in
-//!    lib.rs and add a smoke test that round-trips a simple selector
-//!    match through `selectors::Element`.
+//! Earlier framing targeted `layout_api::LayoutNode` / `LayoutElement` /
+//! `DangerousStyleNode` / `DangerousStyleElement` + `LayoutDomTypeBundle`.
+//! That layer is **dropped under the planes architecture** — the planes
+//! design has no layout_api bundle, no Servo-shaped four-type split.
+//! `NodeRef` impls Stylo's trait family directly. See
+//! `docs/2026-05-17_serval_layout_planes_architecture.md` for the
+//! current target shape, and `docs/2026-05-17_paintlist_polyglot_renderer.md`
+//! for the renderer side.
 //!
-//! ## What's wrong in this first pass
+//! ## Next-session strategy (when this file is wired in)
+//!
+//! 1. Read Blitz's `packages/blitz-dom/src/stylo.rs` (~1000 lines) as
+//!    the closest prior-art reference for "alternative DOM impls Stylo
+//!    directly without layout_api scaffolding." Mark referenced this
+//!    during the planes review; it's the model the planes architecture
+//!    is following.
+//! 2. Also read the script-side reference impls
+//!    (`components/script/layout_dom/servo_layout_node.rs`,
+//!    `servo_layout_element.rs`, `servo_dangerous_style_node.rs`,
+//!    `servo_dangerous_style_element.rs`) for signature details, but
+//!    treat them as references-for-shape rather than templates-to-mirror
+//!    — they're built around the layout_api bundle we're not using.
+//! 3. Adapt each method body to use `LayoutDom` primitives where the
+//!    operation is structural; read `StylePlane` (`serval-layout`-owned
+//!    side table) where it's style-data-accessing; use `unimplemented!()`
+//!    / `unreachable!()` only where the static profile genuinely doesn't
+//!    exercise it.
+//! 4. Add `Hash` and `AttributeProvider` impls in `adapter.rs` (TElement
+//!    super-traits).
+//!
+//! ## Specific errors in this first pass (from cargo check)
 //!
 //! - Made-up methods that don't exist on TElement: `primary_box_size`,
 //!   `each_link_in_parent_implicit_scope`, `parent_element_with_filter`.
@@ -45,18 +59,9 @@
 //! - TElement's `shadow_root()` returns
 //!   `Option<<Self::ConcreteNode as TNode>::ConcreteShadowRoot>`, not
 //!   `Self::ConcreteShadowRoot`.
-//! - Missing `AttributeProvider` and `Hash` impls (TElement super-
-//!   traits).
-//!
-//! Below is preserved as a structural starting point — the *shape* of
-//! the file (which trait impls go where, the method-name-to-LayoutDom
-//! mapping for structural methods) is mostly right even where the
-//! signatures aren't.
+//! - Missing `AttributeProvider` and `Hash` impls (TElement super-traits).
 
 #![allow(dead_code, unused_imports)]
-
-//! `style::dom::*` + `selectors::Element` trait impls for
-//! [`LayoutDomAdapter`].
 //!
 //! Most methods are `unimplemented!()` stubs. The static profile does not
 //! currently run Stylo's cascade or selector matching — these impls exist to
@@ -85,11 +90,11 @@ use style::dom::{
 };
 use style::selector_parser::SelectorImpl;
 
-use crate::adapter::LayoutDomAdapter;
+use crate::adapter::NodeRef;
 
 // -- NodeInfo --------------------------------------------------------------
 
-impl<'a, D: LayoutDom> NodeInfo for LayoutDomAdapter<'a, D> {
+impl<'a, D: LayoutDom> NodeInfo for NodeRef<'a, D> {
     fn is_element(&self) -> bool {
         matches!(self.dom.kind(self.id), layout_dom_api::NodeKind::Element)
     }
@@ -101,7 +106,7 @@ impl<'a, D: LayoutDom> NodeInfo for LayoutDomAdapter<'a, D> {
 
 // -- TNode -----------------------------------------------------------------
 
-impl<'a, D: LayoutDom> TNode for LayoutDomAdapter<'a, D> {
+impl<'a, D: LayoutDom> TNode for NodeRef<'a, D> {
     type ConcreteElement = Self;
     type ConcreteDocument = Self;
     type ConcreteShadowRoot = Self;
@@ -152,7 +157,7 @@ impl<'a, D: LayoutDom> TNode for LayoutDomAdapter<'a, D> {
         // a stable per-node identity — likely a `LayoutDom::opaque(id) -> u64`
         // primitive on the trait, or a per-DOM offset table.
         unimplemented!(
-            "LayoutDomAdapter::opaque() — stable per-node identity not wired \
+            "NodeRef::opaque() — stable per-node identity not wired \
              yet; Stylo cascade is not exercised in the static profile"
         )
     }
@@ -182,7 +187,7 @@ impl<'a, D: LayoutDom> TNode for LayoutDomAdapter<'a, D> {
 
 // -- TDocument -------------------------------------------------------------
 
-impl<'a, D: LayoutDom> TDocument for LayoutDomAdapter<'a, D> {
+impl<'a, D: LayoutDom> TDocument for NodeRef<'a, D> {
     type ConcreteNode = Self;
 
     fn as_node(&self) -> Self {
@@ -204,7 +209,7 @@ impl<'a, D: LayoutDom> TDocument for LayoutDomAdapter<'a, D> {
         // Static profile doesn't run Stylo; this is wired when the cascade
         // lights up. The lock would live in a serval-layout-owned side table.
         unimplemented!(
-            "LayoutDomAdapter::shared_lock() — Stylo SharedRwLock not wired \
+            "NodeRef::shared_lock() — Stylo SharedRwLock not wired \
              yet; static profile doesn't run the cascade"
         )
     }
@@ -212,7 +217,7 @@ impl<'a, D: LayoutDom> TDocument for LayoutDomAdapter<'a, D> {
 
 // -- TShadowRoot -----------------------------------------------------------
 
-impl<'a, D: LayoutDom> TShadowRoot for LayoutDomAdapter<'a, D> {
+impl<'a, D: LayoutDom> TShadowRoot for NodeRef<'a, D> {
     type ConcreteNode = Self;
 
     fn as_node(&self) -> Self {
@@ -235,11 +240,11 @@ impl<'a, D: LayoutDom> TShadowRoot for LayoutDomAdapter<'a, D> {
 
 // -- selectors::Element ---------------------------------------------------
 
-impl<'a, D: LayoutDom> SelectorsElement for LayoutDomAdapter<'a, D> {
+impl<'a, D: LayoutDom> SelectorsElement for NodeRef<'a, D> {
     type Impl = SelectorImpl;
 
     fn opaque(&self) -> OpaqueElement {
-        unimplemented!("LayoutDomAdapter::opaque() — see TNode::opaque comment")
+        unimplemented!("NodeRef::opaque() — see TNode::opaque comment")
     }
 
     fn parent_element(&self) -> Option<Self> {
@@ -404,7 +409,7 @@ impl<'a, D: LayoutDom> SelectorsElement for LayoutDomAdapter<'a, D> {
 
 // -- TElement (mostly stubs) ----------------------------------------------
 
-impl<'a, D: LayoutDom> TElement for LayoutDomAdapter<'a, D> {
+impl<'a, D: LayoutDom> TElement for NodeRef<'a, D> {
     type ConcreteNode = Self;
     type TraversalChildrenIterator = iter::Empty<Self>;
 
@@ -512,7 +517,7 @@ impl<'a, D: LayoutDom> TElement for LayoutDomAdapter<'a, D> {
 
     unsafe fn ensure_data(&self) -> style::data::AtomicRefMut<style::data::ElementData> {
         unimplemented!(
-            "LayoutDomAdapter::ensure_data — element data side table not wired"
+            "NodeRef::ensure_data — element data side table not wired"
         )
     }
 
@@ -593,7 +598,7 @@ impl<'a, D: LayoutDom> TElement for LayoutDomAdapter<'a, D> {
 
     fn local_name(&self) -> &style::LocalName {
         unimplemented!(
-            "LayoutDomAdapter::local_name — needs atom interning side table"
+            "NodeRef::local_name — needs atom interning side table"
         )
     }
 
@@ -601,7 +606,7 @@ impl<'a, D: LayoutDom> TElement for LayoutDomAdapter<'a, D> {
         &self,
     ) -> &<<Self as SelectorsElement>::Impl as selectors::SelectorImpl>::BorrowedNamespaceUrl {
         unimplemented!(
-            "LayoutDomAdapter::namespace — needs atom interning side table"
+            "NodeRef::namespace — needs atom interning side table"
         )
     }
 

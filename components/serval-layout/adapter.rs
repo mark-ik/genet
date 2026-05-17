@@ -2,66 +2,63 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Bridge from `layout_dom_api::LayoutDom` to `layout_api::LayoutNode<'dom>`.
+//! `NodeRef<'a, D>` — handle that wraps `(dom: &'a D, id: D::NodeId)` for any
+//! `layout_dom_api::LayoutDom` impl, and acts as the foreign-trait firewall:
+//! Stylo's trait family (`TNode` / `TElement` / `selectors::Element` / etc.)
+//! is impl'd on `NodeRef` and nowhere else in serval-layout.
 //!
-//! This is the consumer-side adapter the path-C design doc describes (see
-//! `docs/2026-05-16_layout_dom_api_design.md` — "Foreign trait adapters").
-//! `LayoutDomAdapter<'a, D>` wraps a `(dom: &'a D, id: D::NodeId)` pair plus
-//! the side-table references Stylo needs (style storage, atom storage), and
-//! the layout crate's internal types will eventually constrain over its
-//! `layout_api::LayoutNode<'dom>` impl rather than naming a concrete script
-//! type.
+//! See `docs/2026-05-17_serval_layout_planes_architecture.md` for the
+//! architectural context — planes architecture, NodeRef as the single Stylo
+//! adapter, no `layout_api` LayoutNode/Element bundle (the path-C lift plan's
+//! original target shape is superseded).
 //!
-//! ## What's here today (P2.3 step 0, 2026-05-16)
+//! ## What's here today
 //!
-//! - `LayoutDomAdapter<'a, D>` type with structural methods backed by
-//!   `LayoutDom` primitives (parent, children, sibling navigation, kind).
-//! - `LayoutDomBundle<D>` skeleton for the eventual `LayoutDomTypeBundle`
-//!   impl.
-//! - Construction helpers and a smoke test that round-trips structural
-//!   navigation through a `serval-static-dom` `StaticDocument`.
+//! - `NodeRef<'a, D>` type with structural methods backed by `LayoutDom`
+//!   primitives (parent, sibling navigation, children, kind).
+//! - Smoke tests that round-trip structural navigation through
+//!   `serval-static-dom::StaticDocument`.
 //!
-//! ## What's not here yet (deferred to next session)
+//! ## What's not here yet
 //!
-//! - `impl layout_api::LayoutNode<'dom>` for `LayoutDomAdapter`. The
-//!   trait has ~32 methods; many can return None / unimplemented!() for
-//!   the static profile, but the signatures need to be right.
-//! - `impl layout_api::LayoutElement<'dom>`. ~19 methods, similar story.
-//! - `impl layout_api::DangerousStyleNode<'dom>` + the underlying
-//!   `style::dom::TNode` it requires. ~20 method stubs.
-//! - `impl layout_api::DangerousStyleElement<'dom>` + the underlying
-//!   `style::dom::TElement` (~40 methods) and `selectors::Element` (~15
-//!   methods). The big one.
-//! - `LayoutDomBundle` actually impl-ing `LayoutDomTypeBundle<'dom>` once
-//!   the four trait impls above exist.
-//! - Style storage and atom storage side-tables (per the Stylo paper-probe
-//!   findings — `borrow_data()` / `id()` / `each_class()` demand them).
+//! - Stylo trait impls (`NodeInfo` / `TNode` / `TDocument` / `TShadowRoot` /
+//!   `TElement` / `selectors::Element` / `AttributeProvider`). Draft sketch
+//!   in `adapter_stylo.rs` (not yet mod-declared). When written for real,
+//!   read the script-side reference impls in
+//!   `components/script/layout_dom/servo_*` side-by-side rather than from
+//!   memory.
+//! - Side-table references on `NodeRef`. The planes architecture has
+//!   `StylePlane` and atom storage owned by `serval-layout`, not embedded on
+//!   `NodeRef`. The Stylo adapter methods (`borrow_data` / `id` /
+//!   `each_class`) read those planes via accessor methods, not via fields
+//!   on `NodeRef`. Adapter shape may grow to carry plane refs as the design
+//!   converges; today it's just `(dom, id)`.
 //!
-//! These get implemented one trait at a time, starting with TNode +
-//! DangerousStyleNode as the smaller surface, then expanding to TElement
-//! and selectors::Element. Each can land as its own commit with the
-//! audit canary as the load-bearing check.
-
-use std::marker::PhantomData;
+//! Next concrete step: probe slice (NodeRef + minimal Stylo adapter + tiny
+//! StylePlane skeleton + construct.rs + Taffy + parley → log the resulting
+//! rect for one `<p>`).
 
 use layout_dom_api::LayoutDom;
 
-/// A handle into a `LayoutDom`-backed DOM, suitable for the layout crate's
-/// node/element-type expectations. Carries a borrow of the DOM (`&'a D`)
-/// plus the node identity.
+/// A handle into a `LayoutDom`-backed DOM. Carries a borrow of the DOM
+/// (`&'a D`) plus the node identity.
 ///
-/// **Stateful Stylo data is not carried here yet.** When the trait impls
-/// for `DangerousStyleElement` + `TElement` land, this adapter will grow
-/// references to a style storage side-table (`&'a StyleStorage<D::NodeId>`)
-/// and an atom-interned id/class storage (`&'a AtomStorage<D::NodeId>`),
-/// per the Stylo paper-probe findings in
-/// `docs/2026-05-16_layout_dom_api_design.md`.
-pub struct LayoutDomAdapter<'a, D: LayoutDom> {
+/// Stylo's trait family (`TNode`, `TElement`, `selectors::Element`, etc.)
+/// gets impl'd on this type and nowhere else in `serval-layout` — the
+/// foreign-trait firewall per the planes architecture. Today the impls
+/// haven't landed yet; see `adapter_stylo.rs` for the draft.
+///
+/// Style-side state (computed style, atomized id/class, etc.) lives in
+/// `serval-layout`-owned planes (`StylePlane` etc.), keyed by `D::NodeId`,
+/// not embedded on `NodeRef`. The Stylo adapter methods that need that
+/// state (`borrow_data`, `id`, `each_class`, etc.) read it via plane
+/// accessors. See the planes doc for the rationale.
+pub struct NodeRef<'a, D: LayoutDom> {
     pub(crate) dom: &'a D,
     pub(crate) id: D::NodeId,
 }
 
-impl<'a, D: LayoutDom> LayoutDomAdapter<'a, D> {
+impl<'a, D: LayoutDom> NodeRef<'a, D> {
     /// Construct an adapter rooted at a specific node.
     pub fn new(dom: &'a D, id: D::NodeId) -> Self {
         Self { dom, id }
@@ -124,7 +121,7 @@ impl<'a, D: LayoutDom> LayoutDomAdapter<'a, D> {
     }
 }
 
-impl<'a, D: LayoutDom> Clone for LayoutDomAdapter<'a, D> {
+impl<'a, D: LayoutDom> Clone for NodeRef<'a, D> {
     fn clone(&self) -> Self {
         Self {
             dom: self.dom,
@@ -133,33 +130,23 @@ impl<'a, D: LayoutDom> Clone for LayoutDomAdapter<'a, D> {
     }
 }
 
-impl<'a, D: LayoutDom> Copy for LayoutDomAdapter<'a, D> {}
+impl<'a, D: LayoutDom> Copy for NodeRef<'a, D> {}
 
-impl<'a, D: LayoutDom> std::fmt::Debug for LayoutDomAdapter<'a, D> {
+impl<'a, D: LayoutDom> std::fmt::Debug for NodeRef<'a, D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LayoutDomAdapter")
+        f.debug_struct("NodeRef")
             .field("id", &self.id)
             .finish_non_exhaustive()
     }
 }
 
-impl<'a, D: LayoutDom> PartialEq for LayoutDomAdapter<'a, D> {
+impl<'a, D: LayoutDom> PartialEq for NodeRef<'a, D> {
     fn eq(&self, other: &Self) -> bool {
         std::ptr::eq(self.dom, other.dom) && self.id == other.id
     }
 }
 
-impl<'a, D: LayoutDom> Eq for LayoutDomAdapter<'a, D> {}
-
-/// `LayoutDomTypeBundle` impl placeholder. Once the four trait impls
-/// (`LayoutNode`, `LayoutElement`, `DangerousStyleNode`,
-/// `DangerousStyleElement`) land on `LayoutDomAdapter`, this struct
-/// gets the actual `impl LayoutDomTypeBundle<'dom>` block pointing all
-/// four concrete types at `LayoutDomAdapter<'dom, D>`.
-///
-/// Kept as a phantom-data marker today so the bundle "exists" without
-/// committing to a partial trait impl.
-pub struct LayoutDomBundle<D: LayoutDom>(PhantomData<D>);
+impl<'a, D: LayoutDom> Eq for NodeRef<'a, D> {}
 
 #[cfg(test)]
 mod tests {
@@ -170,9 +157,9 @@ mod tests {
     use super::*;
 
     fn find_element_descendant<'a, D: LayoutDom>(
-        start: &LayoutDomAdapter<'a, D>,
+        start: &NodeRef<'a, D>,
         local: html5ever::LocalName,
-    ) -> Option<LayoutDomAdapter<'a, D>> {
+    ) -> Option<NodeRef<'a, D>> {
         // BFS through the subtree looking for an element with the given
         // local name. Tests don't care about traversal order; this avoids
         // depending on html5ever's auto-inserted <head> vs <body> ordering.
@@ -191,7 +178,7 @@ mod tests {
     #[test]
     fn adapter_walks_a_parsed_document() {
         let document = StaticDocument::parse("<html><body><p>Hello</p></body></html>");
-        let root = LayoutDomAdapter::document(&document);
+        let root = NodeRef::document(&document);
 
         let body = find_element_descendant(&root, local_name!("body"))
             .expect("body element exists");
@@ -208,7 +195,7 @@ mod tests {
         let document = StaticDocument::parse(
             "<html><body><p>a</p><p>b</p><p>c</p></body></html>",
         );
-        let root = LayoutDomAdapter::document(&document);
+        let root = NodeRef::document(&document);
         let body = find_element_descendant(&root, local_name!("body"))
             .expect("body element exists");
 
@@ -231,7 +218,7 @@ mod tests {
     #[test]
     fn adapter_round_trips_parent_child() {
         let document = StaticDocument::parse("<html><body><p>x</p></body></html>");
-        let root = LayoutDomAdapter::document(&document);
+        let root = NodeRef::document(&document);
         let html = root.dom_children().next().expect("html");
         assert_eq!(html.parent().map(|p| p.id()), Some(root.id()));
     }
