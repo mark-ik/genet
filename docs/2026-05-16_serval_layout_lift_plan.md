@@ -10,6 +10,53 @@ Implementation plan for path C of the profile ladder: lift the portable parts of
 
 ---
 
+## 2026-05-17 planes-architecture update (supersedes much of this doc)
+
+After reading Blitz's `packages/blitz-dom/` and synthesizing with the path-C goals, the architecture has been rewritten as a **planes** design. The authoritative reference is [2026-05-17_serval_layout_planes_architecture.md](./2026-05-17_serval_layout_planes_architecture.md). Read that first; this lift plan is updated to align.
+
+**Headline changes** vs. the path-C lift framing below:
+
+- **No more "lift Servo's layout machinery."** Servo's flow / flexbox / inline / formatting-context / box-tree / fragment-tree code is **dropped** (~30k lines). We use **Stylo for cascade + Taffy for layout + parley for inline text + lifted Servo `display_list/` for emission** (plus small selected lifts for list markers, quotes, WM geometry, replaced sizing, style helpers).
+- **No more `layout_api` LayoutNode / LayoutElement / DangerousStyleNode / DangerousStyleElement bridge.** Blitz proved this scaffolding is Servo-internal; nothing else consumes it. `NodeRef<'a, D>` impls Stylo's trait family directly (~1000 lines), no four-type bundle.
+- **No more "generic propagation through layout."** The lifted code consumes plane data (`StylePlane`, `LayoutPlane`, `FragmentPlane`), not LayoutNode-trait constraints. Generic parameterization is bounded to the planes' `D: LayoutDom` boundary.
+- **Mutable rendering state lives in planes**, not embedded on DOM nodes. Each plane is keyed by `D::NodeId` and owned by `serval-layout`. Multi-DOM-provider goal preserved (static / scripted / reader-mode all use the same planes); DOM crates stay clean.
+
+**Lift size revised:** ~5.5k lines lifted (display_list + style helpers + WM geometry + list markers + replaced sizing + quotes), plus ~3-4k lines of new plane construction / Stylo adapter / Taffy glue / parley wiring. Net `serval-layout` size: ~8-10k lines, down from the path-C plan's ~30k.
+
+**Next executable slice (replaces the "adapter compile gate" below):** smallest end-to-end that wires `NodeRef` + minimal Stylo adapter + StylePlane skeleton + tiny `construct.rs` that builds a Taffy tree for one `<p>` + Taffy run + log the rect. ~500 lines. Validates Taffy + parley + plane storage choices on a real surface. See the planes doc for the full slice description.
+
+The 2026-05-16 review section that previously lived here is **preserved below** as historical context — it documents the path-C framing the planes architecture supersedes. Don't follow its file-by-file lift order; use the planes doc's "lift now / lift later / drop" categorization instead.
+
+---
+
+## 2026-05-16 review update — first-step implications (historical, superseded 2026-05-17)
+
+The first steps changed this from a speculative port plan into an adapter-first
+lift:
+
+- `components/shared/layout-dom/` exists and `serval-static-dom::StaticDocument`
+  implements `layout_dom_api::LayoutDom`.
+- `components/serval-layout/` exists, builds, and has a structural
+  `LayoutDomAdapter<'a, D>` plus three adapter smoke tests.
+- `adapter_stylo.rs` exists as a deliberately unwired draft. That is the right
+  place for the next hard proof, but it should not be hand-written from memory
+  again.
+- The old per-file port order was too optimistic. The failed bulk move proved
+  that the real cost is generic propagation away from concrete
+  `Servo*Layout*` types, not file movement.
+- The current dependency gate should be package-name-specific. The broad
+  `rg "script|..."` form is wrong because clean graphs contain crates like
+  `unicode-script`.
+
+Critical correction: do **not** bulk-move more layout files until the adapter
+compile gate below is green. Without a compiling `LayoutDomAdapter` bridge into
+the existing `layout_api` / Stylo trait world, the next bulk move only recreates
+the same unresolved concrete-type collapse.
+
+**[2026-05-17 update: this critical correction is itself superseded. The adapter compile gate's target shrinks under the planes architecture — only the Stylo traits need impl'ing, not the layout_api bridge. The "next bulk move" framing is moot because we're not bulk-moving Servo's layout machinery anymore.]**
+
+---
+
 ## Why path C (vs. A and B)
 
 The 2026-05-12 plan assumed `servo-layout` and `servo-script` would remain live workspace members while their `script` couplings were sliced out. The 2026-05-15 audit moved both crates out of `workspace.members`. `components/layout/Cargo.toml` still names `script = { workspace = true }` (line 48), but neither the crate nor that dep entry compiles — the audit also removed `script` from `workspace.dependencies`.
@@ -36,7 +83,7 @@ Cross-checking the lift against the strategic anchors:
 | Blitz convergence | The end shape (Stylo + Taffy + serval-internal box/fragment trees + display list emission) is the same general shape as Blitz's `packages/dom + packages/stylo + packages/taffy_layout + packages/paint`. A side-by-side audit becomes meaningful once the lift is done. |
 | Glass-HQ/gpui host via PlatformSurface | Orthogonal — layout emits display lists; PlatformSurface is downstream of paint. No coupling. |
 | Wasm/browser target (eventually) | Lift must stay wasm-friendly. Don't pull native-only sync primitives or threading assumptions into `serval-layout`. Audit `Send + Sync` decisions explicitly. |
-| Vanilla Windows build (audit baseline) | Hard requirement. Every batch must end with the profile-gate canary (`cargo tree` piped through `rg "mozjs\|script_traits"`) returning empty. |
+| Vanilla Windows build (audit baseline) | Hard requirement. Every batch must end with the package-name canary returning empty for `servo-script`, `servo-script-traits`, `servo-script-bindings`, `mozjs`, and `mozjs_sys`. Do not use a broad `script` substring check; it false-positives on crates like `unicode-script`. |
 | Mere ecosystem fit (inker routes to serval) | Strengthened — inker can carry a "profile preference" payload to serval per route once the profiles are real packages. |
 | W3C-capability-knockout pattern | Apply during lift: paint worklets (CSS Houdini Painter), WebXR layout integration, service-worker hooks all get stubbed or deleted, not ported. |
 
@@ -56,9 +103,19 @@ The phase numbering from the 2026-05-12 plan stays, but the content changes:
 
 This is the bulk of the work. Subdivided:
 
-**P2.1 — Crate scaffold.** New `components/serval-layout/` workspace member. Cargo.toml depends on `layout_api`, `paint_api`, `paint_types`, `stylo`, `stylo_atoms`, `stylo_traits`, `taffy`, the math crates (`euclid`, `app_units`, `kurbo`), `servo-base`, `servo-config`, `servo-url`, `fonts`, `selectors`. **Must not depend on** `script`, `script_traits`, `script_bindings`, `mozjs`, `net_traits` (revisit if a load-image path needs it), or any `components/constellation`-shaped types.
+**P2.1 — Crate scaffold.** New `components/serval-layout/` workspace member. Current scaffold dependencies include the adapter/probe surface (`layout_dom_api`, `layout_api`, `paint_types`, `stylo`, `stylo_atoms`, `stylo_dom`, `stylo_traits`, `selectors`, math/Servo shared types). **Must not depend on** `script`, `script_traits`, `script_bindings`, `mozjs`, or any `components/constellation`-shaped types.
 
-Done condition: `cargo check -p serval-layout` succeeds on an empty `lib.rs`, and `cargo tree -p serval-layout | rg "script|mozjs"` is empty.
+`net_traits` needs a more precise rule. The current graph already reaches
+`servo-net-traits` through `layout_api`, and `serval-layout/Cargo.toml` also
+has a direct `net_traits` entry while the adapter work is still incomplete.
+That is not a SpiderMonkey/JS regression, but it is still dependency debt:
+remove the direct `net_traits` edge unless the first real layout batch proves
+it is needed, and move the stricter "no net traits in the static profile" goal
+to the later `layout_api` cleanup pass.
+
+Done condition: `cargo check -p serval-layout` succeeds, and the package-name
+canary for `serval-layout` returns no `servo-script`, `servo-script-traits`,
+`servo-script-bindings`, `mozjs`, or `mozjs_sys` packages.
 
 **P2.2 — `LayoutDom` provider trait.** Define the profile-neutral DOM trait in `layout_api` (or a new `layout_dom_api` if it deserves its own crate — judgment call once the trait shape is known). The existing `components/layout/layout_provider.rs` stub describes the intent but currently re-exports `ServoLayoutNode` from dead-on-disk script — those re-exports become the trait surface. Specifically: `LayoutDom` provides typed access to nodes/elements/text/attributes/computed-style and a tree-traversal cursor, without naming a concrete provider type.
 
@@ -66,7 +123,7 @@ Done condition: `cargo check -p serval-layout` succeeds on an empty `lib.rs`, an
 
 Done condition: `serval-static-dom` exposes a `LayoutDom` impl; `cargo check -p serval-static-dom` succeeds; a unit test in `serval-layout` exercises the trait against `StaticDocument` (e.g., walks the tree and reads element names).
 
-**P2.3 — Port layout core, batch by batch.** Files in `components/layout/` move into `components/serval-layout/`, in dependency order, with each file's `script::layout_dom::*` references replaced by `LayoutDom`-shaped trait calls. Suggested order (low-coupling first):
+**P2.3 — Port layout core.** Files in `components/layout/` move into `components/serval-layout/`, with each file's `script::layout_dom::*` references replaced by `LayoutDom`-shaped trait calls. The original low-coupling order below is now retained as a cautionary record, not as the live execution rule:
 
 1. `geom.rs`, `layout_box_base.rs`, `cell.rs` — close to pure math/data.
 2. `display_list/` — emits `ServalDisplayList`; minimal DOM touch.
@@ -77,7 +134,9 @@ Done condition: `serval-static-dom` exposes a `LayoutDom` impl; `cargo check -p 
 7. `construct_modern.rs`, `query.rs`, `accessibility_tree.rs` — query/build entry points.
 8. `layout_impl.rs`, `lib.rs` — top-level glue.
 
-Each batch is its own commit; each commit ends with `cargo check -p serval-layout` green and `cargo tree -p serval-static-html | rg "script_traits|mozjs"` empty. Bisect-friendly.
+The failed first attempt below invalidated the per-file green-commit rule. The
+live rule is: adapter compile gate first, then layer/bulk moves with green
+checkpoints at meaningful boundaries.
 
 Done condition for P2.3: `serval-layout`'s public API covers what `serval-static-html` needs to layout a parsed `StaticDocument`.
 
@@ -111,6 +170,53 @@ Per-file `cargo check`-green-at-each-step is **abandoned** in favor of "cargo ch
 - 🔴 **Strategy 3 + jump-ship mechanics + flex-in + W3C-scavenge picked (Mark, 2026-05-16). First attempt reverted — see "P2.3 attempt findings" below.**
 - ✅ **P2.3 step 0 (2026-05-16):** `LayoutDomAdapter<'a, D>` scaffold landed. Structural methods backed by `LayoutDom`; three smoke tests pass; audit canary clean. Trait impls deferred.
 - 🟡 **Adapter Stylo-trait impls (2026-05-16):** first-pass `adapter_stylo.rs` written from memory; signatures partly wrong (made-up methods, wrong return types, missing `Hash` / `AttributeProvider` impls, etc.). File preserved in repo as in-progress draft, **not mod-declared** so the build stays green. See its header for the exact errors and the next-session strategy (read script-side reference impls in full, adapt method-by-method).
+- 🟢 **Review validation (2026-05-17):** `cargo check -p serval-layout`, `cargo test -p serval-layout`, `cargo check -p serval-static-dom`, and `cargo check -p serval-static-html` pass. The corrected package-name canary returns no script / mozjs packages for both `serval-layout` and `serval-static-html`.
+
+#### P2.3 next executable slice — adapter compile gate (superseded 2026-05-17)
+
+**[2026-05-17: this slice's target shrinks under the planes architecture.](./2026-05-17_serval_layout_planes_architecture.md) The Stylo adapter still gets written (now living in `serval-layout/src/stylo_adapter/`), but the four `layout_api` trait impls (LayoutNode / LayoutElement / DangerousStyleNode / DangerousStyleElement) and `LayoutDomBundle` are no longer needed — Blitz's read showed that scaffolding is Servo-internal and serves no consumer outside Servo's layout. The probe slice now also wires Taffy + parley + a StylePlane skeleton. See the planes doc for the full slice scope. The section below is preserved as the original gate framing.]**
+
+Before any further bulk file movement, make the adapter compile against the
+real trait surface. This is the smallest proof that path C is still viable.
+
+1. **Remove accidental direct dependency debt first.** If `serval-layout` does
+   not currently need a direct `net_traits` dependency, remove it. If an adapter
+   impl needs image/media types before the first layout batch, document the
+   exact method forcing it. Either way, keep `servo-net-traits` out of the
+   SpiderMonkey canary; it is a different cleanup problem.
+2. **Split adapter work into two files.**
+   - `adapter_layout_api.rs`: `NodeInfo`, `LayoutNode`, `LayoutElement`,
+     `DangerousStyleNode`, `DangerousStyleElement`, and `LayoutDomBundle`.
+   - `adapter_stylo.rs`: Stylo / selectors traits only
+     (`TNode`, `TElement`, `TDocument`, `TShadowRoot`,
+     `selectors::Element`, `AttributeProvider`, `Hash`).
+   This keeps the Serval-facing adapter boundary readable instead of burying it
+   inside 1000 lines of foreign trait boilerplate.
+3. **Use script-side reference impls as the signature oracle.** Read the six
+   `components/script/layout_dom/servo_*` adapter files side by side and port
+   signatures method-by-method. Do not infer trait signatures from memory.
+4. **Prefer explicit static-profile stubs over fake behavior.** Methods for
+   paint worklets, incremental restyle dirty bits, animation snapshots,
+   shadow DOM, and pseudo-element mutation can return `false`, `None`, or
+   `unimplemented!()` with a precise reason. Structural methods
+   (`parent`, siblings, children, node kind, attrs, text) must delegate to
+   `LayoutDom`.
+5. **Add a compile-test smoke.** A tiny test should prove that
+   `LayoutDomBundle<StaticDocument>` satisfies the layout/type-bundle bounds.
+   It does not need to run style/layout yet; it just proves the adapter bridge
+   is a real bridge.
+
+Exit gate for this slice:
+
+```powershell
+cargo check -p serval-layout
+cargo test -p serval-layout
+cargo tree -p serval-layout --edges normal | rg '(^|[[:space:]])(servo-script|servo-script-traits|servo-script-bindings|mozjs|mozjs_sys)([[:space:]]|$)'
+# Last command should produce no matches. Exit code 1 from rg means clean.
+```
+
+Only after this gate is green should the plan resume the layout-core file
+movement / generic-propagation work.
 
 #### P2.3 attempt findings (2026-05-16) — the real refactor is generic propagation
 
@@ -253,8 +359,8 @@ These are not blockers but produce dividends if done while the porter's hands ar
 
 ## Pitfalls to keep in view
 
-- **Re-introducing the SpiderMonkey env requirement.** `serval-layout`'s deps must be vetted at each step. Adding a transitive crate that depends on `script_traits` → `mozjs` would silently re-introduce NASM / MOZILLABUILD / clang-cl. The profile-gate check (`cargo tree -p serval-static-html | rg "mozjs"`) is the canary; run it after every batch of crate-additions during the lift. Single line in `workspace.exclude` separates us from the world of NASM.
-- **Stylo couplings to script-shaped types.** Servo's `style` crate has historically assumed a JS-reflector-shaped DOM in places (`OriginatingElement` and friends). If `stylo` itself requires `Send`/`Sync` or specific lifetime patterns that `StaticDocument`'s Rc-based tree doesn't satisfy, the port stalls at the style-tree edge. Worth a probe in P2.1: try building a no-op style application against `serval-static-dom` and see what stylo demands.
+- **Re-introducing the SpiderMonkey env requirement.** `serval-layout`'s deps must be vetted at each step. Adding a transitive crate that depends on `servo-script` / `servo-script-traits` / `servo-script-bindings` / `mozjs` would silently re-introduce NASM / MOZILLABUILD / clang-cl. The canary must match package names, not the substring `script`, because clean graphs contain crates like `unicode-script`. Single line in `workspace.exclude` separates us from the world of NASM.
+- **Stylo couplings to script-shaped types.** Servo's `style` crate has historically assumed a JS-reflector-shaped DOM in places (`OriginatingElement` and friends). The finished `StaticDocument` is Vec-backed; the `Rc<RefCell<...>>` only exists in the parser sink, so the current concern is not "StaticDocument is Rc and therefore not Sync." The real concern is whether the adapter can satisfy Stylo's trait/lifetime expectations without smuggling script-DOM assumptions into `layout_dom_api`.
 - **Paint Worklet / CSS Houdini Painter.** `Painter` / `PaintWorkletError` already live in `layout_api`, but only fullweb implements the trait. The static profile must never invoke a worklet. Make sure `serval-layout` either feature-gates the worklet code path or stubs it to `unreachable!()` — the canary is `cargo tree | rg paint_worklet`.
 - **`Send + Sync` bound on `LayoutHostServices`** (carry-over from P1 fallout). The bound currently has no real cost because `NoOpLayoutHostServices` is trivially Sync. The cost lands when P4's scripted DOM lands. The P1 fallout addendum recommended option 2 (Sync-clean IPC router) — that recommendation is preserved. The other options (Mutex-wrap, polling, etc.) remain viable; decide at P4, not before.
 - **Ship of Theseus during the port.** "Portable" is a judgment call per file. Make each port a separate commit with `cargo check -p serval-layout` green and the profile-gate canary empty at every step. Bisect-friendly history is the only way to catch a silent script-coupling reintroduction during a multi-week port.
@@ -268,13 +374,15 @@ These are not blockers but produce dividends if done while the porter's hands ar
 
 ## Validation ladder (path C)
 
-After each P2.3 batch:
+After each P2.3 checkpoint:
 
 ```powershell
 cargo check -p serval-layout
+cargo test -p serval-layout
 cargo check -p serval-static-html
-cargo tree -p serval-static-html | rg "script|script_traits|script_bindings|mozjs"
-# Last command should produce no matches.
+cargo tree -p serval-layout --edges normal | rg '(^|[[:space:]])(servo-script|servo-script-traits|servo-script-bindings|mozjs|mozjs_sys)([[:space:]]|$)'
+cargo tree -p serval-static-html --edges normal | rg '(^|[[:space:]])(servo-script|servo-script-traits|servo-script-bindings|mozjs|mozjs_sys)([[:space:]]|$)'
+# The cargo tree commands should produce no matches. Exit code 1 from rg means clean.
 ```
 
 After P3 lands:
@@ -289,7 +397,8 @@ End-to-end done condition (the entire path C complete):
 ```powershell
 cargo check -p serval-layout
 cargo check -p serval-static-html
-cargo tree -p serval-static-html | rg "script|script_traits|script_bindings|mozjs"   # empty
+cargo tree -p serval-layout --edges normal | rg '(^|[[:space:]])(servo-script|servo-script-traits|servo-script-bindings|mozjs|mozjs_sys)([[:space:]]|$)'        # empty
+cargo tree -p serval-static-html --edges normal | rg '(^|[[:space:]])(servo-script|servo-script-traits|servo-script-bindings|mozjs|mozjs_sys)([[:space:]]|$)'   # empty
 cargo test -p serval-layout                                                            # green
 cargo test -p serval-static-html --test first_pixel                                    # green
 cargo check --workspace                                                                # green
@@ -302,9 +411,13 @@ Last command's emptiness is the load-bearing check: the dead crates are *gone fr
 
 ## Open decisions
 
-1. **Where does `LayoutDom` live?** **Resolved (pending review):** new `layout-dom-api` crate (not `layout_api`). Plausible additional consumers — reader-mode/extract head, DOM serialization, querySelector helpers — clear the bar from the lift plan. See [2026-05-16_layout_dom_api_design.md](./2026-05-16_layout_dom_api_design.md).
-2. **`LayoutDom` trait shape.** **Resolved (pending review):** hybrid pattern — opaque `NodeId` lookups (pattern C foundation) with a default `walk` impl over a `NodeVisitor` trait (pattern B layered on top), no per-node-kind handle types. Real-world references: `petgraph::visit`, `rustc_hir::intravisit::Visitor`, `tree-sitter`'s cursor API, `html5ever::TreeSink`. See the same design doc for rationale, sketch, and exit criteria.
-3. **Parley wiring timing.** P2.3 step 5 (port `flow/inline/*`) or a follow-up phase. Affects whether the first-pixel smoke uses parley or the existing inline-text path.
-4. **Stylo version anchor.** Pin to a specific servo-stylo SHA or follow main. Affects upgrade cadence and stability.
+1. **Where does `LayoutDom` live?** **Resolved and landed:** new `layout-dom-api` crate (not `layout_api`). Plausible additional consumers — reader-mode/extract head, DOM serialization, querySelector helpers — clear the bar from the lift plan. See [2026-05-16_layout_dom_api_design.md](./2026-05-16_layout_dom_api_design.md).
+2. **`LayoutDom` trait shape.** **Resolved and landed:** hybrid pattern — opaque `NodeId` lookups (pattern C foundation) with a default `walk` impl over a `NodeVisitor` trait (pattern B layered on top), no per-node-kind handle types. Real-world references: `petgraph::visit`, `rustc_hir::intravisit::Visitor`, `tree-sitter`'s cursor API, `html5ever::TreeSink`. See the same design doc for rationale, sketch, and exit criteria.
+3. **Parley wiring timing.** **Resolved 2026-05-17:** parley is the inline text engine from the start, behind a Taffy `measure_function` that delegates to a `TextMeasure` trait. See planes doc `inline/` module sketch.
+4. **Stylo version anchor.** Pin to a specific servo-stylo SHA or follow main. Affects upgrade cadence and stability. (Still open; current workspace pin is `572ecba2d160`.)
 5. **`LayoutHostServices` Send + Sync** — keep the bound or relax. Resolved at P4, not before.
-6. **`layout_api` shape after the lift** — keep as one crate or split into static-profile-needed vs. fullweb-only. Resolved at the "layout_api cleanup pass" sidequest.
+6. **`layout_api` shape after the lift** — under planes architecture, `layout_api`'s LayoutNode / LayoutElement / DangerousStyleNode / DangerousStyleElement become unused (no consumer post-Blitz-style adapter). Decide whether to delete those traits entirely or leave them as dead-on-disk in `layout_api`. Lean delete; smaller maintenance surface. Embedder-integration types (`LayoutHostServices`, `LayoutConfig`, `Layout` trait) stay.
+7. **`net_traits` boundary** — current graph reaches `servo-net-traits` through `layout_api`, and `serval-layout` currently has a direct entry too. Decide whether the direct edge is removable now; decide later whether `layout_api` should split image/media-facing pieces so the static profile can become net-traits-free.
+8. **Capability traits — crate location.** **New (2026-05-17):** `ReplacedElementProvider` / `FormControlProvider` / `EmbeddedContentProvider` live in `layout_dom_api`? Sibling `layout_capabilities_api`? Inside `serval-layout`? See planes doc; lean separate `layout_capabilities_api`.
+9. **Plane visibility.** **New (2026-05-17):** are planes (`StylePlane`, `LayoutPlane`, `FragmentPlane`) public read-only API of `serval-layout` (so mere/apparatus/a11y can read FragmentPlane directly), or `pub(crate)`? Lean `pub` reads — "planes as reusable observables" framing depends on it.
+10. **Display-list lift mechanism.** **New (2026-05-17):** Servo's `display_list/` consumes fragment-tree-shaped types (`Fragment`, `BoxFragment`). Define equivalents in `serval-layout::fragment` for high lift fidelity, or refactor the lifted display-list to read plane data directly? Lean equivalents — preserves lift value at small cost.
