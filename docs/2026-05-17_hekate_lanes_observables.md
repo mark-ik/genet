@@ -230,13 +230,17 @@ That's the *permanent ABI*. Internal plane storage (IndexVec / HashMap, Fragment
 
 ### Paint Plane
 
-Display list / render scene.
+Display list / render scene. **See [2026-05-17_paintlist_polyglot_renderer.md](./2026-05-17_paintlist_polyglot_renderer.md) for the full design.**
 
-- **Nematic:** direct text + simple shape commands.
-- **Serval:** `ServalDisplayList` (today; emitted from FragmentPlane + StylePlane).
-- **Scrying:** opaque (scrying paints itself; we receive a wgpu texture).
+Briefly: the Paint Plane is the `PaintList` trait family — common-minimum vocabulary + engine-specific extensions, mirroring SemanticQuery's pattern. NetRender is a polyglot renderer that consumes any `PaintList` impl natively for common items (text, rect, stroke, image, external-texture, compositor primitives) and dispatches engine-specific items back to the producing engine via `PaintExtension::paint(ctx)` where the extension paints itself into a Vello scene the renderer provides.
 
-What's queryable: the display list itself (already a serializable data structure for IPC / NetRender consumption).
+- **Nematic:** `NematicPaintList: impl PaintList`. Common items only initially (text, rect, stroke, image). NematicPaintExtension variants for protocol-shaped items later if needed.
+- **Serval:** `ServalPaintList: impl PaintList` (renamed from `ServalDisplayList`). Common items for most box content; `ServalPaintExtension` variants for CSS-rich items (gradients, complex borders, stacking contexts, paint worklets, masks).
+- **Scrying:** `ScryingPaintList: impl PaintList` containing one `DrawExternalTexture(scrying_texture)` command. NetRender composites natively.
+
+Extension items that prove cross-engine-useful **graduate** to common `PaintCmd` variants over time. Keeps the common vocabulary small + primitive while keeping the evolution path open.
+
+NetRender lives on its own terms in its own crate, knowing nothing about Serval / Nematic / Scrying. Each pairing (engine + NetRender) delivers real value via the shared trait surface.
 
 ### Interaction Plane
 
