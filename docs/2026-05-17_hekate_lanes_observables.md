@@ -230,17 +230,23 @@ That's the *permanent ABI*. Internal plane storage (IndexVec / HashMap, Fragment
 
 ### Paint Plane
 
-Display list / render scene. **See [2026-05-17_paintlist_polyglot_renderer.md](./2026-05-17_paintlist_polyglot_renderer.md) for the full design.**
+Display list / render scene. **See [2026-05-17_paintlist_polyglot_renderer.md](./2026-05-17_paintlist_polyglot_renderer.md) (revised PM-2) for the full design.**
 
-Briefly: the Paint Plane is the `PaintList` trait family — common-minimum vocabulary + engine-specific extensions, mirroring SemanticQuery's pattern. NetRender is a polyglot renderer that consumes any `PaintList` impl natively for common items (text, rect, stroke, image, external-texture, compositor primitives) and dispatches engine-specific items back to the producing engine via `PaintExtension::paint(ctx)` where the extension paints itself into a Vello scene the renderer provides.
+Briefly: paint has three distinct layers — producer-facing `PaintList` trait (what engines emit), transport-friendly wire payload (the same `PaintList`, since it's `Serialize`), and renderer-private `netrender::Scene` (NetRender owns lowering). Common-minimum vocabulary + engine-specific extensions, **mirroring SemanticQuery's pattern**.
 
-- **Nematic:** `NematicPaintList: impl PaintList`. Common items only initially (text, rect, stroke, image). NematicPaintExtension variants for protocol-shaped items later if needed.
-- **Serval:** `ServalPaintList: impl PaintList` (renamed from `ServalDisplayList`). Common items for most box content; `ServalPaintExtension` variants for CSS-rich items (gradients, complex borders, stacking contexts, paint worklets, masks).
-- **Scrying:** `ScryingPaintList: impl PaintList` containing one `DrawExternalTexture(scrying_texture)` command. NetRender composites natively.
+Extensions are **typed serializable payloads** per engine (`ServalPaintExt`, `NematicPaintExt`), not callbacks. NetRender has a registered renderer for each engine's extension variants and lowers them into its internal scene. This keeps paint transportable (no `dyn` across IPC), capture/replay-able, tile-cacheable.
 
-Extension items that prove cross-engine-useful **graduate** to common `PaintCmd` variants over time. Keeps the common vocabulary small + primitive while keeping the evolution path open.
+- **Nematic:** `NematicPaintList: impl PaintList`. Common items only initially (text, rect, stroke, gradient, image). `NematicPaintExt` empty until protocol-shaped items earn a slot.
+- **Serval:** `ServalPaintList: impl PaintList` (renamed from `ServalDisplayList`). Common items for most box content; `ServalPaintExt` variants for paint worklets, mix-blend-mode regions, masks, native form controls.
+- **Scrying:** `ScryingPaintList: impl PaintList` with one `DrawExternalTexture(scrying_texture)` command. NetRender composites natively.
 
-NetRender lives on its own terms in its own crate, knowing nothing about Serval / Nematic / Scrying. Each pairing (engine + NetRender) delivers real value via the shared trait surface.
+Common vocabulary includes gradients (linear/radial/conic), shadows, text runs, strokes — anything NetRender already renders natively. Graduation rule: if NetRender supports the primitive, it's common; engine extensions are reserved for items the renderer doesn't natively know.
+
+Text shaping happens in serval-layout (parley) — paint carries shaped glyph runs. NetRender owns font registration + glyph cache + scene emission, **does not reshape**. This keeps layout and paint from drifting.
+
+Direct Vello access is an **escape hatch outside the PaintList pipeline**: lanes that want it use Vello directly and hand NetRender the resulting texture via `DrawExternalTexture` (what Scrying already does). The pipeline doesn't force a callback-into-Vello model.
+
+NetRender lives on its own terms in its own crate, knowing nothing about Serval / Nematic / Scrying internals. Each pairing (engine + NetRender) delivers real value via the shared trait surface.
 
 ### Interaction Plane
 
