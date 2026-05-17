@@ -7,8 +7,8 @@ conditions for C4.
 
 Companion to:
 
-- [2026-05-05_serval_netrender_cut_plan.md](./2026-05-05_serval_netrender_cut_plan.md) — overall cut plan
-- [2026-05-06_c3_layout_reshape_plan.md](./2026-05-06_c3_layout_reshape_plan.md) — the C3 layout-reshape plan that was executed
+- [archive/2026-05-05_serval_netrender_cut_plan.md](./archive/2026-05-05_serval_netrender_cut_plan.md) — overall cut plan (archived 2026-05-17)
+- [archive/2026-05-06_c3_layout_reshape_plan.md](./archive/2026-05-06_c3_layout_reshape_plan.md) — the C3 layout-reshape plan that was executed (archived 2026-05-17)
 
 ---
 
@@ -145,7 +145,8 @@ Plus the unresolved imports `paint_api::rendering_context` and
 `components/servo/lib.rs:49,54`.
 
 C4 design sketch is in
-[2026-05-05_serval_netrender_cut_plan.md § C4](./2026-05-05_serval_netrender_cut_plan.md#c4--build-servocompositor-adapter).
+[archive/2026-05-05_serval_netrender_cut_plan.md § C4](./archive/2026-05-05_serval_netrender_cut_plan.md#c4--build-servocompositor-adapter)
+(archived 2026-05-17).
 
 ---
 

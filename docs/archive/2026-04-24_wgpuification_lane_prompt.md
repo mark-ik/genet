@@ -1,5 +1,9 @@
 # Servo-wgpu Wgpuification Lane Prompt
 
+**Status (archived 2026-05-17):** Phase A landed. Subsequent lanes were either superseded by the [netrender cut plan](./2026-05-05_serval_netrender_cut_plan.md) (now archived) or rolled into the current planes/lanes architecture (see active docs in `../`). Kept here as the prompt template for if/when we revisit lane-dispatch as a working pattern.
+
+---
+
 **Purpose.** Brief a fresh agent on the servo-wgpu wgpuification effort so they can pick up any one lane as a self-contained slice. Dispatcher assigns the lane; this document supplies the rest.
 
 **How to use.** When dispatching, tell the agent: *"Read `docs/2026-04-24_wgpuification_lane_prompt.md`. You are assigned lane **&lt;S*#*&gt;**. Follow the lane's scope and acceptance bar; do not drift into adjacent lanes."*

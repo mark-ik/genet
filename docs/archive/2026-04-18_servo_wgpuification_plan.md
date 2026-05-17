@@ -1,5 +1,15 @@
 # Servo Wgpuification Plan
 
+**Status (archived 2026-05-17):** Phase A landed (RenderingContext trait split shipped 2026-04). Subsequent phases were reframed by the [2026-05-05 netrender cut plan](./2026-05-05_serval_netrender_cut_plan.md) (also archived) and then by the current planes/lanes architecture. Kept here as historical context for the wgpu-first decision.
+
+Active references for current architecture:
+
+- [../2026-05-17_serval_layout_planes_architecture.md](../2026-05-17_serval_layout_planes_architecture.md) — serval-layout planes design.
+- [../2026-05-17_hekate_lanes_observables.md](../2026-05-17_hekate_lanes_observables.md) — cross-engine lane architecture.
+- [../2026-05-16_workspace_audit_snapshot.md](../2026-05-16_workspace_audit_snapshot.md) — current workspace state.
+
+---
+
 ## Purpose
 
 This branch is no longer evaluating whether Servo can use a wgpu compositor. That part is already real. The next phase is to finish the architectural transition away from GL-era render-path assumptions so that Servo is consistently wgpu-first in the compositor and host-integration path, while GL remains only where product features still require it.

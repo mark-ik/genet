@@ -1,5 +1,9 @@
 # Phase A — Toy Embedder Validation Artifact
 
+**Status (archived 2026-05-17):** Phase A landed; the multi-embedder DoD was met. The toy-embedder validation artifact retired; kept as the design record for the "is the trait actually wgpu-first" test methodology.
+
+---
+
 **Companion to**:
 
 - [`2026-04-18_servo_wgpuification_plan.md`](2026-04-18_servo_wgpuification_plan.md) — plan (updated with multi-embedder DoD)

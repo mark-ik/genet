@@ -16,8 +16,8 @@ dead-on-disk code and not compiled.
 ---
 
 This plan spins the old C5 / C7 "script-optional" cuts out of
-[2026-05-05_serval_netrender_cut_plan.md](./2026-05-05_serval_netrender_cut_plan.md)
-and reframes them as a profile ladder:
+[archive/2026-05-05_serval_netrender_cut_plan.md](./archive/2026-05-05_serval_netrender_cut_plan.md)
+(archived 2026-05-17) and reframes them as a profile ladder:
 
 ```text
 serval-static-html

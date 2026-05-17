@@ -2,7 +2,7 @@
 
 **Status (2026-05-16, revised):** decision adopted following a review pass. Resolves the first two open decisions in [2026-05-16_serval_layout_lift_plan.md](./2026-05-16_serval_layout_lift_plan.md) (path C, P2.2): where `LayoutDom` lives, and what shape its trait takes.
 
-Supersedes [2026-05-13_p2_layout_dom_provider_design.md](./2026-05-13_p2_layout_dom_provider_design.md), which described the equivalent seam inside the now-dead `components/layout/` crate.
+Supersedes [archive/2026-05-13_p2_layout_dom_provider_design.md](./archive/2026-05-13_p2_layout_dom_provider_design.md), which described the equivalent seam inside the now-dead `components/layout/` crate (archived 2026-05-17).
 
 **Revision history:**
 

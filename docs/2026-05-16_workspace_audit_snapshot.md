@@ -1,6 +1,6 @@
 # Serval workspace audit — state snapshot (2026-05-16)
 
-Point-in-time snapshot of the serval workspace after the audit landed on 2026-05-15 and the follow-on commits on 2026-05-16. Companion to [2026-05-05_serval_netrender_cut_plan.md](2026-05-05_serval_netrender_cut_plan.md) (strategy) and [2026-05-13_p2_layout_dom_provider_design.md](2026-05-13_p2_layout_dom_provider_design.md) (next phase).
+Point-in-time snapshot of the serval workspace after the audit landed on 2026-05-15 and the follow-on commits on 2026-05-16. Companion to [archive/2026-05-05_serval_netrender_cut_plan.md](./archive/2026-05-05_serval_netrender_cut_plan.md) (strategy; archived 2026-05-17) and [archive/2026-05-13_p2_layout_dom_provider_design.md](./archive/2026-05-13_p2_layout_dom_provider_design.md) (next phase; superseded by [planes architecture](./2026-05-17_serval_layout_planes_architecture.md); archived 2026-05-17).
 
 ## Live workspace shape
 

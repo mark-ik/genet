@@ -1,5 +1,9 @@
 # Phase A — RenderingContext Consumer Audit
 
+**Status (archived 2026-05-17):** Phase A landed (RenderingContext trait split shipped 2026-04). Audit complete; kept here as the record of which consumers required which capability — useful when revisiting the trait shape.
+
+---
+
 **Companion to** [`2026-04-18_servo_wgpuification_plan.md`](2026-04-18_servo_wgpuification_plan.md)
 **Deliverable**: classification matrix per Phase A's "full audit of `connection()` consumers" directive, expanded to cover every GL-shaped method on the `RenderingContext` trait.
 

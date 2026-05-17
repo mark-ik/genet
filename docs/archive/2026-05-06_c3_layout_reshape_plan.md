@@ -1,5 +1,9 @@
 # C3 layout reshape plan — display-list emission to netrender Scene
 
+**Status (archived 2026-05-17):** C3 landed. See the [c3 landed notes](../2026-05-08_c3_landed_notes.md) (still active) for the outcome. Kept here as the plan record.
+
+---
+
 Companion to [`2026-05-05_serval_netrender_cut_plan.md`](./2026-05-05_serval_netrender_cut_plan.md)
 (see § C3). This doc captures the layout-side of C3 in the cut-plan
 voice, scoped tightly enough for one focused multi-day session.

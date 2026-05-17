@@ -1,5 +1,9 @@
 # Phase A — `RenderingContext` Trait Design Spec
 
+**Status (archived 2026-05-17):** Phase A landed; the trait split shipped close to this design. Kept here as the design rationale.
+
+---
+
 **Companion to**:
 
 - [`2026-04-18_servo_wgpuification_plan.md`](2026-04-18_servo_wgpuification_plan.md) — plan

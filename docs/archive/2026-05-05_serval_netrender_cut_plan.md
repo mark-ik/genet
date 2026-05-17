@@ -1,5 +1,15 @@
 # serval — cut plan (C1.5 — C7)
 
+**Status (archived 2026-05-17):** C1, C1.5, C1.6, C2, C3, C4 all landed (see [c3 landed notes](../2026-05-08_c3_landed_notes.md) + [c4 landed notes](../2026-05-09_c4_landed_notes.md), still active). C5–C7 spun out into the [profile-ladder plan](../2026-05-12_serval_profile_ladder_plan.md), which is itself now strategy-only with implementation through the path-C lift / planes architecture. The cut-plan's "When this plan becomes stale" conditions have all triggered.
+
+Active references for current direction:
+
+- [../2026-05-12_serval_profile_ladder_plan.md](../2026-05-12_serval_profile_ladder_plan.md) — profile-ladder strategy (still canonical).
+- [../2026-05-17_serval_layout_planes_architecture.md](../2026-05-17_serval_layout_planes_architecture.md) — serval-layout planes design.
+- [../2026-05-17_hekate_lanes_observables.md](../2026-05-17_hekate_lanes_observables.md) — cross-engine lane architecture.
+
+---
+
 Companion to the C1 commit (`651a83b62cd`, *cut GL/surfman corpus
 from rendering-context layer*). Captures the imposed shape this fork
 is moving toward, the cuts left after C1, and the contract each

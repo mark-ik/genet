@@ -1,5 +1,9 @@
 # netrender — native-compositor handoff via path (b′) (2026-05-05, revised same day)
 
+**Status (archived 2026-05-17):** Netrender-side sub-phases 5.1, 5.2, 5.3, 5.4 shipped (per the doc's own 2026-05-05 implementation-status note, with receipts in netrender's `p13prime_path_b_present_plumbing.rs`). Serval-side sub-phase 5.5 (the consumer adapter) has landed via the DXGI compositor and CALayer compositor modules in `components/paint/compositor_dxgi.rs` and `components/paint/compositor_calayer/` (see also commit `8f88d8de343` "Update DXGI compositor and add platform handoff documentation" and `10420ed6258` "split netrender_painter + compositor_calayer into module dirs"). Kept here as the design rationale + sub-phase ordering for the work that landed.
+
+---
+
 Design plan for axiom-14 (rasterizer plan §1, §13) — exporting
 per-surface textures to native OS compositors (CALayer / IOSurface
 / DXGI Composition / Wayland subsurfaces) so the OS can apply
