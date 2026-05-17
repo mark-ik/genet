@@ -277,18 +277,19 @@ components/serval-layout/
 
 ## Where serval-layout fits in Hekate's lane system
 
-**Correction (2026-05-17 PM):** earlier framing of "three Hekate heads served by serval-layout" was a category error. The right shape (see [Hekate doc](./2026-05-17_hekate_lanes_observables.md)):
+**Correction (2026-05-17 PM-3):** earlier framing went through two cleanup rounds. The current shape (see [Hekate doc](./2026-05-17_hekate_lanes_observables.md)):
 
-- Hekate is the **router + document-intelligence layer**. Not a renderer. Owns source sniffing, capability detection, route choice, extract tiers, observables cache.
-- **Nematic** is a peer engine lane for protocol-faithful smolweb sources (Gemini, Scroll, Markdown, feeds). It does not route through HTML.
-- **Serval** is the HTML/CSS/(JS) lane. Two profile facades wrap `serval-layout`: `serval-static-html` (Middlenet, no JS) and `serval-fullweb` (full browser).
-- **Extract** is Hekate's own work. Tiers E0–E2 happen in Hekate. E3 (style-assisted) and E4 (layout-assisted) escalate **into** the lane via `ExtractCapableLane::extract_with_style` / `extract_with_layout` — Hekate doesn't run Stylo or Taffy itself.
+- Hekate is the **router + document-intelligence layer**. Not a renderer. Owns source sniffing, capability detection, route choice, extract tiers (E0–E4), observables cache.
+- **Three peer lanes**: Nematic (smolweb protocols), **Serval** (HTML at any tier), Scrying (system-webview fallback).
+- **Serval has internal profile tiering** — `serval-static-html` / `serval-interactive-html` / `serval-scripted` / `serval-fullweb` are tier crates within Serval. From Hekate's view, there's one Serval lane; the tier is Serval's internal concern (informed by a Hekate-provided hint).
+- **Extract** is Hekate's own work. Tiers E0–E2 happen in Hekate. E3 (style-assisted) and E4 (layout-assisted) escalate **into** Serval via `ExtractCapableLane::extract_with_style` / `extract_with_layout` — Hekate doesn't run Stylo or Taffy itself.
 
 What this means concretely for `serval-layout`:
 
 - The "extract head" is **not** a Serval feature. `serval-layout/src/extract.rs` is Serval's *implementation* of Hekate's `ExtractCapableLane` trait — Hekate asks "extract style-assisted facts from this document," Serval runs the cascade and returns observables Hekate caches.
-- The middlenet and fullweb profile facades both use `serval-layout`'s planes. Middlenet doesn't build invalidation; fullweb does.
-- Serval lives as one of several lanes; it doesn't know about Hekate's routing decisions or other lanes. The host (mere) chooses lanes via Hekate; lanes just publish observables.
+- All four tier crates use `serval-layout`'s planes. Lower tiers don't enable invalidation, don't build the scripted-DOM provider, don't reach for `mozjs`. Higher tiers add capabilities. `serval-layout` itself is tier-agnostic — it's the engine; tier crates are facades.
+- Serval lives as one of three lanes; it doesn't know about Hekate's routing decisions or other lanes. The host (mere) chooses lanes via Hekate; lanes just publish observables.
+- Tier escalation mid-session (link click on a static-tier page requires JS): Serval reports the escalation back to Hekate, which records it as route-hint evidence. The tier change itself is Serval-internal; Hekate just learns.
 
 ---
 
