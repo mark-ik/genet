@@ -262,7 +262,7 @@ Nematic implements `extract_structure` cheaply (it knows protocol structure); E3
 
 ### Hekate (new crate)
 
-- Lives in... probably `repos/mere/` since mere is the host orchestrator. Possibly its own crate `mere-hekate` or just `hekate`.
+- Lives at `repos/mere/components/hekate/` (decided 2026-05-17 — just `hekate`, not `mere-hekate`).
 - Owns: source sniffing, capability detection, route choice, extract tiers (E0–E2 directly, escalates E3/E4 to lanes), observables cache/index.
 - Calls into lanes via the trait API. Doesn't render. Doesn't parse HTML or Gemini itself (lanes own their parsers).
 - Apparatus reads from Hekate's observables cache for the inspector view.
@@ -298,7 +298,7 @@ If the answer turns out to be "this belongs in mere," easy to move once both sid
 
 ## Open questions for review
 
-1. **Hekate's crate home.** mere/hekate? Standalone? Inside mere-domain? Per the [mere-domain layer memory](../../../.claude/projects/c--Users-mark--Code/memory/project_mere_domain_layer.md), mere-domain holds UX-concept layers — Hekate as document-intelligence fits that pattern. Lean a `mere-hekate` crate inside mere's workspace.
+1. ~~Hekate's crate home.~~ **Resolved 2026-05-17:** `hekate` crate in mere's workspace (`repos/mere/components/hekate/`). Not `mere-hekate` — just `hekate`. Sits alongside the other 11 mere workspace crates.
 2. **Source/Semantic plane shape across engines.** Nematic's SemanticDocument and Serval's DOM have different shapes (block-oriented vs tree-oriented). Is there a meaningful common API across them, or do we just have two separate trait families and Hekate dispatches on type? Lean "common minimum trait (headings, links, text spans, source ranges) + engine-specific extensions."
 3. **InteractionPlane integration with input routing.** Mere's input event loop needs to know which lane's interaction plane to query for a given point. Hekate's route-choice persists during the session; mere asks Hekate "for this URL/route, which lane is rendering it?" then queries that lane. Confirm this is the loop.
 4. **Wry as a lane.** Real lane or escape hatch? If Wry is in the trait family, mere has to handle its degenerate observables (one fragment, no source plane). If Wry is outside the trait family, mere has special-case code for it. Lean treat-as-lane with degenerate observables — uniform consumption beats special-case host code.
@@ -324,4 +324,5 @@ If the answer turns out to be "this belongs in mere," easy to move once both sid
 - **Decided 2026-05-17:** Shared observable-plane vocabulary across engines (Source/Semantic, Style, Layout/Fragment, Paint, Interaction). Each lane implements the subset that applies; host consumes the same trait API regardless of lane.
 - **Decided 2026-05-17:** FragmentPlane has a stable public ABI in the form of `FragmentQuery` (hit-test, box-model, anchor lookup, source-range mapping, selection rects, generation/epoch). Raw plane storage stays implementation-detail.
 - **Decided 2026-05-17:** A11y is built by fusing Source/Semantic Plane + Style Plane + Fragment Plane, not from any single plane.
-- **Open:** Hekate crate location (lean `mere-hekate`); cross-engine vocab crate location (lean `engine_observables_api` in serval/shared/); Wry-as-lane vs Wry-as-escape-hatch.
+- **Decided 2026-05-17:** Hekate's crate home is `repos/mere/components/hekate/`. Just `hekate` (no `mere-` prefix), sitting alongside mere's other workspace crates.
+- **Open:** cross-engine vocab crate location (lean `engine_observables_api` in serval/shared/); system-webview-fallback lane name (Scry? Wry-as-lane?) and whether it's in the trait family or an escape hatch.
