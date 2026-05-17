@@ -1,6 +1,8 @@
 # serval-layout architecture: planes (proposed, for review)
 
-**Status (2026-05-17):** proposed. Resolves the "Blitz vs path-C lift" question raised after reading `linebender/blitz` and `DioxusLabs/blitz`, by synthesizing both with the goals path C was protecting.
+**Status (2026-05-17, revised PM):** proposed. Resolves the "Blitz vs path-C lift" question raised after reading `linebender/blitz` and `DioxusLabs/blitz`, by synthesizing both with the goals path C was protecting.
+
+**Companion doc (read together):** [2026-05-17_hekate_lanes_observables.md](./2026-05-17_hekate_lanes_observables.md) — the cross-engine architecture. Serval is **one lane** in Hekate's lane system; Nematic is a peer lane; extract is Hekate's own work, not a Serval head. This doc covers serval-layout's piece (Style + Layout + Fragment + Paint planes for HTML) and how it publishes observables to the host. The lane decomposition and observable-plane vocabulary live in the Hekate doc.
 
 This doc is the architectural reference for `serval-layout`. The implementation plan that follows it is in [2026-05-16_serval_layout_lift_plan.md](./2026-05-16_serval_layout_lift_plan.md) (updated 2026-05-17 to align with this doc).
 
@@ -227,7 +229,7 @@ This means:
 
 ### Module layout inside `serval-layout`
 
-```
+```text
 components/serval-layout/
 ├── Cargo.toml
 ├── lib.rs                        — public surface: layout::<D>(dom, viewport) -> LaidOutDoc
@@ -250,7 +252,9 @@ components/serval-layout/
 │   └── parley_impl.rs            — TextMeasure impl backed by parley
 ├── fragment/
 │   ├── mod.rs                    — post-Taffy walk, populate FragmentPlane
-│   └── plane.rs                  — FragmentPlane definition
+│   ├── plane.rs                  — FragmentPlane definition (internal storage)
+│   └── query.rs                  — FragmentQuery impl (the public ABI; see "Publishing
+│                                    observables" below)
 ├── display_list/                 — lifted from Servo, adapted to read FragmentPlane
 │   ├── mod.rs
 │   ├── stacking_context.rs
@@ -258,38 +262,93 @@ components/serval-layout/
 │   ├── border.rs
 │   ├── text.rs                   — parley glyphs → ServalDisplayItem::Text
 │   └── hit_test.rs
+├── extract.rs                    — Serval's impl of Hekate's ExtractCapableLane trait:
+│                                    extract_structure (E1), extract_with_style (E3),
+│                                    extract_with_layout (E4). NOT a "three-head extract head";
+│                                    Hekate owns extract, Serval cooperates.
 ├── geom.rs                       — lifted: WM-aware Logical/Physical geometry
 ├── style_ext.rs                  — lifted: ComputedValuesExt helpers
 ├── lists.rs                      — lifted: list markers
 ├── quotes.rs                     — lifted: CSS quote handling
-├── replaced.rs                   — lifted partial: intrinsic sizing for img/video
-└── extract.rs                    — three-head Hekate extract head: walks LayoutDom, no planes
+└── replaced.rs                   — lifted partial: intrinsic sizing for img/video
 ```
 
 ---
 
-## Three-head Hekate fit
+## Where serval-layout fits in Hekate's lane system
 
-The planes architecture is naturally three-head-friendly:
+**Correction (2026-05-17 PM):** earlier framing of "three Hekate heads served by serval-layout" was a category error. The right shape (see [Hekate doc](./2026-05-17_hekate_lanes_observables.md)):
 
-- **Extract head** (smolweb-extract): consumes `LayoutDom` only. **No planes built.** Walks DOM via visitor, produces a readability-scored content tree. Zero style/layout overhead.
-- **Middlenet head** (≈ static profile): builds Style + Layout + Fragment planes; emits Paint. No JS, no incremental.
-- **Fullweb head**: same planes, with `invalidate` lit up. Adds scripted-DOM provider implementing `LayoutDom + ReplacedElementProvider + FormControlProvider + EmbeddedContentProvider`.
+- Hekate is the **router + document-intelligence layer**. Not a renderer. Owns source sniffing, capability detection, route choice, extract tiers, observables cache.
+- **Nematic** is a peer engine lane for protocol-faithful smolweb sources (Gemini, Scroll, Markdown, feeds). It does not route through HTML.
+- **Serval** is the HTML/CSS/(JS) lane. Two profile facades wrap `serval-layout`: `serval-static-html` (Middlenet, no JS) and `serval-fullweb` (full browser).
+- **Extract** is Hekate's own work. Tiers E0–E2 happen in Hekate. E3 (style-assisted) and E4 (layout-assisted) escalate **into** the lane via `ExtractCapableLane::extract_with_style` / `extract_with_layout` — Hekate doesn't run Stylo or Taffy itself.
 
-The same crate (`serval-layout`) serves all three heads. The extract head doesn't pay for the planes; the middlenet head doesn't pay for `invalidate`; the fullweb head pays for everything.
+What this means concretely for `serval-layout`:
+
+- The "extract head" is **not** a Serval feature. `serval-layout/src/extract.rs` is Serval's *implementation* of Hekate's `ExtractCapableLane` trait — Hekate asks "extract style-assisted facts from this document," Serval runs the cascade and returns observables Hekate caches.
+- The middlenet and fullweb profile facades both use `serval-layout`'s planes. Middlenet doesn't build invalidation; fullweb does.
+- Serval lives as one of several lanes; it doesn't know about Hekate's routing decisions or other lanes. The host (mere) chooses lanes via Hekate; lanes just publish observables.
 
 ---
 
-## Mere adjacency
+## Publishing observables: the FragmentQuery + InteractionQuery surface
 
-The **FragmentPlane** is potentially useful beyond layout:
+Per Mark's correction: **don't expose raw layout internals as a permanent ABI.** Internal plane storage (IndexVec, FxHashMap, the `Fragment` struct shape, line-box representation) is implementation detail and should evolve freely. Consumers (apparatus, host, scroll-to-anchor, selection highlight, `getBoundingClientRect` when scripted lands) speak a query-surface trait.
 
-- **Apparatus** (inspector) queries it for bounding boxes, box-model overlays, hit-test info — without rerunning layout.
-- **Accessibility tree** builds from FragmentPlane plus StylePlane.
-- **`getBoundingClientRect`** (when scripted lands) reads FragmentPlane directly.
-- **Reader-mode "extract laid-out content"** (if we ever want it) reads FragmentPlane + StylePlane.
+`serval-layout` implements the cross-engine `FragmentQuery` trait (defined in the engine-observables crate; see [Hekate doc](./2026-05-17_hekate_lanes_observables.md)) over its internal FragmentPlane + StylePlane data:
 
-Treat planes as **reusable observables**, not internal implementation details. Public read access to each plane should be a first-class part of `serval-layout`'s API surface.
+```rust
+// In serval-layout/src/fragment/query.rs:
+impl<D: LayoutDom> FragmentQuery for LaidOutDoc<'_, D> {
+    type FragmentId = ServalFragmentId;
+
+    fn generation_id(&self) -> u64 { self.epoch }
+
+    fn hit_test(&self, point: Point) -> Option<FragmentHit> {
+        self.fragment_plane.hit_test_at(point, &self.style_plane)
+    }
+
+    fn box_model(&self, source_id: SourceNodeId) -> Option<BoxModel> {
+        let fragment = self.fragment_plane.fragment_for_source(source_id)?;
+        Some(self.fragment_plane.box_model_of(fragment, &self.style_plane))
+    }
+
+    fn fragments_for_anchor(&self, anchor: &str)
+        -> Box<dyn Iterator<Item = Self::FragmentId> + '_>
+    {
+        self.fragment_plane.fragments_for_anchor(anchor)
+    }
+
+    fn text_range_for_fragment(&self, fragment: Self::FragmentId)
+        -> Option<SourceRange>
+    {
+        self.fragment_plane.source_range(fragment)
+    }
+
+    fn rects_for_selection(&self, range: SourceRange) -> Vec<Rect> {
+        self.fragment_plane.selection_rects(range)
+    }
+}
+```
+
+The plane structs (`StylePlane`, `LayoutPlane`, `FragmentPlane`) stay `pub(crate)` inside `serval-layout`. The public surface is the trait impls.
+
+Same pattern for `InteractionQuery` (focus, selection, affordances, activation targets) — `serval-layout`'s impl reads StylePlane + FragmentPlane internally; the public ABI is the trait.
+
+---
+
+## Accessibility as fusion (not "from FragmentPlane alone")
+
+Per Mark's correction: **a11y is a fusion of three planes**, not built from any one of them.
+
+- **Source/Semantic Plane** (= DOM via `LayoutDom` view) gives names, roles (`aria-role`, semantic-element-implied roles), language, ARIA relationships, source spans for citation-back-to-source.
+- **Style Plane** gives computed visibility (`visibility`, `display`, `aria-hidden` interaction), language inheritance, computed text direction.
+- **Fragment Plane** gives geometry (for "where on screen is this thing"), visibility evidence (offscreen fragments are functionally hidden even if CSS-visible), and reading order via fragment traversal.
+
+The a11y tree builder lives in `mere/apparatus/` (or wherever mere owns the cross-engine accessibility composition), not in `serval-layout`. It queries the three planes via the trait API. The same builder works for any lane that publishes the three planes (Serval HTML pages, Nematic Gemini pages, etc.) — Nematic publishes Source/Semantic + Fragment but no Style; the builder degrades gracefully.
+
+This means `accessibility_tree.rs` from Servo (410 lines) **doesn't get lifted into serval-layout**. The cross-engine a11y composition is mere's job. Serval's contribution is publishing the three planes correctly.
 
 ---
 

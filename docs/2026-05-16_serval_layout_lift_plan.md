@@ -12,7 +12,12 @@ Implementation plan for path C of the profile ladder: lift the portable parts of
 
 ## 2026-05-17 planes-architecture update (supersedes much of this doc)
 
-After reading Blitz's `packages/blitz-dom/` and synthesizing with the path-C goals, the architecture has been rewritten as a **planes** design. The authoritative reference is [2026-05-17_serval_layout_planes_architecture.md](./2026-05-17_serval_layout_planes_architecture.md). Read that first; this lift plan is updated to align.
+After reading Blitz's `packages/blitz-dom/` and synthesizing with the path-C goals, the architecture has been rewritten as a **planes** design. The authoritative references (read together):
+
+- [2026-05-17_serval_layout_planes_architecture.md](./2026-05-17_serval_layout_planes_architecture.md) — `serval-layout`'s piece (Style + Layout + Fragment + Paint planes for HTML, publishing the FragmentQuery + InteractionQuery surfaces).
+- [2026-05-17_hekate_lanes_observables.md](./2026-05-17_hekate_lanes_observables.md) — the **cross-engine** architecture. Hekate is a router + document-intelligence layer, not a renderer; lanes are Nematic / Middlenet / Serval fullweb / system-webview-fallback; extract is Hekate's own work with E0–E4 tiers; observable-plane vocabulary is shared across lanes. Serval is **one lane** in this system.
+
+Read both first; this lift plan is updated to align.
 
 **Headline changes** vs. the path-C lift framing below:
 
