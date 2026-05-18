@@ -82,10 +82,12 @@ impl PaintList for ServalPaintList {
 /// Walk the DOM in pre-order, emitting paint commands for each
 /// element + text leaf with a fragment. Coordinates are absolute
 /// (parent-relative `taffy::Layout.location` accumulated through the
-/// recursion).
+/// recursion). Element background colors come from
+/// `ComputedValues::background_color` when the cascade has populated
+/// `ElementData`; otherwise default to transparent (no rect emitted).
 pub fn emit_paint_list<D>(
     dom: &D,
-    _styles: &StylePlane<D::NodeId>,
+    styles: &StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
     viewport: DeviceIntSize,
 ) -> ServalPaintList
@@ -96,6 +98,7 @@ where
     let mut commands = Vec::new();
     walk(
         dom,
+        styles,
         fragments,
         dom.document(),
         LayoutPoint::new(0.0, 0.0),
@@ -114,6 +117,7 @@ where
 /// origin (they're synthetic / skipped, but children still descend).
 fn walk<D>(
     dom: &D,
+    styles: &StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
     id: D::NodeId,
     parent_origin: LayoutPoint,
@@ -138,14 +142,14 @@ fn walk<D>(
             NodeKind::Element => {
                 commands.push(PaintCmd::DrawRect(RectItem {
                     placement: CommonPlacement::new(bounds),
-                    color: background_color_of(id),
+                    color: background_color_of(styles, id),
                 }));
             }
             NodeKind::Text => {
                 commands.push(PaintCmd::DrawText(TextRunItem {
                     placement: CommonPlacement::new(bounds),
                     font_instance: FontInstanceKey::default(),
-                    color: ColorF::BLACK,
+                    color: text_color_of(dom, styles, id),
                     glyphs: Vec::new(),
                     options: TextOptions::default(),
                 }));
@@ -155,16 +159,57 @@ fn walk<D>(
     }
 
     for child in dom.dom_children(id) {
-        walk(dom, fragments, child, origin, commands);
+        walk(dom, styles, fragments, child, origin, commands);
     }
 }
 
-/// Default background color for an element. Probe stage: every
-/// element gets opaque white so the trait-surface probe produces
-/// visible rects; cascade-driven real color extraction lands when
-/// stylesheets apply.
-fn background_color_of<NodeId>(_id: NodeId) -> ColorF {
-    ColorF::WHITE
+/// Read an element's background color from its `ComputedValues`.
+/// Returns transparent when no cascade data is present (hand-rolled
+/// styles bypass the cascade) — that matches CSS semantics for
+/// "background-color: initial".
+fn background_color_of<NodeId: Copy + Eq + std::hash::Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> ColorF {
+    let Some(entry) = styles.get(id) else { return ColorF::TRANSPARENT; };
+    let Some(data) = entry.borrow_data() else { return ColorF::TRANSPARENT; };
+    let primary = data.styles.primary();
+    let bg = &primary.get_background().background_color;
+    let current = primary.get_inherited_text().color;
+    stylo_color_to_paint(bg, current)
+}
+
+/// Resolve a text node's effective color: walk to its parent
+/// element, read that element's `color` from `ComputedValues`
+/// (a `color` value resolves to an `AbsoluteColor` directly —
+/// `inherited_text.color` is already `AbsoluteColor`, not the
+/// `Color` complex enum). Falls back to opaque black.
+fn text_color_of<D>(dom: &D, styles: &StylePlane<D::NodeId>, text_id: D::NodeId) -> ColorF
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + std::hash::Hash,
+{
+    let Some(parent_id) = dom.parent(text_id) else { return ColorF::BLACK; };
+    let Some(entry) = styles.get(parent_id) else { return ColorF::BLACK; };
+    let Some(data) = entry.borrow_data() else { return ColorF::BLACK; };
+    let primary = data.styles.primary();
+    let absolute = primary.get_inherited_text().color;
+    let srgb = absolute.into_srgb_legacy();
+    let [r, g, b, a] = *srgb.raw_components();
+    ColorF::new(r, g, b, a)
+}
+
+/// Convert Stylo's `computed::Color` to a PaintList `ColorF`.
+/// Resolves `currentColor` via the provided `current_color`, then
+/// flattens to sRGB and reads the raw `[r, g, b, a]` components.
+fn stylo_color_to_paint(
+    color: &style::values::computed::Color,
+    current_color: style::color::AbsoluteColor,
+) -> ColorF {
+    let absolute = color.resolve_to_absolute(&current_color);
+    let srgb = absolute.into_srgb_legacy();
+    let [r, g, b, a] = *srgb.raw_components();
+    ColorF::new(r, g, b, a)
 }
 
 #[cfg(test)]
@@ -274,6 +319,54 @@ mod tests {
             serde_json::from_str(&json).expect("deserialize ServalPaintList");
         assert_eq!(parsed.commands().len(), plist.commands().len());
         assert_eq!(parsed.viewport(), plist.viewport());
+    }
+
+    /// Probe the cascade → emit color path: run a real stylesheet
+    /// through the cascade and verify the emitted DrawRect for the
+    /// matched element carries the cascaded color.
+    #[test]
+    fn emit_color_comes_from_cascade_when_stylesheet_applies() {
+        use crate::cascade::run_cascade;
+
+        let document =
+            StaticDocument::parse("<html><body><p>x</p></body></html>");
+        let mut styles = build_style_plane(&document);
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &["body { background-color: rgb(255, 0, 0); }"],
+        );
+
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, _) = layout(&document, &styles, viewport);
+        let plist = emit_paint_list(
+            &document,
+            &styles,
+            &fragments,
+            DeviceIntSize::new(800, 600),
+        );
+
+        // Among DrawRects, at least one must be opaque red — that's body.
+        let mut found_red = false;
+        for cmd in plist.commands() {
+            if let PaintCmd::DrawRect(rect) = cmd {
+                if (rect.color.r - 1.0).abs() < 0.001
+                    && rect.color.g < 0.001
+                    && rect.color.b < 0.001
+                    && (rect.color.a - 1.0).abs() < 0.001
+                {
+                    found_red = true;
+                }
+            }
+        }
+        assert!(
+            found_red,
+            "expected at least one DrawRect with cascade-applied red background"
+        );
     }
 
     #[test]

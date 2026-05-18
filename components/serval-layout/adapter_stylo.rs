@@ -76,12 +76,18 @@ use crate::style::StylePlane;
 // Cascade thread-local context
 // =============================================================================
 
-/// Type-erased pointers to the active cascade's dom + plane. Set by
-/// [`CascadeGuard::enter`], cleared on drop. Single slot per thread.
+/// Type-erased pointers to the active cascade's dom + plane + shared
+/// lock. Set by [`CascadeGuard::enter`], cleared on drop. Single slot
+/// per thread.
 #[derive(Copy, Clone)]
 struct CascadeCtx {
     dom: *const u8,
     plane: *const u8,
+    /// SharedRwLock pointer — Stylo needs it for stylesheet rule
+    /// access via `TDocument::shared_lock`. Outside cascade calls,
+    /// the trait method panics (no active context); during cascade,
+    /// it returns this borrowed reference.
+    shared_lock: *const u8,
 }
 
 thread_local! {
@@ -97,18 +103,22 @@ thread_local! {
 /// previous context.
 pub struct CascadeGuard<'a, D: LayoutDom> {
     prev: Option<CascadeCtx>,
-    _phantom: PhantomData<(&'a D, &'a StylePlane<D::NodeId>)>,
+    _phantom: PhantomData<(&'a D, &'a StylePlane<D::NodeId>, &'a SharedRwLock)>,
 }
 
 impl<'a, D: LayoutDom> CascadeGuard<'a, D> {
-    /// Enter a cascade context. Pointers to `dom` and `plane` are stashed
-    /// in TLS until this guard drops.
+    /// Enter a cascade context. Pointers to `dom`, `plane`, and the
+    /// `SharedRwLock` are stashed in TLS until this guard drops.
     ///
     /// Asserts `D::NodeId` is pointer-shaped (size + align match `usize`),
     /// the condition Stylo's style-sharing cache enforces at runtime.
     /// Hitting this assertion means the caller is trying to use a DOM
     /// whose `NodeId` type doesn't fit Stylo's typeless TLS cache layout.
-    pub fn enter(dom: &'a D, plane: &'a StylePlane<D::NodeId>) -> Self {
+    pub fn enter(
+        dom: &'a D,
+        plane: &'a StylePlane<D::NodeId>,
+        shared_lock: &'a SharedRwLock,
+    ) -> Self {
         assert_eq!(
             std::mem::size_of::<D::NodeId>(),
             std::mem::size_of::<usize>(),
@@ -122,6 +132,7 @@ impl<'a, D: LayoutDom> CascadeGuard<'a, D> {
         let new = CascadeCtx {
             dom: dom as *const D as *const u8,
             plane: plane as *const StylePlane<D::NodeId> as *const u8,
+            shared_lock: shared_lock as *const SharedRwLock as *const u8,
         };
         let prev = CASCADE_CTX.with(|c| c.replace(Some(new)));
         Self {
@@ -196,6 +207,12 @@ impl<'a, D: LayoutDom> StyleNodeRef<'a, D> {
     fn plane_from_ctx() -> &'a StylePlane<D::NodeId> {
         // SAFETY: see dom_from_ctx.
         unsafe { &*(cascade_ctx().plane as *const StylePlane<D::NodeId>) }
+    }
+
+    /// Resolve `&'a SharedRwLock` from TLS.
+    fn shared_lock_from_ctx() -> &'a SharedRwLock {
+        // SAFETY: see dom_from_ctx.
+        unsafe { &*(cascade_ctx().shared_lock as *const SharedRwLock) }
     }
 
     pub(crate) fn dom(&self) -> &'a D {
@@ -286,10 +303,9 @@ impl<'a, D: LayoutDom> TDocument for StyleNodeRef<'a, D> {
     }
 
     fn shared_lock(&self) -> &SharedRwLock {
-        unimplemented!(
-            "TDocument::shared_lock — SharedRwLock not wired yet; \
-             cascade integration will install one on serval-layout."
-        )
+        // Resolved through TLS — only valid inside a CascadeGuard scope,
+        // which is the only context where Stylo invokes this anyway.
+        Self::shared_lock_from_ctx()
     }
 }
 

@@ -55,7 +55,10 @@ use style::properties::ComputedValues;
 use style::properties::style_structs::Font;
 use style::queries::values::PrefersColorScheme;
 use style::selector_parser::SnapshotMap;
+use servo_arc::Arc as ServoArc;
+use style::media_queries::MediaList;
 use style::shared_lock::{SharedRwLock, StylesheetGuards};
+use style::stylesheets::{AllowImportRules, DocumentStyleSheet, Origin, Stylesheet, UrlExtraData};
 use style::stylist::Stylist;
 use style::thread_state::{self, ThreadState};
 use style::traversal::{DomTraversal, PerLevelTraversalData, recalc_style_at};
@@ -152,10 +155,10 @@ fn make_device(viewport: euclid::default::Size2D<f32>) -> Device {
 /// Run Stylo's cascade over `dom`, populating `plane` with `ElementData`
 /// for every element.
 ///
-/// Sequential (no rayon pool). Empty stylist (no stylesheets loaded);
-/// every element ends up with Stylo's default cascaded values. Real CSS
-/// rule application requires loading stylesheets into the stylist; that
-/// arrives in a follow-up.
+/// Sequential (no rayon pool). `stylesheets` is a slice of CSS source
+/// strings to load as UA-origin sheets before the cascade runs;
+/// pass `&[]` for empty-stylist behavior (every element receives
+/// Stylo's default cascaded values).
 ///
 /// `plane` must be pre-populated with empty `StyleEntry` slots for every
 /// element via `StylePlane::populate_for_elements(dom)` before this call —
@@ -165,6 +168,7 @@ pub fn run_cascade<D>(
     dom: &D,
     plane: &mut StylePlane<D::NodeId>,
     viewport: euclid::default::Size2D<f32>,
+    stylesheets: &[&str],
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash + 'static,
@@ -187,10 +191,15 @@ pub fn run_cascade<D>(
         ua_or_user: &read,
     };
 
-    // 3. Stylist setup. Empty stylesheet set; cascade still runs and
-    //    produces default cascaded values for every element.
+    // 3. Stylist setup. Append each provided stylesheet as UA-origin
+    //    before flushing — the Stylist resolves rule indices during
+    //    flush, so all sheets must be present first.
     let device = make_device(viewport);
     let mut stylist = Stylist::new(device, QuirksMode::NoQuirks);
+    for css in stylesheets {
+        let sheet = parse_stylesheet(css, &lock);
+        stylist.append_stylesheet(sheet, &read);
+    }
     stylist.flush(&guards);
 
     // 4. SharedStyleContext bundles everything the cascade needs.
@@ -211,10 +220,10 @@ pub fn run_cascade<D>(
     };
 
     // 5. Enter cascade TLS context. StyleNodeRef methods that need
-    //    `dom`/`plane` access read from this slot; outside the guard they
-    //    panic. See `adapter_stylo::CascadeGuard` for the invariant.
+    //    `dom`/`plane`/`shared_lock` access read from this slot; outside
+    //    the guard they panic.
     let plane_ref: &StylePlane<D::NodeId> = &*plane;
-    let _guard = CascadeGuard::<D>::enter(dom, plane_ref);
+    let _guard = CascadeGuard::<D>::enter(dom, plane_ref, &lock);
 
     // 6. Drive the traversal. RecalcStyle's process_preorder calls
     //    recalc_style_at on each element, populating its ElementData
@@ -231,6 +240,28 @@ pub fn run_cascade<D>(
     // 7. Drop guard (clears TLS), then exit thread state.
     drop(_guard);
     thread_state::exit(ThreadState::LAYOUT);
+}
+
+/// Parse a single CSS source string as a UA-origin `DocumentStyleSheet`.
+/// No loader or error reporter (synthetic stylesheets don't @import; if
+/// they did we'd plumb a real loader).
+fn parse_stylesheet(css: &str, lock: &SharedRwLock) -> DocumentStyleSheet {
+    let url = url::Url::parse("about:internal-stylesheet")
+        .expect("about: URL parses");
+    let url_data = UrlExtraData::from(url);
+    let media = ServoArc::new(lock.wrap(MediaList::empty()));
+    let sheet = Stylesheet::from_str(
+        css,
+        url_data,
+        Origin::UserAgent,
+        media,
+        lock.clone(),
+        None, // stylesheet loader
+        None, // error reporter
+        QuirksMode::NoQuirks,
+        AllowImportRules::Yes,
+    );
+    DocumentStyleSheet(ServoArc::new(sheet))
 }
 
 /// Walk `dom`'s children of `from` and return the first element descendant.
@@ -282,6 +313,7 @@ mod tests {
             &document,
             &mut plane,
             euclid::Size2D::new(800.0, 600.0),
+            &[],
         );
 
         // Every element should now have ElementData populated.
@@ -293,5 +325,41 @@ mod tests {
             let entry = plane.get(id).unwrap_or_else(|| panic!("{name}: no StyleEntry"));
             assert!(entry.has_data(), "{name}: no ElementData populated by cascade");
         }
+    }
+
+    /// Probe that loaded stylesheets actually apply to matched
+    /// elements. The cascade runs with a UA-origin sheet that paints
+    /// <body> red; we read `background_color` off the computed
+    /// values and assert the sRGB components match.
+    #[test]
+    fn cascade_applies_loaded_stylesheet_to_matched_elements() {
+        let document =
+            StaticDocument::parse("<html><body><p>Hello</p></body></html>");
+        let mut plane: StylePlane<_> = StylePlane::new();
+
+        run_cascade(
+            &document,
+            &mut plane,
+            euclid::Size2D::new(800.0, 600.0),
+            &["body { background-color: rgb(255, 0, 0); }"],
+        );
+
+        let body_id = find_element(&document, local_name!("body")).expect("body exists");
+        let entry = plane.get(body_id).expect("body StyleEntry exists");
+        let data = entry.borrow_data().expect("body ElementData populated");
+        let primary = data.styles.primary();
+        let bg = &primary.get_background().background_color;
+        // `color: currentcolor` resolution uses the inherited `color`,
+        // which the cascade defaults to opaque black. For absolute
+        // backgrounds (the `rgb(255,0,0)` literal in the sheet) the
+        // current_color is unused.
+        let current_color = primary.get_inherited_text().color;
+        let absolute = bg.resolve_to_absolute(&current_color);
+        let srgb = absolute.into_srgb_legacy();
+        let [r, g, b, a] = *srgb.raw_components();
+        assert!((r - 1.0).abs() < 0.001, "red channel: {r}");
+        assert!(g < 0.001, "green channel: {g}");
+        assert!(b < 0.001, "blue channel: {b}");
+        assert!((a - 1.0).abs() < 0.001, "alpha: {a}");
     }
 }

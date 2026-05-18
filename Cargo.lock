@@ -4719,6 +4719,7 @@ dependencies = [
  "stylo_dom",
  "stylo_traits",
  "taffy",
+ "url",
 ]
 
 [[package]]
