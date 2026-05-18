@@ -22,6 +22,9 @@ webxr = ["dep:webxr", "dep:webxr-api"]
 
 [dev-dependencies]
 euclid = { workspace = true }
+malloc_size_of = { workspace = true }
+malloc_size_of_derive = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 servo-geometry = { workspace = true }
 stylo_traits = { workspace = true }
 webgl_wgpu = { workspace = true }
@@ -40,6 +43,7 @@ log = { workspace = true }
 netrender = { workspace = true }
 netrender_device = { workspace = true }
 paint_api = { workspace = true, features = ["wgpu_backend"] }
+paint_list_api = { workspace = true }
 paint_types = { workspace = true }
 raw-window-handle = { workspace = true }
 profile_traits = { workspace = true }

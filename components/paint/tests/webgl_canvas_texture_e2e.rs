@@ -4,11 +4,12 @@
 
 //! W4 WebGL-over-wgpu bridge receipt.
 //!
-//! This drives a synthetic WebGL canvas texture from `servo-webgl-wgpu`
+//! Drives a synthetic WebGL canvas texture from `servo-webgl-wgpu`
 //! through the Serval paint path:
 //!
 //! `WebGlContext` -> painter external texture registry ->
-//! `ServalDisplayItem::ExternalTexture` -> `Paint::render` ->
+//! `PaintCmd::DrawExternalTexture` (carried inside a `PaintEnvelope`) ->
+//! `Paint::render` ->
 //! `Renderer::render_with_compositor_and_external_textures` ->
 //! `Paint::composite_texture`.
 
@@ -18,13 +19,13 @@ use euclid::{Scale, Size2D};
 use netrender::{NetrenderOptions, boot, create_netrender_instance};
 use paint::Paint;
 use paint_api::display_list::{AxesScrollSensitivity, PaintDisplayListInfo, ScrollType};
-use paint_api::serval_display_list::{
-    ClipChainId, CommonItemPlacement, PrimitiveFlags, RectItem, ServalDisplayItem,
-    ServalDisplayList,
-};
 use paint_api::wgpu_readback::read_texture_to_image;
-use paint_types::units::{DeviceIntRect, DeviceIntSize, LayoutPoint, LayoutRect, LayoutSize};
-use paint_types::{ColorF, PipelineId, SpatialId};
+use paint_list_api::{
+    CommonPlacement, DeviceIntSize, EngineId, ExternalTextureItem, LayoutPoint, LayoutRect,
+    PaintCmd, PaintEnvelope, PrimitiveFlags, RectItem,
+};
+use paint_types::units::{DeviceIntRect, LayoutSize};
+use paint_types::{ColorF, PipelineId};
 use servo_base::id::{PainterId, PipelineNamespace, PipelineNamespaceId, WebViewId};
 use webgl_wgpu::{
     BufferTarget, BufferUsage, CANONICAL_TRIANGLE_FRAGMENT_SHADER,
@@ -56,48 +57,52 @@ fn paint_info_for(pipeline_id: PipelineId) -> PaintDisplayListInfo {
     )
 }
 
-fn common(bounds: LayoutRect, pipeline_id: PipelineId) -> CommonItemPlacement {
-    CommonItemPlacement {
-        clip_rect: bounds,
-        clip_chain_id: ClipChainId::INVALID,
-        spatial_id: SpatialId(0, pipeline_id),
+fn placement_at(bounds: LayoutRect) -> CommonPlacement {
+    CommonPlacement {
+        bounds,
         flags: PrimitiveFlags::empty(),
     }
 }
 
-fn display_list_with_webgl_canvas(pipeline_id: PipelineId) -> ServalDisplayList {
-    let mut list = ServalDisplayList::new(
-        DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32),
-        pipeline_id,
-    );
-
+fn envelope_with_webgl_canvas() -> PaintEnvelope {
     let full = LayoutRect::new(
         LayoutPoint::new(0.0, 0.0),
         LayoutPoint::new(VIEWPORT as f32, VIEWPORT as f32),
     );
-    list.push(ServalDisplayItem::Rect(RectItem {
-        placement: common(full, pipeline_id),
-        color: ColorF {
-            r: 1.0,
-            g: 0.0,
-            b: 0.0,
-            a: 1.0,
-        },
-    }));
-
     let canvas = LayoutRect::new(LayoutPoint::new(16.0, 16.0), LayoutPoint::new(48.0, 48.0));
-    list.push_external_texture(&common(canvas, pipeline_id), canvas, WEBGL_TEXTURE_KEY, 1.0);
     let overlay = LayoutRect::new(LayoutPoint::new(28.0, 28.0), LayoutPoint::new(36.0, 36.0));
-    list.push(ServalDisplayItem::Rect(RectItem {
-        placement: common(overlay, pipeline_id),
-        color: ColorF {
-            r: 0.0,
-            g: 0.0,
-            b: 1.0,
-            a: 1.0,
-        },
-    }));
-    list
+
+    PaintEnvelope {
+        engine: EngineId::SERVAL,
+        viewport: DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32),
+        generation: 0,
+        commands: vec![
+            PaintCmd::DrawRect(RectItem {
+                placement: placement_at(full),
+                color: ColorF {
+                    r: 1.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+            }),
+            PaintCmd::DrawExternalTexture(ExternalTextureItem {
+                placement: placement_at(canvas),
+                texture_key: WEBGL_TEXTURE_KEY,
+                opacity: 1.0,
+                content_generation: None,
+            }),
+            PaintCmd::DrawRect(RectItem {
+                placement: placement_at(overlay),
+                color: ColorF {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+            }),
+        ],
+    }
 }
 
 fn draw_webgl_triangle(device: wgpu::Device, queue: wgpu::Queue) -> WebGlContext {
@@ -162,9 +167,9 @@ fn webgl_canvas_texture_composes_through_paint_render_path() {
 
     let webview_id = WebViewId::new(painter_id);
     let pipeline_id = PipelineId::default();
-    paint.handle_messages(vec![paint_api::PaintMessage::SendDisplayList {
+    paint.handle_messages(vec![paint_api::PaintMessage::SendPaintList {
         webview_id,
-        display_list: display_list_with_webgl_canvas(pipeline_id),
+        envelope: envelope_with_webgl_canvas(),
         paint_info: paint_info_for(pipeline_id),
     }]);
     paint.render(webview_id);

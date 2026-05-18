@@ -22,11 +22,8 @@ use style_traits::CSSPixel;
 
 pub mod display_list;
 pub mod largest_contentful_paint_candidate;
-pub mod paint_cmd_bridge;
-pub mod paint_cmd_walker;
 pub mod rendering_context;
 pub mod rendering_context_core;
-pub mod serval_display_list;
 pub mod viewport_description;
 #[cfg(feature = "wgpu_backend")]
 #[doc(hidden)]
@@ -48,7 +45,6 @@ use paint_types::{
 };
 use profile_traits::mem::{OpaqueSender, ReportsChan};
 use serde::{Deserialize, Serialize};
-use serval_display_list::ServalDisplayList;
 use servo_base::generic_channel::{self, GenericCallback, GenericSender, GenericSharedMemory};
 
 use crate::largest_contentful_paint_candidate::LCPCandidate;
@@ -128,20 +124,21 @@ pub enum PaintMessage {
         /// The new [`Epoch`] value.
         epoch: Epoch,
     },
-    /// Inform the painter of a new display list for the given pipeline.
-    /// Post-C3, the payload is the netrender-shaped
-    /// [`serval_display_list::ServalDisplayList`] which the painter
-    /// translates into `netrender::SceneOp`s. `paint_info` carries the
-    /// scroll-tree, epoch, and reference-frame metadata that the
-    /// painter consumes for hit-testing, scrolling, and frame cadence.
-    SendDisplayList {
-        /// The [`WebViewId`] that this display list belongs to.
+    /// Inform the painter of a new paint output for the given
+    /// pipeline. The envelope carries the engine discriminant,
+    /// viewport, generation epoch, and closed-set `PaintCmd` stream;
+    /// the painter dispatches through
+    /// `paint::translator::translate_envelope` to produce a
+    /// `netrender::Scene`. `paint_info` carries scroll-tree, epoch,
+    /// and other per-frame metadata.
+    SendPaintList {
+        /// The [`WebViewId`] that this paint output belongs to.
         webview_id: WebViewId,
-        /// The display list itself (paint-order op stream).
-        display_list: ServalDisplayList,
-        /// Scroll-tree, epoch, viewport, root reference frame, caret
-        /// property binding, and other layout-side metadata the
-        /// painter needs to drive netrender per frame.
+        /// The wire envelope — engine discriminant + viewport +
+        /// generation + closed-set `PaintCmd` stream.
+        envelope: paint_list_api::PaintEnvelope,
+        /// Scroll-tree, epoch, and other per-frame metadata the
+        /// painter needs alongside the envelope.
         paint_info: display_list::PaintDisplayListInfo,
     },
     /// Ask the renderer to generate a frame for the current set of display lists
@@ -314,26 +311,25 @@ impl CrossProcessPaintApi {
         }
     }
 
-    /// Inform the painter of a new display list for the given pipeline.
-    /// Post-C3, the payload is the netrender-shaped
-    /// [`serval_display_list::ServalDisplayList`] plus the paint-side
-    /// metadata bundle in [`display_list::PaintDisplayListInfo`]
-    /// (scroll-tree, epoch, reference-frame ids, caret property
-    /// binding, viewport details). Serde handles serialization
-    /// end-to-end.
+    /// Send paint output for the given pipeline. The envelope carries
+    /// engine discriminant + viewport + generation + closed-set
+    /// `PaintCmd` stream; the painter dispatches through
+    /// `paint::translator::translate_envelope` to a
+    /// `netrender::Scene`. `paint_info` is the metadata bundle
+    /// (scroll-tree, epoch, reference-frame ids, viewport details).
     #[servo_tracing::instrument(skip_all)]
-    pub fn send_display_list(
+    pub fn send_paint_list(
         &self,
         webview_id: WebViewId,
-        display_list: ServalDisplayList,
+        envelope: paint_list_api::PaintEnvelope,
         paint_info: display_list::PaintDisplayListInfo,
     ) {
-        if let Err(e) = self.0.send(PaintMessage::SendDisplayList {
+        if let Err(e) = self.0.send(PaintMessage::SendPaintList {
             webview_id,
-            display_list,
+            envelope,
             paint_info,
         }) {
-            warn!("Error sending display list: {}", e);
+            warn!("Error sending paint list envelope: {}", e);
         }
     }
 

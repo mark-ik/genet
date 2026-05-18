@@ -201,6 +201,66 @@ pub enum PaintCmd {
 }
 
 // =============================================================================
+// PaintEnvelope — wire payload for transport
+// =============================================================================
+
+/// Wire shape for transporting a `PaintList` across IPC, fixture
+/// files, or any boundary where the producer's concrete `PaintList`
+/// impl can't be carried by name. PM-3 doc proposed
+/// `enum { Serval(ServalPaintList), Nematic(...), Scrying(...) }`;
+/// implementation went with a flat struct + `EngineId` discriminant
+/// because none of the concrete impls carry engine-specific extra
+/// fields beyond what the trait already exposes, and the enum shape
+/// would force `paint-api` to depend on every engine crate.
+///
+/// Same closed-set property as the doc's enum (`EngineId` is closed),
+/// without the dep inversion. If a future engine grows truly
+/// engine-specific transport fields, switch to the enum then.
+#[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
+pub struct PaintEnvelope {
+    /// Which engine produced this. Receivers route on this discriminant.
+    pub engine: EngineId,
+    /// Viewport the commands were computed against.
+    pub viewport: DeviceIntSize,
+    /// Producer-rolled semantic-equivalence epoch. Same value asserts
+    /// identical paint output across resends.
+    pub generation: u64,
+    /// Paint command stream in paint order.
+    pub commands: Vec<PaintCmd>,
+}
+
+impl PaintEnvelope {
+    /// Package any `PaintList` impl into the wire form. Clones the
+    /// command slice — the envelope owns its commands once
+    /// constructed. Callers that need zero-copy transport can build
+    /// the envelope manually with `Vec::from`/`Cow` patterns as
+    /// usage shapes emerge.
+    pub fn from_list<L: PaintList>(list: &L) -> Self {
+        Self {
+            engine: list.engine_id(),
+            viewport: list.viewport(),
+            generation: list.generation_id(),
+            commands: list.commands().to_vec(),
+        }
+    }
+}
+
+impl PaintList for PaintEnvelope {
+    fn engine_id(&self) -> EngineId {
+        self.engine
+    }
+    fn viewport(&self) -> DeviceIntSize {
+        self.viewport
+    }
+    fn generation_id(&self) -> u64 {
+        self.generation
+    }
+    fn commands(&self) -> &[PaintCmd] {
+        &self.commands
+    }
+}
+
+// =============================================================================
 // PrimitiveFlags — per-item modifiers
 // =============================================================================
 
@@ -357,6 +417,43 @@ mod tests {
             content_generation: None,
         };
         assert_eq!(item.content_generation, None);
+    }
+
+    #[test]
+    fn paint_envelope_preserves_list_fields() {
+        let viewport = DeviceIntSize::new(800, 600);
+        let stub = StubPaintList {
+            viewport,
+            commands: vec![
+                PaintCmd::DrawRect(RectItem {
+                    placement: CommonPlacement::new(box2d(0.0, 0.0, 100.0, 50.0)),
+                    color: ColorF::default(),
+                }),
+                PaintCmd::PopLayer,
+            ],
+            generation: 42,
+        };
+        let envelope = PaintEnvelope::from_list(&stub);
+        assert_eq!(envelope.engine_id(), EngineId::UNASSIGNED);
+        assert_eq!(envelope.viewport(), viewport);
+        assert_eq!(envelope.generation_id(), 42);
+        assert_eq!(envelope.commands().len(), 2);
+    }
+
+    #[test]
+    fn paint_envelope_round_trips_through_serde() {
+        let envelope = PaintEnvelope {
+            engine: EngineId::SERVAL,
+            viewport: DeviceIntSize::new(1024, 768),
+            generation: 7,
+            commands: vec![PaintCmd::PopLayer],
+        };
+        let json = serde_json::to_string(&envelope).expect("serialize");
+        let parsed: PaintEnvelope = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.engine, EngineId::SERVAL);
+        assert_eq!(parsed.viewport, envelope.viewport);
+        assert_eq!(parsed.generation, 7);
+        assert_eq!(parsed.commands.len(), 1);
     }
 
     #[test]

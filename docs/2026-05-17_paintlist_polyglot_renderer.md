@@ -2,7 +2,70 @@
 
 **Status (2026-05-17, revised PM-3):** proposed; foundation decisions resolved after second review pass. PM-3 commits the dispatch mechanism (option 1, compile-time enum), the wire transport shape (`PaintEnvelope` enum, not generic), the `DrawExternalTexture` lowering contract (per-frame compositor pass, not vello `SceneOp::Image`), and the common-vocabulary deltas (`DrawPath` added; `PushReferenceFrame` renamed to `PushTransform`; filters common). Audit of current `ServalDisplayItem` variants finds `ServalPaintExt` v1 effectively empty; the extension machinery may be deferred. See PM-3 entries in [Decision log](#decision-log).
 
-**Earlier status (PM-2):** proposed; revised after Mark's review. The earlier framing (extensions paint themselves into `vello::Scene` as the default ABI) is dropped — that pattern works in-process but breaks transport, capture/replay, tile caching, and resource ownership. PM-2 separated three layers that the first draft blurred, reframed extensions as **typed serializable payloads** rather than callbacks, and clarified the text/font/glyph ownership boundary.
+**Earlier status (PM-2):** proposed; revised after Mark's review. The earlier framing (extensions paint themselves into `vello::Scene` as the default ABI) is dropped — that pattern works in-process but breaks transport, capture/replay, tile caching, and resource ownership. PM-2 separated three layers that the first draft blurred, reframes extensions as **typed serializable payloads** rather than callbacks, and clarifies the text/font/glyph ownership boundary.
+
+---
+
+## Implementation status (2026-05-18)
+
+PM-3 design landed in code over 2026-05-17 → 2026-05-18. The
+codebase ships **one path** — `ServalPaintList` (or any `PaintList`
+impl) → `PaintEnvelope` wire payload → `translate_envelope` →
+`netrender::Scene`. There is no `ServalDisplayList` retirement
+story because `ServalDisplayList` is gone; we cut it in the same
+arc rather than carrying a migration corridor for a codebase with
+no production consumers.
+
+### Receipts
+
+| PM-3 decision | Implementation |
+| --- | --- |
+| `paint_list_api` crate (closed-set vocabulary) | [`components/shared/paint-list-api/`](../components/shared/paint-list-api/) — `lib.rs` (`PaintList` trait, `PaintCmd` enum, `EngineId`, `PrimitiveFlags`, `CommonPlacement`, `PaintEnvelope`), `specs.rs` (compositor primitives + `FilterOp`), `items.rs` (Draw\* payloads incl. `ExternalTextureItem.content_generation`) |
+| `PaintCmd` compile-time dispatch | `PaintCmd` is monomorphic; `Extension` variant deferred per audit (Serval `ServalPaintExt` empty in practice) |
+| `PaintEnvelope` closed-set wire payload | [`paint-list-api/lib.rs::PaintEnvelope`](../components/shared/paint-list-api/lib.rs) — flat struct (`engine: EngineId`, `viewport`, `generation`, `commands`); chosen over the doc's literal enum to avoid `paint-api` → engine-crate dep inversion. Self-translatable: `impl PaintList for PaintEnvelope` |
+| `DrawExternalTexture` compositor-pass lowering | [`components/paint/translator.rs`](../components/paint/translator.rs) routes `DrawExternalTexture` to `ExternalTextureDraw` (separate compositor vec), not `SceneOp::Image`. `content_generation: Option<u64>` forward-looking field on `ExternalTextureItem` for future texture-as-source lowerings |
+| `DrawPath` in common vocabulary | `PaintCmd::DrawPath(PathItem)` with `PathData` / `PathCommand` (MoveTo / LineTo / QuadTo / CurveTo / Close). Translator emits a `warn!` placeholder — full lowering needs kurbo::BezPath plumbing (cleared in netrender; painter-side wiring pending) |
+| `PushReferenceFrame` → `PushTransform` | `PaintCmd::PushTransform(TransformSpec)` with `TransformKind { Standard, Preserve3D, Perspective }` |
+| Filters in `LayerSpec` | `LayerSpec::filters: Vec<FilterOp>` with full FilterOp surface (Blur, Brightness, Contrast, Grayscale, HueRotate, Invert, Opacity, Saturate, Sepia, DropShadow, ColorMatrix). `Opacity` collapses into layer alpha at lowering; others currently no-op until backdrop machinery wires through |
+| `generation_id` as relowering-skip hint | Field on `PaintList`, `PaintEnvelope`; tile-cache invalidation remains via SceneOp content-hashing (decoupled) |
+| Capture/replay at both layers | `PaintEnvelope` is `Serialize + Deserialize` (paint-list-api lib tests round-trip); `netrender::Scene` snapshots ship behind the `serde` feature on netrender |
+| Producer (serval-layout) | [`components/serval-layout/paint_emit.rs`](../components/serval-layout/paint_emit.rs) — `emit_paint_list` / `emit_paint_list_with_layouts` produce `ServalPaintList` directly from the cascade + fragment + style planes |
+| `PaintMessage::SendPaintList` wire variant | [`paint-api/lib.rs::PaintMessage::SendPaintList`](../components/shared/paint/lib.rs) carries `PaintEnvelope`; `PaintProxy::send_paint_list` wraps the send |
+| Painter dispatch | [`components/paint/netrender_painter.rs::handle_one_message`](../components/paint/netrender_painter.rs) matches `SendPaintList`, routes through `translate_envelope_with_external_textures`, pipeline_id from `paint_info` |
+
+### Pipeline as built
+
+```text
+  ┌─ producer (serval-layout) ─┐                ┌─ paint (renderer) ──────────────┐
+  │   FragmentPlane            │                │  Paint::handle_messages         │
+  │   StylePlane               │                │           │                     │
+  │   TextMeasureCtx           │                │           ▼                     │
+  │           │                │                │   translate_envelope_with_      │
+  │           ▼                │                │   external_textures             │
+  │   emit_paint_list(_with_   │                │           │                     │
+  │   layouts)                 │                │           ▼                     │
+  │           │                │                │   PipelineState { scene,        │
+  │           ▼                │                │     external_textures, ... }    │
+  │   ServalPaintList          │                │           │                     │
+  │           │                │                │           ▼                     │
+  │           ▼                │  SendPaintList │   Renderer::render_with_        │
+  │   PaintEnvelope::from_list ───────────────► │   compositor[_and_external_     │
+  │           │                │                │   textures]                     │
+  │           ▼                │                │           │                     │
+  │   send_paint_list          │                │           ▼                     │
+  └────────────────────────────┘                │        master                   │
+                                                └─────────────────────────────────┘
+```
+
+### Remaining work (painter-side wiring gaps)
+
+Three `PaintCmd` variants currently `warn!` and skip in the translator. Each needs new `Paint`-level state, not just translator changes:
+
+1. **`DrawText` → `FontRegistry`.** Painter needs `FontInstanceKey → netrender::FontId` map; translator emits `SceneOp::GlyphRun`.
+2. **`DrawImage` / `DrawRepeatingImage` → `ImageRegistry`.** Painter needs `ImageKey → netrender::ImageKey` map; translator emits `SceneOp::Image` / `SceneOp::Pattern`.
+3. **`DrawShadow` → `Renderer::build_box_shadow_mask`.** Painter constructs the blurred mask texture via its `Renderer` handle, registers under an `ImageKey`, emits as an `Image` primitive.
+
+`DrawStroke` and `DrawPath` also `warn!`-and-skip pending kurbo::BezPath plumbing.
 
 Sister reads:
 

@@ -2,19 +2,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! C3 — `NetrenderPainter`. Routes inbound `PaintMessage`s into per-
-//! pipeline `netrender::Scene`s built by the C3 translator
+//! `NetrenderPainter`. Routes inbound `PaintMessage`s into per-
+//! pipeline `netrender::Scene`s built by the PaintList translator
 //! ([`crate::translator`]).
 //!
-//! As of Step 7, [`Paint::handle_messages`] consumes
-//! `PaintMessage::SendDisplayList`, walks the [`ServalDisplayList`]
-//! through the translator, and stores the resulting `Scene` keyed by
-//! `PipelineId`. `GenerateFrame` is left as a stub: actually rendering
-//! a frame requires a [`netrender::Renderer`] handle plus a
-//! `Compositor` impl, both of which land with C4.
-//!
-//! The plan reference is
-//! [`docs/2026-05-06_c3_layout_reshape_plan.md`](../../docs/2026-05-06_c3_layout_reshape_plan.md).
+//! [`Paint::handle_messages`] consumes `PaintMessage::SendPaintList`,
+//! walks the carried `PaintEnvelope` through `translate_envelope`,
+//! and stores the resulting `Scene` keyed by `PipelineId`.
 
 use std::cell::{Cell, Ref, RefCell};
 use std::rc::Rc;
@@ -41,7 +35,7 @@ use style_traits::CSSPixel;
 
 use crate::InitialPaintState;
 use crate::compositor::{PaintCompositor, WgpuMasterCaptureBackend};
-use crate::translator::{ExternalTextureDraw, translate_display_list_with_external_textures};
+use crate::translator::{ExternalTextureDraw, translate_envelope_with_external_textures};
 
 mod test_support;
 
@@ -58,11 +52,10 @@ pub enum WebRenderDebugOption {
 }
 
 /// Per-pipeline painter state. One entry per known `PipelineId`,
-/// allocated lazily on the first `SendDisplayList` for that pipeline.
+/// allocated lazily on the first `SendPaintList` for that pipeline.
 pub struct PipelineState {
     /// Latest translated scene. Replaced wholesale on each
-    /// `SendDisplayList` (no incremental update yet — see C3 plan
-    /// "What does *not* land in C3" for the deferred surface).
+    /// `SendPaintList` (no incremental update yet).
     pub scene: Scene,
     /// Layout-side metadata bundle. Carries the scroll-tree, epoch,
     /// caret property binding, and root reference frame id.
@@ -72,16 +65,11 @@ pub struct PipelineState {
     pub(crate) external_textures: Vec<ExternalTextureDraw>,
 }
 
-/// `Paint` is Servo's rendering subsystem. In the netrender-driven
-/// world (post-C3) it owns one `netrender::Renderer` per
-/// `RenderingContext`, lowers display lists to `netrender::Scene`s,
-/// and drives `Renderer::render_with_compositor` against a
+/// `Paint` is Servo's rendering subsystem. It owns one
+/// `netrender::Renderer` per `RenderingContext`, lowers paint
+/// envelopes to `netrender::Scene`s via [`crate::translator`], and
+/// drives `Renderer::render_with_compositor` against a
 /// consumer-supplied `netrender_device::Compositor`.
-///
-/// Step 7 of C3 wires the SendDisplayList → Scene translation; the
-/// renderer / compositor handoff is C4 territory and still lives behind
-/// the `unimplemented!()` shaped methods that `components/servo/`
-/// expects.
 /// Per-webview painter state. Tracks zoom, hidpi, and the registered
 /// `WebViewTrait` handle (used to push events back to the embedder).
 struct WebViewState {
@@ -120,7 +108,7 @@ pub struct Paint {
     /// matching the rest of `Paint`'s `Rc<RefCell<...>>` shape — the
     /// painter is single-threaded.
     renderers: RefCell<FxHashMap<PainterId, netrender::Renderer>>,
-    /// `WebViewId` → `PipelineId` map populated on `SendDisplayList`.
+    /// `WebViewId` → `PipelineId` map populated on `SendPaintList`.
     /// `Paint::render` looks up the latest scene by walking
     /// webview → pipeline → `pipelines[pipeline]`.
     webview_to_pipeline: RefCell<FxHashMap<WebViewId, PipelineId>>,
@@ -169,11 +157,10 @@ impl Paint {
         &self.paint_receiver
     }
 
-    /// Drain a batch of `PaintMessage`s. C3 Step 7 routes
-    /// `SendDisplayList` through the translator and stores the
-    /// resulting Scene + metadata under the message's pipeline id.
-    /// Other variants are stubbed; the C4 cut wires the renderer /
-    /// compositor side.
+    /// Drain a batch of `PaintMessage`s. `SendPaintList` routes
+    /// through the translator and stores the resulting Scene +
+    /// metadata under the message's pipeline id; other variants
+    /// route to the renderer / compositor / image-update flows.
     pub fn handle_messages(&self, messages: Vec<PaintMessage>) {
         for message in messages {
             self.handle_one_message(message);
@@ -182,14 +169,15 @@ impl Paint {
 
     fn handle_one_message(&self, message: PaintMessage) {
         match message {
-            PaintMessage::SendDisplayList {
+            // Pipeline_id is read from paint_info (the envelope itself
+            // doesn't carry one — keeping it engine-agnostic).
+            PaintMessage::SendPaintList {
                 webview_id,
-                display_list,
+                envelope,
                 paint_info,
             } => {
-                let pipeline_id = display_list.pipeline_id;
-                let translated =
-                    translate_display_list_with_external_textures(&display_list, &paint_info);
+                let pipeline_id = paint_info.pipeline_id;
+                let translated = translate_envelope_with_external_textures(&envelope);
                 self.pipelines.borrow_mut().insert(
                     pipeline_id,
                     PipelineState {
@@ -388,7 +376,7 @@ impl Paint {
     /// [`Paint::composite_texture`].
     ///
     /// No-op if any of: the webview has no pipeline yet (no
-    /// `SendDisplayList` received), the painter id has no registered
+    /// `SendPaintList` received), the painter id has no registered
     /// rendering context, or the rendering context didn't expose a
     /// `WgpuCapability` at registration time (so no Renderer was
     /// built). The C4 milestone leaves per-platform OS handoff to a

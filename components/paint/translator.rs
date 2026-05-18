@@ -2,33 +2,30 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! C3 Step 7 — `ServalDisplayList` → `netrender::Scene` translator.
+//! `PaintList` → `netrender::Scene` translator.
 //!
-//! Layout emits a [`paint_api::serval_display_list::ServalDisplayList`]
-//! (a paint-order op stream + spatial / clip / transform palettes plus
-//! a `PaintDisplayListInfo` metadata bundle); this module walks that
-//! list and produces a [`netrender::Scene`] the renderer can consume.
+//! Producers emit a [`paint_list_api::PaintList`] (the closed-set
+//! `PaintCmd` vocabulary — compositor primitives plus `Draw*` items);
+//! this module walks the command stream and produces a
+//! [`netrender::Scene`] the renderer can rasterize.
 //!
 //! ## Mapping summary
 //!
 //! Most variants map 1:1 to a `netrender::SceneOp`. The painter-side
-//! gaps that the C3 plan flagged for follow-up (`BoxShadow` / `Shadow`
-//! / `RepeatingImage`) emit a fallback rect for now and log the gap;
-//! the proper translation lands when `Renderer::build_box_shadow_mask`
-//! and `ScenePattern` integration land here. Animation property
-//! bindings (`PropertyBinding::Binding`) are resolved to their static
-//! current value — the painter does not yet advance them per frame.
+//! gaps flagged for follow-up (`DrawText`, `DrawImage`,
+//! `DrawRepeatingImage`, `DrawShadow`, `DrawPath`, `DrawStroke`,
+//! nine-patch borders) emit a fallback or `warn!`-and-skip; the
+//! proper translation lands when the corresponding paint-side state
+//! (font registry, image registry, shadow-mask integration) wires
+//! through. The lowering itself is well-defined for the deferred
+//! variants — only the painter-side resource plumbing is missing.
 
 use log::warn;
 use netrender::{
     ExternalTexturePlacement, GradientKind, GradientStop as NrGradientStop, NO_CLIP, Scene,
-    SceneBlendMode, SceneClip, SceneGradient, SceneLayer, Transform,
+    SceneBlendMode, SceneClip, SceneLayer, Transform,
 };
-use paint_api::display_list::PaintDisplayListInfo;
-use paint_api::serval_display_list::{
-    ConicGradientPayload, FilterOp, GradientPayload, RadialGradientPayload, ServalDisplayItem,
-    ServalDisplayList,
-};
+use paint_list_api::{self as ple, PaintCmd, PaintList};
 use paint_types::ColorF;
 
 #[derive(Clone, Debug)]
@@ -46,160 +43,11 @@ pub(crate) struct TranslatedDisplayList {
     pub external_textures: Vec<ExternalTextureDraw>,
 }
 
-/// Translate a [`ServalDisplayList`] (plus its per-pipeline metadata)
-/// into a [`netrender::Scene`] the renderer can rasterize.
-///
-/// First-cut painter: handles solid rects, images, text, borders,
-/// gradients, stacking contexts (as alpha layers), reference frames
-/// (as transform pushes), and clip rects (as clip layers). Box
-/// shadows, text shadows, and repeating images currently emit a
-/// fallback solid rect — the netrender helpers exist
-/// (`Renderer::build_box_shadow_mask`, `ScenePattern`) but the
-/// integration is a follow-up.
-pub fn translate_display_list(
-    list: &ServalDisplayList,
-    paint_info: &PaintDisplayListInfo,
-) -> Scene {
-    translate_display_list_with_external_textures(list, paint_info).scene
-}
-
-pub(crate) fn translate_display_list_with_external_textures(
-    list: &ServalDisplayList,
-    paint_info: &PaintDisplayListInfo,
-) -> TranslatedDisplayList {
-    let viewport_w = list.viewport.width.max(0) as u32;
-    let viewport_h = list.viewport.height.max(0) as u32;
-    let mut scene = Scene::new(viewport_w, viewport_h);
-    let mut external_textures = Vec::new();
-
-    // The transforms palette is appended onto the Scene's transform
-    // stack (Scene reserves index 0 as identity, mirroring
-    // ServalDisplayList's convention). Subsequent pushes pick up
-    // their transform_id from the offset.
-    let transform_id_offset = scene.transforms.len() as u32 - 1;
-    for transform in list.transforms.iter().skip(1) {
-        scene.transforms.push(serval_to_scene_transform(transform));
-    }
-
-    let caret_animation = paint_info.caret_property_binding;
-
-    for item in &list.items {
-        match item {
-            ServalDisplayItem::Rect(r) => {
-                let (x0, y0, x1, y1) = rect_corners(&r.placement.clip_rect);
-                scene.push_rect(x0, y0, x1, y1, color_to_array(&r.color));
-            },
-            ServalDisplayItem::RectWithAnimation(r) => {
-                // Animation hook: if this is the caret rect, the
-                // painter would resolve its current opacity from
-                // `paint_info.caret_property_binding`. First-cut paints
-                // the static color; per-frame advance lands when the
-                // painter grows a tick callback.
-                let _ = caret_animation;
-                let (x0, y0, x1, y1) = rect_corners(&r.placement.clip_rect);
-                scene.push_rect(x0, y0, x1, y1, color_to_array(&r.color));
-            },
-            ServalDisplayItem::Line(line) => {
-                // A 1-thick line is a degenerate rect; thicker decorated
-                // lines (wavy / dotted / dashed) need stroke variants.
-                // First cut: emit a solid rect spanning the line bounds.
-                let (x0, y0, x1, y1) = rect_corners(&line.placement.clip_rect);
-                scene.push_rect(x0, y0, x1, y1, color_to_array(&line.color));
-            },
-            ServalDisplayItem::Image(_) | ServalDisplayItem::RepeatingImage(_) => {
-                // Image translation needs the painter's `ImageRegistry`
-                // (paint-side) to map `ImageKey` → `netrender::ImageKey`.
-                // First cut: log + emit a transparent fallback so the
-                // tree shape is preserved.
-                warn!(
-                    "[netrender translator] image / repeating image not yet wired; emitting transparent fallback"
-                );
-            },
-            ServalDisplayItem::ExternalTexture(texture) => {
-                let (x0, y0, x1, y1) = rect_corners(&texture.placement.clip_rect);
-                external_textures.push(ExternalTextureDraw {
-                    texture_key: texture.texture_key,
-                    placement: ExternalTexturePlacement::new([x0, y0, x1, y1])
-                        .with_opacity(texture.opacity),
-                    scene_op_boundary: scene.ops.len(),
-                });
-            },
-            ServalDisplayItem::Text(text) => {
-                // Glyph-run translation needs the painter's `FontRegistry`
-                // to map `FontInstanceKey` → `netrender::FontId`. First
-                // cut: log + skip.
-                let _ = text;
-                warn!("[netrender translator] text glyph-run not yet wired; skipping");
-            },
-            ServalDisplayItem::Border(border) => {
-                // First cut: emit four edge-strokes from the border
-                // widths. Rounded corners and per-side styles
-                // (Solid/Dashed/Dotted) are deferred.
-                emit_border_first_cut(&mut scene, border);
-            },
-            ServalDisplayItem::BoxShadow(_) | ServalDisplayItem::PushShadow(_) => {
-                // Box-shadow / text-shadow: netrender's
-                // `Renderer::build_box_shadow_mask` produces a blurred
-                // mask texture that's then inserted as an image. The
-                // painter needs renderer access (held at Paint level,
-                // not Scene level) to do this, so the integration
-                // lands when the painter holds a `Renderer` handle.
-                warn!(
-                    "[netrender translator] box-shadow / text-shadow deferred (needs renderer.build_box_shadow_mask)"
-                );
-            },
-            ServalDisplayItem::PopAllShadows => {
-                // Counterpart to PushShadow; no-op until shadow stack
-                // is wired.
-            },
-            ServalDisplayItem::Gradient(g) => emit_linear_gradient(&mut scene, g),
-            ServalDisplayItem::RadialGradient(g) => emit_radial_gradient(&mut scene, g),
-            ServalDisplayItem::ConicGradient(g) => emit_conic_gradient(&mut scene, g),
-            ServalDisplayItem::Iframe(_) => {
-                // Iframes resolve to the child pipeline's Scene
-                // composited via `declare_compositor_surface` (native
-                // compositor route) or as an image (in-process route).
-                // First cut: deferred.
-                warn!(
-                    "[netrender translator] iframe deferred (needs cross-pipeline scene composition)"
-                );
-            },
-            ServalDisplayItem::PushStackingContext(sc) => {
-                let layer = stacking_context_to_layer(sc, transform_id_offset);
-                scene.push_layer(layer);
-            },
-            ServalDisplayItem::PopStackingContext => {
-                scene.pop_layer();
-            },
-            ServalDisplayItem::PushReferenceFrame(_) => {
-                // Reference frames are already realized by appending
-                // `LayoutTransform`s to the transforms palette in the
-                // header above; per-op `transform_id` selection is the
-                // mechanism netrender uses (rather than push/pop).
-                // The Push/Pop variants are recorded for layout-side
-                // bookkeeping only.
-            },
-            ServalDisplayItem::PopReferenceFrame => {},
-            ServalDisplayItem::HitTest(_) => {
-                // Hit-test items go to a separate `netrender::hit_test`
-                // layer (off the Scene paint-order stream). The painter
-                // accumulates them into a `Vec<HitOp>` per pipeline;
-                // emission from the translator stage is a no-op.
-            },
-        }
-    }
-
-    TranslatedDisplayList {
-        scene,
-        external_textures,
-    }
-}
-
 // =============================================================================
-// Per-variant emit helpers
+// Shared utilities
 // =============================================================================
 
-fn rect_corners(rect: &paint_types::units::LayoutRect) -> (f32, f32, f32, f32) {
+fn rect_corners(rect: &paint_list_api::LayoutRect) -> (f32, f32, f32, f32) {
     (rect.min.x, rect.min.y, rect.max.x, rect.max.y)
 }
 
@@ -207,38 +55,15 @@ fn color_to_array(color: &ColorF) -> [f32; 4] {
     [color.r, color.g, color.b, color.a]
 }
 
-fn serval_to_scene_transform(t: &paint_types::units::LayoutTransform) -> Transform {
-    // ServalDisplayList carries `Transform3D` (4x4 column-major in
-    // euclid's m11..m44 naming); netrender's `Transform.m` is also
-    // 4x4 column-major. Project field-by-field.
+fn layout_transform_to_scene(t: &paint_list_api::LayoutTransform) -> Transform {
+    // PaintCmd carries `Transform3D` (4x4 column-major in euclid's
+    // m11..m44 naming); netrender's `Transform.m` is also 4x4
+    // column-major. Project field-by-field.
     Transform {
         m: [
             t.m11, t.m12, t.m13, t.m14, t.m21, t.m22, t.m23, t.m24, t.m31, t.m32, t.m33, t.m34,
             t.m41, t.m42, t.m43, t.m44,
         ],
-    }
-}
-
-fn stacking_context_to_layer(
-    sc: &paint_api::serval_display_list::StackingContextItem,
-    transform_id_offset: u32,
-) -> SceneLayer {
-    let mut alpha = 1.0_f32;
-    for filter in &sc.filters {
-        if let FilterOp::Opacity(a) = filter {
-            alpha *= *a;
-        }
-    }
-    let blend_mode = mix_blend_mode_to_scene(sc.mix_blend_mode);
-    let _ = transform_id_offset; // SC origins handled per-op via transforms palette
-
-    SceneLayer {
-        clip: SceneClip::None,
-        alpha,
-        blend_mode,
-        compose: netrender::SceneCompose::SrcOver,
-        transform_id: 0,
-        backdrop_filter: None,
     }
 }
 
@@ -258,18 +83,257 @@ fn mix_blend_mode_to_scene(mode: paint_types::MixBlendMode) -> SceneBlendMode {
     }
 }
 
-fn emit_border_first_cut(scene: &mut Scene, border: &paint_api::serval_display_list::BorderItem) {
-    let rect = &border.placement.clip_rect;
+fn gradient_stops(stops: &[paint_types::GradientStop]) -> Vec<NrGradientStop> {
+    stops
+        .iter()
+        .map(|s| NrGradientStop {
+            offset: s.offset,
+            color: [s.color.r, s.color.g, s.color.b, s.color.a],
+        })
+        .collect()
+}
+
+// =============================================================================
+// PaintList → Scene entry points
+// =============================================================================
+
+/// Translate a [`PaintList`] into a [`netrender::Scene`]. External-
+/// texture composite metadata stays renderer-private (used by
+/// `Paint::render` to drive `render_with_compositor_and_external_textures`);
+/// the public entry point returns just the Scene for testability.
+pub fn translate_paint_list<L: PaintList>(list: &L) -> Scene {
+    translate_paint_cmd_stream(list.viewport(), list.commands()).scene
+}
+
+/// Receive-side companion: translate a wire envelope. Thin wrapper
+/// since `PaintEnvelope` itself impls `PaintList`.
+pub fn translate_envelope(envelope: &paint_list_api::PaintEnvelope) -> Scene {
+    translate_paint_list(envelope)
+}
+
+/// Internal variant that also returns the external-texture composite
+/// list. Used by `Paint::render` to drive
+/// `render_with_compositor_and_external_textures`.
+pub(crate) fn translate_envelope_with_external_textures(
+    envelope: &paint_list_api::PaintEnvelope,
+) -> TranslatedDisplayList {
+    translate_paint_cmd_stream(envelope.viewport(), envelope.commands())
+}
+
+/// Stream-form: take a viewport and a flat `PaintCmd` slice.
+pub(crate) fn translate_paint_cmd_stream(
+    viewport: paint_list_api::DeviceIntSize,
+    commands: &[PaintCmd],
+) -> TranslatedDisplayList {
+    let viewport_w = viewport.width.max(0) as u32;
+    let viewport_h = viewport.height.max(0) as u32;
+    let mut scene = Scene::new(viewport_w, viewport_h);
+    let mut external_textures = Vec::new();
+
+    for cmd in commands {
+        match cmd {
+            // ----- Compositor primitives ---------------------------------
+            PaintCmd::PushClip(spec) => emit_push_clip(&mut scene, spec),
+            PaintCmd::PopClip => {
+                // Clips ride on layers in netrender's model; PushClip pairs with PopLayer.
+                scene.pop_layer();
+            },
+            PaintCmd::PushTransform(spec) => emit_push_transform(&mut scene, spec),
+            PaintCmd::PopTransform => {
+                // PushTransform → SceneLayer carrying the transform;
+                // PopTransform returns to the parent layer.
+                scene.pop_layer();
+            },
+            PaintCmd::PushLayer(spec) => emit_push_layer(&mut scene, spec),
+            PaintCmd::PopLayer => {
+                scene.pop_layer();
+            },
+
+            // ----- Paint primitives --------------------------------------
+            PaintCmd::DrawRect(r) => {
+                let (x0, y0, x1, y1) = rect_corners(&r.placement.bounds);
+                scene.push_rect(x0, y0, x1, y1, color_to_array(&r.color));
+            },
+            PaintCmd::DrawStroke(_) => {
+                // Stroke requires `kurbo::BezPath` reconstruction + a
+                // netrender stroke primitive (`SceneStroke`).
+                // Painter-side wiring needs the same plumbing as
+                // DrawPath; deferred together.
+                warn!("[paint translator] DrawStroke deferred (needs kurbo::BezPath wiring)");
+            },
+            PaintCmd::DrawLine(line) => {
+                // First-cut: emit a solid rect spanning the line's
+                // local bounds. Decorated styles (wavy/dotted/dashed)
+                // need stroke variants.
+                let (x0, y0, x1, y1) = rect_corners(&line.placement.bounds);
+                scene.push_rect(x0, y0, x1, y1, color_to_array(&line.color));
+            },
+            PaintCmd::DrawPath(_) => {
+                // PM-3 common variant; renderer side needs
+                // kurbo::BezPath reconstruction from PathData + vello
+                // path emission (netrender's `SceneOp::Shape` exists).
+                warn!("[paint translator] DrawPath deferred (needs kurbo::BezPath wiring)");
+            },
+            PaintCmd::DrawBorder(border) => emit_border_first_cut(&mut scene, border),
+            PaintCmd::DrawLinearGradient(g) => emit_linear_gradient(&mut scene, g),
+            PaintCmd::DrawRadialGradient(g) => emit_radial_gradient(&mut scene, g),
+            PaintCmd::DrawConicGradient(g) => emit_conic_gradient(&mut scene, g),
+            PaintCmd::DrawText(_) => {
+                // Needs FontRegistry to map FontInstanceKey →
+                // netrender::FontId.
+                warn!("[paint translator] DrawText deferred (needs FontRegistry wiring)");
+            },
+            PaintCmd::DrawImage(_) | PaintCmd::DrawRepeatingImage(_) => {
+                // Needs ImageRegistry to map ImageKey → texture handle.
+                warn!(
+                    "[paint translator] DrawImage / DrawRepeatingImage deferred (needs ImageRegistry wiring)"
+                );
+            },
+            PaintCmd::DrawExternalTexture(et) => {
+                let (x0, y0, x1, y1) = rect_corners(&et.placement.bounds);
+                external_textures.push(ExternalTextureDraw {
+                    texture_key: et.texture_key,
+                    placement: ExternalTexturePlacement::new([x0, y0, x1, y1])
+                        .with_opacity(et.opacity),
+                    scene_op_boundary: scene.ops.len(),
+                });
+            },
+            PaintCmd::DrawShadow(_) => {
+                // Box-shadow → needs `Renderer::build_box_shadow_mask`.
+                warn!("[paint translator] DrawShadow deferred (needs build_box_shadow_mask)");
+            },
+            PaintCmd::PushShadow(_) | PaintCmd::PopAllShadows => {
+                // State-stack pair; no-op until shadow integration lands.
+            },
+            PaintCmd::HitTest(_) => {
+                // Hit-test items route to a separate netrender::hit_test
+                // pass, not the Scene paint-order stream. No-op here.
+            },
+        }
+    }
+
+    TranslatedDisplayList {
+        scene,
+        external_textures,
+    }
+}
+
+// =============================================================================
+// PaintCmd per-variant emit helpers
+// =============================================================================
+
+fn emit_push_clip(scene: &mut Scene, spec: &ple::ClipSpec) {
+    let clip = match &spec.kind {
+        ple::ClipKind::Rect(rect) => {
+            let (x0, y0, x1, y1) = rect_corners(rect);
+            SceneClip::Rect {
+                rect: [x0, y0, x1, y1],
+                radii: [0.0, 0.0, 0.0, 0.0],
+            }
+        },
+        ple::ClipKind::RoundedRect { rect, radius, .. } => {
+            let (x0, y0, x1, y1) = rect_corners(rect);
+            SceneClip::Rect {
+                rect: [x0, y0, x1, y1],
+                radii: [
+                    radius.top_left.width,
+                    radius.top_right.width,
+                    radius.bottom_right.width,
+                    radius.bottom_left.width,
+                ],
+            }
+        },
+        ple::ClipKind::Path(_) => {
+            // Path clips need kurbo::BezPath reconstruction; same
+            // deferred plumbing as DrawPath. Fall back to no-clip so
+            // the layer still pushes and pairs correctly with PopClip.
+            warn!("[paint translator] PushClip(Path) deferred; pushing unclipped layer");
+            SceneClip::None
+        },
+    };
+    scene.push_layer(SceneLayer {
+        clip,
+        alpha: 1.0,
+        blend_mode: SceneBlendMode::Normal,
+        compose: netrender::SceneCompose::SrcOver,
+        transform_id: 0,
+        backdrop_filter: None,
+    });
+}
+
+fn emit_push_transform(scene: &mut Scene, spec: &ple::TransformSpec) {
+    // Push the transform onto the Scene's transforms palette and wrap
+    // in a layer that references it. The Scene model uses per-op
+    // `transform_id` rather than push/pop semantics; the layer carries
+    // the new transform_id so child ops pick it up.
+    let nr_transform = layout_transform_to_scene(&spec.transform);
+    // Translate by origin if non-zero. Compose origin into the
+    // transform via pre-multiplication (translate then user transform).
+    let composed = if spec.origin.x != 0.0 || spec.origin.y != 0.0 {
+        compose_with_origin(&nr_transform, spec.origin.x, spec.origin.y)
+    } else {
+        nr_transform
+    };
+    scene.transforms.push(composed);
+    let transform_id = (scene.transforms.len() - 1) as u32;
+    scene.push_layer(SceneLayer {
+        clip: SceneClip::None,
+        alpha: 1.0,
+        blend_mode: SceneBlendMode::Normal,
+        compose: netrender::SceneCompose::SrcOver,
+        transform_id,
+        backdrop_filter: None,
+    });
+    // `spec.kind` (Standard / Preserve3D / Perspective) is recorded
+    // for future stack-state handling; netrender treats the transform
+    // as opaque math regardless.
+    let _ = spec.kind;
+}
+
+fn compose_with_origin(t: &Transform, ox: f32, oy: f32) -> Transform {
+    // The netrender Transform is a flat 16-float array, conceptually
+    // row-major. The "translate by (ox, oy) then apply t" composition
+    // is: t_with_translation[12] += ox, t_with_translation[13] += oy
+    // (translation columns).
+    let mut out = t.m;
+    out[12] += ox;
+    out[13] += oy;
+    Transform { m: out }
+}
+
+fn emit_push_layer(scene: &mut Scene, spec: &ple::LayerSpec) {
+    let blend_mode = mix_blend_mode_to_scene(spec.mix_blend_mode);
+    let mut alpha = spec.opacity;
+    // Filter-chain opacity collapses into the layer's alpha; other
+    // filters need backdrop machinery and are deferred.
+    for filter in &spec.filters {
+        if let ple::FilterOp::Opacity(a) = filter {
+            alpha *= *a;
+        }
+    }
+    let _ = spec.raster_space; // Local vs Screen — deferred
+    let _ = spec.flags;        // BLEND_CONTAINER etc. — deferred
+    let _ = &spec.mask;        // alpha-mask layer — deferred
+    scene.push_layer(SceneLayer {
+        clip: SceneClip::None,
+        alpha,
+        blend_mode,
+        compose: netrender::SceneCompose::SrcOver,
+        transform_id: 0,
+        backdrop_filter: None,
+    });
+}
+
+fn emit_border_first_cut(scene: &mut Scene, border: &ple::BorderItem) {
+    let rect = &border.placement.bounds;
     let widths = &border.widths;
-    use paint_api::serval_display_list::BorderDetails;
     let sides = match &border.details {
-        BorderDetails::Normal(n) => n,
-        BorderDetails::NinePatch(_) => {
-            warn!("[netrender translator] nine-patch border deferred");
+        ple::BorderDetails::Normal(n) => n,
+        ple::BorderDetails::NinePatch(_) => {
+            warn!("[paint translator] nine-patch border deferred");
             return;
         },
     };
-    // Top edge.
     if widths.top > 0.0 {
         scene.push_rect(
             rect.min.x,
@@ -279,7 +343,6 @@ fn emit_border_first_cut(scene: &mut Scene, border: &paint_api::serval_display_l
             color_to_array(&sides.top.color),
         );
     }
-    // Bottom edge.
     if widths.bottom > 0.0 {
         scene.push_rect(
             rect.min.x,
@@ -289,7 +352,6 @@ fn emit_border_first_cut(scene: &mut Scene, border: &paint_api::serval_display_l
             color_to_array(&sides.bottom.color),
         );
     }
-    // Left edge.
     if widths.left > 0.0 {
         scene.push_rect(
             rect.min.x,
@@ -299,7 +361,6 @@ fn emit_border_first_cut(scene: &mut Scene, border: &paint_api::serval_display_l
             color_to_array(&sides.left.color),
         );
     }
-    // Right edge.
     if widths.right > 0.0 {
         scene.push_rect(
             rect.max.x - widths.right,
@@ -309,14 +370,14 @@ fn emit_border_first_cut(scene: &mut Scene, border: &paint_api::serval_display_l
             color_to_array(&sides.right.color),
         );
     }
-    let _ = sides.radius; // border-radius rounding deferred (per-corner)
+    let _ = sides.radius;
     let _ = sides.do_aa;
 }
 
-fn emit_linear_gradient(scene: &mut Scene, item: &paint_api::serval_display_list::GradientItem) {
-    let rect = &item.placement.clip_rect;
-    let g: &GradientPayload = &item.gradient;
-    scene.push_gradient(SceneGradient {
+fn emit_linear_gradient(scene: &mut Scene, item: &ple::LinearGradientItem) {
+    let rect = &item.placement.bounds;
+    let g = &item.gradient;
+    scene.push_gradient(netrender::SceneGradient {
         x0: rect.min.x,
         y0: rect.min.y,
         x1: rect.max.x,
@@ -335,13 +396,10 @@ fn emit_linear_gradient(scene: &mut Scene, item: &paint_api::serval_display_list
     });
 }
 
-fn emit_radial_gradient(
-    scene: &mut Scene,
-    item: &paint_api::serval_display_list::RadialGradientItem,
-) {
-    let rect = &item.placement.clip_rect;
-    let g: &RadialGradientPayload = &item.gradient;
-    scene.push_gradient(SceneGradient {
+fn emit_radial_gradient(scene: &mut Scene, item: &ple::RadialGradientItem) {
+    let rect = &item.placement.bounds;
+    let g = &item.gradient;
+    scene.push_gradient(netrender::SceneGradient {
         x0: rect.min.x,
         y0: rect.min.y,
         x1: rect.max.x,
@@ -355,13 +413,10 @@ fn emit_radial_gradient(
     });
 }
 
-fn emit_conic_gradient(
-    scene: &mut Scene,
-    item: &paint_api::serval_display_list::ConicGradientItem,
-) {
-    let rect = &item.placement.clip_rect;
-    let g: &ConicGradientPayload = &item.gradient;
-    scene.push_gradient(SceneGradient {
+fn emit_conic_gradient(scene: &mut Scene, item: &ple::ConicGradientItem) {
+    let rect = &item.placement.bounds;
+    let g = &item.gradient;
+    scene.push_gradient(netrender::SceneGradient {
         x0: rect.min.x,
         y0: rect.min.y,
         x1: rect.max.x,
@@ -375,125 +430,183 @@ fn emit_conic_gradient(
     });
 }
 
-fn gradient_stops(stops: &[paint_types::GradientStop]) -> Vec<NrGradientStop> {
-    stops
-        .iter()
-        .map(|s| NrGradientStop {
-            offset: s.offset,
-            color: [s.color.r, s.color.g, s.color.b, s.color.a],
-        })
-        .collect()
-}
-
 // =============================================================================
 // Tests
 // =============================================================================
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use paint_api::serval_display_list::{
-        ClipChainId, CommonItemPlacement, PrimitiveFlags, RectItem, ServalDisplayItem,
-        ServalDisplayList,
+    use malloc_size_of_derive::MallocSizeOf;
+    use paint_list_api::{
+        CommonPlacement, DeviceIntSize, EngineId, LayoutPoint, LayoutRect, PaintCmd, PaintList,
+        PrimitiveFlags, RectItem,
     };
-    use paint_types::PipelineId;
-    use paint_types::units::{DeviceIntSize, LayoutRect, LayoutSize};
+    use paint_types::ColorF;
+    use serde::{Deserialize, Serialize};
 
-    fn pipeline() -> PipelineId {
-        PipelineId::default()
+    use super::*;
+
+    /// Minimal `PaintList` impl for driving `translate_paint_list`
+    /// from tests without pulling in a producer crate.
+    #[derive(Clone, Debug, Default, Deserialize, MallocSizeOf, Serialize)]
+    struct StubPaintList {
+        viewport: DeviceIntSize,
+        commands: Vec<PaintCmd>,
     }
 
-    fn placement(rect: LayoutRect) -> CommonItemPlacement {
-        let pid = pipeline();
-        CommonItemPlacement {
-            clip_rect: rect,
-            clip_chain_id: ClipChainId::INVALID,
-            spatial_id: paint_types::SpatialId(0, pid),
+    impl PaintList for StubPaintList {
+        fn engine_id(&self) -> EngineId {
+            EngineId::SERVAL
+        }
+        fn viewport(&self) -> DeviceIntSize {
+            self.viewport
+        }
+        fn generation_id(&self) -> u64 {
+            0
+        }
+        fn commands(&self) -> &[PaintCmd] {
+            &self.commands
+        }
+    }
+
+    fn box2d(x: f32, y: f32, w: f32, h: f32) -> LayoutRect {
+        LayoutRect::new(LayoutPoint::new(x, y), LayoutPoint::new(x + w, y + h))
+    }
+
+    fn placement_at(bounds: LayoutRect) -> CommonPlacement {
+        CommonPlacement {
+            bounds,
             flags: PrimitiveFlags::empty(),
         }
     }
 
-    fn paint_info(
-        viewport_w: f32,
-        viewport_h: f32,
-        pipeline_id: PipelineId,
-    ) -> PaintDisplayListInfo {
-        use embedder_traits::ViewportDetails;
-        use euclid::Scale;
-        use paint_api::display_list::AxesScrollSensitivity;
-        use paint_api::display_list::ScrollType;
-
-        PaintDisplayListInfo::new(
-            ViewportDetails {
-                size: euclid::Size2D::new(viewport_w, viewport_h),
-                hidpi_scale_factor: Scale::new(1.0),
-            },
-            LayoutSize::new(viewport_w, viewport_h),
-            pipeline_id,
-            servo_base::Epoch(0),
-            AxesScrollSensitivity {
-                x: ScrollType::InputEvents | ScrollType::Script,
-                y: ScrollType::InputEvents | ScrollType::Script,
-            },
-            true,
-        )
+    fn list_with(viewport: DeviceIntSize, cmds: Vec<PaintCmd>) -> StubPaintList {
+        StubPaintList {
+            viewport,
+            commands: cmds,
+        }
     }
 
     #[test]
     fn empty_list_translates_to_empty_scene() {
-        let list = ServalDisplayList::new(DeviceIntSize::new(800, 600), pipeline());
-        let info = paint_info(800.0, 600.0, pipeline());
-        let scene = translate_display_list(&list, &info);
+        let list = list_with(DeviceIntSize::new(800, 600), Vec::new());
+        let scene = translate_paint_list(&list);
         assert_eq!(scene.viewport_width, 800);
         assert_eq!(scene.viewport_height, 600);
         assert_eq!(scene.ops.len(), 0);
     }
 
     #[test]
-    fn solid_rect_emits_one_scene_rect() {
-        let mut list = ServalDisplayList::new(DeviceIntSize::new(800, 600), pipeline());
-        list.push(ServalDisplayItem::Rect(RectItem {
-            placement: placement(LayoutRect::new(
-                paint_types::units::LayoutPoint::new(10.0, 20.0),
-                paint_types::units::LayoutPoint::new(110.0, 220.0),
-            )),
-            color: ColorF {
-                r: 1.0,
-                g: 0.0,
-                b: 0.0,
-                a: 1.0,
-            },
-        }));
-        let info = paint_info(800.0, 600.0, pipeline());
-        let scene = translate_display_list(&list, &info);
+    fn draw_rect_emits_scene_rect() {
+        let list = list_with(
+            DeviceIntSize::new(800, 600),
+            vec![PaintCmd::DrawRect(RectItem {
+                placement: placement_at(box2d(10.0, 20.0, 100.0, 50.0)),
+                color: ColorF {
+                    r: 1.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+            })],
+        );
+        let scene = translate_paint_list(&list);
         assert_eq!(scene.ops.len(), 1);
         assert!(matches!(scene.ops[0], netrender::SceneOp::Rect(_)));
     }
 
     #[test]
-    fn stacking_context_push_and_pop_become_layer_pushes() {
-        use paint_api::serval_display_list::{
-            RasterSpace, StackingContextFlags, StackingContextItem,
-        };
-        use paint_types::TransformStyle;
-
-        let mut list = ServalDisplayList::new(DeviceIntSize::new(800, 600), pipeline());
-        list.push(ServalDisplayItem::PushStackingContext(
-            StackingContextItem {
-                placement: placement(LayoutRect::zero()),
-                origin: paint_types::units::LayoutPoint::zero(),
-                transform_style: TransformStyle::Flat,
-                mix_blend_mode: paint_types::MixBlendMode::Normal,
-                filters: vec![FilterOp::Opacity(0.5)],
-                flags: StackingContextFlags::empty(),
-                raster_space: RasterSpace::Screen,
-            },
-        ));
-        list.push(ServalDisplayItem::PopStackingContext);
-        let info = paint_info(800.0, 600.0, pipeline());
-        let scene = translate_display_list(&list, &info);
+    fn push_pop_layer_emits_layer_pair() {
+        let list = list_with(
+            DeviceIntSize::new(800, 600),
+            vec![
+                PaintCmd::PushLayer(ple::LayerSpec {
+                    opacity: 0.5,
+                    ..ple::LayerSpec::default()
+                }),
+                PaintCmd::PopLayer,
+            ],
+        );
+        let scene = translate_paint_list(&list);
         assert_eq!(scene.ops.len(), 2);
         assert!(matches!(scene.ops[0], netrender::SceneOp::PushLayer(_)));
         assert!(matches!(scene.ops[1], netrender::SceneOp::PopLayer));
+    }
+
+    #[test]
+    fn push_pop_transform_emits_layer_pair_with_transform_id() {
+        let list = list_with(
+            DeviceIntSize::new(800, 600),
+            vec![
+                PaintCmd::PushTransform(ple::TransformSpec {
+                    origin: LayoutPoint::new(10.0, 20.0),
+                    transform: paint_list_api::LayoutTransform::identity(),
+                    kind: ple::TransformKind::Standard,
+                }),
+                PaintCmd::PopTransform,
+            ],
+        );
+        let scene = translate_paint_list(&list);
+        // Push emits one transform palette entry beyond identity, plus
+        // a PushLayer carrying that transform_id; Pop emits PopLayer.
+        assert!(
+            scene.transforms.len() >= 2,
+            "transforms: {:?}",
+            scene.transforms
+        );
+        assert_eq!(scene.ops.len(), 2);
+        let push = match &scene.ops[0] {
+            netrender::SceneOp::PushLayer(l) => l,
+            other => panic!("expected PushLayer, got {other:?}"),
+        };
+        assert!(
+            push.transform_id > 0,
+            "transform_id should reference new entry"
+        );
+        assert!(matches!(scene.ops[1], netrender::SceneOp::PopLayer));
+    }
+
+    #[test]
+    fn push_clip_rect_emits_clipped_layer() {
+        let list = list_with(
+            DeviceIntSize::new(800, 600),
+            vec![
+                PaintCmd::PushClip(ple::ClipSpec {
+                    kind: ple::ClipKind::Rect(box2d(0.0, 0.0, 100.0, 100.0)),
+                }),
+                PaintCmd::PopClip,
+            ],
+        );
+        let scene = translate_paint_list(&list);
+        assert_eq!(scene.ops.len(), 2);
+        let layer = match &scene.ops[0] {
+            netrender::SceneOp::PushLayer(l) => l,
+            other => panic!("expected PushLayer, got {other:?}"),
+        };
+        assert!(matches!(layer.clip, netrender::SceneClip::Rect { .. }));
+        assert!(matches!(scene.ops[1], netrender::SceneOp::PopLayer));
+    }
+
+    #[test]
+    fn external_texture_routes_to_external_textures_vec() {
+        use paint_list_api::ExternalTextureItem;
+        let list = list_with(
+            DeviceIntSize::new(800, 600),
+            vec![PaintCmd::DrawExternalTexture(ExternalTextureItem {
+                placement: placement_at(box2d(0.0, 0.0, 200.0, 200.0)),
+                texture_key: 0xC0FFEE,
+                opacity: 0.75,
+                content_generation: None,
+            })],
+        );
+        // External texture metadata lives on the pub(crate) full-shape
+        // translator output; use translate_paint_cmd_stream to inspect it.
+        let out = translate_paint_cmd_stream(list.viewport, &list.commands);
+        // External texture doesn't add to scene.ops; it goes into the
+        // separate compositor vector via the PM-3 lowering contract.
+        assert_eq!(out.scene.ops.len(), 0);
+        assert_eq!(out.external_textures.len(), 1);
+        assert_eq!(out.external_textures[0].texture_key, 0xC0FFEE);
+        assert_eq!(out.external_textures[0].scene_op_boundary, 0);
     }
 }

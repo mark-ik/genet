@@ -53,7 +53,7 @@ pub use crate::compositor_wayland::{
 pub use crate::interop::Dx12FenceSynchronizer;
 pub use crate::interop::{HostWgpuContext, InteropBackend, InteropError, SyncMechanism};
 pub use crate::netrender_painter::{Paint, WebRenderDebugOption};
-pub use crate::translator::translate_display_list;
+pub use crate::translator::{translate_envelope, translate_paint_list};
 
 mod compositor;
 #[cfg(target_vendor = "apple")]

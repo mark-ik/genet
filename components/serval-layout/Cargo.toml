@@ -7,7 +7,7 @@ edition.workspace = true
 publish.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "Profile-neutral layout engine for serval; consumes any LayoutDom-shaped DOM and emits ServalDisplayList."
+description = "Profile-neutral layout engine for serval; consumes any LayoutDom-shaped DOM and emits ServalPaintList."
 
 [lib]
 path = "lib.rs"
