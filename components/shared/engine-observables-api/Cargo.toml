@@ -1,0 +1,23 @@
+[package]
+name = "engine-observables-api"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Common-minimum observable query traits (Fragment / Interaction / Semantic / Loading) consumed by Hekate, mere-host, and Apparatus."
+
+[lib]
+name = "engine_observables_api"
+path = "lib.rs"
+
+[dependencies]
+malloc_size_of = { workspace = true }
+malloc_size_of_derive = { workspace = true }
+paint_types = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

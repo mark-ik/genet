@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "components/media/examples",
+    "components/shared/engine-observables-api",
     "components/shared/paint-list-api",
     "components/shared/paint-types",
     "components/xpath",
@@ -282,6 +283,7 @@ deny_public_fields = { package = "servo-deny-public-fields", version = "=0.2.0",
 devtools_traits = { package = "servo-devtools-traits", version = "=0.2.0", path = "components/shared/devtools" }
 dom_struct = { package = "servo-dom-struct", version = "=0.2.0", path = "components/dom_struct" }
 embedder_traits = { package = "servo-embedder-traits", version = "=0.2.0", path = "components/shared/embedder" }
+engine_observables_api = { package = "engine-observables-api", version = "=0.2.0", path = "components/shared/engine-observables-api" }
 fonts = { package = "servo-fonts", version = "=0.2.0", path = "components/fonts" }
 fonts_traits = { package = "servo-fonts-traits", version = "=0.2.0", path = "components/shared/fonts" }
 hyper_serde = { package = "servo-hyper-serde", version = "=0.2.0", path = "components/hyper_serde" }

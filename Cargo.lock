@@ -1086,6 +1086,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine-observables-api"
+version = "0.2.0"
+dependencies = [
+ "malloc_size_of_derive",
+ "serde",
+ "serde_json",
+ "servo-malloc-size-of",
+ "servo-paint-types",
+]
+
+[[package]]
 name = "enumn"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
