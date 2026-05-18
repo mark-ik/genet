@@ -31,23 +31,40 @@
 //! against our larger element fails the size assertion in
 //! `StyleSharingCache::new()`.
 //!
+//! Why the assertion exists: Stylo stores its style-sharing LRU in a leaked
+//! `thread_local!` `AtomicRefCell<TypelessSharingCache>` (cf. upstream
+//! `style/sharing/mod.rs:548-567`) and transmutes into a typed
+//! `SharingCache<E>` per call. The TLS buffer is sized for `FakeCandidate`,
+//! whose `_element: usize` field bakes in the assumption that `E` is
+//! pointer-shaped. Blitz satisfies this with `type BlitzNode<'a> = &'a Node`
+//! — they embed style state on each `Node`, dodging the planes split.
+//!
 //! Resolution paths (deferred to follow-up):
 //!
-//! - **Thread-local the StylePlane reference.** Shrink `StyleNodeRef` to
-//!   `(dom_ref, id)` — 16 bytes — by stashing `&StylePlane` in a TLS slot
-//!   bound at cascade entry. Closer to Servo's 8-byte shape; still not
-//!   exactly matching (we'd be 16 vs 8). Probably still trips the
-//!   assertion unless the TLS shrinks `dom_ref` too.
-//! - **Owned heap CascadeNode.** Allocate a `Box<CascadeNodeImpl<D>>` per
-//!   visited node carrying `(dom, id, plane)`; `StyleNodeRef` becomes
-//!   `*const CascadeNodeImpl` (8 bytes, pointer-shaped). Allocation
-//!   overhead per cascade call.
-//! - **Patch Stylo to relax the assertion.** Upstream change; either
-//!   parameterize TypelessSharingCache over E's size or remove the
-//!   typeless reuse optimization.
-//! - **Disable style sharing for our cascade.** Doesn't appear possible
-//!   without patching Stylo — the cache is allocated unconditionally
-//!   when `StyleContext` is created.
+//! - **(Recommended) TLS-context + NodeId-only `StyleNodeRef`.** Shrink
+//!   `StyleNodeRef<'a, D>` to `{ id: D::NodeId, _phantom: PhantomData<&'a D> }`
+//!   (8 bytes if `D::NodeId` fits in `usize`; `StaticNodeId(usize)` does).
+//!   Stash `(*const D, *const StylePlane<D::NodeId>)` in a single type-erased
+//!   TLS slot at cascade entry via a `CascadeGuard` RAII wrapper; methods
+//!   that need `dom`/`plane` access fetch from TLS. Keeps the planes split
+//!   intact, matches Servo's pointer-shape assumption, no per-node
+//!   allocation. Cost: unsafe TLS dereferencing in every `StyleNodeRef`
+//!   method that currently uses `self.dom`/`self.style` (~42 sites), plus
+//!   a `D::NodeId: Copy + 'static` constraint and an at-most-one-cascade-
+//!   per-thread invariant.
+//! - **Owned heap `CascadeNode`.** Allocate `Box<CascadeNode<D>>` per
+//!   visited element carrying `(dom, id, plane)`; `StyleNodeRef` becomes
+//!   `&'a CascadeNode<D>` (8 bytes, pointer-shaped). Simpler code than TLS
+//!   but adds an allocation per cascade-visited node.
+//! - **Patch upstream Stylo.** Two sub-options: (a) replace the size
+//!   assertion with a runtime fallback that heap-allocates a fresh
+//!   `SharingCache<E>` when the typeless slot doesn't fit; (b) drop the
+//!   typeless TLS reuse entirely. Either carries forever in our Stylo
+//!   fork unless upstreamed. Stylo's `[patch."https://github.com/servo/stylo"]`
+//!   block in `Cargo.toml` (lines 436-444, currently commented) is the
+//!   wiring point.
+//! - **Disable style sharing.** Not possible without the same patch — the
+//!   cache is allocated unconditionally when `StyleContext` is created.
 //!
 //! The cascade runner stays in the tree as the integration record; its
 //! test is `#[ignore]`'d until the size constraint is resolved.
