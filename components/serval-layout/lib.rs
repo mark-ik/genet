@@ -6,17 +6,33 @@
 
 //! Profile-neutral layout engine for serval.
 //!
-//! Consumes any `LayoutDom`-shaped DOM (initially [`serval-static-dom`]; later
-//! a scripted-DOM adapter) and emits `ServalDisplayList` for the paint stage.
-//! The lift from dead-on-disk `components/layout/` lands here batch-by-batch
-//! per `docs/2026-05-16_serval_layout_lift_plan.md` (P2.3).
+//! Consumes any `LayoutDom`-shaped DOM and produces planes
+//! (`StylePlane`, eventually `LayoutPlane`, `FragmentPlane`) per the
+//! planes architecture in
+//! `docs/2026-05-17_serval_layout_planes_architecture.md`.
+//!
+//! Probe slice (2026-05-17): minimum end-to-end is wired —
+//! `NodeRef` (foreign-trait firewall for Stylo, draft impls in
+//! `adapter_stylo.rs` deferred) + `StylePlane` (hand-built today; cascade
+//! populates later) + `construct` (DOM → Taffy tree) + `taffy::compute_root_layout`
+//! + `FragmentPlane` (per-node rects).
 
 mod adapter;
 // `adapter_stylo.rs` exists as an in-progress draft of the Stylo trait
-// impls; it is intentionally **not** mod-declared here yet because its
-// method signatures haven't been reconciled against the actual stylo
-// trait surface. See the file's header for next-session strategy.
+// impls; intentionally **not** mod-declared yet — its signatures need to
+// be reconciled against the actual Stylo trait surface (read Blitz's
+// `packages/blitz-dom/src/stylo.rs` as the primary reference; see file
+// header). The probe slice doesn't need Stylo: StylePlane is populated
+// by hand.
 mod cell;
+mod construct;
+mod fragment;
+mod layout;
+mod style;
 
 pub use adapter::NodeRef;
 pub use cell::ArcRefCell;
+pub use construct::{construct, ConstructedTree};
+pub use fragment::FragmentPlane;
+pub use layout::layout;
+pub use style::{StyleEntry, StylePlane};
