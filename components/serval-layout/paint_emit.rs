@@ -37,10 +37,11 @@ use std::hash::Hash;
 use layout_dom_api::{LayoutDom, NodeKind};
 use malloc_size_of_derive::MallocSizeOf;
 use paint_list_api::{
-    ColorF, CommonPlacement, DeviceIntSize, EngineId, FontInstanceKey, GlyphInstance, LayoutPoint,
-    LayoutRect, LayoutTransform, PaintCmd, PaintList, RectItem, TextOptions, TextRunItem,
-    TransformSpec,
+    BorderRadius, BorderSide, BorderStyle, ColorF, CommonPlacement, DeviceIntSize, EngineId,
+    FontInstanceKey, GlyphInstance, LayoutPoint, LayoutRect, LayoutSideOffsets, LayoutTransform,
+    NormalBorder, PaintCmd, PaintList, RectItem, TextOptions, TextRunItem, TransformSpec,
 };
+use paint_list_api::items::{BorderDetails, BorderItem};
 use paint_list_api::specs::TransformKind;
 use parley::PositionedLayoutItem;
 use serde::{Deserialize, Serialize};
@@ -208,6 +209,13 @@ fn walk<D>(
                     placement: CommonPlacement::new(local_bounds),
                     color: background_color_of(styles, id),
                 }));
+                if let Some((widths, normal)) = border_of(styles, id) {
+                    commands.push(PaintCmd::DrawBorder(BorderItem {
+                        placement: CommonPlacement::new(local_bounds),
+                        widths,
+                        details: BorderDetails::Normal(normal),
+                    }));
+                }
             }
             NodeKind::Text => {
                 let glyph_runs = glyphs
@@ -311,6 +319,83 @@ fn stylo_color_to_paint(
     let srgb = absolute.into_srgb_legacy();
     let [r, g, b, a] = *srgb.raw_components();
     ColorF::new(r, g, b, a)
+}
+
+/// Read an element's border (widths + per-side color/style) from
+/// `ComputedValues`. Returns `None` if no side has a renderable
+/// border (all widths zero or all sides are `none`/`hidden`) — keeps
+/// the paint stream uncluttered for un-bordered elements.
+fn border_of<NodeId: Copy + Eq + std::hash::Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> Option<(LayoutSideOffsets, NormalBorder)> {
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    let primary = data.styles.primary();
+    let border = primary.get_border();
+    let current_color = primary.get_inherited_text().color;
+
+    let top_w = border.border_top_width.0.to_f32_px();
+    let right_w = border.border_right_width.0.to_f32_px();
+    let bottom_w = border.border_bottom_width.0.to_f32_px();
+    let left_w = border.border_left_width.0.to_f32_px();
+
+    let top_style = stylo_border_style(border.border_top_style);
+    let right_style = stylo_border_style(border.border_right_style);
+    let bottom_style = stylo_border_style(border.border_bottom_style);
+    let left_style = stylo_border_style(border.border_left_style);
+
+    // No-op early-out: every side is zero-width or none/hidden style.
+    let renderable = |w: f32, s: BorderStyle| {
+        w > 0.0 && !matches!(s, BorderStyle::None | BorderStyle::Hidden)
+    };
+    if !renderable(top_w, top_style)
+        && !renderable(right_w, right_style)
+        && !renderable(bottom_w, bottom_style)
+        && !renderable(left_w, left_style)
+    {
+        return None;
+    }
+
+    let widths = LayoutSideOffsets::new(top_w, right_w, bottom_w, left_w);
+    let details = NormalBorder {
+        top: BorderSide {
+            color: stylo_color_to_paint(&border.border_top_color, current_color),
+            style: top_style,
+        },
+        right: BorderSide {
+            color: stylo_color_to_paint(&border.border_right_color, current_color),
+            style: right_style,
+        },
+        bottom: BorderSide {
+            color: stylo_color_to_paint(&border.border_bottom_color, current_color),
+            style: bottom_style,
+        },
+        left: BorderSide {
+            color: stylo_color_to_paint(&border.border_left_color, current_color),
+            style: left_style,
+        },
+        radius: BorderRadius::zero(),
+        do_aa: true,
+    };
+    Some((widths, details))
+}
+
+/// Map Stylo's specified BorderStyle to paint-types BorderStyle.
+fn stylo_border_style(s: style::values::specified::border::BorderStyle) -> BorderStyle {
+    use style::values::specified::border::BorderStyle as S;
+    match s {
+        S::None => BorderStyle::None,
+        S::Solid => BorderStyle::Solid,
+        S::Double => BorderStyle::Double,
+        S::Dotted => BorderStyle::Dotted,
+        S::Dashed => BorderStyle::Dashed,
+        S::Hidden => BorderStyle::Hidden,
+        S::Groove => BorderStyle::Groove,
+        S::Ridge => BorderStyle::Ridge,
+        S::Inset => BorderStyle::Inset,
+        S::Outset => BorderStyle::Outset,
+    }
 }
 
 #[cfg(test)]
@@ -487,6 +572,103 @@ mod tests {
                     "expected empty glyph run from cache-less emit"
                 );
             }
+        }
+    }
+
+    /// Probe DrawBorder emission: a CSS-declared border produces a
+    /// DrawBorder command alongside the element's DrawRect, with the
+    /// expected widths + per-side color.
+    #[test]
+    fn emit_draws_borders_when_cascade_assigns_them() {
+        use crate::cascade::run_cascade;
+        use paint_list_api::items::BorderDetails;
+
+        let document =
+            StaticDocument::parse("<html><body><p>x</p></body></html>");
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[
+                "p { display: block; width: 100px; height: 50px; \
+                    border: 4px solid rgb(0, 128, 255); }",
+            ],
+        );
+        styles.refresh_taffy_from_cascade();
+
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, _, _) = layout(&document, &styles, viewport);
+        let plist = emit_paint_list(
+            &document,
+            &styles,
+            &fragments,
+            DeviceIntSize::new(800, 600),
+        );
+
+        let mut found_p_border = false;
+        for cmd in plist.commands() {
+            if let PaintCmd::DrawBorder(item) = cmd {
+                // The <p>'s border: all sides 4px, solid, color (0, 0.5, 1, 1).
+                if (item.widths.top - 4.0).abs() < 0.001
+                    && (item.widths.right - 4.0).abs() < 0.001
+                    && (item.widths.bottom - 4.0).abs() < 0.001
+                    && (item.widths.left - 4.0).abs() < 0.001
+                {
+                    if let BorderDetails::Normal(n) = &item.details {
+                        if matches!(n.top.style, paint_list_api::BorderStyle::Solid)
+                            && (n.top.color.b - 1.0).abs() < 0.05
+                        {
+                            found_p_border = true;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            found_p_border,
+            "expected a 4px solid blue DrawBorder for the <p> element"
+        );
+    }
+
+    /// No border in CSS = no DrawBorder command. The probe-stage
+    /// optimization that suppresses zero-width/none-style borders.
+    #[test]
+    fn emit_omits_drawborder_when_no_border_declared() {
+        use crate::cascade::run_cascade;
+
+        let document =
+            StaticDocument::parse("<html><body><p>x</p></body></html>");
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        // No border in this sheet — only background.
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &["p { background-color: rgb(255, 0, 0); }"],
+        );
+        styles.refresh_taffy_from_cascade();
+
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, _, _) = layout(&document, &styles, viewport);
+        let plist = emit_paint_list(
+            &document,
+            &styles,
+            &fragments,
+            DeviceIntSize::new(800, 600),
+        );
+
+        for cmd in plist.commands() {
+            assert!(
+                !matches!(cmd, PaintCmd::DrawBorder(_)),
+                "expected no DrawBorder commands, got {cmd:?}"
+            );
         }
     }
 
