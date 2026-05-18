@@ -55,6 +55,14 @@ pub struct StyleEntry {
 
     /// Selector flags accumulated during selector matching.
     pub selector_flags: Cell<ElementSelectorFlags>,
+
+    /// Atom-interned `id` attribute, if the element has one. Populated by
+    /// `StylePlane::populate_for_elements` (which walks the DOM up-front
+    /// and atom-interns once per element). Needed because Stylo's
+    /// `TElement::id() -> Option<&style::Atom>` returns a borrowed atom
+    /// reference — we can't return a freshly-interned atom from inside
+    /// the method without a stable storage to anchor the borrow.
+    pub id_atom: Option<style::Atom>,
 }
 
 // SAFETY: per the cascade's exclusive-access invariant during traversal,
@@ -128,6 +136,7 @@ impl Clone for StyleEntry {
             stylo_data: UnsafeCell::new(None),
             state: self.state,
             selector_flags: Cell::new(self.selector_flags.get()),
+            id_atom: self.id_atom.clone(),
         }
     }
 }
@@ -139,6 +148,7 @@ impl Default for StyleEntry {
             stylo_data: UnsafeCell::new(None),
             state: ElementState::empty(),
             selector_flags: Cell::new(ElementSelectorFlags::empty()),
+            id_atom: None,
         }
     }
 }
@@ -197,18 +207,52 @@ impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
         self.entries.entry(id).or_default()
     }
 
+    /// After the cascade has run + populated `stylo_data`, refresh each
+    /// entry's Taffy style from its cascaded `ComputedValues`. Call this
+    /// to switch from hand-rolled Taffy styles to cascade-driven layout.
+    /// Entries with no cascade data are left untouched.
+    ///
+    /// Property coverage: display / size / margin / padding / border
+    /// widths — the subset needed for box-model semantics. Cf.
+    /// `cv_to_taffy::to_taffy_style` for the full mapping.
+    pub fn refresh_taffy_from_cascade(&mut self) {
+        for entry in self.entries.values_mut() {
+            let new_taffy = entry.borrow_data().map(|data| {
+                let primary = data.styles.primary();
+                crate::cv_to_taffy::to_taffy_style(primary)
+            });
+            if let Some(t) = new_taffy {
+                entry.taffy = t;
+            }
+        }
+    }
+
     /// Populate empty StyleEntry slots for every element in the given DOM.
     /// The cascade calls `ensure_data` on each element it visits — that
     /// requires a StyleEntry to exist first (cascade orchestration's job,
     /// not the cascade's). This walks the DOM up-front and pre-allocates.
+    ///
+    /// Also atom-interns each element's `id` attribute into
+    /// `StyleEntry::id_atom` — Stylo's rule indexer queries
+    /// `TElement::id()` to prune `#foo` rules per element, and that
+    /// method returns `&Atom`, so the atom needs a stable home (this
+    /// pre-pass establishes it).
     pub fn populate_for_elements<D>(&mut self, dom: &D)
     where
         D: layout_dom_api::LayoutDom<NodeId = NodeId>,
     {
+        use html5ever::{namespace_url, ns, LocalName, Namespace};
+        let no_ns: Namespace = ns!();
+        let id_local = LocalName::from("id");
+
         let mut queue = vec![dom.document()];
         while let Some(id) = queue.pop() {
             if matches!(dom.kind(id), layout_dom_api::NodeKind::Element) {
-                self.ensure_entry(id);
+                let id_atom = dom
+                    .attribute(id, &no_ns, &id_local)
+                    .map(style::Atom::from);
+                let entry = self.ensure_entry(id);
+                entry.id_atom = id_atom;
             }
             queue.extend(dom.dom_children(id));
         }

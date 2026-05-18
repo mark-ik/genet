@@ -362,4 +362,55 @@ mod tests {
         assert!(b < 0.001, "blue channel: {b}");
         assert!((a - 1.0).abs() < 0.001, "alpha: {a}");
     }
+
+    /// Probe class + id selector matching. Two rules in the same
+    /// sheet — `.highlight { background: blue }` and
+    /// `#title { color: green }` — should both match their
+    /// respective elements (`<p class="highlight">` and
+    /// `<h1 id="title">`).
+    #[test]
+    fn cascade_matches_class_and_id_selectors() {
+        let document = StaticDocument::parse(
+            "<html><body>\
+                <h1 id=\"title\">T</h1>\
+                <p class=\"highlight\">P</p>\
+            </body></html>",
+        );
+        let mut plane: StylePlane<_> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut plane,
+            euclid::Size2D::new(800.0, 600.0),
+            &[
+                ".highlight { background-color: rgb(0, 0, 255); } \
+                 #title { color: rgb(0, 255, 0); }",
+            ],
+        );
+
+        let h1_id = find_element(&document, local_name!("h1")).expect("h1 exists");
+        let p_id = find_element(&document, local_name!("p")).expect("p exists");
+
+        // <h1 id="title"> — color: green
+        let h1_entry = plane.get(h1_id).expect("h1 StyleEntry");
+        let h1_data = h1_entry.borrow_data().expect("h1 data");
+        let h1_color = h1_data.styles.primary().get_inherited_text().color;
+        let h1_srgb = h1_color.into_srgb_legacy();
+        let [r, g, b, _] = *h1_srgb.raw_components();
+        assert!(r < 0.001, "h1 red: {r}");
+        assert!((g - 1.0).abs() < 0.001, "h1 green: {g}");
+        assert!(b < 0.001, "h1 blue: {b}");
+
+        // <p class="highlight"> — background-color: blue
+        let p_entry = plane.get(p_id).expect("p StyleEntry");
+        let p_data = p_entry.borrow_data().expect("p data");
+        let p_primary = p_data.styles.primary();
+        let bg = &p_primary.get_background().background_color;
+        let current = p_primary.get_inherited_text().color;
+        let absolute = bg.resolve_to_absolute(&current);
+        let srgb = absolute.into_srgb_legacy();
+        let [r, g, b, _] = *srgb.raw_components();
+        assert!(r < 0.001, "p red: {r}");
+        assert!(g < 0.001, "p green: {g}");
+        assert!((b - 1.0).abs() < 0.001, "p blue: {b}");
+    }
 }

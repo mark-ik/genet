@@ -572,20 +572,31 @@ impl<'a, D: LayoutDom> SelectorsElement for StyleNodeRef<'a, D> {
         false
     }
 
-    fn has_id(
-        &self,
-        _id: &AtomIdent,
-        _case_sensitivity: CaseSensitivity,
-    ) -> bool {
-        unimplemented!("selectors::Element::has_id — atom interning not wired yet")
+    fn has_id(&self, id: &AtomIdent, case_sensitivity: CaseSensitivity) -> bool {
+        use style::CaseSensitivityExt;
+        let no_ns = Namespace::default();
+        let id_local = LocalName::from("id");
+        let Some(id_attr) = self.dom().attribute(self.id, &no_ns, &id_local) else {
+            return false;
+        };
+        let atom = style::Atom::from(id_attr);
+        case_sensitivity.eq_atom(&atom, id)
     }
 
-    fn has_class(
-        &self,
-        _name: &AtomIdent,
-        _case_sensitivity: CaseSensitivity,
-    ) -> bool {
-        unimplemented!("selectors::Element::has_class — atom interning not wired yet")
+    fn has_class(&self, name: &AtomIdent, case_sensitivity: CaseSensitivity) -> bool {
+        use style::CaseSensitivityExt;
+        let no_ns = Namespace::default();
+        let class_local = LocalName::from("class");
+        let Some(class_attr) = self.dom().attribute(self.id, &no_ns, &class_local) else {
+            return false;
+        };
+        for token in class_attr.split_ascii_whitespace() {
+            let atom = style::Atom::from(token);
+            if case_sensitivity.eq_atom(&atom, name) {
+                return true;
+            }
+        }
+        false
     }
 
     fn has_custom_state(&self, _name: &AtomIdent) -> bool {
@@ -676,7 +687,9 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
     }
 
     fn id(&self) -> Option<&style::Atom> {
-        None
+        // Atom-interned by `StylePlane::populate_for_elements` before
+        // the cascade runs; returns a borrow rooted in the StylePlane.
+        self.entry().and_then(|e| e.id_atom.as_ref())
     }
 
     fn each_class<F>(&self, mut callback: F)
