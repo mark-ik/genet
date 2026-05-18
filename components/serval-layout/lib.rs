@@ -26,6 +26,7 @@ mod font_metrics;
 mod fragment;
 mod layout;
 mod style;
+mod text_measure;
 
 pub use adapter::NodeRef;
 pub use adapter_stylo::StyleNodeRef;
@@ -35,3 +36,4 @@ pub use construct::{construct, ConstructedTree};
 pub use fragment::FragmentPlane;
 pub use layout::layout;
 pub use style::{StyleEntry, StylePlane};
+pub use text_measure::{measure_text_leaf, TextLeaf, TextMeasureCtx};

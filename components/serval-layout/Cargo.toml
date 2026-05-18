@@ -23,6 +23,7 @@ markup5ever = { workspace = true }
 malloc_size_of = { workspace = true }
 malloc_size_of_derive = { workspace = true }
 paint_types = { workspace = true }
+parley = { workspace = true }
 pixels = { workspace = true }
 rustc-hash = { workspace = true }
 selectors = { workspace = true }
