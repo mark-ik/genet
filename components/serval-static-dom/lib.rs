@@ -194,6 +194,11 @@ impl LayoutDom for StaticDocument {
         }
     }
 
+    fn opaque_id(&self, id: StaticNodeId) -> u64 {
+        // StaticNodeId is a dense usize index; map directly.
+        id.0 as u64
+    }
+
     fn element_name(&self, id: StaticNodeId) -> Option<&QualName> {
         match &self.nodes[id.0].kind {
             StaticNodeKind::Element { name, .. } => Some(name),

@@ -62,6 +62,27 @@ pub trait LayoutDom {
     /// accessors below.
     fn kind(&self, id: Self::NodeId) -> NodeKind;
 
+    /// Stable per-node identity as a `u64`. Used by foreign trait adapters
+    /// (Stylo's `OpaqueNode`, `selectors::OpaqueElement`) that need a
+    /// pointer-shaped value for identity comparisons in the cascade.
+    ///
+    /// Must satisfy: distinct nodes within the same backing store return
+    /// distinct `opaque_id` values, and the same node returns the same value
+    /// across calls. Implementations may use the inner storage index (dense
+    /// DOMs) or a hash (sparse DOMs).
+    ///
+    /// The default implementation hashes `id` with `DefaultHasher` — works
+    /// for any `NodeId: Hash` but isn't guaranteed to be collision-free
+    /// across all node sets. Backends should override when they can return
+    /// the natural underlying index cheaply.
+    fn opaque_id(&self, id: Self::NodeId) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::Hasher;
+        let mut hasher = DefaultHasher::new();
+        id.hash(&mut hasher);
+        hasher.finish()
+    }
+
     /// Element name when `id` is an element, else `None`. Hot on
     /// selector/style match paths.
     fn element_name(&self, id: Self::NodeId) -> Option<&QualName>;

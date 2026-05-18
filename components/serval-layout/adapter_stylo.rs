@@ -286,22 +286,12 @@ impl<'a, D: LayoutDom> TNode for StyleNodeRef<'a, D> {
     }
 
     fn opaque(&self) -> OpaqueNode {
-        // Identity-keyed against the node id. The Stylo OpaqueNode is a
-        // pointer-shaped value; we use a small allocation per node-id
-        // for now. Cascade-time hot path; revisit if profiling shows it
-        // matters. The proper fix is a stable per-node address from
-        // LayoutDom (an `opaque(id) -> usize` primitive).
-        unimplemented!(
-            "TNode::opaque — needs stable per-node identity; cascade \
-             not running yet"
-        )
+        // Stable per-node identity via the LayoutDom primitive.
+        OpaqueNode(self.dom.opaque_id(self.id) as usize)
     }
 
     fn debug_id(self) -> usize {
-        // Use the hash of (dom_ptr, id) as a debug-only identifier.
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.hash(&mut hasher);
-        hasher.finish() as usize
+        self.dom.opaque_id(self.id) as usize
     }
 
     fn as_element(&self) -> Option<Self::ConcreteElement> {
@@ -334,12 +324,13 @@ impl<'a, D: LayoutDom> SelectorsElement for StyleNodeRef<'a, D> {
     type Impl = SelectorImpl;
 
     fn opaque(&self) -> OpaqueElement {
-        // Same caveat as TNode::opaque; see that method. Cascade not
-        // running yet means selector matching isn't exercised.
-        unimplemented!(
-            "selectors::Element::opaque — needs stable per-node identity; \
-             selector matching not running yet"
-        )
+        // Stable per-node identity via LayoutDom::opaque_id. Stored as a
+        // fake `NonNull<()>` (matching Blitz's pattern). The `+1` ensures
+        // non-null even for `opaque_id == 0`.
+        let raw = self.dom.opaque_id(self.id).wrapping_add(1) as usize;
+        let ptr = std::ptr::NonNull::new(raw as *mut ())
+            .expect("opaque_id + 1 cannot be zero");
+        OpaqueElement::from_non_null_ptr(ptr)
     }
 
     fn parent_element(&self) -> Option<Self> {
@@ -604,11 +595,23 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
         None
     }
 
-    fn each_class<F>(&self, _callback: F)
+    fn each_class<F>(&self, mut callback: F)
     where
         F: FnMut(&AtomIdent),
     {
-        // Cascade-time iteration over class atoms. Not wired yet.
+        // Read the class attribute, split on ASCII whitespace, intern each
+        // token as a Stylo Atom and yield through the callback. Per-call
+        // interning is cheap (string_cache interns are cached); no need for
+        // a per-element atom side-table for `each_class` specifically.
+        let no_ns = Namespace::default();
+        let class_local = LocalName::from("class");
+        let Some(class_attr) = self.dom.attribute(self.id, &no_ns, &class_local) else {
+            return;
+        };
+        for token in class_attr.split_ascii_whitespace() {
+            let atom = style::Atom::from(token);
+            callback(AtomIdent::cast(&atom));
+        }
     }
 
     fn each_custom_state<F>(&self, _callback: F)
@@ -662,36 +665,38 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
     }
 
     unsafe fn ensure_data(&self) -> ElementDataMut<'_> {
-        unimplemented!(
-            "TElement::ensure_data — StylePlane allocation not wired yet; \
-             cascade integration installs ElementDataWrapper on first access."
-        )
+        // The StylePlane is `&'a StylePlane`, so we can't allocate a new
+        // entry on the fly without &mut access. Cascade-time work requires
+        // the plane to be pre-populated with entries for the nodes it will
+        // visit (the cascade walks the DOM up-front and inserts entries).
+        // If `ensure_data` is called on a node without an entry, we panic —
+        // that's a cascade-orchestration bug, not a runtime condition.
+        let entry = self
+            .entry()
+            .expect("ensure_data: StylePlane entry must exist; cascade should pre-populate");
+        // SAFETY: Stylo cascade guarantees exclusive access per node.
+        unsafe { entry.ensure_data() }
     }
 
     unsafe fn clear_data(&self) {
-        // Clear the StylePlane's stylo_data slot for this node. Cascade-time.
+        if let Some(entry) = self.entry() {
+            // SAFETY: same cascade-exclusive-access invariant.
+            unsafe { entry.clear_data() }
+        }
     }
 
     fn has_data(&self) -> bool {
-        self.entry()
-            .map(|e| e.stylo_data.borrow().is_some())
-            .unwrap_or(false)
+        self.entry().is_some_and(|e| e.has_data())
     }
 
     fn borrow_data(&self) -> Option<ElementDataRef<'_>> {
-        // The borrow is on the AtomicRefCell holding the Option<ElementDataWrapper>.
-        // Returning the ElementDataRef requires extracting an `ElementDataRef`
-        // out of the wrapper, which depends on Stylo internals not yet stable
-        // here. Stub for now — cascade integration installs this.
-        unimplemented!(
-            "TElement::borrow_data — ElementDataWrapper accessor not wired yet"
-        )
+        self.entry().and_then(|e| e.borrow_data())
     }
 
     fn mutate_data(&self) -> Option<ElementDataMut<'_>> {
-        unimplemented!(
-            "TElement::mutate_data — ElementDataWrapper accessor not wired yet"
-        )
+        // SAFETY: Stylo cascade has exclusive access per node during
+        // traversal. Callers outside the cascade must not call this.
+        self.entry().and_then(|e| unsafe { e.mutate_data() })
     }
 
     fn skip_item_display_fixup(&self) -> bool {
@@ -763,18 +768,19 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
     }
 
     fn local_name(&self) -> &LocalName {
-        // The borrow is into the DOM's stored QualName. element_name
-        // returns &QualName which contains the LocalName.
-        unimplemented!(
-            "TElement::local_name — borrow plumbing through &QualName not yet wired; \
-             cascade integration will work this out"
-        )
+        &self
+            .dom
+            .element_name(self.id)
+            .expect("local_name called on non-element node")
+            .local
     }
 
     fn namespace(&self) -> &Namespace {
-        unimplemented!(
-            "TElement::namespace — borrow plumbing through &QualName not yet wired"
-        )
+        &self
+            .dom
+            .element_name(self.id)
+            .expect("namespace called on non-element node")
+            .ns
     }
 
     fn query_container_size(

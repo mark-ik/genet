@@ -2,6 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+// `UnsafeCell` access for the Stylo `ElementData` slot matches Stylo's
+// cascade exclusive-access invariant. Documented per-method.
+#![allow(unsafe_code)]
+
 //! Style plane skeleton.
 //!
 //! Per the planes architecture, computed style lives in a `serval-layout`-
@@ -14,13 +18,12 @@
 //!
 //! Cf. `docs/2026-05-17_serval_layout_planes_architecture.md`.
 
-use std::cell::Cell;
+use std::cell::{Cell, UnsafeCell};
 use std::hash::Hash;
 
-use atomic_refcell::AtomicRefCell;
 use rustc_hash::FxHashMap;
 use selectors::matching::ElementSelectorFlags;
-use style::data::ElementDataWrapper;
+use style::data::{ElementDataMut, ElementDataRef, ElementDataWrapper};
 use stylo_dom::ElementState;
 use taffy::Style as TaffyStyle;
 
@@ -35,15 +38,84 @@ pub struct StyleEntry {
     /// Stylo `ComputedValues` in the real cascade).
     pub taffy: TaffyStyle,
 
-    /// Stylo's `ElementData` storage. Empty until the cascade populates.
-    /// `AtomicRefCell` per the planes doc: only where Stylo demands it.
-    pub stylo_data: AtomicRefCell<Option<ElementDataWrapper>>,
+    /// Stylo's `ElementData` storage. Empty until the cascade allocates +
+    /// populates. Uses `UnsafeCell` matching Stylo's expectation that the
+    /// cascade has exclusive access per node during traversal (the same
+    /// pattern Blitz uses in `blitz-dom/src/node/stylo_data.rs`).
+    ///
+    /// # Safety
+    ///
+    /// Mutation through this field must happen during Stylo's cascade
+    /// traversal, which guarantees one-thread-at-a-time access per node.
+    /// Outside the cascade, only immutable borrow access is safe.
+    pub stylo_data: UnsafeCell<Option<ElementDataWrapper>>,
 
     /// DOM element state (`:hover`, `:focus`, etc.). Static profile: empty.
     pub state: ElementState,
 
     /// Selector flags accumulated during selector matching.
     pub selector_flags: Cell<ElementSelectorFlags>,
+}
+
+// SAFETY: per the cascade's exclusive-access invariant during traversal,
+// and immutable-only access outside it. Matches Blitz's same claim on its
+// `StyloData` wrapper.
+unsafe impl Send for StyleEntry {}
+unsafe impl Sync for StyleEntry {}
+
+impl StyleEntry {
+    /// Whether Stylo's `ElementData` has been allocated for this entry.
+    pub fn has_data(&self) -> bool {
+        // SAFETY: read-only access; no aliasing.
+        unsafe { (*self.stylo_data.get()).is_some() }
+    }
+
+    /// Immutable borrow of the `ElementData`, if present.
+    pub fn borrow_data(&self) -> Option<ElementDataRef<'_>> {
+        // SAFETY: read-only access. The cascade's exclusive-access invariant
+        // ensures no concurrent writer during traversal; outside the cascade
+        // we only ever borrow immutably.
+        unsafe { (*self.stylo_data.get()).as_ref().map(|w| w.borrow()) }
+    }
+
+    /// Mutable borrow of the `ElementData`. Cascade-time only.
+    ///
+    /// # Safety
+    ///
+    /// Caller must guarantee no other borrow exists. The Stylo cascade
+    /// enforces this via its single-threaded-per-node invariant.
+    pub unsafe fn mutate_data(&self) -> Option<ElementDataMut<'_>> {
+        // SAFETY: caller's responsibility per the # Safety doc above.
+        unsafe { (*self.stylo_data.get()).as_mut().map(|w| w.borrow_mut()) }
+    }
+
+    /// Initialize the `ElementData` slot if empty, returning a mutable borrow.
+    ///
+    /// # Safety
+    ///
+    /// Same as `mutate_data`: caller must guarantee no other borrow exists.
+    pub unsafe fn ensure_data(&self) -> ElementDataMut<'_> {
+        // SAFETY: caller's responsibility per the # Safety doc above.
+        unsafe {
+            let slot = &mut *self.stylo_data.get();
+            if slot.is_none() {
+                *slot = Some(ElementDataWrapper::default());
+            }
+            slot.as_mut().unwrap().borrow_mut()
+        }
+    }
+
+    /// Clear the `ElementData` slot.
+    ///
+    /// # Safety
+    ///
+    /// Same as `mutate_data`.
+    pub unsafe fn clear_data(&self) {
+        // SAFETY: caller's responsibility.
+        unsafe {
+            *self.stylo_data.get() = None;
+        }
+    }
 }
 
 impl Clone for StyleEntry {
@@ -53,7 +125,7 @@ impl Clone for StyleEntry {
         // entries; cascade-time work mutates in place.
         Self {
             taffy: self.taffy.clone(),
-            stylo_data: AtomicRefCell::new(None),
+            stylo_data: UnsafeCell::new(None),
             state: self.state,
             selector_flags: Cell::new(self.selector_flags.get()),
         }
@@ -64,7 +136,7 @@ impl Default for StyleEntry {
     fn default() -> Self {
         Self {
             taffy: TaffyStyle::default(),
-            stylo_data: AtomicRefCell::new(None),
+            stylo_data: UnsafeCell::new(None),
             state: ElementState::empty(),
             selector_flags: Cell::new(ElementSelectorFlags::empty()),
         }
