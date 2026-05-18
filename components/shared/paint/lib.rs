@@ -22,6 +22,7 @@ use style_traits::CSSPixel;
 
 pub mod display_list;
 pub mod largest_contentful_paint_candidate;
+pub mod paint_cmd_bridge;
 pub mod rendering_context;
 pub mod rendering_context_core;
 pub mod serval_display_list;

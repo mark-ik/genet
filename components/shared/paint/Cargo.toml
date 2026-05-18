@@ -28,6 +28,7 @@ ipc-channel = { workspace = true }
 log = { workspace = true }
 malloc_size_of = { workspace = true }
 malloc_size_of_derive = { workspace = true }
+paint_list_api = { workspace = true }
 paint_types = { workspace = true }
 parking_lot = { workspace = true }
 profile_traits = { workspace = true }
