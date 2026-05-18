@@ -22,6 +22,7 @@ mod adapter_stylo;
 mod cascade;
 mod cell;
 mod construct;
+mod cv_to_taffy;
 mod font_metrics;
 mod fragment;
 mod layout;

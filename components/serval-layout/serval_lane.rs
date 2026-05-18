@@ -123,15 +123,19 @@ where
         // Walk to absolute origin (taffy::Layout.location is parent-relative).
         let origin = absolute_origin(self.dom, self.fragments, node)?;
         let layout = self.fragments.rect_of(node)?;
-        let rect = Rect::new(origin, layout.size.width, layout.size.height);
-        // Probe stage: padding/border/margin not yet driven from
-        // ComputedValues — every box collapses to the border-box rect.
-        Some(BoxModel {
-            content: rect,
-            padding: rect,
-            border: rect,
-            margin: rect,
-        })
+
+        // `taffy::Layout`'s position+size is the BORDER box. Inset by
+        // border widths to get padding box; inset that by padding to
+        // get content box; outset border by margin to get margin box.
+        // When the cascade hasn't been applied (hand-rolled styles
+        // with no margin/padding/border), all four collapse to the
+        // border box — matches CSS semantics for an unstyled element.
+        let border = Rect::new(origin, layout.size.width, layout.size.height);
+        let padding = inset_rect(border, layout.border);
+        let content = inset_rect(padding, layout.padding);
+        let margin = outset_rect(border, layout.margin);
+
+        Some(BoxModel { content, padding, border, margin })
     }
 
     fn fragments_for_anchor<'b>(
@@ -211,6 +215,30 @@ fn walk_for_hit<D>(
     for child in dom.dom_children(id) {
         walk_for_hit(dom, fragments, child, origin, point, out);
     }
+}
+
+/// Shrink a rect by the given four insets (top/right/bottom/left).
+/// Used to derive padding-box from border-box, content-box from
+/// padding-box. Negative dimensions clamp to zero — easier than
+/// asserting layout sanity.
+fn inset_rect(rect: Rect, insets: taffy::Rect<f32>) -> Rect {
+    let new_w = (rect.width - insets.left - insets.right).max(0.0);
+    let new_h = (rect.height - insets.top - insets.bottom).max(0.0);
+    Rect::new(
+        Point::new(rect.origin.x + insets.left, rect.origin.y + insets.top),
+        new_w,
+        new_h,
+    )
+}
+
+/// Grow a rect by the given four outsets. Used to derive margin-box
+/// from border-box.
+fn outset_rect(rect: Rect, outsets: taffy::Rect<f32>) -> Rect {
+    Rect::new(
+        Point::new(rect.origin.x - outsets.left, rect.origin.y - outsets.top),
+        rect.width + outsets.left + outsets.right,
+        rect.height + outsets.top + outsets.bottom,
+    )
 }
 
 /// Walk from the document root to `target`, accumulating origins.
@@ -379,11 +407,102 @@ mod tests {
         let bm = view.box_model(p_source).expect("<p> has a box_model");
         assert!(bm.border.width > 0.0);
         assert!(bm.border.height > 0.0);
-        // Probe collapse: all four boxes coincide until cascade applies
-        // real padding/border/margin.
+        // Hand-rolled style plane with no margin/padding/border: all
+        // four boxes coincide. Cascade-driven styles distinguish them
+        // (see box_model_returns_distinct_rects_with_cascade_styling).
         assert_eq!(bm.content, bm.padding);
         assert_eq!(bm.padding, bm.border);
         assert_eq!(bm.border, bm.margin);
+    }
+
+    /// Cascade-driven layout produces distinct content/padding/border/
+    /// margin rects. The stylesheet sets `<p>` to width 100, height 50,
+    /// border 4px, padding 8px, margin 16px; box_model must return
+    /// rects whose deltas match.
+    #[test]
+    fn box_model_returns_distinct_rects_with_cascade_styling() {
+        use crate::cascade::run_cascade;
+
+        let document = StaticDocument::parse(
+            "<html><body><p>x</p></body></html>",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[
+                "p { display: block; width: 100px; height: 50px; \
+                    border: 4px solid black; padding: 8px; margin: 16px; }",
+            ],
+        );
+        // Pull Taffy styles from the cascade so layout reflects the CSS.
+        styles.refresh_taffy_from_cascade();
+
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, _, _) = layout(&document, &styles, viewport);
+        let view = ServalLaneView::new(&document, &styles, &fragments);
+
+        let p = find_element(NodeRef::document(&document), local_name!("p"))
+            .expect("<p> exists");
+        let p_source = SourceNodeId(document.opaque_id(p.id()));
+        let bm = view.box_model(p_source).expect("<p> has a box_model");
+
+        // Border-box = content (100x50) + padding (8 each side) +
+        // border (4 each side). So 100 + 16 + 8 = 124 wide, 50 + 16 +
+        // 8 = 74 tall.
+        assert!(
+            (bm.border.width - 124.0).abs() < 0.1,
+            "border width: {}",
+            bm.border.width
+        );
+        assert!(
+            (bm.border.height - 74.0).abs() < 0.1,
+            "border height: {}",
+            bm.border.height
+        );
+
+        // Padding-box = border-box inset by border (4 each side).
+        // 124 - 8 = 116, 74 - 8 = 66.
+        assert!(
+            (bm.padding.width - 116.0).abs() < 0.1,
+            "padding width: {}",
+            bm.padding.width
+        );
+        assert!(
+            (bm.padding.height - 66.0).abs() < 0.1,
+            "padding height: {}",
+            bm.padding.height
+        );
+
+        // Content-box = padding-box inset by padding (8 each side).
+        // 116 - 16 = 100, 66 - 16 = 50 — matches the CSS width/height.
+        assert!(
+            (bm.content.width - 100.0).abs() < 0.1,
+            "content width: {}",
+            bm.content.width
+        );
+        assert!(
+            (bm.content.height - 50.0).abs() < 0.1,
+            "content height: {}",
+            bm.content.height
+        );
+
+        // Margin-box = border-box outset by margin (16 each side).
+        // 124 + 32 = 156, 74 + 32 = 106.
+        assert!(
+            (bm.margin.width - 156.0).abs() < 0.1,
+            "margin width: {}",
+            bm.margin.width
+        );
+        assert!(
+            (bm.margin.height - 106.0).abs() < 0.1,
+            "margin height: {}",
+            bm.margin.height
+        );
     }
 
     #[test]
