@@ -4694,6 +4694,7 @@ version = "0.2.0"
 dependencies = [
  "app_units",
  "atomic_refcell",
+ "engine-observables-api",
  "euclid",
  "html5ever",
  "layout-dom-api",

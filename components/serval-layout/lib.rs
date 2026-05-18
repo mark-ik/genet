@@ -26,6 +26,7 @@ mod font_metrics;
 mod fragment;
 mod layout;
 mod paint_emit;
+mod serval_lane;
 mod style;
 mod text_measure;
 
@@ -37,5 +38,6 @@ pub use construct::{construct, ConstructedTree};
 pub use fragment::FragmentPlane;
 pub use layout::layout;
 pub use paint_emit::{emit_paint_list, ServalPaintList};
+pub use serval_lane::ServalLaneView;
 pub use style::{StyleEntry, StylePlane};
 pub use text_measure::{measure_text_leaf, TextLeaf, TextMeasureCtx};
