@@ -1,0 +1,24 @@
+[package]
+name = "paint-list-api"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "PaintList trait + common paint vocabulary for polyglot NetRender (PM-3 design)."
+
+[lib]
+name = "paint_list_api"
+path = "lib.rs"
+
+[dependencies]
+euclid = { workspace = true, features = ["serde"] }
+malloc_size_of = { workspace = true }
+malloc_size_of_derive = { workspace = true }
+paint_types = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

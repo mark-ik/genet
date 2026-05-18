@@ -1,6 +1,8 @@
-# PaintList trait + polyglot NetRender (design, revised PM-2)
+# PaintList trait + polyglot NetRender (design, revised PM-3)
 
-**Status (2026-05-17, revised PM-2):** proposed; revised after Mark's review. The earlier framing (extensions paint themselves into `vello::Scene` as the default ABI) is dropped — that pattern works in-process but breaks transport, capture/replay, tile caching, and resource ownership. This revision separates three layers that the first draft blurred, reframes extensions as **typed serializable payloads** rather than callbacks, and clarifies the text/font/glyph ownership boundary.
+**Status (2026-05-17, revised PM-3):** proposed; foundation decisions resolved after second review pass. PM-3 commits the dispatch mechanism (option 1, compile-time enum), the wire transport shape (`PaintEnvelope` enum, not generic), the `DrawExternalTexture` lowering contract (per-frame compositor pass, not vello `SceneOp::Image`), and the common-vocabulary deltas (`DrawPath` added; `PushReferenceFrame` renamed to `PushTransform`; filters common). Audit of current `ServalDisplayItem` variants finds `ServalPaintExt` v1 effectively empty; the extension machinery may be deferred. See PM-3 entries in [Decision log](#decision-log).
+
+**Earlier status (PM-2):** proposed; revised after Mark's review. The earlier framing (extensions paint themselves into `vello::Scene` as the default ABI) is dropped — that pattern works in-process but breaks transport, capture/replay, tile caching, and resource ownership. PM-2 separated three layers that the first draft blurred, reframed extensions as **typed serializable payloads** rather than callbacks, and clarified the text/font/glyph ownership boundary.
 
 Sister reads:
 
@@ -51,7 +53,7 @@ That clears the "separate iff plausible additional consumer" bar by a wide margi
 
 - `paint-types` — image keys, color types, units. Common primitives. Kept; consumed by `paint_list_api`.
 - `paint-api` — the cross-process embedder-facing API (`PaintMessage`, painter handles). Different concern; stays.
-- `paint` (NetRender, the renderer) — input signature lifts from concrete `ServalDisplayList` to generic `<L: PaintList>`. Lowering machinery (translator.rs) stays renderer-private.
+- `paint` (NetRender, the renderer) — input signature lifts from concrete `ServalDisplayList` to the closed-set `PaintEnvelope` enum (PM-3). Lowering machinery (translator.rs) stays renderer-private.
 
 `paint_list_api` is the new crate.
 
@@ -61,7 +63,7 @@ That clears the "separate iff plausible additional consumer" bar by a wide margi
 
 The trait family mirrors `SemanticQuery`'s common-minimum + engine-extension pattern. **Critical difference from the first draft:** extensions are **typed serializable payloads**, not callbacks. Each engine declares its own extension enum (`ServalPaintExt`, `NematicPaintExt`); NetRender knows how to lower each variant into `netrender::Scene`.
 
-### Trait + item sketch (serializable)
+### Trait + item sketch (serializable, post-PM-3)
 
 ```rust
 // paint_list_api/lib.rs
@@ -70,65 +72,78 @@ use serde::{Deserialize, Serialize};
 
 /// What an engine emits. The unit of paint output for one rendered frame.
 ///
-/// Fully serializable — `PaintMessage::SendDisplayList` can transport any
-/// `PaintList` impl across IPC the same way it transports `ServalDisplayList`
-/// today.
+/// Fully serializable — `PaintEnvelope` can transport any `PaintList` impl
+/// across IPC the same way `PaintMessage::SendDisplayList(ServalDisplayList)`
+/// does today. PM-3: trait drops the generic `Extension` associated type;
+/// engine-specific payloads ride in the finite-set `PaintPayload` enum.
 pub trait PaintList: Serialize + for<'de> Deserialize<'de> + Clone + Debug {
-    /// Engine that produced this list. Names the extension variant family.
+    /// Engine that produced this list. Names the `PaintPayload` variant
+    /// family this list emits.
     fn engine_id(&self) -> EngineId;
 
     /// Final viewport this paint output is computed against.
     fn viewport(&self) -> DeviceIntSize;
 
-    /// Generation/epoch matching FragmentQuery. Tile caches and frame
-    /// schedulers key on this; rolls when the source regenerates.
+    /// Producer-rolled semantic-equivalence epoch. Same `(source_id,
+    /// generation_id)` asserts identical paint output and resource refs;
+    /// NetRender may use this to skip *relowering* (PaintList → Scene).
+    /// **Not a tile-cache invalidation key** — tile-cache correctness still
+    /// derives from SceneOp content hashing post-lowering.
     fn generation_id(&self) -> u64;
 
     /// Paint commands in paint order.
-    fn commands(&self) -> &[PaintCmd<Self::Extension>];
-
-    /// The engine-specific extension variant family.
-    type Extension: PaintExtensionPayload;
-}
-
-/// What every extension variant must satisfy. It's **data**, not a callback.
-pub trait PaintExtensionPayload:
-    Serialize + for<'de> Deserialize<'de> + Clone + Debug
-{
-    /// Painted bounds, in local (post-transform/clip) coordinates. For
-    /// culling. Renderers may skip extensions whose bounds fall outside the
-    /// current clip.
-    fn bounds(&self) -> Rect;
+    fn commands(&self) -> &[PaintCmd];
 }
 
 /// The common command stream. Compositor primitives + paint primitives + a
-/// typed extension hole for engine-specific items.
+/// typed extension hole carrying the finite-set `PaintPayload` enum.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub enum PaintCmd<E: PaintExtensionPayload> {
+pub enum PaintCmd {
     // Compositor primitives — composition state stack.
     PushClip(ClipSpec),
     PopClip,
-    PushTransform(LayoutTransform),
-    PopTransform,
-    PushLayer(LayerSpec),       // opacity, blend mode, mask, scroll-container
+    PushTransform(TransformSpec),       // PM-3: renamed from PushReferenceFrame
+    PopTransform,                       // PM-3: renamed from PopReferenceFrame
+    PushLayer(LayerSpec),               // opacity, blend mode, filters, mask, scroll-container
     PopLayer,
-    PushReferenceFrame(ReferenceFrameSpec),
-    PopReferenceFrame,
 
     // Paint primitives — common-minimum item set (expanded; see below).
     DrawRect(RectItem),
     DrawStroke(StrokeItem),
+    DrawLine(LineItem),                 // wavy / dashed / solid; text-decoration shape
+    DrawPath(PathItem),                 // PM-3 add: Bezier outlines via vello kurbo
+    DrawBorder(BorderItem),             // normal + nine-patch
     DrawLinearGradient(LinearGradientItem),
     DrawRadialGradient(RadialGradientItem),
     DrawConicGradient(ConicGradientItem),
-    DrawText(TextRunItem),                  // shaped glyph runs from layout
+    DrawText(TextRunItem),              // shaped glyph runs from layout
     DrawImage(ImageItem),
     DrawRepeatingImage(RepeatingImageItem),
     DrawExternalTexture(ExternalTextureItem),
     DrawShadow(ShadowItem),
+    PushShadow(ShadowSpec),             // text-shadow style state
+    PopAllShadows,
 
-    // Engine-specific items, as data.
-    Extension(E),
+    HitTest(HitTestItem),               // hit-test region with tag
+
+    // Engine-specific items, as data. Finite static set per PM-3.
+    Extension(PaintPayload),
+}
+
+/// PM-3: finite static payload set. Each variant is a small types-only crate
+/// owned by the originating engine; NetRender depends on those crates
+/// (tolerable dep-graph cost for the v1 engine count) and pattern-matches
+/// on the enum. No `dyn` dispatch, no TypeId downcasting.
+///
+/// Audit (PM-3) of current `ServalDisplayItem` finds every variant collapses
+/// to common ops or `DrawExternalTexture`; v1 may ship with all three inner
+/// payloads empty (or the entire `Extension` variant deferred). See
+/// [Per-engine impl notes](#per-engine-impl-notes).
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum PaintPayload {
+    Serval(ServalPaintExt),
+    Nematic(NematicPaintExt),
+    Scrying(ScryingPaintExt),
 }
 ```
 
@@ -138,47 +153,49 @@ pub enum PaintCmd<E: PaintExtensionPayload> {
 // In netrender (its own crate).
 
 impl NetRenderer {
-    pub fn render<L: PaintList>(&mut self, list: &L) {
+    pub fn render(&mut self, list: &dyn PaintList) {
         let mut composition = CompositionState::new(list.viewport());
         for cmd in list.commands() {
             match cmd {
                 PaintCmd::PushClip(c)           => composition.push_clip(c),
                 PaintCmd::PopClip               => composition.pop_clip(),
+                PaintCmd::PushTransform(t)      => composition.push_transform(t),
+                PaintCmd::PopTransform          => composition.pop_transform(),
+                PaintCmd::PushLayer(l)          => composition.push_layer(l),
+                PaintCmd::PopLayer              => composition.pop_layer(),
                 // ... compositor primitives ...
                 PaintCmd::DrawRect(r)           => self.lower_rect(&composition, r),
                 PaintCmd::DrawText(t)           => self.lower_text(&composition, t),
                 PaintCmd::DrawLinearGradient(g) => self.lower_linear_gradient(&composition, g),
+                PaintCmd::DrawPath(p)           => self.lower_path(&composition, p),
+                PaintCmd::DrawExternalTexture(e)=> self.lower_external_texture(&composition, e),
                 // ... common primitives ...
-                PaintCmd::Extension(ext)        => self.lower_extension(&composition, ext),
+                PaintCmd::Extension(payload)    => self.lower_extension(&composition, payload),
             }
         }
     }
-}
 
-// NetRender's extension-lowering dispatch knows about specific engine
-// payloads it has been compiled against. Initial version: built-in match
-// arms keyed on engine_id + variant. Later: registration table.
-impl NetRenderer {
-    fn lower_extension<E: PaintExtensionPayload>(&mut self, c: &CompositionState, ext: &E) {
-        // E is generic, but NetRender depends on the concrete extension
-        // crates (paint_list_api_serval, paint_list_api_nematic, ...) and
-        // downcasts via a registered type-id table OR via direct generic
-        // monomorphization per engine. See "extension dispatch" below.
+    // PM-3: finite static dispatch. NetRender depends on the small
+    // types-only payload crates and pattern-matches the enum.
+    fn lower_extension(&mut self, c: &CompositionState, payload: &PaintPayload) {
+        match payload {
+            PaintPayload::Serval(ext)  => self.lower_serval_ext(c, ext),
+            PaintPayload::Nematic(ext) => self.lower_nematic_ext(c, ext),
+            PaintPayload::Scrying(ext) => self.lower_scrying_ext(c, ext),
+        }
     }
 }
 ```
 
-**Extension dispatch — three options:**
+### Extension dispatch — PM-3 resolution
 
-1. **Generic monomorphization.** NetRender has `render::<ServalPaintList>(...)`, `render::<NematicPaintList>(...)` etc. Each instance knows the concrete extension type at compile time. Match arm dispatch on the extension enum. Fastest; requires NetRender to depend on each extension crate. Crate dep graph is "NetRender → engine extension crates," which inverts the desired "engines depend on api, NetRender consumes generically" graph.
+**Selected: compile-time enum (option 1).** `PaintCmd` is monomorphic; engine-specific items ride in the finite `PaintPayload` enum. NetRender depends on the small types-only payload crates and pattern-matches at compile time. No `dyn PaintExtensionPayload`, no TypeId downcasting, no runtime registration table.
 
-2. **Trait-object dispatch with registered renderers.** Extensions are `dyn PaintExtensionPayload`; engines register `(EngineId, Box<dyn ExtensionRenderer>)` with NetRender at startup. NetRender looks up by engine_id, dispatches. Preserves the clean dep graph (engines don't appear in NetRender's deps); pays a per-extension lookup + dyn call. Reasonable since extensions are infrequent vs common items.
+**Why option 2 (registered renderers with `dyn`) was dropped:** `PaintCmd<E>` was compile-time typed; preserving that while also doing runtime `dyn` registration fights the type shape. Either commit to mono (option 1) or restructure for true tag-based open dispatch (gltf-style). Option 2 was the worst of both — preserved the typed enum shape but bolted dyn dispatch on top, requiring TypeId machinery that bought nothing over plain pattern matching.
 
-3. **Compile-time list of extensions baked into NetRender.** NetRender depends on each engine's extension crate (small types-only crates), pattern-matches the engine_id, dispatches to the right lowerer. Hybrid of 1 and 2 — extension types are statically known to NetRender, but lookup is runtime. Requires NetRender's Cargo.toml to list each engine's extension crate.
+**Why option 3 (compile-time list, hybrid) was dropped:** identical dep graph to option 1, more machinery. Buys nothing.
 
-Lean **option 2** for the v1 design — preserves the dep graph cleanliness and the per-extension cost is bounded. Option 1 is a perf optimization if profiling later shows extension dispatch is hot. Option 3 is a compromise that buys little.
-
-The detail of which option will be revisited at scaffold time; the doc commits to "typed payloads, NetRender owns lowering" without yet committing to the dispatch mechanism.
+**Dep graph cost is bounded.** Three known engines (Serval, Nematic, Scrying) means NetRender's `Cargo.toml` gains three types-only deps. Each engine extension crate is a small payload enum + `bounds()` impl. If engine count grows beyond ~6 or open-extension semantics become real, tag-based dispatch (gltf-pattern: `(stable_tag, postcard_bytes)` with registered decoders) is the cutover path. Today's count doesn't justify the open-dispatch complexity.
 
 ### Real-world prior art
 
@@ -196,23 +213,36 @@ Note what's **not** here: egui's `PaintCallback`, which I cited in the first dra
 
 The common-minimum `PaintCmd` variants are **renderable primitives**, not "HTML/CSS-shaped." If NetRender already supports it and any engine could reasonably want to emit it, it's common.
 
-**Common items (committed):**
+**Common items (committed, post-PM-3):**
 
-- Compositor: `PushClip`, `PopClip`, `PushTransform`, `PopTransform`, `PushLayer`, `PopLayer`, `PushReferenceFrame`, `PopReferenceFrame`.
-- Fills: `DrawRect`, `DrawStroke`.
-- Gradients: `DrawLinearGradient`, `DrawRadialGradient`, `DrawConicGradient`. **Promoted from extensions per Mark's correction** — gradients are a renderable primitive Vello supports natively; making them Serval extensions would hide reusable renderer capability behind per-engine dispatch.
+- Compositor: `PushClip`, `PopClip`, `PushTransform` (PM-3: was `PushReferenceFrame`), `PopTransform`, `PushLayer`, `PopLayer`. `PushReferenceFrame`/`PopReferenceFrame` dropped — WebRender legacy that doesn't map to a NetRender primitive; `PushTransform` with a `TransformSpec` is the honest common shape.
+- Fills: `DrawRect`, `DrawStroke`, `DrawLine` (wavy/dashed/solid; text-decoration shape).
+- **Paths: `DrawPath`** (PM-3 add). Bezier outlines via vello `kurbo`. NetRender has the machinery (`SceneOp::Shape`, R2/R3 cleared path-precise containment), so by the "renderer capability belongs in common" criterion this is common from day one.
+- Borders: `DrawBorder` (normal + nine-patch). Normal lowers to 4 strokes; nine-patch is image-sliced — both are renderable primitives.
+- Gradients: `DrawLinearGradient`, `DrawRadialGradient`, `DrawConicGradient`. Renderable primitives Vello supports natively; making them per-engine would hide reusable renderer capability behind dispatch.
 - Text: `DrawText` (shaped glyph runs from layout; see [Text ownership](#text-ownership-boundary) below).
 - Images: `DrawImage`, `DrawRepeatingImage`.
-- External: `DrawExternalTexture` (Scrying's wgpu texture handoff).
-- Shadows: `DrawShadow`. Common because both HTML (`box-shadow`) and likely Nematic-aesthetic uses (block quote drop shadow as a styling choice) want it.
+- External: `DrawExternalTexture` (Scrying / WebGL canvas / iframe / paint worklet output / native form controls / anything-rasterized-by-the-producer).
+- Shadows: `DrawShadow` (box-shadow), `PushShadow` / `PopAllShadows` (text-shadow state-stack pair).
+- Hit-testing: `HitTest` (region + tag). Every engine needs hit-testing for selection/input.
+- **Filter primitives in `LayerSpec`** (PM-3 clarification). `PushLayer` carries an optional filter chain (`Vec<FilterOp>`: `Blur`, `Brightness`, `Contrast`, `DropShadow`, `Opacity`, `ColorMatrix`, etc.). NetRender's Roadmap D1 shipped filter-via-backdrop machinery; filters are common renderer capability, not per-engine. Includes `Opacity` (subsumes the older "alpha multiplier on every item" pattern) and `DropShadow` (filter-chain shadow, distinct from `DrawShadow`'s box-shadow).
 
-**Extension candidates (engine-specific):**
+**Extension candidates (engine-specific, post-PM-3 audit):**
 
-- *Serval:* paint worklets (CSS Houdini Painter), mix-blend-mode applied to non-layer primitives, masks beyond simple alpha, specific HTML form-control native paint (checkboxes / radio buttons / scrollbars when delegated to system theme).
-- *Nematic:* terminal-aesthetic blocks with cell-grid + cursor markers, ASCII-art preservation hints, gemtext-quote-with-side-rule as an atomic stylable command.
-- *Scrying:* none beyond `DrawExternalTexture`.
+Per the [PM-3 audit of `ServalDisplayItem`](#per-engine-impl-notes), the cited extension candidates from PM-2 all collapse:
 
-**Borderline items:** complex multi-corner-radius borders, gradient-strokes, image-borders. Could be common or extension. Lean common since they're primitive-shaped and most renderers want them; revisit if the common item count balloons.
+- *Serval paint worklets* → `DrawExternalTexture` (Serval rasterizes the worklet to a wgpu texture and hands the handle to NetRender).
+- *Serval mix-blend-mode on non-layer primitives* → common (`PushLayer` carries `mix_blend_mode` in `LayerSpec`).
+- *Serval masks beyond simple alpha* → common (`PushLayer` with `mask`; Roadmap C3 already shipped `SceneCompose::DestIn`).
+- *Serval native form controls* → `DrawExternalTexture` (system-themed widget rasterized by the platform integration layer).
+- *Nematic terminal-aesthetic blocks* → common (`PushTransform` + `DrawRect` + `DrawText` sequence; aesthetic comes from the composition, not from a custom primitive).
+- *Nematic ASCII-art preservation hints* → not paint at all — a hint field on `TextOptions` (font selection / antialiasing preference), no command of its own.
+- *Nematic gemtext quote-with-side-rule* → common decomposition (rect + stroke + text).
+- *Scrying* → already `DrawExternalTexture` exclusively.
+
+**Genuinely engine-specific items left:** CSS-3D `transform_style: Preserve3D` and `raster_space: Local` on stacking contexts (Serval-only). Both could be flags on common `LayerSpec` rather than a separate variant. **Practical upshot: `ServalPaintExt` v1 has zero non-trivial variants** — see [Per-engine impl notes / Serval](#serval).
+
+**Borderline items:** complex multi-corner-radius borders, gradient-strokes, image-borders. Lean common (primitive-shaped, most renderers want them). Revisit if the common item count balloons.
 
 ---
 
@@ -265,10 +295,20 @@ A future Nematic could do the same for a specific subset of its content (e.g., "
 So a lane has three ways to put pixels on screen:
 
 1. **Common vocabulary** — emit standard `PaintCmd` variants; NetRender renders.
-2. **Typed extension** — emit engine-specific data; NetRender's extension lowerer handles it.
+2. **Typed extension** — emit engine-specific data; NetRender's extension lowerer handles it. (Per [PM-3 audit](#per-engine-impl-notes), v1 has no real users of this path; the machinery may be deferred.)
 3. **External texture handoff** — paint yourself (Vello direct, wgpu direct, whatever), register the texture, declare it in PaintList as `DrawExternalTexture(handle)`.
 
 The first draft conflated options 2 and 3 by proposing extensions paint into Vello. The corrected design separates them: extensions are *typed data NetRender knows how to render*; direct-paint is *external textures composed into NetRender's output*.
+
+### PM-3: `DrawExternalTexture` lowering contract
+
+**The lowering for `DrawExternalTexture` is the per-frame compositor pass** ([`ExternalTextureComposite`](https://github.com/mark-ik/netrender/blob/main/netrender/src/external_texture.rs) + `scene_op_boundary` + [`VelloTileRasterizer::render_overlay_fragment`](https://github.com/mark-ik/netrender/blob/main/netrender/src/vello_tile_rasterizer.rs), landed in netrender 2026-05-16), **not vello `SceneOp::Image`**. This is a load-bearing architectural commitment, not an impl detail.
+
+**Why this matters:** the compositor pass reads the texture view at frame composite time. If the WebGL canvas (or any other external texture producer) redraws between frames, the next frame's composite picks up new pixels with no Scene mutation and no tile-cache invalidation needed. Tile cache hashes vello rasterization, which is unchanged; external textures composite *over* the rasterized master via a per-frame pipeline pass. **No `content_generation` is needed for this lowering** — the invalidation problem is sidestepped by construction.
+
+**Forward-looking: `ExternalTextureItem.content_generation`.** Carried as `Option<u64>` for the adjacent case where an external texture is used as a *sampling source for other PaintCmds* (e.g., a future repeating-pattern op that samples the texture). Those lowerings would emit `SceneOp` variants that tile-cache on `ImageKey`; without `content_generation` in the tile-cache hash, the cache would miss content mutations. Default `None` for compositor-pass use; producers set it when texture-as-source. Producers that set `content_generation` accept the invalidation contract: rolling the generation marks the texture content as semantically new.
+
+`scene_op_boundary` (the ordered-interleaving foundation in `ExternalTextureComposite`) is what makes this lowering credible for mid-page external textures — not just topmost overlays. Before that feature landed, the "Nematic code-block as self-rendered wgpu texture" example in option 3 would have been unwieldy (always-topmost). With ordered composite, textures can sit at any z-position in painter order.
 
 ---
 
@@ -276,27 +316,41 @@ The first draft conflated options 2 and 3 by proposing extensions paint into Vel
 
 ### Serval
 
-Current `ServalDisplayList` renames to `ServalPaintList`, implements `PaintList`. Existing `ServalDisplayItem` enum gets split:
+Current `ServalDisplayList` renames to `ServalPaintList`, implements `PaintList`. Existing `ServalDisplayItem` enum is mapped to common `PaintCmd` variants.
 
-- Items mapping to common `PaintCmd` variants emit those (rect, stroke, gradient family, text, image, repeating image, external texture, shadow).
-- Items that are HTML/CSS-specific become `ServalPaintExt` enum variants.
+**PM-3 audit of current `ServalDisplayItem` variants:**
 
-`ServalPaintExt` is the per-engine extension payload type:
+| ServalDisplayItem variant | Lands as |
+| --- | --- |
+| `Rect` / `RectWithAnimation` | common `DrawRect` (animation field is currently a `None`-only stub — vestigial, renderer ignores) |
+| `Line` | common `DrawLine` (wavy/dashed/solid; carries `LineStyle`) |
+| `Image` / `RepeatingImage` | common `DrawImage` / `DrawRepeatingImage` |
+| `ExternalTexture` | common `DrawExternalTexture` |
+| `Text` | common `DrawText` (shaped glyph runs; see [Text ownership](#text-ownership-boundary)) |
+| `Border` (normal + nine-patch) | common `DrawBorder` |
+| `BoxShadow` | common `DrawShadow` |
+| `PushShadow` / `PopAllShadows` | common compositor pair |
+| `Gradient` / `RadialGradient` / `ConicGradient` | common `DrawLinearGradient` / `DrawRadialGradient` / `DrawConicGradient` |
+| `Iframe` | lowers to `DrawExternalTexture` (iframe's rendered output is a texture from the parent pipeline's POV) |
+| `PushStackingContext` / `PopStackingContext` | common `PushLayer` / `PopLayer` with `LayerSpec` carrying `mix_blend_mode`, optional `filters: Vec<FilterOp>`, opacity |
+| `PushReferenceFrame` / `PopReferenceFrame` | common `PushTransform` / `PopTransform` (PM-3 rename) |
+| `HitTest` | common `HitTest` (every engine needs hit-testing) |
+
+**Genuinely Serval-only after this audit:** CSS-3D `transform_style: Preserve3D` and `raster_space: Local` on stacking contexts. Both could be flags on common `LayerSpec` rather than variants in a Serval extension enum.
+
+**Practical upshot: `ServalPaintExt` v1 is empty (or near-empty).**
 
 ```rust
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum ServalPaintExt {
-    PaintWorkletInvocation(PaintWorkletItem),
-    MixBlendModeRegion(MixBlendModeItem),
-    Mask(MaskItem),
-    NativeFormControl(FormControlItem),
-    // others as Serval needs them
+    // No variants identified at scaffold time. CSS-3D fields (if not
+    // absorbed into LayerSpec) would land here; otherwise empty.
 }
-
-impl PaintExtensionPayload for ServalPaintExt { fn bounds(&self) -> Rect { ... } }
 ```
 
-NetRender's lowerer for `ServalPaintExt` lives either in NetRender (option 2 dispatch) or in a small `paint_list_serval_lowering` crate (option 3). Renderable from cached or transported `ServalPaintList` because everything's `Serialize`.
+The PM-2 list of cited extension candidates (paint worklets, mix-blend-mode regions, masks, native form controls) all collapse to common ops or `DrawExternalTexture` per the audit table above. The `PaintPayload::Extension` mechanism scaffolds for hypothetical future needs; **consider deferring the extension machinery entirely** until a real case surfaces (a future Houdini layout API, an SVG filter primitive Vello doesn't yet support, etc.).
+
+**Decision deferred to scaffold time:** ship with empty `ServalPaintExt` and the extension machinery in place (smaller diff for the first real extension), or ship without the extension variant at all (smaller v1 surface). Both are viable; resolve when scaffolding the api crate.
 
 `ServalDisplayList`-as-it-exists-today can either be renamed in-place or kept as a transitional wire format until the trait surface is in place. Lean rename-in-place; the trait shape is straightforward enough that the cutover doesn't need a transitional period.
 
@@ -335,12 +389,19 @@ paint-types (existing)
     primitives: color, image keys, units
 
 paint_list_api (new shared crate)
-    PaintList trait, PaintCmd<E> enum, PaintExtensionPayload trait,
-    common item types
-    depends on: paint-types, serde (for Serialize)
+    PaintList trait, PaintCmd enum (monomorphic per PM-3),
+    PaintEnvelope enum, common item types
+    depends on: paint-types, serde, paint_list_serval / _nematic / _scrying
+                (only if Extension variant is retained per scaffold decision)
+
+paint_list_serval / paint_list_nematic / paint_list_scrying (small types-only crates)
+    ServalPaintExt / NematicPaintExt / ScryingPaintExt payload enums
+    depends on: paint-types, serde
+    NOTE: deferred entirely if PM-3 audit's "defer Extension" path is taken
 
 netrender (its own crate; formerly "components/paint")
-    consumes: PaintList (generic, but with registered extension renderers)
+    consumes: PaintEnvelope (concrete enum dispatch — no generics on the
+              entry point)
     lowering: PaintCmd → netrender::Scene (Vello underneath)
     owns: font registry, glyph atlas, image cache, external texture registry,
           composition state
@@ -348,30 +409,32 @@ netrender (its own crate; formerly "components/paint")
                 helpers, NOT shaping)
 
 paint-api (existing; embedder-facing cross-process API)
-    PaintMessage::SendDisplayList(L: PaintList) — generic
+    PaintMessage::SendDisplayList(PaintEnvelope) — closed-set enum per PM-3
     depends on: paint_list_api
 
 serval-layout (produces ServalPaintList)
     ServalPaintList: impl PaintList
-    ServalPaintExt: enum of CSS-rich items
+    (PM-3 audit: maps to common ops only; ServalPaintExt empty for v1)
     depends on: paint_list_api, parley (for shaping)
 
 nematic
-    NematicPaintList: impl PaintList (common items only initially)
-    NematicPaintExt: empty enum initially
+    NematicPaintList: impl PaintList (common items only)
+    NematicPaintExt: empty
     depends on: paint_list_api
 
 scrying lane wrapper
-    ScryingPaintList: impl PaintList (one ExternalTexture command)
+    ScryingPaintList: impl PaintList (one DrawExternalTexture per frame)
+    ScryingPaintExt: empty
     depends on: paint_list_api, scrying
 ```
 
-**Dep rules:**
+**Dep rules (post-PM-3):**
 
 - Engines don't depend on each other.
-- NetRender depends on `paint_list_api` (the trait) but ideally not on individual engine extension types; extensions register at runtime (option 2 dispatch). If option 3 (compile-time list) is picked later, NetRender adds dep on each engine's extension type crate (small, types-only).
+- **PM-3:** if the `Extension` variant is retained, `paint_list_api` depends on the small types-only payload crates (`paint_list_serval` / `_nematic` / `_scrying`) — that's where the `PaintPayload` enum lives. NetRender inherits these as transitive deps. Tolerable for the v1 engine count; revisit if engine count grows past ~6 or open dispatch becomes a real requirement.
+- **PM-3:** if the `Extension` variant is deferred (per [audit](#serval)), the payload crates aren't created at all; `paint_list_api` stands alone with the common vocabulary.
 - `paint_list_api` is the single shared trait surface every engine + NetRender depends on.
-- `paint-api` is updated to carry `L: PaintList` generically (currently carries concrete `ServalDisplayList`).
+- `paint-api` is updated to carry `PaintEnvelope` (closed-set enum), not generic `L: PaintList`.
 
 ---
 
@@ -379,18 +442,18 @@ scrying lane wrapper
 
 | Current | Becomes |
 | --- | --- |
-| `components/shared/paint/serval_display_list.rs::ServalDisplayList` | `serval-layout::ServalPaintList: impl PaintList`. Same data fields (viewport, items, spatial nodes, clips, transforms); items split between common `PaintCmd` and `ServalPaintExt`. |
-| `components/shared/paint/lib.rs::PaintMessage::SendDisplayList(ServalDisplayList)` | `SendDisplayList(L: PaintList)` (generic). Wire payload is the serialized concrete type per engine. |
-| `components/paint/translator.rs` | NetRender's internal lowering. Stays renderer-private. Updated to dispatch on common variants + extension lowerer registration. |
+| `components/shared/paint/serval_display_list.rs::ServalDisplayList` | `serval-layout::ServalPaintList: impl PaintList`. Same data fields (viewport, items, spatial nodes, clips, transforms); items map to common `PaintCmd` variants per the [Serval audit table](#serval). `ServalPaintExt` empty or near-empty for v1. |
+| `components/shared/paint/lib.rs::PaintMessage::SendDisplayList(ServalDisplayList)` | `PaintMessage::SendDisplayList(PaintEnvelope)` where `enum PaintEnvelope { Serval(ServalPaintList), Nematic(NematicPaintList), Scrying(ScryingPaintList) }`. **PM-3:** envelope is a closed-set enum, not generic over a trait — receivers need a concrete channel payload, and generic-over-trait isn't a workable wire shape. Tag-based open dispatch (gltf-style) is the cutover path if open extensions become real. |
+| `components/paint/translator.rs` | NetRender's internal lowering. Stays renderer-private. Updated to dispatch on common variants + (if `Extension` variant retained) on `PaintPayload` enum match arms. **PM-3:** compile-time pattern match, no runtime registration. |
 | `components/paint/` package name `servo-paint` | Eventually rename to `netrender` (already structurally that). |
 | (none today) | New `components/shared/paint-list-api/` crate. |
 
 The trait surface is straightforward; the work concentrates in:
 
-1. Defining `paint_list_api` (the trait + common items + extension trait).
-2. Refactoring `ServalDisplayList` items into common `PaintCmd` + `ServalPaintExt`.
-3. Updating `PaintMessage::SendDisplayList` to be generic.
-4. Updating `translator.rs` to dispatch on common variants + extension renderers.
+1. Defining `paint_list_api` (the trait + common items + `PaintPayload` enum). Decide at scaffold time whether to include the `Extension` variant or defer entirely (see [Serval audit](#serval)).
+2. Refactoring `ServalDisplayList` items into common `PaintCmd` per the audit table.
+3. Updating `PaintMessage::SendDisplayList` to carry the `PaintEnvelope` enum.
+4. Updating `translator.rs` to dispatch on common variants (+ `PaintPayload` if retained).
 
 Each can land as its own commit. The audit canary stays clean throughout — no SpiderMonkey impact.
 
@@ -398,42 +461,78 @@ Each can land as its own commit. The audit canary stays clean throughout — no 
 
 ## Open questions for review
 
+**Resolved at PM-3:** dispatch mechanism (option 1, compile-time enum); transport envelope shape (`PaintEnvelope` enum, not generic); `DrawExternalTexture` lowering (compositor pass); `generation_id` semantics (producer-rolled semantic-equivalence epoch; tile cache invariant separate); common-vocabulary additions (`DrawPath`, filters in `LayerSpec`, line/border/hit-test common); `PushReferenceFrame` rename to `PushTransform`; capture/replay both layers. See [Decision log](#decision-log).
+
+**Remaining at PM-3:**
+
 1. **Crate name.** `paint_list_api` is the working name. Alternatives: `paint_command_api`, `paint_scene_api`, `render_input_api`, `paintlist`. Decide at scaffold time.
 
-2. **Extension dispatch mechanism.** Options 1 (generic monomorphization), 2 (registered renderers), 3 (compile-time list) all valid. Lean 2 for v1 — preserves dep-graph cleanliness; per-extension cost is bounded. Revisit with profiling data once a real engine extension exists.
+2. **Whether to scaffold the `Extension` variant at all.** Per [Serval audit](#serval), `ServalPaintExt` v1 has no identified non-trivial variants. Two options:
+   - **Keep:** ship `PaintCmd::Extension(PaintPayload)` with empty/near-empty payload enums. Smaller diff for the first real extension, scaffold lives.
+   - **Defer:** ship without `Extension` entirely. Smaller v1 surface; when a real case surfaces, retrofitting the variant is a single-PR change.
 
-3. **Common-vocabulary coverage.** Have I missed renderable primitives that should be common from day one? Specific candidates worth a review pass: complex paths (Bezier outlines beyond stroke), filter primitives (SVG filters), CSS `backdrop-filter`. These exist in CSS but may also be wanted by other engines. Lean: stay primitive-shaped; gradients are in because Vello has them; filters are likely Serval extensions until proven cross-engine.
+   Lean **defer** — the audit suggests the machinery is scaffolding for hypothetical needs. Revisit when a concrete case emerges (Houdini layout API, SVG filter Vello doesn't render, etc.).
 
-4. **Text run shape.** Sketched `TextRunItem` with `Vec<GlyphInstance>`. The actual parley→paint hand-off may want a richer shape (per-cluster source-text-range mapping for selection, line-box info for hit-test). Detailed design at first implementation; the high-level "shaped runs come from layout, not NetRender" is the load-bearing point.
+3. **Text run shape.** Sketched `TextRunItem` with `Vec<GlyphInstance>`. The actual parley→paint hand-off may want a richer shape (per-cluster source-text-range mapping for selection, line-box info for hit-test). Detailed design at first implementation; the high-level "shaped runs come from layout, not NetRender" is the load-bearing point.
 
-5. **PaintList::commands() return type.** Sketched `&[PaintCmd<...>]` (slice). Could be an iterator. Slice is simpler; iterator allows lazy/streaming production. Lean slice — paint output is built-then-shipped, not streamed.
+4. **PaintList::commands() return type.** Sketched `&[PaintCmd]` (slice). Could be an iterator. Slice is simpler; iterator allows lazy/streaming production. Lean slice — paint output is built-then-shipped, not streamed.
 
-6. **Generation_id collision across PaintLists in a composite.** If a tile has multiple PaintLists (Serval page with embedded Scrying iframe), generation_ids don't share namespace. NetRender's cache key would be `(source_id, generation_id)`. Defer until multi-source composition is a real concern.
+5. **Generation_id collision across PaintLists in a composite.** If a tile has multiple PaintLists (Serval page with embedded Scrying iframe), generation_ids don't share namespace. NetRender's relowering-skip key would be `(source_id, generation_id)`. Defer until multi-source composition is a real concern.
 
-7. **PaintList trait object support.** `dyn PaintList` would need extension type erased. Lean: don't support `dyn PaintList` at the trait level; require generic monomorphization at the host's render dispatch. (Host has finite set of lane types; dispatching by lane type then calling `render::<L>(...)` is fine.)
+6. **Border / stroke decomposition shape.** `DrawBorder` is common (per audit); nine-patch is a specialized pattern, normal borders are 4-stroke compositions. Decide at scaffold time whether `DrawBorder` is its own variant or whether the lowerer decomposes it into common strokes upstream of NetRender's match.
 
 ---
 
 ## Review checklist
 
-- [ ] Is the three-layer separation (producer / transport / renderer scene) clear enough? Any layer still bleeding into another in the trait shape?
-- [ ] Is the typed-payload extension model the right pattern, or does some use case genuinely need callbacks? (I can't think of one that wouldn't be better served by `DrawExternalTexture` + direct paint outside the pipeline.)
-- [ ] Common vocabulary — anything missing? Gradients are in. Shadows are in. Borders are common-shaped via stroke. Anything else that's renderable-primitive but I left out?
+- [x] Three-layer separation (producer / transport / renderer scene) — PM-2 separated; PM-3 confirms.
+- [x] Typed-payload extension model — PM-2 chose payloads; PM-3 audited and found `ServalPaintExt` v1 empty, recommending defer.
+- [x] Common vocabulary additions — PM-3 added `DrawPath`, filters-in-`LayerSpec`, common shadows/borders/hit-test; resolved.
 - [ ] Text-ownership boundary — is "shaping in layout, font/glyph/emission in NetRender" the right split? Or are there reasons NetRender needs to know about shaping (e.g., subpixel-position adjustment, hinting hints affecting line metrics)?
-- [ ] Extension-dispatch option 2 (registered renderers) — is the per-extension dyn cost acceptable, or should we plan for option 3 (compile-time list) from the start?
+- [x] Extension dispatch — PM-3: option 1 (compile-time enum). Option 2 rejected; option 3 collapsed into option 1.
+- [x] Transport envelope shape — PM-3: closed-set `PaintEnvelope` enum, not generic.
+- [x] `DrawExternalTexture` lowering contract — PM-3: compositor pass, not `SceneOp::Image`; cites `scene_op_boundary` foundation.
 - [ ] Crate name resonance: `paint_list_api` vs. `paint_command_api` vs. `paint_scene_api` vs. `paintlist` vs. ?
+- [ ] Whether to retain the `Extension` variant at all per PM-3 audit (lean defer).
 
 ---
 
 ## Decision log
 
+### PM-3 (2026-05-17, foundation resolutions)
+
+- **Decided PM-3:** Extension dispatch is **option 1 (compile-time enum)**. `PaintCmd` is monomorphic (no `<E>` generic); engine-specific items ride in `enum PaintPayload { Serval(ServalPaintExt), Nematic(NematicPaintExt), Scrying(ScryingPaintExt) }`. NetRender depends on the small types-only payload crates and pattern-matches at compile time. **Rejects PM-2 option 2** (registered renderers with `dyn PaintExtensionPayload`) — it fights the typed-payload shape and requires TypeId machinery that buys nothing over plain pattern matching.
+
+- **Decided PM-3:** Transport is a **`PaintEnvelope` enum**, not a generic `PaintMessage::SendDisplayList<L: PaintList>`. Receivers need a concrete channel payload; generic-over-trait is not a workable wire shape. `enum PaintEnvelope { Serval(ServalPaintList), Nematic(NematicPaintList), Scrying(ScryingPaintList) }`. Tag-based open-extension dispatch (gltf-style: `(stable_tag, postcard_bytes)` with registered decoders) is the cutover path if open extensions ever become a real requirement.
+
+- **Decided PM-3:** `DrawExternalTexture` **lowering contract** is the per-frame compositor pass (`ExternalTextureComposite` + `scene_op_boundary` + `VelloTileRasterizer::render_overlay_fragment`, landed in netrender 2026-05-16), **not vello `SceneOp::Image`**. This sidesteps tile-cache invalidation by construction: external textures aren't part of vello Scene; the compositor pass reads the texture view at frame time. The lowering choice is a load-bearing commitment, pinned in the doc — not an impl detail.
+
+- **Decided PM-3:** `ExternalTextureItem` gains `content_generation: Option<u64>` as a forward-looking field. **Default `None`** for the compositor-pass lowering (no invalidation needed). **Producers set it** when an external texture is used as a sampling source for *other* PaintCmds (future repeating-pattern op, etc.) where the lowering would emit `SceneOp` variants tile-cached on `ImageKey` and need invalidation in the cache hash.
+
+- **Decided PM-3:** `DrawPath` added to common vocabulary. Bezier outlines via vello kurbo; NetRender has the machinery already (`SceneOp::Shape`, R2/R3 path-precise containment). Passes the "renderer capability belongs in common" graduation criterion.
+
+- **Decided PM-3:** `PushReferenceFrame` / `PopReferenceFrame` **renamed to `PushTransform` / `PopTransform`** in the common vocabulary. ReferenceFrame is WebRender legacy that doesn't map to a NetRender primitive; PushTransform is the honest name. (Serval-side internal spatial-tree state is unaffected — that's engine-local, not common-vocabulary.)
+
+- **Decided PM-3:** Filter primitives are **common**, carried in `LayerSpec` on `PushLayer` (optional `filters: Vec<FilterOp>`). FilterOp variants (Blur, Brightness, Contrast, DropShadow, Opacity, ColorMatrix, etc.) are renderer-capability — Roadmap D1 shipped filter-via-backdrop machinery in netrender. Not per-engine.
+
+- **Decided PM-3:** `generation_id` is a **producer-rolled semantic-equivalence epoch**, not a tile-cache invalidation key. Same `(source_id, generation_id)` asserts identical paint output and resource references; NetRender may use this to skip *relowering* (PaintList → Scene). Tile-cache correctness still derives from SceneOp content hashing post-lowering. Epoch is an optimization hint, not a correctness contract.
+
+- **Decided PM-3:** Capture/replay supports **both layers** as first-class: `PaintList` snapshots (engine-output regression — does the engine emit stable paint output across renderer changes?) and `netrender::Scene` snapshots (renderer regression — Roadmap A2 already shipped). Each validates a different layer's stability.
+
+- **Decided PM-3 (audit finding):** Per [Serval audit](#serval), every current `ServalDisplayItem` variant maps to common ops or `DrawExternalTexture`. **`ServalPaintExt` v1 is empty** (or carries only CSS-3D flags that could be absorbed into `LayerSpec`). The `Extension` variant on `PaintCmd` may be deferred entirely until a real case surfaces. Open at scaffold time: include empty-payload `Extension` (smaller diff for first real extension) vs. defer entirely (smaller v1 surface).
+
+### PM-2 (2026-05-17, prior pass)
+
 - **Decided 2026-05-17 PM-2:** Three layers are distinct: producer-facing `PaintList` trait (engine-friendly), transport-friendly serializable wire form (`PaintList` is fully serializable), renderer-private `netrender::Scene` (NetRender owns lowering). The first draft conflated these.
-- **Decided 2026-05-17 PM-2:** Extensions are **typed serializable payloads** (`PaintExtensionPayload` trait, engine-specific enum variants), not callbacks. The first draft's `dyn PaintExtension::paint(&mut PaintContext)` model is rejected — it works in-process but breaks transport, capture/replay, tile caching, and resource ownership.
+- **Decided 2026-05-17 PM-2:** Extensions are **typed serializable payloads** (`PaintExtensionPayload` trait, engine-specific enum variants), not callbacks. The first draft's `dyn PaintExtension::paint(&mut PaintContext)` model is rejected — it works in-process but breaks transport, capture/replay, tile caching, and resource ownership. *(PM-3: dispatch mechanism resolved to compile-time enum; the trait collapses to a finite `PaintPayload` enum.)*
 - **Decided 2026-05-17 PM-2:** Vello-direct access is an **escape hatch outside the PaintList pipeline**, not a feature of extensions. Lanes that want it use Vello directly and hand NetRender the resulting texture via `DrawExternalTexture`. This is what Scrying already does.
 - **Decided 2026-05-17 PM-2:** Common vocabulary includes **gradients (linear/radial/conic)** and **shadows** from day one. Promotion criterion: if NetRender already supports the primitive, it's common, regardless of how many engines emit it today.
 - **Decided 2026-05-17 PM-2:** **Text shaping happens in serval-layout** (parley). Paint carries shaped glyph runs (`TextRunItem` with `Vec<GlyphInstance>`). NetRender owns font registration, glyph cache/rasterization, scene emission. NetRender does not reshape.
 - **Decided 2026-05-17 PM-2:** New shared crate (`paint_list_api` working name) in `serval/components/shared/`.
-- **Decided 2026-05-17 PM-2:** `ServalDisplayList` renames to `ServalPaintList`, implements `PaintList`. Existing items split between common `PaintCmd` and `ServalPaintExt`. The wire format compatibility is preserved because both are `Serialize`.
+- **Decided 2026-05-17 PM-2:** `ServalDisplayList` renames to `ServalPaintList`, implements `PaintList`. Items map to common `PaintCmd` variants (PM-3 audit: `ServalPaintExt` empty for v1).
 - **Decided 2026-05-17 PM-2:** `paint-types` (primitives) and `paint-api` (embedder cross-process) stay as separate crates with their existing concerns. `paint_list_api` is new and complements them.
-- **Decided 2026-05-17 PM-2:** `PaintMessage::SendDisplayList` becomes generic over `L: PaintList`. The same envelope carries any engine's paint output without renaming.
-- **Open:** crate name spelling; extension dispatch mechanism (lean option 2); common-vocabulary edge cases (paths, filters); TextRunItem detailed shape; PaintList::commands() iterator vs slice; multi-source generation_id; trait-object support.
+- **Decided 2026-05-17 PM-2:** ~~`PaintMessage::SendDisplayList` becomes generic over `L: PaintList`.~~ *Superseded by PM-3:* envelope is `PaintEnvelope` enum, not generic.
+
+### Still open
+
+Crate name spelling; whether to scaffold `Extension` variant at all (PM-3 leans defer); `TextRunItem` detailed shape; `PaintList::commands()` iterator vs slice; multi-source generation_id namespace; `DrawBorder` as variant vs upstream-decomposition.

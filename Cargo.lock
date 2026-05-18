@@ -2738,6 +2738,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "layout-dom-api"
+version = "0.2.0"
+dependencies = [
+ "markup5ever",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3653,6 +3660,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36820e9051aca1014ddc75770aab4d68bc1e9e632f0f5627c4086bc216fb583b"
 dependencies = [
  "ttf-parser",
+]
+
+[[package]]
+name = "paint-list-api"
+version = "0.2.0"
+dependencies = [
+ "euclid",
+ "malloc_size_of_derive",
+ "serde",
+ "serde_json",
+ "servo-malloc-size-of",
+ "servo-paint-types",
 ]
 
 [[package]]
@@ -4578,10 +4597,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "serval-layout"
+version = "0.2.0"
+dependencies = [
+ "app_units",
+ "atomic_refcell",
+ "euclid",
+ "html5ever",
+ "layout-dom-api",
+ "malloc_size_of_derive",
+ "markup5ever",
+ "rustc-hash 2.1.2",
+ "selectors",
+ "serval-static-dom",
+ "servo-base",
+ "servo-layout-api",
+ "servo-malloc-size-of",
+ "servo-paint-types",
+ "servo-pixels",
+ "servo-url",
+ "servo_arc",
+ "stylo",
+ "stylo_atoms",
+ "stylo_dom",
+ "stylo_traits",
+ "taffy",
+]
+
+[[package]]
 name = "serval-static-dom"
 version = "0.2.0"
 dependencies = [
  "html5ever",
+ "layout-dom-api",
 ]
 
 [[package]]

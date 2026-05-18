@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "components/media/examples",
+    "components/shared/paint-list-api",
     "components/shared/paint-types",
     "components/xpath",
     "components/webgl-wgpu",
@@ -292,6 +293,7 @@ metrics = { package = "servo-metrics", version = "=0.2.0", path = "components/me
 net_traits = { package = "servo-net-traits", version = "=0.2.0", path = "components/shared/net" }
 paint = { package = "servo-paint", version = "=0.2.0", path = "components/paint" }
 paint_api = { package = "servo-paint-api", version = "=0.2.0", path = "components/shared/paint" }
+paint_list_api = { package = "paint-list-api", version = "=0.2.0", path = "components/shared/paint-list-api" }
 paint_types = { package = "servo-paint-types", version = "=0.2.0", path = "components/shared/paint-types" }
 pixels = { package = "servo-pixels", version = "=0.2.0", path = "components/pixels" }
 profile = { package = "servo-profile", version = "=0.2.0", path = "components/profile" }
