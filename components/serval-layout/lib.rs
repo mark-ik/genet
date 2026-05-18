@@ -18,12 +18,7 @@
 //! + `FragmentPlane` (per-node rects).
 
 mod adapter;
-// `adapter_stylo.rs` exists as an in-progress draft of the Stylo trait
-// impls; intentionally **not** mod-declared yet — its signatures need to
-// be reconciled against the actual Stylo trait surface (read Blitz's
-// `packages/blitz-dom/src/stylo.rs` as the primary reference; see file
-// header). The probe slice doesn't need Stylo: StylePlane is populated
-// by hand.
+mod adapter_stylo;
 mod cell;
 mod construct;
 mod fragment;
@@ -31,6 +26,7 @@ mod layout;
 mod style;
 
 pub use adapter::NodeRef;
+pub use adapter_stylo::StyleNodeRef;
 pub use cell::ArcRefCell;
 pub use construct::{construct, ConstructedTree};
 pub use fragment::FragmentPlane;

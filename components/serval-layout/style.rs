@@ -14,17 +14,70 @@
 //!
 //! Cf. `docs/2026-05-17_serval_layout_planes_architecture.md`.
 
+use std::cell::Cell;
 use std::hash::Hash;
 
+use atomic_refcell::AtomicRefCell;
 use rustc_hash::FxHashMap;
+use selectors::matching::ElementSelectorFlags;
+use style::data::ElementDataWrapper;
+use stylo_dom::ElementState;
 use taffy::Style as TaffyStyle;
 
-/// Per-node style entry. The probe stores only the Taffy-shaped style;
-/// the eventual full impl will store Stylo's `ComputedValues` here and
-/// derive the Taffy style on demand (or cache both).
-#[derive(Clone, Debug, Default)]
+/// Per-node style entry.
+///
+/// Probe slice today only populates `taffy`. The remaining fields exist so
+/// the Stylo trait impls on `StyleNodeRef` have somewhere to read/write
+/// cascade-time state from. The cascade populates them in real usage;
+/// hand-built probe fixtures leave them at default.
 pub struct StyleEntry {
+    /// Taffy layout style (populated by hand in the probe; derived from
+    /// Stylo `ComputedValues` in the real cascade).
     pub taffy: TaffyStyle,
+
+    /// Stylo's `ElementData` storage. Empty until the cascade populates.
+    /// `AtomicRefCell` per the planes doc: only where Stylo demands it.
+    pub stylo_data: AtomicRefCell<Option<ElementDataWrapper>>,
+
+    /// DOM element state (`:hover`, `:focus`, etc.). Static profile: empty.
+    pub state: ElementState,
+
+    /// Selector flags accumulated during selector matching.
+    pub selector_flags: Cell<ElementSelectorFlags>,
+}
+
+impl Clone for StyleEntry {
+    fn clone(&self) -> Self {
+        // ElementDataWrapper is not Clone in general; provide a default
+        // (empty) for any cloning need. The probe doesn't clone style
+        // entries; cascade-time work mutates in place.
+        Self {
+            taffy: self.taffy.clone(),
+            stylo_data: AtomicRefCell::new(None),
+            state: self.state,
+            selector_flags: Cell::new(self.selector_flags.get()),
+        }
+    }
+}
+
+impl Default for StyleEntry {
+    fn default() -> Self {
+        Self {
+            taffy: TaffyStyle::default(),
+            stylo_data: AtomicRefCell::new(None),
+            state: ElementState::empty(),
+            selector_flags: Cell::new(ElementSelectorFlags::empty()),
+        }
+    }
+}
+
+impl std::fmt::Debug for StyleEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StyleEntry")
+            .field("taffy", &self.taffy)
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Sparse storage of computed style keyed by `D::NodeId`. Sparse for the
@@ -63,5 +116,12 @@ impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
             .get(&id)
             .map(|e| e.taffy.clone())
             .unwrap_or_default()
+    }
+
+    /// Ensure a style entry exists for `id`, creating a default one if not.
+    /// Returns a mutable reference. The Stylo cascade uses this to allocate
+    /// `ElementData` storage before populating it.
+    pub fn ensure_entry(&mut self, id: NodeId) -> &mut StyleEntry {
+        self.entries.entry(id).or_default()
     }
 }

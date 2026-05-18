@@ -107,6 +107,7 @@ mod tests {
                             },
                             ..Default::default()
                         },
+                        ..Default::default()
                     },
                 );
             }
