@@ -27,6 +27,7 @@
 //! parley wiring is step (2) in the roadmap.
 
 use parley::{Alignment, AlignmentOptions, FontContext, Layout, LayoutContext, StyleProperty};
+use rustc_hash::FxHashMap;
 use taffy::geometry::Size;
 use taffy::style::AvailableSpace;
 
@@ -65,8 +66,10 @@ impl TextLeaf {
 }
 
 /// Bundled parley contexts used by every measure call during one layout
-/// pass. Holds the font database + scratch space; build once, thread
-/// through the measure closure.
+/// pass. Holds the font database + scratch space + cached `Layout`s
+/// keyed by `taffy::NodeId`. Build once per layout, thread through the
+/// measure closure, then hand to paint emission so it can extract
+/// positioned glyphs without re-shaping.
 ///
 /// `FontContext::new()` discovers system fonts (parley's `system`
 /// feature, enabled by default). Per the user's testing-hardware
@@ -75,6 +78,12 @@ impl TextLeaf {
 pub struct TextMeasureCtx {
     pub font_ctx: FontContext,
     pub layout_ctx: LayoutContext<()>,
+    /// Cached `parley::Layout` per Taffy text leaf — populated by
+    /// [`measure_text_leaf`] after each measure call. Paint emission
+    /// reads from here via `ConstructedTree::node_map`
+    /// (DOM `NodeId` → `taffy::NodeId` → cached `Layout`) to extract
+    /// positioned glyphs without re-shaping.
+    pub layouts: FxHashMap<taffy::NodeId, Layout<()>>,
 }
 
 impl Default for TextMeasureCtx {
@@ -88,6 +97,7 @@ impl TextMeasureCtx {
         Self {
             font_ctx: FontContext::new(),
             layout_ctx: LayoutContext::new(),
+            layouts: FxHashMap::default(),
         }
     }
 }
@@ -98,7 +108,9 @@ impl std::fmt::Debug for TextMeasureCtx {
     }
 }
 
-/// Measure a text leaf against Taffy's known + available constraints.
+/// Measure a text leaf against Taffy's known + available constraints
+/// and cache the built `Layout` keyed by `taffy_id` so paint emission
+/// can extract positioned glyphs without re-shaping.
 ///
 /// Returns the natural `(width, height)` of the laid-out text:
 /// - `known_dimensions` overrides any axis explicitly set by the
@@ -115,10 +127,13 @@ impl std::fmt::Debug for TextMeasureCtx {
 pub fn measure_text_leaf(
     ctx: &mut TextMeasureCtx,
     leaf: &TextLeaf,
+    taffy_id: taffy::NodeId,
     known_dimensions: Size<Option<f32>>,
     available_space: Size<AvailableSpace>,
 ) -> Size<f32> {
-    // Short-circuit when both axes are explicitly known.
+    // Short-circuit when both axes are explicitly known. (Don't cache
+    // — there's no shaped Layout to give back; emit will see no entry
+    // and emit an empty glyph run.)
     if let (Some(w), Some(h)) = (known_dimensions.width, known_dimensions.height) {
         return Size { width: w, height: h };
     }
@@ -152,15 +167,26 @@ pub fn measure_text_leaf(
     layout.break_all_lines(max_advance);
     layout.align(Alignment::Start, AlignmentOptions::default());
 
-    Size {
+    let size = Size {
         width: known_dimensions.width.unwrap_or_else(|| layout.width()),
         height: known_dimensions.height.unwrap_or_else(|| layout.height()),
-    }
+    };
+
+    // Cache the shaped Layout for paint emission.
+    ctx.layouts.insert(taffy_id, layout);
+    size
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fake_taffy_id() -> taffy::NodeId {
+        // taffy::NodeId is From<u64> in recent versions; use a fixed id
+        // — tests don't actually run a Taffy layout, just exercise the
+        // measure function directly.
+        taffy::NodeId::from(0u64)
+    }
 
     #[test]
     fn empty_text_measures_as_one_line_baseline() {
@@ -169,6 +195,7 @@ mod tests {
         let size = measure_text_leaf(
             &mut ctx,
             &leaf,
+            fake_taffy_id(),
             Size { width: None, height: None },
             Size {
                 width: AvailableSpace::Definite(800.0),
@@ -178,15 +205,19 @@ mod tests {
         assert_eq!(size.width, 0.0);
         // 16 * 1.2 = 19.2
         assert!((size.height - 19.2).abs() < 0.01);
+        // Empty text doesn't shape a Layout — nothing in the cache.
+        assert!(ctx.layouts.is_empty());
     }
 
     #[test]
-    fn nonempty_text_measures_positive_width() {
+    fn nonempty_text_measures_positive_width_and_caches_layout() {
         let mut ctx = TextMeasureCtx::new();
         let leaf = TextLeaf::new("Hello, world!");
+        let taffy_id = fake_taffy_id();
         let size = measure_text_leaf(
             &mut ctx,
             &leaf,
+            taffy_id,
             Size { width: None, height: None },
             Size {
                 width: AvailableSpace::Definite(800.0),
@@ -203,6 +234,9 @@ mod tests {
             "expected positive height, got {}",
             size.height
         );
+        // Cache should hold the shaped Layout.
+        let cached = ctx.layouts.get(&taffy_id).expect("layout cached");
+        assert!(cached.width() > 0.0);
     }
 
     #[test]
@@ -212,6 +246,7 @@ mod tests {
         let size = measure_text_leaf(
             &mut ctx,
             &leaf,
+            fake_taffy_id(),
             Size { width: Some(100.0), height: Some(50.0) },
             Size {
                 width: AvailableSpace::MaxContent,

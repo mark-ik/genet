@@ -37,13 +37,16 @@ use std::hash::Hash;
 use layout_dom_api::{LayoutDom, NodeKind};
 use malloc_size_of_derive::MallocSizeOf;
 use paint_list_api::{
-    ColorF, CommonPlacement, DeviceIntSize, EngineId, FontInstanceKey, LayoutPoint, LayoutRect,
-    PaintCmd, PaintList, RectItem, TextOptions, TextRunItem,
+    ColorF, CommonPlacement, DeviceIntSize, EngineId, FontInstanceKey, GlyphInstance, LayoutPoint,
+    LayoutRect, PaintCmd, PaintList, RectItem, TextOptions, TextRunItem,
 };
+use parley::PositionedLayoutItem;
 use serde::{Deserialize, Serialize};
 
+use crate::construct::ConstructedTree;
 use crate::fragment::FragmentPlane;
 use crate::style::StylePlane;
+use crate::text_measure::TextMeasureCtx;
 
 /// Serval's concrete [`PaintList`] impl. Built by [`emit_paint_list`].
 #[derive(Clone, Debug, Default, Deserialize, MallocSizeOf, Serialize)]
@@ -84,11 +87,63 @@ impl PaintList for ServalPaintList {
 /// (parent-relative `taffy::Layout.location` accumulated through the
 /// recursion). Element background colors come from
 /// `ComputedValues::background_color` when the cascade has populated
-/// `ElementData`; otherwise default to transparent (no rect emitted).
+/// `ElementData`; otherwise default to transparent.
+///
+/// Text glyph runs come from the `TextMeasureCtx`'s cached parley
+/// `Layout`s (populated by `crate::layout::layout` via
+/// `measure_text_leaf`); pass `None` for `text_ctx` to emit text
+/// items without glyph data (probe-quality empty glyph runs — useful
+/// when caller hasn't run layout yet, or wants to skip text shaping).
 pub fn emit_paint_list<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
+    viewport: DeviceIntSize,
+) -> ServalPaintList
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    emit_paint_list_with_glyphs(dom, styles, fragments, None, viewport)
+}
+
+/// Variant of [`emit_paint_list`] that consumes the cached text
+/// layouts. `constructed` provides the DOM → Taffy id mapping;
+/// `text_ctx` provides the cached parley `Layout`s. When both are
+/// present, `DrawText` items carry shaped+positioned glyph runs.
+pub fn emit_paint_list_with_layouts<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    constructed: &ConstructedTree<D::NodeId>,
+    text_ctx: &TextMeasureCtx,
+    viewport: DeviceIntSize,
+) -> ServalPaintList
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    emit_paint_list_with_glyphs(
+        dom,
+        styles,
+        fragments,
+        Some(GlyphSource { constructed, text_ctx }),
+        viewport,
+    )
+}
+
+/// Source for shaped-glyph lookup during emission. Borrowed view over
+/// the constructed tree's node_map + the text measure cache.
+struct GlyphSource<'a, NodeId: Copy + Eq + Hash> {
+    constructed: &'a ConstructedTree<NodeId>,
+    text_ctx: &'a TextMeasureCtx,
+}
+
+fn emit_paint_list_with_glyphs<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    glyphs: Option<GlyphSource<'_, D::NodeId>>,
     viewport: DeviceIntSize,
 ) -> ServalPaintList
 where
@@ -100,6 +155,7 @@ where
         dom,
         styles,
         fragments,
+        glyphs.as_ref(),
         dom.document(),
         LayoutPoint::new(0.0, 0.0),
         &mut commands,
@@ -119,6 +175,7 @@ fn walk<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
+    glyphs: Option<&GlyphSource<'_, D::NodeId>>,
     id: D::NodeId,
     parent_origin: LayoutPoint,
     commands: &mut Vec<PaintCmd>,
@@ -146,11 +203,14 @@ fn walk<D>(
                 }));
             }
             NodeKind::Text => {
+                let glyph_runs = glyphs
+                    .and_then(|g| extract_glyphs(g, id))
+                    .unwrap_or_default();
                 commands.push(PaintCmd::DrawText(TextRunItem {
                     placement: CommonPlacement::new(bounds),
                     font_instance: FontInstanceKey::default(),
                     color: text_color_of(dom, styles, id),
-                    glyphs: Vec::new(),
+                    glyphs: glyph_runs,
                     options: TextOptions::default(),
                 }));
             }
@@ -159,8 +219,35 @@ fn walk<D>(
     }
 
     for child in dom.dom_children(id) {
-        walk(dom, styles, fragments, child, origin, commands);
+        walk(dom, styles, fragments, glyphs, child, origin, commands);
     }
+}
+
+/// Look up the cached parley `Layout` for the given DOM node id and
+/// extract its positioned glyphs into a flat `Vec<GlyphInstance>`.
+/// Glyph positions are baseline-aligned in the text leaf's local
+/// space (parley's `positioned_glyphs` accumulates advance + adds
+/// the baseline offset).
+fn extract_glyphs<NodeId: Copy + Eq + Hash>(
+    source: &GlyphSource<'_, NodeId>,
+    dom_id: NodeId,
+) -> Option<Vec<GlyphInstance>> {
+    let taffy_id = source.constructed.node_map.get(&dom_id)?;
+    let layout = source.text_ctx.layouts.get(taffy_id)?;
+    let mut out = Vec::new();
+    for line in layout.lines() {
+        for item in line.items() {
+            if let PositionedLayoutItem::GlyphRun(run) = item {
+                for g in run.positioned_glyphs() {
+                    out.push(GlyphInstance {
+                        index: g.id,
+                        point: LayoutPoint::new(g.x, g.y),
+                    });
+                }
+            }
+        }
+    }
+    Some(out)
 }
 
 /// Read an element's background color from its `ComputedValues`.
@@ -260,7 +347,7 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, _built) = layout(&document, &styles, viewport);
+        let (fragments, _built, _ctx) = layout(&document, &styles, viewport);
 
         let plist = emit_paint_list(
             &document,
@@ -299,7 +386,7 @@ mod tests {
     fn emit_round_trips_through_serde() {
         let document = StaticDocument::parse("<html><body><p>x</p></body></html>");
         let styles = build_style_plane(&document);
-        let (fragments, _) = layout(
+        let (fragments, _, _) = layout(
             &document,
             &styles,
             Size {
@@ -319,6 +406,74 @@ mod tests {
             serde_json::from_str(&json).expect("deserialize ServalPaintList");
         assert_eq!(parsed.commands().len(), plist.commands().len());
         assert_eq!(parsed.viewport(), plist.viewport());
+    }
+
+    /// Probe glyph caching: pass the layout's TextMeasureCtx +
+    /// ConstructedTree to emission and verify the resulting DrawText
+    /// items carry positioned glyph runs (non-empty) rather than the
+    /// empty Vec the cache-less path produces.
+    #[test]
+    fn emit_with_layouts_extracts_positioned_glyphs() {
+        let document =
+            StaticDocument::parse("<html><body><p>Hello</p></body></html>");
+        let styles = build_style_plane(&document);
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, viewport);
+
+        let plist = emit_paint_list_with_layouts(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            DeviceIntSize::new(800, 600),
+        );
+
+        let mut text_with_glyphs = 0;
+        for cmd in plist.commands() {
+            if let PaintCmd::DrawText(t) = cmd {
+                if !t.glyphs.is_empty() {
+                    text_with_glyphs += 1;
+                }
+            }
+        }
+        assert!(
+            text_with_glyphs >= 1,
+            "expected at least one DrawText with non-empty glyph run, got {text_with_glyphs}"
+        );
+    }
+
+    /// Sanity-check the cache-less emit path still produces empty
+    /// glyph runs (probe-mode behavior — useful when caller hasn't
+    /// run layout or doesn't want to pay for glyph extraction).
+    #[test]
+    fn emit_without_layouts_produces_empty_glyph_runs() {
+        let document =
+            StaticDocument::parse("<html><body><p>Hello</p></body></html>");
+        let styles = build_style_plane(&document);
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, _, _) = layout(&document, &styles, viewport);
+        let plist = emit_paint_list(
+            &document,
+            &styles,
+            &fragments,
+            DeviceIntSize::new(800, 600),
+        );
+
+        for cmd in plist.commands() {
+            if let PaintCmd::DrawText(t) = cmd {
+                assert!(
+                    t.glyphs.is_empty(),
+                    "expected empty glyph run from cache-less emit"
+                );
+            }
+        }
     }
 
     /// Probe the cascade → emit color path: run a real stylesheet
@@ -342,7 +497,7 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, _) = layout(&document, &styles, viewport);
+        let (fragments, _, _) = layout(&document, &styles, viewport);
         let plist = emit_paint_list(
             &document,
             &styles,
@@ -378,7 +533,7 @@ mod tests {
             "<html><body><p>a</p><p>b</p></body></html>",
         );
         let styles = build_style_plane(&document);
-        let (fragments, _) = layout(
+        let (fragments, _, _) = layout(
             &document,
             &styles,
             Size {

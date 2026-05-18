@@ -318,7 +318,7 @@ mod tests {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
         };
-        let (fragments, _) = layout(&document, &styles, viewport);
+        let (fragments, _, _) = layout(&document, &styles, viewport);
         let view = ServalLaneView::new(&document, &styles, &fragments);
 
         // Compute a point known to be inside <p>'s rect (avoids
@@ -354,7 +354,7 @@ mod tests {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
         };
-        let (fragments, _) = layout(&document, &styles, viewport);
+        let (fragments, _, _) = layout(&document, &styles, viewport);
         let view = ServalLaneView::new(&document, &styles, &fragments);
 
         // Way outside the viewport — no fragment contains it.
@@ -369,7 +369,7 @@ mod tests {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
         };
-        let (fragments, _) = layout(&document, &styles, viewport);
+        let (fragments, _, _) = layout(&document, &styles, viewport);
         let view = ServalLaneView::new(&document, &styles, &fragments);
 
         let p = find_element(NodeRef::document(&document), local_name!("p"))
@@ -394,7 +394,7 @@ mod tests {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
         };
-        let (fragments, _) = layout(&document, &styles, viewport);
+        let (fragments, _, _) = layout(&document, &styles, viewport);
         let view = ServalLaneView::new(&document, &styles, &fragments);
 
         assert!(view.box_model(SourceNodeId(0xDEAD_BEEF)).is_none());
@@ -404,7 +404,7 @@ mod tests {
     fn interaction_query_returns_empty_in_probe() {
         let document = StaticDocument::parse("<html><body></body></html>");
         let styles = build_style_plane(&document);
-        let (fragments, _) = layout(
+        let (fragments, _, _) = layout(
             &document,
             &styles,
             taffy::Size {

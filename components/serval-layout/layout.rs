@@ -26,16 +26,23 @@ use crate::text_measure::{measure_text_leaf, TextMeasureCtx};
 /// 1. `construct(dom, styles, viewport)` — DOM walk → Taffy tree with
 ///    text leaves carrying [`crate::text_measure::TextLeaf`] context.
 /// 2. `taffy::compute_layout_with_measure(...)` with a parley-backed
-///    measure closure that resolves text leaves to natural sizes.
+///    measure closure that resolves text leaves to natural sizes and
+///    caches the shaped `Layout` per text leaf.
 /// 3. Walk the node_map → populate `FragmentPlane` with per-node rects.
 ///
-/// Returns the `FragmentPlane` (read-side observable) plus the
-/// `ConstructedTree` itself for tests that want to inspect Taffy state.
+/// Returns the `FragmentPlane`, the `ConstructedTree` (for tests +
+/// emit's `node_map` lookup), and the `TextMeasureCtx` (which holds
+/// the cached `parley::Layout` per text leaf — paint emission reads
+/// from here to extract positioned glyphs without re-shaping).
 pub fn layout<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
     viewport: taffy::Size<taffy::AvailableSpace>,
-) -> (FragmentPlane<D::NodeId>, ConstructedTree<D::NodeId>)
+) -> (
+    FragmentPlane<D::NodeId>,
+    ConstructedTree<D::NodeId>,
+    TextMeasureCtx,
+)
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -48,8 +55,8 @@ where
         .compute_layout_with_measure(
             built.root,
             viewport,
-            |known, avail, _id, ctx, _style| match ctx {
-                Some(leaf) => measure_text_leaf(&mut text_ctx, leaf, known, avail),
+            |known, avail, taffy_id, ctx, _style| match ctx {
+                Some(leaf) => measure_text_leaf(&mut text_ctx, leaf, taffy_id, known, avail),
                 None => taffy::Size::ZERO,
             },
         )
@@ -62,7 +69,7 @@ where
         }
     }
 
-    (fragments, built)
+    (fragments, built, text_ctx)
 }
 
 #[cfg(test)]
@@ -158,7 +165,7 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, _built) = layout(&document, &styles, viewport);
+        let (fragments, _built, _ctx) = layout(&document, &styles, viewport);
 
         let root = NodeRef::document(&document);
         let p_node = find_element(root, local_name!("p")).expect("<p> exists");
@@ -192,7 +199,7 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, _) = layout(&document, &styles, viewport);
+        let (fragments, _, _) = layout(&document, &styles, viewport);
 
         let root = NodeRef::document(&document);
         let p = find_element(root, local_name!("p")).unwrap();
@@ -217,7 +224,7 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, built) = layout(&document, &styles, viewport);
+        let (fragments, built, _ctx) = layout(&document, &styles, viewport);
 
         // The text leaf isn't keyed in our node_map directly under the
         // <p>'s DOM id — it gets its own. The text node's fragment
