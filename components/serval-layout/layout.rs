@@ -212,6 +212,77 @@ mod tests {
         );
     }
 
+    /// Cascade-driven font-size propagates from the parent element's
+    /// ComputedValues into the text leaf. We size the parent
+    /// dramatically (32px vs default 16px) and assert the measured
+    /// text height roughly tracks the difference — parley's measured
+    /// height is proportional to font-size for single-line text.
+    #[test]
+    fn parley_inherits_font_size_from_cascade() {
+        use crate::cascade::run_cascade;
+
+        let document =
+            StaticDocument::parse("<html><body><p>Hello</p></body></html>");
+
+        // Run cascade with a font-size: 32px rule, then refresh Taffy
+        // styles from the cascade so layout sees real cascaded values.
+        let mut styles_big: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles_big,
+            euclid::Size2D::new(800.0, 600.0),
+            &["p { font-size: 32px; }"],
+        );
+        styles_big.refresh_taffy_from_cascade();
+
+        // Baseline: cascade with no font-size rule (uses default 16px).
+        let mut styles_default: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles_default,
+            euclid::Size2D::new(800.0, 600.0),
+            &[],
+        );
+        styles_default.refresh_taffy_from_cascade();
+
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (frags_big, _, _) = layout(&document, &styles_big, viewport);
+        let (frags_default, _, _) = layout(&document, &styles_default, viewport);
+
+        // Find the text node — its measured rect height should differ
+        // between the two cascades.
+        let mut text_id = None;
+        let mut queue = vec![document.document()];
+        while let Some(id) = queue.pop() {
+            if matches!(document.kind(id), layout_dom_api::NodeKind::Text) {
+                text_id = Some(id);
+                break;
+            }
+            queue.extend(document.dom_children(id));
+        }
+        let text_id = text_id.expect("document contains a text node");
+
+        let big_rect = frags_big
+            .rect_of(text_id)
+            .expect("big stylesheet: text fragment");
+        let default_rect = frags_default
+            .rect_of(text_id)
+            .expect("default stylesheet: text fragment");
+
+        // 32px should produce ~2x the height of 16px (line-height
+        // defaults are font-size proportional in parley).
+        assert!(
+            big_rect.size.height > default_rect.size.height * 1.5,
+            "expected big font (32px) to produce >1.5x default (16px) text height; \
+             big={} default={}",
+            big_rect.size.height,
+            default_rect.size.height
+        );
+    }
+
     /// Probe the parley measure path: with default-sized elements, a
     /// text node should give its containing `<p>` a non-zero width
     /// derived from parley's measurement of the text.

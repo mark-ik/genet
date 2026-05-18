@@ -28,6 +28,11 @@ use crate::adapter::NodeRef;
 use crate::style::StylePlane;
 use crate::text_measure::TextLeaf;
 
+/// Default font size used for text leaves whose parent has no
+/// cascaded `font-size`. 16 px matches CSS/UA-stylesheet convention
+/// and parley's own default; lines up with `TextLeaf::new`.
+const DEFAULT_FONT_SIZE: f32 = 16.0;
+
 /// Output of construction: the Taffy tree, the root, and the DOM↔Taffy id
 /// mapping for reading results back. Tree is parameterized by `TextLeaf`
 /// so text leaves carry their content + font properties through to
@@ -87,6 +92,14 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    // Inherit font_size from the parent element's cascaded
+    // ComputedValues. Text nodes themselves don't have entries (only
+    // elements do); their effective font-size comes from the nearest
+    // ancestor element, which here is `parent`. When the cascade
+    // hasn't been applied (hand-rolled style fixtures), fall back to
+    // the default.
+    let parent_font_size = font_size_of(styles, parent.id()).unwrap_or(DEFAULT_FONT_SIZE);
+
     let mut children = Vec::new();
     for child in parent.dom_children() {
         let taffy_id = match dom.kind(child.id()) {
@@ -98,11 +111,7 @@ where
             }
             NodeKind::Text => {
                 let text = dom.text(child.id()).unwrap_or("").to_string();
-                // Inherit font_size from parent's StyleEntry. Probe-stage:
-                // taffy_style doesn't yet carry typography; fall back to
-                // parley's 16 px default until cascade integration wires
-                // ComputedValues font.size through.
-                let leaf = TextLeaf::new(text);
+                let leaf = TextLeaf::with_font_size(text, parent_font_size);
                 tree.new_leaf_with_context(taffy::Style::default(), leaf)
                     .expect("Taffy: failed to create text leaf")
             }
@@ -114,4 +123,16 @@ where
         children.push(taffy_id);
     }
     children
+}
+
+/// Read an element's cascaded `font-size` in CSS px. Returns `None`
+/// when the cascade hasn't been applied to that element (hand-rolled
+/// style fixtures); the caller defaults to `DEFAULT_FONT_SIZE`.
+fn font_size_of<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> Option<f32> {
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    Some(data.styles.primary().get_font().font_size.computed_size().px())
 }
