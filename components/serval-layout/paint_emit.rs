@@ -38,8 +38,10 @@ use layout_dom_api::{LayoutDom, NodeKind};
 use malloc_size_of_derive::MallocSizeOf;
 use paint_list_api::{
     ColorF, CommonPlacement, DeviceIntSize, EngineId, FontInstanceKey, GlyphInstance, LayoutPoint,
-    LayoutRect, PaintCmd, PaintList, RectItem, TextOptions, TextRunItem,
+    LayoutRect, LayoutTransform, PaintCmd, PaintList, RectItem, TextOptions, TextRunItem,
+    TransformSpec,
 };
+use paint_list_api::specs::TransformKind;
 use parley::PositionedLayoutItem;
 use serde::{Deserialize, Serialize};
 
@@ -157,7 +159,6 @@ where
         fragments,
         glyphs.as_ref(),
         dom.document(),
-        LayoutPoint::new(0.0, 0.0),
         &mut commands,
     );
     ServalPaintList {
@@ -167,38 +168,44 @@ where
     }
 }
 
-/// Recursive paint-order walk. `parent_origin` is the parent's
-/// absolute origin (origin of *its* fragment); children's locations
-/// are added to it. Nodes without fragments inherit the parent's
-/// origin (they're synthetic / skipped, but children still descend).
+/// Recursive paint-order walk emitting compositor-model commands:
+///
+/// For each node with a fragment:
+///   1. `PushTransform` with the fragment's local origin (its
+///      `taffy::Layout.location`, which is parent-relative).
+///   2. The node's own paint primitive (`DrawRect` for elements,
+///      `DrawText` for text leaves), in local `(0, 0, w, h)` coords.
+///   3. Recurse into children — their `PushTransform` origins compose
+///      with the active transform stack.
+///   4. `PopTransform` matching the push.
+///
+/// Nodes without fragments (synthetic / skipped) don't push or pop,
+/// but children still descend in the current coord space.
 fn walk<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
     glyphs: Option<&GlyphSource<'_, D::NodeId>>,
     id: D::NodeId,
-    parent_origin: LayoutPoint,
     commands: &mut Vec<PaintCmd>,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    let layout = fragments.rect_of(id);
-    let origin = if let Some(l) = layout {
-        LayoutPoint::new(parent_origin.x + l.location.x, parent_origin.y + l.location.y)
-    } else {
-        parent_origin
-    };
-
-    if let Some(l) = layout {
-        let bounds = LayoutRect::new(
-            origin,
-            LayoutPoint::new(origin.x + l.size.width, origin.y + l.size.height),
+    let pushed = if let Some(l) = fragments.rect_of(id) {
+        commands.push(PaintCmd::PushTransform(TransformSpec {
+            origin: LayoutPoint::new(l.location.x, l.location.y),
+            transform: LayoutTransform::identity(),
+            kind: TransformKind::Standard,
+        }));
+        let local_bounds = LayoutRect::new(
+            LayoutPoint::new(0.0, 0.0),
+            LayoutPoint::new(l.size.width, l.size.height),
         );
         match dom.kind(id) {
             NodeKind::Element => {
                 commands.push(PaintCmd::DrawRect(RectItem {
-                    placement: CommonPlacement::new(bounds),
+                    placement: CommonPlacement::new(local_bounds),
                     color: background_color_of(styles, id),
                 }));
             }
@@ -207,7 +214,7 @@ fn walk<D>(
                     .and_then(|g| extract_glyphs(g, id))
                     .unwrap_or_default();
                 commands.push(PaintCmd::DrawText(TextRunItem {
-                    placement: CommonPlacement::new(bounds),
+                    placement: CommonPlacement::new(local_bounds),
                     font_instance: FontInstanceKey::default(),
                     color: text_color_of(dom, styles, id),
                     glyphs: glyph_runs,
@@ -216,10 +223,17 @@ fn walk<D>(
             }
             _ => {}
         }
-    }
+        true
+    } else {
+        false
+    };
 
     for child in dom.dom_children(id) {
-        walk(dom, styles, fragments, glyphs, child, origin, commands);
+        walk(dom, styles, fragments, glyphs, child, commands);
+    }
+
+    if pushed {
+        commands.push(PaintCmd::PopTransform);
     }
 }
 
@@ -548,14 +562,33 @@ mod tests {
             DeviceIntSize::new(800, 600),
         );
 
-        // The first command should be the html rect (root element),
-        // not a text-run.
+        // The first command must be PushTransform (compositor model:
+        // each fragment opens a new coord space before painting itself).
         match plist.commands().first() {
-            Some(PaintCmd::DrawRect(_)) => {}
-            other => panic!("expected leading DrawRect (html), got {other:?}"),
+            Some(PaintCmd::PushTransform(_)) => {}
+            other => panic!("expected leading PushTransform, got {other:?}"),
         }
 
-        // Find the p indexes — there should be at least two.
+        // The command right after the leading PushTransform must be a
+        // DrawRect — the html element painting itself in local coords.
+        match plist.commands().get(1) {
+            Some(PaintCmd::DrawRect(_)) => {}
+            other => panic!("expected DrawRect after leading PushTransform, got {other:?}"),
+        }
+
+        // Push/Pop pairs must balance — the compositor-stack invariant.
+        let mut depth = 0i32;
+        for cmd in plist.commands() {
+            match cmd {
+                PaintCmd::PushTransform(_) => depth += 1,
+                PaintCmd::PopTransform => depth -= 1,
+                _ => {}
+            }
+            assert!(depth >= 0, "transform stack underflowed at command {cmd:?}");
+        }
+        assert_eq!(depth, 0, "transform stack didn't return to zero");
+
+        // Find the p count — there should be at least two.
         let p_count = document
             .dom_children(document.document())
             .flat_map(|html| document.dom_children(html))
