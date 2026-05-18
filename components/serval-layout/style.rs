@@ -196,4 +196,21 @@ impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
     pub fn ensure_entry(&mut self, id: NodeId) -> &mut StyleEntry {
         self.entries.entry(id).or_default()
     }
+
+    /// Populate empty StyleEntry slots for every element in the given DOM.
+    /// The cascade calls `ensure_data` on each element it visits — that
+    /// requires a StyleEntry to exist first (cascade orchestration's job,
+    /// not the cascade's). This walks the DOM up-front and pre-allocates.
+    pub fn populate_for_elements<D>(&mut self, dom: &D)
+    where
+        D: layout_dom_api::LayoutDom<NodeId = NodeId>,
+    {
+        let mut queue = vec![dom.document()];
+        while let Some(id) = queue.pop() {
+            if matches!(dom.kind(id), layout_dom_api::NodeKind::Element) {
+                self.ensure_entry(id);
+            }
+            queue.extend(dom.dom_children(id));
+        }
+    }
 }

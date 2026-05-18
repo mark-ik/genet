@@ -19,14 +19,17 @@
 
 mod adapter;
 mod adapter_stylo;
+mod cascade;
 mod cell;
 mod construct;
+mod font_metrics;
 mod fragment;
 mod layout;
 mod style;
 
 pub use adapter::NodeRef;
 pub use adapter_stylo::StyleNodeRef;
+pub use cascade::run_cascade;
 pub use cell::ArcRefCell;
 pub use construct::{construct, ConstructedTree};
 pub use fragment::FragmentPlane;
