@@ -4,40 +4,41 @@
 
 //! Stylo trait impls for serval-layout.
 //!
-//! `StyleNodeRef<'a, D>` is the foreign-trait firewall — it wraps a
-//! `(dom: &'a D, id: D::NodeId, style: &'a StylePlane<D::NodeId>)` tuple
-//! and implements Stylo's trait family (`NodeInfo` / `TNode` / `TDocument` /
-//! `TShadowRoot` / `TElement` / `selectors::Element` / `AttributeProvider`)
-//! over those three pieces of state.
+//! `StyleNodeRef<'a, D>` is the foreign-trait firewall — it implements
+//! Stylo's trait family (`NodeInfo` / `TNode` / `TDocument` / `TShadowRoot` /
+//! `TElement` / `selectors::Element` / `AttributeProvider`) over the
+//! `(dom, id, plane)` triple required by the planes architecture.
+//!
+//! **Size constraint**: Stylo's style-sharing cache is a thread-local byte
+//! buffer sized for a pointer-shaped element type (`FakeCandidate {
+//! _element: usize, … }` in upstream `style/sharing/mod.rs`). Blitz
+//! satisfies this with `type BlitzNode<'a> = &'a Node` — they embed style
+//! state on each `Node`. We keep the planes split (style state lives in
+//! `StylePlane`, not on DOM nodes), so to match the 8-byte assumption
+//! `StyleNodeRef` carries only `D::NodeId` and stashes `(dom, plane)` in
+//! TLS for the cascade duration via [`CascadeGuard`]. Methods that need
+//! `dom`/`plane` access read from the TLS slot.
+//!
+//! **Invariant**: At most one cascade per thread at a time. `CascadeGuard`
+//! enforces single-active-context via stack-saved `prev` (nested guards
+//! restore the outer ctx on drop).
 //!
 //! Distinct from `NodeRef` in `adapter.rs`: `NodeRef` is structural-only
-//! (used by `construct.rs`) and doesn't carry a `StylePlane` reference.
-//! `StyleNodeRef` is the Stylo-bound variant constructed by the cascade
-//! when it needs to walk the DOM with style-data access. Splitting keeps
-//! the structural path cheap and avoids forcing `StylePlane` through
-//! every NodeRef construction.
+//! (used by `construct.rs`) and doesn't need TLS. `StyleNodeRef` is the
+//! Stylo-bound variant — only valid inside a `CascadeGuard::enter` scope.
 //!
-//! ## Status (2026-05-18)
-//!
-//! Trait skeleton present; structural methods backed by `LayoutDom`;
-//! cascade-time methods (animations, snapshots, mutate_data, etc.)
-//! `unimplemented!()` with reasons. Cascade integration deferred — once
-//! the cascade runs, the `unimplemented!()` bodies become the next
-//! focused work.
-//!
-//! Architectural reference: Blitz's `packages/blitz-dom/src/stylo.rs`
-//! is the closest prior-art impl (alternative DOM + Stylo direct, no
-//! `layout_api` scaffolding). Our impls mirror its patterns, adapted to
-//! the `(dom, id, style)` shape required by the planes architecture
-//! where style state lives in serval-layout-owned planes rather than
-//! embedded on DOM nodes.
+//! Architectural reference: Blitz's `packages/blitz-dom/src/stylo.rs` is
+//! the closest prior-art impl. Our impls mirror its patterns, adapted
+//! to the TLS-context shape.
 //!
 //! Cf. `docs/2026-05-17_serval_layout_planes_architecture.md`.
 
 #![allow(unsafe_code, dead_code, unused_variables, clippy::needless_lifetimes)]
 
+use std::cell::Cell;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
 
 use layout_dom_api::{LayoutDom, NodeKind};
 use selectors::Element as SelectorsElement;
@@ -72,46 +73,146 @@ use stylo_dom::ElementState;
 use crate::style::StylePlane;
 
 // =============================================================================
+// Cascade thread-local context
+// =============================================================================
+
+/// Type-erased pointers to the active cascade's dom + plane. Set by
+/// [`CascadeGuard::enter`], cleared on drop. Single slot per thread.
+#[derive(Copy, Clone)]
+struct CascadeCtx {
+    dom: *const u8,
+    plane: *const u8,
+}
+
+thread_local! {
+    static CASCADE_CTX: Cell<Option<CascadeCtx>> = const { Cell::new(None) };
+}
+
+/// RAII guard that installs `(dom, plane)` pointers in TLS for the duration
+/// of a cascade traversal. `StyleNodeRef::dom()` / `plane()` resolve through
+/// these pointers; outside a guard, those calls panic.
+///
+/// The `'a` parameter ties the guard's lifetime to the borrowed dom +
+/// plane references. Nested guards are supported — drop restores the
+/// previous context.
+pub struct CascadeGuard<'a, D: LayoutDom> {
+    prev: Option<CascadeCtx>,
+    _phantom: PhantomData<(&'a D, &'a StylePlane<D::NodeId>)>,
+}
+
+impl<'a, D: LayoutDom> CascadeGuard<'a, D> {
+    /// Enter a cascade context. Pointers to `dom` and `plane` are stashed
+    /// in TLS until this guard drops.
+    ///
+    /// Asserts `D::NodeId` is pointer-shaped (size + align match `usize`),
+    /// the condition Stylo's style-sharing cache enforces at runtime.
+    /// Hitting this assertion means the caller is trying to use a DOM
+    /// whose `NodeId` type doesn't fit Stylo's typeless TLS cache layout.
+    pub fn enter(dom: &'a D, plane: &'a StylePlane<D::NodeId>) -> Self {
+        assert_eq!(
+            std::mem::size_of::<D::NodeId>(),
+            std::mem::size_of::<usize>(),
+            "D::NodeId must be pointer-sized for Stylo style-sharing cache",
+        );
+        assert_eq!(
+            std::mem::align_of::<D::NodeId>(),
+            std::mem::align_of::<usize>(),
+            "D::NodeId must have pointer alignment for Stylo style-sharing cache",
+        );
+        let new = CascadeCtx {
+            dom: dom as *const D as *const u8,
+            plane: plane as *const StylePlane<D::NodeId> as *const u8,
+        };
+        let prev = CASCADE_CTX.with(|c| c.replace(Some(new)));
+        Self {
+            prev,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<'a, D: LayoutDom> Drop for CascadeGuard<'a, D> {
+    fn drop(&mut self) {
+        CASCADE_CTX.with(|c| c.set(self.prev));
+    }
+}
+
+/// Read the active TLS cascade context. Panics if no guard is active.
+fn cascade_ctx() -> CascadeCtx {
+    CASCADE_CTX.with(|c| {
+        c.get()
+            .expect("StyleNodeRef accessed outside CascadeGuard scope")
+    })
+}
+
+// =============================================================================
 // StyleNodeRef
 // =============================================================================
 
-/// A `LayoutDom`-backed handle + StylePlane reference. The Stylo-bound
-/// variant of `NodeRef` — implements Stylo's trait family over the
-/// `(dom, id, style)` tuple.
+/// A Stylo-bound DOM handle. Carries only `D::NodeId`; `dom`/`plane`
+/// access goes through TLS (set by [`CascadeGuard`]). Size matches
+/// `usize`, which is the shape Stylo's style-sharing cache assumes.
+///
+/// **Lifetime**: `'a` is a marker representing the lifetime of the active
+/// [`CascadeGuard`]; the borrow checker can't enforce TLS validity, so the
+/// caller must ensure all `StyleNodeRef<'a, D>` instances are dropped
+/// before the guard.
 pub struct StyleNodeRef<'a, D: LayoutDom> {
-    pub(crate) dom: &'a D,
     pub(crate) id: D::NodeId,
-    pub(crate) style: &'a StylePlane<D::NodeId>,
+    _phantom: PhantomData<&'a (D, StylePlane<D::NodeId>)>,
 }
 
 impl<'a, D: LayoutDom> StyleNodeRef<'a, D> {
-    pub fn new(dom: &'a D, id: D::NodeId, style: &'a StylePlane<D::NodeId>) -> Self {
-        Self { dom, id, style }
+    /// Construct a `StyleNodeRef` for the given node id. Must be called
+    /// within a [`CascadeGuard::enter`] scope; methods on the returned
+    /// ref read `(dom, plane)` from TLS.
+    pub fn new(id: D::NodeId) -> Self {
+        Self {
+            id,
+            _phantom: PhantomData,
+        }
     }
 
-    pub fn document(dom: &'a D, style: &'a StylePlane<D::NodeId>) -> Self {
-        Self {
-            dom,
-            id: dom.document(),
-            style,
-        }
+    /// Build a `StyleNodeRef` for the document root. Requires an active
+    /// `CascadeGuard`.
+    pub fn document_root() -> Self {
+        let dom: &'a D = Self::dom_from_ctx();
+        Self::new(dom.document())
     }
 
     fn with_id(&self, id: D::NodeId) -> Self {
-        Self {
-            dom: self.dom,
-            id,
-            style: self.style,
-        }
+        Self::new(id)
+    }
+
+    /// Resolve `&'a D` from TLS. SAFETY: only valid inside a guard scope.
+    fn dom_from_ctx() -> &'a D {
+        // SAFETY: CascadeGuard::enter stored a `*const D` here; the
+        // 'a lifetime is the guard's lifetime, which the caller is
+        // responsible for not outliving.
+        unsafe { &*(cascade_ctx().dom as *const D) }
+    }
+
+    /// Resolve `&'a StylePlane<D::NodeId>` from TLS.
+    fn plane_from_ctx() -> &'a StylePlane<D::NodeId> {
+        // SAFETY: see dom_from_ctx.
+        unsafe { &*(cascade_ctx().plane as *const StylePlane<D::NodeId>) }
+    }
+
+    pub(crate) fn dom(&self) -> &'a D {
+        Self::dom_from_ctx()
+    }
+
+    pub(crate) fn plane(&self) -> &'a StylePlane<D::NodeId> {
+        Self::plane_from_ctx()
     }
 
     /// Lookup the `StyleEntry` for this node, if cascade has populated it.
     fn entry(&self) -> Option<&'a crate::style::StyleEntry> {
-        self.style.get(self.id)
+        self.plane().get(self.id)
     }
 
     fn is_element_kind(&self) -> bool {
-        matches!(self.dom.kind(self.id), NodeKind::Element)
+        matches!(self.dom().kind(self.id), NodeKind::Element)
     }
 }
 
@@ -133,7 +234,9 @@ impl<'a, D: LayoutDom> fmt::Debug for StyleNodeRef<'a, D> {
 
 impl<'a, D: LayoutDom> PartialEq for StyleNodeRef<'a, D> {
     fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.dom, other.dom) && self.id == other.id
+        // Within a cascade, all StyleNodeRefs share the same TLS context;
+        // identity is the node id alone.
+        self.id == other.id
     }
 }
 
@@ -141,8 +244,6 @@ impl<'a, D: LayoutDom> Eq for StyleNodeRef<'a, D> {}
 
 impl<'a, D: LayoutDom> Hash for StyleNodeRef<'a, D> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Identity is (dom pointer, id). Hash both.
-        (self.dom as *const D as usize).hash(state);
         self.id.hash(state);
     }
 }
@@ -153,11 +254,11 @@ impl<'a, D: LayoutDom> Hash for StyleNodeRef<'a, D> {
 
 impl<'a, D: LayoutDom> NodeInfo for StyleNodeRef<'a, D> {
     fn is_element(&self) -> bool {
-        matches!(self.dom.kind(self.id), NodeKind::Element)
+        matches!(self.dom().kind(self.id), NodeKind::Element)
     }
 
     fn is_text_node(&self) -> bool {
-        matches!(self.dom.kind(self.id), NodeKind::Text)
+        matches!(self.dom().kind(self.id), NodeKind::Text)
     }
 }
 
@@ -200,8 +301,6 @@ impl<'a, D: LayoutDom> TShadowRoot for StyleNodeRef<'a, D> {
     type ConcreteNode = StyleNodeRef<'a, D>;
 
     fn as_node(&self) -> Self::ConcreteNode {
-        // Shadow DOM not supported in static profile; this is unreachable
-        // because nothing constructs a shadow root.
         *self
     }
 
@@ -227,10 +326,7 @@ impl<'a, D: LayoutDom> AttributeProvider for StyleNodeRef<'a, D> {
         attr: &style::LocalName,
         namespace: &style::Namespace,
     ) -> Option<String> {
-        // Stylo's AttributeProvider uses `GenericAtomIdent<*>` wrappers
-        // (style::LocalName / style::Namespace), unwrap to the underlying
-        // `Atom<*>` for LayoutDom.
-        self.dom
+        self.dom()
             .attribute(self.id, &namespace.0, &attr.0)
             .map(|s| s.to_string())
     }
@@ -246,38 +342,36 @@ impl<'a, D: LayoutDom> TNode for StyleNodeRef<'a, D> {
     type ConcreteShadowRoot = StyleNodeRef<'a, D>;
 
     fn parent_node(&self) -> Option<Self> {
-        self.dom.parent(self.id).map(|p| self.with_id(p))
+        self.dom().parent(self.id).map(|p| self.with_id(p))
     }
 
     fn first_child(&self) -> Option<Self> {
-        self.dom
+        self.dom()
             .dom_children(self.id)
             .next()
             .map(|c| self.with_id(c))
     }
 
     fn last_child(&self) -> Option<Self> {
-        self.dom
+        self.dom()
             .dom_children(self.id)
             .last()
             .map(|c| self.with_id(c))
     }
 
     fn prev_sibling(&self) -> Option<Self> {
-        self.dom.prev_sibling(self.id).map(|s| self.with_id(s))
+        self.dom().prev_sibling(self.id).map(|s| self.with_id(s))
     }
 
     fn next_sibling(&self) -> Option<Self> {
-        self.dom.next_sibling(self.id).map(|s| self.with_id(s))
+        self.dom().next_sibling(self.id).map(|s| self.with_id(s))
     }
 
     fn owner_doc(&self) -> Self::ConcreteDocument {
-        self.with_id(self.dom.document())
+        self.with_id(self.dom().document())
     }
 
     fn is_in_document(&self) -> bool {
-        // For LayoutDom-backed DOMs, every reachable node is in the
-        // document. (Detached subtrees would need a different impl.)
         true
     }
 
@@ -286,12 +380,11 @@ impl<'a, D: LayoutDom> TNode for StyleNodeRef<'a, D> {
     }
 
     fn opaque(&self) -> OpaqueNode {
-        // Stable per-node identity via the LayoutDom primitive.
-        OpaqueNode(self.dom.opaque_id(self.id) as usize)
+        OpaqueNode(self.dom().opaque_id(self.id) as usize)
     }
 
     fn debug_id(self) -> usize {
-        self.dom.opaque_id(self.id) as usize
+        self.dom().opaque_id(self.id) as usize
     }
 
     fn as_element(&self) -> Option<Self::ConcreteElement> {
@@ -303,7 +396,7 @@ impl<'a, D: LayoutDom> TNode for StyleNodeRef<'a, D> {
     }
 
     fn as_document(&self) -> Option<Self::ConcreteDocument> {
-        if matches!(self.dom.kind(self.id), NodeKind::Document) {
+        if matches!(self.dom().kind(self.id), NodeKind::Document) {
             Some(*self)
         } else {
             None
@@ -311,7 +404,6 @@ impl<'a, D: LayoutDom> TNode for StyleNodeRef<'a, D> {
     }
 
     fn as_shadow_root(&self) -> Option<Self::ConcreteShadowRoot> {
-        // Static profile: no shadow roots.
         None
     }
 }
@@ -327,7 +419,7 @@ impl<'a, D: LayoutDom> SelectorsElement for StyleNodeRef<'a, D> {
         // Stable per-node identity via LayoutDom::opaque_id. Stored as a
         // fake `NonNull<()>` (matching Blitz's pattern). The `+1` ensures
         // non-null even for `opaque_id == 0`.
-        let raw = self.dom.opaque_id(self.id).wrapping_add(1) as usize;
+        let raw = self.dom().opaque_id(self.id).wrapping_add(1) as usize;
         let ptr = std::ptr::NonNull::new(raw as *mut ())
             .expect("opaque_id + 1 cannot be zero");
         OpaqueElement::from_non_null_ptr(ptr)
@@ -346,61 +438,58 @@ impl<'a, D: LayoutDom> SelectorsElement for StyleNodeRef<'a, D> {
     }
 
     fn is_pseudo_element(&self) -> bool {
-        // Static profile doesn't synthesize pseudo elements yet.
         false
     }
 
     fn prev_sibling_element(&self) -> Option<Self> {
-        let mut cursor = self.dom.prev_sibling(self.id);
+        let mut cursor = self.dom().prev_sibling(self.id);
         while let Some(id) = cursor {
             let candidate = self.with_id(id);
             if candidate.is_element_kind() {
                 return Some(candidate);
             }
-            cursor = self.dom.prev_sibling(id);
+            cursor = self.dom().prev_sibling(id);
         }
         None
     }
 
     fn next_sibling_element(&self) -> Option<Self> {
-        let mut cursor = self.dom.next_sibling(self.id);
+        let mut cursor = self.dom().next_sibling(self.id);
         while let Some(id) = cursor {
             let candidate = self.with_id(id);
             if candidate.is_element_kind() {
                 return Some(candidate);
             }
-            cursor = self.dom.next_sibling(id);
+            cursor = self.dom().next_sibling(id);
         }
         None
     }
 
     fn first_element_child(&self) -> Option<Self> {
-        self.dom
+        self.dom()
             .dom_children(self.id)
             .map(|c| self.with_id(c))
             .find(|n| n.is_element_kind())
     }
 
     fn is_html_element_in_html_document(&self) -> bool {
-        // serval-static-dom is always an HTML document with HTML elements;
-        // future DOMs may refine this.
         self.is_element_kind()
     }
 
     fn has_local_name(&self, local_name: &LocalName) -> bool {
-        self.dom
+        self.dom()
             .element_name(self.id)
             .is_some_and(|q| q.local == *local_name)
     }
 
     fn has_namespace(&self, ns: &Namespace) -> bool {
-        self.dom
+        self.dom()
             .element_name(self.id)
             .is_some_and(|q| q.ns == *ns)
     }
 
     fn is_same_type(&self, other: &Self) -> bool {
-        match (self.dom.element_name(self.id), other.dom.element_name(other.id)) {
+        match (self.dom().element_name(self.id), other.dom().element_name(other.id)) {
             (Some(a), Some(b)) => a.local == b.local && a.ns == b.ns,
             _ => false,
         }
@@ -412,8 +501,6 @@ impl<'a, D: LayoutDom> SelectorsElement for StyleNodeRef<'a, D> {
         local_name: &style::LocalName,
         operation: &AttrSelectorOperation<&style::values::AtomString>,
     ) -> bool {
-        // Lookup the attribute via LayoutDom (no-namespace match for now).
-        // Per Blitz's impl: TODO filter by namespace.
         let _ = _ns;
         let _ = local_name;
         let _ = operation;
@@ -428,11 +515,6 @@ impl<'a, D: LayoutDom> SelectorsElement for StyleNodeRef<'a, D> {
         pc: &NonTSPseudoClass,
         _context: &mut MatchingContext<Self::Impl>,
     ) -> bool {
-        // Static profile: most non-TS pseudo-classes are false (no
-        // interaction state, no JS-driven flags). The cascade may still
-        // call this during selector matching; for the probe-stage skeleton
-        // return false uniformly. Real impl reads `self.entry().map(|e|
-        // e.state.contains(...))` for the interaction-state subset.
         let _ = pc;
         false
     }
@@ -446,7 +528,6 @@ impl<'a, D: LayoutDom> SelectorsElement for StyleNodeRef<'a, D> {
     }
 
     fn apply_selector_flags(&self, flags: ElementSelectorFlags) {
-        // Read-modify-write on the entry's selector_flags Cell.
         if let Some(entry) = self.entry() {
             let self_flags = flags.for_self();
             if !self_flags.is_empty() {
@@ -468,7 +549,6 @@ impl<'a, D: LayoutDom> SelectorsElement for StyleNodeRef<'a, D> {
     }
 
     fn is_link(&self) -> bool {
-        // <a href="..."> and <area href="...">. Cascade-time check.
         false
     }
 
@@ -481,8 +561,6 @@ impl<'a, D: LayoutDom> SelectorsElement for StyleNodeRef<'a, D> {
         _id: &AtomIdent,
         _case_sensitivity: CaseSensitivity,
     ) -> bool {
-        // Real impl reads the interned id from StylePlane entry; the
-        // cascade interns at first access. Probe doesn't exercise.
         unimplemented!("selectors::Element::has_id — atom interning not wired yet")
     }
 
@@ -507,19 +585,14 @@ impl<'a, D: LayoutDom> SelectorsElement for StyleNodeRef<'a, D> {
     }
 
     fn is_empty(&self) -> bool {
-        self.dom.dom_children(self.id).next().is_none()
+        self.dom().dom_children(self.id).next().is_none()
     }
 
     fn is_root(&self) -> bool {
-        self.dom.parent(self.id).is_none()
+        self.dom().parent(self.id).is_none()
     }
 
     fn add_element_unique_hashes(&self, _filter: &mut BloomFilter) -> bool {
-        // Bloom-filter contribution for the descendants-bloom optimization.
-        // Real impl: hash the element's local name, classes, and id.
-        // Returning false here means the optimization sees no contribution
-        // for this element — selector matching still works, just slightly
-        // less optimized.
         false
     }
 }
@@ -538,9 +611,9 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
 
     fn traversal_children(&self) -> LayoutIterator<Self::TraversalChildrenIterator> {
         LayoutIterator(TraversalChildren {
-            parent: *self,
-            children: self.dom.dom_children(self.id).collect(),
+            children: self.dom().dom_children(self.id).collect(),
             cursor: 0,
+            _phantom: PhantomData,
         })
     }
 
@@ -557,9 +630,6 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
     }
 
     fn style_attribute(&self) -> Option<ArcBorrow<'_, Locked<PropertyDeclarationBlock>>> {
-        // Inline `style="..."` declaration block. Parsed lazily on first
-        // access; would live in StyleEntry alongside other cascade state.
-        // Probe stage: none.
         None
     }
 
@@ -590,8 +660,6 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
     }
 
     fn id(&self) -> Option<&style::Atom> {
-        // Stylo expects atom-interned ids. Cascade-time interning belongs
-        // in StylePlane; not wired yet.
         None
     }
 
@@ -599,13 +667,9 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
     where
         F: FnMut(&AtomIdent),
     {
-        // Read the class attribute, split on ASCII whitespace, intern each
-        // token as a Stylo Atom and yield through the callback. Per-call
-        // interning is cheap (string_cache interns are cached); no need for
-        // a per-element atom side-table for `each_class` specifically.
         let no_ns = Namespace::default();
         let class_local = LocalName::from("class");
-        let Some(class_attr) = self.dom.attribute(self.id, &no_ns, &class_local) else {
+        let Some(class_attr) = self.dom().attribute(self.id, &no_ns, &class_local) else {
             return;
         };
         for token in class_attr.split_ascii_whitespace() {
@@ -624,15 +688,12 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
     where
         F: FnMut(&style::LocalName),
     {
-        for attr in self.dom.attributes(self.id) {
-            // Wrap the markup5ever atom in the GenericAtomIdent wrapper
-            // Stylo expects. `style::LocalName` is the type alias.
+        for attr in self.dom().attributes(self.id) {
             callback(&GenericAtomIdent(attr.name.local.clone()));
         }
     }
 
     fn has_dirty_descendants(&self) -> bool {
-        // Static profile: no incremental restyle.
         false
     }
 
@@ -644,21 +705,13 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
         true
     }
 
-    unsafe fn set_handled_snapshot(&self) {
-        // No-op: snapshots not used in static profile.
-    }
+    unsafe fn set_handled_snapshot(&self) {}
 
-    unsafe fn set_dirty_descendants(&self) {
-        // No-op for static profile.
-    }
+    unsafe fn set_dirty_descendants(&self) {}
 
-    unsafe fn unset_dirty_descendants(&self) {
-        // No-op for static profile.
-    }
+    unsafe fn unset_dirty_descendants(&self) {}
 
-    fn store_children_to_process(&self, _n: isize) {
-        // No-op for sequential traversal.
-    }
+    fn store_children_to_process(&self, _n: isize) {}
 
     fn did_process_child(&self) -> isize {
         0
@@ -666,11 +719,10 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
 
     unsafe fn ensure_data(&self) -> ElementDataMut<'_> {
         // The StylePlane is `&'a StylePlane`, so we can't allocate a new
-        // entry on the fly without &mut access. Cascade-time work requires
-        // the plane to be pre-populated with entries for the nodes it will
-        // visit (the cascade walks the DOM up-front and inserts entries).
-        // If `ensure_data` is called on a node without an entry, we panic —
-        // that's a cascade-orchestration bug, not a runtime condition.
+        // entry on the fly without &mut access. The cascade orchestrator
+        // pre-populates entries via `StylePlane::populate_for_elements`
+        // before calling the cascade. If the entry is missing, that's a
+        // cascade-orchestration bug.
         let entry = self
             .entry()
             .expect("ensure_data: StylePlane entry must exist; cascade should pre-populate");
@@ -748,9 +800,6 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
     }
 
     fn is_html_document_body_element(&self) -> bool {
-        // Real impl: this element is <body> AND its parent is the document
-        // root (<html>). Cascade exercises this for the body-style cascade
-        // root special case. Probe-stage: false uniformly.
         false
     }
 
@@ -761,15 +810,11 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
     ) where
         V: Push<ApplicableDeclarationBlock>,
     {
-        // HTML legacy attribute hints (align, width, height, bgcolor,
-        // hidden, etc.). Blitz has a ~150-line impl; ours stays empty
-        // until we want real legacy-attribute support. Static profile
-        // renders modern HTML where legacy attrs are rare.
     }
 
     fn local_name(&self) -> &LocalName {
         &self
-            .dom
+            .dom()
             .element_name(self.id)
             .expect("local_name called on non-element node")
             .local
@@ -777,7 +822,7 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
 
     fn namespace(&self) -> &Namespace {
         &self
-            .dom
+            .dom()
             .element_name(self.id)
             .expect("namespace called on non-element node")
             .ns
@@ -787,7 +832,6 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
         &self,
         _display: &style::values::specified::Display,
     ) -> euclid::default::Size2D<Option<app_units::Au>> {
-        // Container queries: not exercised at probe stage.
         Default::default()
     }
 
@@ -828,8 +872,6 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
     }
 
     fn compute_layout_damage(_old: &ComputedValues, _new: &ComputedValues) -> RestyleDamage {
-        // Damage computation drives incremental relayout; for static
-        // profile (no incremental), the default no-damage is fine.
         Default::default()
     }
 }
@@ -842,9 +884,9 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
 /// `TElement::traversal_children`. Materializes the child id list eagerly
 /// because Stylo's `LayoutIterator<T>` expects a sized iterator type.
 pub struct TraversalChildren<'a, D: LayoutDom> {
-    parent: StyleNodeRef<'a, D>,
     children: Vec<D::NodeId>,
     cursor: usize,
+    _phantom: PhantomData<&'a D>,
 }
 
 impl<'a, D: LayoutDom> Iterator for TraversalChildren<'a, D> {
@@ -853,6 +895,6 @@ impl<'a, D: LayoutDom> Iterator for TraversalChildren<'a, D> {
     fn next(&mut self) -> Option<Self::Item> {
         let id = *self.children.get(self.cursor)?;
         self.cursor += 1;
-        Some(self.parent.with_id(id))
+        Some(StyleNodeRef::new(id))
     }
 }

@@ -10,64 +10,32 @@
 //! architecture where style state lives in `serval-layout`-owned planes
 //! rather than embedded on DOM nodes.
 //!
-//! ## Status (v1, 2026-05-18) — INTEGRATION BLOCKED BY STYLE-SHARING SIZE ASSERTION
+//! ## Status (v1.1, 2026-05-18) — END-TO-END, EMPTY-STYLIST
 //!
-//! The cascade runner is fully wired: stylist setup, SharedStyleContext,
-//! DomTraversal driver, all stitched together. **It panics at runtime**
-//! inside Stylo's style-sharing cache initialization:
+//! Cascade runs and populates `ElementData` for every element in the test
+//! document. Probe slice exercises an empty `Stylist` (no stylesheets
+//! loaded), so every element receives Stylo's default cascaded values —
+//! the real win is that the trait surface holds together end-to-end.
 //!
-//! ```text
-//! thread 'cascade::tests::...' panicked at
-//! style/sharing/mod.rs:611: assertion `left == right` failed
-//!   left: 10000  (= size_of::<SharingCache<StyleNodeRef<...>>>())
-//!  right: 9488   (= size_of::<TypelessSharingCache>())
-//! ```
+//! The original integration blocker (Stylo's style-sharing cache size
+//! assertion in `style/sharing/mod.rs:611`) was resolved by the
+//! TLS-context refactor of `StyleNodeRef` — see `adapter_stylo.rs` for
+//! the design. Briefly: Stylo's `TypelessSharingCache` is a leaked
+//! thread-local sized for `FakeCandidate { _element: usize, … }`, which
+//! bakes in the assumption that `E` is pointer-shaped. Blitz's
+//! `BlitzNode<'a> = &'a Node` satisfies it by embedding style state on
+//! the DOM node. We keep the planes split (style lives in `StylePlane`,
+//! not on nodes) and shrunk `StyleNodeRef<'a, D>` to `{ id: D::NodeId }`
+//! (8 bytes for `usize`-sized NodeIds); `(dom, plane)` is stashed in a
+//! TLS slot for the cascade duration via `CascadeGuard`.
 //!
-//! Stylo's style-sharing cache is a thread-local byte buffer sized at
-//! compile time assuming Servo's pointer-shaped element type (~8 bytes).
-//! Our `StyleNodeRef<'a, D>` is 24 bytes (three references: `&'a D`,
-//! `D::NodeId`, `&'a StylePlane<D::NodeId>`). The cache's typeless byte
-//! buffer is sized for the smaller element type; constructing the cache
-//! against our larger element fails the size assertion in
-//! `StyleSharingCache::new()`.
-//!
-//! Why the assertion exists: Stylo stores its style-sharing LRU in a leaked
-//! `thread_local!` `AtomicRefCell<TypelessSharingCache>` (cf. upstream
-//! `style/sharing/mod.rs:548-567`) and transmutes into a typed
-//! `SharingCache<E>` per call. The TLS buffer is sized for `FakeCandidate`,
-//! whose `_element: usize` field bakes in the assumption that `E` is
-//! pointer-shaped. Blitz satisfies this with `type BlitzNode<'a> = &'a Node`
-//! — they embed style state on each `Node`, dodging the planes split.
-//!
-//! Resolution paths (deferred to follow-up):
-//!
-//! - **(Recommended) TLS-context + NodeId-only `StyleNodeRef`.** Shrink
-//!   `StyleNodeRef<'a, D>` to `{ id: D::NodeId, _phantom: PhantomData<&'a D> }`
-//!   (8 bytes if `D::NodeId` fits in `usize`; `StaticNodeId(usize)` does).
-//!   Stash `(*const D, *const StylePlane<D::NodeId>)` in a single type-erased
-//!   TLS slot at cascade entry via a `CascadeGuard` RAII wrapper; methods
-//!   that need `dom`/`plane` access fetch from TLS. Keeps the planes split
-//!   intact, matches Servo's pointer-shape assumption, no per-node
-//!   allocation. Cost: unsafe TLS dereferencing in every `StyleNodeRef`
-//!   method that currently uses `self.dom`/`self.style` (~42 sites), plus
-//!   a `D::NodeId: Copy + 'static` constraint and an at-most-one-cascade-
-//!   per-thread invariant.
-//! - **Owned heap `CascadeNode`.** Allocate `Box<CascadeNode<D>>` per
-//!   visited element carrying `(dom, id, plane)`; `StyleNodeRef` becomes
-//!   `&'a CascadeNode<D>` (8 bytes, pointer-shaped). Simpler code than TLS
-//!   but adds an allocation per cascade-visited node.
-//! - **Patch upstream Stylo.** Two sub-options: (a) replace the size
-//!   assertion with a runtime fallback that heap-allocates a fresh
-//!   `SharingCache<E>` when the typeless slot doesn't fit; (b) drop the
-//!   typeless TLS reuse entirely. Either carries forever in our Stylo
-//!   fork unless upstreamed. Stylo's `[patch."https://github.com/servo/stylo"]`
-//!   block in `Cargo.toml` (lines 436-444, currently commented) is the
-//!   wiring point.
-//! - **Disable style sharing.** Not possible without the same patch — the
-//!   cache is allocated unconditionally when `StyleContext` is created.
-//!
-//! The cascade runner stays in the tree as the integration record; its
-//! test is `#[ignore]`'d until the size constraint is resolved.
+//! Next steps:
+//! - Load stylesheets into the `Stylist` so real CSS rules apply.
+//! - Wire `SharedRwLock` exposure through `TDocument::shared_lock`
+//!   (currently `unimplemented!()`, untouched because the empty-stylist
+//!   path doesn't reach it).
+//! - Replace `each_class` / `each_attr_name` / `id` skeletons with
+//!   real impls once stylesheets exist to exercise them.
 
 #![allow(unsafe_code)]
 
@@ -94,7 +62,7 @@ use style::traversal::{DomTraversal, PerLevelTraversalData, recalc_style_at};
 use style::traversal_flags::TraversalFlags;
 use style::Atom;
 
-use crate::adapter_stylo::StyleNodeRef;
+use crate::adapter_stylo::{CascadeGuard, StyleNodeRef};
 use crate::font_metrics::StubFontMetricsProvider;
 use crate::style::StylePlane;
 
@@ -242,28 +210,26 @@ pub fn run_cascade<D>(
         registered_speculative_painters: &registered_painters,
     };
 
-    // 5. Drive the traversal. RecalcStyle's process_preorder calls
-    //    recalc_style_at on each element, populating its ElementData
-    //    in the StylePlane.
-    let root_id = dom.document();
-    let root = StyleNodeRef::new(dom, root_id, plane);
-    let Some(root_element) = first_element_descendant(dom, root_id).map(|id| {
-        StyleNodeRef::new(dom, id, plane)
-    }) else {
-        // No element in the document — nothing to cascade.
-        thread_state::exit(ThreadState::LAYOUT);
-        return;
-    };
-    let _ = root; // referenced for symmetry with Blitz; the actual entry is the root element.
+    // 5. Enter cascade TLS context. StyleNodeRef methods that need
+    //    `dom`/`plane` access read from this slot; outside the guard they
+    //    panic. See `adapter_stylo::CascadeGuard` for the invariant.
+    let plane_ref: &StylePlane<D::NodeId> = &*plane;
+    let _guard = CascadeGuard::<D>::enter(dom, plane_ref);
 
-    let token = RecalcStyle::pre_traverse(root_element, &context);
-    if token.should_traverse() {
-        let traverser = RecalcStyle::new(context);
-        // Sequential traversal — pass None for the rayon pool.
-        driver::traverse_dom(&traverser, token, None);
+    // 6. Drive the traversal. RecalcStyle's process_preorder calls
+    //    recalc_style_at on each element, populating its ElementData
+    //    in the StylePlane (via UnsafeCell interior mutability per entry).
+    if let Some(root_id) = first_element_descendant(dom, dom.document()) {
+        let root_element: StyleNodeRef<'_, D> = StyleNodeRef::new(root_id);
+        let token = RecalcStyle::pre_traverse(root_element, &context);
+        if token.should_traverse() {
+            let traverser = RecalcStyle::new(context);
+            driver::traverse_dom(&traverser, token, None);
+        }
     }
 
-    // 6. Exit thread state.
+    // 7. Drop guard (clears TLS), then exit thread state.
+    drop(_guard);
     thread_state::exit(ThreadState::LAYOUT);
 }
 
@@ -303,14 +269,10 @@ mod tests {
         None
     }
 
-    /// Cascade integration probe. **Currently `#[ignore]`'d** — see the
-    /// file header for the Stylo style-sharing-cache size assertion that
-    /// blocks the runtime path. The test code itself is correct shape;
-    /// it'll work once StyleNodeRef's size constraint is resolved.
+    /// Cascade integration probe. After the TLS-context refactor of
+    /// `StyleNodeRef` (now 8 bytes, NodeId-only), the cache size
+    /// assertion passes and the cascade runs end-to-end.
     #[test]
-    #[ignore = "blocked on Stylo style-sharing-cache size assertion; \
-                StyleNodeRef is 24 bytes but cache assumes 8-byte element. \
-                See cascade.rs header for resolution paths."]
     fn cascade_populates_element_data_for_every_element() {
         let document =
             StaticDocument::parse("<html><body><p>Hello</p></body></html>");
