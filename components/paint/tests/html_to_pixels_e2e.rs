@@ -191,19 +191,16 @@ fn html_to_pixels_cascaded_background_color_renders_to_master() {
 
     // `body { background-color: rgb(255, 0, 0); }` — pure red.
     //
-    // Real browsers auto-expand `<html>` / `<body>` to the viewport
-    // even without explicit dimensions (CSS initial-containing-block
-    // semantics). Our cv_to_taffy converter takes `width`/`height`
-    // literally — `auto` stays auto, which Taffy treats as
-    // content-sized. With an empty body, content size is 0×0 and
-    // nothing paints. Give them explicit viewport dimensions so the
-    // background actually covers the master texture.
+    // serval-layout's UA-defaults stylesheet (always prepended by
+    // `run_cascade`) sets `html, body { display: block; width: 100%;
+    // height: 100% }`, and `construct` gives the synthetic Taffy
+    // root explicit viewport dimensions for those `100%`s to resolve
+    // against. So an empty body with a `background-color` rule
+    // covers the master texture — no test-side dimension workaround
+    // needed.
     let envelope = html_to_envelope(
         "<html><body></body></html>",
-        &[
-            "html, body { width: 128px; height: 128px; }",
-            "body { background-color: rgb(255, 0, 0); }",
-        ],
+        &["body { background-color: rgb(255, 0, 0); }"],
     );
 
     paint.handle_messages(vec![paint_api::PaintMessage::SendPaintList {

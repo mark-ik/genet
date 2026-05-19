@@ -23,6 +23,7 @@ use std::hash::Hash;
 use layout_dom_api::{LayoutDom, NodeKind};
 use rustc_hash::FxHashMap;
 use taffy::TaffyTree;
+use taffy::prelude::TaffyAuto;
 
 use crate::adapter::NodeRef;
 use crate::style::StylePlane;
@@ -63,19 +64,43 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    let _ = viewport; // Used at layout time, not construct.
     let mut tree: TaffyTree<TextLeaf> = TaffyTree::new();
     let mut node_map: FxHashMap<D::NodeId, taffy::NodeId> = FxHashMap::default();
 
     let root_ref = NodeRef::document(dom);
     let root_children = build_children(dom, styles, root_ref, &mut tree, &mut node_map);
 
-    let root_style = styles.taffy_style(dom.document());
+    // Synthetic root takes the viewport dimensions explicitly. This
+    // is the initial containing block — `<html>`'s `width: 100%` /
+    // `height: 100%` (from the UA defaults) resolves against this
+    // size, which transitively gives `<body>` and its descendants a
+    // base to measure against. Without explicit dimensions on the
+    // root, percentage sizes have nothing to resolve to and an empty
+    // document lays out as 0×0.
+    let root_style = taffy::Style {
+        display: taffy::Display::Block,
+        size: taffy::Size {
+            width: available_space_to_dimension(viewport.width),
+            height: available_space_to_dimension(viewport.height),
+        },
+        ..Default::default()
+    };
     let root = tree
         .new_with_children(root_style, &root_children)
         .expect("Taffy: failed to create root");
 
     ConstructedTree { tree, root, node_map }
+}
+
+/// Translate Taffy's `AvailableSpace` (the layout-time constraint)
+/// into a `Dimension` (the style-time size). `Definite(v)` becomes
+/// an explicit pixel length; `MinContent` / `MaxContent` collapse to
+/// `Auto`, since the root has nothing larger to size against.
+fn available_space_to_dimension(a: taffy::AvailableSpace) -> taffy::Dimension {
+    match a {
+        taffy::AvailableSpace::Definite(v) => taffy::Dimension::length(v),
+        _ => taffy::Dimension::AUTO,
+    }
 }
 
 /// Recursively build Taffy nodes for `parent`'s element + text

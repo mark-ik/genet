@@ -191,11 +191,18 @@ pub fn run_cascade<D>(
         ua_or_user: &read,
     };
 
-    // 3. Stylist setup. Append each provided stylesheet as UA-origin
-    //    before flushing — the Stylist resolves rule indices during
+    // 3. Stylist setup. Prepend the baseline UA stylesheet
+    //    (`ua_defaults::UA_DEFAULTS`) — `<html>`/`<body>` default to
+    //    `display: block` and fill the viewport, structural block
+    //    elements (div, p, headings, lists, etc.) default to
+    //    `display: block`. Then append user-provided stylesheets
+    //    (also UA-origin for now; engine vs author origin handling
+    //    is a follow-up). The Stylist resolves rule indices during
     //    flush, so all sheets must be present first.
     let device = make_device(viewport);
     let mut stylist = Stylist::new(device, QuirksMode::NoQuirks);
+    let ua_sheet = parse_stylesheet(crate::ua_defaults::UA_DEFAULTS, &lock);
+    stylist.append_stylesheet(ua_sheet, &read);
     for css in stylesheets {
         let sheet = parse_stylesheet(css, &lock);
         stylist.append_stylesheet(sheet, &read);

@@ -30,6 +30,7 @@ mod paint_emit;
 mod serval_lane;
 mod style;
 mod text_measure;
+mod ua_defaults;
 
 pub use adapter::NodeRef;
 pub use adapter_stylo::StyleNodeRef;
