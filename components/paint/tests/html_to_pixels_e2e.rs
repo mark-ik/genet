@@ -237,3 +237,135 @@ fn html_to_pixels_cascaded_background_color_renders_to_master() {
         "center pixel should be opaque red from cascaded background-color"
     );
 }
+
+/// Read back the master texture rendered from the given HTML +
+/// stylesheets. Shared helper for the multi-pixel test bodies below.
+fn render_to_image(
+    html: &str,
+    stylesheets: &[&str],
+) -> image::ImageBuffer<image::Rgba<u8>, Vec<u8>> {
+    let handles = boot().expect("wgpu boot");
+    let device = handles.device.clone();
+    let queue = handles.queue.clone();
+    let renderer = create_netrender_instance(
+        handles,
+        NetrenderOptions {
+            tile_cache_size: Some(64),
+            enable_vello: true,
+            ..Default::default()
+        },
+    )
+    .expect("create_netrender_instance");
+
+    let paint_rc = Paint::new_for_test();
+    let paint = paint_rc.borrow();
+
+    ensure_pipeline_namespace();
+    let painter_id = PainterId::next();
+    paint.install_renderer(painter_id, renderer);
+    let webview_id = WebViewId::new(painter_id);
+
+    let envelope = html_to_envelope(html, stylesheets);
+    paint.handle_messages(vec![paint_api::PaintMessage::SendPaintList {
+        webview_id,
+        envelope,
+        paint_info: paint_info_for(PipelineId::default()),
+    }]);
+    paint.render(webview_id);
+
+    let master = paint
+        .composite_texture(painter_id)
+        .expect("composite_texture should return the master after render");
+
+    read_texture_to_image(
+        &device,
+        &queue,
+        &master,
+        master.format(),
+        PhysicalSize::new(VIEWPORT, VIEWPORT),
+        DeviceIntRect::new(
+            paint_types::units::DeviceIntPoint::new(0, 0),
+            paint_types::units::DeviceIntPoint::new(VIEWPORT as i32, VIEWPORT as i32),
+        ),
+    )
+    .expect("master readback")
+}
+
+/// Nested elements with distinct colors paint into the right pixels.
+/// `<div>` is 50×50 anchored at body's origin (top-left); a pixel
+/// inside the div should carry its background color, and a pixel
+/// outside the div (but inside body) should carry body's.
+///
+/// This is the receipt that compositor transforms compose correctly:
+/// PushTransform pairs nest, child PaintCmds emit in the parent's
+/// local space, and the translator's transform palette + Scene
+/// layer stack produce the right absolute pixel positions.
+#[test]
+fn html_to_pixels_nested_elements_render_with_distinct_colors() {
+    let image = render_to_image(
+        "<html><body><div></div></body></html>",
+        &[
+            "body { background-color: rgb(255, 0, 0); }",
+            "div { width: 50px; height: 50px; background-color: rgb(0, 0, 255); }",
+        ],
+    );
+
+    // Inside the div (50×50 at body's top-left): blue.
+    assert_eq!(
+        image.get_pixel(25, 25).0,
+        [0, 0, 255, 255],
+        "(25, 25) is inside the div, should be blue"
+    );
+    // Outside the div, inside body: red.
+    assert_eq!(
+        image.get_pixel(75, 75).0,
+        [255, 0, 0, 255],
+        "(75, 75) is outside the div but inside body, should be red"
+    );
+}
+
+/// Border emission lands at the element's edges. A `<div>` with
+/// `border: 10px solid green; width: 40px; height: 40px;` lays
+/// out at 60×60 (border-box semantics) anchored at body's origin.
+/// Pixels inside the border ring are green; pixels in the inner
+/// content area are body's white.
+#[test]
+fn html_to_pixels_border_renders_at_element_edges() {
+    let image = render_to_image(
+        "<html><body><div></div></body></html>",
+        &[
+            "body { background-color: rgb(255, 255, 255); }",
+            "div {
+                width: 40px;
+                height: 40px;
+                border: 10px solid rgb(0, 128, 0);
+            }",
+        ],
+    );
+
+    // Top border: y in [0, 10), x in [0, 60). (5, 5) is firmly inside.
+    assert_eq!(
+        image.get_pixel(5, 5).0,
+        [0, 128, 0, 255],
+        "(5, 5) should be inside the top border (green)"
+    );
+    // Right border: x in [50, 60), y in [0, 60). (55, 30) is inside.
+    assert_eq!(
+        image.get_pixel(55, 30).0,
+        [0, 128, 0, 255],
+        "(55, 30) should be inside the right border (green)"
+    );
+    // Inside the div's content area (no background-color declared on
+    // div → transparent content area, body's white shows through).
+    assert_eq!(
+        image.get_pixel(30, 30).0,
+        [255, 255, 255, 255],
+        "(30, 30) is the div's content area; body's white shows through"
+    );
+    // Far outside the div, still inside body: white.
+    assert_eq!(
+        image.get_pixel(100, 100).0,
+        [255, 255, 255, 255],
+        "(100, 100) is body interior, should be white"
+    );
+}
