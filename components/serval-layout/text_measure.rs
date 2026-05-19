@@ -26,10 +26,45 @@
 //! Cf. `docs/2026-05-17_serval_layout_planes_architecture.md` —
 //! parley wiring is step (2) in the roadmap.
 
-use parley::{Alignment, AlignmentOptions, FontContext, Layout, LayoutContext, StyleProperty};
+use std::borrow::Cow;
+
+use parley::{
+    Alignment, AlignmentOptions, FontContext, FontFamily, GenericFamily, Layout, LayoutContext,
+    StyleProperty,
+};
 use rustc_hash::FxHashMap;
 use taffy::geometry::Size;
 use taffy::style::AvailableSpace;
+
+/// CSS generic font family. Serval-local mirror of the subset of
+/// Stylo's `GenericFontFamily` we map to parley — keeps `TextLeaf`
+/// decoupled from both Stylo and parley enums (the conversion to
+/// parley's `GenericFamily` lives in [`measure_text_leaf`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GenericFamilyKind {
+    Serif,
+    SansSerif,
+    Monospace,
+    Cursive,
+    Fantasy,
+}
+
+/// Resolved font-family choice for a text leaf. The cascade in
+/// `construct` collapses CSS's family *list* to the first entry for
+/// the probe (no fallback-chain walking yet).
+#[derive(Clone, Debug)]
+pub enum FontFamilySpec {
+    /// A CSS generic family (`serif`, `sans-serif`, …).
+    Generic(GenericFamilyKind),
+    /// A named family (`"Arial"`, `Times New Roman`, …).
+    Named(String),
+}
+
+impl Default for FontFamilySpec {
+    fn default() -> Self {
+        Self::Generic(GenericFamilyKind::SansSerif)
+    }
+}
 
 /// Per-text-node context carried on Taffy leaves. Created in
 /// [`crate::construct`] when walking text DOM nodes; consumed by the
@@ -40,28 +75,57 @@ pub struct TextLeaf {
     /// borrow into the DOM (Taffy moves the context in via
     /// `new_leaf_with_context`).
     pub text: String,
-    /// Cascaded font size in CSS pixels. Defaults to 16.0 in the probe;
-    /// real cascade integration replaces with `font.size` from
-    /// `ComputedValues`.
+    /// Cascaded font size in CSS pixels. Defaults to 16.0 when no
+    /// cascade `font.size` is available.
     pub font_size: f32,
+    /// Cascaded font family. Drives parley's font selection at shape
+    /// time; defaults to `sans-serif`.
+    pub font_family: FontFamilySpec,
 }
 
 impl TextLeaf {
-    /// Build a `TextLeaf` with default font size (16 px). Used when
-    /// no cascade has applied a `font-size` to the text's parent.
+    /// Build a `TextLeaf` with default font size (16 px) + family
+    /// (sans-serif). Used when no cascade has applied typography to
+    /// the text's parent.
     pub fn new(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
             font_size: 16.0,
+            font_family: FontFamilySpec::default(),
         }
     }
 
-    /// Build with an explicit font size.
+    /// Build with an explicit font size (family defaults to sans-serif).
     pub fn with_font_size(text: impl Into<String>, font_size: f32) -> Self {
         Self {
             text: text.into(),
             font_size,
+            font_family: FontFamilySpec::default(),
         }
+    }
+
+    /// Build with explicit cascaded font size + family.
+    pub fn with_font(
+        text: impl Into<String>,
+        font_size: f32,
+        font_family: FontFamilySpec,
+    ) -> Self {
+        Self {
+            text: text.into(),
+            font_size,
+            font_family,
+        }
+    }
+}
+
+/// Map a serval [`GenericFamilyKind`] to parley's `GenericFamily`.
+fn to_parley_generic(kind: GenericFamilyKind) -> GenericFamily {
+    match kind {
+        GenericFamilyKind::Serif => GenericFamily::Serif,
+        GenericFamilyKind::SansSerif => GenericFamily::SansSerif,
+        GenericFamilyKind::Monospace => GenericFamily::Monospace,
+        GenericFamilyKind::Cursive => GenericFamily::Cursive,
+        GenericFamilyKind::Fantasy => GenericFamily::Fantasy,
     }
 }
 
@@ -162,6 +226,14 @@ pub fn measure_text_leaf(
         .layout_ctx
         .ranged_builder(&mut ctx.font_ctx, leaf.text.as_str(), 1.0, true);
     builder.push_default(StyleProperty::FontSize(leaf.font_size));
+    // Apply the cascaded font family so parley selects the right face.
+    let family_prop: StyleProperty<()> = match &leaf.font_family {
+        FontFamilySpec::Generic(kind) => to_parley_generic(*kind).into(),
+        FontFamilySpec::Named(name) => {
+            StyleProperty::FontFamily(FontFamily::Source(Cow::Borrowed(name.as_str())))
+        },
+    };
+    builder.push_default(family_prop);
 
     let mut layout: Layout<()> = builder.build(leaf.text.as_str());
     layout.break_all_lines(max_advance);

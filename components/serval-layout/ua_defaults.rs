@@ -43,8 +43,10 @@ html, body {
 }
 
 address, article, aside, blockquote, div, dl, dt, dd,
-figure, footer, h1, h2, h3, h4, h5, h6, header, hgroup,
-hr, main, nav, ol, p, pre, section, ul, li, figcaption {
+figure, figcaption, footer, h1, h2, h3, h4, h5, h6, header, hgroup,
+hr, main, nav, ol, p, pre, section, ul, li,
+fieldset, form, details, summary, dialog, menu,
+table, caption, thead, tbody, tfoot, tr {
     display: block;
 }
 "#;

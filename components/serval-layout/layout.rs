@@ -283,6 +283,59 @@ mod tests {
         );
     }
 
+    /// Cascaded `font-family` flows into the text leaf's `TextLeaf`
+    /// context. Deterministic (inspects the leaf, not font-dependent
+    /// pixel output): a `p { font-family: monospace }` rule produces a
+    /// text leaf carrying `FontFamilySpec::Generic(Monospace)`.
+    #[test]
+    fn cascade_font_family_flows_into_text_leaf() {
+        use crate::cascade::run_cascade;
+        use crate::text_measure::{FontFamilySpec, GenericFamilyKind};
+
+        let document =
+            StaticDocument::parse("<html><body><p>x</p></body></html>");
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &["p { font-family: monospace; }"],
+        );
+        styles.refresh_taffy_from_cascade();
+
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (_frags, built, _ctx) = layout(&document, &styles, viewport);
+
+        // Find the text node + its Taffy leaf context.
+        let mut text_id = None;
+        let mut queue = vec![document.document()];
+        while let Some(id) = queue.pop() {
+            if matches!(document.kind(id), layout_dom_api::NodeKind::Text) {
+                text_id = Some(id);
+                break;
+            }
+            queue.extend(document.dom_children(id));
+        }
+        let text_id = text_id.expect("document contains a text node");
+        let taffy_id = built.node_map.get(&text_id).expect("text node in node_map");
+        let leaf = built
+            .tree
+            .get_node_context(*taffy_id)
+            .expect("text leaf carries a TextLeaf context");
+
+        assert!(
+            matches!(
+                leaf.font_family,
+                FontFamilySpec::Generic(GenericFamilyKind::Monospace)
+            ),
+            "expected monospace from cascade, got {:?}",
+            leaf.font_family
+        );
+    }
+
     /// Probe the parley measure path: with default-sized elements, a
     /// text node should give its containing `<p>` a non-zero width
     /// derived from parley's measurement of the text.

@@ -27,7 +27,7 @@ use taffy::prelude::TaffyAuto;
 
 use crate::adapter::NodeRef;
 use crate::style::StylePlane;
-use crate::text_measure::TextLeaf;
+use crate::text_measure::{FontFamilySpec, GenericFamilyKind, TextLeaf};
 
 /// Default font size used for text leaves whose parent has no
 /// cascaded `font-size`. 16 px matches CSS/UA-stylesheet convention
@@ -117,13 +117,14 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    // Inherit font_size from the parent element's cascaded
+    // Inherit typography from the parent element's cascaded
     // ComputedValues. Text nodes themselves don't have entries (only
-    // elements do); their effective font-size comes from the nearest
+    // elements do); their effective font comes from the nearest
     // ancestor element, which here is `parent`. When the cascade
     // hasn't been applied (hand-rolled style fixtures), fall back to
-    // the default.
+    // the defaults.
     let parent_font_size = font_size_of(styles, parent.id()).unwrap_or(DEFAULT_FONT_SIZE);
+    let parent_font_family = font_family_of(styles, parent.id()).unwrap_or_default();
 
     let mut children = Vec::new();
     for child in parent.dom_children() {
@@ -136,7 +137,8 @@ where
             }
             NodeKind::Text => {
                 let text = dom.text(child.id()).unwrap_or("").to_string();
-                let leaf = TextLeaf::with_font_size(text, parent_font_size);
+                let leaf =
+                    TextLeaf::with_font(text, parent_font_size, parent_font_family.clone());
                 tree.new_leaf_with_context(taffy::Style::default(), leaf)
                     .expect("Taffy: failed to create text leaf")
             }
@@ -160,4 +162,35 @@ fn font_size_of<NodeId: Copy + Eq + Hash>(
     let entry = styles.get(id)?;
     let data = entry.borrow_data()?;
     Some(data.styles.primary().get_font().font_size.computed_size().px())
+}
+
+/// Read an element's cascaded `font-family` and collapse the family
+/// list to its first entry (probe scope — no fallback-chain walking).
+/// Returns `None` when the cascade hasn't run for this element.
+fn font_family_of<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> Option<FontFamilySpec> {
+    use style::values::computed::font::{GenericFontFamily, SingleFontFamily};
+
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    let primary = data.styles.primary();
+    let first = primary.get_font().font_family.families.iter().next()?;
+    let spec = match first {
+        SingleFontFamily::FamilyName(name) => FontFamilySpec::Named(name.name.to_string()),
+        SingleFontFamily::Generic(g) => {
+            let kind = match g {
+                GenericFontFamily::Serif => GenericFamilyKind::Serif,
+                GenericFontFamily::SansSerif => GenericFamilyKind::SansSerif,
+                GenericFontFamily::Monospace => GenericFamilyKind::Monospace,
+                GenericFontFamily::Cursive => GenericFamilyKind::Cursive,
+                GenericFontFamily::Fantasy => GenericFamilyKind::Fantasy,
+                // None / SystemUi / other internal generics → sans-serif.
+                _ => GenericFamilyKind::SansSerif,
+            };
+            FontFamilySpec::Generic(kind)
+        },
+    };
+    Some(spec)
 }
