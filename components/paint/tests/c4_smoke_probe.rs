@@ -53,6 +53,7 @@ fn one_rect_envelope() -> PaintEnvelope {
             },
         })],
         fonts: Vec::new(),
+        images: Vec::new(),
     }
 }
 
@@ -132,6 +133,7 @@ fn c4_smoke_probe_empty_scene_still_produces_master() {
         generation: 0,
         commands: Vec::new(),
         fonts: Vec::new(),
+        images: Vec::new(),
     };
     let scene = translate_paint_list(&envelope);
     assert_eq!(scene.ops.len(), 0);

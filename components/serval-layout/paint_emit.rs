@@ -38,9 +38,9 @@ use layout_dom_api::{LayoutDom, NodeKind};
 use malloc_size_of_derive::MallocSizeOf;
 use paint_list_api::{
     BorderRadius, BorderSide, BorderStyle, ColorF, CommonPlacement, DeviceIntSize, EngineId,
-    FontInstanceKey, FontResource, GlyphInstance, IdNamespace, LayoutPoint, LayoutRect,
-    LayoutSideOffsets, LayoutTransform, NormalBorder, PaintCmd, PaintList, RectItem, TextOptions,
-    TextRunItem, TransformSpec,
+    FontInstanceKey, FontResource, GlyphInstance, IdNamespace, ImageResource, LayoutPoint,
+    LayoutRect, LayoutSideOffsets, LayoutTransform, NormalBorder, PaintCmd, PaintList, RectItem,
+    TextOptions, TextRunItem, TransformSpec,
 };
 use paint_list_api::items::{BorderDetails, BorderItem};
 use paint_list_api::specs::TransformKind;
@@ -65,6 +65,7 @@ pub struct ServalPaintList {
     commands: Vec<PaintCmd>,
     generation: u64,
     fonts: Vec<FontResource>,
+    images: Vec<ImageResource>,
 }
 
 impl ServalPaintList {
@@ -75,6 +76,7 @@ impl ServalPaintList {
             commands: Vec::new(),
             generation: 0,
             fonts: Vec::new(),
+            images: Vec::new(),
         }
     }
 }
@@ -94,6 +96,9 @@ impl PaintList for ServalPaintList {
     }
     fn fonts(&self) -> &[FontResource] {
         &self.fonts
+    }
+    fn images(&self) -> &[ImageResource] {
+        &self.images
     }
 }
 
@@ -212,6 +217,9 @@ where
         commands,
         generation: 0,
         fonts: fonts.fonts,
+        // Producer doesn't emit DrawImage yet (no <img> handling /
+        // decode); image side-table stays empty.
+        images: Vec::new(),
     }
 }
 

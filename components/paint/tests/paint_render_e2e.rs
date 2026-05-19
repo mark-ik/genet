@@ -76,6 +76,7 @@ fn synthesize_one_rect_envelope() -> (PaintEnvelope, PaintDisplayListInfo, Pipel
             },
         })],
         fonts: Vec::new(),
+        images: Vec::new(),
     };
 
     let info = PaintDisplayListInfo::new(

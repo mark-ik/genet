@@ -287,6 +287,16 @@ fn render_to_image(
     html: &str,
     stylesheets: &[&str],
 ) -> image::ImageBuffer<image::Rgba<u8>, Vec<u8>> {
+    render_envelope_to_image(html_to_envelope(html, stylesheets))
+}
+
+/// Render a prebuilt `PaintEnvelope` through the full embedder path
+/// and read the master back. Lets tests synthesize a `PaintEnvelope`
+/// directly (e.g., with an image side-table) when the HTML producer
+/// doesn't yet emit the command in question.
+fn render_envelope_to_image(
+    envelope: PaintEnvelope,
+) -> image::ImageBuffer<image::Rgba<u8>, Vec<u8>> {
     let handles = boot().expect("wgpu boot");
     let device = handles.device.clone();
     let queue = handles.queue.clone();
@@ -308,7 +318,6 @@ fn render_to_image(
     paint.install_renderer(painter_id, renderer);
     let webview_id = WebViewId::new(painter_id);
 
-    let envelope = html_to_envelope(html, stylesheets);
     paint.handle_messages(vec![paint_api::PaintMessage::SendPaintList {
         webview_id,
         envelope,
@@ -332,6 +341,84 @@ fn render_to_image(
         ),
     )
     .expect("master readback")
+}
+
+/// A `DrawImage` referencing an `ImageResource` rasterizes its pixels.
+/// Synthesizes a `PaintEnvelope` with a 2×2 solid-green RGBA image in
+/// the side-table and a `DrawImage` stretching it over a 64×64 box,
+/// then asserts the rendered master is green there. The HTML producer
+/// doesn't emit `<img>` yet (needs decode + intrinsic sizing), so the
+/// envelope is hand-built — this is the renderer-side receipt that
+/// the image side-table → atlas registration → SceneOp::Image path
+/// works, mirroring the DrawExternalTexture probe.
+#[test]
+fn draw_image_rasterizes_from_side_table() {
+    use paint_list_api::{
+        AlphaType, CommonPlacement, DeviceIntSize, EngineId, ImageItem, ImageRendering,
+        ImageResource, LayoutPoint, LayoutRect, PaintCmd, PrimitiveFlags, RectItem,
+    };
+    use paint_types::{ColorF, IdNamespace, ImageKey};
+
+    let key = ImageKey::new(IdNamespace(0), 1);
+    // 2×2 opaque green, RGBA8.
+    let green = [0u8, 255, 0, 255];
+    let mut pixels = Vec::with_capacity(2 * 2 * 4);
+    for _ in 0..4 {
+        pixels.extend_from_slice(&green);
+    }
+
+    let bounds =
+        |x: f32, y: f32, w: f32, h: f32| -> LayoutRect {
+            LayoutRect::new(LayoutPoint::new(x, y), LayoutPoint::new(x + w, y + h))
+        };
+
+    let envelope = PaintEnvelope {
+        engine: EngineId::SERVAL,
+        viewport: DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32),
+        generation: 0,
+        commands: vec![
+            // White backdrop so "green" is unambiguous.
+            PaintCmd::DrawRect(RectItem {
+                placement: CommonPlacement {
+                    bounds: bounds(0.0, 0.0, VIEWPORT as f32, VIEWPORT as f32),
+                    flags: PrimitiveFlags::empty(),
+                },
+                color: ColorF::WHITE,
+            }),
+            PaintCmd::DrawImage(ImageItem {
+                placement: CommonPlacement {
+                    bounds: bounds(0.0, 0.0, 64.0, 64.0),
+                    flags: PrimitiveFlags::empty(),
+                },
+                image_key: key,
+                image_rendering: ImageRendering::Auto,
+                alpha_type: AlphaType::PremultipliedAlpha,
+                color: ColorF::WHITE, // identity tint
+            }),
+        ],
+        fonts: Vec::new(),
+        images: vec![ImageResource {
+            key,
+            width: 2,
+            height: 2,
+            data: pixels,
+        }],
+    };
+
+    let image = render_envelope_to_image(envelope);
+
+    // Inside the 64×64 image box: green.
+    assert_eq!(
+        image.get_pixel(32, 32).0,
+        [0, 255, 0, 255],
+        "(32, 32) is inside the DrawImage box, should be the image's green"
+    );
+    // Outside the image box, inside viewport: white backdrop.
+    assert_eq!(
+        image.get_pixel(100, 100).0,
+        [255, 255, 255, 255],
+        "(100, 100) is outside the image box, should be white"
+    );
 }
 
 /// Nested elements with distinct colors paint into the right pixels.

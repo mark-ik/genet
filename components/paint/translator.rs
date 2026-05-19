@@ -25,10 +25,12 @@ use std::sync::Arc;
 use log::warn;
 use netrender::{
     ExternalTexturePlacement, FontBlob, FontId, Glyph as NrGlyph, GradientKind,
-    GradientStop as NrGradientStop, NO_CLIP, Scene, SceneBlendMode, SceneClip, SceneLayer,
-    Transform, peniko,
+    GradientStop as NrGradientStop, ImageData, ImageKey as NrImageKey, NO_CLIP, Scene,
+    SceneBlendMode, SceneClip, SceneLayer, Transform, peniko,
 };
-use paint_list_api::{self as ple, FontInstanceKey, FontResource, PaintCmd, PaintList};
+use paint_list_api::{
+    self as ple, FontInstanceKey, FontResource, ImageKey, ImageResource, PaintCmd, PaintList,
+};
 use paint_types::ColorF;
 use rustc_hash::FxHashMap;
 
@@ -106,7 +108,7 @@ fn gradient_stops(stops: &[paint_types::GradientStop]) -> Vec<NrGradientStop> {
 /// `Paint::render` to drive `render_with_compositor_and_external_textures`);
 /// the public entry point returns just the Scene for testability.
 pub fn translate_paint_list<L: PaintList>(list: &L) -> Scene {
-    translate_paint_cmd_stream(list.viewport(), list.commands(), list.fonts()).scene
+    translate_paint_cmd_stream(list.viewport(), list.commands(), list.fonts(), list.images()).scene
 }
 
 /// Receive-side companion: translate a wire envelope. Thin wrapper
@@ -121,7 +123,12 @@ pub fn translate_envelope(envelope: &paint_list_api::PaintEnvelope) -> Scene {
 pub(crate) fn translate_envelope_with_external_textures(
     envelope: &paint_list_api::PaintEnvelope,
 ) -> TranslatedDisplayList {
-    translate_paint_cmd_stream(envelope.viewport(), envelope.commands(), envelope.fonts())
+    translate_paint_cmd_stream(
+        envelope.viewport(),
+        envelope.commands(),
+        envelope.fonts(),
+        envelope.images(),
+    )
 }
 
 /// Register a paint list's font side-table into the scene's font
@@ -138,6 +145,24 @@ fn register_fonts(scene: &mut Scene, fonts: &[FontResource]) -> FxHashMap<FontIn
         };
         let font_id = scene.push_font(blob);
         map.insert(fr.key, font_id);
+    }
+    map
+}
+
+/// Register a paint list's image side-table into the scene's image
+/// sources, returning the `ImageKey → netrender ImageKey` map that
+/// `DrawImage` lowering resolves through. netrender's `ImageKey` is a
+/// flat `u64`; paint-list's is `(IdNamespace, u32)`, so we assign
+/// fresh sequential u64s and key the map on the paint-side key.
+fn register_images(scene: &mut Scene, images: &[ImageResource]) -> FxHashMap<ImageKey, NrImageKey> {
+    let mut map = FxHashMap::default();
+    for (i, ir) in images.iter().enumerate() {
+        let nr_key = (i as u64) + 1; // 0 reserved
+        scene.set_image_source(
+            nr_key,
+            ImageData::from_bytes(ir.width, ir.height, ir.data.clone()),
+        );
+        map.insert(ir.key, nr_key);
     }
     map
 }
@@ -167,14 +192,16 @@ pub(crate) fn translate_paint_cmd_stream(
     viewport: paint_list_api::DeviceIntSize,
     commands: &[PaintCmd],
     fonts: &[FontResource],
+    images: &[ImageResource],
 ) -> TranslatedDisplayList {
     let viewport_w = viewport.width.max(0) as u32;
     let viewport_h = viewport.height.max(0) as u32;
     let mut scene = Scene::new(viewport_w, viewport_h);
     let mut external_textures = Vec::new();
-    // Register fonts up-front so DrawText can resolve font_instance
-    // keys to scene FontIds.
+    // Register fonts + images up-front so DrawText / DrawImage can
+    // resolve their keys to scene-side ids.
     let font_map = register_fonts(&mut scene, fonts);
+    let image_map = register_images(&mut scene, images);
     // Composed transform ids; top = active coordinate space. Empty
     // means identity (transform_id 0).
     let mut transform_stack: Vec<u32> = Vec::new();
@@ -271,11 +298,31 @@ pub(crate) fn translate_paint_cmd_stream(
                     );
                 }
             },
-            PaintCmd::DrawImage(_) | PaintCmd::DrawRepeatingImage(_) => {
-                // Needs ImageRegistry to map ImageKey → texture handle.
-                warn!(
-                    "[paint translator] DrawImage / DrawRepeatingImage deferred (needs ImageRegistry wiring)"
-                );
+            PaintCmd::DrawImage(img) => {
+                if let Some(&nr_key) = image_map.get(&img.image_key) {
+                    let (x0, y0, x1, y1) = rect_corners(&img.placement.bounds);
+                    scene.push_image_full(
+                        x0,
+                        y0,
+                        x1,
+                        y1,
+                        [0.0, 0.0, 1.0, 1.0], // full-image UV
+                        color_to_array(&img.color),
+                        nr_key,
+                        tid,
+                        NO_CLIP,
+                    );
+                } else {
+                    warn!(
+                        "[paint translator] DrawImage references unregistered image {:?}; skipping",
+                        img.image_key
+                    );
+                }
+            },
+            PaintCmd::DrawRepeatingImage(_) => {
+                // Repeating fill → SceneOp::Pattern; deferred until a
+                // producer emits background-image repeat.
+                warn!("[paint translator] DrawRepeatingImage deferred (needs Pattern wiring)");
             },
             PaintCmd::DrawExternalTexture(et) => {
                 let (x0, y0, x1, y1) = rect_corners(&et.placement.bounds);
@@ -747,7 +794,7 @@ mod tests {
         );
         // External texture metadata lives on the pub(crate) full-shape
         // translator output; use translate_paint_cmd_stream to inspect it.
-        let out = translate_paint_cmd_stream(list.viewport, &list.commands, &[]);
+        let out = translate_paint_cmd_stream(list.viewport, &list.commands, &[], &[]);
         // External texture doesn't add to scene.ops; it goes into the
         // separate compositor vector via the PM-3 lowering contract.
         assert_eq!(out.scene.ops.len(), 0);

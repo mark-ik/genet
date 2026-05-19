@@ -103,6 +103,7 @@ fn envelope_with_webgl_canvas() -> PaintEnvelope {
             }),
         ],
         fonts: Vec::new(),
+        images: Vec::new(),
     }
 }
 

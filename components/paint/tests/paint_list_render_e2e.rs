@@ -50,6 +50,7 @@ fn synthesize_one_rect_paint_envelope() -> (PaintEnvelope, PaintDisplayListInfo,
             },
         })],
         fonts: Vec::new(),
+        images: Vec::new(),
     };
 
     let info = PaintDisplayListInfo::new(

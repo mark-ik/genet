@@ -108,6 +108,15 @@ pub trait PaintList:
     fn fonts(&self) -> &[FontResource] {
         &[]
     }
+
+    /// Image resources referenced by `DrawImage` / `DrawRepeatingImage`
+    /// commands. Each [`ImageResource`] carries decoded RGBA8 pixels +
+    /// the [`ImageKey`] that `ImageItem::image_key` points at; the
+    /// renderer registers these into its image atlas and resolves each
+    /// image item's key to a concrete texture. Default is empty.
+    fn images(&self) -> &[ImageResource] {
+        &[]
+    }
 }
 
 // =============================================================================
@@ -134,6 +143,34 @@ pub struct FontResource {
     pub data: Vec<u8>,
     /// Index within a font collection (TTC); `0` for single-font files.
     pub index: u32,
+}
+
+// =============================================================================
+// ImageResource — decoded pixels carried alongside the command stream
+// =============================================================================
+
+/// A decoded image referenced by one or more `DrawImage` /
+/// `DrawRepeatingImage` items. Like [`FontResource`], the pixels
+/// travel in the paint output's image side-table (`PaintList::images`)
+/// rather than inline on each item, so an image used by several items
+/// ships its bytes once. The renderer interns each `ImageResource`
+/// into its atlas and maps `key` → its internal image id;
+/// `ImageItem::image_key` then resolves through that map.
+///
+/// Pixels are **RGBA8, row-major, tightly packed** —
+/// `data.len() == width * height * 4`. The producer is responsible
+/// for decoding (PNG / JPEG / data-URI / etc.) into this shape; the
+/// renderer just uploads the bytes.
+#[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
+pub struct ImageResource {
+    /// The key `ImageItem::image_key` references.
+    pub key: ImageKey,
+    /// Image width in pixels.
+    pub width: u32,
+    /// Image height in pixels.
+    pub height: u32,
+    /// Decoded RGBA8 bytes (`width * height * 4`).
+    pub data: Vec<u8>,
 }
 
 // =============================================================================
@@ -266,6 +303,9 @@ pub struct PaintEnvelope {
     /// Font resources referenced by `DrawText` commands. See
     /// [`FontResource`].
     pub fonts: Vec<FontResource>,
+    /// Image resources referenced by `DrawImage` /
+    /// `DrawRepeatingImage` commands. See [`ImageResource`].
+    pub images: Vec<ImageResource>,
 }
 
 impl PaintEnvelope {
@@ -281,6 +321,7 @@ impl PaintEnvelope {
             generation: list.generation_id(),
             commands: list.commands().to_vec(),
             fonts: list.fonts().to_vec(),
+            images: list.images().to_vec(),
         }
     }
 }
@@ -300,6 +341,9 @@ impl PaintList for PaintEnvelope {
     }
     fn fonts(&self) -> &[FontResource] {
         &self.fonts
+    }
+    fn images(&self) -> &[ImageResource] {
+        &self.images
     }
 }
 
@@ -491,6 +535,7 @@ mod tests {
             generation: 7,
             commands: vec![PaintCmd::PopLayer],
             fonts: Vec::new(),
+            images: Vec::new(),
         };
         let json = serde_json::to_string(&envelope).expect("serialize");
         let parsed: PaintEnvelope = serde_json::from_str(&json).expect("deserialize");
