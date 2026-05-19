@@ -324,6 +324,48 @@ fn html_to_pixels_nested_elements_render_with_distinct_colors() {
     );
 }
 
+/// An offset element renders at its offset position, not at the
+/// origin. This is the receipt that the translator's composed-
+/// transform stack works for *non-zero* offsets — the earlier
+/// nested-element test has every element at (0,0), so it can't
+/// distinguish "transforms compose" from "everything draws at origin
+/// regardless." Here `body` has 40px padding, pushing the div's
+/// content box to (40, 40); the blue must appear there, while the
+/// padding area at the top-left still shows body's red. (Padding
+/// rather than margin avoids CSS margin-collapsing, which would
+/// shift the body box itself.)
+#[test]
+fn html_to_pixels_offset_element_renders_at_offset() {
+    let image = render_to_image(
+        "<html><body><div></div></body></html>",
+        &[
+            "body {
+                background-color: rgb(255, 0, 0);
+                padding-left: 40px;
+                padding-top: 40px;
+            }",
+            "div {
+                width: 30px;
+                height: 30px;
+                background-color: rgb(0, 0, 255);
+            }",
+        ],
+    );
+
+    // Inside the div's offset box (40,40)..(70,70): blue.
+    assert_eq!(
+        image.get_pixel(50, 50).0,
+        [0, 0, 255, 255],
+        "(50, 50) is inside the padding-offset div, should be blue"
+    );
+    // Top-left corner — body's padding area, div is NOT here; body red.
+    assert_eq!(
+        image.get_pixel(10, 10).0,
+        [255, 0, 0, 255],
+        "(10, 10) is in body's padding area above-left of the div, should be red"
+    );
+}
+
 /// Border emission lands at the element's edges. A `<div>` with
 /// `border: 10px solid green; width: 40px; height: 40px;` lays
 /// out at 60×60 (border-box semantics) anchored at body's origin.

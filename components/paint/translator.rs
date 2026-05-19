@@ -121,6 +121,26 @@ pub(crate) fn translate_envelope_with_external_textures(
 }
 
 /// Stream-form: take a viewport and a flat `PaintCmd` slice.
+///
+/// ## Transform model
+///
+/// netrender does *not* cascade a layer's transform to the ops drawn
+/// inside it — every `SceneOp` carries its own `transform_id` and the
+/// rasterizer resolves it directly (`vello_rasterizer.rs` indexes
+/// `transforms[op.transform_id]` per op). So the compositor-coord
+/// model (`PushTransform` opens a coordinate space; `Draw*` items emit
+/// in local coords) only works if the translator threads the active
+/// composed transform onto every op.
+///
+/// This function maintains a `transform_stack`: each `PushTransform`
+/// composes its `(origin, transform)` with the parent (matrix-multiply,
+/// parent ∘ local), pushes the result into `scene.transforms`, and
+/// pushes the new id onto the stack. `PopTransform` pops. Every `Draw*`
+/// op reads the stack top (`current_transform_id`, 0 = identity) and
+/// passes it to the `*_transformed` / `*_full` Scene builder. A
+/// `PushTransform` does *not* open a `SceneLayer` — a coordinate-space
+/// change isn't a compositing group, and pushing a transformed layer
+/// would distort the layer's own clip geometry.
 pub(crate) fn translate_paint_cmd_stream(
     viewport: paint_list_api::DeviceIntSize,
     commands: &[PaintCmd],
@@ -129,22 +149,40 @@ pub(crate) fn translate_paint_cmd_stream(
     let viewport_h = viewport.height.max(0) as u32;
     let mut scene = Scene::new(viewport_w, viewport_h);
     let mut external_textures = Vec::new();
+    // Composed transform ids; top = active coordinate space. Empty
+    // means identity (transform_id 0).
+    let mut transform_stack: Vec<u32> = Vec::new();
 
     for cmd in commands {
+        let tid = transform_stack.last().copied().unwrap_or(0);
         match cmd {
             // ----- Compositor primitives ---------------------------------
-            PaintCmd::PushClip(spec) => emit_push_clip(&mut scene, spec),
+            PaintCmd::PushClip(spec) => emit_push_clip(&mut scene, spec, tid),
             PaintCmd::PopClip => {
                 // Clips ride on layers in netrender's model; PushClip pairs with PopLayer.
                 scene.pop_layer();
             },
-            PaintCmd::PushTransform(spec) => emit_push_transform(&mut scene, spec),
-            PaintCmd::PopTransform => {
-                // PushTransform → SceneLayer carrying the transform;
-                // PopTransform returns to the parent layer.
-                scene.pop_layer();
+            PaintCmd::PushTransform(spec) => {
+                let parent = transform_at(&scene, tid);
+                let local = compose_with_origin(
+                    &layout_transform_to_scene(&spec.transform),
+                    spec.origin.x,
+                    spec.origin.y,
+                );
+                let composed = Transform {
+                    m: mat_mul(&parent.m, &local.m),
+                };
+                scene.transforms.push(composed);
+                transform_stack.push((scene.transforms.len() - 1) as u32);
+                // `spec.kind` (Standard / Preserve3D / Perspective) is
+                // recorded for future stack-state handling; netrender
+                // treats the transform as opaque math regardless.
+                let _ = spec.kind;
             },
-            PaintCmd::PushLayer(spec) => emit_push_layer(&mut scene, spec),
+            PaintCmd::PopTransform => {
+                transform_stack.pop();
+            },
+            PaintCmd::PushLayer(spec) => emit_push_layer(&mut scene, spec, tid),
             PaintCmd::PopLayer => {
                 scene.pop_layer();
             },
@@ -152,7 +190,7 @@ pub(crate) fn translate_paint_cmd_stream(
             // ----- Paint primitives --------------------------------------
             PaintCmd::DrawRect(r) => {
                 let (x0, y0, x1, y1) = rect_corners(&r.placement.bounds);
-                scene.push_rect(x0, y0, x1, y1, color_to_array(&r.color));
+                scene.push_rect_transformed(x0, y0, x1, y1, color_to_array(&r.color), tid);
             },
             PaintCmd::DrawStroke(_) => {
                 // Stroke requires `kurbo::BezPath` reconstruction + a
@@ -166,7 +204,7 @@ pub(crate) fn translate_paint_cmd_stream(
                 // local bounds. Decorated styles (wavy/dotted/dashed)
                 // need stroke variants.
                 let (x0, y0, x1, y1) = rect_corners(&line.placement.bounds);
-                scene.push_rect(x0, y0, x1, y1, color_to_array(&line.color));
+                scene.push_rect_transformed(x0, y0, x1, y1, color_to_array(&line.color), tid);
             },
             PaintCmd::DrawPath(_) => {
                 // PM-3 common variant; renderer side needs
@@ -174,10 +212,10 @@ pub(crate) fn translate_paint_cmd_stream(
                 // path emission (netrender's `SceneOp::Shape` exists).
                 warn!("[paint translator] DrawPath deferred (needs kurbo::BezPath wiring)");
             },
-            PaintCmd::DrawBorder(border) => emit_border_first_cut(&mut scene, border),
-            PaintCmd::DrawLinearGradient(g) => emit_linear_gradient(&mut scene, g),
-            PaintCmd::DrawRadialGradient(g) => emit_radial_gradient(&mut scene, g),
-            PaintCmd::DrawConicGradient(g) => emit_conic_gradient(&mut scene, g),
+            PaintCmd::DrawBorder(border) => emit_border_first_cut(&mut scene, border, tid),
+            PaintCmd::DrawLinearGradient(g) => emit_linear_gradient(&mut scene, g, tid),
+            PaintCmd::DrawRadialGradient(g) => emit_radial_gradient(&mut scene, g, tid),
+            PaintCmd::DrawConicGradient(g) => emit_conic_gradient(&mut scene, g, tid),
             PaintCmd::DrawText(_) => {
                 // Needs FontRegistry to map FontInstanceKey →
                 // netrender::FontId.
@@ -218,11 +256,37 @@ pub(crate) fn translate_paint_cmd_stream(
     }
 }
 
+/// The `Transform` at a palette index; identity for index 0.
+fn transform_at(scene: &Scene, tid: u32) -> Transform {
+    scene
+        .transforms
+        .get(tid as usize)
+        .copied()
+        .unwrap_or(Transform::IDENTITY)
+}
+
+/// Column-major 4×4 matrix multiply: `a ∘ b` (apply `b` first, then
+/// `a`). Used to compose a child transform with its parent so nested
+/// `PushTransform`s accumulate.
+fn mat_mul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
+    let mut out = [0.0f32; 16];
+    for col in 0..4 {
+        for row in 0..4 {
+            let mut s = 0.0;
+            for k in 0..4 {
+                s += a[k * 4 + row] * b[col * 4 + k];
+            }
+            out[col * 4 + row] = s;
+        }
+    }
+    out
+}
+
 // =============================================================================
 // PaintCmd per-variant emit helpers
 // =============================================================================
 
-fn emit_push_clip(scene: &mut Scene, spec: &ple::ClipSpec) {
+fn emit_push_clip(scene: &mut Scene, spec: &ple::ClipSpec, tid: u32) {
     let clip = match &spec.kind {
         ple::ClipKind::Rect(rect) => {
             let (x0, y0, x1, y1) = rect_corners(rect);
@@ -251,57 +315,29 @@ fn emit_push_clip(scene: &mut Scene, spec: &ple::ClipSpec) {
             SceneClip::None
         },
     };
+    // The clip layer carries the active transform so its geometry is
+    // resolved in the same coordinate space as the clipped content.
     scene.push_layer(SceneLayer {
         clip,
         alpha: 1.0,
         blend_mode: SceneBlendMode::Normal,
         compose: netrender::SceneCompose::SrcOver,
-        transform_id: 0,
+        transform_id: tid,
         backdrop_filter: None,
     });
-}
-
-fn emit_push_transform(scene: &mut Scene, spec: &ple::TransformSpec) {
-    // Push the transform onto the Scene's transforms palette and wrap
-    // in a layer that references it. The Scene model uses per-op
-    // `transform_id` rather than push/pop semantics; the layer carries
-    // the new transform_id so child ops pick it up.
-    let nr_transform = layout_transform_to_scene(&spec.transform);
-    // Translate by origin if non-zero. Compose origin into the
-    // transform via pre-multiplication (translate then user transform).
-    let composed = if spec.origin.x != 0.0 || spec.origin.y != 0.0 {
-        compose_with_origin(&nr_transform, spec.origin.x, spec.origin.y)
-    } else {
-        nr_transform
-    };
-    scene.transforms.push(composed);
-    let transform_id = (scene.transforms.len() - 1) as u32;
-    scene.push_layer(SceneLayer {
-        clip: SceneClip::None,
-        alpha: 1.0,
-        blend_mode: SceneBlendMode::Normal,
-        compose: netrender::SceneCompose::SrcOver,
-        transform_id,
-        backdrop_filter: None,
-    });
-    // `spec.kind` (Standard / Preserve3D / Perspective) is recorded
-    // for future stack-state handling; netrender treats the transform
-    // as opaque math regardless.
-    let _ = spec.kind;
 }
 
 fn compose_with_origin(t: &Transform, ox: f32, oy: f32) -> Transform {
-    // The netrender Transform is a flat 16-float array, conceptually
-    // row-major. The "translate by (ox, oy) then apply t" composition
-    // is: t_with_translation[12] += ox, t_with_translation[13] += oy
-    // (translation columns).
+    // The netrender Transform is a flat 16-float array. "translate by
+    // (ox, oy) then apply t" sets the translation columns: [12] += ox,
+    // [13] += oy.
     let mut out = t.m;
     out[12] += ox;
     out[13] += oy;
     Transform { m: out }
 }
 
-fn emit_push_layer(scene: &mut Scene, spec: &ple::LayerSpec) {
+fn emit_push_layer(scene: &mut Scene, spec: &ple::LayerSpec, tid: u32) {
     let blend_mode = mix_blend_mode_to_scene(spec.mix_blend_mode);
     let mut alpha = spec.opacity;
     // Filter-chain opacity collapses into the layer's alpha; other
@@ -319,12 +355,12 @@ fn emit_push_layer(scene: &mut Scene, spec: &ple::LayerSpec) {
         alpha,
         blend_mode,
         compose: netrender::SceneCompose::SrcOver,
-        transform_id: 0,
+        transform_id: tid,
         backdrop_filter: None,
     });
 }
 
-fn emit_border_first_cut(scene: &mut Scene, border: &ple::BorderItem) {
+fn emit_border_first_cut(scene: &mut Scene, border: &ple::BorderItem, tid: u32) {
     let rect = &border.placement.bounds;
     let widths = &border.widths;
     let sides = match &border.details {
@@ -335,46 +371,50 @@ fn emit_border_first_cut(scene: &mut Scene, border: &ple::BorderItem) {
         },
     };
     if widths.top > 0.0 {
-        scene.push_rect(
+        scene.push_rect_transformed(
             rect.min.x,
             rect.min.y,
             rect.max.x,
             rect.min.y + widths.top,
             color_to_array(&sides.top.color),
+            tid,
         );
     }
     if widths.bottom > 0.0 {
-        scene.push_rect(
+        scene.push_rect_transformed(
             rect.min.x,
             rect.max.y - widths.bottom,
             rect.max.x,
             rect.max.y,
             color_to_array(&sides.bottom.color),
+            tid,
         );
     }
     if widths.left > 0.0 {
-        scene.push_rect(
+        scene.push_rect_transformed(
             rect.min.x,
             rect.min.y,
             rect.min.x + widths.left,
             rect.max.y,
             color_to_array(&sides.left.color),
+            tid,
         );
     }
     if widths.right > 0.0 {
-        scene.push_rect(
+        scene.push_rect_transformed(
             rect.max.x - widths.right,
             rect.min.y,
             rect.max.x,
             rect.max.y,
             color_to_array(&sides.right.color),
+            tid,
         );
     }
     let _ = sides.radius;
     let _ = sides.do_aa;
 }
 
-fn emit_linear_gradient(scene: &mut Scene, item: &ple::LinearGradientItem) {
+fn emit_linear_gradient(scene: &mut Scene, item: &ple::LinearGradientItem, tid: u32) {
     let rect = &item.placement.bounds;
     let g = &item.gradient;
     scene.push_gradient(netrender::SceneGradient {
@@ -390,13 +430,13 @@ fn emit_linear_gradient(scene: &mut Scene, item: &ple::LinearGradientItem) {
             g.end_point.y,
         ],
         stops: gradient_stops(&g.stops),
-        transform_id: 0,
+        transform_id: tid,
         clip_rect: NO_CLIP,
         clip_corner_radii: [0.0; 4],
     });
 }
 
-fn emit_radial_gradient(scene: &mut Scene, item: &ple::RadialGradientItem) {
+fn emit_radial_gradient(scene: &mut Scene, item: &ple::RadialGradientItem, tid: u32) {
     let rect = &item.placement.bounds;
     let g = &item.gradient;
     scene.push_gradient(netrender::SceneGradient {
@@ -407,13 +447,13 @@ fn emit_radial_gradient(scene: &mut Scene, item: &ple::RadialGradientItem) {
         kind: GradientKind::Radial,
         params: [g.center.x, g.center.y, g.radius.width, g.radius.height],
         stops: gradient_stops(&g.stops),
-        transform_id: 0,
+        transform_id: tid,
         clip_rect: NO_CLIP,
         clip_corner_radii: [0.0; 4],
     });
 }
 
-fn emit_conic_gradient(scene: &mut Scene, item: &ple::ConicGradientItem) {
+fn emit_conic_gradient(scene: &mut Scene, item: &ple::ConicGradientItem, tid: u32) {
     let rect = &item.placement.bounds;
     let g = &item.gradient;
     scene.push_gradient(netrender::SceneGradient {
@@ -424,7 +464,7 @@ fn emit_conic_gradient(scene: &mut Scene, item: &ple::ConicGradientItem) {
         kind: GradientKind::Conic,
         params: [g.center.x, g.center.y, g.angle, 0.0],
         stops: gradient_stops(&g.stops),
-        transform_id: 0,
+        transform_id: tid,
         clip_rect: NO_CLIP,
         clip_corner_radii: [0.0; 4],
     });
@@ -534,7 +574,10 @@ mod tests {
     }
 
     #[test]
-    fn push_pop_transform_emits_layer_pair_with_transform_id() {
+    fn push_transform_adds_palette_entry_and_positions_child_ops() {
+        // PushTransform is a coordinate-space change, NOT a compositing
+        // layer: it adds a transform palette entry and threads the id
+        // onto child ops, but emits no PushLayer/PopLayer.
         let list = list_with(
             DeviceIntSize::new(800, 600),
             vec![
@@ -543,27 +586,80 @@ mod tests {
                     transform: paint_list_api::LayoutTransform::identity(),
                     kind: ple::TransformKind::Standard,
                 }),
+                PaintCmd::DrawRect(RectItem {
+                    placement: placement_at(box2d(0.0, 0.0, 100.0, 50.0)),
+                    color: ColorF {
+                        r: 1.0,
+                        g: 0.0,
+                        b: 0.0,
+                        a: 1.0,
+                    },
+                }),
                 PaintCmd::PopTransform,
             ],
         );
         let scene = translate_paint_list(&list);
-        // Push emits one transform palette entry beyond identity, plus
-        // a PushLayer carrying that transform_id; Pop emits PopLayer.
+        // One transform palette entry beyond identity (index 1).
         assert!(
             scene.transforms.len() >= 2,
             "transforms: {:?}",
             scene.transforms
         );
-        assert_eq!(scene.ops.len(), 2);
-        let push = match &scene.ops[0] {
-            netrender::SceneOp::PushLayer(l) => l,
-            other => panic!("expected PushLayer, got {other:?}"),
+        // No layers — just the rect.
+        assert_eq!(scene.ops.len(), 1);
+        let rect = match &scene.ops[0] {
+            netrender::SceneOp::Rect(r) => r,
+            other => panic!("expected Rect, got {other:?}"),
         };
+        // The rect picks up the pushed transform (non-zero id).
         assert!(
-            push.transform_id > 0,
-            "transform_id should reference new entry"
+            rect.transform_id > 0,
+            "rect should carry the pushed transform id"
         );
-        assert!(matches!(scene.ops[1], netrender::SceneOp::PopLayer));
+        // That transform translates by the origin (10, 20).
+        let t = &scene.transforms[rect.transform_id as usize];
+        assert_eq!(t.m[12], 10.0, "tx");
+        assert_eq!(t.m[13], 20.0, "ty");
+    }
+
+    #[test]
+    fn nested_transforms_compose() {
+        // Outer translate(10, 20), inner translate(5, 5) → a rect
+        // inside both should resolve to translate(15, 25).
+        let list = list_with(
+            DeviceIntSize::new(800, 600),
+            vec![
+                PaintCmd::PushTransform(ple::TransformSpec {
+                    origin: LayoutPoint::new(10.0, 20.0),
+                    transform: paint_list_api::LayoutTransform::identity(),
+                    kind: ple::TransformKind::Standard,
+                }),
+                PaintCmd::PushTransform(ple::TransformSpec {
+                    origin: LayoutPoint::new(5.0, 5.0),
+                    transform: paint_list_api::LayoutTransform::identity(),
+                    kind: ple::TransformKind::Standard,
+                }),
+                PaintCmd::DrawRect(RectItem {
+                    placement: placement_at(box2d(0.0, 0.0, 10.0, 10.0)),
+                    color: ColorF {
+                        r: 0.0,
+                        g: 1.0,
+                        b: 0.0,
+                        a: 1.0,
+                    },
+                }),
+                PaintCmd::PopTransform,
+                PaintCmd::PopTransform,
+            ],
+        );
+        let scene = translate_paint_list(&list);
+        let rect = match &scene.ops[0] {
+            netrender::SceneOp::Rect(r) => r,
+            other => panic!("expected Rect, got {other:?}"),
+        };
+        let t = &scene.transforms[rect.transform_id as usize];
+        assert_eq!(t.m[12], 15.0, "composed tx (10 + 5)");
+        assert_eq!(t.m[13], 25.0, "composed ty (20 + 5)");
     }
 
     #[test]
