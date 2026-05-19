@@ -244,9 +244,14 @@ pub struct ConicGradientPayload {
 #[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
 pub struct TextRunItem {
     pub placement: CommonPlacement,
-    /// Font instance the run was shaped against. NetRender's font
-    /// registry resolves this to a concrete face + size.
+    /// Font instance the run was shaped against. The renderer
+    /// resolves this (via the `PaintList::fonts` side-table) to a
+    /// concrete font in its palette.
     pub font_instance: FontInstanceKey,
+    /// Em size the run was shaped at, in CSS pixels. The renderer
+    /// needs this explicitly — `font_instance` identifies the face,
+    /// not the size.
+    pub font_size: f32,
     pub color: ColorF,
     /// Shaped + positioned glyphs from parley.
     pub glyphs: Vec<GlyphInstance>,

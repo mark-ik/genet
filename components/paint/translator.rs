@@ -20,13 +20,17 @@
 //! through. The lowering itself is well-defined for the deferred
 //! variants — only the painter-side resource plumbing is missing.
 
+use std::sync::Arc;
+
 use log::warn;
 use netrender::{
-    ExternalTexturePlacement, GradientKind, GradientStop as NrGradientStop, NO_CLIP, Scene,
-    SceneBlendMode, SceneClip, SceneLayer, Transform,
+    ExternalTexturePlacement, FontBlob, FontId, Glyph as NrGlyph, GradientKind,
+    GradientStop as NrGradientStop, NO_CLIP, Scene, SceneBlendMode, SceneClip, SceneLayer,
+    Transform, peniko,
 };
-use paint_list_api::{self as ple, PaintCmd, PaintList};
+use paint_list_api::{self as ple, FontInstanceKey, FontResource, PaintCmd, PaintList};
 use paint_types::ColorF;
+use rustc_hash::FxHashMap;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ExternalTextureDraw {
@@ -102,7 +106,7 @@ fn gradient_stops(stops: &[paint_types::GradientStop]) -> Vec<NrGradientStop> {
 /// `Paint::render` to drive `render_with_compositor_and_external_textures`);
 /// the public entry point returns just the Scene for testability.
 pub fn translate_paint_list<L: PaintList>(list: &L) -> Scene {
-    translate_paint_cmd_stream(list.viewport(), list.commands()).scene
+    translate_paint_cmd_stream(list.viewport(), list.commands(), list.fonts()).scene
 }
 
 /// Receive-side companion: translate a wire envelope. Thin wrapper
@@ -117,7 +121,25 @@ pub fn translate_envelope(envelope: &paint_list_api::PaintEnvelope) -> Scene {
 pub(crate) fn translate_envelope_with_external_textures(
     envelope: &paint_list_api::PaintEnvelope,
 ) -> TranslatedDisplayList {
-    translate_paint_cmd_stream(envelope.viewport(), envelope.commands())
+    translate_paint_cmd_stream(envelope.viewport(), envelope.commands(), envelope.fonts())
+}
+
+/// Register a paint list's font side-table into the scene's font
+/// palette, returning the `FontInstanceKey → FontId` map that
+/// `DrawText` lowering resolves through. Each `FontResource`'s bytes
+/// are wrapped in a fresh `peniko::Blob` (mints a vello-dedup id) and
+/// pushed via `Scene::push_font`.
+fn register_fonts(scene: &mut Scene, fonts: &[FontResource]) -> FxHashMap<FontInstanceKey, FontId> {
+    let mut map = FxHashMap::default();
+    for fr in fonts {
+        let blob = FontBlob {
+            data: peniko::Blob::new(Arc::new(fr.data.clone())),
+            index: fr.index,
+        };
+        let font_id = scene.push_font(blob);
+        map.insert(fr.key, font_id);
+    }
+    map
 }
 
 /// Stream-form: take a viewport and a flat `PaintCmd` slice.
@@ -144,11 +166,15 @@ pub(crate) fn translate_envelope_with_external_textures(
 pub(crate) fn translate_paint_cmd_stream(
     viewport: paint_list_api::DeviceIntSize,
     commands: &[PaintCmd],
+    fonts: &[FontResource],
 ) -> TranslatedDisplayList {
     let viewport_w = viewport.width.max(0) as u32;
     let viewport_h = viewport.height.max(0) as u32;
     let mut scene = Scene::new(viewport_w, viewport_h);
     let mut external_textures = Vec::new();
+    // Register fonts up-front so DrawText can resolve font_instance
+    // keys to scene FontIds.
+    let font_map = register_fonts(&mut scene, fonts);
     // Composed transform ids; top = active coordinate space. Empty
     // means identity (transform_id 0).
     let mut transform_stack: Vec<u32> = Vec::new();
@@ -216,10 +242,34 @@ pub(crate) fn translate_paint_cmd_stream(
             PaintCmd::DrawLinearGradient(g) => emit_linear_gradient(&mut scene, g, tid),
             PaintCmd::DrawRadialGradient(g) => emit_radial_gradient(&mut scene, g, tid),
             PaintCmd::DrawConicGradient(g) => emit_conic_gradient(&mut scene, g, tid),
-            PaintCmd::DrawText(_) => {
-                // Needs FontRegistry to map FontInstanceKey →
-                // netrender::FontId.
-                warn!("[paint translator] DrawText deferred (needs FontRegistry wiring)");
+            PaintCmd::DrawText(t) => {
+                if t.glyphs.is_empty() {
+                    // Empty run (cache-less probe path) — nothing to paint.
+                } else if let Some(&font_id) = font_map.get(&t.font_instance) {
+                    let glyphs: Vec<NrGlyph> = t
+                        .glyphs
+                        .iter()
+                        .map(|g| NrGlyph {
+                            id: g.index,
+                            x: g.point.x,
+                            y: g.point.y,
+                        })
+                        .collect();
+                    scene.push_glyph_run_full(
+                        font_id,
+                        t.font_size,
+                        glyphs,
+                        color_to_array(&t.color),
+                        tid,
+                        NO_CLIP,
+                        [0.0; 4],
+                    );
+                } else {
+                    warn!(
+                        "[paint translator] DrawText references unregistered font {:?}; skipping",
+                        t.font_instance
+                    );
+                }
             },
             PaintCmd::DrawImage(_) | PaintCmd::DrawRepeatingImage(_) => {
                 // Needs ImageRegistry to map ImageKey → texture handle.
@@ -697,7 +747,7 @@ mod tests {
         );
         // External texture metadata lives on the pub(crate) full-shape
         // translator output; use translate_paint_cmd_stream to inspect it.
-        let out = translate_paint_cmd_stream(list.viewport, &list.commands);
+        let out = translate_paint_cmd_stream(list.viewport, &list.commands, &[]);
         // External texture doesn't add to scene.ops; it goes into the
         // separate compositor vector via the PM-3 lowering contract.
         assert_eq!(out.scene.ops.len(), 0);

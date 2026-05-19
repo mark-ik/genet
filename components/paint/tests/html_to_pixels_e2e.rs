@@ -238,6 +238,49 @@ fn html_to_pixels_cascaded_background_color_renders_to_master() {
     );
 }
 
+/// Text renders to actual glyph pixels. `<p>Hello serval</p>` on a
+/// white body with the default black text color: scan the top-left
+/// region where the text lays out and assert some pixels are
+/// markedly darker than white — i.e., glyphs rasterized. This is the
+/// receipt that the full text path holds together: parley shaping →
+/// per-run TextRunItems + font side-table → translator registers the
+/// font, resolves the key, emits SceneOp::GlyphRun → vello rasterizes
+/// the outlines.
+///
+/// We don't assert exact glyph positions (font-dependent); "dark
+/// pixels appear in the text band" is the robust, font-agnostic
+/// check.
+#[test]
+fn html_to_pixels_text_rasterizes_glyphs() {
+    let image = render_to_image(
+        "<html><body><p>Hello serval</p></body></html>",
+        &[
+            "body { background-color: rgb(255, 255, 255); }",
+            // Explicit black text; also the Stylo default, but pin it.
+            "p { color: rgb(0, 0, 0); }",
+        ],
+    );
+
+    // The text lays out near the top-left (p at body origin, glyphs
+    // around the first line's baseline). Scan a generous band and
+    // count pixels noticeably darker than the white background.
+    let mut dark_pixels = 0u32;
+    for y in 0..32u32 {
+        for x in 0..120u32 {
+            let [r, g, b, _a] = image.get_pixel(x, y).0;
+            // A glyph pixel is substantially darker than white on at
+            // least one channel (anti-aliased edges included).
+            if r < 160 && g < 160 && b < 160 {
+                dark_pixels += 1;
+            }
+        }
+    }
+    assert!(
+        dark_pixels > 20,
+        "expected glyph pixels (dark-on-white) in the text band, found {dark_pixels}"
+    );
+}
+
 /// Read back the master texture rendered from the given HTML +
 /// stylesheets. Shared helper for the multi-pixel test bodies below.
 fn render_to_image(

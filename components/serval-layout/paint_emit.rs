@@ -38,12 +38,14 @@ use layout_dom_api::{LayoutDom, NodeKind};
 use malloc_size_of_derive::MallocSizeOf;
 use paint_list_api::{
     BorderRadius, BorderSide, BorderStyle, ColorF, CommonPlacement, DeviceIntSize, EngineId,
-    FontInstanceKey, GlyphInstance, LayoutPoint, LayoutRect, LayoutSideOffsets, LayoutTransform,
-    NormalBorder, PaintCmd, PaintList, RectItem, TextOptions, TextRunItem, TransformSpec,
+    FontInstanceKey, FontResource, GlyphInstance, IdNamespace, LayoutPoint, LayoutRect,
+    LayoutSideOffsets, LayoutTransform, NormalBorder, PaintCmd, PaintList, RectItem, TextOptions,
+    TextRunItem, TransformSpec,
 };
 use paint_list_api::items::{BorderDetails, BorderItem};
 use paint_list_api::specs::TransformKind;
 use parley::PositionedLayoutItem;
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::construct::ConstructedTree;
@@ -51,12 +53,18 @@ use crate::fragment::FragmentPlane;
 use crate::style::StylePlane;
 use crate::text_measure::TextMeasureCtx;
 
+/// Namespace for the font-instance keys this producer mints. Keys are
+/// unique within one paint list; the namespace just disambiguates them
+/// from other `FontInstanceKey` sources if they ever share a registry.
+const SERVAL_FONT_NAMESPACE: IdNamespace = IdNamespace(0);
+
 /// Serval's concrete [`PaintList`] impl. Built by [`emit_paint_list`].
 #[derive(Clone, Debug, Default, Deserialize, MallocSizeOf, Serialize)]
 pub struct ServalPaintList {
     viewport: DeviceIntSize,
     commands: Vec<PaintCmd>,
     generation: u64,
+    fonts: Vec<FontResource>,
 }
 
 impl ServalPaintList {
@@ -66,6 +74,7 @@ impl ServalPaintList {
             viewport,
             commands: Vec::new(),
             generation: 0,
+            fonts: Vec::new(),
         }
     }
 }
@@ -82,6 +91,40 @@ impl PaintList for ServalPaintList {
     }
     fn commands(&self) -> &[PaintCmd] {
         &self.commands
+    }
+    fn fonts(&self) -> &[FontResource] {
+        &self.fonts
+    }
+}
+
+/// Dedups fonts referenced by glyph runs and assigns each a
+/// [`FontInstanceKey`]. Keyed by parley's blob id (stable per font
+/// file), so a font shared across many runs ships its bytes once.
+#[derive(Default)]
+struct FontCollector {
+    fonts: Vec<FontResource>,
+    by_blob: FxHashMap<u64, FontInstanceKey>,
+    next_idx: u32,
+}
+
+impl FontCollector {
+    /// Intern a parley `FontData`, returning the key the matching
+    /// `TextRunItem::font_instance` should carry. Adds a
+    /// [`FontResource`] (font bytes + index) on first sight of a blob.
+    fn intern(&mut self, font: &parley::FontData) -> FontInstanceKey {
+        let blob_id = font.data.id();
+        if let Some(k) = self.by_blob.get(&blob_id) {
+            return *k;
+        }
+        let key = FontInstanceKey::new(SERVAL_FONT_NAMESPACE, self.next_idx);
+        self.next_idx += 1;
+        self.by_blob.insert(blob_id, key);
+        self.fonts.push(FontResource {
+            key,
+            data: font.data.data().to_vec(),
+            index: font.index,
+        });
+        key
     }
 }
 
@@ -154,11 +197,13 @@ where
     D::NodeId: Copy + Eq + Hash,
 {
     let mut commands = Vec::new();
+    let mut fonts = FontCollector::default();
     walk(
         dom,
         styles,
         fragments,
         glyphs.as_ref(),
+        &mut fonts,
         dom.document(),
         &mut commands,
     );
@@ -166,6 +211,7 @@ where
         viewport,
         commands,
         generation: 0,
+        fonts: fonts.fonts,
     }
 }
 
@@ -174,8 +220,9 @@ where
 /// For each node with a fragment:
 ///   1. `PushTransform` with the fragment's local origin (its
 ///      `taffy::Layout.location`, which is parent-relative).
-///   2. The node's own paint primitive (`DrawRect` for elements,
-///      `DrawText` for text leaves), in local `(0, 0, w, h)` coords.
+///   2. The node's own paint primitive (`DrawRect` for elements, one
+///      `DrawText` per parley glyph-run for text leaves), in local
+///      `(0, 0, w, h)` coords.
 ///   3. Recurse into children — their `PushTransform` origins compose
 ///      with the active transform stack.
 ///   4. `PopTransform` matching the push.
@@ -187,6 +234,7 @@ fn walk<D>(
     styles: &StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
     glyphs: Option<&GlyphSource<'_, D::NodeId>>,
+    fonts: &mut FontCollector,
     id: D::NodeId,
     commands: &mut Vec<PaintCmd>,
 ) where
@@ -218,16 +266,25 @@ fn walk<D>(
                 }
             }
             NodeKind::Text => {
-                let glyph_runs = glyphs
-                    .and_then(|g| extract_glyphs(g, id))
-                    .unwrap_or_default();
-                commands.push(PaintCmd::DrawText(TextRunItem {
-                    placement: CommonPlacement::new(local_bounds),
-                    font_instance: FontInstanceKey::default(),
-                    color: text_color_of(dom, styles, id),
-                    glyphs: glyph_runs,
-                    options: TextOptions::default(),
-                }));
+                let color = text_color_of(dom, styles, id);
+                let emitted = glyphs
+                    .map(|g| emit_text_runs(g, id, local_bounds, color, fonts, commands))
+                    .unwrap_or(false);
+                if !emitted {
+                    // Cache-less path (no layout cache, or no glyphs):
+                    // emit one empty text run so the command structure
+                    // still reflects the text node.
+                    commands.push(PaintCmd::DrawText(TextRunItem {
+                        placement: CommonPlacement::new(local_bounds),
+                        font_instance: FontInstanceKey::default(),
+                        // No shaped run to read a size from; 16 px is
+                        // the CSS/UA default (matches TextLeaf::new).
+                        font_size: 16.0,
+                        color,
+                        glyphs: Vec::new(),
+                        options: TextOptions::default(),
+                    }));
+                }
             }
             _ => {}
         }
@@ -237,7 +294,7 @@ fn walk<D>(
     };
 
     for child in dom.dom_children(id) {
-        walk(dom, styles, fragments, glyphs, child, commands);
+        walk(dom, styles, fragments, glyphs, fonts, child, commands);
     }
 
     if pushed {
@@ -245,31 +302,57 @@ fn walk<D>(
     }
 }
 
-/// Look up the cached parley `Layout` for the given DOM node id and
-/// extract its positioned glyphs into a flat `Vec<GlyphInstance>`.
-/// Glyph positions are baseline-aligned in the text leaf's local
-/// space (parley's `positioned_glyphs` accumulates advance + adds
-/// the baseline offset).
-fn extract_glyphs<NodeId: Copy + Eq + Hash>(
+/// Emit one `DrawText` per parley glyph-run for the text node's
+/// cached `Layout`. Each run is homogeneous in font + size, so it
+/// becomes one `TextRunItem` carrying that run's `FontInstanceKey`
+/// (interned into `fonts`), `font_size`, and positioned glyphs.
+/// Returns whether any run was emitted (false → no cached layout, or
+/// empty text; caller falls back to an empty run).
+fn emit_text_runs<NodeId: Copy + Eq + Hash>(
     source: &GlyphSource<'_, NodeId>,
     dom_id: NodeId,
-) -> Option<Vec<GlyphInstance>> {
-    let taffy_id = source.constructed.node_map.get(&dom_id)?;
-    let layout = source.text_ctx.layouts.get(taffy_id)?;
-    let mut out = Vec::new();
+    bounds: LayoutRect,
+    color: ColorF,
+    fonts: &mut FontCollector,
+    commands: &mut Vec<PaintCmd>,
+) -> bool {
+    let Some(taffy_id) = source.constructed.node_map.get(&dom_id) else {
+        return false;
+    };
+    let Some(layout) = source.text_ctx.layouts.get(taffy_id) else {
+        return false;
+    };
+    let mut emitted = false;
     for line in layout.lines() {
         for item in line.items() {
-            if let PositionedLayoutItem::GlyphRun(run) = item {
-                for g in run.positioned_glyphs() {
-                    out.push(GlyphInstance {
-                        index: g.id,
-                        point: LayoutPoint::new(g.x, g.y),
-                    });
-                }
+            let PositionedLayoutItem::GlyphRun(run) = item else {
+                continue;
+            };
+            let parley_run = run.run();
+            let key = fonts.intern(parley_run.font());
+            let font_size = parley_run.font_size();
+            let glyphs: Vec<GlyphInstance> = run
+                .positioned_glyphs()
+                .map(|g| GlyphInstance {
+                    index: g.id,
+                    point: LayoutPoint::new(g.x, g.y),
+                })
+                .collect();
+            if glyphs.is_empty() {
+                continue;
             }
+            commands.push(PaintCmd::DrawText(TextRunItem {
+                placement: CommonPlacement::new(bounds),
+                font_instance: key,
+                font_size,
+                color,
+                glyphs,
+                options: TextOptions::default(),
+            }));
+            emitted = true;
         }
     }
-    Some(out)
+    emitted
 }
 
 /// Read an element's background color from its `ComputedValues`.
@@ -543,6 +626,55 @@ mod tests {
             text_with_glyphs >= 1,
             "expected at least one DrawText with non-empty glyph run, got {text_with_glyphs}"
         );
+    }
+
+    /// Text emission populates the font side-table, and each
+    /// `DrawText`'s `font_instance` resolves to a `FontResource` in
+    /// the list's `fonts()`. This is the producer-side half of the
+    /// FontRegistry contract: the bytes the renderer needs travel
+    /// with the paint output, keyed to the run.
+    #[test]
+    fn emit_with_layouts_populates_font_table() {
+        let document =
+            StaticDocument::parse("<html><body><p>Hello</p></body></html>");
+        let styles = build_style_plane(&document);
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, viewport);
+        let plist = emit_paint_list_with_layouts(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            DeviceIntSize::new(800, 600),
+        );
+
+        // At least one font was collected, and it carries non-empty
+        // bytes (a real system font blob).
+        assert!(!plist.fonts().is_empty(), "expected font side-table populated");
+        assert!(
+            plist.fonts().iter().all(|f| !f.data.is_empty()),
+            "every FontResource should carry font bytes"
+        );
+
+        // Every text run with glyphs references a key present in fonts().
+        let font_keys: std::collections::HashSet<_> =
+            plist.fonts().iter().map(|f| f.key).collect();
+        for cmd in plist.commands() {
+            if let PaintCmd::DrawText(t) = cmd {
+                if !t.glyphs.is_empty() {
+                    assert!(
+                        font_keys.contains(&t.font_instance),
+                        "DrawText font_instance {:?} not in fonts() table",
+                        t.font_instance
+                    );
+                    assert!(t.font_size > 0.0, "shaped run should have positive font_size");
+                }
+            }
+        }
     }
 
     /// Sanity-check the cache-less emit path still produces empty

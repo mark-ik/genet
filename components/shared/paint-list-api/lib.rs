@@ -49,7 +49,7 @@ pub use paint_types::units::{
 };
 pub use paint_types::border::BorderSide;
 pub use paint_types::{
-    BorderRadius, BorderStyle, BoxShadowClipMode, ColorF, ExtendMode, FontInstanceKey,
+    BorderRadius, BorderStyle, BoxShadowClipMode, ColorF, ExtendMode, FontInstanceKey, IdNamespace,
     GradientStop, ImageKey, ImageRendering, LineStyle, MixBlendMode, NormalBorder, RepeatMode,
     TransformStyle,
 };
@@ -98,6 +98,42 @@ pub trait PaintList:
     /// assumption that paint output is built-then-shipped, not
     /// streamed; revisit if a streaming consumer surfaces.
     fn commands(&self) -> &[PaintCmd];
+
+    /// Font resources referenced by `DrawText` commands in this list.
+    /// Each [`FontResource`] carries the font bytes + the
+    /// [`FontInstanceKey`] that `TextRunItem::font_instance` points at;
+    /// the renderer registers these into its font palette and resolves
+    /// each text run's key to a concrete font. Default is empty — only
+    /// lists that emit text populate it.
+    fn fonts(&self) -> &[FontResource] {
+        &[]
+    }
+}
+
+// =============================================================================
+// FontResource — font bytes carried alongside the command stream
+// =============================================================================
+
+/// A font referenced by one or more `DrawText` runs. Carried in the
+/// paint output's font side-table (`PaintList::fonts`) rather than
+/// inline on each `TextRunItem`, so a font shared across many runs
+/// ships its bytes once. The renderer interns each `FontResource`
+/// into its font palette and maps `key` → its internal font id;
+/// `TextRunItem::font_instance` then resolves through that map.
+///
+/// Bytes travel with the paint output (rather than via a shared
+/// registry) so the envelope stays self-contained for IPC /
+/// capture-replay. Dedup across resends is the renderer's job (it can
+/// key on the blob identity); the producer just emits what each run
+/// referenced.
+#[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
+pub struct FontResource {
+    /// The key `TextRunItem::font_instance` references.
+    pub key: FontInstanceKey,
+    /// TTF / OTF / TTC font bytes.
+    pub data: Vec<u8>,
+    /// Index within a font collection (TTC); `0` for single-font files.
+    pub index: u32,
 }
 
 // =============================================================================
@@ -227,11 +263,14 @@ pub struct PaintEnvelope {
     pub generation: u64,
     /// Paint command stream in paint order.
     pub commands: Vec<PaintCmd>,
+    /// Font resources referenced by `DrawText` commands. See
+    /// [`FontResource`].
+    pub fonts: Vec<FontResource>,
 }
 
 impl PaintEnvelope {
     /// Package any `PaintList` impl into the wire form. Clones the
-    /// command slice — the envelope owns its commands once
+    /// command + font slices — the envelope owns its payload once
     /// constructed. Callers that need zero-copy transport can build
     /// the envelope manually with `Vec::from`/`Cow` patterns as
     /// usage shapes emerge.
@@ -241,6 +280,7 @@ impl PaintEnvelope {
             viewport: list.viewport(),
             generation: list.generation_id(),
             commands: list.commands().to_vec(),
+            fonts: list.fonts().to_vec(),
         }
     }
 }
@@ -257,6 +297,9 @@ impl PaintList for PaintEnvelope {
     }
     fn commands(&self) -> &[PaintCmd] {
         &self.commands
+    }
+    fn fonts(&self) -> &[FontResource] {
+        &self.fonts
     }
 }
 
@@ -447,6 +490,7 @@ mod tests {
             viewport: DeviceIntSize::new(1024, 768),
             generation: 7,
             commands: vec![PaintCmd::PopLayer],
+            fonts: Vec::new(),
         };
         let json = serde_json::to_string(&envelope).expect("serialize");
         let parsed: PaintEnvelope = serde_json::from_str(&json).expect("deserialize");
