@@ -4694,9 +4694,12 @@ version = "0.2.0"
 dependencies = [
  "app_units",
  "atomic_refcell",
+ "base64",
+ "data-url",
  "engine-observables-api",
  "euclid",
  "html5ever",
+ "image",
  "layout-dom-api",
  "malloc_size_of_derive",
  "markup5ever",
@@ -5316,6 +5319,7 @@ dependencies = [
 name = "servo-paint"
 version = "0.2.0"
 dependencies = [
+ "base64",
  "crossbeam-channel",
  "dpi",
  "euclid",

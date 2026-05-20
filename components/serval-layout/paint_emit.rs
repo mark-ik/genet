@@ -37,10 +37,10 @@ use std::hash::Hash;
 use layout_dom_api::{LayoutDom, NodeKind};
 use malloc_size_of_derive::MallocSizeOf;
 use paint_list_api::{
-    BorderRadius, BorderSide, BorderStyle, ColorF, CommonPlacement, DeviceIntSize, EngineId,
-    FontInstanceKey, FontResource, GlyphInstance, IdNamespace, ImageResource, LayoutPoint,
-    LayoutRect, LayoutSideOffsets, LayoutTransform, NormalBorder, PaintCmd, PaintList, RectItem,
-    TextOptions, TextRunItem, TransformSpec,
+    AlphaType, BorderRadius, BorderSide, BorderStyle, ColorF, CommonPlacement, DeviceIntSize,
+    EngineId, FontInstanceKey, FontResource, GlyphInstance, IdNamespace, ImageItem, ImageKey,
+    ImageRendering, ImageResource, LayoutPoint, LayoutRect, LayoutSideOffsets, LayoutTransform,
+    NormalBorder, PaintCmd, PaintList, RectItem, TextOptions, TextRunItem, TransformSpec,
 };
 use paint_list_api::items::{BorderDetails, BorderItem};
 use paint_list_api::specs::TransformKind;
@@ -50,6 +50,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::construct::ConstructedTree;
 use crate::fragment::FragmentPlane;
+use crate::image_decode::{DecodedImage, ImagePlane};
 use crate::style::StylePlane;
 use crate::text_measure::TextMeasureCtx;
 
@@ -57,6 +58,9 @@ use crate::text_measure::TextMeasureCtx;
 /// unique within one paint list; the namespace just disambiguates them
 /// from other `FontInstanceKey` sources if they ever share a registry.
 const SERVAL_FONT_NAMESPACE: IdNamespace = IdNamespace(0);
+
+/// Namespace for the image keys this producer mints.
+const SERVAL_IMAGE_NAMESPACE: IdNamespace = IdNamespace(1);
 
 /// Serval's concrete [`PaintList`] impl. Built by [`emit_paint_list`].
 #[derive(Clone, Debug, Default, Deserialize, MallocSizeOf, Serialize)]
@@ -133,6 +137,43 @@ impl FontCollector {
     }
 }
 
+/// Collects `<img>` images into the paint list's image side-table,
+/// assigning each an [`ImageKey`]. One key per `<img>` element for the
+/// probe (no cross-element src dedup yet).
+#[derive(Default)]
+struct ImageCollector {
+    images: Vec<ImageResource>,
+    next_idx: u32,
+}
+
+impl ImageCollector {
+    /// Add a decoded image, returning the key the matching
+    /// `ImageItem::image_key` should carry.
+    fn add(&mut self, decoded: &DecodedImage) -> ImageKey {
+        let key = ImageKey::new(SERVAL_IMAGE_NAMESPACE, self.next_idx);
+        self.next_idx += 1;
+        self.images.push(ImageResource {
+            key,
+            width: decoded.width,
+            height: decoded.height,
+            data: decoded.rgba.clone(),
+        });
+        key
+    }
+}
+
+/// Bundles the per-emission mutable collectors + immutable resource
+/// sources, so the recursive `walk` takes one `&mut Emitter` rather
+/// than a half-dozen separate parameters.
+struct Emitter<'a, NodeId: Copy + Eq + Hash> {
+    /// Shaped-glyph source (None on the cache-less probe path).
+    glyphs: Option<GlyphSource<'a, NodeId>>,
+    /// Decoded `<img>` images keyed by NodeId.
+    images_plane: &'a ImagePlane<NodeId>,
+    fonts: FontCollector,
+    images: ImageCollector,
+}
+
 /// Walk the DOM in pre-order, emitting paint commands for each
 /// element + text leaf with a fragment. Coordinates are absolute
 /// (parent-relative `taffy::Layout.location` accumulated through the
@@ -155,30 +196,35 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    emit_paint_list_with_glyphs(dom, styles, fragments, None, viewport)
+    let empty_images = ImagePlane::new();
+    emit_inner(dom, styles, fragments, None, &empty_images, viewport)
 }
 
 /// Variant of [`emit_paint_list`] that consumes the cached text
-/// layouts. `constructed` provides the DOM → Taffy id mapping;
-/// `text_ctx` provides the cached parley `Layout`s. When both are
-/// present, `DrawText` items carry shaped+positioned glyph runs.
+/// layouts + decoded images. `constructed` provides the DOM → Taffy
+/// id mapping; `text_ctx` provides the cached parley `Layout`s;
+/// `images` provides decoded `<img>` pixels. With these, `DrawText`
+/// items carry shaped glyph runs + a font side-table, and `<img>`
+/// elements emit `DrawImage` + an image side-table.
 pub fn emit_paint_list_with_layouts<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
     constructed: &ConstructedTree<D::NodeId>,
     text_ctx: &TextMeasureCtx,
+    images: &ImagePlane<D::NodeId>,
     viewport: DeviceIntSize,
 ) -> ServalPaintList
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    emit_paint_list_with_glyphs(
+    emit_inner(
         dom,
         styles,
         fragments,
         Some(GlyphSource { constructed, text_ctx }),
+        images,
         viewport,
     )
 }
@@ -190,11 +236,12 @@ struct GlyphSource<'a, NodeId: Copy + Eq + Hash> {
     text_ctx: &'a TextMeasureCtx,
 }
 
-fn emit_paint_list_with_glyphs<D>(
+fn emit_inner<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
     glyphs: Option<GlyphSource<'_, D::NodeId>>,
+    images_plane: &ImagePlane<D::NodeId>,
     viewport: DeviceIntSize,
 ) -> ServalPaintList
 where
@@ -202,24 +249,19 @@ where
     D::NodeId: Copy + Eq + Hash,
 {
     let mut commands = Vec::new();
-    let mut fonts = FontCollector::default();
-    walk(
-        dom,
-        styles,
-        fragments,
-        glyphs.as_ref(),
-        &mut fonts,
-        dom.document(),
-        &mut commands,
-    );
+    let mut emitter = Emitter {
+        glyphs,
+        images_plane,
+        fonts: FontCollector::default(),
+        images: ImageCollector::default(),
+    };
+    walk(dom, styles, fragments, &mut emitter, dom.document(), &mut commands);
     ServalPaintList {
         viewport,
         commands,
         generation: 0,
-        fonts: fonts.fonts,
-        // Producer doesn't emit DrawImage yet (no <img> handling /
-        // decode); image side-table stays empty.
-        images: Vec::new(),
+        fonts: emitter.fonts.fonts,
+        images: emitter.images.images,
     }
 }
 
@@ -241,8 +283,7 @@ fn walk<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
-    glyphs: Option<&GlyphSource<'_, D::NodeId>>,
-    fonts: &mut FontCollector,
+    em: &mut Emitter<'_, D::NodeId>,
     id: D::NodeId,
     commands: &mut Vec<PaintCmd>,
 ) where
@@ -261,10 +302,22 @@ fn walk<D>(
         );
         match dom.kind(id) {
             NodeKind::Element => {
+                // Background first, then replaced content (image),
+                // then border — CSS paint order.
                 commands.push(PaintCmd::DrawRect(RectItem {
                     placement: CommonPlacement::new(local_bounds),
                     color: background_color_of(styles, id),
                 }));
+                if let Some(decoded) = em.images_plane.get(id) {
+                    let key = em.images.add(decoded);
+                    commands.push(PaintCmd::DrawImage(ImageItem {
+                        placement: CommonPlacement::new(local_bounds),
+                        image_key: key,
+                        image_rendering: ImageRendering::Auto,
+                        alpha_type: AlphaType::PremultipliedAlpha,
+                        color: ColorF::WHITE, // identity tint
+                    }));
+                }
                 if let Some((widths, normal)) = border_of(styles, id) {
                     commands.push(PaintCmd::DrawBorder(BorderItem {
                         placement: CommonPlacement::new(local_bounds),
@@ -275,9 +328,10 @@ fn walk<D>(
             }
             NodeKind::Text => {
                 let color = text_color_of(dom, styles, id);
-                let emitted = glyphs
-                    .map(|g| emit_text_runs(g, id, local_bounds, color, fonts, commands))
-                    .unwrap_or(false);
+                let emitted = match em.glyphs.as_ref() {
+                    Some(g) => emit_text_runs(g, id, local_bounds, color, &mut em.fonts, commands),
+                    None => false,
+                };
                 if !emitted {
                     // Cache-less path (no layout cache, or no glyphs):
                     // emit one empty text run so the command structure
@@ -302,7 +356,7 @@ fn walk<D>(
     };
 
     for child in dom.dom_children(id) {
-        walk(dom, styles, fragments, glyphs, fonts, child, commands);
+        walk(dom, styles, fragments, em, child, commands);
     }
 
     if pushed {
@@ -619,6 +673,7 @@ mod tests {
             &fragments,
             &built,
             &text_ctx,
+            &crate::image_decode::ImagePlane::new(),
             DeviceIntSize::new(800, 600),
         );
 
@@ -657,6 +712,7 @@ mod tests {
             &fragments,
             &built,
             &text_ctx,
+            &crate::image_decode::ImagePlane::new(),
             DeviceIntSize::new(800, 600),
         );
 

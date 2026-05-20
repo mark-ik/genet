@@ -43,7 +43,7 @@ use paint_types::PipelineId;
 use paint_types::units::{DeviceIntRect, LayoutSize};
 use servo_base::id::{PainterId, PipelineNamespace, PipelineNamespaceId, WebViewId};
 use serval_layout::{
-    StylePlane, emit_paint_list_with_layouts, layout, run_cascade,
+    ImagePlane, StylePlane, emit_paint_list_with_layouts, layout, run_cascade,
 };
 use serval_static_dom::StaticDocument;
 
@@ -93,6 +93,11 @@ fn html_to_envelope(html: &str, stylesheets: &[&str]) -> PaintEnvelope {
     //    layout from hand-rolled stubs to real CSS-driven box model.
     styles.refresh_taffy_from_cascade();
 
+    // 3b. Decode <img> sources + give each <img> its intrinsic size
+    //     on any axis CSS left auto.
+    let images = ImagePlane::decode_from_dom(&document);
+    styles.apply_intrinsic_image_sizes(&images);
+
     // 4. Layout.
     let viewport = taffy::Size {
         width: taffy::AvailableSpace::Definite(VIEWPORT as f32),
@@ -100,13 +105,15 @@ fn html_to_envelope(html: &str, stylesheets: &[&str]) -> PaintEnvelope {
     };
     let (fragments, built, text_ctx) = layout(&document, &styles, viewport);
 
-    // 5. Emit (with glyph runs from the cached parley Layouts).
+    // 5. Emit (glyph runs from cached parley Layouts + DrawImage from
+    //    the decoded image plane).
     let plist = emit_paint_list_with_layouts(
         &document,
         &styles,
         &fragments,
         &built,
         &text_ctx,
+        &images,
         DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32),
     );
 
@@ -418,6 +425,49 @@ fn draw_image_rasterizes_from_side_table() {
         image.get_pixel(100, 100).0,
         [255, 255, 255, 255],
         "(100, 100) is outside the image box, should be white"
+    );
+}
+
+/// Full producer path: an `<img>` with a `data:` URI src renders from
+/// HTML. The producer decodes the data URI (data-url + image crates),
+/// sizes the `<img>` box to the image's intrinsic dimensions, and
+/// emits DrawImage + an ImageResource — no hand-built envelope. This
+/// is the receipt that `<img src="data:image/png;base64,…">` works
+/// end-to-end: decode → intrinsic sizing → emit → translator → pixels.
+#[test]
+fn html_to_pixels_img_data_uri_renders() {
+    use base64::Engine as _;
+
+    // Encode a 16×16 solid-blue PNG, base64 it, build the data URI.
+    let blue = image::RgbaImage::from_pixel(16, 16, image::Rgba([0, 0, 255, 255]));
+    let mut png_bytes = Vec::new();
+    blue.write_to(
+        &mut std::io::Cursor::new(&mut png_bytes),
+        image::ImageFormat::Png,
+    )
+    .expect("encode test PNG");
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+    let data_uri = format!("data:image/png;base64,{b64}");
+
+    // The <img> has no CSS width/height, so it takes the decoded
+    // intrinsic size (16×16) and lays out at body's origin.
+    let html = format!("<html><body><img src=\"{data_uri}\"></body></html>");
+    let image = render_to_image(
+        &html,
+        &["body { background-color: rgb(255, 255, 255); }"],
+    );
+
+    // Inside the 16×16 image box (top-left): blue.
+    assert_eq!(
+        image.get_pixel(8, 8).0,
+        [0, 0, 255, 255],
+        "(8, 8) is inside the intrinsically-sized <img>, should be blue"
+    );
+    // Outside the image box: white body.
+    assert_eq!(
+        image.get_pixel(40, 40).0,
+        [255, 255, 255, 255],
+        "(40, 40) is outside the 16×16 <img>, should be white body"
     );
 }
 

@@ -257,4 +257,29 @@ impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
             queue.extend(dom.dom_children(id));
         }
     }
+
+    /// Give each decoded `<img>` element its intrinsic pixel size on
+    /// any axis CSS left `auto`. Explicit `width` / `height` rules win
+    /// (only `auto` axes are overridden). Call after
+    /// `refresh_taffy_from_cascade` and before `layout`/`construct` so
+    /// the Taffy tree sees real image dimensions instead of the 0×0 an
+    /// empty replaced element would otherwise get.
+    pub fn apply_intrinsic_image_sizes(
+        &mut self,
+        images: &crate::image_decode::ImagePlane<NodeId>,
+    ) {
+        use taffy::prelude::TaffyAuto;
+        use taffy::style::Dimension;
+
+        for (id, decoded) in images.iter() {
+            if let Some(entry) = self.entries.get_mut(id) {
+                if entry.taffy.size.width == Dimension::AUTO {
+                    entry.taffy.size.width = Dimension::length(decoded.width as f32);
+                }
+                if entry.taffy.size.height == Dimension::AUTO {
+                    entry.taffy.size.height = Dimension::length(decoded.height as f32);
+                }
+            }
+        }
+    }
 }

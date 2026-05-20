@@ -21,6 +21,7 @@ webgpu = ["dep:webgpu"]
 webxr = ["dep:webxr", "dep:webxr-api"]
 
 [dev-dependencies]
+base64 = { workspace = true }
 euclid = { workspace = true }
 html5ever = { workspace = true }
 malloc_size_of = { workspace = true }

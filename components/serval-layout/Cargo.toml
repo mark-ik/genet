@@ -15,8 +15,10 @@ path = "lib.rs"
 [dependencies]
 app_units = { workspace = true }
 atomic_refcell = { workspace = true }
+data-url = { workspace = true }
 euclid = { workspace = true }
 html5ever = { workspace = true }
+image = { workspace = true }
 layout_api = { workspace = true }
 layout_dom_api = { workspace = true }
 markup5ever = { workspace = true }
@@ -41,5 +43,6 @@ stylo_traits = { workspace = true }
 taffy = { workspace = true, features = ["taffy_tree", "block_layout", "flexbox"] }
 
 [dev-dependencies]
+base64 = { workspace = true }
 serde_json = { workspace = true }
 serval-static-dom = { path = "../serval-static-dom" }
