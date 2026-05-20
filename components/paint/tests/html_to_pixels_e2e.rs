@@ -49,6 +49,20 @@ use serval_static_dom::StaticDocument;
 
 const VIEWPORT: u32 = 128;
 
+/// Serializes GPU-touching tests. Booting several wgpu instances
+/// concurrently faults on some Windows drivers
+/// (`STATUS_ACCESS_VIOLATION`), so every test that boots a renderer
+/// holds this guard for the duration of its GPU work — making the
+/// suite safe under the default multi-threaded test harness without a
+/// `--test-threads=1` invocation. Poison is recovered: a failing
+/// assertion shouldn't cascade into lock-poison failures across the
+/// rest of the suite.
+static GPU_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn gpu_serial() -> std::sync::MutexGuard<'static, ()> {
+    GPU_SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// `WebViewId::new` and `PainterId::next` reach into a thread-local
 /// `PipelineNamespace`; each `#[test]` runs on its own thread, so a
 /// single unconditional install per test is safe.
@@ -141,6 +155,7 @@ fn html_to_envelope_with_loader<L: serval_layout::ImageLoader>(
 /// right shape via the production-shaped `SendPaintList` path.
 #[test]
 fn html_to_pixels_drives_full_pipeline() {
+    let _gpu = gpu_serial();
     let handles = boot().expect("wgpu boot");
     let renderer = create_netrender_instance(
         handles,
@@ -191,6 +206,7 @@ fn html_to_pixels_drives_full_pipeline() {
 /// → renderer rasterizes) holds together end-to-end.
 #[test]
 fn html_to_pixels_cascaded_background_color_renders_to_master() {
+    let _gpu = gpu_serial();
     let handles = boot().expect("wgpu boot");
     let device = handles.device.clone();
     let queue = handles.queue.clone();
@@ -447,6 +463,10 @@ fn render_to_image(
 fn render_envelope_to_image(
     envelope: PaintEnvelope,
 ) -> image::ImageBuffer<image::Rgba<u8>, Vec<u8>> {
+    // Held for the whole GPU lifetime (boot → render → readback); all
+    // helper-based tests funnel through here, so this serializes them
+    // against each other and the direct-boot tests.
+    let _gpu = gpu_serial();
     let handles = boot().expect("wgpu boot");
     let device = handles.device.clone();
     let queue = handles.queue.clone();
