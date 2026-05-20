@@ -416,6 +416,15 @@ codegen-units = 1
 # xml5ever = { path = "../html5ever/xml5ever" }
 # tendril = { path = "../html5ever/tendril" }
 gpu-allocator = { path = "support/patches/gpu-allocator" }
+# stylo_taffy (serval-layout) depends on crates.io `stylo`/`stylo_atoms`
+# `^0.17`. serval pins the same crates from the servo/stylo git rev, and
+# `stylo` declares `links = "servo_style_crate"` (only one Stylo allowed
+# in the graph). Redirect the crates.io deps to the git rev so they
+# unify with serval's Stylo instead of conflicting. The git rev is
+# 0.17.0, which satisfies stylo_taffy's `^0.17`. See
+# docs/2026-05-20_stylo_taffy_adoption_plan.md.
+stylo = { git = "https://github.com/servo/stylo", rev = "572ecba2d1600e7c3d490586692a209faf703baa" }
+stylo_atoms = { git = "https://github.com/servo/stylo", rev = "572ecba2d1600e7c3d490586692a209faf703baa" }
 # vello patch removed 2026-05-15 per Mark's audit — bumping to vello 0.9
 # directly from crates.io. If vello upstream needs a fork applied later,
 # re-add here pinned to a specific upstream version.

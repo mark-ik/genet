@@ -2,231 +2,114 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Focused `style::ComputedValues` → [`taffy::Style`] converter.
+//! `style::ComputedValues` → [`taffy::Style`] via the maintained
+//! [`stylo_taffy`] converters.
 //!
-//! Probe-scope subset: display, size (width/height), margin, padding,
-//! border-widths, and positioning (`position` + `top/right/bottom/left`
-//! insets — relative + absolute, which Taffy models natively). Enough
-//! to drive box-model semantics (`FragmentQuery::box_model` returning
-//! real content/padding/border/margin rects), `DrawBorder` emission,
-//! and offset/out-of-flow boxes. Stylo's richer property surface
-//! (flex/grid track sizing, transforms, floats — which Taffy has no
-//! model for) is covered by `linebender/blitz`'s `stylo_taffy` crate —
-//! switch to it when our probe outgrows the subset here.
+//! This is a thin adapter, not a hand-rolled mapping. The per-property
+//! logic (calc, intrinsic-sizing keywords, flex, **float / clear**)
+//! lives in `stylo_taffy::convert::*`; this function assembles those
+//! into the `taffy::Style` shape serval's `TaffyTree` stores.
 //!
-//! Cf. `docs/2026-05-17_serval_layout_planes_architecture.md`.
+//! ## Why not call `stylo_taffy::to_taffy_style` directly
+//!
+//! `stylo_taffy::to_taffy_style` returns `taffy::Style<Atom>` — the
+//! `Atom` type parameter carries CSS grid *template line names*. serval's
+//! `TaffyTree<InlineContent>` stores the default `taffy::Style`
+//! (`Style<DefaultCheapStr>`), and `TaffyTree` isn't generic over the
+//! ident type, so the two `Style<S>` instantiations don't unify. The
+//! grid line-name fields are the *only* place `Atom` appears, and serval
+//! doesn't lay out named grid lines yet — so we assemble a default-ident
+//! `Style` from the (ident-free) per-property converters and leave the
+//! grid-template-name fields at their default. When serval grows named
+//! grid support, revisit (carry `Atom` through `TaffyTree`, or map the
+//! line-name sets).
+//!
+//! Cf. `docs/2026-05-20_stylo_taffy_adoption_plan.md`.
 
 use style::properties::ComputedValues;
-use style::values::computed::{LengthPercentage as ComputedLengthPercentage, Percentage};
-use style::values::generics::length::GenericMargin;
-use style::values::generics::NonNegative;
-use style::values::specified::box_::{DisplayInside, DisplayOutside, PositionProperty};
-use style::values::specified::border::BorderStyle;
-use taffy::prelude::TaffyAuto;
-use taffy::style::{Dimension, Display, LengthPercentage, LengthPercentageAuto, Position, Style};
-use taffy::geometry::Rect;
+use stylo_taffy::convert as c;
 
-/// Convert `ComputedValues` into a [`taffy::Style`] subset.
-///
-/// Properties resolved (the rest left at `Default::default()`):
-/// - `display` (Block / Flex / Grid / None; anything else falls back
-///   to Block — Taffy doesn't model inline flow, so inline elements
-///   collapse to block for the probe)
-/// - `size.width`, `size.height` (Auto / Length / Percent)
-/// - `margin.{top,right,bottom,left}` (Auto / Length / Percent)
-/// - `padding.{top,right,bottom,left}` (Length / Percent)
-/// - `border.{top,right,bottom,left}` (width × style; `none`/`hidden`
-///   collapse to zero)
-pub fn to_taffy_style(values: &ComputedValues) -> Style {
-    let mut s = Style::default();
-    s.display = convert_display(values);
-    s.box_sizing = convert_box_sizing(values);
-    s.position = convert_position(values);
-
+/// Convert `ComputedValues` into serval's `taffy::Style`, delegating
+/// every property to `stylo_taffy::convert`. Grid *template* tracks and
+/// line-names are left at default (they carry the `Atom` ident type that
+/// serval's `TaffyTree` Style instantiation doesn't use); everything
+/// else — display, box-sizing, position + inset, overflow, float/clear,
+/// sizing (incl. min/max + aspect-ratio), margin/padding/border, gap,
+/// and the flexbox properties — comes from the maintained converters.
+pub fn to_taffy_style(values: &ComputedValues) -> taffy::Style {
     let pos = values.get_position();
-    s.size = taffy::Size {
-        width: dimension_from_size(&pos.width),
-        height: dimension_from_size(&pos.height),
-    };
-
-    // Inset (top/right/bottom/left). Taffy applies it to relatively-
-    // positioned boxes (offset from in-flow position) and to absolutely-
-    // positioned boxes (offset from the containing block's padding edge).
-    // For `static` boxes the cascade leaves these `auto`, so they have
-    // no effect — matching CSS, which ignores inset on static elements.
-    s.inset = Rect {
-        top: inset_val(&pos.top),
-        right: inset_val(&pos.right),
-        bottom: inset_val(&pos.bottom),
-        left: inset_val(&pos.left),
-    };
-
     let margin = values.get_margin();
-    s.margin = Rect {
-        top: margin_val(&margin.margin_top),
-        right: margin_val(&margin.margin_right),
-        bottom: margin_val(&margin.margin_bottom),
-        left: margin_val(&margin.margin_left),
-    };
-
     let padding = values.get_padding();
-    s.padding = Rect {
-        top: length_percentage(&padding.padding_top.0),
-        right: length_percentage(&padding.padding_right.0),
-        bottom: length_percentage(&padding.padding_bottom.0),
-        left: length_percentage(&padding.padding_left.0),
+    let border = values.get_border();
+
+    let mut s = taffy::Style::default();
+
+    s.display = c::display(values.clone_display());
+    s.box_sizing = c::box_sizing(values.clone_box_sizing());
+    s.position = c::position(values.clone_position());
+    s.overflow = taffy::Point {
+        x: c::overflow(values.clone_overflow_x()),
+        y: c::overflow(values.clone_overflow_y()),
     };
 
-    let border = values.get_border();
-    s.border = Rect {
-        top: border_width(border.border_top_width.0.to_f32_px(), border.border_top_style),
-        right: border_width(
-            border.border_right_width.0.to_f32_px(),
-            border.border_right_style,
-        ),
-        bottom: border_width(
-            border.border_bottom_width.0.to_f32_px(),
-            border.border_bottom_style,
-        ),
-        left: border_width(
-            border.border_left_width.0.to_f32_px(),
-            border.border_left_style,
-        ),
+    // Floats (stylo_taffy `floats` feature → taffy `float_layout`).
+    s.float = c::float(values.clone_float());
+    s.clear = c::clear(values.clone_clear());
+
+    s.size = taffy::Size {
+        width: c::dimension(&pos.width),
+        height: c::dimension(&pos.height),
     };
+    s.min_size = taffy::Size {
+        width: c::dimension(&pos.min_width),
+        height: c::dimension(&pos.min_height),
+    };
+    s.max_size = taffy::Size {
+        width: c::max_size_dimension(&pos.max_width),
+        height: c::max_size_dimension(&pos.max_height),
+    };
+    s.aspect_ratio = c::aspect_ratio(pos.aspect_ratio);
+
+    s.inset = taffy::Rect {
+        left: c::inset(&pos.left),
+        right: c::inset(&pos.right),
+        top: c::inset(&pos.top),
+        bottom: c::inset(&pos.bottom),
+    };
+    s.margin = taffy::Rect {
+        left: c::margin(&margin.margin_left),
+        right: c::margin(&margin.margin_right),
+        top: c::margin(&margin.margin_top),
+        bottom: c::margin(&margin.margin_bottom),
+    };
+    s.padding = taffy::Rect {
+        left: c::length_percentage(&padding.padding_left.0),
+        right: c::length_percentage(&padding.padding_right.0),
+        top: c::length_percentage(&padding.padding_top.0),
+        bottom: c::length_percentage(&padding.padding_bottom.0),
+    };
+    s.border = taffy::Rect {
+        left: c::border(&border.border_left_width, border.border_left_style),
+        right: c::border(&border.border_right_width, border.border_right_style),
+        top: c::border(&border.border_top_width, border.border_top_style),
+        bottom: c::border(&border.border_bottom_width, border.border_bottom_style),
+    };
+
+    s.gap = taffy::Size {
+        width: c::gap(&pos.column_gap),
+        height: c::gap(&pos.row_gap),
+    };
+
+    s.align_content = c::content_alignment(pos.align_content);
+    s.justify_content = c::content_alignment(pos.justify_content);
+    s.align_items = c::item_alignment(pos.align_items.0);
+    s.align_self = c::item_alignment(pos.align_self.0);
+
+    s.flex_direction = c::flex_direction(pos.flex_direction);
+    s.flex_wrap = c::flex_wrap(pos.flex_wrap);
+    s.flex_grow = pos.flex_grow.0;
+    s.flex_shrink = pos.flex_shrink.0;
+    s.flex_basis = c::flex_basis(&pos.flex_basis);
 
     s
 }
-
-fn convert_box_sizing(values: &ComputedValues) -> taffy::style::BoxSizing {
-    use style::properties::generated::longhands::box_sizing::computed_value::T as StyloBoxSizing;
-    match values.get_position().box_sizing {
-        StyloBoxSizing::BorderBox => taffy::style::BoxSizing::BorderBox,
-        StyloBoxSizing::ContentBox => taffy::style::BoxSizing::ContentBox,
-    }
-}
-
-/// Map Stylo's `position` to Taffy's. Taffy models only `Relative`
-/// (in-flow, inset-offset) and `Absolute` (out-of-flow). `static`,
-/// `relative`, and `sticky` all stay in normal flow → `Relative`;
-/// `absolute` and `fixed` are out-of-flow → `Absolute`. (Taffy has
-/// no separate `fixed` containing-block semantics; `fixed` falls back
-/// to `absolute` against the nearest positioned ancestor — a known
-/// approximation until a viewport-anchored pass lands.)
-fn convert_position(values: &ComputedValues) -> Position {
-    match values.get_box().position {
-        PositionProperty::Absolute | PositionProperty::Fixed => Position::Absolute,
-        _ => Position::Relative,
-    }
-}
-
-fn convert_display(values: &ComputedValues) -> Display {
-    let d = values.get_box().display;
-    match d.outside() {
-        DisplayOutside::None => return Display::None,
-        _ => {}
-    }
-    match d.inside() {
-        DisplayInside::None => Display::None,
-        DisplayInside::Flex => Display::Flex,
-        DisplayInside::Grid => Display::Grid,
-        // Block flow + flow-root + inline (since Taffy doesn't model
-        // inline flow, inline collapses to block — visible regression
-        // when a real inline-aware layout backend lands).
-        _ => Display::Block,
-    }
-}
-
-/// `Position.width` / `.height` shape: `GenericSize<NonNegative<LengthPercentage>>`.
-/// Taffy's `Dimension` accepts Auto / Length / Percent.
-fn dimension_from_size(
-    size: &style::values::generics::length::GenericSize<NonNegative<ComputedLengthPercentage>>,
-) -> Dimension {
-    use style::values::generics::length::GenericSize;
-    match size {
-        GenericSize::Auto => Dimension::AUTO,
-        GenericSize::LengthPercentage(NonNegative(lp)) => match length_percentage_to_dimension(lp) {
-            Some(d) => d,
-            None => Dimension::AUTO,
-        },
-        // Min/max/fit-content / stretch / fill-available are intrinsic
-        // sizing modes Taffy doesn't expose at the Dimension level —
-        // fall back to Auto for the probe.
-        _ => Dimension::AUTO,
-    }
-}
-
-/// `Margin.margin_*` is `GenericMargin<LengthPercentage>` (Auto |
-/// LengthPercentage | anchor-positioning variants).
-fn margin_val(m: &GenericMargin<ComputedLengthPercentage>) -> LengthPercentageAuto {
-    match m {
-        GenericMargin::Auto => LengthPercentageAuto::AUTO,
-        GenericMargin::LengthPercentage(lp) => match unpack_length_percentage(lp) {
-            UnpackResult::Length(px) => LengthPercentageAuto::length(px),
-            UnpackResult::Percent(p) => LengthPercentageAuto::percent(p),
-            UnpackResult::Calc => LengthPercentageAuto::AUTO,
-        },
-        _ => LengthPercentageAuto::AUTO,
-    }
-}
-
-/// `Position.{top,right,bottom,left}` is `computed::Inset` —
-/// `GenericInset<Percentage, LengthPercentage>` (Auto | LengthPercentage
-/// | anchor-positioning variants). Anchor variants fall back to `auto`.
-fn inset_val(v: &style::values::computed::Inset) -> LengthPercentageAuto {
-    use style::values::generics::position::GenericInset;
-    match v {
-        GenericInset::Auto => LengthPercentageAuto::AUTO,
-        GenericInset::LengthPercentage(lp) => match unpack_length_percentage(lp) {
-            UnpackResult::Length(px) => LengthPercentageAuto::length(px),
-            UnpackResult::Percent(p) => LengthPercentageAuto::percent(p),
-            UnpackResult::Calc => LengthPercentageAuto::AUTO,
-        },
-        _ => LengthPercentageAuto::AUTO,
-    }
-}
-
-/// `Padding.padding_*` is `NonNegativeLengthPercentage` — `NonNegative<LengthPercentage>`.
-fn length_percentage(lp: &ComputedLengthPercentage) -> LengthPercentage {
-    match unpack_length_percentage(lp) {
-        UnpackResult::Length(px) => LengthPercentage::length(px),
-        UnpackResult::Percent(p) => LengthPercentage::percent(p),
-        UnpackResult::Calc => LengthPercentage::length(0.0),
-    }
-}
-
-/// Border width: zero for `none` / `hidden` styles, the literal width
-/// otherwise. Matches CSS spec — `border: none` paints no border
-/// regardless of width.
-fn border_width(width_px: f32, style: BorderStyle) -> LengthPercentage {
-    if style.none_or_hidden() {
-        return LengthPercentage::length(0.0);
-    }
-    LengthPercentage::length(width_px)
-}
-
-enum UnpackResult {
-    Length(f32),
-    Percent(f32),
-    Calc,
-}
-
-fn unpack_length_percentage(lp: &ComputedLengthPercentage) -> UnpackResult {
-    use style::values::computed::length_percentage::Unpacked;
-    match lp.unpack() {
-        Unpacked::Length(l) => UnpackResult::Length(l.px()),
-        Unpacked::Percentage(Percentage(p)) => UnpackResult::Percent(p),
-        Unpacked::Calc(_) => UnpackResult::Calc,
-    }
-}
-
-/// LengthPercentage in dimension-context (size). Returns None for
-/// values that can't sensibly map (e.g., calc, which we collapse to
-/// Auto rather than guessing).
-fn length_percentage_to_dimension(lp: &ComputedLengthPercentage) -> Option<Dimension> {
-    match unpack_length_percentage(lp) {
-        UnpackResult::Length(px) => Some(Dimension::length(px)),
-        UnpackResult::Percent(p) => Some(Dimension::percent(p)),
-        UnpackResult::Calc => None,
-    }
-}
-

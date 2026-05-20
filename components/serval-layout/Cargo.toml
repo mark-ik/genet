@@ -40,7 +40,14 @@ stylo = { workspace = true }
 stylo_atoms = { workspace = true }
 stylo_dom = { workspace = true }
 stylo_traits = { workspace = true }
-taffy = { workspace = true, features = ["taffy_tree", "block_layout", "flexbox"] }
+# stylo_taffy pins taffy to this exact experimental pre-release, so
+# serval-layout overrides the workspace taffy 0.10.1 to match (the two
+# must resolve to one taffy version since stylo_taffy returns
+# `taffy::Style` we consume). Reach is serval-layout + paint's dev-dep;
+# Servo's components/layout stays on 0.10.1. See
+# docs/2026-05-20_stylo_taffy_adoption_plan.md.
+taffy = { version = "=0.11.0-experimental-cache-fix.3", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "detailed_layout_info"] }
+stylo_taffy = { version = "0.3.0-alpha.4", features = ["floats"] }
 
 [dev-dependencies]
 base64 = { workspace = true }

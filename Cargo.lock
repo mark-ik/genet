@@ -4720,8 +4720,9 @@ dependencies = [
  "stylo",
  "stylo_atoms",
  "stylo_dom",
+ "stylo_taffy",
  "stylo_traits",
- "taffy",
+ "taffy 0.11.0-experimental-cache-fix.3",
  "url",
 ]
 
@@ -5084,7 +5085,7 @@ dependencies = [
  "stylo",
  "stylo_dom",
  "stylo_malloc_size_of",
- "taffy",
+ "taffy 0.10.1",
  "tendril",
  "time",
  "tokio",
@@ -5355,7 +5356,7 @@ dependencies = [
  "servo-webxr",
  "servo-webxr-api",
  "stylo_traits",
- "taffy",
+ "taffy 0.11.0-experimental-cache-fix.3",
  "wgpu",
  "windows 0.62.2",
 ]
@@ -5968,6 +5969,17 @@ version = "0.17.0"
 source = "git+https://github.com/servo/stylo?rev=572ecba2d1600e7c3d490586692a209faf703baa#572ecba2d1600e7c3d490586692a209faf703baa"
 
 [[package]]
+name = "stylo_taffy"
+version = "0.3.0-alpha.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95128533e10268e12b17cab58c0c608a3a9c444ed21cb9ff3b9892bc55153fbf"
+dependencies = [
+ "stylo",
+ "stylo_atoms",
+ "taffy 0.11.0-experimental-cache-fix.3",
+]
+
+[[package]]
 name = "stylo_traits"
 version = "0.17.0"
 source = "git+https://github.com/servo/stylo?rev=572ecba2d1600e7c3d490586692a209faf703baa#572ecba2d1600e7c3d490586692a209faf703baa"
@@ -6053,6 +6065,18 @@ name = "taffy"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aea22054047c16c3f34d3ac473a2170be1424b1115b2a3adcf28cfb067c88859"
+dependencies = [
+ "arrayvec",
+ "grid",
+ "serde",
+ "slotmap",
+]
+
+[[package]]
+name = "taffy"
+version = "0.11.0-experimental-cache-fix.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e87b88128d417cd7c2c75b8a398177fb9efcb2ae5cddad22bcec106ba9c8e1c3"
 dependencies = [
  "arrayvec",
  "grid",

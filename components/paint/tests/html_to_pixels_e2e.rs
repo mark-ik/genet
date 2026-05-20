@@ -1022,6 +1022,45 @@ fn html_to_pixels_block_siblings_stack_vertically() {
     );
 }
 
+/// Block-level floats: two `float: left` divs sit *side by side* on one
+/// line, where plain blocks would stack vertically (cf.
+/// `html_to_pixels_block_siblings_stack_vertically`). This is the
+/// receipt that the cascade's `float` reaches Taffy's `float_layout`
+/// algorithm through `stylo_taffy`'s converter and displaces sibling
+/// blocks horizontally.
+///
+/// Limit (documented, not a bug): serval's inline content is a
+/// parley-measured opaque leaf to Taffy, so *text wrapping around* a
+/// float doesn't work yet — only block-level float displacement. Real
+/// text reflow around floats needs integration at the IFC seam (see
+/// docs/2026-05-20_stylo_taffy_adoption_plan.md).
+#[test]
+fn html_to_pixels_float_left_places_blocks_side_by_side() {
+    let image = render_to_image(
+        "<html><body><div class=\"a\"></div><div class=\"b\"></div></body></html>",
+        &[
+            "body { background-color: rgb(255, 255, 255); }",
+            ".a { float: left; width: 40px; height: 40px; background-color: rgb(255, 0, 0); }",
+            ".b { float: left; width: 40px; height: 40px; background-color: rgb(0, 0, 255); }",
+        ],
+    );
+
+    // First float at the top-left: (0,0)..(40,40) red.
+    assert_eq!(
+        image.get_pixel(20, 20).0,
+        [255, 0, 0, 255],
+        "(20, 20) is in the first float (red), top-left"
+    );
+    // Second float sits to the RIGHT of the first, same top band:
+    // (40,0)..(80,40) blue. If floats didn't displace, .b would stack
+    // below at y40-80 and (60, 20) would be white.
+    assert_eq!(
+        image.get_pixel(60, 20).0,
+        [0, 0, 255, 255],
+        "(60, 20) is in the second float (blue), placed beside the first"
+    );
+}
+
 /// `position: relative` offsets a box from its in-flow position by its
 /// inset, without removing it from flow. A relatively-positioned div
 /// (`top: 20px; left: 20px`) at body's origin shifts down-right: its
