@@ -18,16 +18,15 @@ members = [
     "tests/unit/*",
 ]
 default-members = ["ports/pelt"]
-# `tests/unit/script` excluded 2026-05-15 per Mark's directive: SpiderMonkey
-# (mozjs / servo-script) is now opt-in. The script_tests crate is the only
-# active workspace member that transitively pulls mozjs (and aws-lc-rs via
-# components/script line 48). Without this exclusion `cargo check --workspace`
-# requires NASM/MOZILLABUILD/clang-cl/vcvars (per
-# `~/.claude/.../memory/project_serval_windows_build_env.md`); with it,
-# default `cargo check` and `cargo check --workspace` both build cleanly on a
-# vanilla toolchain. To re-enable JS support: remove `tests/unit/script` from
-# this exclude list and re-add the SpiderMonkey build env.
-exclude = [".cargo", "support/crown", "tests/unit/script"]
+# The SpiderMonkey-backed scripting stack (components/script,
+# script_bindings, and the heavy Servo subsystems: layout, net, canvas,
+# constellation, devtools, metrics, storage, timers, webdriver_server,
+# bluetooth, background_hang_monitor) plus its `tests/unit/script`
+# (`script_tests`) were deleted 2026-05-20 — they were already cut from
+# the build graph (not workspace members, not reachable from `pelt`).
+# Git history is the reference for the eventual scripting rebuild. See
+# docs/2026-05-20_stylo_taffy_adoption_plan.md (and the cut commit).
+exclude = [".cargo", "support/crown"]
 
 [workspace.package]
 version = "0.2.0"
@@ -281,18 +280,15 @@ zeroize = "1.8"
 # Begin workspace-version dependencies - Don't change this comment, we grep for it in scripts!
 deny_public_fields = { package = "servo-deny-public-fields", version = "=0.2.0", path = "components/deny_public_fields" }
 devtools_traits = { package = "servo-devtools-traits", version = "=0.2.0", path = "components/shared/devtools" }
-dom_struct = { package = "servo-dom-struct", version = "=0.2.0", path = "components/dom_struct" }
 embedder_traits = { package = "servo-embedder-traits", version = "=0.2.0", path = "components/shared/embedder" }
 engine_observables_api = { package = "engine-observables-api", version = "=0.2.0", path = "components/shared/engine-observables-api" }
 fonts = { package = "servo-fonts", version = "=0.2.0", path = "components/fonts" }
 fonts_traits = { package = "servo-fonts-traits", version = "=0.2.0", path = "components/shared/fonts" }
 hyper_serde = { package = "servo-hyper-serde", version = "=0.2.0", path = "components/hyper_serde" }
-jstraceable_derive = { package = "servo-jstraceable-derive", version = "=0.2.0", path = "components/jstraceable_derive" }
 layout_api = { package = "servo-layout-api", version = "=0.2.0", path = "components/shared/layout" }
 layout_dom_api = { package = "layout-dom-api", version = "=0.2.0", path = "components/shared/layout-dom" }
 malloc_size_of = { package = "servo-malloc-size-of", version = "=0.2.0", path = "components/malloc_size_of" }
 media = { package = "servo-media-thread", version = "=0.2.0", path = "components/media/media-thread" }
-metrics = { package = "servo-metrics", version = "=0.2.0", path = "components/metrics" }
 net_traits = { package = "servo-net-traits", version = "=0.2.0", path = "components/shared/net" }
 paint = { package = "servo-paint", version = "=0.2.0", path = "components/paint" }
 paint_api = { package = "servo-paint-api", version = "=0.2.0", path = "components/shared/paint" }
@@ -301,8 +297,6 @@ paint_types = { package = "servo-paint-types", version = "=0.2.0", path = "compo
 pixels = { package = "servo-pixels", version = "=0.2.0", path = "components/pixels" }
 profile = { package = "servo-profile", version = "=0.2.0", path = "components/profile" }
 profile_traits = { package = "servo-profile-traits", version = "=0.2.0", path = "components/shared/profile" }
-script = { package = "servo-script", version = "=0.2.0", path = "components/script" }
-script_bindings = { package = "servo-script-bindings", version = "=0.2.0", path = "components/script_bindings" }
 script_traits = { package = "servo-script-traits", version = "=0.2.0", path = "components/shared/script" }
 # `servo = "..."` workspace.dep removed 2026-05-15 per Mark's audit:
 # serval used to be servo-the-fork, but the umbrella servo crate is no
@@ -339,7 +333,6 @@ servo-tracing = { version = "=0.2.0", path = "components/servo_tracing" }
 servo-url = { version = "=0.2.0", path = "components/url" }
 servo-wakelock = { version = "=0.2.0", path = "components/wakelock" }
 storage_traits = { package = "servo-storage-traits", version = "=0.2.0", path = "components/shared/storage" }
-timers = { package = "servo-timers", version = "=0.2.0", path = "components/timers" }
 webgpu = { package = "servo-webgpu", version = "=0.2.0", path = "components/webgpu" }
 webgpu_traits = { package = "servo-webgpu-traits", version = "=0.2.0", path = "components/shared/webgpu" }
 webgl_wgpu = { package = "servo-webgl-wgpu", version = "=0.2.0", path = "components/webgl-wgpu" }
