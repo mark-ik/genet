@@ -14,6 +14,7 @@ members = [
     "ports/pelt-core",
     "ports/pelt-desktop",
     "ports/pelt-ui-egui",
+    "ports/pelt-viewer",
     "ports/pelt",
     "tests/unit/*",
 ]
@@ -176,8 +177,15 @@ parley = { version = "0.9.0", default-features = true }
 pelt-core = { version = "=0.2.0", path = "ports/pelt-core" }
 pelt-desktop = { version = "=0.2.0", path = "ports/pelt-desktop" }
 pelt-ui-egui = { version = "=0.2.0", path = "ports/pelt-ui-egui" }
+pelt-viewer = { version = "=0.2.0", path = "ports/pelt-viewer" }
 netrender = { path = "../netrender/netrender" }
 netrender_device = { path = "../netrender/netrender_device" }
+# Linebender UI stack — local fork on branch mere-wgpu-29-vello-0-9
+# (vello 0.9 / wgpu 29 / parley 0.9, matching netrender). Same fork
+# Strophe + Woodshed consume.
+xilem = { path = "../xilem/xilem" }
+masonry = { path = "../xilem/masonry" }
+masonry_winit = { path = "../xilem/masonry_winit" }
 peniko = "0.6"
 percent-encoding = "2.3"
 pkcs8 = { version = "0.10", features = ["rand_core"] }

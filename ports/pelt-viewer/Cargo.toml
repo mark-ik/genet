@@ -1,0 +1,43 @@
+[package]
+name = "pelt-viewer"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Xilem-based viewer for Pelt: renders serval HTML content into a Masonry window via netrender."
+
+[[bin]]
+name = "pelt-viewer"
+path = "main.rs"
+
+[lib]
+name = "pelt_viewer"
+path = "lib.rs"
+
+[dependencies]
+# Linebender UI (local fork on wgpu 29 / vello 0.9 / parley 0.9).
+xilem = { workspace = true }
+masonry = { workspace = true }
+masonry_winit = { workspace = true }
+
+# serval engine + render path.
+serval-layout = { path = "../../components/serval-layout" }
+serval-static-dom = { path = "../../components/serval-static-dom" }
+paint = { workspace = true }
+paint_list_api = { workspace = true }
+paint_api = { workspace = true }
+paint_types = { workspace = true }
+netrender = { workspace = true }
+dpi = { workspace = true }
+
+# taffy must match serval-layout's experimental pin (layout() takes a
+# taffy::Size viewport).
+taffy = { version = "=0.11.0-experimental-cache-fix.3", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "detailed_layout_info"] }
+
+euclid = { workspace = true }
+image = { workspace = true }
+url = { workspace = true }
+wgpu = { version = "29", default-features = false, features = ["std", "wgsl"] }
