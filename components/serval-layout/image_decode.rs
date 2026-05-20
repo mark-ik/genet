@@ -33,6 +33,8 @@ use std::hash::Hash;
 use layout_dom_api::LayoutDom;
 use rustc_hash::FxHashMap;
 
+use crate::style::StylePlane;
+
 /// Supplies raw (undecoded) image bytes for non-`data:` URLs that
 /// serval itself doesn't fetch. The host (or Hekate's network
 /// adapter) implements this over its resource cache; `data:` URIs are
@@ -140,6 +142,91 @@ impl<NodeId: Copy + Eq + Hash> ImagePlane<NodeId> {
 
     pub fn iter(&self) -> impl Iterator<Item = (&NodeId, &DecodedImage)> {
         self.images.iter()
+    }
+}
+
+/// Decoded CSS `background-image` images keyed by their element's DOM
+/// `NodeId`. Distinct from [`ImagePlane`] (the `<img>` replaced-content
+/// plane) on purpose: background images must **not** feed
+/// `apply_intrinsic_image_sizes`, since a background never sizes its
+/// box. Built by [`BackgroundImagePlane::decode_from_cascade`] after
+/// the cascade has run (it reads `background-image` from
+/// `ComputedValues`).
+///
+/// v1 decodes the first `url()` layer per element (the topmost CSS
+/// background layer). Gradients and additional layers are deferred.
+pub struct BackgroundImagePlane<NodeId: Copy + Eq + Hash> {
+    images: FxHashMap<NodeId, DecodedImage>,
+}
+
+impl<NodeId: Copy + Eq + Hash> Default for BackgroundImagePlane<NodeId> {
+    fn default() -> Self {
+        Self {
+            images: FxHashMap::default(),
+        }
+    }
+}
+
+impl<NodeId: Copy + Eq + Hash> BackgroundImagePlane<NodeId> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Walk every element with cascade data, decode its first `url()`
+    /// `background-image` layer (a `data:` URI inline, a remote URL via
+    /// `loader`), keyed by the element's `NodeId`.
+    pub fn decode_from_cascade<D, L>(dom: &D, styles: &StylePlane<NodeId>, loader: &L) -> Self
+    where
+        D: LayoutDom<NodeId = NodeId>,
+        L: ImageLoader,
+    {
+        let mut images = FxHashMap::default();
+        let mut queue = vec![dom.document()];
+        while let Some(id) = queue.pop() {
+            if let Some(src) = background_image_url(styles, id) {
+                let decoded = if src.starts_with("data:") {
+                    decode_data_uri(&src)
+                } else {
+                    loader.load(&src).and_then(|bytes| decode_image_bytes(&bytes))
+                };
+                if let Some(decoded) = decoded {
+                    images.insert(id, decoded);
+                }
+            }
+            queue.extend(dom.dom_children(id));
+        }
+        Self { images }
+    }
+
+    pub fn get(&self, id: NodeId) -> Option<&DecodedImage> {
+        self.images.get(&id)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.images.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.images.len()
+    }
+}
+
+/// Read an element's first `url()` `background-image` layer as a URL
+/// string. `None` when the cascade hasn't run, there's no background
+/// image, or the first layer isn't a `url()` (e.g. a gradient).
+fn background_image_url<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> Option<String> {
+    use style::values::generics::image::Image;
+
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    let primary = data.styles.primary();
+    let first = primary.get_background().background_image.0.iter().next()?;
+    match first {
+        Image::Url(url) => url.url().map(|u| u.as_str().to_string()),
+        _ => None,
     }
 }
 

@@ -43,7 +43,7 @@ use paint_types::PipelineId;
 use paint_types::units::{DeviceIntRect, LayoutSize};
 use servo_base::id::{PainterId, PipelineNamespace, PipelineNamespaceId, WebViewId};
 use serval_layout::{
-    ImagePlane, StylePlane, emit_paint_list_with_layouts, layout, run_cascade,
+    BackgroundImagePlane, ImagePlane, StylePlane, emit_paint_list_with_layouts, layout, run_cascade,
 };
 use serval_static_dom::StaticDocument;
 
@@ -108,6 +108,11 @@ fn html_to_envelope_with_loader<L: serval_layout::ImageLoader>(
     let images = ImagePlane::decode_from_dom_with_loader(&document, loader);
     styles.apply_intrinsic_image_sizes(&images);
 
+    // 3c. Decode CSS background-image url() layers (data:/remote via
+    //     loader). Kept in a separate plane — backgrounds don't size
+    //     their box, so these must not feed apply_intrinsic_image_sizes.
+    let bg_images = BackgroundImagePlane::decode_from_cascade(&document, &styles, loader);
+
     // 4. Layout.
     let viewport = taffy::Size {
         width: taffy::AvailableSpace::Definite(VIEWPORT as f32),
@@ -124,6 +129,7 @@ fn html_to_envelope_with_loader<L: serval_layout::ImageLoader>(
         &built,
         &text_ctx,
         &images,
+        &bg_images,
         DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32),
     );
 
@@ -738,6 +744,56 @@ fn html_to_pixels_img_via_loader_renders() {
         image.get_pixel(40, 40).0,
         [255, 255, 255, 255],
         "(40, 40) is outside the 16×16 <img>, should be white body"
+    );
+}
+
+/// Full producer path: CSS `background-image: url(data:…)` tiles
+/// across the element. The producer parses the cascaded
+/// `background-image` url() layer, decodes it, and emits a
+/// `DrawRepeatingImage` over the element box (CSS default
+/// `background-repeat: repeat`). A `<div>` 40×40 with a 8×8 green
+/// background tile on a white body: the div box fills green (the tile
+/// repeats to cover it), the area outside stays white. No hand-built
+/// envelope — decode → cascade read → emit → translator → pixels.
+#[test]
+fn html_to_pixels_background_image_tiles_from_css() {
+    use base64::Engine as _;
+
+    // 8×8 solid-green PNG → data URI.
+    let green = image::RgbaImage::from_pixel(8, 8, image::Rgba([0, 200, 0, 255]));
+    let mut png_bytes = Vec::new();
+    green
+        .write_to(
+            &mut std::io::Cursor::new(&mut png_bytes),
+            image::ImageFormat::Png,
+        )
+        .expect("encode test PNG");
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+    let data_uri = format!("data:image/png;base64,{b64}");
+
+    let css = format!(
+        "div {{ width: 40px; height: 40px; background-image: url({data_uri}); }}"
+    );
+    let image = render_to_image(
+        "<html><body><div></div></body></html>",
+        &["body { background-color: rgb(255, 255, 255); }", &css],
+    );
+
+    // Inside the 40×40 div: the green tile repeats to cover it. Sample
+    // a few points (the tile is solid green, so any covered pixel is
+    // green regardless of tile boundaries).
+    for (x, y) in [(4u32, 4u32), (20, 20), (36, 36)] {
+        assert_eq!(
+            image.get_pixel(x, y).0,
+            [0, 200, 0, 255],
+            "({x}, {y}) is inside the div, should be covered by the green background tile"
+        );
+    }
+    // Outside the div, inside body: white.
+    assert_eq!(
+        image.get_pixel(80, 80).0,
+        [255, 255, 255, 255],
+        "(80, 80) is outside the div, should be white body"
     );
 }
 

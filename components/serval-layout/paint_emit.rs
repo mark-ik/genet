@@ -40,8 +40,8 @@ use paint_list_api::{
     AlphaType, BorderRadius, BorderSide, BorderStyle, BoxShadowClipMode, ColorF, CommonPlacement,
     DeviceIntSize, EngineId, FontInstanceKey, FontResource, GlyphInstance, IdNamespace, ImageItem,
     ImageKey, ImageRendering, ImageResource, LayoutPoint, LayoutRect, LayoutSideOffsets,
-    LayoutTransform, LayoutVector2D, NormalBorder, PaintCmd, PaintList, RectItem, TextOptions,
-    TextRunItem, TransformSpec,
+    LayoutSize, LayoutTransform, LayoutVector2D, NormalBorder, PaintCmd, PaintList, RectItem,
+    RepeatingImageItem, TextOptions, TextRunItem, TransformSpec,
 };
 use paint_list_api::items::{BorderDetails, BorderItem, ShadowItem};
 use paint_list_api::specs::TransformKind;
@@ -51,7 +51,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::construct::ConstructedTree;
 use crate::fragment::FragmentPlane;
-use crate::image_decode::{DecodedImage, ImagePlane};
+use crate::image_decode::{BackgroundImagePlane, DecodedImage, ImagePlane};
 use crate::style::StylePlane;
 use crate::text_measure::TextMeasureCtx;
 
@@ -171,6 +171,8 @@ struct Emitter<'a, NodeId: Copy + Eq + Hash> {
     glyphs: Option<GlyphSource<'a, NodeId>>,
     /// Decoded `<img>` images keyed by NodeId.
     images_plane: &'a ImagePlane<NodeId>,
+    /// Decoded CSS `background-image`s keyed by NodeId.
+    bg_images_plane: &'a BackgroundImagePlane<NodeId>,
     fonts: FontCollector,
     images: ImageCollector,
 }
@@ -198,7 +200,8 @@ where
     D::NodeId: Copy + Eq + Hash,
 {
     let empty_images = ImagePlane::new();
-    emit_inner(dom, styles, fragments, None, &empty_images, viewport)
+    let empty_bg = BackgroundImagePlane::new();
+    emit_inner(dom, styles, fragments, None, &empty_images, &empty_bg, viewport)
 }
 
 /// Variant of [`emit_paint_list`] that consumes the cached text
@@ -206,7 +209,9 @@ where
 /// id mapping; `text_ctx` provides the cached parley `Layout`s;
 /// `images` provides decoded `<img>` pixels. With these, `DrawText`
 /// items carry shaped glyph runs + a font side-table, and `<img>`
-/// elements emit `DrawImage` + an image side-table.
+/// elements emit `DrawImage` + an image side-table. `bg_images`
+/// provides decoded CSS `background-image` pixels, emitted as a
+/// `DrawRepeatingImage` (CSS default `background-repeat: repeat`).
 pub fn emit_paint_list_with_layouts<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
@@ -214,6 +219,7 @@ pub fn emit_paint_list_with_layouts<D>(
     constructed: &ConstructedTree<D::NodeId>,
     text_ctx: &TextMeasureCtx,
     images: &ImagePlane<D::NodeId>,
+    bg_images: &BackgroundImagePlane<D::NodeId>,
     viewport: DeviceIntSize,
 ) -> ServalPaintList
 where
@@ -226,6 +232,7 @@ where
         fragments,
         Some(GlyphSource { constructed, text_ctx }),
         images,
+        bg_images,
         viewport,
     )
 }
@@ -243,6 +250,7 @@ fn emit_inner<D>(
     fragments: &FragmentPlane<D::NodeId>,
     glyphs: Option<GlyphSource<'_, D::NodeId>>,
     images_plane: &ImagePlane<D::NodeId>,
+    bg_images_plane: &BackgroundImagePlane<D::NodeId>,
     viewport: DeviceIntSize,
 ) -> ServalPaintList
 where
@@ -253,6 +261,7 @@ where
     let mut emitter = Emitter {
         glyphs,
         images_plane,
+        bg_images_plane,
         fonts: FontCollector::default(),
         images: ImageCollector::default(),
     };
@@ -328,6 +337,25 @@ fn walk<D>(
                     placement: CommonPlacement::new(local_bounds),
                     color: background_color_of(styles, id),
                 }));
+                // CSS background-image paints over the background color,
+                // under content + border. Default background-repeat is
+                // `repeat`, so tile at the image's intrinsic size across
+                // the element box (DrawRepeatingImage).
+                if let Some(decoded) = em.bg_images_plane.get(id) {
+                    let key = em.images.add(decoded);
+                    commands.push(PaintCmd::DrawRepeatingImage(RepeatingImageItem {
+                        placement: CommonPlacement::new(local_bounds),
+                        image_key: key,
+                        stretch_size: LayoutSize::new(
+                            decoded.width as f32,
+                            decoded.height as f32,
+                        ),
+                        tile_spacing: LayoutSize::zero(),
+                        image_rendering: ImageRendering::Auto,
+                        alpha_type: AlphaType::PremultipliedAlpha,
+                        color: ColorF::WHITE, // identity tint
+                    }));
+                }
                 if let Some(decoded) = em.images_plane.get(id) {
                     let key = em.images.add(decoded);
                     commands.push(PaintCmd::DrawImage(ImageItem {
@@ -752,6 +780,7 @@ mod tests {
             &built,
             &text_ctx,
             &crate::image_decode::ImagePlane::new(),
+            &crate::image_decode::BackgroundImagePlane::new(),
             DeviceIntSize::new(800, 600),
         );
 
@@ -829,6 +858,7 @@ mod tests {
             &built,
             &text_ctx,
             &crate::image_decode::ImagePlane::new(),
+            &crate::image_decode::BackgroundImagePlane::new(),
             DeviceIntSize::new(800, 600),
         );
 
@@ -868,6 +898,7 @@ mod tests {
             &built,
             &text_ctx,
             &crate::image_decode::ImagePlane::new(),
+            &crate::image_decode::BackgroundImagePlane::new(),
             DeviceIntSize::new(800, 600),
         );
 
