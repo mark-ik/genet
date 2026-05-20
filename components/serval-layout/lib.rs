@@ -44,4 +44,7 @@ pub use layout::layout;
 pub use paint_emit::{emit_paint_list, emit_paint_list_with_layouts, ServalPaintList};
 pub use serval_lane::ServalLaneView;
 pub use style::{StyleEntry, StylePlane};
-pub use text_measure::{measure_text_leaf, TextLeaf, TextMeasureCtx};
+pub use text_measure::{
+    measure_inline_content, FontFamilySpec, GenericFamilyKind, InlineContent, InlineRun,
+    TextMeasureCtx,
+};

@@ -49,4 +49,9 @@ fieldset, form, details, summary, dialog, menu,
 table, caption, thead, tbody, tfoot, tr {
     display: block;
 }
+
+/* Inline emphasis — real browsers ship these; they drive the
+   per-run weight/style of inline formatting contexts. */
+b, strong { font-weight: bold; }
+i, em, cite, var, dfn, address { font-style: italic; }
 "#;

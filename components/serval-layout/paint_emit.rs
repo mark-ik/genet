@@ -345,6 +345,16 @@ fn walk<D>(
                         details: BorderDetails::Normal(normal),
                     }));
                 }
+                // An element establishing an inline formatting context
+                // carries its text as the leaf's InlineContent — emit
+                // its glyph runs (paints over background/image, under
+                // the border conceptually; border is rare on inline
+                // contexts). Non-inline elements have no cached layout,
+                // so emit_text_runs no-ops.
+                if let Some(g) = em.glyphs.as_ref() {
+                    let color = element_text_color(styles, id);
+                    emit_text_runs(g, id, local_bounds, color, &mut em.fonts, commands);
+                }
             }
             NodeKind::Text => {
                 let color = text_color_of(dom, styles, id);
@@ -463,11 +473,24 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + std::hash::Hash,
 {
-    let Some(parent_id) = dom.parent(text_id) else { return ColorF::BLACK; };
-    let Some(entry) = styles.get(parent_id) else { return ColorF::BLACK; };
+    match dom.parent(text_id) {
+        Some(parent_id) => element_text_color(styles, parent_id),
+        None => ColorF::BLACK,
+    }
+}
+
+/// An element's own cascaded text `color` as a `ColorF`. Used for the
+/// uniform color of an inline-context element's text. (Per-span color
+/// — colored `<span>` / `<a>` inside the flow — is a follow-up; v1
+/// colors the whole inline content with the context element's color.)
+/// Falls back to opaque black when the cascade hasn't run.
+fn element_text_color<NodeId: Copy + Eq + std::hash::Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> ColorF {
+    let Some(entry) = styles.get(id) else { return ColorF::BLACK; };
     let Some(data) = entry.borrow_data() else { return ColorF::BLACK; };
-    let primary = data.styles.primary();
-    let absolute = primary.get_inherited_text().color;
+    let absolute = data.styles.primary().get_inherited_text().color;
     let srgb = absolute.into_srgb_legacy();
     let [r, g, b, a] = *srgb.raw_components();
     ColorF::new(r, g, b, a)
@@ -654,12 +677,18 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, _built, _ctx) = layout(&document, &styles, viewport);
+        let (fragments, built, text_ctx) = layout(&document, &styles, viewport);
 
-        let plist = emit_paint_list(
+        // <p> is an inline-context leaf carrying "Hello"; its text is
+        // emitted via the cached layout, so use the with-layouts path
+        // (the cache-less emit_paint_list emits boxes only).
+        let plist = emit_paint_list_with_layouts(
             &document,
             &styles,
             &fragments,
+            &built,
+            &text_ctx,
+            &crate::image_decode::ImagePlane::new(),
             DeviceIntSize::new(800, 600),
         );
 
@@ -682,7 +711,7 @@ mod tests {
             rect_count >= 3,
             "expected at least 3 DrawRects (html/body/p), got {rect_count}"
         );
-        // "Hello" — at least one text run.
+        // "Hello" — at least one text run (from <p>'s inline content).
         assert!(
             text_count >= 1,
             "expected at least 1 DrawText, got {text_count}"

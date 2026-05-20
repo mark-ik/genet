@@ -18,7 +18,7 @@ use layout_dom_api::LayoutDom;
 use crate::construct::{construct, ConstructedTree};
 use crate::fragment::FragmentPlane;
 use crate::style::StylePlane;
-use crate::text_measure::{measure_text_leaf, TextMeasureCtx};
+use crate::text_measure::{measure_inline_content, TextMeasureCtx};
 
 /// Run the layout pipeline against a viewport.
 ///
@@ -56,7 +56,9 @@ where
             built.root,
             viewport,
             |known, avail, taffy_id, ctx, _style| match ctx {
-                Some(leaf) => measure_text_leaf(&mut text_ctx, leaf, taffy_id, known, avail),
+                Some(content) => {
+                    measure_inline_content(&mut text_ctx, content, taffy_id, known, avail)
+                },
                 None => taffy::Size::ZERO,
             },
         )
@@ -252,25 +254,18 @@ mod tests {
         let (frags_big, _, _) = layout(&document, &styles_big, viewport);
         let (frags_default, _, _) = layout(&document, &styles_default, viewport);
 
-        // Find the text node — its measured rect height should differ
-        // between the two cascades.
-        let mut text_id = None;
-        let mut queue = vec![document.document()];
-        while let Some(id) = queue.pop() {
-            if matches!(document.kind(id), layout_dom_api::NodeKind::Text) {
-                text_id = Some(id);
-                break;
-            }
-            queue.extend(document.dom_children(id));
-        }
-        let text_id = text_id.expect("document contains a text node");
-
+        // `<p>` is an inline formatting context (its only child is
+        // text), so it's the measured leaf — check its fragment
+        // height. The 32px cascade should produce a taller box than
+        // the 16px one.
+        let p = find_element(NodeRef::document(&document), local_name!("p"))
+            .expect("<p> exists");
         let big_rect = frags_big
-            .rect_of(text_id)
-            .expect("big stylesheet: text fragment");
+            .rect_of(p.id())
+            .expect("big stylesheet: <p> fragment");
         let default_rect = frags_default
-            .rect_of(text_id)
-            .expect("default stylesheet: text fragment");
+            .rect_of(p.id())
+            .expect("default stylesheet: <p> fragment");
 
         // 32px should produce ~2x the height of 16px (line-height
         // defaults are font-size proportional in parley).
@@ -283,10 +278,11 @@ mod tests {
         );
     }
 
-    /// Cascaded `font-family` flows into the text leaf's `TextLeaf`
-    /// context. Deterministic (inspects the leaf, not font-dependent
-    /// pixel output): a `p { font-family: monospace }` rule produces a
-    /// text leaf carrying `FontFamilySpec::Generic(Monospace)`.
+    /// Cascaded `font-family` flows into the inline leaf's
+    /// `InlineContent` run. Deterministic (inspects the leaf, not
+    /// font-dependent pixels): a `p { font-family: monospace }` rule
+    /// produces a `<p>` inline leaf whose run carries
+    /// `FontFamilySpec::Generic(Monospace)`.
     #[test]
     fn cascade_font_family_flows_into_text_leaf() {
         use crate::cascade::run_cascade;
@@ -309,36 +305,87 @@ mod tests {
         };
         let (_frags, built, _ctx) = layout(&document, &styles, viewport);
 
-        // Find the text node + its Taffy leaf context.
-        let mut text_id = None;
-        let mut queue = vec![document.document()];
-        while let Some(id) = queue.pop() {
-            if matches!(document.kind(id), layout_dom_api::NodeKind::Text) {
-                text_id = Some(id);
-                break;
-            }
-            queue.extend(document.dom_children(id));
-        }
-        let text_id = text_id.expect("document contains a text node");
-        let taffy_id = built.node_map.get(&text_id).expect("text node in node_map");
-        let leaf = built
+        // `<p>` is the inline-context leaf; its InlineContent's first
+        // run carries the cascaded family.
+        let p = find_element(NodeRef::document(&document), local_name!("p"))
+            .expect("<p> exists");
+        let taffy_id = built.node_map.get(&p.id()).expect("<p> in node_map");
+        let content = built
             .tree
             .get_node_context(*taffy_id)
-            .expect("text leaf carries a TextLeaf context");
+            .expect("<p> carries an InlineContent context");
+        let run = content.runs.first().expect("inline content has a run");
 
         assert!(
             matches!(
-                leaf.font_family,
+                run.font_family,
                 FontFamilySpec::Generic(GenericFamilyKind::Monospace)
             ),
             "expected monospace from cascade, got {:?}",
-            leaf.font_family
+            run.font_family
         );
     }
 
-    /// Probe the parley measure path: with default-sized elements, a
-    /// text node should give its containing `<p>` a non-zero width
-    /// derived from parley's measurement of the text.
+    /// Inline flow: `<p>Hello <b>world</b> !</p>` gathers into one
+    /// inline-context leaf whose runs carry per-element styling — the
+    /// `<b>` run is bold (weight 700 from the UA `b { font-weight: bold }`
+    /// rule), the surrounding runs are normal (400). And it lays out
+    /// on ONE line (height ≈ a single line), not stacked.
+    #[test]
+    fn inline_flow_gathers_styled_runs_on_one_line() {
+        use crate::cascade::run_cascade;
+
+        let document = StaticDocument::parse(
+            "<html><body><p>Hello <b>world</b> !</p></body></html>",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[],
+        );
+        styles.refresh_taffy_from_cascade();
+
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, _ctx) = layout(&document, &styles, viewport);
+
+        let p = find_element(NodeRef::document(&document), local_name!("p"))
+            .expect("<p> exists");
+
+        // p is the inline-context leaf; its runs span the inline subtree.
+        let taffy_id = built.node_map.get(&p.id()).expect("<p> in node_map");
+        let content = built
+            .tree
+            .get_node_context(*taffy_id)
+            .expect("<p> carries InlineContent");
+        assert!(
+            content.runs.len() >= 2,
+            "expected multiple runs (text + <b>), got {}",
+            content.runs.len()
+        );
+        let has_normal = content.runs.iter().any(|r| r.weight < 500.0);
+        let has_bold = content.runs.iter().any(|r| r.weight >= 600.0);
+        assert!(has_normal, "expected a normal-weight run");
+        assert!(has_bold, "expected a bold run from <b>");
+
+        // One line: p's height is about a single line (~16 * 1.2 ≈ 19),
+        // certainly under two lines — i.e. the runs flowed inline
+        // rather than stacking as separate blocks.
+        let h = fragments.rect_of(p.id()).expect("<p> fragment").size.height;
+        assert!(
+            h < 40.0,
+            "expected single-line height (<40px), got {h} — runs may be stacking"
+        );
+    }
+
+    /// Probe the parley measure path: a `<p>` whose only child is text
+    /// establishes an inline formatting context, so it's the measured
+    /// leaf. Its fragment should get a non-zero size derived from
+    /// parley's measurement of the gathered text.
     #[test]
     fn parley_measures_inline_text() {
         let document =
@@ -350,29 +397,16 @@ mod tests {
         };
         let (fragments, built, _ctx) = layout(&document, &styles, viewport);
 
-        // The text leaf isn't keyed in our node_map directly under the
-        // <p>'s DOM id — it gets its own. The text node's fragment
-        // should have positive dimensions. Find a text node by DOM
-        // kind and check its fragment.
-        let mut text_id = None;
-        let mut queue = vec![document.document()];
-        while let Some(id) = queue.pop() {
-            if matches!(document.kind(id), layout_dom_api::NodeKind::Text) {
-                text_id = Some(id);
-                break;
-            }
-            queue.extend(document.dom_children(id));
-        }
-        let text_id = text_id.expect("document contains a text node");
-
-        // Confirm the text leaf is in the node_map (construct.rs adds it).
+        // <p> is the inline-context leaf; it's in node_map and the
+        // text node is not (gathered into <p>'s InlineContent).
+        let p = find_element(NodeRef::document(&document), local_name!("p"))
+            .expect("<p> exists");
         assert!(
-            built.node_map.contains_key(&text_id),
-            "expected text node in Taffy node_map after construct"
+            built.node_map.contains_key(&p.id()),
+            "expected <p> in Taffy node_map after construct"
         );
 
-        // Confirm the text rect has positive width — parley measured it.
-        let rect = fragments.rect_of(text_id).expect("text node has a fragment");
+        let rect = fragments.rect_of(p.id()).expect("<p> has a fragment");
         assert!(
             rect.size.width > 0.0,
             "expected positive width from parley measurement, got {}",
