@@ -334,6 +334,97 @@ fn html_to_pixels_inline_span_keeps_its_own_color() {
     assert!(saw_blue, "expected blue glyph pixels from the <span> run");
 }
 
+/// Replaced inline content: an `<img>` mid-paragraph flows among the
+/// text rather than forcing its own block. `<p>aaaaa <img> aaaaa</p>`
+/// with a 16×16 blue data-URI image: the text is black on white, the
+/// image is blue. The blue image pixels appear in the first line's
+/// band, offset to the right of the leading "aaaaa " text (so the box
+/// flowed inline, not at the paragraph origin), with dark glyph pixels
+/// both before and after it on the same line.
+///
+/// This is the receipt that the inline-box path holds together:
+/// `construct` gathers the `<img>` as an `InlineBoxItem` at its byte
+/// offset, parley reserves + positions the box among the runs, and
+/// emission resolves the box back to its decoded image and draws it at
+/// the laid-out position.
+#[test]
+fn html_to_pixels_inline_img_flows_among_text() {
+    use base64::Engine as _;
+
+    // 16×16 solid-blue PNG → data URI.
+    let blue = image::RgbaImage::from_pixel(16, 16, image::Rgba([0, 0, 255, 255]));
+    let mut png_bytes = Vec::new();
+    blue.write_to(
+        &mut std::io::Cursor::new(&mut png_bytes),
+        image::ImageFormat::Png,
+    )
+    .expect("encode test PNG");
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+    let data_uri = format!("data:image/png;base64,{b64}");
+
+    let html = format!(
+        "<html><body><p>aaaaa <img src=\"{data_uri}\"> aaaaa</p></body></html>"
+    );
+    let image = render_to_image(
+        &html,
+        &[
+            "body { background-color: rgb(255, 255, 255); }",
+            "p { color: rgb(0, 0, 0); }",
+        ],
+    );
+
+    // Scan the first line's band. The img is 16px tall; text + img
+    // share the line near the top-left. Collect the blue (image) pixel
+    // columns and the dark (glyph) pixel columns.
+    let mut blue_min_x: Option<u32> = None;
+    let mut blue_max_x: Option<u32> = None;
+    let mut dark_left_of_blue = false;
+    let mut dark_right_of_blue = false;
+    // First pass: locate the blue band.
+    for y in 0..24u32 {
+        for x in 0..120u32 {
+            let [r, g, b, _a] = image.get_pixel(x, y).0;
+            if b > 150 && r < 90 && g < 90 {
+                blue_min_x = Some(blue_min_x.map_or(x, |m| m.min(x)));
+                blue_max_x = Some(blue_max_x.map_or(x, |m| m.max(x)));
+            }
+        }
+    }
+    let blue_min_x = blue_min_x.expect("expected blue inline-img pixels in the first line band");
+    let blue_max_x = blue_max_x.unwrap();
+
+    // The image flowed *after* leading text, so it isn't flush at x=0.
+    assert!(
+        blue_min_x > 8,
+        "inline img should be offset right by the leading text, got min x {blue_min_x}"
+    );
+
+    // Dark glyph pixels appear both before and after the blue box on
+    // the line — the text wraps the image inline.
+    for y in 0..24u32 {
+        for x in 0..120u32 {
+            let [r, g, b, _a] = image.get_pixel(x, y).0;
+            let dark = r < 140 && g < 140 && b < 140;
+            if dark {
+                if x + 2 < blue_min_x {
+                    dark_left_of_blue = true;
+                }
+                if x > blue_max_x + 2 {
+                    dark_right_of_blue = true;
+                }
+            }
+        }
+    }
+    assert!(
+        dark_left_of_blue,
+        "expected glyph pixels left of the inline img (the leading 'aaaaa ')"
+    );
+    assert!(
+        dark_right_of_blue,
+        "expected glyph pixels right of the inline img (the trailing 'aaaaa')"
+    );
+}
+
 /// Read back the master texture rendered from the given HTML +
 /// stylesheets. Shared helper for the multi-pixel test bodies below.
 fn render_to_image(

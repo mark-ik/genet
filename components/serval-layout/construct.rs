@@ -41,7 +41,9 @@ use taffy::prelude::TaffyAuto;
 
 use crate::adapter::NodeRef;
 use crate::style::StylePlane;
-use crate::text_measure::{FontFamilySpec, GenericFamilyKind, InlineContent, InlineRun};
+use crate::text_measure::{
+    FontFamilySpec, GenericFamilyKind, InlineBoxItem, InlineContent, InlineRun,
+};
 
 /// Default font size used for runs whose element has no cascaded
 /// `font-size` (hand-rolled style fixtures). 16 px matches the
@@ -53,7 +55,7 @@ const DEFAULT_FONT_SIZE: f32 = 16.0;
 /// [`InlineContent`] so inline leaves carry their styled text runs
 /// through to the measure function.
 pub struct ConstructedTree<NodeId: Copy + Eq + Hash> {
-    pub tree: TaffyTree<InlineContent>,
+    pub tree: TaffyTree<InlineContent<NodeId>>,
     pub root: taffy::NodeId,
     /// DOM NodeId → Taffy NodeId. Sparse only for nodes that don't get
     /// Taffy entries (e.g., comments, the document node when treated
@@ -78,7 +80,7 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    let mut tree: TaffyTree<InlineContent> = TaffyTree::new();
+    let mut tree: TaffyTree<InlineContent<D::NodeId>> = TaffyTree::new();
     let mut node_map: FxHashMap<D::NodeId, taffy::NodeId> = FxHashMap::default();
 
     let root_ref = NodeRef::document(dom);
@@ -124,7 +126,7 @@ fn build_children<'a, D>(
     dom: &'a D,
     styles: &StylePlane<D::NodeId>,
     parent: NodeRef<'a, D>,
-    tree: &mut TaffyTree<InlineContent>,
+    tree: &mut TaffyTree<InlineContent<D::NodeId>>,
     node_map: &mut FxHashMap<D::NodeId, taffy::NodeId>,
 ) -> Vec<taffy::NodeId>
 where
@@ -155,6 +157,7 @@ where
                 // parent element (size / family / weight / italic / color).
                 let content = InlineContent {
                     runs: vec![run_for_element(styles, parent.id(), text)],
+                    boxes: Vec::new(),
                 };
                 tree.new_leaf_with_context(taffy::Style::default(), content)
                     .expect("Taffy: failed to create text leaf")
@@ -169,12 +172,22 @@ where
     children
 }
 
-/// Whether `elem` establishes an inline formatting context: it has at
-/// least one child and every element child is `display:inline` (text
-/// children are inline by nature). Comments / PIs are ignored. With no
-/// cascade data (`is_inline_element` → `None`), the element is treated
-/// as block — preserving the pre-inline behavior for hand-rolled
-/// style fixtures.
+/// Whether `elem` establishes an inline formatting context: every
+/// element child is either `display:inline` or a replaced inline box
+/// (`<img>`), text children flow inline by nature, and there is at
+/// least one piece of *inline text* (a text node or a non-replaced
+/// inline element) to flow.
+///
+/// The inline-text requirement keeps a lone `<img>` on the block path:
+/// `<body><img></body>` stays a block with the image as its own child
+/// box (the established, working behavior). Only when an `<img>` is
+/// mixed with text — `<p>before <img> after</p>` — does the element
+/// become an inline context where the image flows as a parley
+/// `InlineBox` among the runs.
+///
+/// Comments / PIs are ignored. With no cascade data (`is_inline_element`
+/// → `None`), non-replaced elements are treated as block — preserving
+/// the pre-inline behavior for hand-rolled style fixtures.
 fn establishes_inline_context<'a, D>(
     dom: &'a D,
     styles: &StylePlane<D::NodeId>,
@@ -184,29 +197,28 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    let mut has_child = false;
+    let mut has_inline_text = false;
     for child in elem.dom_children() {
         match dom.kind(child.id()) {
-            NodeKind::Text => has_child = true,
+            NodeKind::Text => has_inline_text = true,
             NodeKind::Element => {
-                has_child = true;
-                // Inline *and* not replaced. Replaced inline content
-                // (`<img>`) needs parley InlineBox placeholders, which
-                // the gather doesn't produce yet — so an element with a
-                // replaced child isn't treated as a pure-inline-text
-                // context. It stays block, and the replaced child keeps
-                // its own box (renders as before). Mixing flowed text
-                // with `<img>` on one line is a follow-up.
-                if is_replaced(dom, child.id())
-                    || !is_inline_element(styles, child.id()).unwrap_or(false)
-                {
+                if is_replaced(dom, child.id()) {
+                    // A replaced element can flow as an inline box, but
+                    // doesn't itself count as the inline text that makes
+                    // this an inline context (so a lone img stays block).
+                    continue;
+                }
+                if is_inline_element(styles, child.id()).unwrap_or(false) {
+                    has_inline_text = true;
+                } else {
+                    // A block-level child forces block layout.
                     return false;
                 }
             }
             _ => {}
         }
     }
-    has_child
+    has_inline_text
 }
 
 /// Whether an element is replaced content we render as its own box
@@ -236,29 +248,38 @@ fn is_inline_element<NodeId: Copy + Eq + Hash>(
 
 /// Gather an inline-context element's subtree into [`InlineContent`].
 /// Walks in document order; each text node becomes a run styled by the
-/// nearest enclosing inline element (which carries the cascade).
+/// nearest enclosing inline element (which carries the cascade), and
+/// each replaced element (`<img>`) becomes an [`InlineBoxItem`] anchored
+/// at the current byte offset into the concatenated run text.
 fn gather_inline_content<'a, D>(
     dom: &'a D,
     styles: &StylePlane<D::NodeId>,
     elem: NodeRef<'a, D>,
-) -> InlineContent
+) -> InlineContent<D::NodeId>
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
     let mut runs = Vec::new();
-    gather_runs(dom, styles, elem, &mut runs);
-    InlineContent { runs }
+    let mut boxes = Vec::new();
+    let mut offset = 0usize;
+    gather_runs(dom, styles, elem, &mut runs, &mut boxes, &mut offset);
+    InlineContent { runs, boxes }
 }
 
 /// Recursive helper for [`gather_inline_content`]. `node`'s direct
 /// text children are styled by `node` (the enclosing inline element);
-/// element children recurse with themselves as the new styling element.
+/// element children recurse with themselves as the new styling element,
+/// except replaced elements (`<img>`) which become inline boxes.
+/// `offset` tracks the running byte position into the concatenated run
+/// text so each box's `index` matches the parley `InlineBox` placement.
 fn gather_runs<'a, D>(
     dom: &'a D,
     styles: &StylePlane<D::NodeId>,
     node: NodeRef<'a, D>,
     runs: &mut Vec<InlineRun>,
+    boxes: &mut Vec<InlineBoxItem<D::NodeId>>,
+    offset: &mut usize,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -268,13 +289,45 @@ fn gather_runs<'a, D>(
             NodeKind::Text => {
                 let text = dom.text(child.id()).unwrap_or("").to_string();
                 if !text.is_empty() {
+                    *offset += text.len();
                     runs.push(run_for_element(styles, node.id(), text));
                 }
             }
-            NodeKind::Element => gather_runs(dom, styles, child, runs),
+            NodeKind::Element => {
+                if is_replaced(dom, child.id()) {
+                    let (width, height) = img_size(styles, child.id());
+                    boxes.push(InlineBoxItem {
+                        index: *offset,
+                        width,
+                        height,
+                        source: child.id(),
+                    });
+                } else {
+                    gather_runs(dom, styles, child, runs, boxes, offset);
+                }
+            }
             _ => {}
         }
     }
+}
+
+/// The pixel size of a replaced element (`<img>`) for inline-box
+/// reservation, read from its Taffy style `size` (populated from the
+/// decoded image's intrinsic dimensions by
+/// [`StylePlane::apply_intrinsic_image_sizes`], or from explicit CSS
+/// `width`/`height`). Non-length dimensions (`auto`, percentages)
+/// contribute 0 — an undecoded or unsized image reserves no space.
+fn img_size<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId) -> (f32, f32) {
+    use taffy::style::CompactLength;
+    let size = styles.taffy_style(id).size;
+    let length = |d: taffy::Dimension| {
+        if d.tag() == CompactLength::LENGTH_TAG {
+            d.value()
+        } else {
+            0.0
+        }
+    };
+    (length(size.width), length(size.height))
 }
 
 /// Build an [`InlineRun`] for `text` styled by element `id`'s cascade

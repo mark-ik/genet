@@ -346,18 +346,35 @@ fn walk<D>(
                     }));
                 }
                 // An element establishing an inline formatting context
-                // carries its text as the leaf's InlineContent — emit
-                // its glyph runs (paints over background/image, under
-                // the border conceptually; border is rare on inline
+                // carries its text + replaced boxes as the leaf's
+                // InlineContent — emit its glyph runs and inline-box
+                // images (paints over background/image, under the
+                // border conceptually; border is rare on inline
                 // contexts). Non-inline elements have no cached layout,
-                // so emit_text_runs no-ops.
+                // so emit_inline_content no-ops.
                 if let Some(g) = em.glyphs.as_ref() {
-                    emit_text_runs(g, id, local_bounds, &mut em.fonts, commands);
+                    emit_inline_content(
+                        g,
+                        id,
+                        local_bounds,
+                        em.images_plane,
+                        &mut em.fonts,
+                        &mut em.images,
+                        commands,
+                    );
                 }
             }
             NodeKind::Text => {
                 let emitted = match em.glyphs.as_ref() {
-                    Some(g) => emit_text_runs(g, id, local_bounds, &mut em.fonts, commands),
+                    Some(g) => emit_inline_content(
+                        g,
+                        id,
+                        local_bounds,
+                        em.images_plane,
+                        &mut em.fonts,
+                        &mut em.images,
+                        commands,
+                    ),
                     None => false,
                 };
                 if !emitted {
@@ -392,17 +409,26 @@ fn walk<D>(
     }
 }
 
-/// Emit one `DrawText` per parley glyph-run for the text node's
-/// cached `Layout`. Each run is homogeneous in font + size, so it
-/// becomes one `TextRunItem` carrying that run's `FontInstanceKey`
-/// (interned into `fonts`), `font_size`, and positioned glyphs.
-/// Returns whether any run was emitted (false → no cached layout, or
-/// empty text; caller falls back to an empty run).
-fn emit_text_runs<NodeId: Copy + Eq + Hash>(
+/// Emit the paint commands for a leaf's inline content from its cached
+/// parley `Layout`: one `DrawText` per glyph-run and one `DrawImage`
+/// per replaced inline box (`<img>` flowing among the text).
+///
+/// Each glyph-run is homogeneous in font + size, so it becomes one
+/// `TextRunItem` carrying that run's `FontInstanceKey` (interned into
+/// `fonts`), `font_size`, and positioned glyphs. Each inline box's
+/// `id` indexes the leaf's `InlineContent::boxes`, recovering the
+/// source `<img>` element for image lookup; the image draws at the
+/// box's laid-out `(x, y, width, height)` in the leaf's local coords.
+///
+/// Returns whether any command was emitted (false → no cached layout,
+/// or empty content; caller falls back to an empty run).
+fn emit_inline_content<NodeId: Copy + Eq + Hash>(
     source: &GlyphSource<'_, NodeId>,
     dom_id: NodeId,
     bounds: LayoutRect,
+    images_plane: &ImagePlane<NodeId>,
     fonts: &mut FontCollector,
+    images: &mut ImageCollector,
     commands: &mut Vec<PaintCmd>,
 ) -> bool {
     let Some(taffy_id) = source.constructed.node_map.get(&dom_id) else {
@@ -411,38 +437,74 @@ fn emit_text_runs<NodeId: Copy + Eq + Hash>(
     let Some(layout) = source.text_ctx.layouts.get(taffy_id) else {
         return false;
     };
+    // The leaf's inline content, for mapping inline-box ids → source
+    // `<img>` nodes. Absent for a fixed-size leaf (no shaped content);
+    // glyph runs still emit, boxes just won't resolve.
+    let content = source.constructed.tree.get_node_context(*taffy_id);
     let mut emitted = false;
     for line in layout.lines() {
         for item in line.items() {
-            let PositionedLayoutItem::GlyphRun(run) = item else {
-                continue;
-            };
-            let parley_run = run.run();
-            let key = fonts.intern(parley_run.font());
-            let font_size = parley_run.font_size();
-            // Per-run color rides the brush (set per span at measure
-            // time); a colored <span> / <a> in the flow keeps its color.
-            let [r, g, b, a] = run.style().brush.0;
-            let color = ColorF::new(r, g, b, a);
-            let glyphs: Vec<GlyphInstance> = run
-                .positioned_glyphs()
-                .map(|g| GlyphInstance {
-                    index: g.id,
-                    point: LayoutPoint::new(g.x, g.y),
-                })
-                .collect();
-            if glyphs.is_empty() {
-                continue;
+            match item {
+                PositionedLayoutItem::GlyphRun(run) => {
+                    let parley_run = run.run();
+                    let key = fonts.intern(parley_run.font());
+                    let font_size = parley_run.font_size();
+                    // Per-run color rides the brush (set per span at
+                    // measure time); a colored <span>/<a> in the flow
+                    // keeps its color.
+                    let [r, g, b, a] = run.style().brush.0;
+                    let color = ColorF::new(r, g, b, a);
+                    let glyphs: Vec<GlyphInstance> = run
+                        .positioned_glyphs()
+                        .map(|g| GlyphInstance {
+                            index: g.id,
+                            point: LayoutPoint::new(g.x, g.y),
+                        })
+                        .collect();
+                    if glyphs.is_empty() {
+                        continue;
+                    }
+                    commands.push(PaintCmd::DrawText(TextRunItem {
+                        placement: CommonPlacement::new(bounds),
+                        font_instance: key,
+                        font_size,
+                        color,
+                        glyphs,
+                        options: TextOptions::default(),
+                    }));
+                    emitted = true;
+                },
+                PositionedLayoutItem::InlineBox(pbox) => {
+                    // Resolve the box id back to its source <img> via the
+                    // leaf's InlineContent, then look up its decoded
+                    // pixels and draw at the laid-out box rect.
+                    let Some(content) = content else { continue };
+                    let Some(item) = content.boxes.get(pbox.id as usize) else {
+                        continue;
+                    };
+                    let Some(decoded) = images_plane.get(item.source) else {
+                        continue;
+                    };
+                    let key = images.add(decoded);
+                    // Box position is relative to the leaf origin (same
+                    // space as glyph points); place in local coords.
+                    let rect = LayoutRect::new(
+                        LayoutPoint::new(bounds.min.x + pbox.x, bounds.min.y + pbox.y),
+                        LayoutPoint::new(
+                            bounds.min.x + pbox.x + pbox.width,
+                            bounds.min.y + pbox.y + pbox.height,
+                        ),
+                    );
+                    commands.push(PaintCmd::DrawImage(ImageItem {
+                        placement: CommonPlacement::new(rect),
+                        image_key: key,
+                        image_rendering: ImageRendering::Auto,
+                        alpha_type: AlphaType::PremultipliedAlpha,
+                        color: ColorF::WHITE, // identity tint
+                    }));
+                    emitted = true;
+                },
             }
-            commands.push(PaintCmd::DrawText(TextRunItem {
-                placement: CommonPlacement::new(bounds),
-                font_instance: key,
-                font_size,
-                color,
-                glyphs,
-                options: TextOptions::default(),
-            }));
-            emitted = true;
         }
     }
     emitted

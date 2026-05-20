@@ -30,7 +30,7 @@ use std::borrow::Cow;
 
 use parley::{
     Alignment, AlignmentOptions, FontContext, FontFamily, FontStyle, FontWeight, GenericFamily,
-    Layout, LayoutContext, StyleProperty,
+    InlineBox, InlineBoxKind, Layout, LayoutContext, StyleProperty,
 };
 use rustc_hash::FxHashMap;
 use taffy::geometry::Size;
@@ -112,24 +112,44 @@ impl InlineRun {
     }
 }
 
-/// The inline content of a Taffy leaf — one or more styled runs that
-/// parley lays out together (text + inline elements flow on shared
-/// lines, wrapping at the container width). A bare text node is a
-/// one-run `InlineContent`; a block element establishing an inline
-/// formatting context is a multi-run one.
+/// A replaced inline box (an `<img>`) flowing among text runs. parley
+/// reserves `width`×`height` at byte `index` in the concatenated run
+/// text and reports its laid-out position; paint emission draws the
+/// image identified by `source` there.
+#[derive(Clone, Debug)]
+pub struct InlineBoxItem<NodeId> {
+    /// Byte offset into the concatenated run text where the box sits.
+    pub index: usize,
+    pub width: f32,
+    pub height: f32,
+    /// DOM node of the replaced element (the `<img>`), for image lookup.
+    pub source: NodeId,
+}
+
+/// The inline content of a Taffy leaf — styled text runs plus replaced
+/// inline boxes (`<img>`), which parley lays out together (text +
+/// inline elements + images flow on shared lines, wrapping at the
+/// container width). A bare text node is a one-run, no-box
+/// `InlineContent`; a block element establishing an inline formatting
+/// context may have many runs and boxes.
+///
+/// Generic over the DOM `NodeId` so inline boxes can carry their
+/// source element for image lookup at paint time.
 ///
 /// Created in [`crate::construct`]; consumed by the measure function
 /// during `compute_layout_with_measure`.
 #[derive(Clone, Debug)]
-pub struct InlineContent {
+pub struct InlineContent<NodeId> {
     pub runs: Vec<InlineRun>,
+    pub boxes: Vec<InlineBoxItem<NodeId>>,
 }
 
-impl InlineContent {
+impl<NodeId> InlineContent<NodeId> {
     /// Single-run content from one text string with default typography.
     pub fn new(text: impl Into<String>) -> Self {
         Self {
             runs: vec![InlineRun::new(text)],
+            boxes: Vec::new(),
         }
     }
 
@@ -145,6 +165,7 @@ impl InlineContent {
                 italic: false,
                 color: [0.0, 0.0, 0.0, 1.0],
             }],
+            boxes: Vec::new(),
         }
     }
 
@@ -241,9 +262,9 @@ impl std::fmt::Debug for TextMeasureCtx {
 /// - Otherwise width comes from parley's break-all-lines using the
 ///   available space as `max_advance` (no max for
 ///   `MinContent`/`MaxContent`); height is `layout.height()`.
-pub fn measure_inline_content(
+pub fn measure_inline_content<NodeId>(
     ctx: &mut TextMeasureCtx,
-    content: &InlineContent,
+    content: &InlineContent<NodeId>,
     taffy_id: taffy::NodeId,
     known_dimensions: Size<Option<f32>>,
     available_space: Size<AvailableSpace>,
@@ -264,9 +285,9 @@ pub fn measure_inline_content(
         ranges.push((start..text.len(), run));
     }
 
-    // Empty content measures as zero-by-(font-size * 1.2) — a one-line
-    // baseline (line-height ≈ font-size * 1.2 in browsers).
-    if text.is_empty() {
+    // Empty content (no text and no inline boxes) measures as
+    // zero-by-(font-size * 1.2) — a one-line baseline.
+    if text.is_empty() && content.boxes.is_empty() {
         return Size {
             width: known_dimensions.width.unwrap_or(0.0),
             height: known_dimensions
@@ -308,6 +329,19 @@ pub fn measure_inline_content(
         builder.push(StyleProperty::Brush(ColorBrush(run.color)), range.clone());
     }
 
+    // Replaced inline boxes (`<img>`) — parley reserves their space
+    // and reports their laid-out position. `id` is the index into
+    // `content.boxes` so paint emission can recover the source node.
+    for (i, b) in content.boxes.iter().enumerate() {
+        builder.push_inline_box(InlineBox {
+            id: i as u64,
+            kind: InlineBoxKind::InFlow,
+            index: b.index,
+            width: b.width,
+            height: b.height,
+        });
+    }
+
     let mut layout: Layout<ColorBrush> = builder.build(text.as_str());
     layout.break_all_lines(max_advance);
     layout.align(Alignment::Start, AlignmentOptions::default());
@@ -336,7 +370,7 @@ mod tests {
     #[test]
     fn empty_text_measures_as_one_line_baseline() {
         let mut ctx = TextMeasureCtx::new();
-        let content = InlineContent::new("");
+        let content = InlineContent::<u64>::new("");
         let size = measure_inline_content(
             &mut ctx,
             &content,
@@ -357,7 +391,7 @@ mod tests {
     #[test]
     fn nonempty_text_measures_positive_width_and_caches_layout() {
         let mut ctx = TextMeasureCtx::new();
-        let content = InlineContent::new("Hello, world!");
+        let content = InlineContent::<u64>::new("Hello, world!");
         let taffy_id = fake_taffy_id();
         let size = measure_inline_content(
             &mut ctx,
@@ -387,7 +421,7 @@ mod tests {
     #[test]
     fn known_dimensions_override_measurement() {
         let mut ctx = TextMeasureCtx::new();
-        let content = InlineContent::new("ignored");
+        let content = InlineContent::<u64>::new("ignored");
         let size = measure_inline_content(
             &mut ctx,
             &content,
@@ -407,10 +441,11 @@ mod tests {
         // Two runs concatenate into one line; combined width exceeds
         // each run's own width (sanity that runs lay out together).
         let mut ctx = TextMeasureCtx::new();
-        let combined = InlineContent {
+        let combined = InlineContent::<u64> {
             runs: vec![InlineRun::new("Hello "), InlineRun::new("world")],
+            boxes: Vec::new(),
         };
-        let just_hello = InlineContent::new("Hello ");
+        let just_hello = InlineContent::<u64>::new("Hello ");
         let avail = Size {
             width: AvailableSpace::MaxContent,
             height: AvailableSpace::MaxContent,
