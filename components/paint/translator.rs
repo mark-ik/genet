@@ -26,7 +26,7 @@ use log::warn;
 use netrender::{
     ExternalTexturePlacement, FontBlob, FontId, Glyph as NrGlyph, GradientKind,
     GradientStop as NrGradientStop, ImageData, ImageKey as NrImageKey, NO_CLIP, Scene,
-    SceneBlendMode, SceneClip, SceneLayer, Transform, peniko,
+    SceneBlendMode, SceneClip, SceneLayer, SceneOp, ScenePattern, Transform, peniko,
 };
 use paint_list_api::{
     self as ple, FontInstanceKey, FontResource, ImageKey, ImageResource, PaintCmd, PaintList,
@@ -319,10 +319,27 @@ pub(crate) fn translate_paint_cmd_stream(
                     );
                 }
             },
-            PaintCmd::DrawRepeatingImage(_) => {
-                // Repeating fill → SceneOp::Pattern; deferred until a
-                // producer emits background-image repeat.
-                warn!("[paint translator] DrawRepeatingImage deferred (needs Pattern wiring)");
+            PaintCmd::DrawRepeatingImage(ri) => {
+                if let Some(&nr_key) = image_map.get(&ri.image_key) {
+                    let (x0, y0, x1, y1) = rect_corners(&ri.placement.bounds);
+                    // `scale` is the tile-size multiplier (1.0 = native
+                    // pixel size). `stretch_size` / `tile_spacing` (CSS
+                    // background-size / gap) aren't honored yet — native
+                    // tiling only.
+                    scene.ops.push(SceneOp::Pattern(ScenePattern {
+                        tile: nr_key,
+                        extent: [x0, y0, x1, y1],
+                        scale: 1.0,
+                        transform_id: tid,
+                        clip_rect: NO_CLIP,
+                        clip_corner_radii: [0.0; 4],
+                    }));
+                } else {
+                    warn!(
+                        "[paint translator] DrawRepeatingImage references unregistered image {:?}; skipping",
+                        ri.image_key
+                    );
+                }
             },
             PaintCmd::DrawExternalTexture(et) => {
                 let (x0, y0, x1, y1) = rect_corners(&et.placement.bounds);

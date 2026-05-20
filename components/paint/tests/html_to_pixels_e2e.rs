@@ -428,6 +428,85 @@ fn draw_image_rasterizes_from_side_table() {
     );
 }
 
+/// A `DrawRepeatingImage` tiles its image across the extent via
+/// `SceneOp::Pattern`. Synthesizes a `PaintEnvelope` with a 2×2 green
+/// tile in the side-table and a `DrawRepeatingImage` over a 64×64 box
+/// on a white backdrop; asserts the box fills green (the tile repeats
+/// to cover it). The producer doesn't emit background-image yet (needs
+/// cascade Image-list parsing + url decode), so the envelope is
+/// hand-built — renderer-side receipt that the Pattern path works.
+#[test]
+fn draw_repeating_image_tiles_from_side_table() {
+    use paint_list_api::{
+        AlphaType, CommonPlacement, DeviceIntSize, EngineId, ImageRendering, ImageResource,
+        LayoutPoint, LayoutRect, LayoutSize, PaintCmd, PrimitiveFlags, RectItem,
+        RepeatingImageItem,
+    };
+    use paint_types::{ColorF, IdNamespace, ImageKey};
+
+    let key = ImageKey::new(IdNamespace(0), 1);
+    let green = [0u8, 255, 0, 255];
+    let mut pixels = Vec::with_capacity(2 * 2 * 4);
+    for _ in 0..4 {
+        pixels.extend_from_slice(&green);
+    }
+
+    let b = |x: f32, y: f32, w: f32, h: f32| -> LayoutRect {
+        LayoutRect::new(LayoutPoint::new(x, y), LayoutPoint::new(x + w, y + h))
+    };
+
+    let envelope = PaintEnvelope {
+        engine: EngineId::SERVAL,
+        viewport: DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32),
+        generation: 0,
+        commands: vec![
+            PaintCmd::DrawRect(RectItem {
+                placement: CommonPlacement {
+                    bounds: b(0.0, 0.0, VIEWPORT as f32, VIEWPORT as f32),
+                    flags: PrimitiveFlags::empty(),
+                },
+                color: ColorF::WHITE,
+            }),
+            PaintCmd::DrawRepeatingImage(RepeatingImageItem {
+                placement: CommonPlacement {
+                    bounds: b(0.0, 0.0, 64.0, 64.0),
+                    flags: PrimitiveFlags::empty(),
+                },
+                image_key: key,
+                stretch_size: LayoutSize::new(2.0, 2.0),
+                tile_spacing: LayoutSize::new(0.0, 0.0),
+                image_rendering: ImageRendering::Auto,
+                alpha_type: AlphaType::PremultipliedAlpha,
+                color: ColorF::WHITE,
+            }),
+        ],
+        fonts: Vec::new(),
+        images: vec![ImageResource {
+            key,
+            width: 2,
+            height: 2,
+            data: pixels,
+        }],
+    };
+
+    let image = render_envelope_to_image(envelope);
+
+    // The tiled fill covers the 64×64 box — sample a few points.
+    for (x, y) in [(5u32, 5u32), (32, 32), (60, 60)] {
+        assert_eq!(
+            image.get_pixel(x, y).0,
+            [0, 255, 0, 255],
+            "({x}, {y}) should be covered by the repeating green tile"
+        );
+    }
+    // Outside the box: white backdrop.
+    assert_eq!(
+        image.get_pixel(100, 100).0,
+        [255, 255, 255, 255],
+        "(100, 100) is outside the pattern extent, should be white"
+    );
+}
+
 /// Full producer path: an `<img>` with a `data:` URI src renders from
 /// HTML. The producer decodes the data URI (data-url + image crates),
 /// sizes the `<img>` box to the image's intrinsic dimensions, and
