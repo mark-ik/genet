@@ -131,11 +131,6 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    // For a bare text node in this (non-inline) parent context, its
-    // run inherits the parent element's cascaded font.
-    let parent_font_size = font_size_of(styles, parent.id()).unwrap_or(DEFAULT_FONT_SIZE);
-    let parent_font_family = font_family_of(styles, parent.id()).unwrap_or_default();
-
     let mut children = Vec::new();
     for child in parent.dom_children() {
         let taffy_id = match dom.kind(child.id()) {
@@ -156,11 +151,11 @@ where
             }
             NodeKind::Text => {
                 let text = dom.text(child.id()).unwrap_or("").to_string();
-                let content = InlineContent::single(
-                    text,
-                    parent_font_size,
-                    parent_font_family.clone(),
-                );
+                // Bare text in a block context: one run styled by the
+                // parent element (size / family / weight / italic / color).
+                let content = InlineContent {
+                    runs: vec![run_for_element(styles, parent.id(), text)],
+                };
                 tree.new_leaf_with_context(taffy::Style::default(), content)
                     .expect("Taffy: failed to create text leaf")
             }
@@ -296,7 +291,22 @@ fn run_for_element<NodeId: Copy + Eq + Hash>(
         font_family: font_family_of(styles, id).unwrap_or_default(),
         weight: font_weight_of(styles, id).unwrap_or(400.0),
         italic: font_italic_of(styles, id).unwrap_or(false),
+        // Per-run color from the styling element's cascaded `color`.
+        color: text_color_of(styles, id).unwrap_or([0.0, 0.0, 0.0, 1.0]),
     }
+}
+
+/// Read an element's cascaded text `color` as straight RGBA in
+/// `[0, 1]`. `None` when the cascade hasn't run.
+fn text_color_of<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> Option<[f32; 4]> {
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    let absolute = data.styles.primary().get_inherited_text().color;
+    let srgb = absolute.into_srgb_legacy();
+    Some(*srgb.raw_components())
 }
 
 /// Read an element's cascaded `font-size` in CSS px. Returns `None`

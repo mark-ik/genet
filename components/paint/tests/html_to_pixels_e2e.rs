@@ -298,6 +298,42 @@ fn html_to_pixels_text_rasterizes_glyphs() {
     );
 }
 
+/// Per-span text color: a `<p>` (red text) containing a `<span>`
+/// (blue text) flows on one line, and each run keeps its own color —
+/// red glyph pixels AND blue glyph pixels both appear in the text
+/// band. This is the receipt that per-run color rides the parley
+/// brush through `Layout<ColorBrush>` and is read back per GlyphRun.
+#[test]
+fn html_to_pixels_inline_span_keeps_its_own_color() {
+    let image = render_to_image(
+        "<html><body><p>aaaaa <span>bbbbb</span></p></body></html>",
+        &[
+            "body { background-color: rgb(255, 255, 255); }",
+            "p { color: rgb(255, 0, 0); }",
+            "span { color: rgb(0, 0, 255); }",
+        ],
+    );
+
+    // Scan the top text band; classify glyph pixels by dominant channel.
+    let mut saw_red = false;
+    let mut saw_blue = false;
+    for y in 0..32u32 {
+        for x in 0..120u32 {
+            let [r, g, b, _a] = image.get_pixel(x, y).0;
+            // Reddish glyph pixel: red dominant, blue low.
+            if r > 120 && b < 80 && g < 80 {
+                saw_red = true;
+            }
+            // Bluish glyph pixel: blue dominant, red low.
+            if b > 120 && r < 80 && g < 80 {
+                saw_blue = true;
+            }
+        }
+    }
+    assert!(saw_red, "expected red glyph pixels from the <p> run");
+    assert!(saw_blue, "expected blue glyph pixels from the <span> run");
+}
+
 /// Read back the master texture rendered from the given HTML +
 /// stylesheets. Shared helper for the multi-pixel test bodies below.
 fn render_to_image(

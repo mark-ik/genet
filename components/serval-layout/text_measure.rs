@@ -66,10 +66,24 @@ impl Default for FontFamilySpec {
     }
 }
 
+/// Glyph fill color carried as the parley layout brush, so each run's
+/// cascaded `color` survives shaping into the `Layout` and is read
+/// back per-`GlyphRun` at paint time. Straight (non-premultiplied)
+/// RGBA in `[0, 1]`, matching `paint_list_api::ColorF`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColorBrush(pub [f32; 4]);
+
+impl Default for ColorBrush {
+    fn default() -> Self {
+        // Opaque black — the CSS initial `color`.
+        Self([0.0, 0.0, 0.0, 1.0])
+    }
+}
+
 /// One styled run of text within an inline formatting context — a
-/// maximal span sharing one cascaded font (the text of a single inline
-/// element / text node). `construct` produces these by walking an
-/// inline subtree in document order.
+/// maximal span sharing one cascaded font + color (the text of a
+/// single inline element / text node). `construct` produces these by
+/// walking an inline subtree in document order.
 #[derive(Clone, Debug)]
 pub struct InlineRun {
     pub text: String,
@@ -79,10 +93,13 @@ pub struct InlineRun {
     pub weight: f32,
     /// Italic / oblique.
     pub italic: bool,
+    /// Cascaded `color`, straight RGBA in `[0, 1]`.
+    pub color: [f32; 4],
 }
 
 impl InlineRun {
-    /// A run with default typography (16 px sans-serif, normal weight).
+    /// A run with default typography (16 px sans-serif, normal weight,
+    /// opaque black).
     pub fn new(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
@@ -90,6 +107,7 @@ impl InlineRun {
             font_family: FontFamilySpec::default(),
             weight: 400.0,
             italic: false,
+            color: [0.0, 0.0, 0.0, 1.0],
         }
     }
 }
@@ -116,7 +134,7 @@ impl InlineContent {
     }
 
     /// Single-run content with explicit size + family (the common
-    /// bare-text-node case).
+    /// bare-text-node case). Default weight / normal / opaque black.
     pub fn single(text: impl Into<String>, font_size: f32, font_family: FontFamilySpec) -> Self {
         Self {
             runs: vec![InlineRun {
@@ -125,6 +143,7 @@ impl InlineContent {
                 font_family,
                 weight: 400.0,
                 italic: false,
+                color: [0.0, 0.0, 0.0, 1.0],
             }],
         }
     }
@@ -153,7 +172,7 @@ fn to_parley_generic(kind: GenericFamilyKind) -> GenericFamily {
 }
 
 /// The parley font-family `StyleProperty` for a run's family spec.
-fn family_property(spec: &FontFamilySpec) -> StyleProperty<'_, ()> {
+fn family_property(spec: &FontFamilySpec) -> StyleProperty<'_, ColorBrush> {
     match spec {
         FontFamilySpec::Generic(kind) => to_parley_generic(*kind).into(),
         FontFamilySpec::Named(name) => {
@@ -174,13 +193,14 @@ fn family_property(spec: &FontFamilySpec) -> StyleProperty<'_, ()> {
 /// via fontique's default registry.
 pub struct TextMeasureCtx {
     pub font_ctx: FontContext,
-    pub layout_ctx: LayoutContext<()>,
+    pub layout_ctx: LayoutContext<ColorBrush>,
     /// Cached `parley::Layout` per Taffy text leaf — populated by
-    /// [`measure_text_leaf`] after each measure call. Paint emission
-    /// reads from here via `ConstructedTree::node_map`
+    /// [`measure_inline_content`] after each measure call. Paint
+    /// emission reads from here via `ConstructedTree::node_map`
     /// (DOM `NodeId` → `taffy::NodeId` → cached `Layout`) to extract
-    /// positioned glyphs without re-shaping.
-    pub layouts: FxHashMap<taffy::NodeId, Layout<()>>,
+    /// positioned glyphs (and per-run color via the brush) without
+    /// re-shaping.
+    pub layouts: FxHashMap<taffy::NodeId, Layout<ColorBrush>>,
 }
 
 impl Default for TextMeasureCtx {
@@ -283,9 +303,12 @@ pub fn measure_inline_content(
             FontStyle::Normal
         };
         builder.push(StyleProperty::FontStyle(style), range.clone());
+        // Per-run color rides the brush so it survives into the
+        // Layout and is read back per GlyphRun at paint time.
+        builder.push(StyleProperty::Brush(ColorBrush(run.color)), range.clone());
     }
 
-    let mut layout: Layout<()> = builder.build(text.as_str());
+    let mut layout: Layout<ColorBrush> = builder.build(text.as_str());
     layout.break_all_lines(max_advance);
     layout.align(Alignment::Start, AlignmentOptions::default());
 

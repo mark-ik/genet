@@ -352,14 +352,12 @@ fn walk<D>(
                 // contexts). Non-inline elements have no cached layout,
                 // so emit_text_runs no-ops.
                 if let Some(g) = em.glyphs.as_ref() {
-                    let color = element_text_color(styles, id);
-                    emit_text_runs(g, id, local_bounds, color, &mut em.fonts, commands);
+                    emit_text_runs(g, id, local_bounds, &mut em.fonts, commands);
                 }
             }
             NodeKind::Text => {
-                let color = text_color_of(dom, styles, id);
                 let emitted = match em.glyphs.as_ref() {
-                    Some(g) => emit_text_runs(g, id, local_bounds, color, &mut em.fonts, commands),
+                    Some(g) => emit_text_runs(g, id, local_bounds, &mut em.fonts, commands),
                     None => false,
                 };
                 if !emitted {
@@ -370,9 +368,9 @@ fn walk<D>(
                         placement: CommonPlacement::new(local_bounds),
                         font_instance: FontInstanceKey::default(),
                         // No shaped run to read a size from; 16 px is
-                        // the CSS/UA default (matches TextLeaf::new).
+                        // the CSS/UA default.
                         font_size: 16.0,
-                        color,
+                        color: text_color_of(dom, styles, id),
                         glyphs: Vec::new(),
                         options: TextOptions::default(),
                     }));
@@ -404,7 +402,6 @@ fn emit_text_runs<NodeId: Copy + Eq + Hash>(
     source: &GlyphSource<'_, NodeId>,
     dom_id: NodeId,
     bounds: LayoutRect,
-    color: ColorF,
     fonts: &mut FontCollector,
     commands: &mut Vec<PaintCmd>,
 ) -> bool {
@@ -423,6 +420,10 @@ fn emit_text_runs<NodeId: Copy + Eq + Hash>(
             let parley_run = run.run();
             let key = fonts.intern(parley_run.font());
             let font_size = parley_run.font_size();
+            // Per-run color rides the brush (set per span at measure
+            // time); a colored <span> / <a> in the flow keeps its color.
+            let [r, g, b, a] = run.style().brush.0;
+            let color = ColorF::new(r, g, b, a);
             let glyphs: Vec<GlyphInstance> = run
                 .positioned_glyphs()
                 .map(|g| GlyphInstance {
