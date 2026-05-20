@@ -77,6 +77,16 @@ fn paint_info_for(pid: PipelineId) -> PaintDisplayListInfo {
 /// the producer side of the pipeline so the actual test bodies stay
 /// focused on render + readback.
 fn html_to_envelope(html: &str, stylesheets: &[&str]) -> PaintEnvelope {
+    html_to_envelope_with_loader(html, stylesheets, &serval_layout::NoImageLoader)
+}
+
+/// `html_to_envelope` variant that resolves remote `<img>` srcs
+/// through `loader` (the host's resource cache, here a test fake).
+fn html_to_envelope_with_loader<L: serval_layout::ImageLoader>(
+    html: &str,
+    stylesheets: &[&str],
+    loader: &L,
+) -> PaintEnvelope {
     // 1. Parse HTML.
     let document = StaticDocument::parse(html);
 
@@ -93,9 +103,9 @@ fn html_to_envelope(html: &str, stylesheets: &[&str]) -> PaintEnvelope {
     //    layout from hand-rolled stubs to real CSS-driven box model.
     styles.refresh_taffy_from_cascade();
 
-    // 3b. Decode <img> sources + give each <img> its intrinsic size
-    //     on any axis CSS left auto.
-    let images = ImagePlane::decode_from_dom(&document);
+    // 3b. Decode <img> sources (data: inline, remote via loader) +
+    //     give each <img> its intrinsic size on any auto axis.
+    let images = ImagePlane::decode_from_dom_with_loader(&document, loader);
     styles.apply_intrinsic_image_sizes(&images);
 
     // 4. Layout.
@@ -543,6 +553,60 @@ fn html_to_pixels_img_data_uri_renders() {
         "(8, 8) is inside the intrinsically-sized <img>, should be blue"
     );
     // Outside the image box: white body.
+    assert_eq!(
+        image.get_pixel(40, 40).0,
+        [255, 255, 255, 255],
+        "(40, 40) is outside the 16×16 <img>, should be white body"
+    );
+}
+
+/// Remote `<img>` (http URL) renders via the ImageLoader seam. serval
+/// doesn't fetch — a test loader stands in for the host's resource
+/// cache, handing back PNG bytes for the URL. The producer decodes
+/// them through the loader, sizes the box intrinsically, and emits
+/// DrawImage. This is the receipt that `<img src="http://…">` works
+/// once the host supplies the bytes (fetching stays Hekate's job).
+#[test]
+fn html_to_pixels_img_via_loader_renders() {
+    /// Test fake: returns a fixed PNG for one known URL, nothing else.
+    struct FakeLoader {
+        url: String,
+        png: Vec<u8>,
+    }
+    impl serval_layout::ImageLoader for FakeLoader {
+        fn load(&self, url: &str) -> Option<Vec<u8>> {
+            (url == self.url).then(|| self.png.clone())
+        }
+    }
+
+    // A 16×16 solid-magenta PNG.
+    let magenta = image::RgbaImage::from_pixel(16, 16, image::Rgba([255, 0, 255, 255]));
+    let mut png = Vec::new();
+    magenta
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("encode test PNG");
+
+    let url = "http://example.test/icon.png";
+    let loader = FakeLoader {
+        url: url.to_string(),
+        png,
+    };
+
+    let html = format!("<html><body><img src=\"{url}\"></body></html>");
+    let envelope = html_to_envelope_with_loader(
+        &html,
+        &["body { background-color: rgb(255, 255, 255); }"],
+        &loader,
+    );
+    let image = render_envelope_to_image(envelope);
+
+    // Inside the 16×16 loaded image: magenta.
+    assert_eq!(
+        image.get_pixel(8, 8).0,
+        [255, 0, 255, 255],
+        "(8, 8) is inside the loader-supplied <img>, should be magenta"
+    );
+    // Outside: white body.
     assert_eq!(
         image.get_pixel(40, 40).0,
         [255, 255, 255, 255],
