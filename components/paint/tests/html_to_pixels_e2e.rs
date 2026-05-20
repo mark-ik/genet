@@ -787,6 +787,60 @@ fn html_to_pixels_box_shadow_hard_renders_offset() {
     );
 }
 
+/// A blurred `box-shadow` renders a soft Gaussian halo via the
+/// painter-side mask pass. `body` white; a 30×30 black div with
+/// `box-shadow: 0 0 12px rgb(255,0,0)` — no offset, 12px blur. With a
+/// hard shadow the (0,0,30,30) shadow box would sit exactly under the
+/// div (black on top, nothing visible). The 12px blur spreads coverage
+/// *outward* past the div edges, so reddish halo pixels appear beyond
+/// the box, fading with distance. Their presence is the receipt that
+/// `build_box_shadow_mask` ran and the mask composited.
+#[test]
+fn html_to_pixels_box_shadow_blur_renders_soft_halo() {
+    let image = render_to_image(
+        "<html><body><div></div></body></html>",
+        &[
+            "body { background-color: rgb(255, 255, 255); }",
+            "div {
+                width: 30px;
+                height: 30px;
+                background-color: rgb(0, 0, 0);
+                box-shadow: 0 0 12px rgb(255, 0, 0);
+            }",
+        ],
+    );
+
+    // Scan outward from the div's right edge along the vertical center
+    // (y = 15). The div is (0,0)..(30,30); x in [31, 55) is outside it
+    // but inside the blur halo. Count reddish pixels (red dominant over
+    // the white backdrop — red channel high, green/blue pulled down by
+    // the shadow's red tint).
+    let mut halo_pixels = 0u32;
+    for x in 31..55u32 {
+        let [r, g, b, _a] = image.get_pixel(x, 15).0;
+        if r > 200 && g < 235 && b < 235 && (r as i32 - g as i32) > 20 {
+            halo_pixels += 1;
+        }
+    }
+    assert!(
+        halo_pixels >= 4,
+        "expected a soft red halo beyond the div's right edge (blur spread), found {halo_pixels} reddish pixels"
+    );
+
+    // The div itself (painted over its shadow) is black.
+    assert_eq!(
+        image.get_pixel(15, 15).0,
+        [0, 0, 0, 255],
+        "(15, 15) is inside the div, should be black"
+    );
+    // Far from the div + halo: white body.
+    assert_eq!(
+        image.get_pixel(110, 110).0,
+        [255, 255, 255, 255],
+        "(110, 110) is clear of div + shadow halo, should be white"
+    );
+}
+
 /// Nested elements with distinct colors paint into the right pixels.
 /// `<div>` is 50×50 anchored at body's origin (top-left); a pixel
 /// inside the div should carry its background color, and a pixel

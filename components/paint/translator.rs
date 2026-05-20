@@ -12,13 +12,14 @@
 //! ## Mapping summary
 //!
 //! Most variants map 1:1 to a `netrender::SceneOp`. The painter-side
-//! gaps flagged for follow-up (`DrawText`, `DrawImage`,
-//! `DrawRepeatingImage`, `DrawShadow`, `DrawPath`, `DrawStroke`,
-//! nine-patch borders) emit a fallback or `warn!`-and-skip; the
-//! proper translation lands when the corresponding paint-side state
-//! (font registry, image registry, shadow-mask integration) wires
-//! through. The lowering itself is well-defined for the deferred
-//! variants — only the painter-side resource plumbing is missing.
+//! gaps flagged for follow-up (`DrawPath`, `DrawStroke`, nine-patch
+//! borders, inset `DrawShadow`) emit a fallback or `warn!`-and-skip.
+//!
+//! `DrawShadow` is fully wired for outset shadows: hard shadows
+//! (blur 0) lower to a solid rect; blurred ones record a
+//! [`BoxShadowMaskRequest`] (built GPU-side by the painter via
+//! `Renderer::build_box_shadow_mask`) and push the matching mask
+//! image op into the scene at the right paint position.
 
 use std::sync::Arc;
 
@@ -44,9 +45,30 @@ pub(crate) struct ExternalTextureDraw {
     pub scene_op_boundary: usize,
 }
 
+/// A blurred box-shadow mask the painter must build on the GPU
+/// (`Renderer::build_box_shadow_mask`) before rasterizing the scene.
+/// The translator can't reach the `Renderer`, so it records the
+/// parameters here and pushes the matching image op into the scene
+/// (at the right paint position); the painter materializes the mask
+/// texture under `key` ahead of the render.
+#[derive(Clone, Debug)]
+pub(crate) struct BoxShadowMaskRequest {
+    /// netrender image key the scene's shadow image op references.
+    pub key: NrImageKey,
+    /// Square mask texture side length (covers the scene; the shadow
+    /// box is drawn at `bounds` within it, in absolute scene coords).
+    pub dim: u32,
+    /// Shadow box in absolute scene coords `[x0, y0, x1, y1]`.
+    pub bounds: [f32; 4],
+    pub corner_radius: f32,
+    pub blur_radius_px: f32,
+}
+
 pub(crate) struct TranslatedDisplayList {
     pub scene: Scene,
     pub external_textures: Vec<ExternalTextureDraw>,
+    /// Blurred box-shadow masks to build before rendering this scene.
+    pub box_shadow_masks: Vec<BoxShadowMaskRequest>,
 }
 
 // =============================================================================
@@ -198,6 +220,10 @@ pub(crate) fn translate_paint_cmd_stream(
     let viewport_h = viewport.height.max(0) as u32;
     let mut scene = Scene::new(viewport_w, viewport_h);
     let mut external_textures = Vec::new();
+    let mut box_shadow_masks: Vec<BoxShadowMaskRequest> = Vec::new();
+    // Square mask side covering the whole scene; shadow boxes are drawn
+    // at their absolute coords inside it.
+    let mask_dim = viewport_w.max(viewport_h).max(1);
     // Register fonts + images up-front so DrawText / DrawImage can
     // resolve their keys to scene-side ids.
     let font_map = register_fonts(&mut scene, fonts);
@@ -351,23 +377,74 @@ pub(crate) fn translate_paint_cmd_stream(
                 });
             },
             PaintCmd::DrawShadow(s) => {
-                // First-cut: a solid rect at the shadow's offset +
-                // spread bounds, in the shadow color. True Gaussian
-                // blur needs `Renderer::build_box_shadow_mask` (a
-                // painter-side, GPU pass) which the pure Scene
-                // translator can't reach; `blur_radius` is ignored
-                // here. Hard shadows (blur 0) render correctly;
-                // blurred ones render as a hard approximation.
                 // Inset shadows deferred (need clip-difference).
                 if matches!(s.clip_mode, ple::BoxShadowClipMode::Inset) {
                     warn!("[paint translator] inset box-shadow deferred");
                 } else {
+                    // The offset + spread box, in element-local coords.
                     let b = &s.box_bounds;
-                    let x0 = b.min.x + s.offset.x - s.spread_radius;
-                    let y0 = b.min.y + s.offset.y - s.spread_radius;
-                    let x1 = b.max.x + s.offset.x + s.spread_radius;
-                    let y1 = b.max.y + s.offset.y + s.spread_radius;
-                    scene.push_rect_transformed(x0, y0, x1, y1, color_to_array(&s.color), tid);
+                    let lx0 = b.min.x + s.offset.x - s.spread_radius;
+                    let ly0 = b.min.y + s.offset.y - s.spread_radius;
+                    let lx1 = b.max.x + s.offset.x + s.spread_radius;
+                    let ly1 = b.max.y + s.offset.y + s.spread_radius;
+
+                    if s.blur_radius <= 0.0 {
+                        // Hard shadow: a solid rect at the offset/spread
+                        // box, in local coords + tid (exact, no GPU pass).
+                        scene.push_rect_transformed(
+                            lx0,
+                            ly0,
+                            lx1,
+                            ly1,
+                            color_to_array(&s.color),
+                            tid,
+                        );
+                    } else {
+                        // Blurred shadow: build a Gaussian coverage mask
+                        // (painter-side GPU pass), then composite it
+                        // tinted by the shadow color. The mask lives in
+                        // absolute scene space, so lift the local box
+                        // through the active transform; the composite
+                        // image op uses identity transform with the
+                        // absolute rect (no double transform).
+                        let m = transform_at(&scene, tid).m;
+                        let (ax0, ay0) = apply_transform_2d(&m, lx0, ly0);
+                        let (ax1, ay1) = apply_transform_2d(&m, lx1, ly1);
+                        // Normalize in case the transform flipped an axis.
+                        let (sx0, sx1) = (ax0.min(ax1), ax0.max(ax1));
+                        let (sy0, sy1) = (ay0.min(ay1), ay0.max(ay1));
+
+                        let key = BOX_SHADOW_MASK_KEY_BASE + box_shadow_masks.len() as u64;
+                        box_shadow_masks.push(BoxShadowMaskRequest {
+                            key,
+                            dim: mask_dim,
+                            bounds: [sx0, sy0, sx1, sy1],
+                            corner_radius: 0.0,
+                            blur_radius_px: s.blur_radius,
+                        });
+
+                        // The blurred halo extends ~blur_radius beyond the
+                        // box; inflate the sampled rect so the falloff
+                        // isn't clipped. UV maps the absolute rect into
+                        // the dim×dim mask texture.
+                        let margin = s.blur_radius;
+                        let tx0 = sx0 - margin;
+                        let ty0 = sy0 - margin;
+                        let tx1 = sx1 + margin;
+                        let ty1 = sy1 + margin;
+                        let dim_f = mask_dim as f32;
+                        scene.push_image_full(
+                            tx0,
+                            ty0,
+                            tx1,
+                            ty1,
+                            [tx0 / dim_f, ty0 / dim_f, tx1 / dim_f, ty1 / dim_f],
+                            color_to_array(&s.color),
+                            key,
+                            0, // absolute coords already; identity transform
+                            NO_CLIP,
+                        );
+                    }
                 }
             },
             PaintCmd::PushShadow(_) | PaintCmd::PopAllShadows => {
@@ -383,7 +460,21 @@ pub(crate) fn translate_paint_cmd_stream(
     TranslatedDisplayList {
         scene,
         external_textures,
+        box_shadow_masks,
     }
+}
+
+/// Base for box-shadow mask image keys, chosen well above the
+/// sequential keys [`register_images`] mints (1..N) so masks never
+/// collide with real images in the rasterizer's image table.
+const BOX_SHADOW_MASK_KEY_BASE: u64 = 0xFFFF_0000_0000_0000;
+
+/// Apply a column-major 4×4 transform to a 2D point `(x, y, 0, 1)`,
+/// returning the transformed `(x', y')`. Used to lift a shadow box
+/// from its element-local coords into absolute scene coords for the
+/// GPU mask pass (the mask is built in scene space, not local space).
+fn apply_transform_2d(m: &[f32; 16], x: f32, y: f32) -> (f32, f32) {
+    (m[0] * x + m[4] * y + m[12], m[1] * x + m[5] * y + m[13])
 }
 
 /// The `Transform` at a palette index; identity for index 0.

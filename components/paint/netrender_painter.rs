@@ -35,7 +35,9 @@ use style_traits::CSSPixel;
 
 use crate::InitialPaintState;
 use crate::compositor::{PaintCompositor, WgpuMasterCaptureBackend};
-use crate::translator::{ExternalTextureDraw, translate_envelope_with_external_textures};
+use crate::translator::{
+    BoxShadowMaskRequest, ExternalTextureDraw, translate_envelope_with_external_textures,
+};
 
 mod test_support;
 
@@ -63,6 +65,10 @@ pub struct PipelineState {
     /// Same-device external textures that should be overlaid into the
     /// rendered frame after the ordinary Scene paints.
     pub(crate) external_textures: Vec<ExternalTextureDraw>,
+    /// Blurred box-shadow masks to materialize on the GPU
+    /// (`Renderer::build_box_shadow_mask`) before rasterizing the
+    /// scene; the scene's shadow image ops reference them by key.
+    pub(crate) box_shadow_masks: Vec<BoxShadowMaskRequest>,
 }
 
 /// `Paint` is Servo's rendering subsystem. It owns one
@@ -184,6 +190,7 @@ impl Paint {
                         scene: translated.scene,
                         paint_info,
                         external_textures: translated.external_textures,
+                        box_shadow_masks: translated.box_shadow_masks,
                     },
                 );
                 self.webview_to_pipeline
@@ -402,6 +409,22 @@ impl Paint {
             None => return,
         };
         let scene = &state.scene;
+
+        // Materialize blurred box-shadow masks before rasterizing: each
+        // builds a Gaussian coverage texture (GPU render-graph pass) and
+        // registers it under its key, which the scene's shadow image ops
+        // reference. Must run before `render_with_compositor` so the
+        // rasterizer finds the texture when it resolves the image key.
+        for mask in &state.box_shadow_masks {
+            renderer.build_box_shadow_mask(
+                mask.key,
+                mask.dim,
+                mask.bounds,
+                mask.corner_radius,
+                mask.blur_radius_px,
+            );
+        }
+
         let registered_external_textures = self.external_textures.borrow();
         let mut external_views = Vec::new();
         for external in &state.external_textures {
