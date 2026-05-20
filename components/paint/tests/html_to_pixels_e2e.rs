@@ -972,6 +972,112 @@ fn html_to_pixels_offset_element_renders_at_offset() {
     );
 }
 
+/// Multiple block siblings stack vertically. Two 40px-tall `<div>`s
+/// (red then blue) inside body lay out one above the other via Taffy's
+/// block flow — the first fills the top band, the second sits directly
+/// below it. This is the receipt that block-level siblings stack
+/// (multi-paragraph flow) rather than overlapping at the origin.
+#[test]
+fn html_to_pixels_block_siblings_stack_vertically() {
+    let image = render_to_image(
+        "<html><body><div class=\"a\"></div><div class=\"b\"></div></body></html>",
+        &[
+            "body { background-color: rgb(255, 255, 255); }",
+            ".a { width: 60px; height: 40px; background-color: rgb(255, 0, 0); }",
+            ".b { width: 60px; height: 40px; background-color: rgb(0, 0, 255); }",
+        ],
+    );
+
+    // First div: top band (y ~20). Red.
+    assert_eq!(
+        image.get_pixel(20, 20).0,
+        [255, 0, 0, 255],
+        "(20, 20) is in the first (red) div"
+    );
+    // Second div stacks below the first (y ~60, since .a is 40px tall).
+    assert_eq!(
+        image.get_pixel(20, 60).0,
+        [0, 0, 255, 255],
+        "(20, 60) is in the second (blue) div, stacked below the first"
+    );
+}
+
+/// `position: relative` offsets a box from its in-flow position by its
+/// inset, without removing it from flow. A relatively-positioned div
+/// (`top: 20px; left: 20px`) at body's origin shifts down-right: its
+/// blue lands at the offset position, and the in-flow origin (0,0) is
+/// vacated (body white shows through).
+#[test]
+fn html_to_pixels_relative_position_offsets_box() {
+    let image = render_to_image(
+        "<html><body><div></div></body></html>",
+        &[
+            "body { background-color: rgb(255, 255, 255); }",
+            "div {
+                width: 30px;
+                height: 30px;
+                background-color: rgb(0, 0, 255);
+                position: relative;
+                top: 20px;
+                left: 20px;
+            }",
+        ],
+    );
+
+    // Offset box: (20,20)..(50,50). (35, 35) is inside → blue.
+    assert_eq!(
+        image.get_pixel(35, 35).0,
+        [0, 0, 255, 255],
+        "(35, 35) is inside the relatively-offset div, should be blue"
+    );
+    // The in-flow origin the div vacated (5, 5) shows body white.
+    assert_eq!(
+        image.get_pixel(5, 5).0,
+        [255, 255, 255, 255],
+        "(5, 5) is above-left of the offset div, should be white (box shifted away)"
+    );
+}
+
+/// `position: absolute` takes a box out of flow and places it at its
+/// inset from the containing block. An absolutely-positioned div
+/// (`top: 30px; left: 30px`) lands there regardless of its in-flow
+/// siblings; a normal-flow sibling paints at the origin underneath.
+#[test]
+fn html_to_pixels_absolute_position_places_box() {
+    let image = render_to_image(
+        "<html><body><div class=\"flow\"></div><div class=\"abs\"></div></body></html>",
+        &[
+            "body { background-color: rgb(255, 255, 255); }",
+            // In-flow sibling at the origin — green, 80x80.
+            ".flow { width: 80px; height: 80px; background-color: rgb(0, 200, 0); }",
+            // Out-of-flow box placed at (30, 30) — blue, 30x30.
+            ".abs {
+                width: 30px;
+                height: 30px;
+                background-color: rgb(0, 0, 255);
+                position: absolute;
+                top: 30px;
+                left: 30px;
+            }",
+        ],
+    );
+
+    // Absolute box: (30,30)..(60,60). (45, 45) is inside → blue,
+    // painted over the green in-flow sibling.
+    assert_eq!(
+        image.get_pixel(45, 45).0,
+        [0, 0, 255, 255],
+        "(45, 45) is inside the absolutely-positioned div, should be blue"
+    );
+    // The in-flow green sibling shows where the absolute box doesn't
+    // cover it — e.g. (10, 10), top-left of the 80x80 green box.
+    assert_eq!(
+        image.get_pixel(10, 10).0,
+        [0, 200, 0, 255],
+        "(10, 10) is the in-flow green sibling, not covered by the absolute box"
+    );
+}
+
 /// Border emission lands at the element's edges. A `<div>` with
 /// `border: 10px solid green; width: 40px; height: 40px;` lays
 /// out at 60×60 (border-box semantics) anchored at body's origin.

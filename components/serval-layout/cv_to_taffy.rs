@@ -5,26 +5,25 @@
 //! Focused `style::ComputedValues` → [`taffy::Style`] converter.
 //!
 //! Probe-scope subset: display, size (width/height), margin, padding,
-//! border-widths. Enough to drive box-model semantics
-//! (`FragmentQuery::box_model` returning real content/padding/border/
-//! margin rects) and `DrawBorder` emission. Stylo's richer property
-//! surface (flex, grid, positioning, transforms, etc.) is covered by
-//! `linebender/blitz`'s `stylo_taffy` crate — switch to it when our
-//! probe outgrows the subset here.
+//! border-widths, and positioning (`position` + `top/right/bottom/left`
+//! insets — relative + absolute, which Taffy models natively). Enough
+//! to drive box-model semantics (`FragmentQuery::box_model` returning
+//! real content/padding/border/margin rects), `DrawBorder` emission,
+//! and offset/out-of-flow boxes. Stylo's richer property surface
+//! (flex/grid track sizing, transforms, floats — which Taffy has no
+//! model for) is covered by `linebender/blitz`'s `stylo_taffy` crate —
+//! switch to it when our probe outgrows the subset here.
 //!
 //! Cf. `docs/2026-05-17_serval_layout_planes_architecture.md`.
 
 use style::properties::ComputedValues;
 use style::values::computed::{LengthPercentage as ComputedLengthPercentage, Percentage};
-use style::values::generics::length::{
-    GenericLengthPercentageOrAuto as LpOrAuto,
-    GenericMargin,
-};
+use style::values::generics::length::GenericMargin;
 use style::values::generics::NonNegative;
-use style::values::specified::box_::{DisplayInside, DisplayOutside};
+use style::values::specified::box_::{DisplayInside, DisplayOutside, PositionProperty};
 use style::values::specified::border::BorderStyle;
 use taffy::prelude::TaffyAuto;
-use taffy::style::{Dimension, Display, LengthPercentage, LengthPercentageAuto, Style};
+use taffy::style::{Dimension, Display, LengthPercentage, LengthPercentageAuto, Position, Style};
 use taffy::geometry::Rect;
 
 /// Convert `ComputedValues` into a [`taffy::Style`] subset.
@@ -42,11 +41,24 @@ pub fn to_taffy_style(values: &ComputedValues) -> Style {
     let mut s = Style::default();
     s.display = convert_display(values);
     s.box_sizing = convert_box_sizing(values);
+    s.position = convert_position(values);
 
     let pos = values.get_position();
     s.size = taffy::Size {
         width: dimension_from_size(&pos.width),
         height: dimension_from_size(&pos.height),
+    };
+
+    // Inset (top/right/bottom/left). Taffy applies it to relatively-
+    // positioned boxes (offset from in-flow position) and to absolutely-
+    // positioned boxes (offset from the containing block's padding edge).
+    // For `static` boxes the cascade leaves these `auto`, so they have
+    // no effect — matching CSS, which ignores inset on static elements.
+    s.inset = Rect {
+        top: inset_val(&pos.top),
+        right: inset_val(&pos.right),
+        bottom: inset_val(&pos.bottom),
+        left: inset_val(&pos.left),
     };
 
     let margin = values.get_margin();
@@ -90,6 +102,20 @@ fn convert_box_sizing(values: &ComputedValues) -> taffy::style::BoxSizing {
     match values.get_position().box_sizing {
         StyloBoxSizing::BorderBox => taffy::style::BoxSizing::BorderBox,
         StyloBoxSizing::ContentBox => taffy::style::BoxSizing::ContentBox,
+    }
+}
+
+/// Map Stylo's `position` to Taffy's. Taffy models only `Relative`
+/// (in-flow, inset-offset) and `Absolute` (out-of-flow). `static`,
+/// `relative`, and `sticky` all stay in normal flow → `Relative`;
+/// `absolute` and `fixed` are out-of-flow → `Absolute`. (Taffy has
+/// no separate `fixed` containing-block semantics; `fixed` falls back
+/// to `absolute` against the nearest positioned ancestor — a known
+/// approximation until a viewport-anchored pass lands.)
+fn convert_position(values: &ComputedValues) -> Position {
+    match values.get_box().position {
+        PositionProperty::Absolute | PositionProperty::Fixed => Position::Absolute,
+        _ => Position::Relative,
     }
 }
 
@@ -143,6 +169,22 @@ fn margin_val(m: &GenericMargin<ComputedLengthPercentage>) -> LengthPercentageAu
     }
 }
 
+/// `Position.{top,right,bottom,left}` is `computed::Inset` —
+/// `GenericInset<Percentage, LengthPercentage>` (Auto | LengthPercentage
+/// | anchor-positioning variants). Anchor variants fall back to `auto`.
+fn inset_val(v: &style::values::computed::Inset) -> LengthPercentageAuto {
+    use style::values::generics::position::GenericInset;
+    match v {
+        GenericInset::Auto => LengthPercentageAuto::AUTO,
+        GenericInset::LengthPercentage(lp) => match unpack_length_percentage(lp) {
+            UnpackResult::Length(px) => LengthPercentageAuto::length(px),
+            UnpackResult::Percent(p) => LengthPercentageAuto::percent(p),
+            UnpackResult::Calc => LengthPercentageAuto::AUTO,
+        },
+        _ => LengthPercentageAuto::AUTO,
+    }
+}
+
 /// `Padding.padding_*` is `NonNegativeLengthPercentage` — `NonNegative<LengthPercentage>`.
 fn length_percentage(lp: &ComputedLengthPercentage) -> LengthPercentage {
     match unpack_length_percentage(lp) {
@@ -188,18 +230,3 @@ fn length_percentage_to_dimension(lp: &ComputedLengthPercentage) -> Option<Dimen
     }
 }
 
-/// Use this helper to handle the `LpOrAuto`-shaped properties (insets,
-/// etc.) if needed. Currently unused at the probe level; kept around
-/// because the property surface uses this generic shape in several
-/// places and follow-up wiring will pick it up.
-#[allow(dead_code)]
-fn lp_or_auto(v: &LpOrAuto<ComputedLengthPercentage>) -> LengthPercentageAuto {
-    match v {
-        LpOrAuto::Auto => LengthPercentageAuto::AUTO,
-        LpOrAuto::LengthPercentage(lp) => match unpack_length_percentage(lp) {
-            UnpackResult::Length(px) => LengthPercentageAuto::length(px),
-            UnpackResult::Percent(p) => LengthPercentageAuto::percent(p),
-            UnpackResult::Calc => LengthPercentageAuto::AUTO,
-        },
-    }
-}
