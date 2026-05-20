@@ -471,6 +471,52 @@ fn html_to_pixels_img_data_uri_renders() {
     );
 }
 
+/// A hard `box-shadow` (blur 0) renders as an offset rect behind the
+/// element. `body` white; a 30×30 black div with
+/// `box-shadow: 20px 20px 0 rgb(255,0,0)` — the red shadow sits at the
+/// div's box offset by (20, 20). Pixels in the offset shadow band
+/// (right/below the div, outside it) are red; the div itself is black;
+/// elsewhere is white. (True Gaussian blur needs the painter-side
+/// mask pass; this first-cut renders hard shadows correctly and
+/// blurred ones as a hard approximation.)
+#[test]
+fn html_to_pixels_box_shadow_hard_renders_offset() {
+    let image = render_to_image(
+        "<html><body><div></div></body></html>",
+        &[
+            "body { background-color: rgb(255, 255, 255); }",
+            "div {
+                width: 30px;
+                height: 30px;
+                background-color: rgb(0, 0, 0);
+                box-shadow: 20px 20px 0 rgb(255, 0, 0);
+            }",
+        ],
+    );
+
+    // The div is at (0,0)..(30,30) black. The shadow is the same box
+    // offset by (20,20): (20,20)..(50,50) red, painted behind the div.
+    // A point in the shadow band that the div doesn't cover — e.g.
+    // (40, 40) — is red.
+    assert_eq!(
+        image.get_pixel(40, 40).0,
+        [255, 0, 0, 255],
+        "(40, 40) is in the offset shadow band, should be red"
+    );
+    // The div itself (painted over its shadow) is black.
+    assert_eq!(
+        image.get_pixel(10, 10).0,
+        [0, 0, 0, 255],
+        "(10, 10) is inside the div, should be black"
+    );
+    // Far from both: white body.
+    assert_eq!(
+        image.get_pixel(100, 100).0,
+        [255, 255, 255, 255],
+        "(100, 100) is clear of div + shadow, should be white"
+    );
+}
+
 /// Nested elements with distinct colors paint into the right pixels.
 /// `<div>` is 50×50 anchored at body's origin (top-left); a pixel
 /// inside the div should carry its background color, and a pixel

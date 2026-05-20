@@ -37,12 +37,13 @@ use std::hash::Hash;
 use layout_dom_api::{LayoutDom, NodeKind};
 use malloc_size_of_derive::MallocSizeOf;
 use paint_list_api::{
-    AlphaType, BorderRadius, BorderSide, BorderStyle, ColorF, CommonPlacement, DeviceIntSize,
-    EngineId, FontInstanceKey, FontResource, GlyphInstance, IdNamespace, ImageItem, ImageKey,
-    ImageRendering, ImageResource, LayoutPoint, LayoutRect, LayoutSideOffsets, LayoutTransform,
-    NormalBorder, PaintCmd, PaintList, RectItem, TextOptions, TextRunItem, TransformSpec,
+    AlphaType, BorderRadius, BorderSide, BorderStyle, BoxShadowClipMode, ColorF, CommonPlacement,
+    DeviceIntSize, EngineId, FontInstanceKey, FontResource, GlyphInstance, IdNamespace, ImageItem,
+    ImageKey, ImageRendering, ImageResource, LayoutPoint, LayoutRect, LayoutSideOffsets,
+    LayoutTransform, LayoutVector2D, NormalBorder, PaintCmd, PaintList, RectItem, TextOptions,
+    TextRunItem, TransformSpec,
 };
-use paint_list_api::items::{BorderDetails, BorderItem};
+use paint_list_api::items::{BorderDetails, BorderItem, ShadowItem};
 use paint_list_api::specs::TransformKind;
 use parley::PositionedLayoutItem;
 use rustc_hash::FxHashMap;
@@ -302,8 +303,27 @@ fn walk<D>(
         );
         match dom.kind(id) {
             NodeKind::Element => {
-                // Background first, then replaced content (image),
-                // then border — CSS paint order.
+                // Outset box-shadows paint behind the border-box, so
+                // emit them before the background. (Inset shadows,
+                // which paint over the background, are deferred —
+                // skipped here, warn-skipped in the translator.)
+                for shadow in box_shadows_of(styles, id) {
+                    if shadow.inset {
+                        continue;
+                    }
+                    commands.push(PaintCmd::DrawShadow(ShadowItem {
+                        placement: CommonPlacement::new(local_bounds),
+                        box_bounds: local_bounds,
+                        offset: LayoutVector2D::new(shadow.h, shadow.v),
+                        color: shadow.color,
+                        blur_radius: shadow.blur,
+                        spread_radius: shadow.spread,
+                        border_radius: BorderRadius::zero(),
+                        clip_mode: BoxShadowClipMode::Outset,
+                    }));
+                }
+                // Background, then replaced content (image), then
+                // border — CSS paint order.
                 commands.push(PaintCmd::DrawRect(RectItem {
                     placement: CommonPlacement::new(local_bounds),
                     color: background_color_of(styles, id),
@@ -524,6 +544,49 @@ fn border_of<NodeId: Copy + Eq + std::hash::Hash>(
         do_aa: true,
     };
     Some((widths, details))
+}
+
+/// Resolved box-shadow params for one shadow (cascade → paint units).
+struct ShadowData {
+    color: ColorF,
+    h: f32,
+    v: f32,
+    blur: f32,
+    spread: f32,
+    inset: bool,
+}
+
+/// Read an element's cascaded `box-shadow` list. Returns the shadows
+/// in declaration order (paint order is back-to-front = last-declared
+/// paints first; the producer emits in list order and the renderer's
+/// later-paints-on-top handles depth). Empty when no cascade data or
+/// no shadows.
+fn box_shadows_of<NodeId: Copy + Eq + std::hash::Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> Vec<ShadowData> {
+    let Some(entry) = styles.get(id) else {
+        return Vec::new();
+    };
+    let Some(data) = entry.borrow_data() else {
+        return Vec::new();
+    };
+    let primary = data.styles.primary();
+    let current = primary.get_inherited_text().color;
+    primary
+        .get_effects()
+        .box_shadow
+        .0
+        .iter()
+        .map(|sh| ShadowData {
+            color: stylo_color_to_paint(&sh.base.color, current),
+            h: sh.base.horizontal.px(),
+            v: sh.base.vertical.px(),
+            blur: sh.base.blur.0.px(),
+            spread: sh.spread.px(),
+            inset: sh.inset,
+        })
+        .collect()
 }
 
 /// Map Stylo's specified BorderStyle to paint-types BorderStyle.

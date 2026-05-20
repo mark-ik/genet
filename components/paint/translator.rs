@@ -333,9 +333,25 @@ pub(crate) fn translate_paint_cmd_stream(
                     scene_op_boundary: scene.ops.len(),
                 });
             },
-            PaintCmd::DrawShadow(_) => {
-                // Box-shadow → needs `Renderer::build_box_shadow_mask`.
-                warn!("[paint translator] DrawShadow deferred (needs build_box_shadow_mask)");
+            PaintCmd::DrawShadow(s) => {
+                // First-cut: a solid rect at the shadow's offset +
+                // spread bounds, in the shadow color. True Gaussian
+                // blur needs `Renderer::build_box_shadow_mask` (a
+                // painter-side, GPU pass) which the pure Scene
+                // translator can't reach; `blur_radius` is ignored
+                // here. Hard shadows (blur 0) render correctly;
+                // blurred ones render as a hard approximation.
+                // Inset shadows deferred (need clip-difference).
+                if matches!(s.clip_mode, ple::BoxShadowClipMode::Inset) {
+                    warn!("[paint translator] inset box-shadow deferred");
+                } else {
+                    let b = &s.box_bounds;
+                    let x0 = b.min.x + s.offset.x - s.spread_radius;
+                    let y0 = b.min.y + s.offset.y - s.spread_radius;
+                    let x1 = b.max.x + s.offset.x + s.spread_radius;
+                    let y1 = b.max.y + s.offset.y + s.spread_radius;
+                    scene.push_rect_transformed(x0, y0, x1, y1, color_to_array(&s.color), tid);
+                }
             },
             PaintCmd::PushShadow(_) | PaintCmd::PopAllShadows => {
                 // State-stack pair; no-op until shadow integration lands.
