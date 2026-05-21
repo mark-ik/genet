@@ -27,6 +27,7 @@ masonry_winit = { workspace = true }
 serval-layout = { path = "../../components/serval-layout" }
 serval-static-dom = { path = "../../components/serval-static-dom" }
 layout_dom_api = { workspace = true }
+markup5ever = { workspace = true }
 paint = { workspace = true }
 paint_list_api = { workspace = true }
 paint_api = { workspace = true }

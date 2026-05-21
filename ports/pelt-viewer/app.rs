@@ -42,14 +42,21 @@ struct AppState {
 }
 
 /// Render the nav input: a readable file path → its HTML (inline
-/// `<style>` blocks are honored by [`render_html`]); otherwise the
-/// built-in sample page with its own stylesheet.
+/// `<style>` and local `<link rel=stylesheet>` are honored, the latter
+/// resolved against the file's directory); otherwise the built-in
+/// sample page with its own stylesheet.
 fn render_input(input: &str) -> Option<ImageData> {
-    let (html, css): (String, Vec<&str>) = match std::fs::read_to_string(input) {
-        Ok(contents) => (contents, Vec::new()),
-        Err(_) => (SAMPLE_HTML.to_string(), SAMPLE_CSS.to_vec()),
-    };
-    match render_html(&html, &css, VIEWPORT_W, VIEWPORT_H) {
+    let (html, css, base): (String, Vec<&str>, Option<std::path::PathBuf>) =
+        match std::fs::read_to_string(input) {
+            Ok(contents) => {
+                let base = std::path::Path::new(input)
+                    .parent()
+                    .map(std::path::Path::to_path_buf);
+                (contents, Vec::new(), base)
+            },
+            Err(_) => (SAMPLE_HTML.to_string(), SAMPLE_CSS.to_vec(), None),
+        };
+    match render_html(&html, &css, base.as_deref(), VIEWPORT_W, VIEWPORT_H) {
         Ok(img) => Some(img),
         Err(err) => {
             eprintln!("[pelt-viewer] render failed: {err}");

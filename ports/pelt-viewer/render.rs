@@ -15,6 +15,7 @@
 //! avoids per-render GPU init.
 
 use std::cell::RefCell;
+use std::path::Path;
 use std::sync::Arc;
 
 use layout_dom_api::LayoutDom;
@@ -61,11 +62,13 @@ impl ServalRenderer {
     }
 
     /// Render `html` (+ `stylesheets`) at `width`×`height` to RGBA8,
-    /// reusing the booted device/renderer.
+    /// reusing the booted device/renderer. `base_dir`, when given, is the
+    /// directory `<link rel=stylesheet href>` paths resolve against.
     fn render(
         &self,
         html: &str,
         stylesheets: &[&str],
+        base_dir: Option<&Path>,
         width: u32,
         height: u32,
     ) -> Result<ImageData, String> {
@@ -73,13 +76,15 @@ impl ServalRenderer {
         //    images → layout → emit paint list.
         let document = StaticDocument::parse(html);
 
-        // Author CSS = caller-supplied sheets + the document's own
-        // inline `<style>` blocks, so a real .html file renders styled.
-        // (External `<link rel=stylesheet>` needs fetching — serval's
-        // host job — and is not resolved here.)
+        // Author CSS = caller-supplied sheets + the document's own inline
+        // `<style>` blocks + local `<link rel=stylesheet>` files resolved
+        // against `base_dir`, so a real .html file renders styled.
+        // (Remote `<link>` URLs need host fetching and are skipped.)
         let inline_css = extract_inline_styles(&document);
+        let linked_css = extract_linked_styles(&document, base_dir);
         let mut all_sheets: Vec<&str> = stylesheets.to_vec();
         all_sheets.extend(inline_css.iter().map(String::as_str));
+        all_sheets.extend(linked_css.iter().map(String::as_str));
 
         let mut styles: StylePlane<_> = StylePlane::new();
         run_cascade(
@@ -161,11 +166,14 @@ impl ServalRenderer {
 }
 
 /// Render `html` (with optional `stylesheets`) at `width`×`height` to an
-/// RGBA8 `ImageData`. Boots the netrender device on first call and
-/// reuses it. Returns `Err` if the GPU boot or readback fails.
+/// RGBA8 `ImageData`. `base_dir`, when given, is the directory that
+/// `<link rel=stylesheet href>` paths resolve against (the HTML file's
+/// own directory). Boots the netrender device on first call and reuses
+/// it. Returns `Err` if the GPU boot or readback fails.
 pub fn render_html(
     html: &str,
     stylesheets: &[&str],
+    base_dir: Option<&Path>,
     width: u32,
     height: u32,
 ) -> Result<ImageData, String> {
@@ -176,7 +184,7 @@ pub fn render_html(
         }
         slot.as_ref()
             .expect("renderer just initialized")
-            .render(html, stylesheets, width, height)
+            .render(html, stylesheets, base_dir, width, height)
     })
 }
 
@@ -198,6 +206,95 @@ fn extract_inline_styles<D: LayoutDom>(dom: &D) -> Vec<String> {
             }
             if !css.trim().is_empty() {
                 sheets.push(css);
+            }
+        }
+        for child in dom.dom_children(id) {
+            stack.push(child);
+        }
+    }
+    sheets
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inline_style_blocks_are_extracted() {
+        let doc = StaticDocument::parse(
+            "<html><head><style>p { color: red; }</style>\
+             <style>h1 { color: blue; }</style></head><body></body></html>",
+        );
+        let sheets = extract_inline_styles(&doc);
+        assert_eq!(sheets.len(), 2, "two <style> blocks");
+        let joined = sheets.join("\n");
+        assert!(joined.contains("color: red"));
+        assert!(joined.contains("color: blue"));
+    }
+
+    #[test]
+    fn linked_stylesheets_resolve_against_base_dir() {
+        let dir = std::env::temp_dir().join(format!("pelt_viewer_link_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("site.css"), "body { color: green; }").unwrap();
+
+        let doc = StaticDocument::parse(
+            "<html><head>\
+             <link rel=\"stylesheet\" href=\"site.css\">\
+             <link rel=\"icon\" href=\"favicon.ico\">\
+             </head><body></body></html>",
+        );
+
+        let sheets = extract_linked_styles(&doc, Some(&dir));
+        assert_eq!(sheets.len(), 1, "only the rel=stylesheet link, not the icon");
+        assert!(sheets[0].contains("color: green"));
+
+        // No base directory → nothing resolves.
+        assert!(extract_linked_styles(&doc, None).is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// Read every `<link rel=stylesheet href=…>` whose `href` resolves to a
+/// readable local file under `base_dir`. Returns empty when `base_dir`
+/// is `None` (no document directory — e.g. the built-in sample) or when
+/// no link resolves. Remote (`http(s):`) hrefs are skipped — fetching is
+/// the host's job.
+fn extract_linked_styles<D: LayoutDom>(dom: &D, base_dir: Option<&Path>) -> Vec<String> {
+    let Some(base) = base_dir else {
+        return Vec::new();
+    };
+    let no_ns = markup5ever::Namespace::default();
+    let rel_attr = markup5ever::LocalName::from("rel");
+    let href_attr = markup5ever::LocalName::from("href");
+
+    let mut sheets = Vec::new();
+    let mut stack = vec![dom.document()];
+    while let Some(id) = stack.pop() {
+        let is_link = dom
+            .element_name(id)
+            .is_some_and(|q| q.local.as_ref() == "link");
+        if is_link {
+            let is_stylesheet = dom
+                .attribute(id, &no_ns, &rel_attr)
+                .is_some_and(|rel| rel.eq_ignore_ascii_case("stylesheet"));
+            if is_stylesheet {
+                if let Some(href) = dom.attribute(id, &no_ns, &href_attr) {
+                    // Local files only; leave remote URLs to the host.
+                    if href.starts_with("http://") || href.starts_with("https://") {
+                        eprintln!("[pelt-viewer] skipping remote stylesheet: {href}");
+                    } else {
+                        let path = base.join(href);
+                        match std::fs::read_to_string(&path) {
+                            Ok(css) => sheets.push(css),
+                            Err(err) => eprintln!(
+                                "[pelt-viewer] could not read stylesheet {}: {err}",
+                                path.display()
+                            ),
+                        }
+                    }
+                }
             }
         }
         for child in dom.dom_children(id) {

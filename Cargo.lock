@@ -4340,6 +4340,7 @@ dependencies = [
  "euclid",
  "image",
  "layout-dom-api",
+ "markup5ever",
  "masonry",
  "masonry_winit",
  "netrender",
