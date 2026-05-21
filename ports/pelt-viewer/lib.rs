@@ -11,6 +11,8 @@
 //! beneath a navigation bar. Adapted from `wgpu-graft/demo-servo-xilem`
 //! (Servo → serval). See `docs/2026-05-20_*` plans.
 
+mod app;
 mod render;
 
+pub use app::run;
 pub use render::render_html;

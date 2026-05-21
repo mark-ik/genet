@@ -7,7 +7,6 @@
 use std::env;
 
 use pelt_core::{DeferredShellEngine, EngineProfile, ShellEngine};
-use pelt_desktop::{StaticViewerConfig, WindowingMode, run_static_viewer};
 
 use crate::VERSION;
 
@@ -130,18 +129,12 @@ pub(crate) fn main() {
         return;
     }
 
-    let config = StaticViewerConfig::new(engine.profile(), WindowingMode::Headed, url);
-    match run_static_viewer(config) {
-        Ok(outcome) => {
-            println!(
-                "pelt viewer rendered url={} created_window={} redraws={}",
-                outcome.url, outcome.created_window, outcome.redraws
-            );
-        },
-        Err(error) => {
-            eprintln!("{error}");
-            std::process::exit(1);
-        },
+    // Launch the Xilem viewer (serval content + chrome). `url` is the
+    // first nav input — a file path renders that HTML, anything else
+    // (e.g. "about:blank") falls back to the built-in sample page.
+    if let Err(error) = pelt_viewer::run(Some(url)) {
+        eprintln!("{error}");
+        std::process::exit(1);
     }
 }
 
