@@ -26,6 +26,7 @@ mod cv_to_taffy;
 mod font_metrics;
 mod fragment;
 mod image_decode;
+mod invalidate;
 mod layout;
 mod paint_emit;
 mod serval_lane;
@@ -42,6 +43,7 @@ pub use fragment::FragmentPlane;
 pub use image_decode::{
     BackgroundImagePlane, DecodedImage, ImageLoader, ImagePlane, NoImageLoader,
 };
+pub use invalidate::{classify, Invalidation};
 pub use layout::layout;
 pub use paint_emit::{emit_paint_list, emit_paint_list_with_layouts, ServalPaintList};
 pub use serval_lane::ServalLaneView;
