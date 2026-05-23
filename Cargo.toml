@@ -3,14 +3,21 @@ resolver = "2"
 members = [
     "components/media/examples",
     "components/shared/engine-observables-api",
-    "components/shared/paint-list-api",
     "components/shared/paint-types",
     "components/xpath",
     "components/webgl-wgpu",
     "components/serval-layout",
     "components/serval-static-dom",
+    "components/serval-scripted-dom",
+    "components/serval-scripted",
     "components/serval-static-html",
     "components/shared/layout-dom",
+    "components/script-engine-api",
+    # script-engine-boa is intentionally NOT a member: boa_engine 0.21.1 pins
+    # icu_normalizer ~2.0.0, which conflicts irreconcilably with serval's parley 0.9
+    # (icu_normalizer ^2.1.1). It builds standalone (own [workspace]) until boa bumps
+    # its icu pin or we pick a different wasm backend. See the script-engine plan doc.
+    "components/script-engine-nova",
     "ports/pelt-core",
     "ports/pelt-desktop",
     "ports/pelt-viewer",
@@ -298,7 +305,12 @@ media = { package = "servo-media-thread", version = "=0.2.0", path = "components
 net_traits = { package = "servo-net-traits", version = "=0.2.0", path = "components/shared/net" }
 paint = { package = "servo-paint", version = "=0.2.0", path = "components/paint" }
 paint_api = { package = "servo-paint-api", version = "=0.2.0", path = "components/shared/paint" }
-paint_list_api = { package = "paint-list-api", version = "=0.2.0", path = "components/shared/paint-list-api" }
+# Moved to the netrender workspace as a neutral, engine-agnostic crate
+# (extraction plan 2026-05-20). serval is now a consumer, not the owner.
+paint_list_api = { path = "../netrender/paint_list_api" }
+# The PaintCmd -> netrender::Scene translator; also lives in the netrender
+# workspace so any engine (serval, nematic, inker) can reuse the lowering.
+paint_list_render = { path = "../netrender/paint_list_render" }
 paint_types = { package = "servo-paint-types", version = "=0.2.0", path = "components/shared/paint-types" }
 pixels = { package = "servo-pixels", version = "=0.2.0", path = "components/pixels" }
 profile = { package = "servo-profile", version = "=0.2.0", path = "components/profile" }
@@ -415,6 +427,10 @@ codegen-units = 1
 # xml5ever = { path = "../html5ever/xml5ever" }
 # tendril = { path = "../html5ever/tendril" }
 gpu-allocator = { path = "support/patches/gpu-allocator" }
+# Nova fork (serval-embedder branch) carrying the EmbedderObject native-data patch
+# that script-engine-nova relies on. Local path for dev; the shippable form is the
+# git branch: nova_vm = { git = "https://github.com/mark-ik/nova", branch = "serval-embedder" }
+nova_vm = { path = "../nova/nova_vm" }
 # stylo_taffy (serval-layout) depends on crates.io `stylo`/`stylo_atoms`
 # `^0.17`. serval pins the same crates from the servo/stylo git rev, and
 # `stylo` declares `links = "servo_style_crate"` (only one Stylo allowed
