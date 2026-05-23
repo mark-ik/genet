@@ -50,3 +50,36 @@ pub use text_measure::{
     measure_inline_content, FontFamilySpec, GenericFamilyKind, InlineContent, InlineRun,
     TextMeasureCtx,
 };
+
+use layout_dom_api::LayoutDom;
+use std::hash::Hash;
+
+/// Run the full layout pipeline (cascade → Taffy layout) over any `LayoutDom`,
+/// returning the per-node [`FragmentPlane`]. Convenience wrapper hiding the
+/// euclid/taffy viewport types — used by the scripted tier's coarse
+/// relayout-on-mutation and by any caller that just wants "lay this out".
+pub fn render<D>(
+    dom: &D,
+    stylesheets: &[&str],
+    viewport_width: f32,
+    viewport_height: f32,
+) -> FragmentPlane<D::NodeId>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + 'static,
+{
+    let mut styles = StylePlane::new();
+    run_cascade(
+        dom,
+        &mut styles,
+        euclid::default::Size2D::new(viewport_width, viewport_height),
+        stylesheets,
+    );
+    styles.refresh_taffy_from_cascade();
+    let viewport = taffy::Size {
+        width: taffy::AvailableSpace::Definite(viewport_width),
+        height: taffy::AvailableSpace::Definite(viewport_height),
+    };
+    let (fragments, _tree, _ctx) = layout(dom, &styles, viewport);
+    fragments
+}

@@ -1,0 +1,27 @@
+# Scripted tier: binds the JS engine (Nova, native) to serval-scripted-dom — JS
+# mutates the DOM through NodeId reflectors. The reflector/host-callback binding is
+# engine-specific (per Appendix A), so this is Nova-flavoured and native-only; on
+# wasm32 there is no JS tier (the no-JS structured-HTML/smolweb profile is the
+# browser offering). See docs/2026-05-20_serval_script_engine_plan.md.
+[package]
+name = "serval-scripted"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Scripted tier: binds Nova to serval-scripted-dom so JS mutates the DOM via NodeId reflectors."
+
+[lib]
+name = "serval_scripted"
+path = "lib.rs"
+
+[dependencies]
+serval-scripted-dom = { path = "../serval-scripted-dom" }
+layout-dom-api = { path = "../shared/layout-dom" }
+serval-layout = { path = "../serval-layout" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+nova_vm = "1"
