@@ -119,6 +119,59 @@ pub trait LayoutDom {
     }
 }
 
+/// Mutation extension for scripted DOMs (plan Part 3 / the layout_dom_api design's
+/// open question #1). Read-only consumers (reader-mode, serialization, static
+/// layout) implement only [`LayoutDom`]; `serval-scripted-dom` implements both.
+///
+/// Mutators record *structural* change as [`DomMutation`] records — they carry no
+/// notion of dirty bits, style, or layout. serval-layout's scheduler drains the
+/// stream ([`Self::drain_mutations`]) and translates it into StylePlane/LayoutPlane
+/// invalidation; the DOM provider itself stays render-state-free.
+pub trait LayoutDomMut: LayoutDom {
+    /// Create a detached element node (no parent until appended).
+    fn create_element(&mut self, name: QualName) -> Self::NodeId;
+
+    /// Create a detached text node.
+    fn create_text(&mut self, data: &str) -> Self::NodeId;
+
+    /// Append `child` as the last child of `parent`, detaching it from any
+    /// previous parent first.
+    fn append_child(&mut self, parent: Self::NodeId, child: Self::NodeId);
+
+    /// Detach `node` from its parent and drop its subtree.
+    fn remove(&mut self, node: Self::NodeId);
+
+    /// Set (or replace) an attribute on an element.
+    fn set_attribute(&mut self, node: Self::NodeId, name: QualName, value: &str);
+
+    /// Replace a text/comment node's character data.
+    fn set_text(&mut self, node: Self::NodeId, data: &str);
+
+    /// Replace `node`'s children with the subtree parsed from an HTML fragment
+    /// (the `innerHTML` setter). Records a single [`DomMutation::SubtreeReplaced`].
+    fn set_inner_html(&mut self, node: Self::NodeId, html: &str);
+
+    /// Drain the structural mutations recorded since the last call into `out`.
+    /// The provider records WHAT changed; serval-layout decides what to invalidate.
+    fn drain_mutations(&mut self, out: &mut Vec<DomMutation<Self::NodeId>>);
+}
+
+/// A recorded structural DOM mutation — render-state-free (no dirty bits, no style).
+/// `Id` is the implementor's [`LayoutDom::NodeId`].
+#[derive(Clone, Debug)]
+pub enum DomMutation<Id> {
+    /// `node` was inserted under `parent`.
+    Inserted { node: Id, parent: Id },
+    /// `node` was removed from `former_parent`.
+    Removed { node: Id, former_parent: Id },
+    /// The attribute named `name` was set or changed on `node`.
+    AttributeChanged { node: Id, name: QualName },
+    /// A text/comment node's character data changed.
+    CharacterDataChanged { node: Id },
+    /// `node`'s entire child subtree was replaced (e.g. via `innerHTML`).
+    SubtreeReplaced { node: Id },
+}
+
 /// Plain node kind. Use the typed accessors on [`LayoutDom`]
 /// (`element_name`, `attribute`, `text`, etc.) to read kind-specific data.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

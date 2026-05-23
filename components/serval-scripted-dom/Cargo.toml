@@ -1,0 +1,21 @@
+[package]
+name = "serval-scripted-dom"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Mutable scripted-DOM provider: LayoutDom + LayoutDomMut over a NodeId arena, recording DomMutations for serval-layout invalidation."
+
+[lib]
+name = "serval_scripted_dom"
+path = "lib.rs"
+
+[dependencies]
+layout-dom-api = { path = "../shared/layout-dom" }
+markup5ever = { workspace = true }
+# Reused for `set_inner_html` fragment parsing: parse via StaticDocument (a LayoutDom),
+# then walk it into the mutable arena. Avoids a second TreeSink impl.
+serval-static-dom = { path = "../serval-static-dom" }
