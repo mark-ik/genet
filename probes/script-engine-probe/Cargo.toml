@@ -1,0 +1,17 @@
+# Track A validation probe for the serval script-engine plan
+# (docs/2026-05-20_serval_script_engine_plan.md). Standalone workspace so it can
+# NOT be pulled into serval's workspace or perturb its mozjs-free audit gates.
+# Throwaway: proves the ScriptEngine/ScriptEngineLive trait shape is implementable
+# against a real, complete engine API (Boa 0.21), and that Appendix A Findings 1
+# (explicit traced captures) and 2 (native-data reflector) actually compile + run.
+[package]
+name = "script-engine-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+boa_engine = "0.21"
+boa_gc = "0.21"   # Trace/Finalize derives emit `boa_gc::` paths
+
+[workspace]

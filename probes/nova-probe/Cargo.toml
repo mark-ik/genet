@@ -1,0 +1,14 @@
+# Track B1 probe — tests the Global-capture-safety hypothesis (plan Part 6 /
+# Appendix A) against real Nova. Standalone workspace; path-deps the local clone of
+# the fork so the API matches the source we read (and is the same checkout Track B2
+# will patch). No fork push needed for this step.
+[package]
+name = "nova-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+nova_vm = { path = "../../../nova/nova_vm" }
+
+[workspace]
