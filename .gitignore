@@ -8,6 +8,14 @@
 /.vs
 /android-toolchains
 /target
+# Sub-workspace build outputs. Each of these crates has its own
+# [workspace], so the root `/target` (anchored) doesn't cover them.
+# Explicit paths on purpose: a blanket `target/` would also ignore the
+# tracked WPT test resource at
+# tests/wpt/.../the-form-element/resources/target (a real test dir, not
+# build output).
+/components/script-engine-boa/target
+/probes/*/target
 /tests/wpt/reftests-report/report.html
 /python/_virtualenv*
 /python/_venv*

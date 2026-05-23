@@ -97,7 +97,9 @@ The HTML/CSS/(JS) lane. Internally tiered — `serval-layout` is shared across a
 - **From Hekate's view:** one Serval lane. The tier is Serval's internal concern.
 - **What it publishes:** Source/Semantic + Style + Layout/Fragment + Paint + Interaction + Loading planes. (Scripted+ tiers also publish mutation/invalidation events.)
 
-The tier ladder also matters for the audit canary: `serval-static-html` and `serval-interactive-html` must stay `mozjs`-free; `serval-scripted` and `serval-fullweb` are where SpiderMonkey lives.
+The tier ladder also matters for the audit canary: `serval-static-html` and `serval-interactive-html` carry **no JS engine at all** (no `script-engine-*`, no `nova_vm`, no `mozjs`); `serval-scripted` and `serval-fullweb` are where the engine lives.
+
+**Updated 2026-05-21:** the primary engine is now **Nova** (pure-Rust, wasm-clean), not SpiderMonkey — see [script-engine plan Part 6](./2026-05-20_serval_script_engine_plan.md). The no-engine tiers stay engine-free for **attack-surface + bundle-size + DOM-as-library** reasons, *not* wasm-safety: Nova compiles to wasm too, so the wasm *target* is now orthogonal to the capability *tier*. SpiderMonkey, if it ever returns, is a native-fullweb-only backend.
 
 ### Scrying
 
@@ -401,7 +403,7 @@ This is phrased as *consistent with eidetic's current crate scope*, not *roadmap
 
 - These are Serval's profile-tier crates. From Hekate's view, they're all "Serval" — Hekate picks which tier when handing the document over.
 - All wrap `serval-layout` + a tier-appropriate DOM provider.
-- Static and interactive tiers are `mozjs`-free (audit-canary load-bearing).
+- Static and interactive tiers carry no JS engine — no `script-engine-*` / `nova_vm` / `mozjs` (audit-canary load-bearing; rationale updated 2026-05-21 to attack-surface/bundle-size, not wasm — see the Serval-lane note above).
 - Publish observables via the trait API; tier just controls what's enabled (e.g., scripted+ adds mutation/invalidation events).
 
 ### nematic

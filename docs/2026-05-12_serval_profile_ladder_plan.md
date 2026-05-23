@@ -27,6 +27,20 @@ is **historical** — the affected adapter
 (`ScriptLayoutHostServices` in `components/script/script_thread.rs`) is in
 dead-on-disk code and not compiled.
 
+**Reconciliation note (2026-05-21):** the JS-engine slot in the `serval-scripted`
+tier is now **Nova** (primary, pure-Rust) with Boa as a conformance oracle — see
+[script-engine plan Part 6](./2026-05-20_serval_script_engine_plan.md). This
+re-axes one assumption below: **wasm is no longer a property of the *tier* — it's an
+orthogonal build target.** P7 ("browser/wasm host profile") is therefore *not* a
+low-profile lane; any capability tier can target wasm in principle. The capability
+matrix and the `mozjs`-free dependency gates remain valid as written (low tiers carry
+no JS engine), but their justification is **attack-surface + bundle-size +
+DOM-as-library**, not wasm-safety. Caveat (verified 2026-05-21): Nova does not yet
+compile to wasm32 *out of the box* — its unconditional `usdt` (DTrace) dependency
+hard-errors off-x86_64/ARM64, and the `array-buffer`/`atomics` features pull
+`ecmascript_atomics` (arch-specific asm); the wasm story needs a small upstream patch
++ feature trim. See the script-engine plan's Part 6 / Appendix B for specifics.
+
 ---
 
 This plan spins the old C5 / C7 "script-optional" cuts out of
