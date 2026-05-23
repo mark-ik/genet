@@ -35,7 +35,6 @@
 use std::hash::Hash;
 
 use layout_dom_api::{LayoutDom, NodeKind};
-use malloc_size_of_derive::MallocSizeOf;
 use paint_list_api::{
     AlphaType, BorderRadius, BorderSide, BorderStyle, BoxShadowClipMode, ColorF, CommonPlacement,
     DeviceIntSize, EngineId, FontInstanceKey, FontResource, GlyphInstance, IdNamespace, ImageItem,
@@ -64,7 +63,14 @@ const SERVAL_FONT_NAMESPACE: IdNamespace = IdNamespace(0);
 const SERVAL_IMAGE_NAMESPACE: IdNamespace = IdNamespace(1);
 
 /// Serval's concrete [`PaintList`] impl. Built by [`emit_paint_list`].
-#[derive(Clone, Debug, Default, Deserialize, MallocSizeOf, Serialize)]
+///
+/// No `MallocSizeOf` derive: the paint vocabulary (`paint_list_api`)
+/// moved to the neutral netrender workspace and dropped its dependency
+/// on servo's `malloc_size_of` (extraction plan 2026-05-20). This list
+/// is a transient per-frame value converted straight to a
+/// `PaintEnvelope` and sent; it is not retained in a size-reported
+/// structure.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ServalPaintList {
     viewport: DeviceIntSize,
     commands: Vec<PaintCmd>,

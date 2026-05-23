@@ -37,9 +37,9 @@ use paint_api::CrossProcessPaintApi;
 use paint_api::display_list::{AxesScrollSensitivity, PaintDisplayListInfo, ScrollType};
 use paint_list_api::{
     CommonPlacement, DeviceIntSize, EngineId, LayoutPoint, LayoutRect, PaintCmd, PaintEnvelope,
-    PrimitiveFlags, RectItem,
+    ColorF, PrimitiveFlags, RectItem,
 };
-use paint_types::{ColorF, PipelineId};
+use paint_types::PipelineId;
 use servo_base::id::{PainterId, PipelineNamespace, PipelineNamespaceId, WebViewId};
 
 /// `WebViewId::new` and `PainterId::next` reach into a thread-local

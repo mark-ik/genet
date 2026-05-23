@@ -17,9 +17,9 @@ use paint::Paint;
 use paint_api::display_list::{AxesScrollSensitivity, PaintDisplayListInfo, ScrollType};
 use paint_list_api::{
     CommonPlacement, DeviceIntSize, EngineId, LayoutPoint, LayoutRect, PaintCmd, PaintEnvelope,
-    PrimitiveFlags, RectItem,
+    ColorF, PrimitiveFlags, RectItem,
 };
-use paint_types::{ColorF, PipelineId};
+use paint_types::PipelineId;
 use servo_base::id::{PainterId, PipelineNamespace, PipelineNamespaceId, WebViewId};
 
 fn ensure_pipeline_namespace() {

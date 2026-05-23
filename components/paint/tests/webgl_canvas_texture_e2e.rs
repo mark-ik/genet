@@ -22,10 +22,10 @@ use paint_api::display_list::{AxesScrollSensitivity, PaintDisplayListInfo, Scrol
 use paint_api::wgpu_readback::read_texture_to_image;
 use paint_list_api::{
     CommonPlacement, DeviceIntSize, EngineId, ExternalTextureItem, LayoutPoint, LayoutRect,
-    PaintCmd, PaintEnvelope, PrimitiveFlags, RectItem,
+    ColorF, PaintCmd, PaintEnvelope, PrimitiveFlags, RectItem,
 };
 use paint_types::units::{DeviceIntRect, LayoutSize};
-use paint_types::{ColorF, PipelineId};
+use paint_types::PipelineId;
 use servo_base::id::{PainterId, PipelineNamespace, PipelineNamespaceId, WebViewId};
 use webgl_wgpu::{
     BufferTarget, BufferUsage, CANONICAL_TRIANGLE_FRAGMENT_SHADER,

@@ -15,4 +15,4 @@ mod app;
 mod render;
 
 pub use app::run;
-pub use render::render_html;
+pub use render::build_scene;

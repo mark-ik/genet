@@ -527,7 +527,7 @@ fn draw_image_rasterizes_from_side_table() {
         AlphaType, CommonPlacement, DeviceIntSize, EngineId, ImageItem, ImageRendering,
         ImageResource, LayoutPoint, LayoutRect, PaintCmd, PrimitiveFlags, RectItem,
     };
-    use paint_types::{ColorF, IdNamespace, ImageKey};
+    use paint_list_api::{ColorF, IdNamespace, ImageKey};
 
     let key = ImageKey::new(IdNamespace(0), 1);
     // 2×2 opaque green, RGBA8.
@@ -605,7 +605,7 @@ fn draw_repeating_image_tiles_from_side_table() {
         LayoutPoint, LayoutRect, LayoutSize, PaintCmd, PrimitiveFlags, RectItem,
         RepeatingImageItem,
     };
-    use paint_types::{ColorF, IdNamespace, ImageKey};
+    use paint_list_api::{ColorF, IdNamespace, ImageKey};
 
     let key = ImageKey::new(IdNamespace(0), 1);
     let green = [0u8, 255, 0, 255];

@@ -4,7 +4,7 @@
 
 //! `NetrenderPainter`. Routes inbound `PaintMessage`s into per-
 //! pipeline `netrender::Scene`s built by the PaintList translator
-//! ([`crate::translator`]).
+//! ([`paint_list_render`]).
 //!
 //! [`Paint::handle_messages`] consumes `PaintMessage::SendPaintList`,
 //! walks the carried `PaintEnvelope` through `translate_envelope`,
@@ -35,7 +35,7 @@ use style_traits::CSSPixel;
 
 use crate::InitialPaintState;
 use crate::compositor::{PaintCompositor, WgpuMasterCaptureBackend};
-use crate::translator::{
+use paint_list_render::{
     BoxShadowMaskRequest, ExternalTextureDraw, translate_envelope_with_external_textures,
 };
 
@@ -73,7 +73,7 @@ pub struct PipelineState {
 
 /// `Paint` is Servo's rendering subsystem. It owns one
 /// `netrender::Renderer` per `RenderingContext`, lowers paint
-/// envelopes to `netrender::Scene`s via [`crate::translator`], and
+/// envelopes to `netrender::Scene`s via [`paint_list_render`], and
 /// drives `Renderer::render_with_compositor` against a
 /// consumer-supplied `netrender_device::Compositor`.
 /// Per-webview painter state. Tracks zoom, hidpi, and the registered

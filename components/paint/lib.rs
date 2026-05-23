@@ -53,7 +53,10 @@ pub use crate::compositor_wayland::{
 pub use crate::interop::Dx12FenceSynchronizer;
 pub use crate::interop::{HostWgpuContext, InteropBackend, InteropError, SyncMechanism};
 pub use crate::netrender_painter::{Paint, WebRenderDebugOption};
-pub use crate::translator::{translate_envelope, translate_paint_list};
+// The PaintCmd -> netrender::Scene translator now lives in the neutral
+// `paint_list_render` crate in the netrender workspace (extraction plan
+// 2026-05-20); re-exported here for callers that used the old path.
+pub use paint_list_render::{translate_envelope, translate_paint_list};
 
 mod compositor;
 #[cfg(target_vendor = "apple")]
@@ -67,7 +70,6 @@ mod compositor_factory;
 #[allow(unsafe_code)]
 mod compositor_wayland;
 mod netrender_painter;
-mod translator;
 
 /// Data used to initialize the `Paint` subsystem.
 pub struct InitialPaintState {

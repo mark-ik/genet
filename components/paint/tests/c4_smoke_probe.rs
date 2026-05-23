@@ -20,9 +20,8 @@ use netrender::{NetrenderOptions, boot, create_netrender_instance, peniko};
 use paint::{WgpuMasterCaptureBackend, translate_paint_list};
 use paint_list_api::{
     CommonPlacement, DeviceIntSize, EngineId, LayoutPoint, LayoutRect, PaintCmd, PaintEnvelope,
-    PrimitiveFlags, RectItem,
+    ColorF, PrimitiveFlags, RectItem,
 };
-use paint_types::ColorF;
 
 const VIEWPORT: u32 = 256;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
