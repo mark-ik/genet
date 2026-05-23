@@ -1,0 +1,14 @@
+# Engine-neutral scripting backend contract for serval's scripted tier.
+# Lifted from the validated Track A/B probes (see
+# docs/2026-05-20_serval_script_engine_plan.md). No engine dependency: this crate
+# names only capabilities; engine-native types stay inside the backend crates.
+[package]
+name = "script-engine-api"
+version = "0.0.0"
+edition = "2021"
+license = "MPL-2.0"
+publish = false
+
+[lib]
+name = "script_engine_api"
+path = "lib.rs"

@@ -1,0 +1,25 @@
+# Nova backend for script-engine-api — the PRIMARY backend, NATIVE-ONLY.
+# Nova is 64-bit-bound (its `Value` is usize-sized; wasm32 has 32-bit usize — see
+# Appendix B in docs/2026-05-20_serval_script_engine_plan.md), so `nova_vm` is gated
+# to non-wasm targets and this crate compiles to an empty shell on wasm32 (staying a
+# valid workspace member). The wasm scripted tier uses script-engine-boa instead.
+#
+# `nova_vm` is redirected to the local fork checkout (serval-embedder branch, which
+# carries the EmbedderObject native-data patch) via [patch.crates-io] in the
+# workspace root Cargo.toml.
+[package]
+name = "script-engine-nova"
+version = "0.0.0"
+edition = "2021"
+license = "MPL-2.0"
+publish = false
+
+[lib]
+name = "script_engine_nova"
+path = "lib.rs"
+
+[dependencies]
+script-engine-api = { path = "../script-engine-api" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+nova_vm = "1"

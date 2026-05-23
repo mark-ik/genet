@@ -1,0 +1,25 @@
+# Boa backend for script-engine-api. Pure Rust, builds on all targets — it is the
+# wasm32 scripting backend (Nova is 64-bit-bound / native-only; see Appendix B in
+# docs/2026-05-20_serval_script_engine_plan.md) and the native conformance oracle.
+[package]
+name = "script-engine-boa"
+version = "0.0.0"
+edition = "2021"
+license = "MPL-2.0"
+publish = false
+
+[lib]
+name = "script_engine_boa"
+path = "lib.rs"
+
+[dependencies]
+script-engine-api = { path = "../script-engine-api" }
+boa_engine = "0.21"
+boa_gc = "0.21"
+
+# Standalone workspace: boa_engine 0.21.1's icu_normalizer ~2.0.0 conflicts with
+# serval's parley 0.9 (^2.1.1), so this crate cannot join serval's unified graph
+# yet. Kept buildable on its own until the icu conflict is resolved upstream (or we
+# switch the wasm backend to quickjs).
+[workspace]
+
