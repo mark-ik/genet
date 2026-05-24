@@ -1,6 +1,10 @@
 # PaintList layer extraction — neutral shared crate (plan)
 
-**Status (2026-05-20):** planned; decisions resolved, no code moved yet.
+**Status: DONE (2026-05-24).** Extraction committed (`15e9a0c`): `paint_list_api` + the
+`PaintCmd→Scene` translator now live in the netrender workspace, and serval consumes them
+(`paint_list_api`/`paint_list_render = { path = "../netrender/…" }`);
+`components/shared/paint-list-api` + `components/paint/translator.rs` are deleted. (Was
+"planned; no code moved yet", 2026-05-20.)
 Successor to [2026-05-17_paintlist_polyglot_renderer.md](./2026-05-17_paintlist_polyglot_renderer.md)
 (the PM-3 design + as-built receipts). That doc designed a polyglot
 renderer-input layer but, per the constraint below, the layer shipped

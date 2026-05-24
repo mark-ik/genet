@@ -4,7 +4,13 @@
 [profile-ladder plan](./2026-05-12_serval_profile_ladder_plan.md) left as the
 `serval-scripted` tier's open interior, after the 2026-05-15 SpiderMonkey
 excision (see [workspace audit snapshot](./2026-05-16_workspace_audit_snapshot.md)).
-No implementation yet.
+
+**Now (2026-05-24): partially IMPLEMENTED — not "no implementation yet".** The design
+below is built through the incremental-layout core: `script-engine-api` + the Nova
+(primary) and Boa (oracle) backends, `serval-scripted-dom` + the reflector bridge, and
+both coarse and incremental relayout — all committed and diff-tested (see the dated
+build records inline below, and the [2026-05-24 state snapshot](./2026-05-24_workspace_audit_snapshot.md)).
+Remaining: the fine-grained Stylo-restyle arc and the incremental edges.
 
 **Revised 2026-05-20 (review pass).** Six corrections, all incorporated below:
 (1) `mark_dirty` removed from `LayoutDomMut` — DOM mutations emit `DomMutation`
