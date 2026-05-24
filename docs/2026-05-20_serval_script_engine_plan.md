@@ -1074,6 +1074,29 @@ Direction set (2026-05-21, Part 6):
   harness is the first scaffolding**: run (a) coarse + (b) incremental on the same mutation,
   assert identical fragments (catches the stale-layout bug class). Recommendation: tackle
   (b) as its own focused arc; the (a) oracle is now in place to validate it against.
+- **#2(b) core BUILT + diff-tested (2026-05-24).** The incremental pipeline exists and
+  is green, validated against the (a) oracle:
+  - **Plan** — `serval_layout::classify(DomMutation) → Invalidation{RestyleSubtree |
+    RelayoutSubtree | RepaintNode}` + `coalesce(&[Invalidation], parent_of)` → minimal
+    roots (ancestor subsumption with strength ordering; a weaker ancestor never subsumes
+    a stronger descendant).
+  - **Execute** — `serval_layout::SubtreeView` re-roots a `LayoutDom` so the existing
+    pipeline lays out just one subtree; `render_subtree` wraps it.
+  - **Splice** — `serval_scripted::relayout_incremental(dom, prior, …)` drains → classifies
+    → coalesces → lays out each root's subtree → splices the fragments into the prior plane
+    at the root's real position, with a **correct coarse fallback** when a subtree's outer
+    size changes (ancestors would reflow) or the root wasn't laid out before.
+  - **Diff-tests** (the stale-layout-bug guard): scoped subtree layout matches the coarse
+    oracle's *relative* interior geometry; `relayout_incremental` matches the coarse oracle
+    at *absolute* positions for a size-stable mutation.
+  - **Deferred boundaries** (bounded, documented, all safe — they defer to the correct
+    coarse path or only affect removed/inherited cases): inheritance-context threading
+    (the `SubtreeView` boundary — scoped cascade uses default inherited style); stale-fragment
+    eviction for removed nodes (`SubtreeReplaced` doesn't carry old children); fine-grained
+    sub-subtree restyle (un-stubbing Stylo's invalidation map — the optimization); and
+    size-change propagation (currently the coarse fallback rather than incremental).
+  So incremental went from "design-stage subsystem" to a **working, oracle-validated core**;
+  what remains are optimizations and the inheritance/eviction edges, not the mechanism.
 
 ---
 
