@@ -1097,6 +1097,33 @@ Direction set (2026-05-21, Part 6):
     size-change propagation (currently the coarse fallback rather than incremental).
   So incremental went from "design-stage subsystem" to a **working, oracle-validated core**;
   what remains are optimizations and the inheritance/eviction edges, not the mechanism.
+- **Fine-grained restyle — investigated; it's the deliberately-stubbed Stylo invalidation
+  pipeline → a focused Stylo arc (plan below, 2026-05-24).** Grounded in the source:
+  `cascade.rs` builds a real Stylo `Stylist` (UA + author sheets, flushed — its invalidation
+  map *is* built but unused) and re-cascades the whole tree each pass; the incremental
+  pieces are stubbed — empty `SnapshotMap::new()`, no-op `set_dirty_descendants` /
+  `unset_dirty_descendants` / `has_dirty_descendants` (`adapter_stylo.rs`), stub
+  `compute_layout_damage`. Faithfully un-stubbing this is Stylo's real incremental-restyle
+  path — a multi-session effort that can't meet the diff-tested-correct bar if rushed.
+  **Precise plan (execute in a focused Stylo session):**
+  1. **Snapshots** — before a mutation, capture the element's old attrs/classes/state into
+     the `SnapshotMap` (hook serval-scripted-dom's `set_attribute`/structural mutators);
+     implement Stylo's `ElementSnapshot` on the DOM adapter.
+  2. **Invalidation map** — query the `Stylist`'s already-built map for the selector
+     dependencies of the changed class/attr/id.
+  3. **Invalidator** — run Stylo's `StateAndAttrInvalidationProcessor` + `TreeStyleInvalidator`
+     over (snapshot, map) to mark the *actually-affected* elements (un-stub the dirty bits).
+  4. **Restyle traversal** — re-cascade only the marked elements (vs the current full walk).
+  5. **RestyleDamage** — un-stub `compute_layout_damage` (old vs new `ComputedValues` →
+     REPAINT vs RELAYOUT) so repaint-only changes skip layout.
+  6. **Wire into `relayout_incremental`** — replace `RestyleSubtree`'s whole-subtree
+     re-cascade with the invalidation-driven minimal restyle; the coarse-oracle diff-test is
+     already in place to validate it.
+  **Tractable adjacent alternative (relayout axis, not restyle):** a cascade-skip for
+  layout-only (text) changes — `RelayoutSubtree` reuses the prior `StylePlane` and runs a
+  layout-only subtree pass, skipping the cascade. Nearer reach, but has its own edges
+  (text-node → containing-element resolution; multi-call style staleness) and is a different
+  axis than the invalidation-map restyle asked for.
 
 ---
 
