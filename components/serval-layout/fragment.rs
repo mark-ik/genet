@@ -22,6 +22,7 @@ use std::hash::Hash;
 use rustc_hash::FxHashMap;
 use taffy::Layout;
 
+#[derive(Clone)]
 pub struct FragmentPlane<NodeId: Copy + Eq + Hash> {
     pub(crate) rects: FxHashMap<NodeId, Layout>,
 }
