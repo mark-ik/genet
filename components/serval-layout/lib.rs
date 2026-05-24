@@ -43,7 +43,7 @@ pub use fragment::FragmentPlane;
 pub use image_decode::{
     BackgroundImagePlane, DecodedImage, ImageLoader, ImagePlane, NoImageLoader,
 };
-pub use invalidate::{classify, Invalidation};
+pub use invalidate::{classify, coalesce, Invalidation};
 pub use layout::layout;
 pub use paint_emit::{emit_paint_list, emit_paint_list_with_layouts, ServalPaintList};
 pub use serval_lane::ServalLaneView;

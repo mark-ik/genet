@@ -39,6 +39,66 @@ impl<Id: Copy> Invalidation<Id> {
             | Invalidation::RepaintNode(node) => node,
         }
     }
+
+    /// Whether recomputing this invalidation also recomputes the node's
+    /// descendants (true for the subtree variants, false for a node-local repaint).
+    fn covers_descendants(self) -> bool {
+        matches!(
+            self,
+            Invalidation::RestyleSubtree(_) | Invalidation::RelayoutSubtree(_)
+        )
+    }
+
+    /// How much work this invalidation implies, for subsumption ordering:
+    /// restyle ⊇ relayout ⊇ repaint.
+    fn strength(self) -> u8 {
+        match self {
+            Invalidation::RestyleSubtree(_) => 2,
+            Invalidation::RelayoutSubtree(_) => 1,
+            Invalidation::RepaintNode(_) => 0,
+        }
+    }
+}
+
+/// Reduce a batch of invalidations to a minimal set. Drops any invalidation whose
+/// node is a descendant of another invalidation that (a) covers its descendants and
+/// (b) is at least as strong — that ancestor's subtree recompute already does the
+/// descendant's work. A weaker ancestor (e.g. relayout) does **not** subsume a
+/// stronger descendant (e.g. restyle), which is kept. `parent_of` walks the DOM up.
+pub fn coalesce<Id: Copy + Eq>(
+    invalidations: &[Invalidation<Id>],
+    parent_of: impl Fn(Id) -> Option<Id>,
+) -> Vec<Invalidation<Id>> {
+    let mut kept: Vec<Invalidation<Id>> = Vec::new();
+    'outer: for &inv in invalidations {
+        for &other in invalidations {
+            if other.node() != inv.node()
+                && other.covers_descendants()
+                && other.strength() >= inv.strength()
+                && is_ancestor(other.node(), inv.node(), &parent_of)
+            {
+                continue 'outer; // subsumed by a stronger/equal ancestor subtree
+            }
+        }
+        if !kept.iter().any(|k| k.node() == inv.node()) {
+            kept.push(inv);
+        }
+    }
+    kept
+}
+
+fn is_ancestor<Id: Copy + Eq>(
+    ancestor: Id,
+    mut node: Id,
+    parent_of: &impl Fn(Id) -> Option<Id>,
+) -> bool {
+    while let Some(parent) = parent_of(node) {
+        if parent == ancestor {
+            return true;
+        }
+        node = parent;
+    }
+    false
 }
 
 /// Classify a single mutation into its invalidation scope.
@@ -97,5 +157,39 @@ mod tests {
             Invalidation::RelayoutSubtree(7),
         );
         assert_eq!(Invalidation::RelayoutSubtree(7).node(), 7);
+    }
+
+    #[test]
+    fn coalesce_subsumes_descendants() {
+        use std::collections::HashMap;
+        // 0 → 1 → 2 → 3, and 0 → 4
+        let parents: HashMap<u32, u32> = [(1, 0), (2, 1), (3, 2), (4, 0)].into_iter().collect();
+        let parent_of = |id: u32| parents.get(&id).copied();
+        let invs = vec![
+            Invalidation::RestyleSubtree(1u32),
+            Invalidation::RelayoutSubtree(2), // descendant of 1
+            Invalidation::RestyleSubtree(3),  // descendant of 1
+            Invalidation::RestyleSubtree(4),  // sibling subtree
+        ];
+        let mut nodes: Vec<u32> = coalesce(&invs, parent_of).iter().map(|i| i.node()).collect();
+        nodes.sort();
+        assert_eq!(nodes, vec![1, 4], "1's descendants subsumed; sibling 4 kept");
+    }
+
+    #[test]
+    fn coalesce_keeps_stronger_descendant() {
+        use std::collections::HashMap;
+        let parents: HashMap<u32, u32> = [(1, 0)].into_iter().collect();
+        let parent_of = |id: u32| parents.get(&id).copied();
+        // Ancestor only relayouts; descendant needs a restyle the ancestor won't do.
+        let invs = vec![
+            Invalidation::RelayoutSubtree(0u32),
+            Invalidation::RestyleSubtree(1),
+        ];
+        assert_eq!(
+            coalesce(&invs, parent_of).len(),
+            2,
+            "weaker ancestor must not subsume a stronger descendant",
+        );
     }
 }
