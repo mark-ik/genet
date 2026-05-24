@@ -252,4 +252,46 @@ mod relayout_tests {
         // Gating: no mutation since the last relayout → None.
         assert!(relayout_if_dirty(&mut dom, SHEET, 800.0, 600.0).is_none());
     }
+
+    /// #2(b) first scoped-execution check: laying out only `body`'s subtree (via the
+    /// re-rooted `SubtreeView`) must reproduce the *relative interior* layout that the
+    /// coarse full-document pass produces. This is the diff-test guarding scoped
+    /// recompute against the coarse oracle (for the inheritance-neutral case).
+    #[test]
+    fn scoped_relayout_matches_coarse_interior() {
+        const SHEET: &[&str] = &["html, body, p { display: block; }"];
+
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let html = dom.create_element(html_el("html"));
+        dom.append_child(root, html);
+        let body = dom.create_element(html_el("body"));
+        dom.append_child(html, body);
+        dom.set_inner_html(body, "<p>one</p><p>two</p><p>three</p>");
+
+        let coarse = serval_layout::render(&dom, SHEET, 800.0, 600.0);
+        let scoped = serval_layout::render_subtree(&dom, body, SHEET, 800.0, 600.0);
+
+        let kids: Vec<_> = dom.dom_children(body).collect();
+        assert_eq!(kids.len(), 3);
+        let coarse_y: Vec<f32> = kids
+            .iter()
+            .map(|&k| coarse.rect_of(k).expect("coarse paragraph").location.y)
+            .collect();
+        let scoped_y: Vec<f32> = kids
+            .iter()
+            .map(|&k| scoped.rect_of(k).expect("scoped paragraph").location.y)
+            .collect();
+
+        // Relative stacking within the subtree must match (absolute origin differs:
+        // scoped lays the subtree out at its own root).
+        for i in 1..3 {
+            let coarse_rel = coarse_y[i] - coarse_y[0];
+            let scoped_rel = scoped_y[i] - scoped_y[0];
+            assert!(
+                (coarse_rel - scoped_rel).abs() < 0.5,
+                "paragraph {i} relative offset: coarse={coarse_rel} scoped={scoped_rel}",
+            );
+        }
+    }
 }
