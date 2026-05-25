@@ -173,6 +173,75 @@ pub fn run_cascade<D>(
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash + 'static,
 {
+    cascade_traverse(dom, plane, viewport, stylesheets, None);
+}
+
+/// Incremental restyle: re-cascade only the elements a batch of
+/// `DomMutation`s actually affects, reusing the prior `plane`'s
+/// `ElementData`.
+///
+/// Builds a Stylo [`SnapshotMap`](crate::snapshot::build_snapshot_map)
+/// from the mutation stream (the pre-mutation state), marks the dirty
+/// path from each changed element up to the root so Stylo's traversal
+/// descends to reach it, then re-runs the cascade with the snapshots in
+/// context. Stylo's `ElementData::invalidate_style_if_needed` (invoked
+/// per element during the traversal) runs the actual
+/// `StateAndAttrInvalidationProcessor` + `TreeStyleInvalidator` against
+/// (snapshot, selector-dependency-map), setting `RestyleHint`s so only
+/// the genuinely-affected elements recompute; clean subtrees keep their
+/// prior `ComputedValues`.
+///
+/// `plane` must already hold the prior cascade's data. Non-attribute
+/// mutations (structural / character-data) don't drive this path — they
+/// go through the relayout scope, not the attribute/state invalidator.
+pub fn restyle_with_snapshots<D>(
+    dom: &D,
+    plane: &mut StylePlane<D::NodeId>,
+    viewport: euclid::default::Size2D<f32>,
+    stylesheets: &[&str],
+    mutations: &[layout_dom_api::DomMutation<D::NodeId>],
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + 'static,
+{
+    use layout_dom_api::DomMutation;
+
+    let snapshots = crate::snapshot::build_snapshot_map(dom, mutations);
+
+    // Mark the dirty path: for each attribute-changed element, set the
+    // dirty-descendants bit on every ancestor up to the root, so the
+    // traversal descends far enough for the element's parent to process
+    // its snapshot (Stylo processes a child's snapshot while traversing
+    // the parent — see `traversal.rs`). Cell access through `&` entries.
+    for m in mutations {
+        if let DomMutation::AttributeChanged { node, .. } = m {
+            let mut cur = dom.parent(*node);
+            while let Some(ancestor) = cur {
+                if let Some(entry) = plane.get(ancestor) {
+                    entry.dirty_descendants.set(true);
+                }
+                cur = dom.parent(ancestor);
+            }
+        }
+    }
+
+    cascade_traverse(dom, plane, viewport, stylesheets, Some(&snapshots));
+}
+
+/// Shared cascade traversal. `snapshots = None` is a full cascade (every
+/// element styled because none has `ElementData` yet); `Some` is the
+/// incremental restyle path (existing data + snapshots drive Stylo's
+/// invalidator to recompute only the affected elements).
+fn cascade_traverse<D>(
+    dom: &D,
+    plane: &mut StylePlane<D::NodeId>,
+    viewport: euclid::default::Size2D<f32>,
+    stylesheets: &[&str],
+    snapshots: Option<&SnapshotMap>,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + 'static,
+{
     // Pre-populate StylePlane entries for every element. The cascade's
     // ensure_data() requires entries to exist (cascade-orchestration
     // contract; see StyleNodeRef::ensure_data documentation).
@@ -209,8 +278,11 @@ pub fn run_cascade<D>(
     }
     stylist.flush(&guards);
 
-    // 4. SharedStyleContext bundles everything the cascade needs.
-    let snapshots = SnapshotMap::new();
+    // 4. SharedStyleContext bundles everything the cascade needs. For a
+    //    full cascade the snapshot map is empty; for incremental restyle
+    //    it carries the pre-mutation snapshots Stylo's invalidator reads.
+    let empty_snapshots = SnapshotMap::new();
+    let snapshot_map = snapshots.unwrap_or(&empty_snapshots);
     let animations = DocumentAnimationSet::default();
     let registered_painters = NoOpRegisteredPainters;
 
@@ -222,17 +294,16 @@ pub fn run_cascade<D>(
         visited_styles_enabled: false,
         animations,
         current_time_for_animations: 0.0,
-        snapshot_map: &snapshots,
+        snapshot_map,
         registered_speculative_painters: &registered_painters,
     };
 
     // 5. Enter cascade TLS context. StyleNodeRef methods that need
-    //    `dom`/`plane`/`shared_lock` access read from this slot; outside
-    //    the guard they panic.
+    //    `dom`/`plane`/`shared_lock`/snapshot access read from this slot;
+    //    outside the guard they panic. `has_snapshot` consults the same
+    //    map (None ⇒ always false ⇒ full-cascade behavior).
     let plane_ref: &StylePlane<D::NodeId> = &*plane;
-    // Full cascade: no incremental snapshots (None). The restyle path
-    // passes `Some(&snapshot_map)`.
-    let _guard = CascadeGuard::<D>::enter(dom, plane_ref, &lock, None);
+    let _guard = CascadeGuard::<D>::enter(dom, plane_ref, &lock, snapshots);
 
     // 6. Drive the traversal. RecalcStyle's process_preorder calls
     //    recalc_style_at on each element, populating its ElementData
@@ -421,5 +492,129 @@ mod tests {
         assert!(r < 0.001, "p red: {r}");
         assert!(g < 0.001, "p green: {g}");
         assert!((b - 1.0).abs() < 0.001, "p blue: {b}");
+    }
+
+    /// The text `color` an element's cascade resolved to, as straight RGBA.
+    fn color_of<D>(plane: &StylePlane<D::NodeId>, id: D::NodeId) -> [f32; 4]
+    where
+        D: LayoutDom,
+        D::NodeId: Copy + Eq + std::hash::Hash,
+    {
+        let entry = plane.get(id).expect("StyleEntry");
+        let data = entry.borrow_data().expect("ElementData");
+        let color = data.styles.primary().get_inherited_text().color;
+        *color.into_srgb_legacy().raw_components()
+    }
+
+    /// Incremental restyle must produce the **same** computed styles as a
+    /// full re-cascade. Toggle a `<p>`'s class from `a` (red) to `b`
+    /// (blue): `restyle_with_snapshots` recomputes the `<p>` through
+    /// Stylo's invalidator (snapshot: old class `a`), and the result
+    /// matches a fresh full cascade of the mutated DOM. An untouched
+    /// sibling keeps its color.
+    #[test]
+    fn incremental_restyle_matches_full_recascade_on_class_toggle() {
+        use html5ever::{namespace_url, ns};
+        use layout_dom_api::{LayoutDomMut, QualName};
+        use serval_scripted_dom::ScriptedDom;
+
+        const SHEET: &[&str] =
+            &[".a { color: rgb(255,0,0); } .b { color: rgb(0,0,255); } .keep { color: rgb(0,255,0); }"];
+        let html = |l: &str| QualName::new(None, ns!(html), l.into());
+        let attr = |l: &str| QualName::new(None, ns!(), l.into());
+
+        // html > body > (p.a, span.keep)
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.set_attribute(p, attr("class"), "a");
+        dom.append_child(body, p);
+        let span = dom.create_element(html("span"));
+        dom.set_attribute(span, attr("class"), "keep");
+        dom.append_child(body, span);
+
+        // Prior full cascade. <p> is red, <span> green.
+        let mut plane: StylePlane<_> = StylePlane::new();
+        run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET);
+        assert_eq!(color_of::<ScriptedDom>(&plane, p)[0], 1.0, "p starts red");
+
+        // Mutate class a → b, drain only that mutation, then restyle.
+        let mut sink = Vec::new();
+        dom.drain_mutations(&mut sink);
+        dom.set_attribute(p, attr("class"), "b");
+        let mut muts = Vec::new();
+        dom.drain_mutations(&mut muts);
+        restyle_with_snapshots(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, &muts);
+
+        // Oracle: a fresh full cascade of the mutated DOM.
+        let mut oracle: StylePlane<_> = StylePlane::new();
+        run_cascade(&dom, &mut oracle, euclid::Size2D::new(800.0, 600.0), SHEET);
+
+        let p_inc = color_of::<ScriptedDom>(&plane, p);
+        let p_full = color_of::<ScriptedDom>(&oracle, p);
+        assert_eq!(p_inc, p_full, "incremental <p> color must match full re-cascade");
+        assert!((p_inc[2] - 1.0).abs() < 0.001, "<p> should be blue after a→b, got {p_inc:?}");
+
+        // The untouched sibling matches too (still green).
+        let span_inc = color_of::<ScriptedDom>(&plane, span);
+        let span_full = color_of::<ScriptedDom>(&oracle, span);
+        assert_eq!(span_inc, span_full, "untouched <span> must match full re-cascade");
+        assert!((span_inc[1] - 1.0).abs() < 0.001, "<span> should stay green, got {span_inc:?}");
+    }
+
+    /// Invalidation must **propagate to descendants**, not just the
+    /// changed element. A `.box p { color: blue }` rule: toggling the
+    /// container's class to `box` recolors the *child* `<p>` (which
+    /// didn't itself change). `restyle_with_snapshots` must reach + restyle
+    /// it, matching a full re-cascade. This is the receipt that Stylo's
+    /// invalidator sets descendant hints through serval's adapter.
+    #[test]
+    fn incremental_restyle_propagates_to_descendants() {
+        use html5ever::{namespace_url, ns};
+        use layout_dom_api::{LayoutDomMut, QualName};
+        use serval_scripted_dom::ScriptedDom;
+
+        const SHEET: &[&str] = &["p { color: rgb(0,0,0); } .box p { color: rgb(0,0,255); }"];
+        let html = |l: &str| QualName::new(None, ns!(html), l.into());
+        let attr = |l: &str| QualName::new(None, ns!(), l.into());
+
+        // html > body > div > p   (div initially has no class)
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let div = dom.create_element(html("div"));
+        dom.append_child(body, div);
+        let p = dom.create_element(html("p"));
+        dom.append_child(div, p);
+
+        let mut plane: StylePlane<_> = StylePlane::new();
+        run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET);
+        assert!(color_of::<ScriptedDom>(&plane, p)[2] < 0.001, "p starts black (no .box ancestor)");
+
+        // Add class="box" to the div; the descendant <p> must recolor.
+        let mut sink = Vec::new();
+        dom.drain_mutations(&mut sink);
+        dom.set_attribute(div, attr("class"), "box");
+        let mut muts = Vec::new();
+        dom.drain_mutations(&mut muts);
+        restyle_with_snapshots(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, &muts);
+
+        let mut oracle: StylePlane<_> = StylePlane::new();
+        run_cascade(&dom, &mut oracle, euclid::Size2D::new(800.0, 600.0), SHEET);
+
+        let p_inc = color_of::<ScriptedDom>(&plane, p);
+        assert_eq!(
+            p_inc,
+            color_of::<ScriptedDom>(&oracle, p),
+            "descendant <p> must match full re-cascade after the container's class change"
+        );
+        assert!((p_inc[2] - 1.0).abs() < 0.001, "descendant <p> should be blue via `.box p`, got {p_inc:?}");
     }
 }
