@@ -24,6 +24,7 @@ use std::hash::Hash;
 use rustc_hash::FxHashMap;
 use selectors::matching::ElementSelectorFlags;
 use style::data::{ElementDataMut, ElementDataRef, ElementDataWrapper};
+use style::selector_parser::RestyleDamage;
 use stylo_dom::ElementState;
 
 /// Per-node style entry.
@@ -235,5 +236,35 @@ impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
             }
             queue.extend(dom.dom_children(id));
         }
+    }
+
+    /// Clear the per-element `RestyleDamage` across all entries. Called
+    /// before an incremental restyle so that, afterward, only the elements
+    /// Stylo actually restyled carry damage (the cascade leaves clean
+    /// elements untouched). `RestyleDamage` is a per-restyle output, not
+    /// persistent state, so clearing it is safe.
+    ///
+    /// Must be called outside a cascade (single-threaded, no live borrow).
+    pub fn reset_damage(&self) {
+        for entry in self.entries.values() {
+            // SAFETY: not inside a cascade traversal — single-threaded
+            // access, no other borrow of this entry's `ElementData`.
+            if let Some(mut data) = unsafe { entry.mutate_data() } {
+                data.damage = RestyleDamage::empty();
+            }
+        }
+    }
+
+    /// The union of `RestyleDamage` across all entries. After
+    /// [`reset_damage`](Self::reset_damage) + an incremental restyle, this
+    /// is exactly the damage of the elements that were restyled this pass.
+    pub fn aggregate_damage(&self) -> RestyleDamage {
+        let mut acc = RestyleDamage::empty();
+        for entry in self.entries.values() {
+            if let Some(data) = entry.borrow_data() {
+                acc |= data.damage;
+            }
+        }
+        acc
     }
 }

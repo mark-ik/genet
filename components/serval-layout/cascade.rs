@@ -54,7 +54,7 @@ use style::media_queries::MediaType;
 use style::properties::ComputedValues;
 use style::properties::style_structs::Font;
 use style::queries::values::PrefersColorScheme;
-use style::selector_parser::SnapshotMap;
+use style::selector_parser::{RestyleDamage, SnapshotMap};
 use servo_arc::Arc as ServoArc;
 use style::media_queries::MediaList;
 use style::shared_lock::{SharedRwLock, StylesheetGuards};
@@ -194,17 +194,26 @@ pub fn run_cascade<D>(
 /// `plane` must already hold the prior cascade's data. Non-attribute
 /// mutations (structural / character-data) don't drive this path — they
 /// go through the relayout scope, not the attribute/state invalidator.
+///
+/// Returns a [`RestyleOutcome`] reporting whether any restyled element's
+/// `RestyleDamage` requires re-layout (vs repaint-only) — so the caller
+/// can skip layout for paint-only changes (e.g. a `color` swap).
 pub fn restyle_with_snapshots<D>(
     dom: &D,
     plane: &mut StylePlane<D::NodeId>,
     viewport: euclid::default::Size2D<f32>,
     stylesheets: &[&str],
     mutations: &[layout_dom_api::DomMutation<D::NodeId>],
-) where
+) -> RestyleOutcome
+where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash + 'static,
 {
     use layout_dom_api::DomMutation;
+
+    // Clear stale damage so the post-restyle aggregate reflects only what
+    // this pass restyled.
+    plane.reset_damage();
 
     let snapshots = crate::snapshot::build_snapshot_map(dom, mutations);
 
@@ -226,6 +235,26 @@ pub fn restyle_with_snapshots<D>(
     }
 
     cascade_traverse(dom, plane, viewport, stylesheets, Some(&snapshots));
+
+    // Stylo stored each restyled element's RestyleDamage on its
+    // ElementData during the traversal (via compute_style_difference).
+    // RELAYOUT (the fully-saturated bit) means box geometry may have
+    // changed → re-layout; lesser bits (REPAINT / stacking / overflow)
+    // are paint-tier for serval's taffy-driven layout.
+    let damage = plane.aggregate_damage();
+    RestyleOutcome {
+        needs_relayout: damage.contains(RestyleDamage::RELAYOUT),
+    }
+}
+
+/// Result of [`restyle_with_snapshots`]: whether the restyle changed
+/// anything that requires re-running layout, or was repaint-only.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RestyleOutcome {
+    /// `true` if any restyled element's damage requires re-layout;
+    /// `false` for a paint-only change (the prior `FragmentPlane` is
+    /// still valid — skip layout, just re-emit paint).
+    pub needs_relayout: bool,
 }
 
 /// Shared cascade traversal. `snapshots = None` is a full cascade (every
@@ -616,5 +645,67 @@ mod tests {
             "descendant <p> must match full re-cascade after the container's class change"
         );
         assert!((p_inc[2] - 1.0).abs() < 0.001, "descendant <p> should be blue via `.box p`, got {p_inc:?}");
+    }
+
+    /// RestyleDamage drives the repaint-vs-relayout decision: a `color`-only
+    /// change is repaint-only (`needs_relayout == false`), while a `width`
+    /// change needs re-layout (`true`). This is the signal the live path
+    /// uses to skip layout for paint-only mutations.
+    #[test]
+    fn restyle_outcome_distinguishes_repaint_from_relayout() {
+        use html5ever::{namespace_url, ns};
+        use layout_dom_api::{LayoutDomMut, QualName};
+        use serval_scripted_dom::ScriptedDom;
+
+        const SHEET: &[&str] = &[
+            ".red { color: rgb(255,0,0); } .blue { color: rgb(0,0,255); } \
+             .wide { width: 200px; } .narrow { width: 50px; }",
+        ];
+        let html = |l: &str| QualName::new(None, ns!(html), l.into());
+        let attr = |l: &str| QualName::new(None, ns!(), l.into());
+
+        let build = || {
+            let mut dom = ScriptedDom::new();
+            let root = dom.document();
+            let h = dom.create_element(html("html"));
+            dom.append_child(root, h);
+            let body = dom.create_element(html("body"));
+            dom.append_child(h, body);
+            let p = dom.create_element(html("p"));
+            dom.append_child(body, p);
+            (dom, p)
+        };
+
+        // Color-only change → repaint-only.
+        {
+            let (mut dom, p) = build();
+            dom.set_attribute(p, attr("class"), "red");
+            let mut plane: StylePlane<_> = StylePlane::new();
+            run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET);
+            let mut sink = Vec::new();
+            dom.drain_mutations(&mut sink);
+            dom.set_attribute(p, attr("class"), "blue");
+            let mut muts = Vec::new();
+            dom.drain_mutations(&mut muts);
+            let outcome =
+                restyle_with_snapshots(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, &muts);
+            assert!(!outcome.needs_relayout, "color swap should be repaint-only");
+        }
+
+        // Width change → relayout.
+        {
+            let (mut dom, p) = build();
+            dom.set_attribute(p, attr("class"), "narrow");
+            let mut plane: StylePlane<_> = StylePlane::new();
+            run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET);
+            let mut sink = Vec::new();
+            dom.drain_mutations(&mut sink);
+            dom.set_attribute(p, attr("class"), "wide");
+            let mut muts = Vec::new();
+            dom.drain_mutations(&mut muts);
+            let outcome =
+                restyle_with_snapshots(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, &muts);
+            assert!(outcome.needs_relayout, "width change should require relayout");
+        }
     }
 }
