@@ -26,6 +26,7 @@ mod construct;
 mod font_metrics;
 mod fragment;
 mod image_decode;
+mod incremental;
 mod invalidate;
 mod layout;
 mod paint_emit;
@@ -42,6 +43,7 @@ pub use box_tree::{build_box_tree, layout_via_box_tree, BoxTree};
 pub use cascade::{restyle_with_snapshots, run_cascade, RestyleOutcome};
 pub use cell::ArcRefCell;
 pub use fragment::FragmentPlane;
+pub use incremental::{Applied, IncrementalLayout};
 pub use image_decode::{
     BackgroundImagePlane, DecodedImage, ImageLoader, ImagePlane, NoImageLoader,
 };

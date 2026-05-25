@@ -543,7 +543,7 @@ mod tests {
     /// sibling keeps its color.
     #[test]
     fn incremental_restyle_matches_full_recascade_on_class_toggle() {
-        use html5ever::{namespace_url, ns};
+        use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
         use serval_scripted_dom::ScriptedDom;
 
@@ -603,7 +603,7 @@ mod tests {
     /// invalidator sets descendant hints through serval's adapter.
     #[test]
     fn incremental_restyle_propagates_to_descendants() {
-        use html5ever::{namespace_url, ns};
+        use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
         use serval_scripted_dom::ScriptedDom;
 
@@ -653,7 +653,7 @@ mod tests {
     /// uses to skip layout for paint-only mutations.
     #[test]
     fn restyle_outcome_distinguishes_repaint_from_relayout() {
-        use html5ever::{namespace_url, ns};
+        use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
         use serval_scripted_dom::ScriptedDom;
 

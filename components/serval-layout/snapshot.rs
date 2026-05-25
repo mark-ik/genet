@@ -144,7 +144,7 @@ fn make_value(name: &QualName, value: String) -> AttrValue {
 
 #[cfg(test)]
 mod tests {
-    use html5ever::{namespace_url, ns, QualName};
+    use html5ever::{ns, QualName};
     use layout_dom_api::{LayoutDom, LayoutDomMut};
     use selectors::attr::CaseSensitivity;
     use serval_scripted_dom::ScriptedDom;
