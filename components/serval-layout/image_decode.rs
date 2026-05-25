@@ -7,8 +7,8 @@
 //! Walks the DOM for `<img>` elements, reads their `src`, and decodes
 //! the referenced image to RGBA8. The result feeds two consumers:
 //! - **Layout** reads intrinsic dimensions to size `<img>` boxes
-//!   whose CSS leaves width/height `auto`
-//!   (`StylePlane::apply_intrinsic_image_sizes`).
+//!   whose CSS leaves width/height `auto` (the box tree's
+//!   replaced-leaf sizing, `construct::replaced_px_size`).
 //! - **Paint emission** reads the pixels to emit `DrawImage` +
 //!   `ImageResource` (`paint_emit`).
 //!
@@ -147,9 +147,10 @@ impl<NodeId: Copy + Eq + Hash> ImagePlane<NodeId> {
 
 /// Decoded CSS `background-image` images keyed by their element's DOM
 /// `NodeId`. Distinct from [`ImagePlane`] (the `<img>` replaced-content
-/// plane) on purpose: background images must **not** feed
-/// `apply_intrinsic_image_sizes`, since a background never sizes its
-/// box. Built by [`BackgroundImagePlane::decode_from_cascade`] after
+/// plane) on purpose: background images must **not** size their box
+/// (only `<img>` replaced content does), so they never feed the box
+/// tree's replaced-leaf sizing. Built by
+/// [`BackgroundImagePlane::decode_from_cascade`] after
 /// the cascade has run (it reads `background-image` from
 /// `ComputedValues`).
 ///

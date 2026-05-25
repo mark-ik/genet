@@ -23,7 +23,6 @@ mod box_tree;
 mod cascade;
 mod cell;
 mod construct;
-mod cv_to_taffy;
 mod font_metrics;
 mod fragment;
 mod image_decode;
@@ -41,7 +40,6 @@ pub use adapter_stylo::StyleNodeRef;
 pub use box_tree::{build_box_tree, layout_via_box_tree, BoxTree};
 pub use cascade::run_cascade;
 pub use cell::ArcRefCell;
-pub use construct::{construct, ConstructedTree};
 pub use fragment::FragmentPlane;
 pub use image_decode::{
     BackgroundImagePlane, DecodedImage, ImageLoader, ImagePlane, NoImageLoader,
@@ -60,10 +58,16 @@ pub use text_measure::{
 use layout_dom_api::LayoutDom;
 use std::hash::Hash;
 
-/// Run the full layout pipeline (cascade → Taffy layout) over any `LayoutDom`,
-/// returning the per-node [`FragmentPlane`]. Convenience wrapper hiding the
-/// euclid/taffy viewport types — used by the scripted tier's coarse
-/// relayout-on-mutation and by any caller that just wants "lay this out".
+/// Run the full layout pipeline (cascade → box-tree layout) over any
+/// `LayoutDom`, returning the per-node [`FragmentPlane`]. Convenience
+/// wrapper hiding the euclid/taffy viewport types — used by the scripted
+/// tier's coarse relayout-on-mutation and by any caller that just wants
+/// "lay this out".
+///
+/// This path doesn't decode images (the scripted relayout corpus has
+/// none), so it lays out against an empty `ImagePlane`; callers needing
+/// replaced-element sizing decode an `ImagePlane` and call [`layout`]
+/// directly (as the paint e2e does).
 pub fn render<D>(
     dom: &D,
     stylesheets: &[&str],
@@ -81,11 +85,11 @@ where
         euclid::default::Size2D::new(viewport_width, viewport_height),
         stylesheets,
     );
-    styles.refresh_taffy_from_cascade();
+    let images = ImagePlane::new();
     let viewport = taffy::Size {
         width: taffy::AvailableSpace::Definite(viewport_width),
         height: taffy::AvailableSpace::Definite(viewport_height),
     };
-    let (fragments, _tree, _ctx) = layout(dom, &styles, viewport);
+    let (fragments, _tree, _ctx) = layout(dom, &styles, &images, viewport);
     fragments
 }

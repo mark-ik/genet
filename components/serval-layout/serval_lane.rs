@@ -289,36 +289,25 @@ mod tests {
     use html5ever::local_name;
     use layout_dom_api::LayoutDom;
     use serval_static_dom::{StaticDocument, StaticNodeId};
-    use taffy::prelude::*;
 
     use super::*;
     use crate::adapter::NodeRef;
+    use crate::image_decode::ImagePlane;
     use crate::layout::layout;
-    use crate::style::StyleEntry;
 
+    /// Cascade-driven style plane sizing block elements to a fixed
+    /// 200×50 with no spacing — the box tree reads `ComputedValues`, so
+    /// these tests now drive layout through the real cascade rather than
+    /// hand-built Taffy styles. No margin/padding/border keeps the four
+    /// box-model rects coincident (what the box_model tests rely on).
     fn build_style_plane(document: &StaticDocument) -> StylePlane<StaticNodeId> {
         let mut plane: StylePlane<StaticNodeId> = StylePlane::new();
-        let root = NodeRef::document(document);
-        let mut queue = vec![root];
-        while let Some(node) = queue.pop() {
-            if document.element_name(node.id()).is_some() {
-                plane.insert(
-                    node.id(),
-                    StyleEntry {
-                        taffy: Style {
-                            display: Display::Block,
-                            size: Size {
-                                width: length(200.0),
-                                height: length(50.0),
-                            },
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    },
-                );
-            }
-            queue.extend(node.dom_children());
-        }
+        crate::cascade::run_cascade(
+            document,
+            &mut plane,
+            euclid::Size2D::new(800.0, 600.0),
+            &["p, div { display: block; width: 200px; height: 50px; margin: 0; padding: 0; border: 0; }"],
+        );
         plane
     }
 
@@ -346,7 +335,7 @@ mod tests {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
         };
-        let (fragments, _, _) = layout(&document, &styles, viewport);
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
         let view = ServalLaneView::new(&document, &styles, &fragments);
 
         // Compute a point known to be inside <p>'s rect (avoids
@@ -382,7 +371,7 @@ mod tests {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
         };
-        let (fragments, _, _) = layout(&document, &styles, viewport);
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
         let view = ServalLaneView::new(&document, &styles, &fragments);
 
         // Way outside the viewport — no fragment contains it.
@@ -397,7 +386,7 @@ mod tests {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
         };
-        let (fragments, _, _) = layout(&document, &styles, viewport);
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
         let view = ServalLaneView::new(&document, &styles, &fragments);
 
         let p = find_element(NodeRef::document(&document), local_name!("p"))
@@ -436,14 +425,12 @@ mod tests {
                     border: 4px solid black; padding: 8px; margin: 16px; }",
             ],
         );
-        // Pull Taffy styles from the cascade so layout reflects the CSS.
-        styles.refresh_taffy_from_cascade();
 
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
         };
-        let (fragments, _, _) = layout(&document, &styles, viewport);
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
         let view = ServalLaneView::new(&document, &styles, &fragments);
 
         let p = find_element(NodeRef::document(&document), local_name!("p"))
@@ -513,7 +500,7 @@ mod tests {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
         };
-        let (fragments, _, _) = layout(&document, &styles, viewport);
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
         let view = ServalLaneView::new(&document, &styles, &fragments);
 
         assert!(view.box_model(SourceNodeId(0xDEAD_BEEF)).is_none());
@@ -526,6 +513,7 @@ mod tests {
         let (fragments, _, _) = layout(
             &document,
             &styles,
+            &ImagePlane::new(),
             taffy::Size {
                 width: taffy::AvailableSpace::Definite(800.0),
                 height: taffy::AvailableSpace::Definite(600.0),

@@ -113,26 +113,23 @@ fn html_to_envelope_with_loader<L: serval_layout::ImageLoader>(
         stylesheets,
     );
 
-    // 3. Refresh Taffy styles from cascaded ComputedValues — switches
-    //    layout from hand-rolled stubs to real CSS-driven box model.
-    styles.refresh_taffy_from_cascade();
-
-    // 3b. Decode <img> sources (data: inline, remote via loader) +
-    //     give each <img> its intrinsic size on any auto axis.
+    // 3. Decode <img> sources (data: inline, remote via loader). The box
+    //    tree sizes each replaced leaf from this plane at layout time
+    //    (intrinsic, overridden by definite CSS width/height) — no
+    //    style-mutation pre-pass.
     let images = ImagePlane::decode_from_dom_with_loader(&document, loader);
-    styles.apply_intrinsic_image_sizes(&images);
 
-    // 3c. Decode CSS background-image url() layers (data:/remote via
+    // 3b. Decode CSS background-image url() layers (data:/remote via
     //     loader). Kept in a separate plane — backgrounds don't size
-    //     their box, so these must not feed apply_intrinsic_image_sizes.
+    //     their box.
     let bg_images = BackgroundImagePlane::decode_from_cascade(&document, &styles, loader);
 
-    // 4. Layout.
+    // 4. Layout (box tree reads ComputedValues + the ImagePlane directly).
     let viewport = taffy::Size {
         width: taffy::AvailableSpace::Definite(VIEWPORT as f32),
         height: taffy::AvailableSpace::Definite(VIEWPORT as f32),
     };
-    let (fragments, built, text_ctx) = layout(&document, &styles, viewport);
+    let (fragments, built, text_ctx) = layout(&document, &styles, &images, viewport);
 
     // 5. Emit (glyph runs from cached parley Layouts + DrawImage from
     //    the decoded image plane).

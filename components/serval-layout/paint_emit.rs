@@ -48,7 +48,7 @@ use parley::PositionedLayoutItem;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
-use crate::construct::ConstructedTree;
+use crate::box_tree::BoxTree;
 use crate::fragment::FragmentPlane;
 use crate::image_decode::{BackgroundImagePlane, DecodedImage, ImagePlane};
 use crate::style::StylePlane;
@@ -222,7 +222,7 @@ pub fn emit_paint_list_with_layouts<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
-    constructed: &ConstructedTree<D::NodeId>,
+    constructed: &BoxTree<D::NodeId>,
     text_ctx: &TextMeasureCtx,
     images: &ImagePlane<D::NodeId>,
     bg_images: &BackgroundImagePlane<D::NodeId>,
@@ -244,9 +244,9 @@ where
 }
 
 /// Source for shaped-glyph lookup during emission. Borrowed view over
-/// the constructed tree's node_map + the text measure cache.
+/// the box tree's node_map + the text measure cache.
 struct GlyphSource<'a, NodeId: Copy + Eq + Hash> {
-    constructed: &'a ConstructedTree<NodeId>,
+    constructed: &'a BoxTree<NodeId>,
     text_ctx: &'a TextMeasureCtx,
 }
 
@@ -474,7 +474,7 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
     // The leaf's inline content, for mapping inline-box ids → source
     // `<img>` nodes. Absent for a fixed-size leaf (no shaped content);
     // glyph runs still emit, boxes just won't resolve.
-    let content = source.constructed.tree.get_node_context(*taffy_id);
+    let content = source.constructed.get_node_context(*taffy_id);
     let mut emitted = false;
     for line in layout.lines() {
         for item in line.items() {
@@ -735,33 +735,21 @@ mod tests {
     use taffy::prelude::*;
 
     use super::*;
-    use crate::adapter::NodeRef;
+    use crate::cascade::run_cascade;
+    use crate::image_decode::ImagePlane;
     use crate::layout::layout;
-    use crate::style::StyleEntry;
 
+    /// Cascade-driven style plane sizing block elements 200×50 (no
+    /// spacing). The box tree reads `ComputedValues`, so emit tests now
+    /// drive layout through the cascade rather than hand-built styles.
     fn build_style_plane(document: &StaticDocument) -> StylePlane<StaticNodeId> {
         let mut plane: StylePlane<StaticNodeId> = StylePlane::new();
-        let root = NodeRef::document(document);
-        let mut queue = vec![root];
-        while let Some(node) = queue.pop() {
-            if document.element_name(node.id()).is_some() {
-                plane.insert(
-                    node.id(),
-                    StyleEntry {
-                        taffy: Style {
-                            display: Display::Block,
-                            size: Size {
-                                width: length(200.0),
-                                height: length(50.0),
-                            },
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    },
-                );
-            }
-            queue.extend(node.dom_children());
-        }
+        run_cascade(
+            document,
+            &mut plane,
+            euclid::Size2D::new(800.0, 600.0),
+            &["p, div { display: block; width: 200px; height: 50px; }"],
+        );
         plane
     }
 
@@ -774,7 +762,7 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, built, text_ctx) = layout(&document, &styles, viewport);
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
 
         // <p> is an inline-context leaf carrying "Hello"; its text is
         // emitted via the cached layout, so use the with-layouts path
@@ -823,6 +811,7 @@ mod tests {
         let (fragments, _, _) = layout(
             &document,
             &styles,
+            &ImagePlane::new(),
             Size {
                 width: AvailableSpace::Definite(800.0),
                 height: AvailableSpace::Definite(600.0),
@@ -843,7 +832,7 @@ mod tests {
     }
 
     /// Probe glyph caching: pass the layout's TextMeasureCtx +
-    /// ConstructedTree to emission and verify the resulting DrawText
+    /// BoxTree to emission and verify the resulting DrawText
     /// items carry positioned glyph runs (non-empty) rather than the
     /// empty Vec the cache-less path produces.
     #[test]
@@ -855,7 +844,7 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, built, text_ctx) = layout(&document, &styles, viewport);
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
 
         let plist = emit_paint_list_with_layouts(
             &document,
@@ -896,7 +885,7 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, built, text_ctx) = layout(&document, &styles, viewport);
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
         let plist = emit_paint_list_with_layouts(
             &document,
             &styles,
@@ -945,7 +934,7 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, _, _) = layout(&document, &styles, viewport);
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
         let plist = emit_paint_list(
             &document,
             &styles,
@@ -983,13 +972,12 @@ mod tests {
                     border: 4px solid rgb(0, 128, 255); }",
             ],
         );
-        styles.refresh_taffy_from_cascade();
 
         let viewport = Size {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, _, _) = layout(&document, &styles, viewport);
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
         let plist = emit_paint_list(
             &document,
             &styles,
@@ -1038,13 +1026,12 @@ mod tests {
             euclid::Size2D::new(800.0, 600.0),
             &["p { background-color: rgb(255, 0, 0); }"],
         );
-        styles.refresh_taffy_from_cascade();
 
         let viewport = Size {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, _, _) = layout(&document, &styles, viewport);
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
         let plist = emit_paint_list(
             &document,
             &styles,
@@ -1065,11 +1052,9 @@ mod tests {
     /// matched element carries the cascaded color.
     #[test]
     fn emit_color_comes_from_cascade_when_stylesheet_applies() {
-        use crate::cascade::run_cascade;
-
         let document =
             StaticDocument::parse("<html><body><p>x</p></body></html>");
-        let mut styles = build_style_plane(&document);
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
         run_cascade(
             &document,
             &mut styles,
@@ -1081,7 +1066,7 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, _, _) = layout(&document, &styles, viewport);
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
         let plist = emit_paint_list(
             &document,
             &styles,
@@ -1120,6 +1105,7 @@ mod tests {
         let (fragments, _, _) = layout(
             &document,
             &styles,
+            &ImagePlane::new(),
             Size {
                 width: AvailableSpace::Definite(800.0),
                 height: AvailableSpace::Definite(600.0),

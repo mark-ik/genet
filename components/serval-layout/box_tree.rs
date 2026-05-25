@@ -39,7 +39,10 @@ use taffy::{
 };
 
 use crate::adapter::NodeRef;
-use crate::construct::{establishes_inline_context, gather_inline_content, is_replaced, run_for_element};
+use crate::construct::{
+    establishes_inline_context, gather_inline_content, is_replaced, replaced_px_size,
+    run_for_element,
+};
 use crate::fragment::FragmentPlane;
 use crate::image_decode::ImagePlane;
 use crate::style::StylePlane;
@@ -118,6 +121,14 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
         self.nodes.push(node);
         i
     }
+
+    /// The inline content (styled runs + replaced boxes) of a measured
+    /// leaf, keyed by its Taffy `NodeId` — paint emission reads this to
+    /// extract positioned glyphs. `None` for block nodes / replaced
+    /// leaves. Mirrors `TaffyTree::get_node_context` on the old oracle.
+    pub fn get_node_context(&self, id: NodeId) -> Option<&InlineContent<Id>> {
+        self.nodes.get(idx(id)).and_then(|n| n.inline_content.as_ref())
+    }
 }
 
 /// Build the box tree from `dom` rooted at the document's root element,
@@ -141,17 +152,23 @@ where
         node_map: FxHashMap::default(),
     };
 
-    // The document's root element (skip comments / doctype the parser
-    // may have placed before <html>). Fall back to the document node's
-    // own style if there is somehow no element child.
+    // The layout root. Two shapes of `LayoutDom::document()`:
+    //   - A `Document` wrapper node (the normal case): its first element
+    //     child (`<html>`, skipping comments/doctype) is the real root.
+    //   - An element (a re-rooted `SubtreeView`, whose `document()` is the
+    //     subtree root, e.g. `<body>`): that element *is* the root, and
+    //     all of its children must be laid out.
     let doc = NodeRef::document(dom);
-    let root_elem = doc
-        .dom_children()
-        .find(|c| matches!(dom.kind(c.id()), NodeKind::Element));
-
-    let root = match root_elem {
-        Some(elem) => build_node(dom, styles, images, elem, &mut tree),
-        None => tree.push(BoxNode::new(initial_style())),
+    let root = if matches!(dom.kind(doc.id()), NodeKind::Element) {
+        build_node(dom, styles, images, doc, &mut tree)
+    } else {
+        match doc
+            .dom_children()
+            .find(|c| matches!(dom.kind(c.id()), NodeKind::Element))
+        {
+            Some(elem) => build_node(dom, styles, images, elem, &mut tree),
+            None => tree.push(BoxNode::new(initial_style())),
+        }
     };
     tree.root = root;
     tree
@@ -176,7 +193,7 @@ where
     // inline-context leaf and are handled there, not here).
     if is_replaced(dom, elem.id()) {
         let mut node = BoxNode::new(style);
-        node.replaced_size = Some(replaced_size(styles, images, elem.id()));
+        node.replaced_size = Some(replaced_px_size(styles, images, elem.id()));
         let i = tree.push(node);
         tree.node_map.insert(elem.id(), nid(i));
         return i;
@@ -186,7 +203,7 @@ where
     // subtree's runs + boxes; inline children get no boxes of their own.
     if establishes_inline_context(dom, styles, elem) {
         let mut node = BoxNode::new(style);
-        node.inline_content = Some(gather_inline_content(dom, styles, elem));
+        node.inline_content = Some(gather_inline_content(dom, styles, images, elem));
         let i = tree.push(node);
         tree.node_map.insert(elem.id(), nid(i));
         return i;
@@ -229,45 +246,6 @@ fn style_of<Id: Copy + Eq + Hash>(styles: &StylePlane<Id>, id: Id) -> ServoArc<C
         .get(id)
         .and_then(|e| e.borrow_data().map(|d| d.styles.primary().clone()))
         .unwrap_or_else(initial_style)
-}
-
-/// Pixel size for a replaced `<img>` leaf: the decoded intrinsic size
-/// from the `ImagePlane`, with each axis overridden by a definite CSS
-/// `width`/`height` if the cascade set one. Matches the oracle, where
-/// `apply_intrinsic_image_sizes` fills auto axes from the decoded size.
-fn replaced_size<Id: Copy + Eq + Hash>(
-    styles: &StylePlane<Id>,
-    images: &ImagePlane<Id>,
-    id: Id,
-) -> (f32, f32) {
-    let (mut w, mut h) = images
-        .get(id)
-        .map(|d| (d.width as f32, d.height as f32))
-        .unwrap_or((0.0, 0.0));
-
-    // Definite CSS size wins over intrinsic, per axis.
-    if let Some(entry) = styles.get(id) {
-        if let Some(data) = entry.borrow_data() {
-            let pos = data.styles.primary().get_position();
-            if let Some(cw) = definite_px(&pos.width) {
-                w = cw;
-            }
-            if let Some(ch) = definite_px(&pos.height) {
-                h = ch;
-            }
-        }
-    }
-    (w, h)
-}
-
-/// A CSS `Size` as definite pixels, or `None` for `auto` / percentage /
-/// intrinsic keywords (which leave the intrinsic image size in place).
-fn definite_px(size: &style::values::computed::Size) -> Option<f32> {
-    use style::values::computed::Size as CssSize;
-    match size {
-        CssSize::LengthPercentage(lp) => lp.0.to_length().map(|l| l.px()),
-        _ => None,
-    }
 }
 
 /// The `TaffyStyloStyle` GAT — owned (an `Arc` clone), so it carries no
@@ -690,182 +668,157 @@ where
 
 #[cfg(test)]
 mod tests {
-    //! Diff-test: the box tree (TaffyStyloStyle, zero-copy) must produce
-    //! the same `FragmentPlane` as the `TaffyTree`-based oracle
-    //! (`crate::layout::layout`, via the `cv_to_taffy` converter). When
-    //! these agree across the corpus, the box tree can replace the
-    //! oracle and `cv_to_taffy` retires.
+    //! Absolute-geometry checks for the box tree. (These began as a
+    //! diff-test against the `TaffyTree`/`cv_to_taffy` oracle; once the
+    //! box tree reached parity and the oracle was retired, they became
+    //! direct assertions on the resulting `FragmentPlane`. The full
+    //! HTML→pixel corpus runs through the box tree in
+    //! `components/paint/tests/html_to_pixels_e2e.rs`.)
 
     use serval_static_dom::{StaticDocument, StaticNodeId};
     use taffy::prelude::*;
 
     use super::*;
     use crate::cascade::run_cascade;
-    use crate::layout::layout as oracle_layout;
 
     const VIEWPORT: f32 = 128.0;
 
-    /// Cascade a fixture into a `StylePlane` the same way the e2e
-    /// pipeline does (UA defaults + the test sheets, then refresh the
-    /// owned Taffy styles the *oracle* reads). The box tree ignores the
-    /// refreshed `taffy` field and reads `ComputedValues` directly.
-    fn cascade(html: &str, sheets: &[&str]) -> (StaticDocument, StylePlane<StaticNodeId>) {
+    /// Cascade + box-tree layout a fixture, returning the fragment plane.
+    fn lay(html: &str, sheets: &[&str]) -> (StaticDocument, FragmentPlane<StaticNodeId>) {
         let document = StaticDocument::parse(html);
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(
-            &document,
-            &mut styles,
-            euclid::Size2D::new(VIEWPORT, VIEWPORT),
-            sheets,
-        );
-        styles.refresh_taffy_from_cascade();
-        (document, styles)
-    }
-
-    /// Run both pipelines over the fixture and assert every node in the
-    /// oracle's fragment plane has a box-tree rect within `eps`, and the
-    /// two planes cover the same node set.
-    ///
-    /// Decodes any inline `<img>` data URIs and applies intrinsic sizes
-    /// to the oracle's styles (its replaced-element path), while handing
-    /// the same `ImagePlane` to the box tree (which sizes the `<img>`
-    /// leaf from it directly) — so the replaced path is on the diff too.
-    fn assert_parity(html: &str, sheets: &[&str]) {
-        let (document, mut styles) = cascade(html, sheets);
+        run_cascade(&document, &mut styles, euclid::Size2D::new(VIEWPORT, VIEWPORT), sheets);
         let images = ImagePlane::decode_from_dom(&document);
-        styles.apply_intrinsic_image_sizes(&images);
         let viewport = Size {
             width: AvailableSpace::Definite(VIEWPORT),
             height: AvailableSpace::Definite(VIEWPORT),
         };
+        let (fragments, _tree, _ctx) = layout_via_box_tree(&document, &styles, &images, viewport);
+        (document, fragments)
+    }
 
-        let (oracle, _, _) = oracle_layout(&document, &styles, viewport);
-        let (boxed, _, _) = layout_via_box_tree(&document, &styles, &images, viewport);
-
-        assert_eq!(
-            oracle.len(),
-            boxed.len(),
-            "fragment count mismatch: oracle={} box={} for {html:?}",
-            oracle.len(),
-            boxed.len()
-        );
-
-        let eps = 0.5; // sub-pixel; both pipelines round to the grid.
-        for (id, o) in oracle.iter() {
-            let b = boxed
-                .rect_of(*id)
-                .unwrap_or_else(|| panic!("box tree missing node {id:?} for {html:?}"));
-            let close = |a: f32, c: f32, what: &str| {
-                assert!(
-                    (a - c).abs() <= eps,
-                    "{what} mismatch for node {id:?} in {html:?}: oracle={a} box={c}"
-                );
-            };
-            close(o.location.x, b.location.x, "location.x");
-            close(o.location.y, b.location.y, "location.y");
-            close(o.size.width, b.size.width, "size.width");
-            close(o.size.height, b.size.height, "size.height");
+    /// Elements with the given local name, in document (pre-order) order.
+    fn find_all(doc: &StaticDocument, local: html5ever::LocalName) -> Vec<StaticNodeId> {
+        let mut out = Vec::new();
+        let mut stack = vec![doc.document()];
+        // Pre-order: push children reversed so siblings pop in order.
+        let mut order = Vec::new();
+        while let Some(id) = stack.pop() {
+            order.push(id);
+            let kids: Vec<_> = doc.dom_children(id).collect();
+            for k in kids.into_iter().rev() {
+                stack.push(k);
+            }
         }
+        for id in order {
+            if doc.element_name(id).is_some_and(|q| q.local == local) {
+                out.push(id);
+            }
+        }
+        out
     }
 
+    fn approx(a: f32, b: f32) -> bool {
+        (a - b).abs() <= 0.5
+    }
+
+    /// Two plain block divs stack vertically: the second sits below the
+    /// first (relative to their shared parent), not overlapping at the
+    /// origin.
     #[test]
-    fn parity_block_siblings_stack() {
-        assert_parity(
+    fn block_siblings_stack_vertically() {
+        let (doc, frags) = lay(
             "<html><body><div class=\"a\"></div><div class=\"b\"></div></body></html>",
-            &[
-                "body { background-color: rgb(255,255,255); }",
-                ".a { width: 60px; height: 40px; }",
-                ".b { width: 60px; height: 40px; }",
-            ],
+            &[".a { width: 60px; height: 40px; }", ".b { width: 60px; height: 40px; }"],
         );
+        let divs = find_all(&doc, html5ever::local_name!("div"));
+        let a = frags.rect_of(divs[0]).expect(".a fragment");
+        let b = frags.rect_of(divs[1]).expect(".b fragment");
+        assert!(approx(a.location.y, 0.0), ".a at top, got y={}", a.location.y);
+        assert!(approx(a.size.height, 40.0), ".a height 40, got {}", a.size.height);
+        assert!(approx(b.location.y, 40.0), ".b stacks below .a (y=40), got y={}", b.location.y);
     }
 
+    /// Block-level floats: two `float: left` divs sit side by side on one
+    /// line (where plain blocks would stack). This is the box tree's
+    /// float path through the `CssStyle` float/clear forwarding.
     #[test]
-    fn parity_nested_padding_offset() {
-        assert_parity(
-            "<html><body><div></div></body></html>",
-            &[
-                "body { padding-left: 40px; padding-top: 40px; }",
-                "div { width: 30px; height: 30px; }",
-            ],
-        );
-    }
-
-    #[test]
-    fn parity_inline_text_flow() {
-        assert_parity(
-            "<html><body><p>Hello <b>world</b> !</p></body></html>",
-            &[],
-        );
-    }
-
-    #[test]
-    fn parity_borders_border_box() {
-        assert_parity(
-            "<html><body><div></div></body></html>",
-            &["div { width: 40px; height: 40px; border: 10px solid rgb(0,128,0); }"],
-        );
-    }
-
-    #[test]
-    fn parity_relative_position() {
-        assert_parity(
-            "<html><body><div></div></body></html>",
-            &["div { width: 30px; height: 30px; position: relative; top: 20px; left: 20px; }"],
-        );
-    }
-
-    #[test]
-    fn parity_cascaded_font_size() {
-        assert_parity(
-            "<html><body><p>Hello</p></body></html>",
-            &["p { font-size: 32px; }"],
-        );
-    }
-
-    #[test]
-    fn parity_plain_paragraph() {
-        assert_parity("<html><body><p>Hello, serval!</p></body></html>", &[]);
-    }
-
-    /// Replaced element: a lone `<img>` (data URI) takes its decoded
-    /// intrinsic size. Box tree sizes it via the `ImagePlane` measured
-    /// leaf; oracle via `apply_intrinsic_image_sizes` on the owned style.
-    #[test]
-    fn parity_img_intrinsic_size() {
-        use base64::Engine as _;
-        let blue = image::RgbaImage::from_pixel(16, 16, image::Rgba([0, 0, 255, 255]));
-        let mut png = Vec::new();
-        blue.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .expect("encode test PNG");
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
-        let html = format!("<html><body><img src=\"data:image/png;base64,{b64}\"></body></html>");
-        assert_parity(&html, &[]);
-    }
-
-    /// Replaced element with an explicit CSS size override on one axis:
-    /// definite `width` wins, `height` stays intrinsic. Exercises the
-    /// box tree's `definite_px` override against the oracle's style.
-    #[test]
-    fn parity_img_css_size_override() {
-        use base64::Engine as _;
-        let blue = image::RgbaImage::from_pixel(16, 16, image::Rgba([0, 0, 255, 255]));
-        let mut png = Vec::new();
-        blue.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .expect("encode test PNG");
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
-        let html = format!("<html><body><img src=\"data:image/png;base64,{b64}\"></body></html>");
-        assert_parity(&html, &["img { width: 50px; }"]);
-    }
-
-    #[test]
-    fn parity_float_left_blocks() {
-        assert_parity(
+    fn float_left_places_blocks_side_by_side() {
+        let (doc, frags) = lay(
             "<html><body><div class=\"a\"></div><div class=\"b\"></div></body></html>",
             &[
                 ".a { float: left; width: 40px; height: 40px; }",
                 ".b { float: left; width: 40px; height: 40px; }",
             ],
         );
+        let divs = find_all(&doc, html5ever::local_name!("div"));
+        let a = frags.rect_of(divs[0]).expect(".a fragment");
+        let b = frags.rect_of(divs[1]).expect(".b fragment");
+        assert!(approx(a.location.x, 0.0), ".a at left, got x={}", a.location.x);
+        assert!(approx(b.location.x, 40.0), ".b beside .a (x=40), got x={}", b.location.x);
+        assert!(approx(b.location.y, 0.0), ".b on the same line as .a (y=0), got y={}", b.location.y);
+    }
+
+    /// `position: relative` offsets the box by its inset from in-flow.
+    #[test]
+    fn relative_position_offsets_box() {
+        let (doc, frags) = lay(
+            "<html><body><div></div></body></html>",
+            &["div { width: 30px; height: 30px; position: relative; top: 20px; left: 20px; }"],
+        );
+        let div = find_all(&doc, html5ever::local_name!("div"))[0];
+        let r = frags.rect_of(div).expect("div fragment");
+        assert!(approx(r.location.x, 20.0), "left:20 → x=20, got {}", r.location.x);
+        assert!(approx(r.location.y, 20.0), "top:20 → y=20, got {}", r.location.y);
+    }
+
+    /// Border-box layout: content `width/height: 40` + `border: 10`
+    /// each side lays out a 60×60 border box (CSS content-box default).
+    #[test]
+    fn border_adds_to_box_size() {
+        let (doc, frags) = lay(
+            "<html><body><div></div></body></html>",
+            &["div { width: 40px; height: 40px; border: 10px solid rgb(0,128,0); }"],
+        );
+        let div = find_all(&doc, html5ever::local_name!("div"))[0];
+        let r = frags.rect_of(div).expect("div fragment");
+        assert!(approx(r.size.width, 60.0), "40 content + 20 border = 60, got {}", r.size.width);
+        assert!(approx(r.size.height, 60.0), "40 content + 20 border = 60, got {}", r.size.height);
+    }
+
+    /// Replaced element: a lone `<img>` (data URI) takes its decoded
+    /// intrinsic size (16×16) — the box tree sizes it via the measured
+    /// leaf + `get_block_child_style` size override, not by stretching.
+    #[test]
+    fn img_takes_intrinsic_size() {
+        let html = img_html();
+        let (doc, frags) = lay(&html, &[]);
+        let img = find_all(&doc, html5ever::local_name!("img"))[0];
+        let r = frags.rect_of(img).expect("img fragment");
+        assert!(approx(r.size.width, 16.0), "intrinsic width 16, got {}", r.size.width);
+        assert!(approx(r.size.height, 16.0), "intrinsic height 16, got {}", r.size.height);
+    }
+
+    /// A definite CSS `width` overrides the intrinsic on that axis;
+    /// the unspecified `height` stays intrinsic.
+    #[test]
+    fn img_css_width_overrides_intrinsic() {
+        let html = img_html();
+        let (doc, frags) = lay(&html, &["img { width: 50px; }"]);
+        let img = find_all(&doc, html5ever::local_name!("img"))[0];
+        let r = frags.rect_of(img).expect("img fragment");
+        assert!(approx(r.size.width, 50.0), "css width 50, got {}", r.size.width);
+        assert!(approx(r.size.height, 16.0), "intrinsic height 16, got {}", r.size.height);
+    }
+
+    /// A 16×16 blue PNG as a data-URI `<img>` document.
+    fn img_html() -> String {
+        use base64::Engine as _;
+        let blue = image::RgbaImage::from_pixel(16, 16, image::Rgba([0, 0, 255, 255]));
+        let mut png = Vec::new();
+        blue.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .expect("encode test PNG");
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        format!("<html><body><img src=\"data:image/png;base64,{b64}\"></body></html>")
     }
 }

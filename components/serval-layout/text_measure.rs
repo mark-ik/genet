@@ -217,7 +217,7 @@ pub struct TextMeasureCtx {
     pub layout_ctx: LayoutContext<ColorBrush>,
     /// Cached `parley::Layout` per Taffy text leaf — populated by
     /// [`measure_inline_content`] after each measure call. Paint
-    /// emission reads from here via `ConstructedTree::node_map`
+    /// emission reads from here via `BoxTree::node_map`
     /// (DOM `NodeId` → `taffy::NodeId` → cached `Layout`) to extract
     /// positioned glyphs (and per-run color via the brush) without
     /// re-shaping.

@@ -22,7 +22,7 @@
 //!
 //! Grow this as the property surface grows — but stay minimal.
 //! Heavyweight UA stylesheets (gradients, table layout, form
-//! controls) are deferred until the cascade + cv_to_taffy + emit
+//! controls) are deferred until the cascade + box-tree + emit
 //! actually exercise the matching properties.
 
 /// Prepended to every `run_cascade` invocation. Always sets:

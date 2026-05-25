@@ -48,22 +48,21 @@ pub fn build_scene(
         euclid::Size2D::new(width as f32, height as f32),
         &all_sheets,
     );
-    styles.refresh_taffy_from_cascade();
 
     // `<img>`: data: URIs decode inline; relative paths load from disk
-    // against the document's directory.
+    // against the document's directory. The box tree sizes each replaced
+    // leaf from this plane at layout time.
     let loader = LocalFileImageLoader {
         base_dir: base_dir.map(Path::to_path_buf),
     };
     let images = ImagePlane::decode_from_dom_with_loader(&document, &loader);
-    styles.apply_intrinsic_image_sizes(&images);
     let bg_images = BackgroundImagePlane::decode_from_cascade(&document, &styles, &loader);
 
     let viewport = taffy::Size {
         width: taffy::AvailableSpace::Definite(width as f32),
         height: taffy::AvailableSpace::Definite(height as f32),
     };
-    let (fragments, built, text_ctx) = layout(&document, &styles, viewport);
+    let (fragments, built, text_ctx) = layout(&document, &styles, &images, viewport);
     let plist = emit_paint_list_with_layouts(
         &document,
         &styles,

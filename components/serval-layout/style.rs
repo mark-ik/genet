@@ -25,19 +25,14 @@ use rustc_hash::FxHashMap;
 use selectors::matching::ElementSelectorFlags;
 use style::data::{ElementDataMut, ElementDataRef, ElementDataWrapper};
 use stylo_dom::ElementState;
-use taffy::Style as TaffyStyle;
 
 /// Per-node style entry.
 ///
-/// Probe slice today only populates `taffy`. The remaining fields exist so
-/// the Stylo trait impls on `StyleNodeRef` have somewhere to read/write
-/// cascade-time state from. The cascade populates them in real usage;
-/// hand-built probe fixtures leave them at default.
+/// Holds the cascade's per-element state. Layout reads the computed style
+/// straight off `stylo_data` (via the box tree's `TaffyStyloStyle`), so
+/// there is no separate owned `taffy::Style` cache — the cascade is the
+/// single source of truth. Hand-built fixtures leave the fields at default.
 pub struct StyleEntry {
-    /// Taffy layout style (populated by hand in the probe; derived from
-    /// Stylo `ComputedValues` in the real cascade).
-    pub taffy: TaffyStyle,
-
     /// Stylo's `ElementData` storage. Empty until the cascade allocates +
     /// populates. Uses `UnsafeCell` matching Stylo's expectation that the
     /// cascade has exclusive access per node during traversal (the same
@@ -132,7 +127,6 @@ impl Clone for StyleEntry {
         // (empty) for any cloning need. The probe doesn't clone style
         // entries; cascade-time work mutates in place.
         Self {
-            taffy: self.taffy.clone(),
             stylo_data: UnsafeCell::new(None),
             state: self.state,
             selector_flags: Cell::new(self.selector_flags.get()),
@@ -144,7 +138,6 @@ impl Clone for StyleEntry {
 impl Default for StyleEntry {
     fn default() -> Self {
         Self {
-            taffy: TaffyStyle::default(),
             stylo_data: UnsafeCell::new(None),
             state: ElementState::empty(),
             selector_flags: Cell::new(ElementSelectorFlags::empty()),
@@ -156,7 +149,6 @@ impl Default for StyleEntry {
 impl std::fmt::Debug for StyleEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StyleEntry")
-            .field("taffy", &self.taffy)
             .field("state", &self.state)
             .finish_non_exhaustive()
     }
@@ -190,41 +182,11 @@ impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
         self.entries.get(&id)
     }
 
-    /// The Taffy style for a node, or Taffy's default style if no entry.
-    /// Defaulting (rather than panicking) lets construct.rs handle nodes
-    /// without explicit style entries (text nodes, anonymous boxes, etc.).
-    pub fn taffy_style(&self, id: NodeId) -> TaffyStyle {
-        self.entries
-            .get(&id)
-            .map(|e| e.taffy.clone())
-            .unwrap_or_default()
-    }
-
     /// Ensure a style entry exists for `id`, creating a default one if not.
     /// Returns a mutable reference. The Stylo cascade uses this to allocate
     /// `ElementData` storage before populating it.
     pub fn ensure_entry(&mut self, id: NodeId) -> &mut StyleEntry {
         self.entries.entry(id).or_default()
-    }
-
-    /// After the cascade has run + populated `stylo_data`, refresh each
-    /// entry's Taffy style from its cascaded `ComputedValues`. Call this
-    /// to switch from hand-rolled Taffy styles to cascade-driven layout.
-    /// Entries with no cascade data are left untouched.
-    ///
-    /// Property coverage: display / size / margin / padding / border
-    /// widths — the subset needed for box-model semantics. Cf.
-    /// `cv_to_taffy::to_taffy_style` for the full mapping.
-    pub fn refresh_taffy_from_cascade(&mut self) {
-        for entry in self.entries.values_mut() {
-            let new_taffy = entry.borrow_data().map(|data| {
-                let primary = data.styles.primary();
-                crate::cv_to_taffy::to_taffy_style(primary)
-            });
-            if let Some(t) = new_taffy {
-                entry.taffy = t;
-            }
-        }
     }
 
     /// Populate empty StyleEntry slots for every element in the given DOM.
@@ -255,31 +217,6 @@ impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
                 entry.id_atom = id_atom;
             }
             queue.extend(dom.dom_children(id));
-        }
-    }
-
-    /// Give each decoded `<img>` element its intrinsic pixel size on
-    /// any axis CSS left `auto`. Explicit `width` / `height` rules win
-    /// (only `auto` axes are overridden). Call after
-    /// `refresh_taffy_from_cascade` and before `layout`/`construct` so
-    /// the Taffy tree sees real image dimensions instead of the 0×0 an
-    /// empty replaced element would otherwise get.
-    pub fn apply_intrinsic_image_sizes(
-        &mut self,
-        images: &crate::image_decode::ImagePlane<NodeId>,
-    ) {
-        use taffy::prelude::TaffyAuto;
-        use taffy::style::Dimension;
-
-        for (id, decoded) in images.iter() {
-            if let Some(entry) = self.entries.get_mut(id) {
-                if entry.taffy.size.width == Dimension::AUTO {
-                    entry.taffy.size.width = Dimension::length(decoded.width as f32);
-                }
-                if entry.taffy.size.height == Dimension::AUTO {
-                    entry.taffy.size.height = Dimension::length(decoded.height as f32);
-                }
-            }
         }
     }
 }
