@@ -565,8 +565,17 @@ impl<'a, D: LayoutDom> SelectorsElement for StyleNodeRef<'a, D> {
         pc: &NonTSPseudoClass,
         _context: &mut MatchingContext<Self::Impl>,
     ) -> bool {
-        let _ = pc;
-        false
+        // State-backed pseudo-classes (`:hover`, `:focus`, `:active`,
+        // `:focus-within`, `:disabled`, `:checked`, …) match against the
+        // element's `ElementState` (stored in the `StyleEntry`, set by the
+        // host's interaction layer). `state_flag()` is `empty()` for
+        // non-state pseudo-classes (`:lang`, custom state, link variants),
+        // which aren't modeled yet → no match.
+        let flag = pc.state_flag();
+        if flag.is_empty() {
+            return false;
+        }
+        TElement::state(self).intersects(flag)
     }
 
     fn match_pseudo_element(

@@ -255,6 +255,17 @@ impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
         }
     }
 
+    /// Set an element's interaction [`ElementState`] (`:hover`, `:focus`,
+    /// `:active`, …), creating the entry if needed. The cascade reads this
+    /// via `TElement::state`, so state-backed pseudo-class selectors match
+    /// once a host interaction layer sets it. (Scaffold: serval has no
+    /// input pipeline yet; incremental state-change restyle — snapshot the
+    /// old state + invalidate — is the follow-on, parallel to the
+    /// attribute path.)
+    pub fn set_element_state(&mut self, id: NodeId, state: ElementState) {
+        self.ensure_entry(id).state = state;
+    }
+
     /// The union of `RestyleDamage` across all entries. After
     /// [`reset_damage`](Self::reset_damage) + an incremental restyle, this
     /// is exactly the damage of the elements that were restyled this pass.

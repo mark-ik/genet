@@ -630,6 +630,48 @@ mod tests {
         assert!(!green(c2) && !blue(c2), "data-state=off matches neither rule");
     }
 
+    /// State-backed pseudo-classes match against the element's
+    /// `ElementState`: a `p:hover { color: red }` rule applies to the `<p>`
+    /// whose state has `HOVER` set, not its sibling. This is the scaffold
+    /// receipt that `match_non_ts_pseudo_class` reads element state (it was
+    /// stubbed `false`); the host interaction layer sets the state.
+    #[test]
+    fn cascade_matches_hover_pseudo_class() {
+        use stylo_dom::ElementState;
+
+        let document =
+            StaticDocument::parse("<html><body><p>A</p><p>B</p></body></html>");
+        let ps: Vec<_> = {
+            let mut out = Vec::new();
+            let mut q = vec![document.document()];
+            while let Some(id) = q.pop() {
+                if document.element_name(id).is_some_and(|n| n.local == local_name!("p")) {
+                    out.push(id);
+                }
+                let mut kids: Vec<_> = document.dom_children(id).collect();
+                kids.reverse();
+                q.extend(kids);
+            }
+            out
+        };
+        assert_eq!(ps.len(), 2);
+
+        let mut plane: StylePlane<_> = StylePlane::new();
+        // Host sets :hover on the first <p> before the cascade.
+        plane.set_element_state(ps[0], ElementState::HOVER);
+        run_cascade(
+            &document,
+            &mut plane,
+            euclid::Size2D::new(800.0, 600.0),
+            &["p:hover { color: rgb(255, 0, 0); }"],
+        );
+
+        let hovered = color_of::<StaticDocument>(&plane, ps[0]);
+        let plain = color_of::<StaticDocument>(&plane, ps[1]);
+        assert!(hovered[0] > 0.99 && hovered[1] < 0.01, ":hover <p> should be red, got {hovered:?}");
+        assert!(plain[0] < 0.01, "non-hovered <p> should stay default, got {plain:?}");
+    }
+
     /// The text `color` an element's cascade resolved to, as straight RGBA.
     fn color_of<D>(plane: &StylePlane<D::NodeId>, id: D::NodeId) -> [f32; 4]
     where
