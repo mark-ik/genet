@@ -165,7 +165,18 @@ pub enum DomMutation<Id> {
     /// `node` was removed from `former_parent`.
     Removed { node: Id, former_parent: Id },
     /// The attribute named `name` was set or changed on `node`.
-    AttributeChanged { node: Id, name: QualName },
+    ///
+    /// `old_value` is the attribute's value *before* this change (`None`
+    /// if the attribute was newly added). It is plain pre-mutation DOM
+    /// data — not render state — and lets serval-layout reconstruct a
+    /// Stylo `ElementSnapshot` at restyle time (the old value is gone from
+    /// the live DOM by then). See
+    /// `docs/2026-05-25_fine_grained_restyle_plan.md`.
+    AttributeChanged {
+        node: Id,
+        name: QualName,
+        old_value: Option<String>,
+    },
     /// A text/comment node's character data changed.
     CharacterDataChanged { node: Id },
     /// `node`'s entire child subtree was replaced (e.g. via `innerHTML`).

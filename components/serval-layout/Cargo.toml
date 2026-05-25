@@ -53,3 +53,7 @@ stylo_taffy = { version = "0.3.0-alpha.4", features = ["floats"] }
 base64 = { workspace = true }
 serde_json = { workspace = true }
 serval-static-dom = { path = "../serval-static-dom" }
+# Mutable DOM provider — drives the snapshot-builder tests (set_attribute →
+# DomMutation → build_snapshot_map). No cycle: serval-scripted-dom depends
+# only on layout-dom-api, not serval-layout.
+serval-scripted-dom = { path = "../serval-scripted-dom" }

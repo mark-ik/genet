@@ -274,16 +274,24 @@ impl LayoutDomMut for ScriptedDom {
 
     fn set_attribute(&mut self, node: NodeId, name: QualName, value: &str) {
         let attrs = &mut self.node_mut(node).attrs;
+        // Capture the prior value before overwriting — serval-layout needs
+        // it to build the Stylo snapshot at restyle time (the old value is
+        // gone from the live DOM once we mutate). `None` = newly added.
+        let old_value;
         if let Some(existing) = attrs
             .iter_mut()
             .find(|(n, _)| n.ns == name.ns && n.local == name.local)
         {
-            existing.1 = value.to_owned();
+            old_value = Some(std::mem::replace(&mut existing.1, value.to_owned()));
         } else {
+            old_value = None;
             attrs.push((name.clone(), value.to_owned()));
         }
-        self.mutations
-            .push(DomMutation::AttributeChanged { node, name });
+        self.mutations.push(DomMutation::AttributeChanged {
+            node,
+            name,
+            old_value,
+        });
     }
 
     fn set_text(&mut self, node: NodeId, data: &str) {

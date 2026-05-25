@@ -30,6 +30,7 @@ mod invalidate;
 mod layout;
 mod paint_emit;
 mod serval_lane;
+mod snapshot;
 mod style;
 mod subtree;
 mod text_measure;
@@ -48,6 +49,7 @@ pub use invalidate::{classify, coalesce, Invalidation};
 pub use layout::layout;
 pub use paint_emit::{emit_paint_list, emit_paint_list_with_layouts, ServalPaintList};
 pub use serval_lane::ServalLaneView;
+pub use snapshot::build_snapshot_map;
 pub use style::{StyleEntry, StylePlane};
 pub use subtree::{render_subtree, SubtreeView};
 pub use text_measure::{

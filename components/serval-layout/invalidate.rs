@@ -134,6 +134,7 @@ mod tests {
             classify::<Id>(&DomMutation::AttributeChanged {
                 node: 1,
                 name: class_attr(),
+                old_value: None,
             }),
             Invalidation::RestyleSubtree(1),
         );

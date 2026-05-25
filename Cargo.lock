@@ -6035,6 +6035,7 @@ dependencies = [
  "selectors",
  "serde",
  "serde_json",
+ "serval-scripted-dom",
  "serval-static-dom",
  "servo-base",
  "servo-layout-api",
