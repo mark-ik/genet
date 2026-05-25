@@ -1,93 +1,47 @@
-# The Servo Parallel Browser Engine Project
+# serval
 
-Servo is a prototype web browser engine written in the
-[Rust](https://github.com/rust-lang/rust) language. It is currently developed on
-64-bit macOS, 64-bit Linux, 64-bit Windows, 64-bit OpenHarmony, and Android.
+serval is a web engine derived from [Servo](https://servo.org), adapted for
+embedding in the Mere ecosystem. It keeps Servo's Rust foundation and diverges
+where the ecosystem's needs differ. It is a work in progress.
 
-Servo welcomes contribution from everyone. Check out:
+## How it differs from Servo
 
-- The [Servo Book](https://book.servo.org) for documentation
-- [servo.org](https://servo.org/) for news and guides
+- **Scripting.** SpiderMonkey is removed. JavaScript is built around the Nova
+  engine on native, with Boa as the conformance oracle. See
+  `docs/2026-05-20_serval_script_engine_plan.md` and
+  `docs/2026-05-25_js_execution_strategy.md`.
+- **Layout.** `serval-layout` is a profile-neutral engine: a box tree laid out
+  by Taffy through `stylo_taffy`, styled by the Stylo cascade, with text shaped
+  by parley. See `docs/2026-05-25_box_tree_trait_impl_plan.md`.
+- **Rendering.** serval emits a paint list that netrender (a vello-based
+  renderer) consumes.
+- **Profiles.** Capabilities are tiered (static-html, interactive-html,
+  scripted, fullweb) so each build pulls only what its profile needs. See
+  `docs/2026-05-12_serval_profile_ladder_plan.md`.
+- **Entrypoint.** `ports/pelt` is a script-free validation viewer and the
+  default workspace member.
 
-Coordination of Servo development happens:
-- Here in the Github Issues
-- On the [Servo Zulip](https://servo.zulipchat.com/)
-- In video calls advertised in the [Servo Project](https://github.com/servo/project/issues) repo.
+## Build
 
-## Getting started
+serval builds with cargo on the pinned toolchain (rust 1.95.0, set by
+`rust-toolchain.toml`; `rustup` applies it automatically).
 
-For more detailed build instructions, see the Servo Book under [Getting the Code] and [Building Servo].
+```shell
+cargo build
+cargo run -p pelt -- --engine viewer [URL]
+```
 
-[Getting the Code]: https://book.servo.org/building/getting-the-code.html
-[Building Servo]: https://book.servo.org/building/building.html
+Plain `cargo build` / `cargo run` target `ports/pelt`, the default member. The
+default build runs on a stock Windows toolchain. Re-including `tests/unit/script`
+in the workspace brings back the heavier mozjs build environment; see
+`docs/2026-05-16_workspace_audit_snapshot.md`.
 
-### macOS
+## Architecture
 
-- Download and install [Xcode](https://developer.apple.com/xcode/) and [`brew`](https://brew.sh/).
-- Install `uv`: `curl -LsSf https://astral.sh/uv/install.sh | sh` 
-- Install `rustup`: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- Restart your shell to make sure `cargo` is available
-- Install the other dependencies: `./mach bootstrap`
-- Build servoshell: `./mach build`
+Design docs live in `docs/`, named by date. The most recent workspace-audit
+snapshot there describes current state.
 
-### Linux
+## License
 
-- Install `curl`:
-  - Arch: `sudo pacman -S --needed curl`
-  - Debian, Ubuntu: `sudo apt install curl`
-  - Fedora: `sudo dnf install curl`
-  - Gentoo: `sudo emerge net-misc/curl`
-- Install `uv`: `curl -LsSf https://astral.sh/uv/install.sh | sh` 
-- Install `rustup`: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- Restart your shell to make sure `cargo` is available
-- Install the other dependencies: `./mach bootstrap`
-- Build servoshell: `./mach build`
-
-### Windows
-
-- Download [`uv`](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer), [`choco`](https://chocolatey.org/install#individual), and [`rustup`](https://win.rustup.rs/)
-  - Be sure to select *Quick install via the Visual Studio Community installer*
-- Install [`NASM`](https://www.nasm.us/) and make sure `nasm.exe` is on `PATH`
-  - `aws-lc-sys` requires this on Windows, so standalone crate builds such as `cargo check -p servo-script` will fail without it
-  - If you use Chocolatey: `choco install nasm`
-- In the Visual Studio Installer, ensure the following components are installed:
-  - **Windows 10/11 SDK (anything >= 10.0.19041.0)** (`Microsoft.VisualStudio.Component.Windows{10, 11}SDK.{>=19041}`)
-  - **MSVC v143 - VS 2022 C++ x64/x86 build tools (Latest)** (`Microsoft.VisualStudio.Component.VC.Tools.x86.x64`)
-  - **C++ ATL for latest v143 build tools (x86 & x64)** (`Microsoft.VisualStudio.Component.VC.ATL`)
-- Restart your shell to make sure `cargo` is available
-- Install the other dependencies: `.\mach bootstrap`
-- Build servoshell: `.\mach build`
-
-### Android
-
-- Ensure that the following environment variables are set:
-  - `ANDROID_SDK_ROOT`
-  - `ANDROID_NDK_ROOT`: `$ANDROID_SDK_ROOT/ndk/28.2.13676358/`
- `ANDROID_SDK_ROOT` can be any directory (such as `~/android-sdk`).
-  All of the Android build dependencies will be installed there.
-- Install the latest version of the [Android command-line
-  tools](https://developer.android.com/studio#command-tools) to
-  `$ANDROID_SDK_ROOT/cmdline-tools/latest`.
-- Run the following command to install the necessary components:
-  ```shell
-  sudo $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install \
-   "build-tools;34.0.0" \
-   "emulator" \
-   "ndk;28.2.13676358" \
-   "platform-tools" \
-   "platforms;android-33" \
-   "system-images;android-33;google_apis;x86_64"
-  ```
-- Follow the instructions above for the platform you are building on
-
-### OpenHarmony
-
-- Follow the instructions above for the platform you are building on to prepare the environment.
-- Depending on the target distribution (e.g. `HarmonyOS NEXT` vs pure `OpenHarmony`) the build configuration will differ slightly.
-- Ensure that the following environment variables are set
-  - `DEVECO_SDK_HOME` (Required when targeting `HarmonyOS NEXT`)
-  - `OHOS_BASE_SDK_HOME` (Required when targeting `OpenHarmony`)
-  - `OHOS_SDK_NATIVE` (e.g. `${DEVECO_SDK_HOME}/default/openharmony/native` or `${OHOS_BASE_SDK_HOME}/${API_VERSION}/native`)
-  - `SERVO_OHOS_SIGNING_CONFIG`: Path to json file containing a valid signing configuration for the demo app.
-- Review the detailed instructions at [Building for OpenHarmony].
-- The target distribution can be modified by passing `--flavor=<default|harmonyos>` to `mach <build|package|install>`.
+serval is a derivative of Servo and is licensed under MPL-2.0. Upstream Servo:
+[servo.org](https://servo.org), [book.servo.org](https://book.servo.org).
