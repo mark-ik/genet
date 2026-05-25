@@ -1,6 +1,10 @@
 # Fine-grained Stylo restyle — execution plan
 
-Status: **in progress (2026-05-25)**. Executes the 6-step arc sketched in
+Status: **DONE (2026-05-25)** — the deliberately-stubbed Stylo
+invalidation pipeline is un-stubbed and live; incremental restyle drives
+the layout loop, skipping layout for paint-only changes. Diff-tested
+against full re-cascade. See [Outcome](#outcome-2026-05-25). Executes the
+6-step arc sketched in
 [2026-05-20_serval_script_engine_plan.md](./2026-05-20_serval_script_engine_plan.md)
 (§ "Fine-grained restyle"). Grounded in the Stylo source
 (`servo/stylo` rev `572ecba`) + the current serval stubs.
@@ -122,3 +126,60 @@ minimal restyle. The coarse-oracle diff-test is already in place.
 - `relayout_incremental` drives the minimal restyle; the coarse oracle
   diff-test stays green.
 - REPAINT-only changes skip relayout (`compute_layout_damage`).
+
+## Outcome (2026-05-25)
+
+Done — the four increments landed across six commits (plan + 1/2/3/4a/4b):
+
+- **1 — snapshots.** `DomMutation::AttributeChanged` carries `old_value`
+  (captured in `serval-scripted-dom::set_attribute`);
+  `serval_layout::build_snapshot_map` reconstructs each changed element's
+  pre-mutation attr set into a Stylo `SnapshotMap`. Tests: snapshot
+  reports the *old* class/id (not the live value).
+- **2 — adapter bits.** `StyleEntry` gained dirty-descendant +
+  handled-snapshot `Cell`s; the `TElement` `{set,unset,has}_dirty_descendants`
+  / `has_snapshot` / `handled_snapshot` impls read/write them; the cascade
+  TLS context carries an optional `SnapshotMap`. Full cascade unchanged.
+- **3 — invalidator.** `restyle_with_snapshots`: build snapshots → mark
+  the dirty path from each changed element to the root → re-run the
+  cascade with the snapshots in context. Stylo's
+  `ElementData::invalidate_style_if_needed` (per element, during the
+  traversal) runs the real `StateAndAttrInvalidationProcessor` +
+  `TreeStyleInvalidator`, setting `RestyleHint`s so only the affected
+  elements recompute. `run_cascade` + `restyle_with_snapshots` share a
+  `cascade_traverse` helper. Diff-tested vs full re-cascade: self-restyle
+  (class a→b) **and** descendant propagation (`.box p`).
+- **4a — damage signal.** `restyle_with_snapshots` returns
+  `RestyleOutcome { needs_relayout }`, read from the `RestyleDamage` Stylo
+  stores on `ElementData` during the restyle (`StylePlane::reset_damage` /
+  `aggregate_damage`). `compute_layout_damage` stays empty — it's the
+  servo-flow augmentation hook; serval lays out with taffy, so the generic
+  damage is the right signal. Test: color → repaint-only, width → relayout.
+- **4b — live wiring.** `IncrementalLayout` persists `StylePlane` +
+  `FragmentPlane`; `apply(mutations)` routes attribute-only batches through
+  the incremental restyle and **skips layout** when paint-only, structural
+  batches through a full recompute. Returns `Applied` (Unchanged /
+  RepaintOnly / Restyled / FullRecompute). Diff-tested vs full
+  cascade+layout (color = RepaintOnly box-unchanged; width = Restyled
+  matches full; append = FullRecompute).
+
+Receipts: `serval-layout --lib` 47, `serval-scripted` 4 — green.
+
+**Deviations from the original done-conditions, recorded:**
+
+- The live entry point is the new `IncrementalLayout` (a stateful
+  cascade+layout session), **not** the existing stateless
+  `relayout_incremental` (which is FragmentPlane-splice and holds no
+  `StylePlane`). Incremental restyle fundamentally needs a persistent
+  `StylePlane`, so a stateful holder is the right shape; folding the
+  structural FragmentPlane-splice path into `IncrementalLayout` (so one
+  engine handles both restyle and structural relayout) is the natural
+  follow-on, plus having `serval-scripted` adopt it as its live entry.
+- `compute_layout_damage` was **not** un-stubbed (left empty) — see 4a;
+  the repaint-vs-relayout signal comes from the generic `RestyleDamage`
+  Stylo already computes, which is the correct source for taffy layout.
+
+**Deferred (tracked):** full old-attr set + `attr_matches` for `[attr]`
+selectors; pseudo-class state (`:hover`/`:focus`) snapshots +
+`match_non_ts_pseudo_class`; merging the structural-relayout splice into
+`IncrementalLayout` + serval-scripted adoption.
