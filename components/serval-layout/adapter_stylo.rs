@@ -57,7 +57,7 @@ use style::dom::{
 };
 use style::properties::{ComputedValues, PropertyDeclarationBlock};
 use style::selector_parser::{
-    AttrValue, Lang, NonTSPseudoClass, PseudoElement, RestyleDamage, SelectorImpl,
+    AttrValue, Lang, NonTSPseudoClass, PseudoElement, RestyleDamage, SelectorImpl, SnapshotMap,
 };
 use style::shared_lock::{Locked, SharedRwLock};
 use style::stylesheets::scope_rule::ImplicitScopeRoot;
@@ -88,6 +88,9 @@ struct CascadeCtx {
     /// the trait method panics (no active context); during cascade,
     /// it returns this borrowed reference.
     shared_lock: *const u8,
+    /// `SnapshotMap` pointer for incremental restyle — null for a full
+    /// cascade (no snapshots). When present, `has_snapshot` queries it.
+    snapshot_map: *const u8,
 }
 
 thread_local! {
@@ -103,12 +106,20 @@ thread_local! {
 /// previous context.
 pub struct CascadeGuard<'a, D: LayoutDom> {
     prev: Option<CascadeCtx>,
-    _phantom: PhantomData<(&'a D, &'a StylePlane<D::NodeId>, &'a SharedRwLock)>,
+    _phantom: PhantomData<(
+        &'a D,
+        &'a StylePlane<D::NodeId>,
+        &'a SharedRwLock,
+        &'a SnapshotMap,
+    )>,
 }
 
 impl<'a, D: LayoutDom> CascadeGuard<'a, D> {
-    /// Enter a cascade context. Pointers to `dom`, `plane`, and the
-    /// `SharedRwLock` are stashed in TLS until this guard drops.
+    /// Enter a cascade context. Pointers to `dom`, `plane`, the
+    /// `SharedRwLock`, and an optional `SnapshotMap` are stashed in TLS
+    /// until this guard drops. Pass `None` for `snapshot_map` on a full
+    /// cascade (no incremental snapshots); the incremental restyle path
+    /// passes `Some`.
     ///
     /// Asserts `D::NodeId` is pointer-shaped (size + align match `usize`),
     /// the condition Stylo's style-sharing cache enforces at runtime.
@@ -118,6 +129,7 @@ impl<'a, D: LayoutDom> CascadeGuard<'a, D> {
         dom: &'a D,
         plane: &'a StylePlane<D::NodeId>,
         shared_lock: &'a SharedRwLock,
+        snapshot_map: Option<&'a SnapshotMap>,
     ) -> Self {
         assert_eq!(
             std::mem::size_of::<D::NodeId>(),
@@ -133,6 +145,8 @@ impl<'a, D: LayoutDom> CascadeGuard<'a, D> {
             dom: dom as *const D as *const u8,
             plane: plane as *const StylePlane<D::NodeId> as *const u8,
             shared_lock: shared_lock as *const SharedRwLock as *const u8,
+            snapshot_map: snapshot_map
+                .map_or(std::ptr::null(), |m| m as *const SnapshotMap as *const u8),
         };
         let prev = CASCADE_CTX.with(|c| c.replace(Some(new)));
         Self {
@@ -213,6 +227,19 @@ impl<'a, D: LayoutDom> StyleNodeRef<'a, D> {
     fn shared_lock_from_ctx() -> &'a SharedRwLock {
         // SAFETY: see dom_from_ctx.
         unsafe { &*(cascade_ctx().shared_lock as *const SharedRwLock) }
+    }
+
+    /// Resolve the active `SnapshotMap` from TLS, if the cascade was
+    /// entered with one (incremental restyle). `None` for a full cascade.
+    fn snapshot_map_from_ctx() -> Option<&'a SnapshotMap> {
+        let ptr = cascade_ctx().snapshot_map;
+        if ptr.is_null() {
+            None
+        } else {
+            // SAFETY: see dom_from_ctx; the pointer was stored from a
+            // `&'a SnapshotMap` that outlives the guard.
+            Some(unsafe { &*(ptr as *const SnapshotMap) })
+        }
     }
 
     pub(crate) fn dom(&self) -> &'a D {
@@ -723,22 +750,41 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
     }
 
     fn has_dirty_descendants(&self) -> bool {
-        false
+        self.entry().is_some_and(|e| e.dirty_descendants.get())
     }
 
     fn has_snapshot(&self) -> bool {
-        false
+        // A snapshot exists for this element iff the active incremental
+        // restyle captured one. Full cascade: no SnapshotMap → false.
+        Self::snapshot_map_from_ctx().is_some_and(|m| m.get(self).is_some())
     }
 
     fn handled_snapshot(&self) -> bool {
-        true
+        // No snapshot ⇒ nothing to handle ⇒ treated as handled (matches
+        // the prior stub's `true` for the full-cascade path).
+        if !self.has_snapshot() {
+            return true;
+        }
+        self.entry().is_some_and(|e| e.handled_snapshot.get())
     }
 
-    unsafe fn set_handled_snapshot(&self) {}
+    unsafe fn set_handled_snapshot(&self) {
+        if let Some(entry) = self.entry() {
+            entry.handled_snapshot.set(true);
+        }
+    }
 
-    unsafe fn set_dirty_descendants(&self) {}
+    unsafe fn set_dirty_descendants(&self) {
+        if let Some(entry) = self.entry() {
+            entry.dirty_descendants.set(true);
+        }
+    }
 
-    unsafe fn unset_dirty_descendants(&self) {}
+    unsafe fn unset_dirty_descendants(&self) {
+        if let Some(entry) = self.entry() {
+            entry.dirty_descendants.set(false);
+        }
+    }
 
     fn store_children_to_process(&self, _n: isize) {}
 

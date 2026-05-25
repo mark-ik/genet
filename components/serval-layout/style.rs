@@ -58,6 +58,19 @@ pub struct StyleEntry {
     /// reference — we can't return a freshly-interned atom from inside
     /// the method without a stable storage to anchor the borrow.
     pub id_atom: Option<style::Atom>,
+
+    /// Stylo's "dirty descendants" bit — set during incremental
+    /// invalidation to mark that a descendant needs restyle, consulted by
+    /// the traversal to decide whether to descend. No-op'd in the full
+    /// cascade (nothing sets it; every element is styled because it has no
+    /// `ElementData` yet). Backs `TElement::{set,unset,has}_dirty_descendants`.
+    pub dirty_descendants: Cell<bool>,
+
+    /// Whether the invalidator has processed this element's snapshot
+    /// (Stylo's `handled_snapshot` bit). Set during incremental restyle so
+    /// a snapshot is consumed once. Backs `TElement::{handled_snapshot,
+    /// set_handled_snapshot}`.
+    pub handled_snapshot: Cell<bool>,
 }
 
 // SAFETY: per the cascade's exclusive-access invariant during traversal,
@@ -131,6 +144,8 @@ impl Clone for StyleEntry {
             state: self.state,
             selector_flags: Cell::new(self.selector_flags.get()),
             id_atom: self.id_atom.clone(),
+            dirty_descendants: Cell::new(self.dirty_descendants.get()),
+            handled_snapshot: Cell::new(self.handled_snapshot.get()),
         }
     }
 }
@@ -142,6 +157,8 @@ impl Default for StyleEntry {
             state: ElementState::empty(),
             selector_flags: Cell::new(ElementSelectorFlags::empty()),
             id_atom: None,
+            dirty_descendants: Cell::new(false),
+            handled_snapshot: Cell::new(false),
         }
     }
 }

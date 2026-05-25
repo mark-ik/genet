@@ -230,7 +230,9 @@ pub fn run_cascade<D>(
     //    `dom`/`plane`/`shared_lock` access read from this slot; outside
     //    the guard they panic.
     let plane_ref: &StylePlane<D::NodeId> = &*plane;
-    let _guard = CascadeGuard::<D>::enter(dom, plane_ref, &lock);
+    // Full cascade: no incremental snapshots (None). The restyle path
+    // passes `Some(&snapshot_map)`.
+    let _guard = CascadeGuard::<D>::enter(dom, plane_ref, &lock, None);
 
     // 6. Drive the traversal. RecalcStyle's process_preorder calls
     //    recalc_style_at on each element, populating its ElementData
