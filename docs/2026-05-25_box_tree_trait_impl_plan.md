@@ -1,9 +1,11 @@
 # Box-tree (taffy trait-impl tree) — retire `cv_to_taffy`, zero-copy style
 
-Status: **in progress (2026-05-25)**. Follow-on to
+Status: **DONE (2026-05-25)**. Follow-on to
 [2026-05-20_stylo_taffy_adoption_plan.md](./2026-05-20_stylo_taffy_adoption_plan.md),
 which closed the converter side but left `cv_to_taffy.rs` undeletable
-under the owned-`Style` `TaffyTree` model. This plan removes that model.
+under the owned-`Style` `TaffyTree` model. This plan removed that model —
+the box tree is now serval's layout engine and `cv_to_taffy.rs` is
+deleted. See [Outcome](#outcome-2026-05-25).
 
 ## Goal (what "done" buys us)
 
@@ -157,3 +159,45 @@ diff-test green) so the work lands in reviewable batches.
   box-tree produces pixel-identical results to the retired oracle).
 - The stylo_taffy plan's reframed done-condition is closed (file
   deleted, for real this time); snapshot updated.
+
+## Outcome (2026-05-25)
+
+All done-conditions met. Landed in three commits:
+
+- **Increment 1+2+2b** — `box_tree.rs`: the arena + the taffy trait impls
+  (`TraversePartialTree`/`LayoutPartialTree`/`CacheTree`/`RoundTree` +
+  the block/flex/grid container traits), `layout_via_box_tree`, and a
+  diff-test against the `TaffyTree` oracle (10 fixtures incl. floats +
+  images, ≤0.5px). Two wrinkles surfaced + fixed:
+  - **Floats** needed the `BlockContext` threaded into
+    `compute_block_child_layout` (the default impl drops it), *and* a
+    `CssStyle` adapter forwarding `BlockItemStyle::float`/`clear` —
+    `stylo_taffy 0.3.0-alpha.4`'s `TaffyStyloStyle` only overrides
+    `is_table`, so floats were invisible through the zero-copy wrapper.
+  - **Replaced `<img>`** sizing: the parent's block layout makes the
+    stretch decision from the child's `get_block_child_style().size()`,
+    so the intrinsic size has to be baked into the *child* style there
+    (the same `CssStyle` carries an optional `size_override`), not just
+    the leaf's own measure.
+- **Increment 3** — the swap. `layout()` is a thin wrapper over the box
+  tree (takes `&ImagePlane`, returns `BoxTree`); `construct.rs` reduced
+  to shared gather/cascade-reader helpers; `paint_emit` emits from
+  `&BoxTree`; `StyleEntry` dropped its owned `taffy: Style` (+
+  `refresh_taffy_from_cascade` / `apply_intrinsic_image_sizes` /
+  `taffy_style`); `render`/`render_subtree`/pelt-viewer/e2e dropped the
+  refresh+apply-intrinsic pre-pass. **`cv_to_taffy.rs` deleted.**
+  `build_box_tree` handles a re-rooted `SubtreeView` (an element
+  `document()`) as the root directly. The lib parity tests became
+  absolute-geometry assertions (oracle retired).
+
+Receipts: `serval-layout --lib` 38, `serval-scripted --lib` 4, GPU
+`html_to_pixels_e2e` 19 — all green; the full
+HTML→cascade→box-tree→emit→render→readback path is pixel-correct.
+
+**Deferred (out of scope, tracked):** mutate-in-place for incremental
+relayout (OQ1 — `relayout_incremental` still rebuilds from the DOM);
+anonymous block boxes (OQ2); the `size_override` rides only the block
+path (no flex/grid replaced content in the corpus + no such serval
+feature yet); named grid lines (the `Atom` ident now *can* flow, but
+nothing consumes it). The upstream `stylo_taffy` `BlockItemStyle`
+float/clear gap is a fix-candidate to offer.

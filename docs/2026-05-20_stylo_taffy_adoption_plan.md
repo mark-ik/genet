@@ -3,9 +3,10 @@
 Status: **DONE (2026-05-25)** — the hand-written property mapping is
 gone; `cv_to_taffy.rs` now delegates every property to
 `stylo_taffy::convert::*`. Floats land (block-level), verified by an
-e2e pixel test. One done-condition was **reframed, not met as literally
-written** — see [Outcome](#outcome-2026-05-25). Originally planned
-2026-05-20.
+e2e pixel test. The one done-condition originally **reframed** (delete
+`cv_to_taffy.rs`) was later **fully met** when the box-tree
+re-architecture landed and retired the file — see
+[Outcome](#outcome-2026-05-25). Originally planned 2026-05-20.
 
 ## Decision
 
@@ -146,10 +147,13 @@ Adopted and verified. Status of each done-condition against the tree:
   `stylo_taffy::convert::*`. This is the substance the plan set out to
   achieve: serval no longer carries its own `ComputedValues → Style`
   logic.
-- ⚠️ **`cv_to_taffy.rs` not *deleted*; reframed.** The literal
-  done-condition ("delete `cv_to_taffy.rs`; drive via
-  `stylo_taffy::to_taffy_style`") is **not achievable** with serval's
-  tree model, and this is a real taffy-API constraint, not laziness:
+- ✅ **`cv_to_taffy.rs` deleted (2026-05-25, via the box tree).** This
+  bullet was first written as ⚠️ "reframed, not deletable" — the
+  explanation below stands as the *why it took a re-architecture*, but
+  the file is now gone. The literal done-condition ("delete
+  `cv_to_taffy.rs`; drive via the zero-copy `TaffyStyloStyle`") was
+  **not achievable under the owned-`Style` `TaffyTree`**, for a real
+  taffy-API reason, not laziness:
   - `stylo_taffy::to_taffy_style` returns `taffy::Style<Atom>` (the
     `Atom` carries CSS-grid *template line-names*).
   - serval stores nodes in `TaffyTree<InlineContent<NodeId>>`, and
@@ -166,11 +170,11 @@ Adopted and verified. Status of each done-condition against the tree:
     serval's planes implement `LayoutPartialTree`/`*ContainerStyle` and
     feed `TaffyStyloStyle` (zero-copy over `ComputedValues`) directly.
     That's how blitz-dom does it. It's a tree re-architecture, not a
-    converter swap — out of scope here, and tracked as a future option
-    (revisit when serval wants named-grid-line support or the zero-copy
-    style path). So `cv_to_taffy.rs` survives as a ~30-line
-    default-ident assembler over the maintained converters, which is
-    the correct shape given the API.
+    converter swap — so it was split into its own plan
+    ([2026-05-25_box_tree_trait_impl_plan.md](./2026-05-25_box_tree_trait_impl_plan.md)),
+    which **landed 2026-05-25**: the box tree feeds `TaffyStyloStyle`
+    zero-copy, `cv_to_taffy.rs` is deleted, and `StyleEntry` no longer
+    carries an owned `taffy::Style`.
 - ✅ **Block-level float e2e pixel test green.**
   `components/paint/tests/html_to_pixels_e2e.rs::html_to_pixels_float_left_places_blocks_side_by_side`
   — two `float: left` divs sit side-by-side (where plain blocks stack),
@@ -180,8 +184,9 @@ Adopted and verified. Status of each done-condition against the tree:
   test passes through the full HTML → cascade → layout → emit → render
   → readback path.
 
-Net: the adoption is **done in substance** (no hand-rolled mapping,
-floats land, tests green). The one literal miss — file deletion — is an
-artifact of taffy's non-generic `TaffyTree`, recorded here rather than
-silently dropped, with the trait-impl-tree path noted as the only way
-to close it and deliberately deferred.
+Net: the adoption is **done** — no hand-rolled mapping, floats land,
+tests green. The one literal miss at first writing (file deletion) was
+an artifact of taffy's non-generic `TaffyTree`; rather than silently
+drop the condition, it was recorded with the trait-impl-tree path named
+as the only way to close it — and that path was then taken (the box
+tree), so the file is deleted and the condition fully met.
