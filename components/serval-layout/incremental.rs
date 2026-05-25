@@ -26,7 +26,9 @@ use layout_dom_api::{DomMutation, LayoutDom};
 use crate::cascade::{restyle_with_snapshots, run_cascade};
 use crate::fragment::FragmentPlane;
 use crate::image_decode::ImagePlane;
+use crate::invalidate::{classify, coalesce};
 use crate::style::StylePlane;
+use crate::subtree::SubtreeView;
 
 /// What [`IncrementalLayout::apply`] did for a mutation batch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,7 +41,13 @@ pub enum Applied {
     /// Attribute-only batch, restyled incrementally, and re-laid-out
     /// (box geometry changed).
     Restyled,
-    /// Structural batch — full cascade + layout (the conservative path).
+    /// Structural batch, laid out **incrementally** — each affected
+    /// subtree re-laid-out and spliced into the prior fragments at its
+    /// real position (outer size unchanged).
+    Spliced,
+    /// Full cascade + layout — the conservative fallback (a spliced
+    /// subtree's outer size changed, so ancestors would reflow, or a
+    /// root wasn't previously laid out).
     FullRecompute,
 }
 
@@ -95,12 +103,7 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
             .all(|m| matches!(m, DomMutation::AttributeChanged { .. }));
 
         if !attribute_only {
-            // Structural change → full recompute (conservative + correct).
-            let mut styles = StylePlane::new();
-            run_cascade(dom, &mut styles, euclid::Size2D::new(self.width, self.height), stylesheets);
-            self.fragments = lay_out(dom, &styles, self.width, self.height);
-            self.styles = styles;
-            return Applied::FullRecompute;
+            return self.apply_structural(dom, stylesheets, mutations);
         }
 
         // Attribute-only → incremental restyle over the persistent plane.
@@ -118,6 +121,86 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
             // Paint-only: prior fragments are still valid; skip layout.
             Applied::RepaintOnly
         }
+    }
+
+    /// Structural batch: re-cascade styles (full — structural
+    /// restyle-invalidation is the deferred optimization), then lay out
+    /// **incrementally** by re-laying-out each coalesced subtree over the
+    /// fresh styles and splicing it into the prior fragments at its real
+    /// position. Falls back to a full layout when a subtree's outer size
+    /// changed (ancestors would reflow) or a root wasn't previously laid
+    /// out — the same boundary the coarse-oracle diff-test guards.
+    fn apply_structural<D>(
+        &mut self,
+        dom: &D,
+        stylesheets: &[&str],
+        mutations: &[DomMutation<Id>],
+    ) -> Applied
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        // 1. Styles: full re-cascade so new elements are styled and any
+        //    cross-subtree selector effects are captured (correctness over
+        //    the partial-cascade optimization).
+        let mut styles = StylePlane::new();
+        run_cascade(dom, &mut styles, euclid::Size2D::new(self.width, self.height), stylesheets);
+        self.styles = styles;
+
+        // 2. Fragments: incremental splice over the fresh styles.
+        let invalidations: Vec<_> = mutations.iter().map(classify).collect();
+        let roots = coalesce(&invalidations, |id| dom.parent(id));
+
+        let mut result = self.fragments.clone();
+        for inv in &roots {
+            let root = inv.node();
+            let Some(prior_root) = self.fragments.rect_of(root).copied() else {
+                return self.full_relayout(dom);
+            };
+            // Lay out just this subtree (re-rooted) over the persistent styles.
+            let scoped = lay_out(&SubtreeView::new(dom, root), &self.styles, self.width, self.height);
+            let Some(scoped_root) = scoped.rect_of(root).copied() else {
+                return self.full_relayout(dom);
+            };
+            // Outer size change → ancestors would reflow → full fallback.
+            if (scoped_root.size.width - prior_root.size.width).abs() >= 0.5
+                || (scoped_root.size.height - prior_root.size.height).abs() >= 0.5
+            {
+                return self.full_relayout(dom);
+            }
+            // Splice: translate the scoped subtree to its real position.
+            let dx = prior_root.location.x - scoped_root.location.x;
+            let dy = prior_root.location.y - scoped_root.location.y;
+            let mut subtree = Vec::new();
+            collect_subtree(dom, root, &mut subtree);
+            for node in subtree {
+                if let Some(layout) = scoped.rect_of(node) {
+                    let mut translated = *layout;
+                    translated.location.x += dx;
+                    translated.location.y += dy;
+                    result.insert(node, translated);
+                }
+            }
+        }
+        self.fragments = result;
+        Applied::Spliced
+    }
+
+    /// Full layout over the current (already-cascaded) styles. The
+    /// fallback for the structural splice.
+    fn full_relayout<D>(&mut self, dom: &D) -> Applied
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        self.fragments = lay_out(dom, &self.styles, self.width, self.height);
+        Applied::FullRecompute
+    }
+}
+
+/// Pre-order subtree node ids rooted at `root`.
+fn collect_subtree<D: LayoutDom>(dom: &D, root: D::NodeId, out: &mut Vec<D::NodeId>) {
+    out.push(root);
+    for child in dom.dom_children(root) {
+        collect_subtree(dom, child, out);
     }
 }
 
@@ -242,9 +325,12 @@ mod tests {
         assert!((inc.size.width - 200.0).abs() < 0.5, "p should be 200px wide after restyle");
     }
 
-    /// A structural change (append a child) takes the full-recompute path.
+    /// A structural change whose subtree keeps its outer size splices
+    /// incrementally (`Spliced`): appending a `<p>` under the full-height
+    /// `<body>` (UA `height:100%`) re-lays-out the body subtree, and the
+    /// new `<p>` lands where a full recompute would put it.
     #[test]
-    fn structural_change_is_full_recompute() {
+    fn structural_change_splices_incrementally() {
         const SHEET: &[&str] = &["p{height:20px}"];
         let mut dom = ScriptedDom::new();
         let root = dom.document();
@@ -258,7 +344,83 @@ mod tests {
         let p = dom.create_element(html("p"));
         dom.append_child(body, p);
         let muts = drain(&mut dom);
+        assert_eq!(layout.apply(&dom, SHEET, &muts), Applied::Spliced);
+
+        // The new <p> matches a full cascade + layout of the mutated DOM.
+        let mut oracle_styles = StylePlane::new();
+        run_cascade(&dom, &mut oracle_styles, euclid::Size2D::new(W, H), SHEET);
+        let oracle = lay_out(&dom, &oracle_styles, W, H);
+        let spliced = layout.fragments().rect_of(p).expect("new <p> laid out");
+        let full = oracle.rect_of(p).expect("oracle <p>");
+        assert!((spliced.location.y - full.location.y).abs() < 0.5, "spliced <p> y must match full");
+        assert!((spliced.size.height - full.size.height).abs() < 0.5, "spliced <p> height must match full");
+    }
+
+    /// When a structural change grows its subtree's outer size (an
+    /// auto-height container gains a child), ancestors would reflow, so
+    /// the engine falls back to a full recompute.
+    #[test]
+    fn structural_size_growth_falls_back_to_full() {
+        // `div` is auto-height (no height rule) → grows with its children.
+        const SHEET: &[&str] = &["div{width:50px}p{height:20px}"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let div = dom.create_element(html("div"));
+        dom.append_child(body, div);
+        let p1 = dom.create_element(html("p"));
+        dom.append_child(div, p1);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let _ = drain(&mut dom);
+        // Append a second <p> → the div grows from 20px to 40px tall.
+        let p2 = dom.create_element(html("p"));
+        dom.append_child(div, p2);
+        let muts = drain(&mut dom);
         assert_eq!(layout.apply(&dom, SHEET, &muts), Applied::FullRecompute);
-        assert!(layout.fragments().rect_of(p).is_some(), "new <p> laid out after full recompute");
+        assert!(layout.fragments().rect_of(p2).is_some(), "new <p> laid out after fallback");
+    }
+
+    /// `innerHTML` replace (a `SubtreeReplaced`) under the full-height
+    /// `<body>` splices: the three new paragraphs land at the same
+    /// absolute positions a full recompute produces. (Ported from the
+    /// stateless `relayout_incremental` test it supersedes.)
+    #[test]
+    fn inner_html_replace_splices_matching_full() {
+        const SHEET: &[&str] = &["html, body, p { display: block; }"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p0 = dom.create_element(html("p"));
+        dom.append_child(body, p0);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let _ = drain(&mut dom);
+        dom.set_inner_html(body, "<p>one</p><p>two</p><p>three</p>");
+        let muts = drain(&mut dom);
+        assert_eq!(layout.apply(&dom, SHEET, &muts), Applied::Spliced);
+
+        // Oracle: full cascade + layout of the mutated DOM.
+        let mut oracle_styles = StylePlane::new();
+        run_cascade(&dom, &mut oracle_styles, euclid::Size2D::new(W, H), SHEET);
+        let oracle = lay_out(&dom, &oracle_styles, W, H);
+
+        let kids: Vec<_> = dom.dom_children(body).collect();
+        assert_eq!(kids.len(), 3, "body has the three replacement paragraphs");
+        for &p in &kids {
+            let c = oracle.rect_of(p).expect("oracle paragraph");
+            let i = layout.fragments().rect_of(p).expect("spliced paragraph");
+            assert!(
+                (c.location.x - i.location.x).abs() < 0.5 && (c.location.y - i.location.y).abs() < 0.5,
+                "paragraph abs pos: oracle=({},{}) spliced=({},{})",
+                c.location.x, c.location.y, i.location.x, i.location.y,
+            );
+        }
     }
 }

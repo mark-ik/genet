@@ -20,18 +20,26 @@
 
 #![cfg_attr(target_arch = "wasm32", allow(unused_crate_dependencies))]
 
-use std::hash::Hash;
-
-use layout_dom_api::{LayoutDom, LayoutDomMut};
-use serval_layout::{classify, coalesce, render, render_subtree, FragmentPlane};
+use layout_dom_api::LayoutDomMut;
+use serval_layout::{render, FragmentPlane};
 use serval_scripted_dom::{NodeId, ScriptedDom};
 
-/// Coarse relayout-on-mutation — the **#2(a) correctness oracle**. Drain the DOM's
+/// The live incremental layout engine. Re-exported as the scripted
+/// tier's relayout-on-mutation entry: a persistent cascade + layout
+/// session that restyles attribute changes through Stylo invalidation
+/// (skipping layout for paint-only changes) and splices structural
+/// changes — one engine for both, superseding the earlier stateless
+/// `relayout_incremental` splice. See `serval_layout::IncrementalLayout`
+/// and `docs/2026-05-25_fine_grained_restyle_plan.md`.
+pub use serval_layout::{Applied, IncrementalLayout};
+
+/// Coarse relayout-on-mutation — the **correctness oracle**. Drain the DOM's
 /// pending [`DomMutation`](layout_dom_api::DomMutation)s; if anything changed, re-run
 /// the *whole* layout pipeline and return the fresh fragment plane. Correct by
-/// construction (a full recompute can't be stale), so it is the ground truth that
-/// incremental invalidation (#2(b)) is diff-tested against. Engine-agnostic
-/// (DOM + layout only), so it lives at the crate root, not the Nova module.
+/// construction (a full recompute can't be stale), so it is the ground truth the
+/// incremental engine ([`IncrementalLayout`]) is diff-tested against. The live path
+/// uses `IncrementalLayout`; this stays as the oracle. Engine-agnostic (DOM + layout
+/// only), so it lives at the crate root, not the Nova module.
 pub fn relayout_if_dirty(
     dom: &mut ScriptedDom,
     stylesheets: &[&str],
@@ -46,75 +54,11 @@ pub fn relayout_if_dirty(
     Some(render(dom, stylesheets, width, height))
 }
 
-/// Incremental relayout (#2(b)): drain the DOM's mutations, plan the minimal
-/// recompute roots (classify → coalesce), and for each root lay out only its
-/// subtree, splicing the result into `prior` at the root's real document position.
-///
-/// Falls back to a correct full recompute when a subtree's outer size changes (its
-/// ancestors would reflow) or the root wasn't previously laid out. Two known
-/// boundaries (both deferred, both safe — they only affect *removed*/inherited
-/// cases): (1) stale fragments for removed nodes linger until a full pass (the
-/// mutation stream doesn't carry the old children of a `SubtreeReplaced`);
-/// (2) the scoped cascade uses the default inherited context, not the root's real
-/// ancestors' (the `SubtreeView` boundary). Diff-tested against the coarse oracle.
-pub fn relayout_incremental<D>(
-    dom: &mut D,
-    prior: &FragmentPlane<D::NodeId>,
-    stylesheets: &[&str],
-    width: f32,
-    height: f32,
-) -> FragmentPlane<D::NodeId>
-where
-    D: LayoutDom + LayoutDomMut,
-    D::NodeId: Copy + Eq + Hash + 'static,
-{
-    let mut mutations = Vec::new();
-    dom.drain_mutations(&mut mutations);
-    if mutations.is_empty() {
-        return prior.clone();
-    }
-    let invalidations: Vec<_> = mutations.iter().map(classify).collect();
-    let roots = coalesce(&invalidations, |id| dom.parent(id));
-
-    let mut result = prior.clone();
-    for inv in &roots {
-        let root = inv.node();
-        let Some(prior_root) = prior.rect_of(root).copied() else {
-            return render(dom, stylesheets, width, height);
-        };
-        let scoped = render_subtree(dom, root, stylesheets, width, height);
-        let Some(scoped_root) = scoped.rect_of(root).copied() else {
-            return render(dom, stylesheets, width, height);
-        };
-        // Outer size change → ancestors would reflow → defer to the correct full pass.
-        if (scoped_root.size.width - prior_root.size.width).abs() >= 0.5
-            || (scoped_root.size.height - prior_root.size.height).abs() >= 0.5
-        {
-            return render(dom, stylesheets, width, height);
-        }
-        // Splice: translate the scoped subtree to the root's real document position.
-        let dx = prior_root.location.x - scoped_root.location.x;
-        let dy = prior_root.location.y - scoped_root.location.y;
-        let mut subtree = Vec::new();
-        collect_subtree(dom, root, &mut subtree);
-        for node in subtree {
-            if let Some(layout) = scoped.rect_of(node) {
-                let mut translated = *layout;
-                translated.location.x += dx;
-                translated.location.y += dy;
-                result.insert(node, translated);
-            }
-        }
-    }
-    result
-}
-
-fn collect_subtree<D: LayoutDom>(dom: &D, root: D::NodeId, out: &mut Vec<D::NodeId>) {
-    out.push(root);
-    for child in dom.dom_children(root) {
-        collect_subtree(dom, child, out);
-    }
-}
+// Incremental relayout is now `serval_layout::IncrementalLayout` (re-exported
+// above) — a persistent cascade+layout session that handles both attribute
+// restyle (via Stylo invalidation, skipping layout for paint-only changes) and
+// structural splice, superseding the earlier stateless `relayout_incremental`
+// here. `relayout_if_dirty` stays as the coarse oracle it's diff-tested against.
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
@@ -367,55 +311,9 @@ mod relayout_tests {
         }
     }
 
-    /// #2(b) completion check: `relayout_incremental` (splice path) must reproduce
-    /// the coarse full-recompute at ABSOLUTE positions for a size-stable mutation.
-    #[test]
-    fn incremental_relayout_matches_coarse_absolute() {
-        const SHEET: &[&str] = &["html, body, p { display: block; }"];
-
-        let mut dom = ScriptedDom::new();
-        let root = dom.document();
-        let html = dom.create_element(html_el("html"));
-        dom.append_child(root, html);
-        let body = dom.create_element(html_el("body"));
-        dom.append_child(html, body);
-        let p0 = dom.create_element(html_el("p"));
-        dom.append_child(body, p0);
-        let hi = dom.create_text("Hi");
-        dom.append_child(p0, hi);
-
-        // Prior full layout, then clear the build mutations so the incremental pass
-        // sees only the upcoming edit.
-        let prior = serval_layout::render(&dom, SHEET, 800.0, 600.0);
-        let mut cleared = Vec::new();
-        dom.drain_mutations(&mut cleared);
-
-        // Edit: replace body's content (body fills the viewport → outer size stable).
-        dom.set_inner_html(body, "<p>one</p><p>two</p><p>three</p>");
-
-        let incremental = relayout_incremental(&mut dom, &prior, SHEET, 800.0, 600.0);
-        let coarse = serval_layout::render(&dom, SHEET, 800.0, 600.0); // oracle, post-edit
-
-        // body's position unchanged, and the three new paragraphs match coarse at
-        // absolute positions (the splice placed them at body's real origin).
-        let cb = coarse.rect_of(body).expect("coarse body");
-        let ib = incremental.rect_of(body).expect("incremental body");
-        assert!((cb.location.y - ib.location.y).abs() < 0.5, "body y drifted");
-
-        let kids: Vec<_> = dom.dom_children(body).collect();
-        assert_eq!(kids.len(), 3);
-        for &p in &kids {
-            let c = coarse.rect_of(p).expect("coarse paragraph");
-            let i = incremental.rect_of(p).expect("incremental paragraph");
-            assert!(
-                (c.location.x - i.location.x).abs() < 0.5
-                    && (c.location.y - i.location.y).abs() < 0.5,
-                "paragraph abs pos: coarse=({},{}) incremental=({},{})",
-                c.location.x,
-                c.location.y,
-                i.location.x,
-                i.location.y,
-            );
-        }
-    }
+    // The splice/absolute-position correctness check moved with the engine:
+    // `serval_layout::incremental::tests::inner_html_replace_splices_matching_full`
+    // (IncrementalLayout over the persistent StylePlane). `relayout_if_dirty`
+    // (the coarse oracle) and the SubtreeView relative-geometry check above
+    // stay here.
 }
