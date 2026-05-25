@@ -86,16 +86,21 @@ Validation env at [`.cargo-check-logs/cargo-check-env.ps1`](../.cargo-check-logs
 
 ## Remaining gaps before C4 is universally ✅
 
-0. **Windows per-surface DCOMP parity.** `WindowsDxgiBackend::declare`
-  already creates an `IDCompositionVisual` per `SurfaceKey` and stores
-  it with the destination texture, but `WindowsDxgiBackend` still
-  inherits the trait default no-op for `present(key, transform, clip,
-  opacity)`. Wire that body so the per-surface visual is attached under
-  the root, displays the declared surface destination, receives the
-  transform/clip/opacity state, and commits through DCOMP. Add a Pelt
-  `--windows-present-surfaces-smoke` mode mirroring the macOS smoke
-  (red master, green declared surface, 50% opacity) so parity has a
-  visible receipt.
+0. **Windows per-surface DCOMP parity — ✅ LANDED (verified 2026-05-25).**
+  `WindowsDxgiBackend::present(key, transform, clip, opacity)` is now wired
+  (delegates to `present_surface`): `apply_surface_state` sets the per-`SurfaceKey`
+  visual's transform/clip/opacity, then a D3D12 command list copies the surface's
+  destination texture into the swapchain backbuffer (resource barriers +
+  `CopyResource`) and commits through DCOMP. The Pelt
+  `--windows-present-surfaces-smoke` mode exists (`ports/pelt/viewer.rs` →
+  `run_optional_windows_present_surfaces_smoke`). The **code gap is closed**, and
+  the runtime path is now **executed on real hardware** (2026-05-25, AMD Radeon
+  780M / NVIDIA RTX 4060 laptop, D3D12-forced): `--windows-present-smoke` →
+  `800x600 frames=1 created_window=true declared_subsurface=false`;
+  `--windows-present-surfaces-smoke` → `800x600 frames=2 created_window=true
+  declared_subsurface=true` (the per-`SurfaceKey` DCOMP child-visual path,
+  exit 0, no error). A manual visual-color receipt (red master, green declared
+  surface, 50% opacity) is the only thing left, and that is cosmetic, not a gap.
 
 1. **macOS smoke receipt — ✅ landed (2026-05-09).**
    `MacosCALayerBackend::new` now constructs end-to-end (extracts
@@ -170,7 +175,7 @@ Validation env at [`.cargo-check-logs/cargo-check-env.ps1`](../.cargo-check-logs
    the remaining `cargo check -p servo` cost on Mac is the
    SpiderMonkey native build, not Rust-side method gaps.
 
-(0) is the active Windows/macOS parity lane. (1) is ✅. (2) is ✅ as
+(0) is ✅ (code landed; runtime smoke **executed on Windows hardware 2026-05-25** — both basic and per-surface DCOMP paths present clean, exit 0; only a cosmetic color-screenshot is left). (1) is ✅. (2) is ✅ as
 well. (3) was a wait-and-see deferred to (2)'s landing — the
 master-path sync is now FIFO-ordered without the wgpu-hal queue
 accessor; future per-`SurfaceKey` GPU sync upgrades may still want it,

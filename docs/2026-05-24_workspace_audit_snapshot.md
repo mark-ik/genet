@@ -69,7 +69,7 @@ Members = the 2026-05-16 set **plus four scripting crates** (`script-engine-api`
 | `2026-05-17_paintlist_polyglot_renderer` | PM-3 design + receipts | superseded by the extraction (done) | superseded |
 | `2026-05-20_stylo_taffy_adoption_plan` | planned; supersedes `cv_to_taffy` | **in progress** — `cv_to_taffy.rs` still present | active |
 | `2026-05-20_blitz_float_linebox_study` | study | reference (floats still a gap) | reference |
-| `2026-05-08_c3` / `2026-05-09_c4` landed notes | landed | historical; **c4 "Windows parity tail"** unconfirmed | flag c4 tail |
+| `2026-05-08_c3` / `2026-05-09_c4` landed notes | landed | c4 Windows parity tail **runtime-verified 2026-05-25** (both present smokes green on real D3D12/DCOMP hardware) | resolved |
 | `2026-05-16_workspace_audit_snapshot` | 2026-05-16 snapshot | **superseded by this doc** | superseded |
 | `2026-05-23_sem_weave_smoke_test` | tooling note | current | current |
 
@@ -84,9 +84,14 @@ Members = the 2026-05-16 set **plus four scripting crates** (`script-engine-api`
   Moot for wasm (wasm = no-JS); matters only for the native conformance oracle.
 - **Nova fork** — upstream PR pending; `usdt` + the 64-bit `Value` keep Nova native-only.
 - **stylo_taffy adoption** — `cv_to_taffy` not yet retired.
-- **c4 Windows parity tail** — confirm resolved or still open.
-- **Uncommitted (2026-05-24):** the nova-clone-move fixups (root `Cargo.toml` patch path,
-  `probes/nova-probe` path) + a `sem_weave` doc edit.
+- **c4 Windows parity tail** — ✅ resolved (runtime-verified 2026-05-25). Both
+  `--windows-present-smoke` (master) and `--windows-present-surfaces-smoke`
+  (per-`SurfaceKey` DCOMP child visual) present clean on this machine's
+  D3D12/DCOMP path (AMD 780M / RTX 4060), exit 0. Only a cosmetic color
+  screenshot remains.
+- **Fork-path fixups (committed 2026-05-25):** root `Cargo.toml` + `probes/nova-probe`
+  patch paths repointed to `../../crates/{nova,xilem}` after the linebender/nova forks
+  moved under `crates/`; `sem_weave` doc updated for the repo-wide `weave` rollout.
 
 ## Pitfalls (carried + new)
 
