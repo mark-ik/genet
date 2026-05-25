@@ -1,7 +1,11 @@
 # stylo_taffy adoption + Stylo 0.16 isolation + floats
 
-Status: planned 2026-05-20. Supersedes the hand-written `cv_to_taffy`
-property subset.
+Status: **DONE (2026-05-25)** — the hand-written property mapping is
+gone; `cv_to_taffy.rs` now delegates every property to
+`stylo_taffy::convert::*`. Floats land (block-level), verified by an
+e2e pixel test. One done-condition was **reframed, not met as literally
+written** — see [Outcome](#outcome-2026-05-25). Originally planned
+2026-05-20.
 
 ## Decision
 
@@ -125,3 +129,59 @@ the *ideas* when the crate embeds a conflicting model (blitz-dom's tree).
 - All serval-layout lib tests + html_to_pixels_e2e green.
 - A block-level float renders correctly in an e2e pixel test; the
   text-wrap-around-float limit is documented, not silently broken.
+
+## Outcome (2026-05-25)
+
+Adopted and verified. Status of each done-condition against the tree:
+
+- ✅ **serval-layout compiles against stylo_taffy.** `Cargo.toml`:
+  `stylo_taffy = { version = "0.3.0-alpha.4", features = ["floats"] }`,
+  `taffy = "=0.11.0-experimental-cache-fix.3"` with `float_layout`
+  enabled. (The "Stylo 0.16 isolation" framing was already overtaken by
+  the Resolved-facts section — one git Stylo, workspace-wide. No port.)
+- ✅ **The hand-written property mapping is gone.** `cv_to_taffy.rs`'s
+  `to_taffy_style` delegates *every* property — display, box-sizing,
+  position/inset, overflow, float/clear, sizing (incl. min/max +
+  aspect-ratio), margin/padding/border, gap, flexbox — to
+  `stylo_taffy::convert::*`. This is the substance the plan set out to
+  achieve: serval no longer carries its own `ComputedValues → Style`
+  logic.
+- ⚠️ **`cv_to_taffy.rs` not *deleted*; reframed.** The literal
+  done-condition ("delete `cv_to_taffy.rs`; drive via
+  `stylo_taffy::to_taffy_style`") is **not achievable** with serval's
+  tree model, and this is a real taffy-API constraint, not laziness:
+  - `stylo_taffy::to_taffy_style` returns `taffy::Style<Atom>` (the
+    `Atom` carries CSS-grid *template line-names*).
+  - serval stores nodes in `TaffyTree<InlineContent<NodeId>>`, and
+    `TaffyTree<NodeContext = ()>` is **not generic over the ident
+    type** — its stored `style` field and `new_leaf`/`set_style` all
+    take `Style` (= `Style<DefaultCheapStr>`, the hardcoded default).
+    So `Style<Atom>` cannot be stored without a per-field rebuild —
+    which is precisely what `cv_to_taffy::to_taffy_style` *is*. Calling
+    `to_taffy_style` then field-copying `Style<Atom> → Style<…>` would
+    be *more* code than the current direct assembly, and still
+    hand-written.
+  - The only way to *literally* retire the file is to abandon the
+    owned-`Style` `TaffyTree` for taffy's **trait-impl tree** — make
+    serval's planes implement `LayoutPartialTree`/`*ContainerStyle` and
+    feed `TaffyStyloStyle` (zero-copy over `ComputedValues`) directly.
+    That's how blitz-dom does it. It's a tree re-architecture, not a
+    converter swap — out of scope here, and tracked as a future option
+    (revisit when serval wants named-grid-line support or the zero-copy
+    style path). So `cv_to_taffy.rs` survives as a ~30-line
+    default-ident assembler over the maintained converters, which is
+    the correct shape given the API.
+- ✅ **Block-level float e2e pixel test green.**
+  `components/paint/tests/html_to_pixels_e2e.rs::html_to_pixels_float_left_places_blocks_side_by_side`
+  — two `float: left` divs sit side-by-side (where plain blocks stack),
+  verified at the pixel level on real GPU. The text-wrap-around-float
+  limit is documented in the test body, not silently broken.
+- ✅ **Tests green.** `serval-layout --lib`: 34 passed. The float e2e
+  test passes through the full HTML → cascade → layout → emit → render
+  → readback path.
+
+Net: the adoption is **done in substance** (no hand-rolled mapping,
+floats land, tests green). The one literal miss — file deletion — is an
+artifact of taffy's non-generic `TaffyTree`, recorded here rather than
+silently dropped, with the trait-impl-tree path noted as the only way
+to close it and deliberately deferred.

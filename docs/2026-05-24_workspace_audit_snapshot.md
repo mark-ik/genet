@@ -67,7 +67,7 @@ Members = the 2026-05-16 set **plus four scripting crates** (`script-engine-api`
 | `2026-05-17_serval_layout_planes_architecture` | proposed (canonical layout arch) | current; invalidation **core built**, fine-grained Stylo restyle still stubbed | current |
 | `2026-05-17_hekate_lanes_observables` | proposed (cross-engine) | current; Serval scripted lane partly real | current |
 | `2026-05-17_paintlist_polyglot_renderer` | PM-3 design + receipts | superseded by the extraction (done) | superseded |
-| `2026-05-20_stylo_taffy_adoption_plan` | planned; supersedes `cv_to_taffy` | **in progress** — `cv_to_taffy.rs` still present | active |
+| `2026-05-20_stylo_taffy_adoption_plan` | planned; supersedes `cv_to_taffy` | **done (2026-05-25)** — `cv_to_taffy` now fully delegates to `stylo_taffy::convert`; floats land (e2e pixel test green). `cv_to_taffy.rs` kept (not deletable: taffy's `TaffyTree` isn't ident-generic, so `to_taffy_style`'s `Style<Atom>` can't be stored) | done |
 | `2026-05-20_blitz_float_linebox_study` | study | reference (floats still a gap) | reference |
 | `2026-05-08_c3` / `2026-05-09_c4` landed notes | landed | c4 Windows parity tail **runtime-verified 2026-05-25** (both present smokes green on real D3D12/DCOMP hardware) | resolved |
 | `2026-05-16_workspace_audit_snapshot` | 2026-05-16 snapshot | **superseded by this doc** | superseded |
@@ -83,7 +83,12 @@ Members = the 2026-05-16 set **plus four scripting crates** (`script-engine-api`
 - **Boa/parley icu conflict** — boa quarantined; clears when boa bumps `icu_normalizer`.
   Moot for wasm (wasm = no-JS); matters only for the native conformance oracle.
 - **Nova fork** — upstream PR pending; `usdt` + the 64-bit `Value` keep Nova native-only.
-- **stylo_taffy adoption** — `cv_to_taffy` not yet retired.
+- **stylo_taffy adoption** — ✅ done (2026-05-25). Hand-written mapping
+  retired (full delegation to `stylo_taffy::convert`); block-level floats
+  land + e2e-tested. `cv_to_taffy.rs` survives as a thin default-ident
+  assembler — *literal* deletion is blocked by taffy's non-generic
+  `TaffyTree` (can't store `to_taffy_style`'s `Style<Atom>`); closing it
+  needs the trait-impl-tree re-architecture (blitz-style), deferred.
 - **c4 Windows parity tail** — ✅ resolved (runtime-verified 2026-05-25). Both
   `--windows-present-smoke` (master) and `--windows-present-surfaces-smoke`
   (per-`SurfaceKey` DCOMP child visual) present clean on this machine's
