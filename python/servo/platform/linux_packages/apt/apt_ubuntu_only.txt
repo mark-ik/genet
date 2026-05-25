@@ -1,2 +1,0 @@
-# This package does not exist on debian
-libgstreamer-plugins-good1.0-dev
