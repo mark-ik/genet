@@ -257,6 +257,62 @@ pub struct RestyleOutcome {
     pub needs_relayout: bool,
 }
 
+/// Partial cascade for a **structural** change: re-cascade only the
+/// mutation's affected subtrees (`roots`), reusing the prior `plane`.
+///
+/// Each root is hinted `RestyleHint::restyle_subtree()` (restyle self +
+/// descendants) and the dirty-descendant path from its parent up to the
+/// document root is marked, so Stylo's traversal descends to it and
+/// re-cascades that subtree — covering the inserted/replaced nodes (no
+/// `ElementData` yet → styled) and within-parent sibling / `:nth-child`
+/// effects. Elements outside the affected subtrees keep their prior
+/// `ComputedValues` (the cascade skips clean nodes).
+///
+/// Boundary (documented, same spirit as the `SubtreeView` scope): a
+/// structural change whose selector reach crosses *outside* the affected
+/// subtree (`~`/`+` reaching a different parent, `:has()`, ancestor
+/// `:nth-child`) is not re-matched — those want full structural
+/// invalidation. `IncrementalLayout` only takes this path for the common
+/// within-subtree case.
+pub fn restyle_structural<D>(
+    dom: &D,
+    plane: &mut StylePlane<D::NodeId>,
+    viewport: euclid::default::Size2D<f32>,
+    stylesheets: &[&str],
+    roots: &[D::NodeId],
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + 'static,
+{
+    use style::invalidation::element::restyle_hints::RestyleHint;
+
+    plane.reset_damage();
+
+    for &root in roots {
+        // Hint the root's subtree for restyle. The root existed before the
+        // mutation (it's the container / replaced node), so it has data;
+        // RESTYLE_DESCENDANTS propagates to its children — including any
+        // newly-inserted ones, which get styled as no-data elements.
+        if let Some(entry) = plane.get(root) {
+            // SAFETY: not inside a cascade traversal (single-threaded, no
+            // live borrow of this entry's ElementData).
+            if let Some(mut data) = unsafe { entry.mutate_data() } {
+                data.hint.insert(RestyleHint::restyle_subtree());
+            }
+        }
+        // Mark the dirty path so the traversal descends to the root.
+        let mut cur = dom.parent(root);
+        while let Some(ancestor) = cur {
+            if let Some(entry) = plane.get(ancestor) {
+                entry.dirty_descendants.set(true);
+            }
+            cur = dom.parent(ancestor);
+        }
+    }
+
+    cascade_traverse(dom, plane, viewport, stylesheets, None);
+}
+
 /// Shared cascade traversal. `snapshots = None` is a full cascade (every
 /// element styled because none has `ElementData` yet); `Some` is the
 /// incremental restyle path (existing data + snapshots drive Stylo's

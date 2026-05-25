@@ -23,7 +23,7 @@ use std::hash::Hash;
 
 use layout_dom_api::{DomMutation, LayoutDom};
 
-use crate::cascade::{restyle_with_snapshots, run_cascade};
+use crate::cascade::{restyle_structural, restyle_with_snapshots, run_cascade};
 use crate::fragment::FragmentPlane;
 use crate::image_decode::ImagePlane;
 use crate::invalidate::{classify, coalesce};
@@ -139,16 +139,24 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
     where
         D: LayoutDom<NodeId = Id>,
     {
-        // 1. Styles: full re-cascade so new elements are styled and any
-        //    cross-subtree selector effects are captured (correctness over
-        //    the partial-cascade optimization).
-        let mut styles = StylePlane::new();
-        run_cascade(dom, &mut styles, euclid::Size2D::new(self.width, self.height), stylesheets);
-        self.styles = styles;
-
-        // 2. Fragments: incremental splice over the fresh styles.
+        // Plan the affected subtree roots (shared by the partial cascade
+        // and the layout splice).
         let invalidations: Vec<_> = mutations.iter().map(classify).collect();
         let roots = coalesce(&invalidations, |id| dom.parent(id));
+        let root_ids: Vec<Id> = roots.iter().map(|inv| inv.node()).collect();
+
+        // 1. Styles: partial cascade — re-cascade only the affected
+        //    subtrees over the persistent plane (the inserted/replaced
+        //    nodes + within-parent sibling/nth-child effects).
+        restyle_structural(
+            dom,
+            &mut self.styles,
+            euclid::Size2D::new(self.width, self.height),
+            stylesheets,
+            &root_ids,
+        );
+
+        // 2. Fragments: incremental layout splice over the restyled plane.
 
         let mut result = self.fragments.clone();
         for inv in &roots {
@@ -382,6 +390,48 @@ mod tests {
         let muts = drain(&mut dom);
         assert_eq!(layout.apply(&dom, SHEET, &muts), Applied::FullRecompute);
         assert!(layout.fragments().rect_of(p2).is_some(), "new <p> laid out after fallback");
+    }
+
+    /// The partial structural cascade re-matches **existing** siblings,
+    /// not just the new node: with `p:last-child { color: red }`,
+    /// appending a `<p>` must recolor the previously-last `<p>` (now black)
+    /// and color the new one red — matching a full re-cascade. This is the
+    /// receipt that `restyle_structural`'s `RESTYLE_DESCENDANTS` re-runs
+    /// `:last-child` over the parent's children, not only the insertion.
+    #[test]
+    fn structural_resibling_recolors_existing_via_partial_cascade() {
+        const SHEET: &[&str] = &["p{color:rgb(0,0,0)}p:last-child{color:rgb(255,0,0)}"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p1 = dom.create_element(html("p"));
+        dom.append_child(body, p1);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert!((color(&layout, p1)[0] - 1.0).abs() < 0.01, "p1 starts red (only/last child)");
+
+        // Append p2: p1 is no longer :last-child, p2 is.
+        let _ = drain(&mut dom);
+        let p2 = dom.create_element(html("p"));
+        dom.append_child(body, p2);
+        let muts = drain(&mut dom);
+        layout.apply(&dom, SHEET, &muts);
+
+        // Oracle: full cascade of the mutated DOM.
+        let mut oracle = StylePlane::new();
+        run_cascade(&dom, &mut oracle, euclid::Size2D::new(W, H), SHEET);
+        let oracle_color = |id| {
+            *oracle.get(id).unwrap().borrow_data().unwrap()
+                .styles.primary().get_inherited_text().color.into_srgb_legacy().raw_components()
+        };
+
+        assert_eq!(color(&layout, p1), oracle_color(p1), "p1 must match full re-cascade");
+        assert_eq!(color(&layout, p2), oracle_color(p2), "p2 must match full re-cascade");
+        assert!(color(&layout, p1)[0] < 0.01, "p1 recolored black (no longer last-child), got {:?}", color(&layout, p1));
+        assert!((color(&layout, p2)[0] - 1.0).abs() < 0.01, "p2 is red (now last-child), got {:?}", color(&layout, p2));
     }
 
     /// `innerHTML` replace (a `SubtreeReplaced`) under the full-height
