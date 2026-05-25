@@ -9,6 +9,6 @@ edition = "2021"
 publish = false
 
 [dependencies]
-nova_vm = { path = "../../../nova/nova_vm" }
+nova_vm = { path = "../../../../crates/nova/nova_vm" }
 
 [workspace]

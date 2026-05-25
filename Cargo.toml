@@ -188,9 +188,9 @@ netrender_device = { path = "../netrender/netrender_device" }
 # Linebender UI stack — local fork on branch mere-wgpu-29-vello-0-9
 # (vello 0.9 / wgpu 29 / parley 0.9, matching netrender). Same fork
 # Strophe + Woodshed consume.
-xilem = { path = "../xilem/xilem" }
-masonry = { path = "../xilem/masonry" }
-masonry_winit = { path = "../xilem/masonry_winit" }
+xilem = { path = "../../crates/xilem/xilem" }
+masonry = { path = "../../crates/xilem/masonry" }
+masonry_winit = { path = "../../crates/xilem/masonry_winit" }
 peniko = "0.6"
 percent-encoding = "2.3"
 pkcs8 = { version = "0.10", features = ["rand_core"] }
@@ -430,7 +430,7 @@ gpu-allocator = { path = "support/patches/gpu-allocator" }
 # Nova fork (serval-embedder branch) carrying the EmbedderObject native-data patch
 # that script-engine-nova relies on. Local path for dev; the shippable form is the
 # git branch: nova_vm = { git = "https://github.com/mark-ik/nova", branch = "serval-embedder" }
-nova_vm = { path = "../nova/nova_vm" }
+nova_vm = { path = "../../crates/nova/nova_vm" }
 # stylo_taffy (serval-layout) depends on crates.io `stylo`/`stylo_atoms`
 # `^0.17`. serval pins the same crates from the servo/stylo git rev, and
 # `stylo` declares `links = "servo_style_crate"` (only one Stylo allowed

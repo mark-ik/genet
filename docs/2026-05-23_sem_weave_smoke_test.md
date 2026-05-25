@@ -16,6 +16,17 @@ helpers for agent-heavy development:
 - Neither should replace compile/test validation. They understand structural
   entities, not full program semantics or project invariants.
 
+> **Update 2026-05-24:** superseded on the repo-wide point. `weave` is now
+> enabled across the workspace — every repo (mere, serval, netrender, strophe,
+> woodshed, graphshell, wgpu-graft/scry/weld) carries a committed
+> `.gitattributes` mapping ~50 file types to `merge=weave`, and the driver is
+> wired in each clone's local `.git/config`
+> (`merge.weave.driver = ~/.cargo/bin/weave-driver …`). The original caution
+> below predates that rollout. `sem` remains ad-hoc (run via `npx
+> @ataraxy-labs/sem` / the binary; not committed-wired). Both stay
+> **non-authoritative** — they never replace compile/test validation. See the
+> workspace-level note: [`mere/design_docs/2026-05-24_external_deps_topology_brief.md`](../../mere/design_docs/2026-05-24_external_deps_topology_brief.md).
+
 Do not enable repo-wide setup by default yet. Prefer explicit commands,
 temporary tests, and local-only configuration until the tools have been used on
 real Serval conflicts.
