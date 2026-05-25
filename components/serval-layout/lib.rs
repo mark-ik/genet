@@ -19,6 +19,7 @@
 
 mod adapter;
 mod adapter_stylo;
+mod box_tree;
 mod cascade;
 mod cell;
 mod construct;
@@ -37,6 +38,7 @@ mod ua_defaults;
 
 pub use adapter::NodeRef;
 pub use adapter_stylo::StyleNodeRef;
+pub use box_tree::{build_box_tree, layout_via_box_tree, BoxTree};
 pub use cascade::run_cascade;
 pub use cell::ArcRefCell;
 pub use construct::{construct, ConstructedTree};

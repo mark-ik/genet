@@ -188,7 +188,7 @@ where
 /// Comments / PIs are ignored. With no cascade data (`is_inline_element`
 /// → `None`), non-replaced elements are treated as block — preserving
 /// the pre-inline behavior for hand-rolled style fixtures.
-fn establishes_inline_context<'a, D>(
+pub(crate) fn establishes_inline_context<'a, D>(
     dom: &'a D,
     styles: &StylePlane<D::NodeId>,
     elem: NodeRef<'a, D>,
@@ -223,7 +223,7 @@ where
 
 /// Whether an element is replaced content we render as its own box
 /// rather than as flowed inline text. v1: just `<img>`.
-fn is_replaced<D>(dom: &D, id: D::NodeId) -> bool
+pub(crate) fn is_replaced<D>(dom: &D, id: D::NodeId) -> bool
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -251,7 +251,7 @@ fn is_inline_element<NodeId: Copy + Eq + Hash>(
 /// nearest enclosing inline element (which carries the cascade), and
 /// each replaced element (`<img>`) becomes an [`InlineBoxItem`] anchored
 /// at the current byte offset into the concatenated run text.
-fn gather_inline_content<'a, D>(
+pub(crate) fn gather_inline_content<'a, D>(
     dom: &'a D,
     styles: &StylePlane<D::NodeId>,
     elem: NodeRef<'a, D>,
@@ -333,7 +333,7 @@ fn img_size<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId) -
 /// Build an [`InlineRun`] for `text` styled by element `id`'s cascade
 /// (size / family / weight / italic), defaulting where the cascade
 /// hasn't run.
-fn run_for_element<NodeId: Copy + Eq + Hash>(
+pub(crate) fn run_for_element<NodeId: Copy + Eq + Hash>(
     styles: &StylePlane<NodeId>,
     id: NodeId,
     text: String,
