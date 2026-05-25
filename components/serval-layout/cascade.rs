@@ -523,6 +523,57 @@ mod tests {
         assert!((b - 1.0).abs() < 0.001, "p blue: {b}");
     }
 
+    /// Attribute selectors match against element attributes: an
+    /// `[data-state="on"]` rule (value match) and a `[hidden]` rule
+    /// (existence) each apply to the right element. This is the receipt
+    /// that `SelectorsElement::attr_matches` is wired (it was stubbed to
+    /// `false`, so `[attr]` selectors matched nothing).
+    #[test]
+    fn cascade_matches_attribute_selectors() {
+        let document = StaticDocument::parse(
+            "<html><body>\
+                <p data-state=\"on\">A</p>\
+                <p hidden>B</p>\
+                <p data-state=\"off\">C</p>\
+            </body></html>",
+        );
+        let mut plane: StylePlane<_> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut plane,
+            euclid::Size2D::new(800.0, 600.0),
+            &[
+                "[data-state=\"on\"] { color: rgb(0, 255, 0); } \
+                 [hidden] { color: rgb(0, 0, 255); }",
+            ],
+        );
+
+        let ps: Vec<_> = {
+            let mut out = Vec::new();
+            let mut q = vec![document.document()];
+            while let Some(id) = q.pop() {
+                if document.element_name(id).is_some_and(|n| n.local == local_name!("p")) {
+                    out.push(id);
+                }
+                let mut kids: Vec<_> = document.dom_children(id).collect();
+                kids.reverse();
+                q.extend(kids);
+            }
+            out
+        };
+        assert_eq!(ps.len(), 3);
+
+        let green = |c: [f32; 4]| c[1] > 0.99 && c[0] < 0.01 && c[2] < 0.01;
+        let blue = |c: [f32; 4]| c[2] > 0.99 && c[0] < 0.01 && c[1] < 0.01;
+
+        // p[0] = data-state=on → green; p[1] = hidden → blue; p[2] =
+        // data-state=off → neither rule (default black).
+        assert!(green(color_of::<StaticDocument>(&plane, ps[0])), "[data-state=on] → green");
+        assert!(blue(color_of::<StaticDocument>(&plane, ps[1])), "[hidden] → blue");
+        let c2 = color_of::<StaticDocument>(&plane, ps[2]);
+        assert!(!green(c2) && !blue(c2), "data-state=off matches neither rule");
+    }
+
     /// The text `color` an element's cascade resolved to, as straight RGBA.
     fn color_of<D>(plane: &StylePlane<D::NodeId>, id: D::NodeId) -> [f32; 4]
     where
@@ -645,6 +696,50 @@ mod tests {
             "descendant <p> must match full re-cascade after the container's class change"
         );
         assert!((p_inc[2] - 1.0).abs() < 0.001, "descendant <p> should be blue via `.box p`, got {p_inc:?}");
+    }
+
+    /// Incremental restyle handles **attribute-selector** dependencies:
+    /// toggling `data-state` off→on makes `[data-state="on"]` match, and
+    /// `restyle_with_snapshots` recolors the element to match a full
+    /// re-cascade. (Exercises attr snapshots + `attr_matches` together.)
+    #[test]
+    fn incremental_restyle_handles_attribute_selectors() {
+        use html5ever::ns;
+        use layout_dom_api::{LayoutDomMut, QualName};
+        use serval_scripted_dom::ScriptedDom;
+
+        const SHEET: &[&str] = &["p { color: rgb(0,0,0); } p[data-state=\"on\"] { color: rgb(0,255,0); }"];
+        let html = |l: &str| QualName::new(None, ns!(html), l.into());
+        let attr = |l: &str| QualName::new(None, ns!(), l.into());
+
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.set_attribute(p, attr("data-state"), "off");
+        dom.append_child(body, p);
+
+        let mut plane: StylePlane<_> = StylePlane::new();
+        run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET);
+        assert!(color_of::<ScriptedDom>(&plane, p)[1] < 0.01, "p starts black (data-state=off)");
+
+        // Toggle data-state off → on.
+        let mut sink = Vec::new();
+        dom.drain_mutations(&mut sink);
+        dom.set_attribute(p, attr("data-state"), "on");
+        let mut muts = Vec::new();
+        dom.drain_mutations(&mut muts);
+        restyle_with_snapshots(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, &muts);
+
+        let mut oracle: StylePlane<_> = StylePlane::new();
+        run_cascade(&dom, &mut oracle, euclid::Size2D::new(800.0, 600.0), SHEET);
+
+        let inc = color_of::<ScriptedDom>(&plane, p);
+        assert_eq!(inc, color_of::<ScriptedDom>(&oracle, p), "attr restyle must match full re-cascade");
+        assert!(inc[1] > 0.99, "p should be green after data-state→on, got {inc:?}");
     }
 
     /// RestyleDamage drives the repaint-vs-relayout decision: a `color`-only

@@ -540,17 +540,24 @@ impl<'a, D: LayoutDom> SelectorsElement for StyleNodeRef<'a, D> {
 
     fn attr_matches(
         &self,
-        _ns: &NamespaceConstraint<&style::Namespace>,
+        ns: &NamespaceConstraint<&style::Namespace>,
         local_name: &style::LocalName,
         operation: &AttrSelectorOperation<&style::values::AtomString>,
     ) -> bool {
-        let _ = _ns;
-        let _ = local_name;
-        let _ = operation;
-        // Real impl: walk attributes(), find matching local_name (filtered
-        // by ns constraint), run operation.eval_str(&value). Probe-stage
-        // skeleton returns false (no attribute selectors matched).
-        false
+        // Find the attribute matching `local_name` under the namespace
+        // constraint, then run the operation (`[attr]` exists, `[attr=v]`,
+        // `[attr~=v]`, …) against its value. `style::{LocalName,Namespace}`
+        // are `GenericAtomIdent` wrappers over the raw markup5ever atoms
+        // `LayoutDom` stores, hence the `.0`.
+        let dom = self.dom();
+        match ns {
+            NamespaceConstraint::Specific(ns) => dom
+                .attribute(self.id, &ns.0, &local_name.0)
+                .is_some_and(|value| operation.eval_str(value)),
+            NamespaceConstraint::Any => dom.attributes(self.id).any(|attr| {
+                attr.name.local == local_name.0 && operation.eval_str(attr.value)
+            }),
+        }
     }
 
     fn match_non_ts_pseudo_class(
