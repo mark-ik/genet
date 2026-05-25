@@ -113,9 +113,14 @@ minimal restyle. The coarse-oracle diff-test is already in place.
   operators) match in both the full cascade and incremental restyle.
   Diff-tested (`cascade_matches_attribute_selectors`,
   `incremental_restyle_handles_attribute_selectors`).
-- **Pseudo-class state** (`:hover`, `:focus`) — needs a `StateChanged`
-  mutation + `state` on the snapshot. Deferred (no interaction state yet);
-  `match_non_ts_pseudo_class` is stubbed `false`.
+- **Pseudo-class state** (`:hover`, `:focus`) — **scaffolded (2026-05-25).**
+  `match_non_ts_pseudo_class` reads the element's `ElementState` via
+  `NonTSPseudoClass::state_flag()` (was stubbed `false`), so state-backed
+  pseudo-classes match in the cascade; `StylePlane::set_element_state` lets
+  a host set the state. Tested (`cascade_matches_hover_pseudo_class`).
+  **Remaining:** runtime input to *set* the state, and incremental
+  state-change restyle (snapshot old `state` + invalidate, parallel to the
+  attribute path) — both wait on an interaction/event pipeline.
 - `SelectorCaches` / `MatchingContext` lifetimes and `ElementData` mutation
   *during* invalidation are the intricate part of increment 3 — budget for
   it; do not rush past the diff-test.
@@ -184,9 +189,13 @@ Receipts: `serval-layout --lib` 47, `serval-scripted` 4 — green.
   the repaint-vs-relayout signal comes from the generic `RestyleDamage`
   Stylo already computes, which is the correct source for taffy layout.
 
-**Deferred (tracked):** pseudo-class state (`:hover`/`:focus`) snapshots +
-`match_non_ts_pseudo_class`; partial (non-full) cascade for structural
-changes (`IncrementalLayout` re-cascades fully on structural — the splice
-optimizes layout, not cascade). *(Done 2026-05-25: structural-splice
-unification + serval-scripted adoption; `[attr]` selectors via
-`attr_matches` + full old-attr-set snapshots.)*
+**Deferred (tracked), all gated on a runtime interaction/event pipeline:**
+setting `:hover`/`:focus` state at runtime + incremental state-change
+restyle (the matching + state storage are scaffolded — see above).
+
+*Done 2026-05-25 (this session): increments 1–4; structural-splice
+unification into `IncrementalLayout` + serval-scripted adoption; `[attr]`
+selectors (`attr_matches` + full old-attr-set snapshots); **partial cascade
+for structural changes** (`restyle_structural` — only the affected subtrees
+re-cascade); **state-pseudo-class matching scaffold**
+(`match_non_ts_pseudo_class` reads `ElementState`, plus `set_element_state`).*
