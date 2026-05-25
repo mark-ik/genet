@@ -71,6 +71,7 @@ the DOM crate, more than the principle wants.)
 ## Increments (each diff-tested against the full-re-cascade oracle)
 
 **1 — Snapshot data + capture + builder (this increment).**
+
 - `DomMutation::AttributeChanged` gains `old_value: Option<String>`
   (`None` = the attr was newly added). `serval-scripted-dom::set_attribute`
   records the prior value before overwriting.
@@ -171,15 +172,20 @@ Receipts: `serval-layout --lib` 47, `serval-scripted` 4 — green.
   cascade+layout session), **not** the existing stateless
   `relayout_incremental` (which is FragmentPlane-splice and holds no
   `StylePlane`). Incremental restyle fundamentally needs a persistent
-  `StylePlane`, so a stateful holder is the right shape; folding the
-  structural FragmentPlane-splice path into `IncrementalLayout` (so one
-  engine handles both restyle and structural relayout) is the natural
-  follow-on, plus having `serval-scripted` adopt it as its live entry.
+  `StylePlane`, so a stateful holder is the right shape. **Resolved
+  2026-05-25:** the structural FragmentPlane-splice was folded into
+  `IncrementalLayout` (full re-cascade + incremental subtree splice over
+  the persistent styles, `Applied::Spliced`, full-layout fallback), so one
+  engine handles both restyle and structural relayout; `serval-scripted`
+  re-exports it as its live entry and dropped the superseded stateless
+  `relayout_incremental`.
 - `compute_layout_damage` was **not** un-stubbed (left empty) — see 4a;
   the repaint-vs-relayout signal comes from the generic `RestyleDamage`
   Stylo already computes, which is the correct source for taffy layout.
 
 **Deferred (tracked):** full old-attr set + `attr_matches` for `[attr]`
 selectors; pseudo-class state (`:hover`/`:focus`) snapshots +
-`match_non_ts_pseudo_class`; merging the structural-relayout splice into
-`IncrementalLayout` + serval-scripted adoption.
+`match_non_ts_pseudo_class`; partial (non-full) cascade for structural
+changes (`IncrementalLayout` re-cascades fully on structural — the splice
+optimizes layout, not cascade). *(Structural-splice unification into
+`IncrementalLayout` + serval-scripted adoption — **done 2026-05-25**.)*
