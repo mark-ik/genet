@@ -274,100 +274,124 @@ fn definite_px(size: &style::values::computed::Size) -> Option<f32> {
 /// borrow of the tree.
 type NodeStyle = TaffyStyloStyle<ServoArc<ComputedValues>>;
 
-/// Block-item style adapter.
+/// `CoreStyle` wrapper that delegates to a `TaffyStyloStyle` but can
+/// force a definite `size`.
 ///
-/// `stylo_taffy 0.3.0-alpha.4`'s `TaffyStyloStyle` implements
-/// `BlockItemStyle` but **only** overrides `is_table` — it leaves
-/// `float()`/`clear()` at the trait defaults (`None`), so block floats
-/// are invisible through the zero-copy wrapper (they work through the
-/// owned-`Style` `to_taffy_style` path, which sets the fields). This
-/// newtype delegates every `CoreStyle` method to the inner
-/// `TaffyStyloStyle` and forwards `float`/`clear` via
-/// `stylo_taffy::convert`, restoring block-float parity with the oracle.
-/// (Upstream fix candidate: forward these in the wrapper.)
-struct BlockItem(NodeStyle);
+/// Two jobs:
+/// 1. **Replaced sizing.** For a lone `<img>`, the oracle bakes the
+///    intrinsic/CSS size into the node's owned `taffy::Style`, so the
+///    parent's block layout uses it instead of stretching the auto-width
+///    box to the container. The box tree reads size from
+///    `ComputedValues` (`auto`), so it injects the resolved replaced
+///    size via `size_override` — and it must do so in the *parent's*
+///    child-style query (`get_block_child_style`), since that's where
+///    the stretch decision is made.
+/// 2. **`BlockItemStyle` float/clear.** `stylo_taffy 0.3.0-alpha.4`'s
+///    `TaffyStyloStyle` implements `BlockItemStyle` but only overrides
+///    `is_table`, leaving `float()`/`clear()` at the `None` defaults
+///    (they work through the owned-`Style` path, not the zero-copy
+///    wrapper). This type forwards them via `stylo_taffy::convert`,
+///    restoring block-float parity. (Upstream fix candidate.)
+struct CssStyle {
+    inner: NodeStyle,
+    size_override: Option<taffy::Size<taffy::Dimension>>,
+}
 
-impl taffy::CoreStyle for BlockItem {
-    type CustomIdent = style::Atom;
+impl CssStyle {
+    #[inline]
+    fn new(inner: NodeStyle) -> Self {
+        Self { inner, size_override: None }
+    }
 
     #[inline]
-    fn box_generation_mode(&self) -> taffy::BoxGenerationMode {
-        self.0.box_generation_mode()
-    }
-    #[inline]
-    fn is_block(&self) -> bool {
-        self.0.is_block()
-    }
-    #[inline]
-    fn is_compressible_replaced(&self) -> bool {
-        self.0.is_compressible_replaced()
-    }
-    #[inline]
-    fn box_sizing(&self) -> taffy::BoxSizing {
-        self.0.box_sizing()
-    }
-    #[inline]
-    fn direction(&self) -> taffy::Direction {
-        self.0.direction()
-    }
-    #[inline]
-    fn overflow(&self) -> taffy::Point<taffy::Overflow> {
-        self.0.overflow()
-    }
-    #[inline]
-    fn scrollbar_width(&self) -> f32 {
-        self.0.scrollbar_width()
-    }
-    #[inline]
-    fn position(&self) -> taffy::Position {
-        self.0.position()
-    }
-    #[inline]
-    fn inset(&self) -> taffy::Rect<taffy::LengthPercentageAuto> {
-        self.0.inset()
-    }
-    #[inline]
-    fn size(&self) -> taffy::Size<taffy::Dimension> {
-        self.0.size()
-    }
-    #[inline]
-    fn min_size(&self) -> taffy::Size<taffy::Dimension> {
-        self.0.min_size()
-    }
-    #[inline]
-    fn max_size(&self) -> taffy::Size<taffy::Dimension> {
-        self.0.max_size()
-    }
-    #[inline]
-    fn aspect_ratio(&self) -> Option<f32> {
-        self.0.aspect_ratio()
-    }
-    #[inline]
-    fn margin(&self) -> taffy::Rect<taffy::LengthPercentageAuto> {
-        self.0.margin()
-    }
-    #[inline]
-    fn padding(&self) -> taffy::Rect<taffy::LengthPercentage> {
-        self.0.padding()
-    }
-    #[inline]
-    fn border(&self) -> taffy::Rect<taffy::LengthPercentage> {
-        self.0.border()
+    fn with_size(inner: NodeStyle, size: taffy::Size<taffy::Dimension>) -> Self {
+        Self { inner, size_override: Some(size) }
     }
 }
 
-impl taffy::BlockItemStyle for BlockItem {
+impl taffy::CoreStyle for CssStyle {
+    type CustomIdent = style::Atom;
+
+    #[inline]
+    fn size(&self) -> taffy::Size<taffy::Dimension> {
+        self.size_override.unwrap_or_else(|| self.inner.size())
+    }
+
+    // Everything else delegates to the inner `TaffyStyloStyle`.
+    #[inline]
+    fn box_generation_mode(&self) -> taffy::BoxGenerationMode {
+        self.inner.box_generation_mode()
+    }
+    #[inline]
+    fn is_block(&self) -> bool {
+        self.inner.is_block()
+    }
+    #[inline]
+    fn is_compressible_replaced(&self) -> bool {
+        self.inner.is_compressible_replaced()
+    }
+    #[inline]
+    fn box_sizing(&self) -> taffy::BoxSizing {
+        self.inner.box_sizing()
+    }
+    #[inline]
+    fn direction(&self) -> taffy::Direction {
+        self.inner.direction()
+    }
+    #[inline]
+    fn overflow(&self) -> taffy::Point<taffy::Overflow> {
+        self.inner.overflow()
+    }
+    #[inline]
+    fn scrollbar_width(&self) -> f32 {
+        self.inner.scrollbar_width()
+    }
+    #[inline]
+    fn position(&self) -> taffy::Position {
+        self.inner.position()
+    }
+    #[inline]
+    fn inset(&self) -> taffy::Rect<taffy::LengthPercentageAuto> {
+        self.inner.inset()
+    }
+    #[inline]
+    fn min_size(&self) -> taffy::Size<taffy::Dimension> {
+        self.inner.min_size()
+    }
+    #[inline]
+    fn max_size(&self) -> taffy::Size<taffy::Dimension> {
+        self.inner.max_size()
+    }
+    #[inline]
+    fn aspect_ratio(&self) -> Option<f32> {
+        self.inner.aspect_ratio()
+    }
+    #[inline]
+    fn margin(&self) -> taffy::Rect<taffy::LengthPercentageAuto> {
+        self.inner.margin()
+    }
+    #[inline]
+    fn padding(&self) -> taffy::Rect<taffy::LengthPercentage> {
+        self.inner.padding()
+    }
+    #[inline]
+    fn border(&self) -> taffy::Rect<taffy::LengthPercentage> {
+        self.inner.border()
+    }
+}
+
+impl taffy::BlockItemStyle for CssStyle {
     #[inline]
     fn is_table(&self) -> bool {
-        taffy::BlockItemStyle::is_table(&self.0)
+        taffy::BlockItemStyle::is_table(&self.inner)
     }
     #[inline]
     fn float(&self) -> taffy::Float {
-        stylo_taffy::convert::float(self.0 .0.clone_float())
+        stylo_taffy::convert::float(self.inner.0.clone_float())
     }
     #[inline]
     fn clear(&self) -> taffy::Clear {
-        stylo_taffy::convert::clear(self.0 .0.clone_clear())
+        stylo_taffy::convert::clear(self.inner.0.clone_clear())
     }
 }
 
@@ -384,6 +408,25 @@ impl<Id: Copy + Eq + Hash> BoxTreeView<'_, Id> {
     #[inline]
     fn node(&self, n: NodeId) -> &BoxNode<Id> {
         &self.tree.nodes[idx(n)]
+    }
+
+    /// Style for `n` as a `CssStyle`, baking in the replaced (`<img>`)
+    /// definite size so the parent's block layout sizes it intrinsically
+    /// rather than stretching the auto-width box.
+    #[inline]
+    fn css_style(&self, n: NodeId) -> CssStyle {
+        let node = self.node(n);
+        let inner = TaffyStyloStyle(node.style.clone());
+        match node.replaced_size {
+            Some((w, h)) => CssStyle::with_size(
+                inner,
+                taffy::Size {
+                    width: taffy::Dimension::length(w),
+                    height: taffy::Dimension::length(h),
+                },
+            ),
+            None => CssStyle::new(inner),
+        }
     }
 
     /// Unified dispatch that both `LayoutPartialTree::compute_child_layout`
@@ -416,19 +459,34 @@ impl<Id: Copy + Eq + Hash> BoxTreeView<'_, Id> {
                 (Display::Grid, true) => taffy::compute_grid_layout(tree, node, inputs),
                 // Leaf: replaced (<img>) or text/inline measured by parley.
                 (_, false) => {
-                    let style = TaffyStyloStyle(tree.tree.nodes[key].style.clone());
-                    let replaced = tree.tree.nodes[key].replaced_size;
-                    taffy::compute_leaf_layout(inputs, &style, |_, _| 0.0, |known, avail| {
-                        if let Some((w, h)) = replaced {
-                            return Size { width: w, height: h };
-                        }
-                        match &tree.tree.nodes[key].inline_content {
-                            Some(content) => {
-                                measure_inline_content(tree.text_ctx, content, node, known, avail)
+                    let style = tree.css_style(node);
+                    match tree.tree.nodes[key].replaced_size {
+                        // Replaced element: definite size (intrinsic/CSS).
+                        // `css_style` already forced the leaf's `size`, so
+                        // the measure value is only a fallback.
+                        Some((w, h)) => taffy::compute_leaf_layout(
+                            inputs,
+                            &style,
+                            |_, _| 0.0,
+                            |_, _| Size { width: w, height: h },
+                        ),
+                        // Text / inline formatting context: parley measures.
+                        None => taffy::compute_leaf_layout(
+                            inputs,
+                            &style,
+                            |_, _| 0.0,
+                            |known, avail| match &tree.tree.nodes[key].inline_content {
+                                Some(content) => measure_inline_content(
+                                    tree.text_ctx,
+                                    content,
+                                    node,
+                                    known,
+                                    avail,
+                                ),
+                                None => Size::ZERO,
                             },
-                            None => Size::ZERO,
-                        }
-                    })
+                        ),
+                    }
                 },
             }
         })
@@ -529,7 +587,7 @@ impl<Id: Copy + Eq + Hash> LayoutBlockContainer for BoxTreeView<'_, Id> {
     where
         Self: 'b;
     type BlockItemStyle<'b>
-        = BlockItem
+        = CssStyle
     where
         Self: 'b;
 
@@ -539,8 +597,8 @@ impl<Id: Copy + Eq + Hash> LayoutBlockContainer for BoxTreeView<'_, Id> {
     }
 
     #[inline]
-    fn get_block_child_style(&self, child: NodeId) -> BlockItem {
-        BlockItem(self.get_core_container_style(child))
+    fn get_block_child_style(&self, child: NodeId) -> CssStyle {
+        self.css_style(child)
     }
 
     #[inline]
@@ -667,9 +725,15 @@ mod tests {
     /// Run both pipelines over the fixture and assert every node in the
     /// oracle's fragment plane has a box-tree rect within `eps`, and the
     /// two planes cover the same node set.
+    ///
+    /// Decodes any inline `<img>` data URIs and applies intrinsic sizes
+    /// to the oracle's styles (its replaced-element path), while handing
+    /// the same `ImagePlane` to the box tree (which sizes the `<img>`
+    /// leaf from it directly) — so the replaced path is on the diff too.
     fn assert_parity(html: &str, sheets: &[&str]) {
-        let (document, styles) = cascade(html, sheets);
-        let images = ImagePlane::new();
+        let (document, mut styles) = cascade(html, sheets);
+        let images = ImagePlane::decode_from_dom(&document);
+        styles.apply_intrinsic_image_sizes(&images);
         let viewport = Size {
             width: AvailableSpace::Definite(VIEWPORT),
             height: AvailableSpace::Definite(VIEWPORT),
@@ -762,6 +826,36 @@ mod tests {
     #[test]
     fn parity_plain_paragraph() {
         assert_parity("<html><body><p>Hello, serval!</p></body></html>", &[]);
+    }
+
+    /// Replaced element: a lone `<img>` (data URI) takes its decoded
+    /// intrinsic size. Box tree sizes it via the `ImagePlane` measured
+    /// leaf; oracle via `apply_intrinsic_image_sizes` on the owned style.
+    #[test]
+    fn parity_img_intrinsic_size() {
+        use base64::Engine as _;
+        let blue = image::RgbaImage::from_pixel(16, 16, image::Rgba([0, 0, 255, 255]));
+        let mut png = Vec::new();
+        blue.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .expect("encode test PNG");
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        let html = format!("<html><body><img src=\"data:image/png;base64,{b64}\"></body></html>");
+        assert_parity(&html, &[]);
+    }
+
+    /// Replaced element with an explicit CSS size override on one axis:
+    /// definite `width` wins, `height` stays intrinsic. Exercises the
+    /// box tree's `definite_px` override against the oracle's style.
+    #[test]
+    fn parity_img_css_size_override() {
+        use base64::Engine as _;
+        let blue = image::RgbaImage::from_pixel(16, 16, image::Rgba([0, 0, 255, 255]));
+        let mut png = Vec::new();
+        blue.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .expect("encode test PNG");
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        let html = format!("<html><body><img src=\"data:image/png;base64,{b64}\"></body></html>");
+        assert_parity(&html, &["img { width: 50px; }"]);
     }
 
     #[test]
