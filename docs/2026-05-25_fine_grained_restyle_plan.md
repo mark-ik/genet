@@ -106,12 +106,13 @@ minimal restyle. The coarse-oracle diff-test is already in place.
 
 ## Known fiddly bits / deferred
 
-- **Full old attr set.** Snapshots populate `attrs` with the *changed*
-  attrs' old values; `[attr]`-selector deps want the *complete* old attr
-  vector. The class/id increment doesn't need it; full-old-attrs is
-  reconstructable (old_value + current attrs) when attribute selectors
-  land. Until then `attr_matches` is also still stubbed to `false`
-  (a separate gap).
+- **Full old attr set + `[attr]` selectors — DONE (2026-05-25).** Snapshots
+  reconstruct the *complete* pre-mutation attr set (increment 1), and
+  `SelectorsElement::attr_matches` is implemented (was stubbed `false`), so
+  `[attr]` selectors (`[type=text]`, `[disabled]`, `[data-x=y]`, all value
+  operators) match in both the full cascade and incremental restyle.
+  Diff-tested (`cascade_matches_attribute_selectors`,
+  `incremental_restyle_handles_attribute_selectors`).
 - **Pseudo-class state** (`:hover`, `:focus`) — needs a `StateChanged`
   mutation + `state` on the snapshot. Deferred (no interaction state yet);
   `match_non_ts_pseudo_class` is stubbed `false`.
@@ -183,9 +184,9 @@ Receipts: `serval-layout --lib` 47, `serval-scripted` 4 — green.
   the repaint-vs-relayout signal comes from the generic `RestyleDamage`
   Stylo already computes, which is the correct source for taffy layout.
 
-**Deferred (tracked):** full old-attr set + `attr_matches` for `[attr]`
-selectors; pseudo-class state (`:hover`/`:focus`) snapshots +
+**Deferred (tracked):** pseudo-class state (`:hover`/`:focus`) snapshots +
 `match_non_ts_pseudo_class`; partial (non-full) cascade for structural
 changes (`IncrementalLayout` re-cascades fully on structural — the splice
-optimizes layout, not cascade). *(Structural-splice unification into
-`IncrementalLayout` + serval-scripted adoption — **done 2026-05-25**.)*
+optimizes layout, not cascade). *(Done 2026-05-25: structural-splice
+unification + serval-scripted adoption; `[attr]` selectors via
+`attr_matches` + full old-attr-set snapshots.)*
