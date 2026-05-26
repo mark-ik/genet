@@ -6349,6 +6349,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "serval-wpt"
+version = "0.2.0"
+dependencies = [
+ "serval-layout",
+ "serval-static-dom",
+]
+
+[[package]]
 name = "servo-allocator"
 version = "0.2.0"
 dependencies = [

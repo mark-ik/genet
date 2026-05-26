@@ -1,0 +1,19 @@
+[package]
+name = "serval-wpt"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "serval-native web-platform-tests runner; subset-selectable."
+
+[[bin]]
+name = "serval-wpt"
+path = "src/main.rs"
+
+[dependencies]
+# Phase 1 (crash-smoke) needs only the parse + layout path; no GPU.
+serval-static-dom = { path = "../../components/serval-static-dom" }
+serval-layout = { path = "../../components/serval-layout" }

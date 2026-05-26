@@ -23,6 +23,7 @@ members = [
     "ports/pelt-desktop",
     "ports/pelt-viewer",
     "ports/pelt",
+    "ports/serval-wpt",
     "tests/unit/*",
 ]
 default-members = ["ports/pelt"]
