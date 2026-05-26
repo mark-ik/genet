@@ -12,6 +12,7 @@ use futures_util::TryStreamExt;
 use http_body_util::{BodyExt, Full};
 use url::Url;
 
+use crate::altsvc;
 use crate::cache::{self, StoredResponse};
 use crate::client::shared_client;
 use crate::cors;
@@ -165,6 +166,18 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
                     if let Some(host) = current_url.host_str() {
                         cx.hsts.record(host, max_age, include_subdomains);
                     }
+                }
+            }
+        }
+
+        // Record Alt-Svc advertisements so future requests to this origin can use
+        // h3 (the routing itself lands in 4b's next step).
+        if let Some(host) = current_url.host_str() {
+            if let Some(value) = resp.headers().get("alt-svc").and_then(|v| v.to_str().ok()) {
+                match altsvc::parse_alt_svc(value) {
+                    altsvc::AltSvc::H3 { port, max_age } => cx.alt_svc.record_h3(host, port, max_age),
+                    altsvc::AltSvc::Clear => cx.alt_svc.clear(host),
+                    altsvc::AltSvc::None => {}
                 }
             }
         }
@@ -415,6 +428,7 @@ mod tests {
             csp: Box::new(AllowAllCsp),
             hsts: Box::new(crate::InMemoryHsts::new()),
             preflight: Box::new(crate::InMemoryPreflightCache::new()),
+            alt_svc: Box::new(crate::InMemoryAltSvc::new()),
         }
     }
 
@@ -540,6 +554,7 @@ mod tests {
             csp: Box::new(AllowAllCsp),
             hsts: Box::new(crate::InMemoryHsts::new()),
             preflight: Box::new(crate::InMemoryPreflightCache::new()),
+            alt_svc: Box::new(crate::InMemoryAltSvc::new()),
         };
         let res = fetch(
             Request::get(format!("{}/c", server.url()).parse().unwrap()),
@@ -766,6 +781,48 @@ mod tests {
 
         options.assert_async().await;
         assert!(res.is_network_error(), "preflight denial blocks the actual request");
+    }
+
+    #[tokio::test]
+    async fn records_alt_svc_h3_advertisement() {
+        #[derive(Clone, Default)]
+        struct SpyAltSvc(Arc<Mutex<Option<u16>>>);
+        impl crate::AltSvcStore for SpyAltSvc {
+            fn h3_port(&self, _: &str) -> Option<u16> {
+                *self.0.lock().unwrap()
+            }
+            fn record_h3(&self, _: &str, port: u16, _: u64) {
+                *self.0.lock().unwrap() = Some(port);
+            }
+            fn clear(&self, _: &str) {
+                *self.0.lock().unwrap() = None;
+            }
+        }
+
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("alt-svc", "h3=\":443\"; ma=3600")
+            .with_body("ok")
+            .create_async()
+            .await;
+
+        let spy = SpyAltSvc::default();
+        let cx = FetchContext {
+            cookies: Box::new(InMemoryCookieJar::new()),
+            cache: Box::new(NoHttpCache),
+            csp: Box::new(AllowAllCsp),
+            hsts: Box::new(crate::InMemoryHsts::new()),
+            preflight: Box::new(crate::InMemoryPreflightCache::new()),
+            alt_svc: Box::new(spy.clone()),
+        };
+        let _ = fetch(Request::get(server.url().parse().unwrap()), &cx)
+            .await
+            .bytes()
+            .await;
+
+        assert_eq!(*spy.0.lock().unwrap(), Some(443), "h3 advertisement recorded");
     }
 
     #[tokio::test]

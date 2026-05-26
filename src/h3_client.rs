@@ -15,6 +15,7 @@
 
 use bytes::{Buf, Bytes, BytesMut};
 use std::net::ToSocketAddrs;
+use std::sync::Arc;
 use url::Url;
 
 /// An HTTP/3 response: status, headers, and the fully-collected body.
@@ -85,6 +86,31 @@ pub(crate) async fn fetch_h3(
         result = request => result,
         _ = std::future::poll_fn(|cx| driver.poll_close(cx)) => None,
     }
+}
+
+/// Production QUIC client config: webpki trust roots + ALPN `h3`.
+#[allow(dead_code)] // used by fetch_h3_default; wired into the fetch loop in 4b routing
+fn webpki_quic_config() -> Option<quinn::ClientConfig> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let mut tls = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    tls.alpn_protocols = vec![b"h3".to_vec()];
+    Some(quinn::ClientConfig::new(Arc::new(
+        quinn::crypto::rustls::QuicClientConfig::try_from(tls).ok()?,
+    )))
+}
+
+/// [`fetch_h3`] using the production (webpki) QUIC config.
+#[allow(dead_code)] // wired into the fetch loop in 4b routing
+pub(crate) async fn fetch_h3_default(
+    url: &Url,
+    method: http::Method,
+    headers: &[(String, String)],
+) -> Option<H3Response> {
+    fetch_h3(webpki_quic_config()?, url, method, headers).await
 }
 
 #[cfg(test)]

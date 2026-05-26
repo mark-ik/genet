@@ -25,6 +25,7 @@
 //! matching (increment 2), CORS/tainting (increment 3), HSTS (increment 3), and
 //! HTTP/3 (increment 4).
 
+mod altsvc;
 mod cache;
 mod client;
 mod context;
@@ -39,6 +40,7 @@ mod hsts;
 mod request;
 mod response;
 
+pub use altsvc::{AltSvcStore, InMemoryAltSvc};
 pub use cache::{HttpCache, InMemoryHttpCache, NoHttpCache, StoredResponse};
 pub use context::{AllowAllCsp, CookieStore, CspChecker, FetchContext, SameSiteContext};
 pub use cors::{InMemoryPreflightCache, PreflightCache};
