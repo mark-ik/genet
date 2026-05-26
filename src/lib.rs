@@ -29,6 +29,7 @@ mod cache;
 mod client;
 mod context;
 mod cookie_jar;
+mod cors;
 mod decode;
 mod fetch;
 mod request;

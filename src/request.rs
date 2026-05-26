@@ -10,7 +10,7 @@
 //! question #1** — deferred; for now netfetcher owns its types.
 
 use bytes::Bytes;
-use url::Url;
+use url::{Origin, Url};
 
 /// A Fetch request.
 #[derive(Clone, Debug)]
@@ -24,6 +24,10 @@ pub struct Request {
     pub mode: RequestMode,
     pub credentials: Credentials,
     pub redirect: RedirectMode,
+    /// The initiator's origin (the page/script that issued the fetch). Drives CORS
+    /// gating and response tainting. `None` = no initiator (a top-level fetch),
+    /// treated as same-origin with the target — no cross-origin checks apply.
+    pub origin: Option<Origin>,
 }
 
 impl Request {
@@ -37,7 +41,14 @@ impl Request {
             mode: RequestMode::default(),
             credentials: Credentials::default(),
             redirect: RedirectMode::default(),
+            origin: None,
         }
+    }
+
+    /// Set the initiator origin (cross-origin requests need this for CORS).
+    pub fn with_origin(mut self, origin: Origin) -> Self {
+        self.origin = Some(origin);
+        self
     }
 }
 

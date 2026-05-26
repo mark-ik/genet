@@ -13,6 +13,7 @@ use http_body_util::{BodyExt, Full};
 
 use crate::cache::{self, StoredResponse};
 use crate::client::shared_client;
+use crate::cors;
 use crate::decode::decode_stream;
 use crate::request::{Method, RedirectMode};
 use crate::response::{ResponseBody, ResponseType};
@@ -30,8 +31,10 @@ const MAX_REDIRECTS: u32 = 20;
 /// manual); streaming bodies with on-the-fly `Content-Encoding` decode; an RFC
 /// 6265bis cookie jar (attach + record); an RFC 9111 cache (fresh hits served
 /// without a round-trip, stale/`no-cache` entries revalidated via
-/// `ETag`/`Last-Modified`); and the CSP `connect-src` hook. Deferred: CORS/tainting
-/// (all responses are `Basic`), HSTS, and HTTP/3.
+/// `ETag`/`Last-Modified`); cross-origin response tainting + simple-request CORS
+/// gating (`Basic`/`Cors`/`Opaque`, cross-origin CORS failures → network error);
+/// and the CSP `connect-src` hook. Deferred: CORS preflight + response-header
+/// filtering, `SameSite` enforcement, HSTS, mixed-content, and HTTP/3.
 pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
     let client = shared_client();
 
@@ -155,6 +158,22 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
             .get(http::header::CONTENT_ENCODING)
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
+
+        // Cross-origin policy: response tainting + CORS gating. A blocked CORS
+        // check is a network error (and we skip even reading the body).
+        let response_type = match cors::evaluate(
+            request.origin.as_ref(),
+            &current_url,
+            request.mode,
+            request.credentials,
+            &headers,
+        ) {
+            cors::Taint::Basic => ResponseType::Basic,
+            cors::Taint::Cors => ResponseType::Cors,
+            cors::Taint::Opaque => ResponseType::Opaque,
+            cors::Taint::Blocked => return Response::network_error(),
+        };
+
         let data = resp
             .into_body()
             .into_data_stream()
@@ -185,7 +204,7 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
                     headers: stored_headers,
                     body: ResponseBody::from_bytes(bytes),
                     url_list,
-                    response_type: ResponseType::Basic,
+                    response_type,
                 };
             }
         }
@@ -196,7 +215,7 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
             headers,
             body: ResponseBody::new(body),
             url_list,
-            response_type: ResponseType::Basic,
+            response_type,
         };
     }
 }
@@ -468,5 +487,67 @@ mod tests {
         let _ = fetch(Request::get(url.parse().unwrap()), &cx).await.bytes().await;
 
         m.assert_async().await;
+    }
+
+    fn origin_of(s: &str) -> url::Origin {
+        Url::parse(s).unwrap().origin()
+    }
+
+    #[tokio::test]
+    async fn cross_origin_cors_pass_taints_cors() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/api")
+            .with_status(200)
+            .with_header("access-control-allow-origin", "https://app.example")
+            .with_body("data")
+            .create_async()
+            .await;
+
+        let cx = FetchContext::permissive();
+        let req = Request::get(format!("{}/api", server.url()).parse().unwrap())
+            .with_origin(origin_of("https://app.example/"));
+        let res = fetch(req, &cx).await;
+
+        assert_eq!(res.response_type, ResponseType::Cors);
+        assert!(!res.is_network_error());
+        assert_eq!(res.bytes().await.unwrap().as_ref(), b"data");
+    }
+
+    #[tokio::test]
+    async fn cross_origin_cors_without_header_is_blocked() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/api")
+            .with_status(200)
+            .with_body("data")
+            .create_async()
+            .await;
+
+        let cx = FetchContext::permissive();
+        let req = Request::get(format!("{}/api", server.url()).parse().unwrap())
+            .with_origin(origin_of("https://app.example/"));
+        let res = fetch(req, &cx).await;
+
+        assert!(res.is_network_error(), "cross-origin CORS with no ACAO is blocked");
+    }
+
+    #[tokio::test]
+    async fn cross_origin_no_cors_is_opaque() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/img")
+            .with_status(200)
+            .with_body("data")
+            .create_async()
+            .await;
+
+        let cx = FetchContext::permissive();
+        let mut req = Request::get(format!("{}/img", server.url()).parse().unwrap())
+            .with_origin(origin_of("https://app.example/"));
+        req.mode = crate::RequestMode::NoCors;
+        let res = fetch(req, &cx).await;
+
+        assert_eq!(res.response_type, ResponseType::Opaque);
     }
 }
