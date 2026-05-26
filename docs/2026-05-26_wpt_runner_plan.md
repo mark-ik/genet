@@ -1,8 +1,8 @@
 # serval-native WPT runner
 
 Status: **in progress (2026-05-26).** Phase 1 (crash-smoke) and phase 2
-slice 1 (reftest pixel compare, inline-only, exact match) built; phase 2
-refinements + phase 3 scoped below.
+(reftest pixel compare, with linked-resource loading + fuzzy + ref
+chains) built; phase 3 scoped below.
 
 ## Goal
 
@@ -64,12 +64,20 @@ A real `MANIFEST.json` reader can replace this later for exactness
 2. **Reftests.** Render test + reference to images (the
    `html_to_pixels_e2e` path: cascade → layout → emit → netrender →
    readback) and pixel-compare, with match/mismatch semantics. GPU,
-   booted once per run. **Slice 1 (done):** inline `<style>` only, exact
-   compare; tests needing linked CSS / scripts are skipped. First signal
-   on `css/CSS2/floats`: 7 passed, 92 failed, 98 skipped of 197.
-   **Refinements (next):** linked stylesheets + local images (relative +
-   `/`-absolute resolution); fuzzy matching (WPT `fuzzy` metadata) so
-   anti-aliasing diffs do not count as failures; ref chains.
+   booted once per run. **Done:** inline `<style>` + linked
+   `<link rel="stylesheet">` + local images (resolved relative to the
+   test dir, `/`-absolute to the tests root; remote `http(s)://` renders
+   as missing, `data:` decodes inline); fuzzy matching from
+   `<meta name="fuzzy">` (max per-channel diff + max differing pixels),
+   exact when absent; `match` ref chains followed to the final reference
+   (capped); only `<script>` tests are skipped (no JS yet). Verified: the
+   linked-CSS loader fires (`css/css-backgrounds/box-shadow` reftests now
+   render + compare, not skip). `css/CSS2/floats` is unchanged (100%
+   inline-style, so the refinements are correct no-ops there: 7/92/98).
+   **Honest caveat:** linked-CSS is confirmed firing; the fuzzy + ref-chain
+   paths run without error but their pass-changing effect is not yet
+   demonstrated on a specific subset. **Still out:** remote resources (the
+   WPT server), `mismatch` chains.
 3. **testharness.js.** Once the scripting tier runs testharness, capture
    subtest results. Gated on JS execution maturity.
 4. **Expectations.** A checked-in expected-results file so known

@@ -12,11 +12,14 @@
 //! Slice 1 renders inline `<style>` only (no linked CSS / external
 //! images); the runner skips tests that need those.
 
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use dpi::PhysicalSize;
 use embedder_traits::ViewportDetails;
 use euclid::{Scale, Size2D};
+use layout_dom_api::{LayoutDom, LocalName, Namespace};
 use netrender::{boot, create_netrender_instance, NetrenderOptions};
 use paint::Paint;
 use paint_api::display_list::{AxesScrollSensitivity, PaintDisplayListInfo, ScrollType};
@@ -26,8 +29,8 @@ use paint_types::units::{DeviceIntRect, LayoutSize};
 use paint_types::PipelineId;
 use servo_base::id::{PainterId, PipelineNamespace, PipelineNamespaceId, WebViewId};
 use serval_layout::{
-    emit_paint_list_with_layouts, layout, run_cascade, BackgroundImagePlane, ImagePlane,
-    NoImageLoader, StylePlane,
+    emit_paint_list_with_layouts, layout, run_cascade, BackgroundImagePlane, ImageLoader,
+    ImagePlane, StylePlane,
 };
 use serval_static_dom::StaticDocument;
 
@@ -69,10 +72,18 @@ impl Renderer {
         Ok(Self { device, queue, paint, painter_id, webview_id })
     }
 
-    /// Render `html` (with `sheets` as author stylesheets) to an image at
-    /// `width` x `height`.
-    pub fn render_html(&self, html: &str, sheets: &[&str], width: u32, height: u32) -> Image {
-        let envelope = html_to_envelope(html, sheets, width, height);
+    /// Render `html` to an image at `width` x `height`, resolving the
+    /// page's inline + linked CSS and local images relative to `base_dir`
+    /// (and `tests_root` for `/`-absolute URLs).
+    pub fn render_html(
+        &self,
+        html: &str,
+        base_dir: &Path,
+        tests_root: &Path,
+        width: u32,
+        height: u32,
+    ) -> Image {
+        let envelope = html_to_envelope(html, base_dir, tests_root, width, height);
         let paint = self.paint.borrow();
         paint.handle_messages(vec![paint_api::PaintMessage::SendPaintList {
             webview_id: self.webview_id,
@@ -116,15 +127,31 @@ fn paint_info_for(pid: PipelineId, width: u32, height: u32) -> PaintDisplayListI
 }
 
 /// HTML -> `PaintEnvelope` (the producer half). Mirrors the e2e test's
-/// `html_to_envelope`. Inline `<img>`/background data-URIs decode via
-/// `NoImageLoader`; remote resources are not fetched.
-fn html_to_envelope(html: &str, sheets: &[&str], width: u32, height: u32) -> PaintEnvelope {
+/// `html_to_envelope`, plus author sheets from inline `<style>` + linked
+/// `<link rel="stylesheet">`, and a file-backed image loader. data-URI
+/// images decode inline; remote (`http(s)://`) resources are not fetched.
+fn html_to_envelope(
+    html: &str,
+    base_dir: &Path,
+    tests_root: &Path,
+    width: u32,
+    height: u32,
+) -> PaintEnvelope {
     let document = StaticDocument::parse(html);
-    let mut styles: StylePlane<_> = StylePlane::new();
-    run_cascade(&document, &mut styles, euclid::Size2D::new(width as f32, height as f32), sheets);
 
-    let images = ImagePlane::decode_from_dom_with_loader(&document, &NoImageLoader);
-    let bg_images = BackgroundImagePlane::decode_from_cascade(&document, &styles, &NoImageLoader);
+    let mut sheets = extract_inline_styles(html);
+    sheets.extend(extract_linked_styles(&document, base_dir, tests_root));
+    let sheet_refs: Vec<&str> = sheets.iter().map(String::as_str).collect();
+
+    let mut styles: StylePlane<_> = StylePlane::new();
+    run_cascade(&document, &mut styles, euclid::Size2D::new(width as f32, height as f32), &sheet_refs);
+
+    let loader = LocalFileImageLoader {
+        base_dir: base_dir.to_path_buf(),
+        tests_root: tests_root.to_path_buf(),
+    };
+    let images = ImagePlane::decode_from_dom_with_loader(&document, &loader);
+    let bg_images = BackgroundImagePlane::decode_from_cascade(&document, &styles, &loader);
 
     let viewport = taffy::Size {
         width: taffy::AvailableSpace::Definite(width as f32),
@@ -142,4 +169,80 @@ fn html_to_envelope(html: &str, sheets: &[&str], width: u32, height: u32) -> Pai
         DeviceIntSize::new(width as i32, height as i32),
     );
     PaintEnvelope::from_list(&plist)
+}
+
+/// Text of every `<style>` block (crude source scan; robust to parse
+/// failures). Shared with the phase-1 crash-smoke.
+pub fn extract_inline_styles(html: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let lower = html.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(open) = lower[from..].find("<style") {
+        let open = from + open;
+        let Some(gt) = lower[open..].find('>') else { break };
+        let content_start = open + gt + 1;
+        let Some(close_rel) = lower[content_start..].find("</style>") else { break };
+        let close = content_start + close_rel;
+        out.push(html[content_start..close].to_string());
+        from = close + "</style>".len();
+    }
+    out
+}
+
+/// Contents of each `<link rel="stylesheet" href>`, resolved + read.
+fn extract_linked_styles(doc: &StaticDocument, base_dir: &Path, tests_root: &Path) -> Vec<String> {
+    let no_ns = Namespace::default();
+    let rel = LocalName::from("rel");
+    let href = LocalName::from("href");
+    let mut out = Vec::new();
+    let mut stack = vec![doc.document()];
+    while let Some(id) = stack.pop() {
+        if doc.element_name(id).is_some_and(|q| q.local.as_ref() == "link")
+            && doc.attribute(id, &no_ns, &rel) == Some("stylesheet")
+        {
+            if let Some(h) = doc.attribute(id, &no_ns, &href) {
+                if let Some(path) = resolve(h, base_dir, tests_root) {
+                    if let Ok(bytes) = fs::read(&path) {
+                        out.push(String::from_utf8_lossy(&bytes).into_owned());
+                    }
+                }
+            }
+        }
+        stack.extend(doc.dom_children(id));
+    }
+    out
+}
+
+/// Resolve a resource URL to a file: `/`-absolute against the tests root,
+/// otherwise relative to `base_dir`. Remote (`http(s)://`, `//`) and
+/// `data:` URLs return `None` (the caller handles data: separately).
+fn resolve(url: &str, base_dir: &Path, tests_root: &Path) -> Option<PathBuf> {
+    let url = url.split(['#', '?']).next().unwrap_or(url).trim();
+    if url.is_empty()
+        || url.starts_with("http://")
+        || url.starts_with("https://")
+        || url.starts_with("//")
+        || url.starts_with("data:")
+    {
+        return None;
+    }
+    Some(match url.strip_prefix('/') {
+        Some(rest) => tests_root.join(rest),
+        None => base_dir.join(url),
+    })
+}
+
+/// `ImageLoader` that reads `<img>` / background-image files from disk,
+/// resolving relative to the test's dir (and the tests root for
+/// `/`-absolute). Remote URLs yield `None` (rendered as missing).
+struct LocalFileImageLoader {
+    base_dir: PathBuf,
+    tests_root: PathBuf,
+}
+
+impl ImageLoader for LocalFileImageLoader {
+    fn load(&self, url: &str) -> Option<Vec<u8>> {
+        let path = resolve(url, &self.base_dir, &self.tests_root)?;
+        fs::read(path).ok()
+    }
 }

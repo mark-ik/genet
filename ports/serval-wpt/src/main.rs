@@ -20,7 +20,7 @@ use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
-use layout_dom_api::{LayoutDom, LocalName, NodeKind};
+use layout_dom_api::{LayoutDom, LocalName};
 use serval_static_dom::StaticDocument;
 
 mod render;
@@ -105,26 +105,6 @@ fn classify(path: &Path, contents: &str) -> Kind {
     Kind::Load
 }
 
-/// Extract the text of every `<style>` block from raw HTML. Crude (ignores
-/// attributes and nesting), but enough to exercise the cascade with the
-/// page's own rules during the smoke. Robust to parse failures since it
-/// works on the source string.
-fn extract_inline_styles(html: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let lower = html.to_ascii_lowercase();
-    let mut from = 0;
-    while let Some(open) = lower[from..].find("<style") {
-        let open = from + open;
-        let Some(gt) = lower[open..].find('>') else { break };
-        let content_start = open + gt + 1;
-        let Some(close_rel) = lower[content_start..].find("</style>") else { break };
-        let close = content_start + close_rel;
-        out.push(html[content_start..close].to_string());
-        from = close + "</style>".len();
-    }
-    out
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Outcome {
     Passed,
@@ -147,7 +127,7 @@ fn smoke_test(path: &Path) -> (Kind, Outcome) {
 
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
         let document = StaticDocument::parse(&html);
-        let sheets = extract_inline_styles(&html);
+        let sheets = render::extract_inline_styles(&html);
         let sheet_refs: Vec<&str> = sheets.iter().map(String::as_str).collect();
         let _fragments = serval_layout::render(&document, &sheet_refs, VIEWPORT_W, VIEWPORT_H);
     }));
@@ -370,12 +350,95 @@ fn reftest_ref(html: &str) -> Option<(MatchKind, String)> {
     None
 }
 
-/// Slice-1 conservatism: skip reftests needing resources we do not yet
-/// load (linked stylesheets, scripts). Inline `<style>` and data-URI
-/// images are handled.
-fn needs_external_resources(html: &str) -> bool {
-    let l = html.to_ascii_lowercase();
-    l.contains("rel=\"stylesheet\"") || l.contains("rel=stylesheet") || l.contains("<script")
+/// Skip reftests needing things we cannot run: scripts (no JS yet).
+/// Inline + linked CSS and local images are loaded; remote resources just
+/// render as missing.
+fn needs_script(html: &str) -> bool {
+    html.to_ascii_lowercase().contains("<script")
+}
+
+/// WPT `<meta name="fuzzy" content="...">` tolerance, as
+/// `(max_per_channel_difference, max_differing_pixels)` upper bounds.
+/// Common forms: `maxDifference=0-2;totalPixels=0-100` or `0-2;0-100`.
+fn parse_fuzzy(html: &str) -> Option<(u16, u64)> {
+    let doc = StaticDocument::parse(html);
+    let no_ns = layout_dom_api::Namespace::default();
+    let name = LocalName::from("name");
+    let content = LocalName::from("content");
+    let mut stack = vec![doc.document()];
+    while let Some(id) = stack.pop() {
+        if doc.element_name(id).is_some_and(|q| q.local.as_ref() == "meta")
+            && doc.attribute(id, &no_ns, &name) == Some("fuzzy")
+        {
+            if let Some(c) = doc.attribute(id, &no_ns, &content) {
+                return parse_fuzzy_content(c);
+            }
+        }
+        stack.extend(doc.dom_children(id));
+    }
+    None
+}
+
+fn parse_fuzzy_content(content: &str) -> Option<(u16, u64)> {
+    let (a, b) = content.trim().split_once(';')?;
+    Some((range_upper(a)? as u16, range_upper(b)?))
+}
+
+/// Upper bound of a fuzzy segment: `label=lo-hi` / `lo-hi` / `n` -> the
+/// last number.
+fn range_upper(seg: &str) -> Option<u64> {
+    let after_eq = seg.rsplit('=').next().unwrap_or(seg);
+    after_eq.rsplit('-').next()?.trim().parse::<u64>().ok()
+}
+
+/// Whether two images match under an optional fuzzy tolerance. With
+/// `None`, exact; with `Some((max_diff, max_pixels))`, at most
+/// `max_pixels` may differ by more than `max_diff` on any channel.
+fn images_match(a: &render::Image, b: &render::Image, fuzzy: Option<(u16, u64)>) -> bool {
+    if a.dimensions() != b.dimensions() {
+        return false;
+    }
+    let (max_diff, max_pixels) = fuzzy.unwrap_or((0, 0));
+    let mut differing = 0u64;
+    for (pa, pb) in a.pixels().zip(b.pixels()) {
+        let channel_max = pa
+            .0
+            .iter()
+            .zip(pb.0.iter())
+            .map(|(x, y)| (i16::from(*x) - i16::from(*y)).unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        if channel_max > max_diff {
+            differing += 1;
+            if differing > max_pixels {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Follow a `match` ref chain to its final reference, returning that
+/// reference's path + HTML. `mismatch` chains are not followed (the direct
+/// reference is used). Capped to avoid cycles.
+fn final_ref(start: PathBuf, kind: MatchKind, tests_root: &Path) -> Option<(PathBuf, String)> {
+    let mut ref_path = start;
+    let mut html = String::from_utf8_lossy(&fs::read(&ref_path).ok()?).into_owned();
+    if kind == MatchKind::Mismatch {
+        return Some((ref_path, html));
+    }
+    for _ in 0..10 {
+        match reftest_ref(&html) {
+            Some((MatchKind::Match, next_href)) => {
+                let Some(next) = resolve_ref(&ref_path, &next_href, tests_root) else { break };
+                let Ok(bytes) = fs::read(&next) else { break };
+                ref_path = next;
+                html = String::from_utf8_lossy(&bytes).into_owned();
+            }
+            _ => break,
+        }
+    }
+    Some((ref_path, html))
 }
 
 /// Resolve a reftest `href` to a file: `/`-absolute against the tests
@@ -423,39 +486,29 @@ fn reftest(tests: &[PathBuf], args: &Args) {
             skipped += 1;
             continue;
         };
-        let Some(ref_path) = resolve_ref(path, &href, tests_root) else {
+        let Some(direct_ref) = resolve_ref(path, &href, tests_root) else {
             skipped += 1;
             continue;
         };
-        let Ok(ref_bytes) = fs::read(&ref_path) else {
+        let Some((ref_path, ref_html)) = final_ref(direct_ref, kind, tests_root) else {
             errored += 1;
             println!("ERROR ref-missing {}", rel(path, &args.tests_root));
             continue;
         };
-        let ref_html = String::from_utf8_lossy(&ref_bytes).into_owned();
-        if needs_external_resources(&test_html) || needs_external_resources(&ref_html) {
+        if needs_script(&test_html) || needs_script(&ref_html) {
             skipped += 1;
             if args.verbose {
-                println!("SKIP  resources {}", rel(path, &args.tests_root));
+                println!("SKIP  script   {}", rel(path, &args.tests_root));
             }
             continue;
         }
 
-        let test_sheets = extract_inline_styles(&test_html);
-        let ref_sheets = extract_inline_styles(&ref_html);
+        let fuzzy = parse_fuzzy(&test_html);
+        let test_dir = path.parent().unwrap_or(tests_root);
+        let ref_dir = ref_path.parent().unwrap_or(tests_root);
         let rendered = panic::catch_unwind(AssertUnwindSafe(|| {
-            let t = renderer.render_html(
-                &test_html,
-                &test_sheets.iter().map(String::as_str).collect::<Vec<_>>(),
-                REFTEST_W,
-                REFTEST_H,
-            );
-            let r = renderer.render_html(
-                &ref_html,
-                &ref_sheets.iter().map(String::as_str).collect::<Vec<_>>(),
-                REFTEST_W,
-                REFTEST_H,
-            );
+            let t = renderer.render_html(&test_html, test_dir, tests_root, REFTEST_W, REFTEST_H);
+            let r = renderer.render_html(&ref_html, ref_dir, tests_root, REFTEST_W, REFTEST_H);
             (t, r)
         }));
         let (test_img, ref_img) = match rendered {
@@ -467,10 +520,10 @@ fn reftest(tests: &[PathBuf], args: &Args) {
             }
         };
 
-        let equal = images_equal(&test_img, &ref_img);
+        let matches = images_match(&test_img, &ref_img, fuzzy);
         let pass = match kind {
-            MatchKind::Match => equal,
-            MatchKind::Mismatch => !equal,
+            MatchKind::Match => matches,
+            MatchKind::Mismatch => !matches,
         };
         if pass {
             passed += 1;
