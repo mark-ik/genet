@@ -31,6 +31,8 @@ use xilem::core::{MessageCtx, MessageResult, Mut, View, ViewMarker};
 use xilem::view::{FlexExt, flex_col, flex_row, text_button, text_input};
 use xilem::{EventLoop, Pod, ViewCtx, WidgetView, WindowOptions, Xilem};
 
+use pelt_core::ResourceFetcher;
+
 use crate::render::build_scene;
 
 const SAMPLE_HTML: &str = "<html><body>\
@@ -198,6 +200,9 @@ struct ServalDriver<D: AppDriver> {
     inner: D,
     request: Arc<Mutex<RenderRequest>>,
     gpu: Option<Gpu>,
+    /// Host resource fetcher (one instance, reused). `Some` with the `netfetch`
+    /// feature (http/https `<img>` load via netfetcher), else `None`.
+    fetcher: Option<Box<dyn ResourceFetcher>>,
 }
 
 struct Gpu {
@@ -217,7 +222,20 @@ struct CachedContent {
 
 impl<D: AppDriver> ServalDriver<D> {
     fn new(inner: D, request: Arc<Mutex<RenderRequest>>) -> Self {
-        Self { inner, request, gpu: None }
+        Self { inner, request, gpu: None, fetcher: make_fetcher() }
+    }
+}
+
+/// The host's resource fetcher: netfetcher-backed with the `netfetch` feature
+/// (so http/https `<img>`s load), otherwise `None` (local files only).
+fn make_fetcher() -> Option<Box<dyn ResourceFetcher>> {
+    #[cfg(feature = "netfetch")]
+    {
+        Some(Box::new(crate::net_fetcher::NetResourceFetcher::new()))
+    }
+    #[cfg(not(feature = "netfetch"))]
+    {
+        None
     }
 }
 
@@ -294,11 +312,18 @@ impl<D: AppDriver> AppDriver for ServalDriver<D> {
             );
             if !fresh {
                 let sheets: Vec<&str> = req.stylesheets.iter().map(String::as_str).collect();
-                // `None` = local-only fetch (default). Activating the live netfetch
-                // path means the driver owning a single `NetResourceFetcher` (one
-                // runtime, reused) and passing it here — a follow-up; the seam +
-                // impl are proven by the `netfetch` integration test for now.
-                let scene = build_scene(&req.html, &sheets, req.base_dir.as_deref(), w, h, None);
+                // The driver owns one fetcher (one runtime, reused). With the
+                // `netfetch` feature this fetches http(s) <img>s via netfetcher;
+                // otherwise it's None and only local/relative images load. (Fetch
+                // blocks this one-shot render; off-thread is the FetcherPool's job.)
+                let scene = build_scene(
+                    &req.html,
+                    &sheets,
+                    req.base_dir.as_deref(),
+                    w,
+                    h,
+                    self.fetcher.as_deref(),
+                );
                 let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("pelt-viewer content"),
                     size: wgpu::Extent3d {
