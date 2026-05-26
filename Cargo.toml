@@ -13,10 +13,11 @@ members = [
     "components/serval-static-html",
     "components/shared/layout-dom",
     "components/script-engine-api",
-    # script-engine-boa is intentionally NOT a member: boa_engine 0.21.1 pins
-    # icu_normalizer ~2.0.0, which conflicts irreconcilably with serval's parley 0.9
-    # (icu_normalizer ^2.1.1). It builds standalone (own [workspace]) until boa bumps
-    # its icu pin or we pick a different wasm backend. See the script-engine plan doc.
+    # script-engine-boa joined the workspace 2026-05-25. The old blocker (boa
+    # 0.21.1's icu_normalizer ~2.0 vs parley 0.9's ^2.1.1) was resolved by forking
+    # boa to crates/boa (`serval` branch) and bumping its icu family ~2.0 -> ~2.1,
+    # which unifies with parley at 2.1.1. Patched in via [patch.crates-io] below.
+    "components/script-engine-boa",
     "components/script-engine-nova",
     "ports/pelt-core",
     "ports/pelt-desktop",
@@ -431,6 +432,14 @@ gpu-allocator = { path = "support/patches/gpu-allocator" }
 # that script-engine-nova relies on. Local path for dev; the shippable form is the
 # git branch: nova_vm = { git = "https://github.com/mark-ik/nova", branch = "serval-embedder" }
 nova_vm = { path = "../../crates/nova/nova_vm" }
+# Boa fork (crates/boa, `serval` branch) carrying the icu family bump ~2.0 -> ~2.1
+# so boa's (non-optional) icu_normalizer unifies with parley 0.9's ^2.1.1 — the
+# conflict that kept script-engine-boa out of the workspace. boa_engine pulls its
+# sibling boa_* crates via the fork's own path deps; only boa_engine + boa_gc are
+# named from crates.io (by script-engine-boa), so only those two need patching.
+# See docs/2026-05-20_serval_script_engine_plan.md.
+boa_engine = { path = "../../crates/boa/core/engine" }
+boa_gc = { path = "../../crates/boa/core/gc" }
 # stylo_taffy (serval-layout) depends on crates.io `stylo`/`stylo_atoms`
 # `^0.17`. serval pins the same crates from the servo/stylo git rev, and
 # `stylo` declares `links = "servo_style_crate"` (only one Stylo allowed

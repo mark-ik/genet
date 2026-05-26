@@ -107,3 +107,93 @@ Members = the 2026-05-16 set **plus four scripting crates** (`script-engine-api`
   `serval-embedder` branch (`EmbedderObject` patch). The `[patch.crates-io]` path tracks
   the clone location (`crates/nova` now); keep it in sync if the clone moves.
 - (new) Scripted `NodeId` must stay `usize`-backed (Stylo style-sharing cache assertion).
+
+## Addendum — 2026-05-25 review (post-snapshot developments + the rendering pipeline)
+
+A state review the day after this snapshot. Verified against the tree
+(`cargo check -p pelt` green 2026-05-25).
+
+### Box tree — the "leave `TaffyTree`" move is in flight, not deferred
+
+The Open-threads `stylo_taffy` entry above calls the trait-impl-tree
+re-architecture "deferred"; as of 2026-05-25 02:52 it's **in progress**.
+**`box_tree.rs`** (`2026-05-25_box_tree_trait_impl_plan`) is serval's own
+box-tree arena implementing taffy's trait-impl tree (`LayoutPartialTree` +
+traversal / style-access traits), the style accessor returning
+`stylo_taffy::TaffyStyloStyle` **zero-copy** over `Arc<ComputedValues>` — no
+per-node `Style` rebuild. **Increment 1 (arena + traits + `layout_via_box_tree`)
+has landed and is wired** (`layout()` is now a thin wrapper over it); the old
+`TaffyTree` path stays as the diff-test oracle until parity, then the swap
+deletes the `construct` TaffyTree path + `cv_to_taffy.rs` and drops
+`StyleEntry.taffy`.
+
+This is the convergence point for three threads listed separately above —
+stylo_taffy, the float gap, the parley-leaf IFC seam. Owning the tree is the
+prerequisite the blitz-float study identified; the box tree now has "the same
+shape as blitz-dom," so the deeper float work (text-wrap-around-floats,
+anonymous block boxes — box-tree OQ2) becomes *reachable* (not delivered) once
+the swap lands. The big architectural call was made and is executing.
+
+### Absent from the snapshot: the rendering / host-integration pipeline
+
+This doc covers engine internals thoroughly but says nothing about **how serval
+reaches a screen**. That arc exists and builds clean:
+
+- **`pelt-viewer`** — a Xilem app: nav bar + a `WebContent` Masonry widget that
+  reserves an `External` layer (paints nothing itself).
+- **Zero-copy compositing** — netrender is booted on Masonry's *shared* wgpu
+  device via `AppDriver::on_wgpu_ready`; serval content renders to a texture on
+  that device and is `copy_texture_to_texture`'d into the External layer's
+  bounds — **no GPU→CPU readback**. Resize falls out (External bounds drive the
+  render size); relative `<img>` / `<link>` resolve via a local-file loader.
+- Depends on the **masonry_winit External-layer realization seam**
+  (`crates/xilem`, commit `694cc7f`) — additive, default-no-op
+  `composite_external_layers` hook.
+
+**This pipeline has no plan doc** — the one part of serval that puts pixels on
+screen has no design record. Recommend writing one.
+
+### Load-bearing forks — offer-don't-push
+
+serval carries **two** un-upstreamed load-bearing fork patches:
+
+- **nova** — `crates/nova`, branch `serval-embedder`, `EmbedderObject`
+  native-data patch (`fbca54b`). Gates scripting.
+- **xilem** — `crates/xilem`, the masonry_winit External-layer realization
+  (`694cc7f`) on `mere-wgpu-29-vello-0-9`. Gates the zero-copy viewer.
+
+Policy: **don't proactively upstream, don't bug maintainers.** Each patch
+carries a **proposed-upstream note** — drafted, ready to offer *if* a maintainer
+ever shows interest — in
+[`2026-05-25_fork_upstream_proposals.md`](./2026-05-25_fork_upstream_proposals.md).
+The pitch is on hand; nothing is pushed. (The xilem seam is the cleaner pitch —
+it *finishes* an existing upstream placeholder: `VisualLayerKind::External` was
+designed-but-unrealized.) This supersedes the "Nova fork — upstream PR pending"
+line above: not pending, just ready.
+
+### Scripting reach (native-vs-wasm) — deliberate non-priority, not a contradiction
+
+Nova is native-only (64-bit `Value`, `usdt`); "wasm = no-JS" is **by design and
+fine**: browser-embedded hosts (extension, PWA) already run inside a browser
+with working JS, so serval needn't provide it there — its value in those
+contexts is the **"everything else"** (smolweb + p2p-protocol experiences via
+netrender that Chrome/Firefox won't render anyway). A wasm-JS path exists if
+ever needed (wasm64; boa's `icu_normalizer` pin clearing; Nova on nightly) —
+explicitly deferred. Near-term target: **render the open web on native** —
+already a wild result. One thing at a time. ("serval everywhere, maximally
+featured" stays the long heart's-goal, not a near-term constraint.)
+
+### What's next (re-prioritized)
+
+1. **box tree → parity diff-test → swap** (Increments 2–4): delete
+   `cv_to_taffy.rs` + the TaffyTree `construct` path; drop `StyleEntry.taffy`.
+   In flight.
+2. **Fine-grained Stylo restyle** — highest-leverage incremental-layout
+   optimization (the focused-arc plan; stands).
+3. **Mere integration** — the inker paint-list adoption consuming serval's
+   `ServalPaintList` / External-layer bridge; turns the engine into the product.
+4. *Then* the deeper float / IFC work (text-wrap-around-floats), now reachable
+   on the owned tree.
+
+Restyle (#2) vs Mere-integration (#3) is a "make it fast" vs "make it real" bet
+worth naming explicitly.

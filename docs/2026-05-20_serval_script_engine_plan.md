@@ -983,24 +983,29 @@ Direction set (2026-05-21, Part 6):
   `components/`: **`script-engine-api`** (the trait crate — `ScriptEngine` +
   `ScriptEngineLive` with `make_reflector`/`reflector_data`; DOM-neutral, no engine dep);
   **`script-engine-nova`** (native-only via `cfg(not(wasm32))`, `nova_vm` redirected to the
-  fork clone by a root `[patch.crates-io]`); **`script-engine-boa`**. api + nova are serval
-  **workspace members and green** (`script_engine_nova` reflector round-trip survives GC
-  in-workspace); boa is **green standalone**.
-- **BLOCKER finding — Boa cannot join serval's graph (2026-05-23).** `boa_engine 0.21.1`
-  hard-deps `icu_normalizer ~2.0.0` (non-optional; no feature drops it); serval's
-  **parley 0.9** needs `icu_normalizer ^2.1.1` — disjoint, so adding boa breaks workspace
-  resolution entirely (even `cargo build -p pelt`). Latest boa is 0.21.1, so **no boa
-  version resolves it today**. This hits boa in *both* roles (wasm backend AND native
-  oracle), since parley is in both graphs. `script-engine-boa` is therefore quarantined as
-  a **standalone `[workspace]` crate** (builds + tests pass in isolation) until one of:
-  (a) boa bumps its icu pin upstream (active project — likely eventually); (b) we switch the
-  wasm backend to **quickjs** (no icu dep — sidesteps it; cost: C-to-wasm toolchain, the
-  thing boa was chosen to avoid); (c) fork/patch boa's icu (heavy). **Decided 2026-05-23:
-  (a) wait.** The wasm-backend question is moot anyway — wasm ships *no* JS engine (the
-  no-JS structured-HTML/smolweb profile is the browser offering; JS is native-only, Nova).
-  Boa is wanted *only* as a native conformance oracle, which the same icu clear unblocks.
-  So `script-engine-boa` stays standalone-quarantined until boa bumps its icu pin (or
-  memory64 lands); no fork, no quickjs pivot.
+  fork clone by a root `[patch.crates-io]`); **`script-engine-boa`**. All three —
+  api, nova, **and now boa** — are serval **workspace members and green**
+  (`script_engine_nova` reflector round-trip survives GC in-workspace).
+- **RESOLVED — Boa joined serval's graph via a fork (2026-05-25).** *Prior blocker
+  (2026-05-23):* `boa_engine 0.21.1` hard-deps `icu_normalizer ~2.0.0` (non-optional);
+  serval's **parley 0.9** needs `^2.1.1` — disjoint, so adding boa broke workspace
+  resolution. (Worse, in the live graph nova_vm → `temporal_rs 0.2.3` → `icu_calendar
+  2.2.1` force-pins the whole icu family to **2.2.x**, so the real target was 2.2, not
+  2.1.) *Resolution:* took option **(c) fork/patch boa's icu** — which the 2026-05-23
+  note feared as "heavy" and **it was the opposite of heavy.** Forked boa to
+  `crates/boa` (`serval` branch, shallow @ `v0.21.1`/`bc36c3f`), widened the icu family
+  pin `~2.0` → `^2.1` (one workspace `Cargo.toml` edit), and redirected `boa_engine` +
+  `boa_gc` via serval's root `[patch.crates-io]` (same pattern as `nova_vm`).
+  **boa_engine compiled clean against icu 2.2.0 with zero code changes** — the `~2.0.0`
+  pin was precautionary tilde-caution, not a real API incompatibility. `cargo check -p
+  script-engine-boa` is green in the unified workspace; `icu_normalizer` resolves to a
+  single 2.2.0 shared by boa, parley, and nova. (One benign deprecation warning in boa's
+  `host_defined.rs`: `hashbrown::get_many_mut` → `get_disjoint_mut`; cosmetic, upstream's
+  code.) This unblocks boa in **both** roles — native conformance oracle *and* the wasm
+  backend — and, more importantly, gives us an **owned boa fork to restructure for
+  weval-based AOT** (the actual reason the pin "stopped being an excuse": we have to fork
+  to weval-ify the interpreter anyway, so the icu bump is free along the way). The earlier
+  "wait for upstream / no fork" decision is **superseded**; the quickjs-pivot option is moot.
 - **serval-scripted-dom — foundation built + green (2026-05-23).** Resolves
   `layout-dom-api`'s open question #1: added **`LayoutDomMut`** (`create_element`,
   `create_text`, `append_child`, `remove`, `set_attribute`, `set_text`,

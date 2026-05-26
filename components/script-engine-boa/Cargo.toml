@@ -16,10 +16,9 @@ path = "lib.rs"
 script-engine-api = { path = "../script-engine-api" }
 boa_engine = "0.21"
 boa_gc = "0.21"
-
-# Standalone workspace: boa_engine 0.21.1's icu_normalizer ~2.0.0 conflicts with
-# serval's parley 0.9 (^2.1.1), so this crate cannot join serval's unified graph
-# yet. Kept buildable on its own until the icu conflict is resolved upstream (or we
-# switch the wasm backend to quickjs).
-[workspace]
+# Both resolve to the crates/boa `serval` fork via serval's root [patch.crates-io]
+# (icu family bumped ~2.0 -> ~2.1), which unifies boa's icu_normalizer with parley
+# 0.9 at 2.1.1. That's why this crate is now a serval workspace member (was a
+# standalone [workspace] until 2026-05-25). See
+# ../../docs/2026-05-20_serval_script_engine_plan.md.
 
