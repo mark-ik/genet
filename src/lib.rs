@@ -16,14 +16,20 @@
 //! host*, not by linking it. See the plan:
 //! `mere/design_docs/mere_docs/implementation_strategy/2026-05-25_netfetcher_plan.md`.
 //!
-//! ## Status — increment 1 (2026-05-25)
+//! ## Status — increments 1–5 (2026-05-26)
 //!
-//! Real fetching works: h1/h2 GET/POST over hyper + rustls, redirect handling
-//! (follow / error / manual), **streaming bodies** with on-the-fly
-//! `Content-Encoding` decode (gzip/deflate/br/zstd), cookie attach/record, and
-//! the CSP `connect-src` hook. Still ahead: HTTP cache + real RFC 6265bis cookie
-//! matching (increment 2), CORS/tainting (increment 3), HSTS (increment 3), and
-//! HTTP/3 (increment 4).
+//! - **1** h1/h2 GET/POST over hyper + rustls, redirects, streaming bodies with
+//!   on-the-fly `Content-Encoding` decode.
+//! - **2** RFC 6265bis cookie jar; RFC 9111 cache (freshness + revalidation).
+//! - **3** cross-origin model: response tainting, CORS (simple + preflight +
+//!   header filtering), HSTS, mixed-content auto-upgrade, SameSite; CSP hook.
+//! - **4** HTTP/3 via Alt-Svc — a transport-abstracted h3 lane (quinn) with
+//!   h1/h2 fallback.
+//! - **5** WebSocket (`ws://` / `wss://`).
+//!
+//! Native-focused; the h3 and WebSocket lanes are native-only (wasm-excluded).
+//! Deferred: h3 for requests with bodies, the active/passive mixed-content split,
+//! and public-suffix-accurate same-site.
 
 mod altsvc;
 mod cache;
@@ -39,6 +45,9 @@ mod h3_client;
 mod hsts;
 mod request;
 mod response;
+// WebSocket — native-only (tokio + tungstenite); a wasm build binds browser WS.
+#[cfg(not(target_arch = "wasm32"))]
+mod websocket;
 
 pub use altsvc::{AltSvcStore, InMemoryAltSvc};
 pub use cache::{HttpCache, InMemoryHttpCache, NoHttpCache, StoredResponse};
@@ -49,3 +58,5 @@ pub use fetch::fetch;
 pub use hsts::{HstsStore, InMemoryHsts};
 pub use request::{Credentials, Method, RedirectMode, Request, RequestMode};
 pub use response::{Response, ResponseBody, ResponseType};
+#[cfg(not(target_arch = "wasm32"))]
+pub use websocket::{WebSocket, WsMessage, connect as connect_websocket};
