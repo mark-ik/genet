@@ -42,11 +42,34 @@ impl FetchContext {
     }
 }
 
+/// Whether a request is same-site with its target — drives SameSite cookie gating.
+/// Computed by the fetch layer (which knows the initiator origin) and passed to
+/// [`CookieStore::cookies_for`].
+#[derive(Clone, Copy, Debug)]
+pub struct SameSiteContext {
+    /// The request's initiator site equals the target's site.
+    pub same_site: bool,
+    /// The request is a top-level navigation (lets `Lax` cookies through cross-site).
+    pub top_level_navigation: bool,
+}
+
+impl SameSiteContext {
+    /// A same-site request — the common case, and what a top-level fetch with no
+    /// initiator is treated as.
+    pub fn same_site() -> Self {
+        Self {
+            same_site: true,
+            top_level_navigation: false,
+        }
+    }
+}
+
 /// RFC 6265bis cookie jar seam. In-memory default here; durable impls live in the
 /// host (eidetic / persona-scoped storage).
 pub trait CookieStore: Send + Sync {
-    /// `Cookie` header value(s) to attach for a request to `url`.
-    fn cookies_for(&self, url: &Url) -> Vec<String>;
+    /// `Cookie` header value(s) to attach for a request to `url`, applying SameSite
+    /// gating per `ctx`.
+    fn cookies_for(&self, url: &Url, ctx: SameSiteContext) -> Vec<String>;
     /// Record a `Set-Cookie` header received from `url`.
     fn set_cookie(&self, url: &Url, set_cookie_header: &str);
 }

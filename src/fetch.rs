@@ -17,9 +17,9 @@ use crate::client::shared_client;
 use crate::cors;
 use crate::decode::decode_stream;
 use crate::hsts;
-use crate::request::{Method, RedirectMode};
+use crate::request::{Method, RedirectMode, RequestMode};
 use crate::response::{ResponseBody, ResponseType};
-use crate::{FetchContext, Request, Response};
+use crate::{FetchContext, Request, Response, SameSiteContext};
 
 /// WHATWG Fetch's redirect cap.
 const MAX_REDIRECTS: u32 = 20;
@@ -37,9 +37,10 @@ const MAX_REDIRECTS: u32 = 20;
 /// gating (`Basic`/`Cors`/`Opaque`, cross-origin CORS failures → network error);
 /// HSTS + mixed-content auto-upgrade (a http target is rewritten to https when the
 /// host is HSTS-known or the request runs in an https-origin context;
-/// `Strict-Transport-Security` recorded over https); and the CSP `connect-src`
-/// hook. Deferred: CORS preflight + response-header filtering, `SameSite`
-/// enforcement, the active/passive mixed-content split, and HTTP/3.
+/// `Strict-Transport-Security` recorded over https); SameSite cookie gating
+/// (Strict/Lax, same-site approximated by registrable domain); and the CSP
+/// `connect-src` hook. Deferred: CORS preflight + response-header filtering, the
+/// active/passive mixed-content split, public-suffix-accurate same-site, HTTP/3.
 pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
     let client = shared_client();
 
@@ -88,7 +89,13 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
         for (name, value) in &base_headers {
             builder = builder.header(name.as_str(), value.as_str());
         }
-        let cookies = cx.cookies.cookies_for(&current_url);
+        let cookies = cx.cookies.cookies_for(
+            &current_url,
+            SameSiteContext {
+                same_site: is_same_site(request.origin.as_ref(), &current_url),
+                top_level_navigation: matches!(request.mode, RequestMode::Navigate),
+            },
+        );
         if !cookies.is_empty() {
             builder = builder.header(http::header::COOKIE, cookies.join("; "));
         }
@@ -266,6 +273,34 @@ fn upgrade_to_https(url: &mut Url, secure_context: bool, cx: &FetchContext) {
     }
 }
 
+/// Approximate same-site test for SameSite cookie gating: compare registrable
+/// domains (no public-suffix list — wrong at eTLD edges like `*.github.io`,
+/// accepted for v1). No initiator origin = a top-level request → same-site.
+fn is_same_site(origin: Option<&url::Origin>, target: &Url) -> bool {
+    let Some(origin) = origin else {
+        return true;
+    };
+    match (origin_host(origin), target.host_str()) {
+        (Some(oh), Some(th)) => registrable_domain(&oh) == registrable_domain(th),
+        _ => false,
+    }
+}
+
+fn origin_host(origin: &url::Origin) -> Option<String> {
+    match origin {
+        url::Origin::Tuple(_, host, _) => Some(host.to_string()),
+        url::Origin::Opaque(_) => None,
+    }
+}
+
+/// Registrable domain, approximated as the last two dot-labels (no PSL).
+fn registrable_domain(host: &str) -> &str {
+    match host.rmatch_indices('.').nth(1) {
+        Some((idx, _)) => &host[idx + 1..],
+        None => host,
+    }
+}
+
 fn http_method(method: Method) -> http::Method {
     match method {
         Method::Get => http::Method::GET,
@@ -418,7 +453,7 @@ mod tests {
         #[derive(Clone, Default)]
         struct SpyJar(Arc<Mutex<Vec<String>>>);
         impl CookieStore for SpyJar {
-            fn cookies_for(&self, _: &Url) -> Vec<String> {
+            fn cookies_for(&self, _: &Url, _: SameSiteContext) -> Vec<String> {
                 Vec::new()
             }
             fn set_cookie(&self, _: &Url, header: &str) {
@@ -602,5 +637,13 @@ mod tests {
         let mut insecure: Url = "http://example.org/x".parse().unwrap();
         upgrade_to_https(&mut insecure, false, &cx);
         assert_eq!(insecure.scheme(), "http");
+    }
+
+    #[test]
+    fn same_site_by_registrable_domain() {
+        let target: Url = "https://api.example.org/x".parse().unwrap();
+        assert!(is_same_site(Some(&origin_of("https://www.example.org/")), &target));
+        assert!(!is_same_site(Some(&origin_of("https://other.example/")), &target));
+        assert!(is_same_site(None, &target), "no initiator is same-site");
     }
 }

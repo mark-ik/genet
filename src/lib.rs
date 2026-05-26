@@ -37,7 +37,7 @@ mod request;
 mod response;
 
 pub use cache::{HttpCache, InMemoryHttpCache, NoHttpCache, StoredResponse};
-pub use context::{AllowAllCsp, CookieStore, CspChecker, FetchContext};
+pub use context::{AllowAllCsp, CookieStore, CspChecker, FetchContext, SameSiteContext};
 pub use cookie_jar::InMemoryCookieJar;
 pub use fetch::fetch;
 pub use hsts::{HstsStore, InMemoryHsts};
