@@ -36,7 +36,15 @@ cookie = "0.18"
 time = "0.3"
 httpdate = "1"
 
+# HTTP/3 (increment 4): QUIC (quinn) + h3. Native-only (UDP sockets); a wasm build
+# excludes this module. h3 is pre-1.0 (0.0.x) — API churn expected.
+quinn = "0.11"
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+
 [dev-dependencies]
 mockito = "1"
 # Used only to build gzip fixtures in tests; decode itself is async-compression.
 flate2 = "1"
+# Self-signed cert for the in-process h3 test server.
+rcgen = "0.14"

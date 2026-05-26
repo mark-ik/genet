@@ -32,6 +32,9 @@ mod cookie_jar;
 mod cors;
 mod decode;
 mod fetch;
+// HTTP/3 transport — native-only (QUIC over UDP); excluded from wasm builds.
+#[cfg(not(target_arch = "wasm32"))]
+mod h3_client;
 mod hsts;
 mod request;
 mod response;
