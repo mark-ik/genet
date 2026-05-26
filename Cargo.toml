@@ -1,0 +1,42 @@
+[package]
+name = "netfetcher"
+version = "0.0.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "Portable WHATWG-Fetch network engine for the Mere ecosystem — Servo's net, de-IPC'd, plus an HTTP/3 lane. Mere owns networking; consumers receive bytes."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+url = "2.5"
+bytes = "1"
+
+# Transport: hyper 1.x (h1/h2) + the hyper-util legacy client (connection pool).
+hyper = { version = "1", features = ["client", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }
+http = "1"
+http-body-util = "0.1"
+
+# TLS: rustls 0.23 via hyper-rustls; ring provider + webpki-roots trust anchors
+# (routed through hyper-rustls's own feature so we don't pin webpki-roots's major).
+hyper-rustls = { version = "0.27", default-features = false, features = ["webpki-roots", "http1", "http2", "ring", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "time", "macros"] }
+
+# Streaming bodies + on-the-fly Content-Encoding decode.
+futures-util = "0.3"
+tokio-util = { version = "0.7", features = ["io"] }
+async-compression = { version = "0.4", features = ["tokio", "gzip", "zlib", "brotli", "zstd"] }
+
+# Cookies (RFC 6265bis) + HTTP-date parsing for the cache (RFC 9111).
+cookie = "0.18"
+time = "0.3"
+httpdate = "1"
+
+[dev-dependencies]
+mockito = "1"
+# Used only to build gzip fixtures in tests; decode itself is async-compression.
+flate2 = "1"
