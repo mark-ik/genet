@@ -12,7 +12,13 @@
 //! (Servo → serval). See `docs/2026-05-20_*` plans.
 
 mod app;
+// Netfetcher-backed ResourceFetcher — only with the `netfetch` feature (keeps the
+// async network stack out of serval's default build).
+#[cfg(feature = "netfetch")]
+mod net_fetcher;
 mod render;
 
 pub use app::run;
 pub use render::build_scene;
+#[cfg(feature = "netfetch")]
+pub use net_fetcher::NetResourceFetcher;

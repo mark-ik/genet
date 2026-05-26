@@ -14,9 +14,11 @@
 use std::path::Path;
 
 use paint_list_api::DeviceIntSize;
+use pelt_core::ResourceFetcher;
 use serval_layout::{
-    BackgroundImagePlane, ImagePlane, LocalFileImageLoader, ResourceResolver, StylePlane,
-    emit_paint_list_with_layouts, inline_stylesheets, layout, linked_stylesheets, run_cascade,
+    BackgroundImagePlane, ImageLoader, ImagePlane, LocalFileImageLoader, ResourceResolver,
+    StylePlane, emit_paint_list_with_layouts, inline_stylesheets, layout, linked_stylesheets,
+    run_cascade,
 };
 use serval_static_dom::StaticDocument;
 
@@ -31,6 +33,7 @@ pub fn build_scene(
     base_dir: Option<&Path>,
     width: u32,
     height: u32,
+    fetcher: Option<&dyn ResourceFetcher>,
 ) -> netrender::Scene {
     let document = StaticDocument::parse(html);
 
@@ -52,7 +55,10 @@ pub fn build_scene(
     // `<img>`: data: URIs decode inline; relative paths load from disk
     // against the document's directory. The box tree sizes each replaced
     // leaf from this plane at layout time.
-    let loader = LocalFileImageLoader::new(resolver);
+    let loader = HostImageLoader {
+        local: LocalFileImageLoader::new(resolver),
+        fetcher,
+    };
     let images = ImagePlane::decode_from_dom_with_loader(&document, &loader);
     let bg_images = BackgroundImagePlane::decode_from_cascade(&document, &styles, &loader);
 
@@ -73,4 +79,24 @@ pub fn build_scene(
     );
 
     paint::translate_paint_list(&plist)
+}
+
+/// The host's image loader: remote `http(s)` URLs go through the shell's
+/// [`ResourceFetcher`] (when one is supplied), everything else (relative / local
+/// files) through serval's [`LocalFileImageLoader`]. `data:` URIs are decoded
+/// inside serval and never reach a loader. With `fetcher == None` this behaves
+/// exactly like the bare `LocalFileImageLoader` — remote `<img>`s just don't load.
+pub(crate) struct HostImageLoader<'a> {
+    pub(crate) local: LocalFileImageLoader,
+    pub(crate) fetcher: Option<&'a dyn ResourceFetcher>,
+}
+
+impl ImageLoader for HostImageLoader<'_> {
+    fn load(&self, url: &str) -> Option<Vec<u8>> {
+        if url.starts_with("http://") || url.starts_with("https://") {
+            self.fetcher.and_then(|f| f.fetch(url))
+        } else {
+            self.local.load(url)
+        }
+    }
 }

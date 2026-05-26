@@ -104,3 +104,13 @@ impl ShellEngine for DeferredShellEngine {
         ShellEngineCapabilities::default()
     }
 }
+
+/// Host-shell resource-fetch contract: turn a URL into bytes for whichever engine
+/// is hosted underneath. Networking is a *platform-integration* concern the shell
+/// owns — kept off the engine, which only consumes bytes. Impls live in the ports
+/// (a local-file fetcher, a netfetcher-backed fetcher, …); an engine's own byte
+/// seams (e.g. serval's `ImageLoader`) delegate to whichever the shell supplies.
+pub trait ResourceFetcher {
+    /// Fetch `url` to bytes, or `None` on failure / unsupported scheme.
+    fn fetch(&self, url: &str) -> Option<Vec<u8>>;
+}

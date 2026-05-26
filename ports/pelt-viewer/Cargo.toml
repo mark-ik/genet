@@ -23,6 +23,9 @@ xilem = { workspace = true }
 masonry = { workspace = true }
 masonry_winit = { workspace = true }
 
+# Host-shell contracts (ResourceFetcher).
+pelt-core = { path = "../pelt-core" }
+
 # serval engine + render path.
 serval-layout = { path = "../../components/serval-layout" }
 serval-static-dom = { path = "../../components/serval-static-dom" }
@@ -43,3 +46,17 @@ euclid = { workspace = true }
 image = { workspace = true }
 url = { workspace = true }
 wgpu = { version = "29", default-features = false, features = ["std", "wgsl"] }
+
+# Optional netfetcher-backed ResourceFetcher (the `netfetch` feature). Off by
+# default so serval's normal build stays free of the async network stack.
+# netfetcher lives in the sibling repo (repos/netfetcher).
+netfetcher = { path = "../../../netfetcher", optional = true }
+tokio = { version = "1", features = ["rt"], optional = true }
+
+[features]
+# Wire a real netfetcher-backed fetcher (http/https) into the host loader.
+netfetch = ["dep:netfetcher", "dep:tokio"]
+
+[dev-dependencies]
+# Offline mock server for the netfetch integration test.
+mockito = "1"

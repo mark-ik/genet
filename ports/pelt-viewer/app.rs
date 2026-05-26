@@ -294,7 +294,11 @@ impl<D: AppDriver> AppDriver for ServalDriver<D> {
             );
             if !fresh {
                 let sheets: Vec<&str> = req.stylesheets.iter().map(String::as_str).collect();
-                let scene = build_scene(&req.html, &sheets, req.base_dir.as_deref(), w, h);
+                // `None` = local-only fetch (default). Activating the live netfetch
+                // path means the driver owning a single `NetResourceFetcher` (one
+                // runtime, reused) and passing it here — a follow-up; the seam +
+                // impl are proven by the `netfetch` integration test for now.
+                let scene = build_scene(&req.html, &sheets, req.base_dir.as_deref(), w, h, None);
                 let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("pelt-viewer content"),
                     size: wgpu::Extent3d {
