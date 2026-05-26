@@ -6092,6 +6092,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "script-runtime-api"
+version = "0.0.0"
+dependencies = [
+ "script-engine-api",
+ "script-engine-boa",
+ "script-engine-nova",
+]
+
+[[package]]
 name = "scroll"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

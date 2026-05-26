@@ -15,10 +15,12 @@ members = [
     "components/script-engine-api",
     # script-engine-boa joined the workspace 2026-05-25. The old blocker (boa
     # 0.21.1's icu_normalizer ~2.0 vs parley 0.9's ^2.1.1) was resolved by forking
-    # boa to crates/boa (`serval` branch) and bumping its icu family ~2.0 -> ~2.1,
-    # which unifies with parley at 2.1.1. Patched in via [patch.crates-io] below.
+    # boa to crates/boa (`serval` branch) and widening its icu family ~2.0 -> ^2.1,
+    # which resolves to icu 2.2.0 — the version nova_vm's temporal_rs -> icu_calendar
+    # chain forces, and which parley accepts. Patched in via [patch.crates-io] below.
     "components/script-engine-boa",
     "components/script-engine-nova",
+    "components/script-runtime-api",
     "ports/pelt-core",
     "ports/pelt-desktop",
     "ports/pelt-viewer",

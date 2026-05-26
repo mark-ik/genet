@@ -1,0 +1,26 @@
+# Browser host surface for serval's scripted tier (plan Layer 1). Built ON the
+# script-engine-api VM primitives (set_global / set_function / host data), generic
+# over the backend — no engine dependency in the non-dev graph. The "browser-ish"
+# concepts (global scope, console, event loop, EventTarget, document) live here, not
+# in script-engine-api. See docs/2026-05-26_pluggable_engines_testharness_plan.md.
+[package]
+name = "script-runtime-api"
+version = "0.0.0"
+edition = "2021"
+license = "MPL-2.0"
+publish = false
+
+[lib]
+name = "script_runtime_api"
+path = "lib.rs"
+
+[dependencies]
+script-engine-api = { path = "../script-engine-api" }
+
+[dev-dependencies]
+# Validate the host surface against a real backend. Boa is pure Rust (all targets);
+# Nova is native-only.
+script-engine-boa = { path = "../script-engine-boa" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+script-engine-nova = { path = "../script-engine-nova" }

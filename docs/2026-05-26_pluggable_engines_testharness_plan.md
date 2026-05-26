@@ -123,9 +123,16 @@ lifetime.
    are proven driving real DOM mutation. `serval-scripted` no longer
    names `nova_vm` directly (it is transitive via `script-engine-nova`),
    and the duplicate Nova path is retired.
-2. **Build `script-runtime-api` against the trait:** global scope,
-   EventTarget, event loop (timers + microtask drain), `postMessage`,
-   and the document/Node slice above, all from VM primitives.
+2. **Build `script-runtime-api` against the trait** (in progress,
+   2026-05-26): `Runtime<E>` over any backend, the aggregated `HostState`
+   host-data slot, global aliases (`self` / `window`), `console`, a
+   cooperative **event loop** (`setTimeout` / `setInterval` / `clear*`,
+   drained by `run_event_loop`), and **EventTarget** / `Event`
+   (`addEventListener` / `removeEventListener` / `dispatchEvent` /
+   `preventDefault`). All composed from `eval` + `set_function` +
+   host data; validated on Nova and Boa. **Remaining:** Promise
+   microtask draining (needs an engine `pump_microtasks` primitive),
+   `postMessage`, and the document/Node slice.
 3. **Load `testharness.js` on Nova** and add the results bridge. This is
    WPT runner phase 3
    ([wpt runner plan](./2026-05-26_wpt_runner_plan.md), gated here).
