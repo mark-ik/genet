@@ -1,13 +1,14 @@
 # serval
 
-serval is a web engine derived from [Servo](https://servo.org), adapted for
-embedding in the Mere ecosystem. It keeps Servo's Rust foundation and diverges
-where the ecosystem's needs differ. It is a work in progress.
+serval is a prototype web engine derived from [Servo](https://servo.org), inspired by [Blitz](https://blitz.is/), and rebuilt on the [Linebender](https://linebender.org/) ecosystem. It keeps Servo's Rust foundation, extending it while removing mozjs, mozangle, and other legacy components.
+
+serval is modular, scriptable, and profile-aware; it aspires to WPT-conformance, embeddability, and maintainability. The default workspace member is `ports/pelt`, a script-free validation viewer (and embedding example along the lines of servoshell).
 
 ## How it differs from Servo
 
 - **Scripting.** SpiderMonkey is removed. JavaScript is built around the Nova
-  engine on native, with Boa as the conformance oracle. See
+  engine on native, with Boa as the conformance oracle. The goal is true JS engine modularity.
+  See
   `docs/2026-05-20_serval_script_engine_plan.md` and
   `docs/2026-05-25_js_execution_strategy.md`.
 - **Layout.** `serval-layout` is a profile-neutral engine: a box tree laid out
