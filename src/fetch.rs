@@ -19,7 +19,7 @@ use crate::cors;
 use crate::decode::decode_stream;
 use crate::hsts;
 use crate::request::{Credentials, Method, RedirectMode, RequestMode};
-use crate::response::{ResponseBody, ResponseType};
+use crate::response::{BodyStream, ResponseBody, ResponseType};
 use crate::{FetchContext, Request, Response, SameSiteContext};
 
 /// WHATWG Fetch's redirect cap.
@@ -40,12 +40,11 @@ const MAX_REDIRECTS: u32 = 20;
 /// host is HSTS-known or the request runs in an https-origin context;
 /// `Strict-Transport-Security` recorded over https); SameSite cookie gating
 /// (Strict/Lax, same-site approximated by registrable domain); CORS preflight
-/// (OPTIONS, Max-Age-cached) + `Cors` response-header filtering; and the CSP
-/// `connect-src` hook. Deferred: the active/passive mixed-content split,
-/// public-suffix-accurate same-site, and HTTP/3.
+/// (OPTIONS, Max-Age-cached) + `Cors` response-header filtering; the CSP
+/// `connect-src` hook; and **HTTP/3** via Alt-Svc (a transport-abstracted h3 lane
+/// over quinn, with h1/h2 fallback). Deferred: the active/passive mixed-content
+/// split, public-suffix-accurate same-site, and h3 for requests with bodies.
 pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
-    let client = shared_client();
-
     let mut current_url = request.url.clone();
     // A secure (https-origin) context drives mixed-content auto-upgrade; together
     // with HSTS this rewrites a http target to https before anything keys on it.
@@ -110,15 +109,8 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
             return Response::network_error();
         }
 
-        let Ok(uri) = http::Uri::try_from(current_url.as_str()) else {
-            return Response::network_error();
-        };
-        let mut builder = http::Request::builder()
-            .method(http_method(method))
-            .uri(uri);
-        for (name, value) in &base_headers {
-            builder = builder.header(name.as_str(), value.as_str());
-        }
+        // Assemble request headers: base + cookies + (initial-only) conditional.
+        let mut req_headers = base_headers.clone();
         let cookies = cx.cookies.cookies_for(
             &current_url,
             SameSiteContext {
@@ -127,41 +119,35 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
             },
         );
         if !cookies.is_empty() {
-            builder = builder.header(http::header::COOKIE, cookies.join("; "));
+            req_headers.push(("cookie".to_owned(), cookies.join("; ")));
         }
-        // Conditional revalidation headers, on the initial request only.
         if url_list.len() == 1 {
             if let Some(entry) = &revalidate {
-                for (name, value) in cache::conditional_headers(entry) {
-                    builder = builder.header(name.as_str(), value.as_str());
-                }
+                req_headers.extend(cache::conditional_headers(entry));
             }
         }
-        let wire_body = Full::new(body.clone().unwrap_or_default());
-        let Ok(req) = builder.body(wire_body) else {
-            return Response::network_error();
-        };
 
-        let resp = match client.request(req).await {
-            Ok(resp) => resp,
-            Err(_) => return Response::network_error(),
+        // Transport: prefer h3 when this https origin advertised it (bodyless only).
+        let try_h3 = current_url.scheme() == "https"
+            && body.is_none()
+            && current_url.host_str().and_then(|h| cx.alt_svc.h3_port(h)).is_some();
+        let raw = match send_request(&current_url, method, &req_headers, body.as_ref(), try_h3).await
+        {
+            Some(raw) => raw,
+            None => return Response::network_error(),
         };
-        let status = resp.status();
+        let status = raw.status;
 
         // Record any Set-Cookie headers against the URL that produced them.
-        for value in resp.headers().get_all(http::header::SET_COOKIE).iter() {
-            if let Ok(s) = value.to_str() {
-                cx.cookies.set_cookie(&current_url, s);
+        for (name, value) in &raw.headers {
+            if name.eq_ignore_ascii_case("set-cookie") {
+                cx.cookies.set_cookie(&current_url, value);
             }
         }
 
         // Record HSTS policy — only honored when delivered over https.
         if current_url.scheme() == "https" {
-            if let Some(sts) = resp
-                .headers()
-                .get(http::header::STRICT_TRANSPORT_SECURITY)
-                .and_then(|v| v.to_str().ok())
-            {
+            if let Some(sts) = header_val(&raw.headers, "strict-transport-security") {
                 if let Some((max_age, include_subdomains)) = hsts::parse_sts(sts) {
                     if let Some(host) = current_url.host_str() {
                         cx.hsts.record(host, max_age, include_subdomains);
@@ -170,10 +156,9 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
             }
         }
 
-        // Record Alt-Svc advertisements so future requests to this origin can use
-        // h3 (the routing itself lands in 4b's next step).
+        // Record Alt-Svc advertisements so future requests to this origin use h3.
         if let Some(host) = current_url.host_str() {
-            if let Some(value) = resp.headers().get("alt-svc").and_then(|v| v.to_str().ok()) {
+            if let Some(value) = header_val(&raw.headers, "alt-svc") {
                 match altsvc::parse_alt_svc(value) {
                     altsvc::AltSvc::H3 { port, max_age } => cx.alt_svc.record_h3(host, port, max_age),
                     altsvc::AltSvc::Clear => cx.alt_svc.clear(host),
@@ -183,18 +168,16 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
         }
 
         // Redirect handling.
-        if status.is_redirection() {
-            if let Some(location) = resp
-                .headers()
-                .get(http::header::LOCATION)
-                .and_then(|v| v.to_str().ok())
-            {
+        if (300..400).contains(&status) {
+            // Own the location so `raw.headers` is free to move below.
+            let location = header_val(&raw.headers, "location").map(str::to_owned);
+            if let Some(location) = location {
                 match request.redirect {
                     RedirectMode::Error => return Response::network_error(),
                     RedirectMode::Manual => {
                         return Response {
-                            status: status.as_u16(),
-                            headers: collect_headers(resp.headers()),
+                            status,
+                            headers: raw.headers,
                             body: ResponseBody::empty(),
                             url_list,
                             response_type: ResponseType::OpaqueRedirect,
@@ -204,11 +187,11 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
                         if redirects_remaining == 0 {
                             return Response::network_error();
                         }
-                        let Ok(next) = current_url.join(location) else {
+                        let Ok(next) = current_url.join(&location) else {
                             return Response::network_error();
                         };
                         redirects_remaining -= 1;
-                        method = redirect_method(status.as_u16(), method, &mut body);
+                        method = redirect_method(status, method, &mut body);
                         current_url = next;
                         upgrade_to_https(&mut current_url, secure_context, cx);
                         url_list.push(current_url.clone());
@@ -220,54 +203,39 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
         }
 
         // 304 Not Modified → serve (and refresh) the stored entry.
-        if status.as_u16() == 304 {
+        if status == 304 {
             if let (Some(key), Some(entry)) = (&cache_key, revalidate.take()) {
-                let refreshed = cache::refresh(entry, &collect_headers(resp.headers()), now);
+                let refreshed = cache::refresh(entry, &raw.headers, now);
                 cx.cache.put(key, refreshed.clone());
                 return cache::to_response(refreshed, url_list);
             }
         }
 
-        // Terminal response: snapshot headers + encoding before consuming the body.
-        let headers = collect_headers(resp.headers());
-        let content_encoding = resp
-            .headers()
-            .get(http::header::CONTENT_ENCODING)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned);
-
-        // Cross-origin policy: response tainting + CORS gating. A blocked CORS
-        // check is a network error (and we skip even reading the body).
+        // Terminal: tainting/filtering, then decode the transport-agnostic body.
+        let content_encoding = header_val(&raw.headers, "content-encoding").map(str::to_owned);
         let response_type = match cors::evaluate(
             request.origin.as_ref(),
             &current_url,
             request.mode,
             request.credentials,
-            &headers,
+            &raw.headers,
         ) {
             cors::Taint::Basic => ResponseType::Basic,
             cors::Taint::Cors => ResponseType::Cors,
             cors::Taint::Opaque => ResponseType::Opaque,
             cors::Taint::Blocked => return Response::network_error(),
         };
-
-        // A Cors-tainted response exposes only safelisted + Expose-Headers.
         let headers = if matches!(response_type, ResponseType::Cors) {
-            cors::filter_cors_response_headers(headers)
+            cors::filter_cors_response_headers(raw.headers)
         } else {
-            headers
+            raw.headers
         };
+        let body = decode_stream(content_encoding.as_deref(), raw.body);
 
-        let data = resp
-            .into_body()
-            .into_data_stream()
-            .map_err(|e| io::Error::other(e));
-        let body = decode_stream(content_encoding.as_deref(), Box::pin(data));
-
-        // Cacheable GET 200 → buffer the decoded body so we can store it, then hand
-        // the caller that same buffer (a live stream can't be tee'd into the cache).
+        // Cacheable GET 200 → buffer the decoded body to store it, then hand the
+        // caller that same buffer (a live stream can't be tee'd into the cache).
         if let Some(key) = &cache_key {
-            if cache::is_cacheable(status.as_u16(), &headers) {
+            if cache::is_cacheable(status, &headers) {
                 let bytes = match ResponseBody::new(body).bytes().await {
                     Ok(bytes) => bytes,
                     Err(_) => return Response::network_error(),
@@ -277,14 +245,14 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
                 cx.cache.put(
                     key,
                     StoredResponse {
-                        status: status.as_u16(),
+                        status,
                         headers: stored_headers.clone(),
                         body: bytes.clone(),
                         stored_at: now,
                     },
                 );
                 return Response {
-                    status: status.as_u16(),
+                    status,
                     headers: stored_headers,
                     body: ResponseBody::from_bytes(bytes),
                     url_list,
@@ -295,13 +263,75 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
 
         // Non-cacheable: stream straight through.
         return Response {
-            status: status.as_u16(),
+            status,
             headers,
             body: ResponseBody::new(body),
             url_list,
             response_type,
         };
     }
+}
+
+/// Normalized transport response: status + headers + a raw (undecoded) body
+/// stream, produced by either the h1/h2 or the h3 path so the loop's back half is
+/// transport-agnostic.
+struct RawResponse {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: BodyStream,
+}
+
+/// Send one request over h3 (if `try_h3` and available) or h1/h2, normalizing the
+/// result to a [`RawResponse`]. An h3 failure falls back to h1/h2.
+#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+async fn send_request(
+    url: &Url,
+    method: Method,
+    headers: &[(String, String)],
+    body: Option<&Bytes>,
+    try_h3: bool,
+) -> Option<RawResponse> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if try_h3 {
+        if let Some(h3) = crate::h3_client::fetch_h3_default(url, http_method(method), headers).await
+        {
+            return Some(RawResponse {
+                status: h3.status,
+                headers: h3.headers,
+                body: once_body(h3.body),
+            });
+        }
+        // h3 attempt failed → fall back to h1/h2.
+    }
+
+    let uri = http::Uri::try_from(url.as_str()).ok()?;
+    let mut builder = http::Request::builder().method(http_method(method)).uri(uri);
+    for (name, value) in headers {
+        builder = builder.header(name.as_str(), value.as_str());
+    }
+    let req = builder.body(Full::new(body.cloned().unwrap_or_default())).ok()?;
+    let resp = shared_client().request(req).await.ok()?;
+    let status = resp.status().as_u16();
+    let headers = collect_headers(resp.headers());
+    let data = resp.into_body().into_data_stream().map_err(|e| io::Error::other(e));
+    Some(RawResponse {
+        status,
+        headers,
+        body: Box::pin(data),
+    })
+}
+
+/// Wrap already-collected bytes as a single-chunk body stream (the h3 path; the
+/// shared decode step then handles its `Content-Encoding` uniformly).
+fn once_body(bytes: Bytes) -> BodyStream {
+    Box::pin(futures_util::stream::once(async move { Ok::<_, io::Error>(bytes) }))
+}
+
+fn header_val<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
 }
 
 /// The stored/served body is decoded (identity), so its `Content-Encoding` and the
