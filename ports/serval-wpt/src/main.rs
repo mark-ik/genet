@@ -20,13 +20,19 @@ use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
+use layout_dom_api::{LayoutDom, LocalName, NodeKind};
 use serval_static_dom::StaticDocument;
+
+mod render;
 
 // The upstream WPT checkout lives under `tests/wpt/tests/`
 // (`tests/wpt/mozilla/` holds servo-specific tests).
 const DEFAULT_TESTS_ROOT: &str = "tests/wpt/tests";
 const VIEWPORT_W: f32 = 800.0;
 const VIEWPORT_H: f32 = 600.0;
+// Reftest render size (the WPT default viewport).
+const REFTEST_W: u32 = 800;
+const REFTEST_H: u32 = 600;
 
 /// WPT test classification (convention-based; see the plan doc).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -208,8 +214,9 @@ fn usage() -> String {
 serval-wpt - serval-native web-platform-tests runner (phase 1: crash-smoke)
 
 Usage:
-    serval-wpt list <subset>          enumerate + classify tests in a subset
-    serval-wpt run  <subset>          crash-smoke a subset (parse + layout)
+    serval-wpt list    <subset>       enumerate + classify tests in a subset
+    serval-wpt run     <subset>       crash-smoke a subset (parse + layout)
+    serval-wpt reftest <subset>       render + pixel-compare reftests (needs a GPU)
 
 Options:
     --tests-root <dir>   tests root (default: tests/wpt)
@@ -247,6 +254,7 @@ fn main() {
     match args.command.as_str() {
         "list" => list(&tests, &args),
         "run" => run(&tests, &args),
+        "reftest" => reftest(&tests, &args),
         other => {
             eprintln!("unknown command: {other}\n{}", usage());
             std::process::exit(2);
@@ -324,6 +332,166 @@ fn run(tests: &[PathBuf], args: &Args) {
         failed,
         errored,
         skipped,
+        tests.len()
+    );
+    if failed > 0 || errored > 0 {
+        std::process::exit(1);
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MatchKind {
+    Match,
+    Mismatch,
+}
+
+/// The first `<link rel="match"|"mismatch" href="...">` in a reftest.
+fn reftest_ref(html: &str) -> Option<(MatchKind, String)> {
+    let doc = StaticDocument::parse(html);
+    let no_ns = layout_dom_api::Namespace::default();
+    let rel = LocalName::from("rel");
+    let href = LocalName::from("href");
+    let mut stack = vec![doc.document()];
+    while let Some(id) = stack.pop() {
+        if doc.element_name(id).is_some_and(|q| q.local.as_ref() == "link") {
+            let kind = match doc.attribute(id, &no_ns, &rel) {
+                Some("match") => Some(MatchKind::Match),
+                Some("mismatch") => Some(MatchKind::Mismatch),
+                _ => None,
+            };
+            if let Some(kind) = kind {
+                if let Some(h) = doc.attribute(id, &no_ns, &href) {
+                    return Some((kind, h.to_string()));
+                }
+            }
+        }
+        stack.extend(doc.dom_children(id));
+    }
+    None
+}
+
+/// Slice-1 conservatism: skip reftests needing resources we do not yet
+/// load (linked stylesheets, scripts). Inline `<style>` and data-URI
+/// images are handled.
+fn needs_external_resources(html: &str) -> bool {
+    let l = html.to_ascii_lowercase();
+    l.contains("rel=\"stylesheet\"") || l.contains("rel=stylesheet") || l.contains("<script")
+}
+
+/// Resolve a reftest `href` to a file: `/`-absolute against the tests
+/// root, otherwise relative to the test's directory. Drops fragment/query.
+fn resolve_ref(test_path: &Path, href: &str, tests_root: &Path) -> Option<PathBuf> {
+    let href = href.split(['#', '?']).next().unwrap_or(href);
+    if href.is_empty() {
+        return None;
+    }
+    Some(match href.strip_prefix('/') {
+        Some(rest) => tests_root.join(rest),
+        None => test_path.parent()?.join(href),
+    })
+}
+
+fn images_equal(a: &render::Image, b: &render::Image) -> bool {
+    a.dimensions() == b.dimensions() && a.as_raw() == b.as_raw()
+}
+
+fn reftest(tests: &[PathBuf], args: &Args) {
+    let renderer = match render::Renderer::boot() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("cannot boot renderer (reftests need a GPU): {e}");
+            std::process::exit(1);
+        }
+    };
+    let tests_root = Path::new(&args.tests_root);
+
+    let prev = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+
+    let (mut passed, mut failed, mut skipped, mut errored) = (0, 0, 0, 0);
+    for path in tests {
+        let Ok(bytes) = fs::read(path) else {
+            errored += 1;
+            continue;
+        };
+        let test_html = String::from_utf8_lossy(&bytes).into_owned();
+        if classify(path, &test_html) != Kind::Reftest {
+            skipped += 1;
+            continue;
+        }
+        let Some((kind, href)) = reftest_ref(&test_html) else {
+            skipped += 1;
+            continue;
+        };
+        let Some(ref_path) = resolve_ref(path, &href, tests_root) else {
+            skipped += 1;
+            continue;
+        };
+        let Ok(ref_bytes) = fs::read(&ref_path) else {
+            errored += 1;
+            println!("ERROR ref-missing {}", rel(path, &args.tests_root));
+            continue;
+        };
+        let ref_html = String::from_utf8_lossy(&ref_bytes).into_owned();
+        if needs_external_resources(&test_html) || needs_external_resources(&ref_html) {
+            skipped += 1;
+            if args.verbose {
+                println!("SKIP  resources {}", rel(path, &args.tests_root));
+            }
+            continue;
+        }
+
+        let test_sheets = extract_inline_styles(&test_html);
+        let ref_sheets = extract_inline_styles(&ref_html);
+        let rendered = panic::catch_unwind(AssertUnwindSafe(|| {
+            let t = renderer.render_html(
+                &test_html,
+                &test_sheets.iter().map(String::as_str).collect::<Vec<_>>(),
+                REFTEST_W,
+                REFTEST_H,
+            );
+            let r = renderer.render_html(
+                &ref_html,
+                &ref_sheets.iter().map(String::as_str).collect::<Vec<_>>(),
+                REFTEST_W,
+                REFTEST_H,
+            );
+            (t, r)
+        }));
+        let (test_img, ref_img) = match rendered {
+            Ok(pair) => pair,
+            Err(_) => {
+                failed += 1;
+                println!("FAIL  crash    {}", rel(path, &args.tests_root));
+                continue;
+            }
+        };
+
+        let equal = images_equal(&test_img, &ref_img);
+        let pass = match kind {
+            MatchKind::Match => equal,
+            MatchKind::Mismatch => !equal,
+        };
+        if pass {
+            passed += 1;
+            if args.verbose {
+                println!("PASS  {}", rel(path, &args.tests_root));
+            }
+        } else {
+            failed += 1;
+            let k = if kind == MatchKind::Match { "match   " } else { "mismatch" };
+            println!("FAIL  {k} {}", rel(path, &args.tests_root));
+        }
+    }
+
+    panic::set_hook(prev);
+
+    println!(
+        "\nreftest: {} passed, {} failed, {} skipped, {} errored (of {} files)",
+        passed,
+        failed,
+        skipped,
+        errored,
         tests.len()
     );
     if failed > 0 || errored > 0 {

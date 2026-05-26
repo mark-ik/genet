@@ -6352,8 +6352,21 @@ dependencies = [
 name = "serval-wpt"
 version = "0.2.0"
 dependencies = [
+ "dpi",
+ "euclid",
+ "image",
+ "layout-dom-api",
+ "netrender",
+ "paint_list_api",
  "serval-layout",
  "serval-static-dom",
+ "servo-base",
+ "servo-embedder-traits",
+ "servo-paint",
+ "servo-paint-api",
+ "servo-paint-types",
+ "taffy 0.11.0-experimental-cache-fix.3",
+ "wgpu",
 ]
 
 [[package]]

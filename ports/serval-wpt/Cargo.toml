@@ -14,6 +14,23 @@ name = "serval-wpt"
 path = "src/main.rs"
 
 [dependencies]
-# Phase 1 (crash-smoke) needs only the parse + layout path; no GPU.
+# Phase 1 (crash-smoke): parse + layout, no GPU.
 serval-static-dom = { path = "../../components/serval-static-dom" }
 serval-layout = { path = "../../components/serval-layout" }
+layout_dom_api = { workspace = true }
+
+# Phase 2 (reftests): render to pixels via the paint + netrender path
+# (the same public API the html_to_pixels_e2e test drives) and compare.
+paint = { workspace = true }
+paint_api = { workspace = true }
+paint_list_api = { workspace = true }
+paint_types = { workspace = true }
+netrender = { workspace = true }
+wgpu = { workspace = true }
+embedder_traits = { workspace = true }
+servo-base = { workspace = true }
+dpi = { workspace = true }
+euclid = { workspace = true }
+image = { workspace = true }
+# Must match serval-layout's experimental pin (layout() takes a taffy::Size).
+taffy = { version = "=0.11.0-experimental-cache-fix.3", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "detailed_layout_info"] }

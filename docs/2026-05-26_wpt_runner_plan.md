@@ -1,7 +1,8 @@
 # serval-native WPT runner
 
-Status: **in progress (2026-05-26).** Phase 1 (crash-smoke + subset
-selection) built; later phases scoped below.
+Status: **in progress (2026-05-26).** Phase 1 (crash-smoke) and phase 2
+slice 1 (reftest pixel compare, inline-only, exact match) built; phase 2
+refinements + phase 3 scoped below.
 
 ## Goal
 
@@ -62,8 +63,13 @@ A real `MANIFEST.json` reader can replace this later for exactness
    No GPU.
 2. **Reftests.** Render test + reference to images (the
    `html_to_pixels_e2e` path: cascade → layout → emit → netrender →
-   readback), compare within a tolerance. Linked CSS + local images via
-   the pelt-viewer loader. GPU.
+   readback) and pixel-compare, with match/mismatch semantics. GPU,
+   booted once per run. **Slice 1 (done):** inline `<style>` only, exact
+   compare; tests needing linked CSS / scripts are skipped. First signal
+   on `css/CSS2/floats`: 7 passed, 92 failed, 98 skipped of 197.
+   **Refinements (next):** linked stylesheets + local images (relative +
+   `/`-absolute resolution); fuzzy matching (WPT `fuzzy` metadata) so
+   anti-aliasing diffs do not count as failures; ref chains.
 3. **testharness.js.** Once the scripting tier runs testharness, capture
    subtest results. Gated on JS execution maturity.
 4. **Expectations.** A checked-in expected-results file so known
