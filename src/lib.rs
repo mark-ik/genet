@@ -32,6 +32,7 @@ mod cookie_jar;
 mod cors;
 mod decode;
 mod fetch;
+mod hsts;
 mod request;
 mod response;
 
@@ -39,5 +40,6 @@ pub use cache::{HttpCache, InMemoryHttpCache, NoHttpCache, StoredResponse};
 pub use context::{AllowAllCsp, CookieStore, CspChecker, FetchContext};
 pub use cookie_jar::InMemoryCookieJar;
 pub use fetch::fetch;
+pub use hsts::{HstsStore, InMemoryHsts};
 pub use request::{Credentials, Method, RedirectMode, Request, RequestMode};
 pub use response::{Response, ResponseBody, ResponseType};

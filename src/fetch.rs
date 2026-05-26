@@ -10,11 +10,13 @@ use std::time::SystemTime;
 use bytes::Bytes;
 use futures_util::TryStreamExt;
 use http_body_util::{BodyExt, Full};
+use url::Url;
 
 use crate::cache::{self, StoredResponse};
 use crate::client::shared_client;
 use crate::cors;
 use crate::decode::decode_stream;
+use crate::hsts;
 use crate::request::{Method, RedirectMode};
 use crate::response::{ResponseBody, ResponseType};
 use crate::{FetchContext, Request, Response};
@@ -33,12 +35,22 @@ const MAX_REDIRECTS: u32 = 20;
 /// without a round-trip, stale/`no-cache` entries revalidated via
 /// `ETag`/`Last-Modified`); cross-origin response tainting + simple-request CORS
 /// gating (`Basic`/`Cors`/`Opaque`, cross-origin CORS failures → network error);
-/// and the CSP `connect-src` hook. Deferred: CORS preflight + response-header
-/// filtering, `SameSite` enforcement, HSTS, mixed-content, and HTTP/3.
+/// HSTS + mixed-content auto-upgrade (a http target is rewritten to https when the
+/// host is HSTS-known or the request runs in an https-origin context;
+/// `Strict-Transport-Security` recorded over https); and the CSP `connect-src`
+/// hook. Deferred: CORS preflight + response-header filtering, `SameSite`
+/// enforcement, the active/passive mixed-content split, and HTTP/3.
 pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
     let client = shared_client();
 
     let mut current_url = request.url.clone();
+    // A secure (https-origin) context drives mixed-content auto-upgrade; together
+    // with HSTS this rewrites a http target to https before anything keys on it.
+    let secure_context = request
+        .origin
+        .as_ref()
+        .is_some_and(|o| o.ascii_serialization().starts_with("https://"));
+    upgrade_to_https(&mut current_url, secure_context, cx);
     let mut method = request.method;
     let mut body = request.body.clone();
     let base_headers = request.headers.clone();
@@ -106,6 +118,21 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
             }
         }
 
+        // Record HSTS policy — only honored when delivered over https.
+        if current_url.scheme() == "https" {
+            if let Some(sts) = resp
+                .headers()
+                .get(http::header::STRICT_TRANSPORT_SECURITY)
+                .and_then(|v| v.to_str().ok())
+            {
+                if let Some((max_age, include_subdomains)) = hsts::parse_sts(sts) {
+                    if let Some(host) = current_url.host_str() {
+                        cx.hsts.record(host, max_age, include_subdomains);
+                    }
+                }
+            }
+        }
+
         // Redirect handling.
         if status.is_redirection() {
             if let Some(location) = resp
@@ -134,6 +161,7 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
                         redirects_remaining -= 1;
                         method = redirect_method(status.as_u16(), method, &mut body);
                         current_url = next;
+                        upgrade_to_https(&mut current_url, secure_context, cx);
                         url_list.push(current_url.clone());
                         continue;
                     }
@@ -228,6 +256,16 @@ fn strip_body_encoding_headers(headers: &mut Vec<(String, String)>) {
     });
 }
 
+/// Rewrite a `http` URL to `https` when the request runs in a secure (https-origin)
+/// context — mixed-content auto-upgrade — or the host is HSTS-known. The
+/// active/passive split (block scripts, only upgrade media) is a later refinement;
+/// it needs a request `destination` concept netfetcher doesn't model yet.
+fn upgrade_to_https(url: &mut Url, secure_context: bool, cx: &FetchContext) {
+    if url.scheme() == "http" && (secure_context || hsts::should_upgrade(url, cx.hsts.as_ref())) {
+        let _ = url.set_scheme("https");
+    }
+}
+
 fn http_method(method: Method) -> http::Method {
     match method {
         Method::Get => http::Method::GET,
@@ -278,6 +316,7 @@ mod tests {
             cookies: Box::new(InMemoryCookieJar::new()),
             cache: Box::new(InMemoryHttpCache::new()),
             csp: Box::new(AllowAllCsp),
+            hsts: Box::new(crate::InMemoryHsts::new()),
         }
     }
 
@@ -401,6 +440,7 @@ mod tests {
             cookies: Box::new(spy.clone()),
             cache: Box::new(NoHttpCache),
             csp: Box::new(AllowAllCsp),
+            hsts: Box::new(crate::InMemoryHsts::new()),
         };
         let res = fetch(
             Request::get(format!("{}/c", server.url()).parse().unwrap()),
@@ -499,14 +539,14 @@ mod tests {
         let _m = server
             .mock("GET", "/api")
             .with_status(200)
-            .with_header("access-control-allow-origin", "https://app.example")
+            .with_header("access-control-allow-origin", "http://app.example")
             .with_body("data")
             .create_async()
             .await;
 
         let cx = FetchContext::permissive();
         let req = Request::get(format!("{}/api", server.url()).parse().unwrap())
-            .with_origin(origin_of("https://app.example/"));
+            .with_origin(origin_of("http://app.example/"));
         let res = fetch(req, &cx).await;
 
         assert_eq!(res.response_type, ResponseType::Cors);
@@ -526,7 +566,7 @@ mod tests {
 
         let cx = FetchContext::permissive();
         let req = Request::get(format!("{}/api", server.url()).parse().unwrap())
-            .with_origin(origin_of("https://app.example/"));
+            .with_origin(origin_of("http://app.example/"));
         let res = fetch(req, &cx).await;
 
         assert!(res.is_network_error(), "cross-origin CORS with no ACAO is blocked");
@@ -544,10 +584,23 @@ mod tests {
 
         let cx = FetchContext::permissive();
         let mut req = Request::get(format!("{}/img", server.url()).parse().unwrap())
-            .with_origin(origin_of("https://app.example/"));
+            .with_origin(origin_of("http://app.example/"));
         req.mode = crate::RequestMode::NoCors;
         let res = fetch(req, &cx).await;
 
         assert_eq!(res.response_type, ResponseType::Opaque);
+    }
+
+    #[test]
+    fn mixed_content_upgrades_in_secure_context() {
+        let cx = FetchContext::permissive();
+        let mut url: Url = "http://example.org/x".parse().unwrap();
+        upgrade_to_https(&mut url, true, &cx);
+        assert_eq!(url.scheme(), "https", "https-origin context upgrades http target");
+
+        // No secure context and no HSTS entry → left as http.
+        let mut insecure: Url = "http://example.org/x".parse().unwrap();
+        upgrade_to_https(&mut insecure, false, &cx);
+        assert_eq!(insecure.scheme(), "http");
     }
 }
