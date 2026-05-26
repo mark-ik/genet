@@ -6315,7 +6315,8 @@ name = "serval-scripted"
 version = "0.2.0"
 dependencies = [
  "layout-dom-api",
- "nova_vm",
+ "script-engine-api",
+ "script-engine-nova",
  "serval-layout",
  "serval-scripted-dom",
 ]

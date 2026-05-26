@@ -79,7 +79,9 @@ A real `MANIFEST.json` reader can replace this later for exactness
    demonstrated on a specific subset. **Still out:** remote resources (the
    WPT server), `mismatch` chains.
 3. **testharness.js.** Once the scripting tier runs testharness, capture
-   subtest results. Gated on JS execution maturity.
+   subtest results. Gated on JS execution maturity; the binding work and
+   per-engine cost are scoped in
+   [2026-05-26_pluggable_engines_testharness_plan.md](./2026-05-26_pluggable_engines_testharness_plan.md).
 4. **Expectations.** A checked-in expected-results file so known
    failures are tolerated and regressions surface (the WPT metadata
    model, serval-shaped).

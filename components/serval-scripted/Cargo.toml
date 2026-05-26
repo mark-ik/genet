@@ -22,6 +22,10 @@ path = "lib.rs"
 serval-scripted-dom = { path = "../serval-scripted-dom" }
 layout-dom-api = { path = "../shared/layout-dom" }
 serval-layout = { path = "../serval-layout" }
+# Engine-neutral scripting contract (the native-callback + host-data surface).
+script-engine-api = { path = "../script-engine-api" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-nova_vm = "1"
+# Nova backend, native-only. Wraps nova_vm (no longer named directly here); on
+# wasm32 the scripted tier carries no engine.
+script-engine-nova = { path = "../script-engine-nova" }

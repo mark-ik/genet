@@ -4,19 +4,19 @@
 
 //! Scripted tier — the reflector bridge (engine↔DOM, JS→DOM direction).
 //!
-//! A JS script, handed a **reflector** (an `EmbedderObject` carrying a `NodeId`),
-//! can mutate the corresponding `serval-scripted-dom` node through native
-//! callbacks: the callback recovers the `NodeId` from the reflector and calls
-//! [`LayoutDomMut`]. This closes the JS→DOM half of the live-scripting loop
-//! (the DOM→layout half is the next pass: draining `DomMutation` into serval-layout).
+//! A JS script, handed a **reflector** (a value carrying a `NodeId`), can mutate
+//! the corresponding `serval-scripted-dom` node through a native callback: the
+//! callback recovers the `NodeId` from the reflector and calls [`LayoutDomMut`].
+//! This closes the JS→DOM half of the live-scripting loop (the DOM→layout half is
+//! the next pass: draining `DomMutation` into serval-layout).
 //!
-//! Native-only: the reflector/host-callback binding is engine-specific (Appendix A
-//! in the script-engine plan), and JS is native-only by design (wasm ships no JS).
+//! Built on the engine-neutral `script-engine-api` contract (`NativeFn` +
+//! `CallCx` + host data), implemented by `script-engine-nova`. The host DOM
+//! reaches the callback through Nova host-defined data, not a `thread_local`. See
+//! `docs/2026-05-26_pluggable_engines_testharness_plan.md`.
 //!
-//! Probe-grade caveat: the host DOM is reached through a `thread_local` (the
-//! rakers pattern) rather than Nova host-defined data, and bindings are installed
-//! at realm-init via a plain `fn` (hence the thread_locals). Cleaning this up — a
-//! proper `script-runtime-api` host layer over Nova host-data — is follow-up work.
+//! Native-only: Nova is 64-bit-bound, and JS is native-only by design (wasm ships
+//! no JS). On wasm32 the scripted tier carries no engine.
 
 #![cfg_attr(target_arch = "wasm32", allow(unused_crate_dependencies))]
 
@@ -62,116 +62,53 @@ pub fn relayout_if_dirty(
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
-    use std::cell::{Cell, RefCell};
+    use std::cell::RefCell;
     use std::rc::Rc;
 
     use layout_dom_api::LayoutDomMut;
-    use nova_vm::{
-        ecmascript::{
-            Agent, AgentOptions, ArgumentsList, Behaviour, BuiltinFunctionArgs, DefaultHostHooks,
-            EmbedderObject, GcAgent, InternalMethods, JsResult, Object, PropertyDescriptor,
-            PropertyKey, String as JsString, Value, create_builtin_function, parse_script,
-            script_evaluation,
-        },
-        engine::{Bindable, GcScope},
-    };
+    use script_engine_api::{CallCx, NativeFn, ScriptEngine, ScriptEngineLive};
+    use script_engine_nova::NovaEngine;
     use serval_scripted_dom::{NodeId, ScriptedDom};
 
-    thread_local! {
-        // The host DOM the native callbacks mutate. Set for the duration of a script run.
-        static HOST_DOM: RefCell<Option<Rc<RefCell<ScriptedDom>>>> = const { RefCell::new(None) };
-        // The NodeId to expose to JS as the `node` reflector global.
-        static REFLECT_NODE: Cell<u64> = const { Cell::new(0) };
-    }
+    /// The host DOM stashed in engine host data, recovered inside the callback.
+    type HostDom = RefCell<ScriptedDom>;
 
-    /// `setText(reflector, text)` — recover the `NodeId` from the reflector and set
-    /// the node's text on the host DOM.
-    fn dom_set_text<'gc>(
-        agent: &mut Agent,
-        _this: Value,
-        args: ArgumentsList,
-        gc: GcScope<'gc, '_>,
-    ) -> JsResult<'gc, Value<'gc>> {
-        let Value::EmbedderObject(reflector) = args[0] else {
-            return Ok(Value::Undefined);
-        };
-        let node = NodeId::from_raw(reflector.embedder_data(agent) as usize);
-        let text = args[1]
-            .to_string(agent, gc)?
-            .to_string_lossy(agent)
-            .into_owned();
-        HOST_DOM.with(|dom| {
-            if let Some(dom) = dom.borrow().as_ref() {
-                dom.borrow_mut().set_text(node, &text);
+    /// `setText(node, text)` — recover the `NodeId` off the reflector argument, read
+    /// the text, and set it on the host DOM. Host state arrives through host-defined
+    /// data (`CallCx::host_data`), not a `thread_local`.
+    struct SetText;
+
+    impl NativeFn<NovaEngine> for SetText {
+        fn call(
+            cx: &mut <NovaEngine as ScriptEngine>::CallCx<'_>,
+        ) -> Result<<NovaEngine as ScriptEngine>::Value, <NovaEngine as ScriptEngine>::Error>
+        {
+            let node = cx.arg(0);
+            let text = cx.arg(1);
+            let Some(id) = cx.reflector_data(&node) else {
+                return Ok(cx.undefined());
+            };
+            let text = cx.value_to_string(&text)?;
+            if let Some(data) = cx.host_data() {
+                if let Some(dom) = data.downcast_ref::<HostDom>() {
+                    dom.borrow_mut().set_text(NodeId::from_raw(id as usize), &text);
+                }
             }
-        });
-        Ok(Value::Undefined)
+            Ok(cx.undefined())
+        }
     }
 
-    /// Realm-init: install the `setText` native function and a `node` reflector for
-    /// the thread-local target node.
-    fn install_dom_bindings(agent: &mut Agent, global: Object, mut gc: GcScope) {
-        let set_text = create_builtin_function(
-            agent,
-            Behaviour::Regular(dom_set_text),
-            BuiltinFunctionArgs::new(2, "setText"),
-            gc.nogc(),
-        );
-        let set_text_key = PropertyKey::from_static_str(agent, "setText", gc.nogc());
-        global
-            .internal_define_own_property(
-                agent,
-                set_text_key.unbind(),
-                PropertyDescriptor {
-                    value: Some(set_text.unbind().into()),
-                    ..Default::default()
-                },
-                gc.reborrow(),
-            )
-            .unwrap();
-
-        let reflector = EmbedderObject::create_with_data(agent, REFLECT_NODE.with(Cell::get));
-        let node_key = PropertyKey::from_static_str(agent, "node", gc.nogc());
-        global
-            .internal_define_own_property(
-                agent,
-                node_key.unbind(),
-                PropertyDescriptor {
-                    value: Some(Value::EmbedderObject(reflector).unbind()),
-                    ..Default::default()
-                },
-                gc,
-            )
-            .unwrap();
-    }
-
-    /// Run `source` against a realm wired so JS can mutate `dom` through the `node`
+    /// Run `source` against an engine wired so JS can mutate `dom` through the `node`
     /// reflector (which reflects `reflect`).
     pub fn run_script(dom: Rc<RefCell<ScriptedDom>>, reflect: NodeId, source: &str) {
-        REFLECT_NODE.with(|n| n.set(reflect.raw() as u64));
-        HOST_DOM.with(|d| *d.borrow_mut() = Some(dom));
+        let mut engine = NovaEngine::new().expect("NovaEngine");
+        engine.set_host_data(dom);
+        engine.set_function::<SetText>("setText", 2).expect("install setText");
 
-        let mut agent = GcAgent::new(AgentOptions::default(), &DefaultHostHooks);
-        let create_global_object: Option<for<'a> fn(&mut Agent, GcScope<'a, '_>) -> Object<'a>> =
-            None;
-        let create_global_this_value: Option<
-            for<'a> fn(&mut Agent, GcScope<'a, '_>) -> Object<'a>,
-        > = None;
-        let realm = agent.create_realm(
-            create_global_object,
-            create_global_this_value,
-            Some(install_dom_bindings),
-        );
+        let reflector = engine.make_reflector(reflect.raw() as u64).expect("reflector");
+        engine.set_global("node", &reflector).expect("install node");
 
-        let src = source.to_string();
-        agent.run_in_realm(&realm, |agent, mut gc| {
-            let realm = agent.current_realm(gc.nogc());
-            let source_text = JsString::from_string(agent, src, gc.nogc());
-            let script = parse_script(agent, source_text, realm, false, None, gc.nogc()).unwrap();
-            let _ = script_evaluation(agent, script.unbind(), gc.reborrow());
-        });
-
-        HOST_DOM.with(|d| *d.borrow_mut() = None);
+        let _ = engine.eval(source);
     }
 
     #[cfg(test)]
