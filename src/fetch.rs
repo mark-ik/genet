@@ -17,7 +17,7 @@ use crate::client::shared_client;
 use crate::cors;
 use crate::decode::decode_stream;
 use crate::hsts;
-use crate::request::{Method, RedirectMode, RequestMode};
+use crate::request::{Credentials, Method, RedirectMode, RequestMode};
 use crate::response::{ResponseBody, ResponseType};
 use crate::{FetchContext, Request, Response, SameSiteContext};
 
@@ -38,9 +38,10 @@ const MAX_REDIRECTS: u32 = 20;
 /// HSTS + mixed-content auto-upgrade (a http target is rewritten to https when the
 /// host is HSTS-known or the request runs in an https-origin context;
 /// `Strict-Transport-Security` recorded over https); SameSite cookie gating
-/// (Strict/Lax, same-site approximated by registrable domain); and the CSP
-/// `connect-src` hook. Deferred: CORS preflight + response-header filtering, the
-/// active/passive mixed-content split, public-suffix-accurate same-site, HTTP/3.
+/// (Strict/Lax, same-site approximated by registrable domain); CORS preflight
+/// (OPTIONS, Max-Age-cached) + `Cors` response-header filtering; and the CSP
+/// `connect-src` hook. Deferred: the active/passive mixed-content split,
+/// public-suffix-accurate same-site, and HTTP/3.
 pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
     let client = shared_client();
 
@@ -70,6 +71,34 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
             }
             if cache::has_validators(&entry) {
                 revalidate = Some(entry); // stale / no-cache → conditional GET
+            }
+        }
+    }
+
+    // CORS preflight: a cross-origin, cors-mode, non-simple request gets an OPTIONS
+    // round-trip first (cached per Access-Control-Max-Age).
+    let cross_origin = request
+        .origin
+        .as_ref()
+        .is_some_and(|o| *o != current_url.origin());
+    if cross_origin
+        && matches!(request.mode, RequestMode::Cors)
+        && cors::needs_preflight(method, &base_headers)
+    {
+        let requested = cors::preflight_request_headers(&base_headers);
+        let key = cors::preflight_key(request.origin.as_ref(), &current_url, method, &requested);
+        if !cx.preflight.check(&key) {
+            match run_preflight(
+                &current_url,
+                request.origin.as_ref(),
+                method,
+                &requested,
+                request.credentials,
+            )
+            .await
+            {
+                Some(max_age) => cx.preflight.store(&key, max_age),
+                None => return Response::network_error(),
             }
         }
     }
@@ -209,6 +238,13 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
             cors::Taint::Blocked => return Response::network_error(),
         };
 
+        // A Cors-tainted response exposes only safelisted + Expose-Headers.
+        let headers = if matches!(response_type, ResponseType::Cors) {
+            cors::filter_cors_response_headers(headers)
+        } else {
+            headers
+        };
+
         let data = resp
             .into_body()
             .into_data_stream()
@@ -301,6 +337,32 @@ fn registrable_domain(host: &str) -> &str {
     }
 }
 
+/// Send a CORS preflight `OPTIONS` and verify it. `Some(max_age)` if the actual
+/// request is permitted, `None` if denied (or the preflight itself failed).
+async fn run_preflight(
+    target: &Url,
+    origin: Option<&url::Origin>,
+    method: Method,
+    requested_headers: &[String],
+    credentials: Credentials,
+) -> Option<u64> {
+    let uri = http::Uri::try_from(target.as_str()).ok()?;
+    let mut builder = http::Request::builder()
+        .method(http::Method::OPTIONS)
+        .uri(uri)
+        .header("access-control-request-method", http_method(method).as_str());
+    if let Some(o) = origin {
+        builder = builder.header(http::header::ORIGIN, o.ascii_serialization());
+    }
+    if !requested_headers.is_empty() {
+        builder = builder.header("access-control-request-headers", requested_headers.join(","));
+    }
+    let req = builder.body(Full::new(Bytes::new())).ok()?;
+    let resp = shared_client().request(req).await.ok()?;
+    let headers = collect_headers(resp.headers());
+    cors::preflight_verdict(origin, credentials, method, requested_headers, &headers)
+}
+
 fn http_method(method: Method) -> http::Method {
     match method {
         Method::Get => http::Method::GET,
@@ -352,6 +414,7 @@ mod tests {
             cache: Box::new(InMemoryHttpCache::new()),
             csp: Box::new(AllowAllCsp),
             hsts: Box::new(crate::InMemoryHsts::new()),
+            preflight: Box::new(crate::InMemoryPreflightCache::new()),
         }
     }
 
@@ -476,6 +539,7 @@ mod tests {
             cache: Box::new(NoHttpCache),
             csp: Box::new(AllowAllCsp),
             hsts: Box::new(crate::InMemoryHsts::new()),
+            preflight: Box::new(crate::InMemoryPreflightCache::new()),
         };
         let res = fetch(
             Request::get(format!("{}/c", server.url()).parse().unwrap()),
@@ -645,5 +709,89 @@ mod tests {
         assert!(is_same_site(Some(&origin_of("https://www.example.org/")), &target));
         assert!(!is_same_site(Some(&origin_of("https://other.example/")), &target));
         assert!(is_same_site(None, &target), "no initiator is same-site");
+    }
+
+    #[tokio::test]
+    async fn preflight_allows_then_sends_actual_request() {
+        let mut server = mockito::Server::new_async().await;
+        let options = server
+            .mock("OPTIONS", "/x")
+            .match_header("access-control-request-method", "PUT")
+            .with_status(204)
+            .with_header("access-control-allow-origin", "http://app.example")
+            .with_header("access-control-allow-methods", "PUT")
+            .with_header("access-control-max-age", "600")
+            .expect(1)
+            .create_async()
+            .await;
+        let actual = server
+            .mock("PUT", "/x")
+            .with_status(200)
+            .with_header("access-control-allow-origin", "http://app.example")
+            .with_body("done")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let cx = FetchContext::permissive();
+        let mut req = Request::get(format!("{}/x", server.url()).parse().unwrap())
+            .with_origin(origin_of("http://app.example/"));
+        req.method = Method::Put;
+        let res = fetch(req, &cx).await;
+
+        options.assert_async().await;
+        actual.assert_async().await;
+        assert_eq!(res.response_type, ResponseType::Cors);
+        assert_eq!(res.bytes().await.unwrap().as_ref(), b"done");
+    }
+
+    #[tokio::test]
+    async fn preflight_denial_blocks_without_sending_actual() {
+        let mut server = mockito::Server::new_async().await;
+        // OPTIONS allows the origin but not the method → denied.
+        let options = server
+            .mock("OPTIONS", "/x")
+            .with_status(204)
+            .with_header("access-control-allow-origin", "http://app.example")
+            .with_header("access-control-allow-methods", "GET")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let cx = FetchContext::permissive();
+        let mut req = Request::get(format!("{}/x", server.url()).parse().unwrap())
+            .with_origin(origin_of("http://app.example/"));
+        req.method = Method::Put;
+        let res = fetch(req, &cx).await;
+
+        options.assert_async().await;
+        assert!(res.is_network_error(), "preflight denial blocks the actual request");
+    }
+
+    #[tokio::test]
+    async fn cors_response_headers_are_filtered() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/data")
+            .with_status(200)
+            .with_header("access-control-allow-origin", "http://app.example")
+            .with_header("content-type", "application/json")
+            .with_header("x-secret", "leak")
+            .with_body("{}")
+            .create_async()
+            .await;
+
+        let cx = FetchContext::permissive();
+        let req = Request::get(format!("{}/data", server.url()).parse().unwrap())
+            .with_origin(origin_of("http://app.example/"));
+        let res = fetch(req, &cx).await;
+
+        assert_eq!(res.response_type, ResponseType::Cors);
+        let names: Vec<&str> = res.headers.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(names.contains(&"content-type"), "safelisted header kept");
+        assert!(
+            !names.iter().any(|n| n.eq_ignore_ascii_case("x-secret")),
+            "non-exposed header filtered out"
+        );
     }
 }

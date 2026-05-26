@@ -18,6 +18,7 @@ use url::Url;
 
 use crate::cache::{HttpCache, NoHttpCache};
 use crate::cookie_jar::InMemoryCookieJar;
+use crate::cors::{InMemoryPreflightCache, PreflightCache};
 use crate::hsts::{HstsStore, InMemoryHsts};
 
 /// Caller-owned bundle of policy + storage the Fetch algorithm consults.
@@ -26,18 +27,21 @@ pub struct FetchContext {
     pub cache: Box<dyn HttpCache>,
     pub csp: Box<dyn CspChecker>,
     pub hsts: Box<dyn HstsStore>,
+    pub preflight: Box<dyn PreflightCache>,
     // request origin (for CORS) travels on the Request; redirect-cap override … later.
 }
 
 impl FetchContext {
     /// A dev/default context: in-memory cookie jar, no cache, permissive CSP,
-    /// in-memory HSTS. Real deployments supply durable, host-backed impls (plan §4).
+    /// in-memory HSTS + preflight cache. Real deployments supply durable,
+    /// host-backed impls (plan §4).
     pub fn permissive() -> Self {
         Self {
             cookies: Box::new(InMemoryCookieJar::default()),
             cache: Box::new(NoHttpCache),
             csp: Box::new(AllowAllCsp),
             hsts: Box::new(InMemoryHsts::new()),
+            preflight: Box::new(InMemoryPreflightCache::new()),
         }
     }
 }
