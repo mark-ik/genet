@@ -127,7 +127,7 @@ fn smoke_test(path: &Path) -> (Kind, Outcome) {
 
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
         let document = StaticDocument::parse(&html);
-        let sheets = render::extract_inline_styles(&html);
+        let sheets = serval_layout::inline_stylesheets_from_source(&html);
         let sheet_refs: Vec<&str> = sheets.iter().map(String::as_str).collect();
         let _fragments = serval_layout::render(&document, &sheet_refs, VIEWPORT_W, VIEWPORT_H);
     }));

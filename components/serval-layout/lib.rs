@@ -25,6 +25,7 @@ mod cell;
 mod construct;
 mod font_metrics;
 mod fragment;
+mod host_loader;
 mod image_decode;
 mod incremental;
 mod invalidate;
@@ -43,6 +44,10 @@ pub use box_tree::{build_box_tree, layout_via_box_tree, BoxTree};
 pub use cascade::{restyle_structural, restyle_with_snapshots, run_cascade, RestyleOutcome};
 pub use cell::ArcRefCell;
 pub use fragment::FragmentPlane;
+pub use host_loader::{
+    inline_stylesheets, inline_stylesheets_from_source, linked_stylesheets, LocalFileImageLoader,
+    ResourceResolver,
+};
 pub use incremental::{Applied, IncrementalLayout};
 pub use image_decode::{
     BackgroundImagePlane, DecodedImage, ImageLoader, ImagePlane, NoImageLoader,
