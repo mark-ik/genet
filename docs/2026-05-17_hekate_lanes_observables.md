@@ -120,6 +120,8 @@ System-webview fallback for content the above lanes can't faithfully handle (ori
 
 This avoids host special-cases (mere doesn't need a separate code path for "is this a webview") while telling apparatus *"you can't inspect inside this thing"* via the explicit none/opaque slots in the matrix.
 
+**The matrix is a ceiling, not a floor.** [2026-05-26_scrying_dom_bridge.md](./2026-05-26_scrying_dom_bridge.md) proposes lifting the Source/Semantic, Fragment, and Interaction rows out of degenerate via a page-injected `web-sys`-shaped DOM bridge — a low-frequency introspection/control channel separate from scrying's existing zero-copy pixel path. It feeds the `SemanticQuery` / `FragmentQuery` / `InteractionQuery` traits this doc defines, carries a page-attested provenance flag (lower trust than a first-party DOM), and unblocks a11y + graph ingestion for the webview lane.
+
 ---
 
 ## Observable plane vocabulary (cross-engine)
