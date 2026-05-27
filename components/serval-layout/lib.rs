@@ -45,8 +45,8 @@ pub use cascade::{restyle_structural, restyle_with_snapshots, run_cascade, Resty
 pub use cell::ArcRefCell;
 pub use fragment::FragmentPlane;
 pub use host_loader::{
-    inline_stylesheets, inline_stylesheets_from_source, linked_stylesheets, LocalFileImageLoader,
-    ResourceResolver,
+    inline_stylesheets, inline_stylesheets_from_source, linked_stylesheets,
+    linked_stylesheets_with_loader, LocalFileImageLoader, ResourceResolver,
 };
 pub use incremental::{Applied, IncrementalLayout};
 pub use image_decode::{

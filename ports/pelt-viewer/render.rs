@@ -17,8 +17,8 @@ use paint_list_api::DeviceIntSize;
 use pelt_core::ResourceFetcher;
 use serval_layout::{
     BackgroundImagePlane, ImageLoader, ImagePlane, LocalFileImageLoader, ResourceResolver,
-    StylePlane, emit_paint_list_with_layouts, inline_stylesheets, layout, linked_stylesheets,
-    run_cascade,
+    StylePlane, emit_paint_list_with_layouts, inline_stylesheets, layout,
+    linked_stylesheets_with_loader, run_cascade,
 };
 use serval_static_dom::StaticDocument;
 
@@ -38,8 +38,19 @@ pub fn build_scene(
     let document = StaticDocument::parse(html);
 
     let resolver = ResourceResolver { base_dir: base_dir.map(Path::to_path_buf), tests_root: None };
+
+    // One loader for every external resource: remote `http(s)` URLs go through the
+    // shell's `ResourceFetcher` (when supplied), local/relative ones through disk.
+    // `data:` URIs are decoded inside serval and never reach it.
+    let loader = HostImageLoader {
+        local: LocalFileImageLoader::new(resolver),
+        fetcher,
+    };
+
     let inline_css = inline_stylesheets(&document);
-    let linked_css = linked_stylesheets(&document, &resolver);
+    // `<link rel=stylesheet>` sheets load through the same loader, so remote
+    // stylesheets resolve via the fetcher rather than being silently dropped.
+    let linked_css = linked_stylesheets_with_loader(&document, &loader);
     let mut all_sheets: Vec<&str> = stylesheets.to_vec();
     all_sheets.extend(inline_css.iter().map(String::as_str));
     all_sheets.extend(linked_css.iter().map(String::as_str));
@@ -52,13 +63,9 @@ pub fn build_scene(
         &all_sheets,
     );
 
-    // `<img>`: data: URIs decode inline; relative paths load from disk
-    // against the document's directory. The box tree sizes each replaced
-    // leaf from this plane at layout time.
-    let loader = HostImageLoader {
-        local: LocalFileImageLoader::new(resolver),
-        fetcher,
-    };
+    // `<img>`: data: URIs decode inline; relative paths load from disk against
+    // the document's directory, remote `src`s through the fetcher. The box tree
+    // sizes each replaced leaf from this plane at layout time.
     let images = ImagePlane::decode_from_dom_with_loader(&document, &loader);
     let bg_images = BackgroundImagePlane::decode_from_cascade(&document, &styles, &loader);
 

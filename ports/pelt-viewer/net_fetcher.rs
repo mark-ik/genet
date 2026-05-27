@@ -99,5 +99,22 @@ mod tests {
         };
         let images = ImagePlane::decode_from_dom_with_loader(&doc, &loader);
         assert!(!images.is_empty(), "remote <img> decoded via netfetcher");
+
+        // (3) a remote <link rel=stylesheet> flows through the same fetcher-backed
+        //     loader: netfetcher fetches the CSS bytes and they become an author sheet.
+        let css = "body { color: teal; }";
+        let _c = server
+            .mock("GET", "/s.css")
+            .with_status(200)
+            .with_header("content-type", "text/css")
+            .with_body(css)
+            .create();
+        let css_url = format!("{}/s.css", server.url());
+        let css_html =
+            format!("<html><head><link rel=\"stylesheet\" href=\"{css_url}\"></head><body></body></html>");
+        let css_doc = StaticDocument::parse(&css_html);
+        let sheets = serval_layout::linked_stylesheets_with_loader(&css_doc, &loader);
+        assert_eq!(sheets.len(), 1, "remote stylesheet fetched via netfetcher");
+        assert!(sheets[0].contains("color: teal"));
     }
 }

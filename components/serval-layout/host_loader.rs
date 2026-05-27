@@ -120,8 +120,24 @@ pub fn inline_stylesheets_from_source(html: &str) -> Vec<String> {
 
 /// Contents of each `<link rel="stylesheet" href>` whose `href`
 /// resolves to a readable local file through `resolver`. Remote and
-/// unresolvable hrefs are skipped silently.
+/// unresolvable hrefs are skipped silently. Convenience wrapper over
+/// [`linked_stylesheets_with_loader`] with a local-filesystem loader; use the
+/// loader form to also pull remote sheets through a host fetcher.
 pub fn linked_stylesheets<D: LayoutDom>(dom: &D, resolver: &ResourceResolver) -> Vec<String> {
+    linked_stylesheets_with_loader(dom, &LocalFileImageLoader::new(resolver.clone()))
+}
+
+/// Contents of each `<link rel="stylesheet" href>` whose `href` the `loader`
+/// supplies bytes for. The [`ImageLoader`] is the host's general resource-bytes
+/// seam (despite the name): a loader that fetches remote URLs — e.g. the viewer's
+/// netfetcher-backed loader — makes external stylesheets load, while a
+/// local-only loader keeps the filesystem behavior of [`linked_stylesheets`].
+/// Bytes are decoded as UTF-8; non-UTF-8 or unavailable hrefs are skipped.
+pub fn linked_stylesheets_with_loader<D, L>(dom: &D, loader: &L) -> Vec<String>
+where
+    D: LayoutDom,
+    L: ImageLoader,
+{
     let no_ns = Namespace::default();
     let rel_attr = LocalName::from("rel");
     let href_attr = LocalName::from("href");
@@ -135,10 +151,8 @@ pub fn linked_stylesheets<D: LayoutDom>(dom: &D, resolver: &ResourceResolver) ->
                 .is_some_and(|rel| rel.eq_ignore_ascii_case("stylesheet"));
         if is_stylesheet {
             if let Some(href) = dom.attribute(id, &no_ns, &href_attr) {
-                if let Some(path) = resolver.resolve(href) {
-                    if let Ok(css) = std::fs::read_to_string(&path) {
-                        sheets.push(css);
-                    }
+                if let Some(css) = loader.load(href).and_then(|bytes| String::from_utf8(bytes).ok()) {
+                    sheets.push(css);
                 }
             }
         }
@@ -198,6 +212,32 @@ mod tests {
         assert!(linked_stylesheets(&doc, &ResourceResolver::default()).is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn linked_stylesheets_load_remote_through_loader() {
+        use crate::image_decode::ImageLoader;
+
+        // A loader standing in for a fetcher: it serves one remote sheet.
+        struct FakeFetcher;
+        impl ImageLoader for FakeFetcher {
+            fn load(&self, url: &str) -> Option<Vec<u8>> {
+                (url == "https://cdn.example/site.css")
+                    .then(|| b"body { color: purple; }".to_vec())
+            }
+        }
+
+        let doc = StaticDocument::parse(
+            "<html><head>\
+             <link rel=\"stylesheet\" href=\"https://cdn.example/site.css\">\
+             <link rel=\"stylesheet\" href=\"https://cdn.example/missing.css\">\
+             </head><body></body></html>",
+        );
+
+        // The remote sheet the loader serves comes through; the one it doesn't is skipped.
+        let sheets = linked_stylesheets_with_loader(&doc, &FakeFetcher);
+        assert_eq!(sheets.len(), 1);
+        assert!(sheets[0].contains("color: purple"));
     }
 
     #[test]
