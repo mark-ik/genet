@@ -123,16 +123,57 @@ lifetime.
    are proven driving real DOM mutation. `serval-scripted` no longer
    names `nova_vm` directly (it is transitive via `script-engine-nova`),
    and the duplicate Nova path is retired.
-2. **Build `script-runtime-api` against the trait** (in progress,
-   2026-05-26): `Runtime<E>` over any backend, the aggregated `HostState`
-   host-data slot, global aliases (`self` / `window`), `console`, a
-   cooperative **event loop** (`setTimeout` / `setInterval` / `clear*`,
-   drained by `run_event_loop`), and **EventTarget** / `Event`
-   (`addEventListener` / `removeEventListener` / `dispatchEvent` /
-   `preventDefault`). All composed from `eval` + `set_function` +
-   host data; validated on Nova and Boa. **Remaining:** Promise
-   microtask draining (needs an engine `pump_microtasks` primitive),
-   `postMessage`, and the document/Node slice.
+2. **Build the host surface against the trait** (in progress,
+   2026-05-26/27). Two layers, per the
+   [web-platform-API shared-middle plan](./2026-05-25_web_platform_api_shared_middle_plan.md)
+   (that doc is the *interior* this step's catalogue half fills in):
+   - **`script-runtime-api` = the host shell.** `Runtime<E>` over any
+     backend, the aggregated `HostState` host-data slot, global aliases
+     (`self` / `window`), `console`, the cooperative **event loop**
+     (`setTimeout` / `setInterval` / `clear*`, drained by
+     `run_event_loop`), and the **global-scope EventTarget** / `Event`.
+     These are genuine host concerns with no DOM tree, so they are JS
+     bootstraps over `eval` + `set_function`. Validated on Nova and Boa.
+   - **The DOM interface catalogue = `web-api` behavior** (grown inside
+     `script-runtime-api`'s `dom.rs` for now; extract a `web-api` crate
+     when the catalogue's shape justifies it, **without** WebIDL
+     codegen, which the `CallCx` work made unnecessary). Behavior is
+     native Rust over `LayoutDomMut`, written once and bound through
+     `CallCx` (not per-engine): the `CallCx` marshaling surface
+     (`arg` / `value_to_string` / `reflector_data` / `make_reflector` /
+     `undefined`) collapsed the 2026-05-25 plan's per-engine edges to a
+     single neutral binding. **W0a (done):** the construction/mutation
+     sinks — `createElement` / `createTextNode` / `appendChild` /
+     `setAttribute` / `textContent` setter / `getElementById` — mutate
+     the host `ScriptedDom` natively, bound through `CallCx`, validated
+     on both backends. The `setText` probe is generalized, not replaced.
+
+   The `document` *global slot* is installed by the shell; the `Document`
+   *interface behavior* lives in the catalogue. That split resolves the
+   apparent shell-vs-catalogue contradiction (both docs are right about
+   their own half).
+
+   **True-W0 remaining** (the part a JS bootstrap genuinely cannot do):
+   - **Reflector identity** (`document.body === document.body`). Today
+     each lookup mints a fresh wrapper. The fix is a `NodeId → canonical
+     reflector` cache, and it **must be engine-side**, exposed as a
+     `CallCx::reflector_for(node)` primitive: a cached reflector is an
+     engine-native value (Nova `Global<Value>`, Boa `JsValue`), so
+     stashing it in neutral `HostState` would re-acquire an engine
+     dependency and breach the wall. This is the precise residue of
+     "what stays per-engine" — identity caching, not marshaling.
+   - **Read primitives** `make_string` / `make_null` on `CallCx`, the
+     mirror of `make_reflector`, so `getAttribute` / `tagName` /
+     `textContent` getter can return strings and `getElementById` a real
+     `null`.
+   - **Prototype-based dispatch** (`Node.prototype.appendChild`,
+     `instanceof`) instead of per-object closures in `wrapNode`.
+   - **Node-level EventTarget** with real tree propagation
+     (capture/bubble over `parentNode`), which the global-scope
+     bootstrap cannot do.
+
+   Also remaining at the shell: Promise microtask draining (needs an
+   engine `pump_microtasks` primitive), `postMessage`.
 3. **Load `testharness.js` on Nova** and add the results bridge. This is
    WPT runner phase 3
    ([wpt runner plan](./2026-05-26_wpt_runner_plan.md), gated here).

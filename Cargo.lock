@@ -6522,9 +6522,11 @@ dependencies = [
 name = "script-runtime-api"
 version = "0.0.0"
 dependencies = [
+ "layout-dom-api",
  "script-engine-api",
  "script-engine-boa",
  "script-engine-nova",
+ "serval-scripted-dom",
 ]
 
 [[package]]

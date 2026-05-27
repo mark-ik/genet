@@ -70,6 +70,24 @@ mod native {
             }
         }
 
+        fn make_reflector(&mut self, data: ReflectorData) -> Result<Self::Value, Self::Error> {
+            // We are mid-call, already inside the realm (the trampoline holds the
+            // `Agent`), so build the `EmbedderObject` directly rather than via
+            // `run_in_realm` (which can't nest). Mirrors the engine-level
+            // `ScriptEngineLive::make_reflector`.
+            let eo = EmbedderObject::create_with_data(self.agent, data);
+            Ok(Global::new(self.agent, Value::EmbedderObject(eo).unbind()))
+        }
+
+        fn make_string(&mut self, s: &str) -> Result<Self::Value, Self::Error> {
+            let js = JsString::from_str(self.agent, s, self.gc.nogc());
+            Ok(Global::new(self.agent, Value::from(js).unbind()))
+        }
+
+        fn make_null(&mut self) -> Self::Value {
+            Global::new(self.agent, Value::Null)
+        }
+
         fn undefined(&mut self) -> Self::Value {
             Global::new(self.agent, Value::Undefined)
         }

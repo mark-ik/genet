@@ -2,7 +2,9 @@
 # script-engine-api VM primitives (set_global / set_function / host data), generic
 # over the backend — no engine dependency in the non-dev graph. The "browser-ish"
 # concepts (global scope, console, event loop, EventTarget, document) live here, not
-# in script-engine-api. See docs/2026-05-26_pluggable_engines_testharness_plan.md.
+# in script-engine-api. The DOM surface binds serval-scripted-dom (a LayoutDomMut
+# arena) — a DOM dep, still no engine dep.
+# See docs/2026-05-26_pluggable_engines_testharness_plan.md.
 [package]
 name = "script-runtime-api"
 version = "0.0.0"
@@ -16,6 +18,11 @@ path = "lib.rs"
 
 [dependencies]
 script-engine-api = { path = "../script-engine-api" }
+# The DOM the host surface scripts against: a NodeId arena implementing
+# LayoutDom + LayoutDomMut, recording DomMutations for serval-layout.
+serval-scripted-dom = { path = "../serval-scripted-dom" }
+# QualName / Namespace / LocalName for create_element.
+layout-dom-api = { path = "../shared/layout-dom" }
 
 [dev-dependencies]
 # Validate the host surface against a real backend. Boa is pure Rust (all targets);

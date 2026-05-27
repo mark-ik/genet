@@ -14,31 +14,43 @@
 //! Present: aggregated [`HostState`] (the engine's single host-data slot) for
 //! native sinks; global aliases (`self` / `window`); `console`; a cooperative
 //! **event loop** (`setTimeout` / `setInterval` / `clear*`, drained by
-//! [`Runtime::run_event_loop`]); and **EventTarget** / `Event`
-//! (`addEventListener` / `removeEventListener` / `dispatchEvent`). The event loop
-//! and EventTarget are JS bootstraps composed on the engine primitives (the
-//! rakers lesson), so callbacks live JS-side and no VM-trait surface beyond
-//! `eval` + `set_function` is needed.
+//! [`Runtime::run_event_loop`]); **EventTarget** / `Event` (`addEventListener` /
+//! `removeEventListener` / `dispatchEvent`); and the **`document` / `Node`
+//! construction surface** (the `dom` module) — `createElement`, `createTextNode`,
+//! `appendChild`, `setAttribute`, `textContent` (setter), `getElementById` —
+//! bound to a [`serval_scripted_dom::ScriptedDom`] in host state. The event loop,
+//! EventTarget, and DOM wrappers are JS bootstraps composed on the engine
+//! primitives (the rakers lesson); the DOM mutators are native sinks reached the
+//! same way as `console`. The only VM-trait growth needed was
+//! `CallCx::make_reflector` (mint an outgoing node), added alongside the existing
+//! `reflector_data` (recover an incoming one).
 //!
-//! Not yet: Promise microtask draining (needs an engine `pump_microtasks`
-//! primitive), real timer delays (the loop fires in `(delay, insertion)` order,
-//! cooperatively), and the document/Node surface. Those are the next rungs toward
-//! loading `testharness.js`. See
+//! Not yet: the DOM **read** surface (`getAttribute`, `textContent` getter,
+//! `tagName`), which needs a string-minting primitive on `CallCx`; Promise
+//! microtask draining (needs an engine `pump_microtasks` primitive); and real
+//! timer delays (the loop fires in `(delay, insertion)` order, cooperatively).
+//! Those are the next rungs toward loading `testharness.js`. See
 //! `docs/2026-05-26_pluggable_engines_testharness_plan.md`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use script_engine_api::{CallCx, NativeFn, ScriptEngine};
+use serval_scripted_dom::ScriptedDom;
+
+mod dom;
 
 /// State the runtime's native callbacks share, stored as the engine's single
 /// host-data slot (`Rc<dyn Any>`). One aggregate so every host object reaches the
-/// same place; grows as host objects are added (the event-loop task queue,
-/// `EventTarget` listeners, and the live DOM land here next).
+/// same place; grows as host objects are added (the event-loop task queue and
+/// `EventTarget` listeners land here as they graduate from JS bootstraps).
 #[derive(Default)]
 pub struct HostState {
     /// `console.log` / `console.error` output, in call order.
     pub console: Vec<String>,
+    /// The live document the `document`/`Node` surface mutates. Native DOM
+    /// callbacks reach it through `CallCx::host_data` (a `RefCell<HostState>`).
+    pub dom: ScriptedDom,
 }
 
 /// Shared handle to the runtime's [`HostState`]. The host reads it after running
@@ -106,6 +118,11 @@ fn install_host_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error>
     // coverage.
     engine.eval(EVENT_LOOP_BOOTSTRAP)?;
     engine.eval(EVENT_TARGET_BOOTSTRAP)?;
+
+    // `document` + the Node/Element construction surface, bound to the `ScriptedDom`
+    // in host state. Native sinks mutate the arena; a JS bootstrap wraps reflectors
+    // into ergonomic node objects.
+    dom::install_dom_surface(engine)?;
     Ok(())
 }
 

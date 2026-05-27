@@ -113,6 +113,28 @@ pub trait CallCx {
     /// is not a reflector.
     fn reflector_data(&mut self, value: &Self::Value) -> Option<ReflectorData>;
 
+    /// Mint a reflector carrying `data`, the in-callback mirror of
+    /// [`ScriptEngineLive::make_reflector`]. A native callback that *returns* a host
+    /// object (e.g. `document.createElement` handing JS a new `Node`) needs this:
+    /// `reflector_data` recovers an incoming node, this mints an outgoing one. Both
+    /// backends can build a reflector mid-call from the context they already hold
+    /// (Nova's `Agent`, Boa's `Context`), so it sits on the base context rather than
+    /// gating DOM callbacks behind a separate live-context trait.
+    fn make_reflector(&mut self, data: ReflectorData) -> Result<Self::Value, Self::Error>;
+
+    /// Mint a JS string value. The read-surface mirror of [`value_to_string`]: a
+    /// callback returning text (`getAttribute`, `tagName`, the `textContent` getter)
+    /// builds it with this.
+    ///
+    /// [`value_to_string`]: CallCx::value_to_string
+    fn make_string(&mut self, s: &str) -> Result<Self::Value, Self::Error>;
+
+    /// The `null` value, distinct from [`undefined`]. A miss returns `null`
+    /// (`getElementById`, `getAttribute` on an absent attribute), per the DOM.
+    ///
+    /// [`undefined`]: CallCx::undefined
+    fn make_null(&mut self) -> Self::Value;
+
     /// The `undefined` value (the usual callback return).
     fn undefined(&mut self) -> Self::Value;
 }

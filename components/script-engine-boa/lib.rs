@@ -80,6 +80,22 @@ impl CallCx for BoaCallCx<'_> {
             .and_then(|o| o.downcast_ref::<Reflector>().map(|r| r.data))
     }
 
+    fn make_reflector(&mut self, data: ReflectorData) -> Result<JsValue, JsError> {
+        // The `Reflector` class is registered at engine construction, so building one
+        // from the held `Context` is the in-callback mirror of the engine-level
+        // `ScriptEngineLive::make_reflector`.
+        let obj: JsObject = Reflector::from_data(Reflector { data }, self.ctx)?;
+        Ok(obj.into())
+    }
+
+    fn make_string(&mut self, s: &str) -> Result<JsValue, JsError> {
+        Ok(JsValue::from(JsString::from(s)))
+    }
+
+    fn make_null(&mut self) -> JsValue {
+        JsValue::null()
+    }
+
     fn undefined(&mut self) -> JsValue {
         JsValue::undefined()
     }
