@@ -6,12 +6,15 @@
 //! backend, and the native conformance oracle. Engine-native types (`JsValue`,
 //! `Context`, the reflector `Class`) stay confined to this crate.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use boa_engine::{
     Context, JsData, JsError, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction,
     Source,
     class::{Class, ClassBuilder},
 };
-use boa_gc::{Finalize, Trace};
+use boa_gc::{Finalize, GcRefCell, Trace};
 use script_engine_api::{CallCx, HostData, NativeFn, ReflectorData, ScriptEngine, ScriptEngineLive};
 
 /// Native-data reflector (Appendix A Finding 2): a JS object carrying only the host
@@ -37,13 +40,22 @@ impl Class for Reflector {
     }
 }
 
-/// Host-data slot stored in Boa's `Context` host-defined data. Wraps the
-/// engine-neutral [`HostData`]; the `Rc<dyn Any>` is not traced (it holds host
-/// state, never JS values).
+/// Host-data slot stored in Boa's `Context` host-defined data. Holds the
+/// engine-neutral [`HostData`] (the `Rc<dyn Any>` is not traced — it holds host
+/// state, never JS values) plus the canonical-reflector cache (`NodeId →
+/// reflector`), which **is** traced: the cached `JsValue`s are live JS objects and
+/// must survive collection. Both engine-side, never in neutral host state.
 #[derive(Trace, Finalize, JsData)]
 struct HostCell {
     #[unsafe_ignore_trace]
-    data: HostData,
+    data: RefCell<Option<HostData>>,
+    reflectors: GcRefCell<HashMap<u64, JsValue>>,
+}
+
+impl HostCell {
+    fn new() -> Self {
+        Self { data: RefCell::new(None), reflectors: GcRefCell::new(HashMap::new()) }
+    }
 }
 
 /// A Boa-backed scripting engine.
@@ -67,7 +79,20 @@ impl CallCx for BoaCallCx<'_> {
     }
 
     fn host_data(&self) -> Option<HostData> {
-        self.ctx.get_data::<HostCell>().map(|c| c.data.clone())
+        self.ctx.get_data::<HostCell>().and_then(|c| c.data.borrow().clone())
+    }
+
+    fn reflector_for(&mut self, data: ReflectorData) -> Result<JsValue, JsError> {
+        if let Some(cell) = self.ctx.get_data::<HostCell>() {
+            if let Some(v) = cell.reflectors.borrow().get(&data) {
+                return Ok(v.clone());
+            }
+        }
+        let v = self.make_reflector(data)?;
+        if let Some(cell) = self.ctx.get_data::<HostCell>() {
+            cell.reflectors.borrow_mut().insert(data, v.clone());
+        }
+        Ok(v)
     }
 
     fn value_to_string(&mut self, value: &JsValue) -> Result<String, JsError> {
@@ -109,6 +134,7 @@ impl ScriptEngine for BoaEngine {
     fn new() -> Result<Self, Self::Error> {
         let mut ctx = Context::default();
         ctx.register_global_class::<Reflector>()?;
+        ctx.insert_data(HostCell::new());
         Ok(Self { ctx })
     }
 
@@ -127,7 +153,9 @@ impl ScriptEngine for BoaEngine {
     }
 
     fn set_host_data(&mut self, data: HostData) {
-        self.ctx.insert_data(HostCell { data });
+        if let Some(cell) = self.ctx.get_data::<HostCell>() {
+            *cell.data.borrow_mut() = Some(data);
+        }
     }
 
     fn set_function<F: NativeFn<Self>>(

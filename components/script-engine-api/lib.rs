@@ -122,6 +122,17 @@ pub trait CallCx {
     /// gating DOM callbacks behind a separate live-context trait.
     fn make_reflector(&mut self, data: ReflectorData) -> Result<Self::Value, Self::Error>;
 
+    /// The **canonical** reflector for `data`: minted on first call and cached, so
+    /// repeated calls for the same node return a reflector backed by the *same* JS
+    /// object (`document.body === document.body`). Unlike [`make_reflector`], which
+    /// mints a fresh object every time.
+    ///
+    /// The cache is necessarily **engine-side** (a cached reflector is an
+    /// engine-native value — a Nova `Global`, a Boa `JsValue` — so it cannot live in
+    /// neutral [`HostData`] without re-coupling the host layer to an engine). It
+    /// lives in the same host-defined slot the engine already owns.
+    fn reflector_for(&mut self, data: ReflectorData) -> Result<Self::Value, Self::Error>;
+
     /// Mint a JS string value. The read-surface mirror of [`value_to_string`]: a
     /// callback returning text (`getAttribute`, `tagName`, the `textContent` getter)
     /// builds it with this.

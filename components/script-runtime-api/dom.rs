@@ -10,8 +10,10 @@
 //! `document` object and wraps node handles. The JS→DOM bridge is the **reflector**
 //! — a JS-opaque value carrying a `NodeId` (proven by `serval-scripted`'s `setText`,
 //! generalized here and made engine-neutral). Incoming nodes are recovered with
-//! `CallCx::reflector_data`; outgoing nodes (`createElement`) are minted with
-//! `CallCx::make_reflector`.
+//! `CallCx::reflector_data`; outgoing nodes (`createElement`, `getElementById`) are
+//! returned via `CallCx::reflector_for`, which mints **canonical** reflectors (one
+//! per node), so the JS wrapper cache keyed on them gives identity
+//! (`getElementById('x') === getElementById('x')`).
 //!
 //! Construction/mutation half: `createElement`, `createTextNode`, `appendChild`,
 //! `setAttribute`, `textContent` (setter), `getElementById`. Read half
@@ -19,12 +21,9 @@
 //! `make_null`. Generic over the backend; tested on Boa + Nova like the rest of the
 //! host surface.
 //!
-//! Not yet (true-W0 remaining): reflector *identity* (`document.body ===
-//! document.body`) needs an engine-side `NodeId → reflector` cache, since a cached
-//! reflector is an engine-native value and cannot live in neutral host state;
-//! prototype-based dispatch instead of the per-object closures `wrapNode` builds;
-//! and node-level `EventTarget` with tree propagation. See
-//! `docs/2026-05-26_pluggable_engines_testharness_plan.md`.
+//! Not yet (true-W0 remaining): prototype-based dispatch instead of the per-object
+//! closures `wrapNode` builds, and node-level `EventTarget` with tree propagation.
+//! See `docs/2026-05-26_pluggable_engines_testharness_plan.md`.
 
 use std::cell::RefCell;
 
@@ -98,7 +97,7 @@ struct DocumentRoot;
 impl<E: ScriptEngine> NativeFn<E> for DocumentRoot {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
         match with_dom::<E, _>(cx, |dom| dom.document()) {
-            Some(root) => cx.make_reflector(root.raw() as u64),
+            Some(root) => cx.reflector_for(root.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -111,7 +110,7 @@ impl<E: ScriptEngine> NativeFn<E> for CreateElement {
         let arg = cx.arg(0);
         let tag = cx.value_to_string(&arg)?;
         match with_dom::<E, _>(cx, |dom| dom.create_element(html_qual(&tag))) {
-            Some(id) => cx.make_reflector(id.raw() as u64),
+            Some(id) => cx.reflector_for(id.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -124,7 +123,7 @@ impl<E: ScriptEngine> NativeFn<E> for CreateTextNode {
         let arg = cx.arg(0);
         let data = cx.value_to_string(&arg)?;
         match with_dom::<E, _>(cx, |dom| dom.create_text(&data)) {
-            Some(id) => cx.make_reflector(id.raw() as u64),
+            Some(id) => cx.reflector_for(id.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -186,7 +185,7 @@ impl<E: ScriptEngine> NativeFn<E> for GetElementById {
         let arg = cx.arg(0);
         let id = cx.value_to_string(&arg)?;
         match with_dom::<E, _>(cx, |dom| find_by_id(dom, &id)).flatten() {
-            Some(node) => cx.make_reflector(node.raw() as u64),
+            Some(node) => cx.reflector_for(node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -253,7 +252,13 @@ impl<E: ScriptEngine> NativeFn<E> for GetTextContent {
 /// classes / let) for the widest backend coverage, matching the other bootstraps.
 const DOM_BOOTSTRAP: &str = r#"
 (function() {
+  // Wrapper cache keyed by the canonical reflector (engine-side `reflector_for`
+  // returns the same reflector object per node), so the same node yields the same
+  // wrapper: document.getElementById('x') === document.getElementById('x').
+  var wrappers = new Map();
   function wrapNode(ref) {
+    if (ref === undefined || ref === null) return null;
+    if (wrappers.has(ref)) return wrappers.get(ref);
     var node = { __ref: ref };
     node.appendChild = function(child) { __appendChild(ref, child.__ref); return child; };
     node.setAttribute = function(name, value) { __setAttribute(ref, String(name), String(value)); };
@@ -267,15 +272,13 @@ const DOM_BOOTSTRAP: &str = r#"
       get: function() { return __getTextContent(ref); },
       set: function(v) { __setTextContent(ref, String(v)); }
     });
+    wrappers.set(ref, node);
     return node;
   }
   var document = wrapNode(__documentRoot());
   document.createElement = function(tag) { return wrapNode(__createElement(String(tag))); };
   document.createTextNode = function(data) { return wrapNode(__createTextNode(String(data))); };
-  document.getElementById = function(id) {
-    var r = __getElementById(String(id));
-    return (r === undefined) ? null : wrapNode(r);
-  };
+  document.getElementById = function(id) { return wrapNode(__getElementById(String(id))); };
   globalThis.document = document;
 })();
 "#;
@@ -362,9 +365,41 @@ mod tests {
         );
     }
 
+    /// Reflector identity, exercised against any backend: two lookups of the same
+    /// node are `===` (canonical reflector + wrapper cache), distinct nodes are not,
+    /// and `document` is stable.
+    fn dom_identity_works<E: ScriptEngine>() {
+        let mut rt = Runtime::<E>::new().expect("runtime");
+
+        rt.eval(
+            "var d = document.createElement('div');\
+             d.setAttribute('id', 'main');\
+             document.appendChild(d);\
+             console.log(String(document.getElementById('main') === document.getElementById('main')));\
+             console.log(String(document.getElementById('main') === d));\
+             console.log(String(document.createElement('div') === document.createElement('div')));\
+             console.log(String(document === document));",
+        )
+        .expect("identity script");
+
+        // same node: ===; created === found-by-id; two fresh elements: not ===; doc stable.
+        assert_eq!(rt.host().borrow().console, vec!["true", "true", "false", "true"]);
+    }
+
     #[test]
     fn dom_construction_on_boa() {
         dom_construction_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[test]
+    fn dom_identity_on_boa() {
+        dom_identity_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dom_identity_on_nova() {
+        dom_identity_works::<script_engine_nova::NovaEngine>();
     }
 
     #[test]

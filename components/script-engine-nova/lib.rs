@@ -12,6 +12,10 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
     use nova_vm::{
         ecmascript::{
             Agent, AgentOptions, ArgumentsList, Behaviour, BuiltinFunctionArgs, DefaultHostHooks,
@@ -24,6 +28,21 @@ mod native {
     use script_engine_api::{
         CallCx, HostData, NativeFn, ReflectorData, ScriptEngine, ScriptEngineLive,
     };
+
+    /// Nova's realm `[[HostDefined]]` slot: the neutral [`HostData`] (the DOM, set by
+    /// the host) plus the canonical-reflector cache. The cached `Global`s are
+    /// permanent roots in `agent.heap.globals`, so they survive collection without
+    /// the slot itself being traced. Both engine-side, off the neutral wall.
+    struct NovaHostSlot {
+        neutral: RefCell<Option<HostData>>,
+        reflectors: RefCell<HashMap<u64, Global<Value<'static>>>>,
+    }
+
+    impl NovaHostSlot {
+        fn new() -> Self {
+            Self { neutral: RefCell::new(None), reflectors: RefCell::new(HashMap::new()) }
+        }
+    }
 
     /// The call context handed to a native callback. Nova's `RegularFn` gives
     /// `(&mut Agent, this, ArgumentsList, GcScope<'gc, 'b>)`; `GcScope` is invariant
@@ -52,7 +71,10 @@ mod native {
 
         fn host_data(&self) -> Option<HostData> {
             let agent: &Agent = self.agent;
-            agent.current_realm(self.gc.nogc()).host_defined(agent)
+            let hd = agent.current_realm(self.gc.nogc()).host_defined(agent)?;
+            let slot = hd.downcast_ref::<NovaHostSlot>()?;
+            let neutral = slot.neutral.borrow().clone();
+            neutral
         }
 
         fn value_to_string(&mut self, value: &Self::Value) -> Result<String, Self::Error> {
@@ -77,6 +99,35 @@ mod native {
             // `ScriptEngineLive::make_reflector`.
             let eo = EmbedderObject::create_with_data(self.agent, data);
             Ok(Global::new(self.agent, Value::EmbedderObject(eo).unbind()))
+        }
+
+        fn reflector_for(&mut self, data: ReflectorData) -> Result<Self::Value, Self::Error> {
+            // Cache hit: return a fresh `Global` to the *same* heap object, so the
+            // returned reflectors compare `===`.
+            {
+                let agent: &Agent = self.agent;
+                if let Some(hd) = agent.current_realm(self.gc.nogc()).host_defined(agent) {
+                    if let Some(slot) = hd.downcast_ref::<NovaHostSlot>() {
+                        if let Some(g) = slot.reflectors.borrow().get(&data) {
+                            let v = g.get(self.agent, self.gc.nogc()).unbind();
+                            return Ok(Global::new(self.agent, v));
+                        }
+                    }
+                }
+            }
+            // Miss: mint once, cache a `Global` to it, return another to the same object.
+            let canonical = self.make_reflector(data)?;
+            {
+                let v = canonical.get(self.agent, self.gc.nogc()).unbind();
+                let cached = Global::new(self.agent, v);
+                let agent: &Agent = self.agent;
+                if let Some(hd) = agent.current_realm(self.gc.nogc()).host_defined(agent) {
+                    if let Some(slot) = hd.downcast_ref::<NovaHostSlot>() {
+                        slot.reflectors.borrow_mut().insert(data, cached);
+                    }
+                }
+            }
+            Ok(canonical)
         }
 
         fn make_string(&mut self, s: &str) -> Result<Self::Value, Self::Error> {
@@ -134,6 +185,9 @@ mod native {
         fn new() -> Result<Self, Self::Error> {
             let mut agent = GcAgent::new(AgentOptions::default(), &DefaultHostHooks);
             let realm = agent.create_default_realm();
+            // The realm owns the host slot (neutral DOM + reflector cache) for its
+            // whole life; `set_host_data` later fills the neutral half.
+            realm.initialize_host_defined(&mut agent, Rc::new(NovaHostSlot::new()));
             Ok(Self { agent, realm })
         }
 
@@ -188,9 +242,14 @@ mod native {
         }
 
         fn set_host_data(&mut self, data: HostData) {
-            // Nova's realm `[[HostDefined]]` is `Rc<dyn Any>` — the same shape as
-            // `HostData`. Set once before running script (Nova panics on replace).
-            self.realm.initialize_host_defined(&mut self.agent, data);
+            // Fill the neutral half of the realm's host slot (initialized in `new`).
+            self.agent.run_in_realm(&self.realm, |agent, gc| {
+                if let Some(hd) = agent.current_realm(gc.nogc()).host_defined(agent) {
+                    if let Some(slot) = hd.downcast_ref::<NovaHostSlot>() {
+                        *slot.neutral.borrow_mut() = Some(data);
+                    }
+                }
+            });
         }
 
         fn set_function<F: NativeFn<Self>>(

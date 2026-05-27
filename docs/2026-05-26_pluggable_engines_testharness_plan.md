@@ -153,19 +153,20 @@ lifetime.
    apparent shell-vs-catalogue contradiction (both docs are right about
    their own half).
 
+   **W0b (done 2026-05-27):**
+   - **Read primitives** `make_string` / `make_null` on `CallCx` (the
+     mirror of `make_reflector`), feeding `getAttribute` / `tagName` /
+     `textContent` getter and a real `null` on a miss.
+   - **Reflector identity** (`getElementById('x') === getElementById('x')`).
+     `CallCx::reflector_for(node)` returns a **canonical** reflector
+     (minted once, cached), and `wrapNode` caches wrappers keyed on it.
+     The cache is **engine-side** (the neutrality wall): per-engine
+     `NodeId → reflector` maps in each engine's host-defined slot — Nova
+     `Global`s self-root, Boa `JsValue`s are GC-traced. This is the
+     precise residue of "what stays per-engine": identity caching, not
+     marshaling. Validated `===` on both backends.
+
    **True-W0 remaining** (the part a JS bootstrap genuinely cannot do):
-   - **Reflector identity** (`document.body === document.body`). Today
-     each lookup mints a fresh wrapper. The fix is a `NodeId → canonical
-     reflector` cache, and it **must be engine-side**, exposed as a
-     `CallCx::reflector_for(node)` primitive: a cached reflector is an
-     engine-native value (Nova `Global<Value>`, Boa `JsValue`), so
-     stashing it in neutral `HostState` would re-acquire an engine
-     dependency and breach the wall. This is the precise residue of
-     "what stays per-engine" — identity caching, not marshaling.
-   - **Read primitives** `make_string` / `make_null` on `CallCx`, the
-     mirror of `make_reflector`, so `getAttribute` / `tagName` /
-     `textContent` getter can return strings and `getElementById` a real
-     `null`.
    - **Prototype-based dispatch** (`Node.prototype.appendChild`,
      `instanceof`) instead of per-object closures in `wrapNode`.
    - **Node-level EventTarget** with real tree propagation
