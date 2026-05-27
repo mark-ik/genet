@@ -166,15 +166,21 @@ lifetime.
      precise residue of "what stays per-engine": identity caching, not
      marshaling. Validated `===` on both backends.
 
-   **True-W0 remaining** (the part a JS bootstrap genuinely cannot do):
-   - **Prototype-based dispatch** (`Node.prototype.appendChild`,
-     `instanceof`) instead of per-object closures in `wrapNode`.
-   - **Node-level EventTarget** with real tree propagation
-     (capture/bubble over `parentNode`), which the global-scope
-     bootstrap cannot do.
+   **W0c (done 2026-05-27):**
+   - **Prototype-based dispatch.** `Node` / `Document` prototypes
+     (`Document : Node`), methods shared on the prototype not per-object,
+     `instanceof` works, `parentNode` walks the real tree. Wrappers are
+     `Object.create(Node.prototype)`; the cache keeps identity.
+   - **Node-level EventTarget** with real tree propagation: `capture →
+     target → bubble` over the `parentNode` chain, `target` /
+     `currentTarget`, `stopPropagation`, and `preventDefault` flipping
+     the dispatch result. Validated on both backends.
 
-   Also remaining at the shell: Promise microtask draining (needs an
-   engine `pump_microtasks` primitive), `postMessage`.
+   **W0 is essentially complete.** Remaining DOM breadth is later tiers:
+   the `Element` / `Text` split (all wrappers are `Node` today) and W2
+   reflection. Remaining at the shell toward loading `testharness.js`:
+   Promise microtask draining (needs an engine `pump_microtasks`
+   primitive) and `postMessage`.
 3. **Load `testharness.js` on Nova** and add the results bridge. This is
    WPT runner phase 3
    ([wpt runner plan](./2026-05-26_wpt_runner_plan.md), gated here).

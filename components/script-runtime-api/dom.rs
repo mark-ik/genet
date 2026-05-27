@@ -21,9 +21,11 @@
 //! `make_null`. Generic over the backend; tested on Boa + Nova like the rest of the
 //! host surface.
 //!
-//! Not yet (true-W0 remaining): prototype-based dispatch instead of the per-object
-//! closures `wrapNode` builds, and node-level `EventTarget` with tree propagation.
-//! See `docs/2026-05-26_pluggable_engines_testharness_plan.md`.
+//! Dispatch is prototype-based (`Node`/`Document` prototypes, `instanceof`), and
+//! nodes are `EventTarget`s with real tree propagation (capture → target → bubble
+//! over `parentNode`, with `stopPropagation`). Not yet: the `Element`/`Text` split
+//! (all wrappers are `Node` today), and broader reflection (W2). See
+//! `docs/2026-05-26_pluggable_engines_testharness_plan.md`.
 
 use std::cell::RefCell;
 
@@ -46,6 +48,7 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     engine.set_function::<GetAttribute>("__getAttribute", 2)?;
     engine.set_function::<TagName>("__tagName", 1)?;
     engine.set_function::<GetTextContent>("__getTextContent", 1)?;
+    engine.set_function::<ParentNode>("__parentNode", 1)?;
     engine.eval(DOM_BOOTSTRAP)?;
     Ok(())
 }
@@ -247,6 +250,22 @@ impl<E: ScriptEngine> NativeFn<E> for GetTextContent {
     }
 }
 
+/// `__parentNode(node)` → a reflector for the parent, or `undefined` if unparented.
+/// Used by the `parentNode` getter and event propagation.
+struct ParentNode;
+impl<E: ScriptEngine> NativeFn<E> for ParentNode {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let node = cx.arg(0);
+        let Some(id) = cx.reflector_data(&node) else {
+            return Ok(cx.undefined());
+        };
+        match with_dom::<E, _>(cx, |dom| dom.parent(NodeId::from_raw(id as usize))).flatten() {
+            Some(p) => cx.reflector_for(p.raw() as u64),
+            None => Ok(cx.undefined()),
+        }
+    }
+}
+
 /// `document` plus node wrappers. A wrapper is a plain object carrying its reflector
 /// (`__ref`) and the methods that drive the native sinks. ES5-style (no arrows /
 /// classes / let) for the widest backend coverage, matching the other bootstraps.
@@ -256,29 +275,106 @@ const DOM_BOOTSTRAP: &str = r#"
   // returns the same reflector object per node), so the same node yields the same
   // wrapper: document.getElementById('x') === document.getElementById('x').
   var wrappers = new Map();
+
+  // wrapNode is hoisted (function declaration), so the prototype methods defined
+  // below may reference it before this point — they only run when called.
   function wrapNode(ref) {
     if (ref === undefined || ref === null) return null;
     if (wrappers.has(ref)) return wrappers.get(ref);
-    var node = { __ref: ref };
-    node.appendChild = function(child) { __appendChild(ref, child.__ref); return child; };
-    node.setAttribute = function(name, value) { __setAttribute(ref, String(name), String(value)); };
-    node.getAttribute = function(name) { return __getAttribute(ref, String(name)); };
-    Object.defineProperty(node, 'tagName', {
-      configurable: true,
-      get: function() { return __tagName(ref); }
-    });
-    Object.defineProperty(node, 'textContent', {
-      configurable: true,
-      get: function() { return __getTextContent(ref); },
-      set: function(v) { __setTextContent(ref, String(v)); }
-    });
+    var node = Object.create(Node.prototype);
+    node.__ref = ref;
     wrappers.set(ref, node);
     return node;
   }
-  var document = wrapNode(__documentRoot());
-  document.createElement = function(tag) { return wrapNode(__createElement(String(tag))); };
-  document.createTextNode = function(data) { return wrapNode(__createTextNode(String(data))); };
-  document.getElementById = function(id) { return wrapNode(__getElementById(String(id))); };
+
+  // Node: methods live on the prototype (shared, instanceof-able), not as
+  // per-object closures. `this.__ref` is the node's reflector.
+  function Node() {}
+  Node.prototype.appendChild = function(child) { __appendChild(this.__ref, child.__ref); return child; };
+  Node.prototype.setAttribute = function(name, value) { __setAttribute(this.__ref, String(name), String(value)); };
+  Node.prototype.getAttribute = function(name) { return __getAttribute(this.__ref, String(name)); };
+  Object.defineProperty(Node.prototype, 'tagName', {
+    configurable: true,
+    get: function() { return __tagName(this.__ref); }
+  });
+  Object.defineProperty(Node.prototype, 'textContent', {
+    configurable: true,
+    get: function() { return __getTextContent(this.__ref); },
+    set: function(v) { __setTextContent(this.__ref, String(v)); }
+  });
+  Object.defineProperty(Node.prototype, 'parentNode', {
+    configurable: true,
+    get: function() { return wrapNode(__parentNode(this.__ref)); }
+  });
+
+  // Node-level EventTarget with real tree propagation (capture → target → bubble)
+  // over the parentNode chain. Listeners live on the (cached) wrapper, keyed by
+  // phase: 'c:'+type for capture, 'b:'+type for bubble/target.
+  Node.prototype.addEventListener = function(type, cb, capture) {
+    if (typeof cb !== 'function') return;
+    if (!this.__listeners) this.__listeners = {};
+    var key = (capture ? 'c:' : 'b:') + type;
+    if (!this.__listeners[key]) this.__listeners[key] = [];
+    this.__listeners[key].push(cb);
+  };
+  Node.prototype.removeEventListener = function(type, cb, capture) {
+    if (!this.__listeners) return;
+    var l = this.__listeners[(capture ? 'c:' : 'b:') + type];
+    if (!l) return;
+    var i = l.indexOf(cb);
+    if (i !== -1) l.splice(i, 1);
+  };
+  function fire(node, event, key) {
+    if (!node.__listeners) return;
+    var l = node.__listeners[key];
+    if (!l) return;
+    event.currentTarget = node;
+    var copy = l.slice();
+    for (var i = 0; i < copy.length; i++) { copy[i].call(node, event); }
+  }
+  Node.prototype.dispatchEvent = function(event) {
+    var path = [];
+    var n = this;
+    while (n) { path.push(n); n = n.parentNode; }
+    event.target = this;
+    event.__stop = false;
+    // Capture: root → just above the target.
+    for (var i = path.length - 1; i >= 1 && !event.__stop; i--) {
+      fire(path[i], event, 'c:' + event.type);
+    }
+    // Target: capture- then bubble-registered listeners on the target itself.
+    if (!event.__stop) { fire(this, event, 'c:' + event.type); }
+    if (!event.__stop) { fire(this, event, 'b:' + event.type); }
+    // Bubble: just above the target → root, when the event bubbles.
+    if (event.bubbles) {
+      for (var j = 1; j < path.length && !event.__stop; j++) {
+        fire(path[j], event, 'b:' + event.type);
+      }
+    }
+    return !event.__canceled;
+  };
+  // stopPropagation halts further nodes (the current node's other listeners still
+  // run). Extends the shell's Event, installed before this bootstrap.
+  if (globalThis.Event && globalThis.Event.prototype) {
+    globalThis.Event.prototype.stopPropagation = function() { this.__stop = true; };
+  }
+
+  // Document : Node, with the construction/lookup methods.
+  function Document() {}
+  Document.prototype = Object.create(Node.prototype);
+  Document.prototype.createElement = function(tag) { return wrapNode(__createElement(String(tag))); };
+  Document.prototype.createTextNode = function(data) { return wrapNode(__createTextNode(String(data))); };
+  Document.prototype.getElementById = function(id) { return wrapNode(__getElementById(String(id))); };
+
+  globalThis.Node = Node;
+  globalThis.Document = Document;
+
+  // The document is a Document instance over the root reflector, registered in the
+  // wrapper cache so wrapNode(rootRef) returns this same object.
+  var docRef = __documentRoot();
+  var document = Object.create(Document.prototype);
+  document.__ref = docRef;
+  wrappers.set(docRef, document);
   globalThis.document = document;
 })();
 "#;
@@ -386,9 +482,82 @@ mod tests {
         assert_eq!(rt.host().borrow().console, vec!["true", "true", "false", "true"]);
     }
 
+    /// Prototype dispatch, exercised against any backend: methods live on
+    /// `Node.prototype` (shared, not per-object closures), `instanceof` works, the
+    /// `Document : Node` chain holds, and `parentNode` walks the real tree.
+    fn dom_prototype_dispatch_works<E: ScriptEngine>() {
+        let mut rt = Runtime::<E>::new().expect("runtime");
+
+        rt.eval(
+            "var d = document.createElement('div');\
+             var e = document.createElement('span');\
+             document.appendChild(d);\
+             console.log(String(d instanceof Node));\
+             console.log(String(document instanceof Document));\
+             console.log(String(document instanceof Node));\
+             console.log(String(d.appendChild === e.appendChild));\
+             console.log(String(d.parentNode === document));",
+        )
+        .expect("prototype script");
+
+        // element is a Node; document is a Document and a Node; the method is shared
+        // (same prototype function); parentNode walks back to the document.
+        assert_eq!(rt.host().borrow().console, vec!["true", "true", "true", "true", "true"]);
+    }
+
     #[test]
     fn dom_construction_on_boa() {
         dom_construction_works::<script_engine_boa::BoaEngine>();
+    }
+
+    /// Node-level EventTarget with tree propagation, against any backend: a
+    /// bubbling event fires on the target then ancestors (with `target` /
+    /// `currentTarget` set); a non-bubbling event does not reach ancestors;
+    /// `stopPropagation` halts the climb.
+    fn dom_node_events_work<E: ScriptEngine>() {
+        let mut rt = Runtime::<E>::new().expect("runtime");
+
+        rt.eval(
+            "var parent = document.createElement('div');\
+             var child = document.createElement('span');\
+             parent.appendChild(child);\
+             document.appendChild(parent);\
+             child.addEventListener('ping', function(e){ console.log('child:' + e.target.tagName); });\
+             parent.addEventListener('ping', function(e){ console.log('parent:' + e.currentTarget.tagName); });\
+             child.dispatchEvent(new Event('ping', { bubbles: true }));\
+             parent.addEventListener('solo', function(){ console.log('solo-bubbled-SHOULD-NOT'); });\
+             child.dispatchEvent(new Event('solo'));\
+             child.addEventListener('stop', function(e){ e.stopPropagation(); console.log('child-stop'); });\
+             parent.addEventListener('stop', function(){ console.log('parent-stop-SHOULD-NOT'); });\
+             child.dispatchEvent(new Event('stop', { bubbles: true }));",
+        )
+        .expect("events script");
+
+        // ping bubbles child→parent; solo does not reach parent (no bubble); stop is
+        // halted at the child.
+        assert_eq!(rt.host().borrow().console, vec!["child:SPAN", "parent:DIV", "child-stop"]);
+    }
+
+    #[test]
+    fn dom_prototype_dispatch_on_boa() {
+        dom_prototype_dispatch_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[test]
+    fn dom_node_events_on_boa() {
+        dom_node_events_work::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dom_node_events_on_nova() {
+        dom_node_events_work::<script_engine_nova::NovaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dom_prototype_dispatch_on_nova() {
+        dom_prototype_dispatch_works::<script_engine_nova::NovaEngine>();
     }
 
     #[test]
