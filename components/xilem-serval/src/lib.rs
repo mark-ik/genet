@@ -36,8 +36,16 @@
 //! [`on_click`] handlers may return an [`OptionalAction`] that bubbles as a
 //! [`MessageResult::Action`](xilem_core::MessageResult::Action) and composes up
 //! through `map_action`; [`ServalAppRunner::dispatch_click`] returns the actions
-//! that reach the root. Still exercised by tests, not a window; the window →
-//! hit-test wiring lives in the `pelt-live` host.
+//! that reach the root. Stage 3b adds the *keyboard + focus foundation*: an
+//! [`on_key`] view registers a key handler (mirroring [`on_click`]) which also
+//! marks its element focusable; [`ServalAppRunner`] tracks a focused node
+//! ([`focus`](ServalAppRunner::focus)/[`set_focus`](ServalAppRunner::set_focus)),
+//! [`dispatch_click`](ServalAppRunner::dispatch_click) sets focus to the nearest
+//! focusable ancestor of the click (click-to-focus), and
+//! [`dispatch_key`](ServalAppRunner::dispatch_key) bubble-walks a [`KeyEvent`]
+//! from the focused node. Still exercised by tests, not a window; the window →
+//! hit-test and winit→[`KeyEvent`] wiring lives in the `pelt-live` host (a later
+//! slice).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -48,6 +56,7 @@ use serval_scripted_dom::ScriptedDom;
 mod context;
 mod element;
 mod event;
+mod key;
 mod optional_action;
 mod pod;
 mod runner;
@@ -60,6 +69,7 @@ mod tests;
 pub use context::ServalCtx;
 pub use element::{Element, El, el};
 pub use event::{OnClick, OnClickState, PointerClick, on_click};
+pub use key::{Key, KeyEvent, NamedKey, OnKey, OnKeyState, on_key};
 pub use optional_action::{Action, OptionalAction};
 pub use pod::{ServalElement, ServalElementMut};
 pub use runner::ServalAppRunner;

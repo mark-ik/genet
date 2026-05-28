@@ -8,7 +8,8 @@
 //! fragment, hydration node stack, modifier size hints). It holds the `id_path`
 //! used for message routing, the [`Environment`], a shared handle to the
 //! [`ScriptedDom`] every view mutates, and the native click-handler registry
-//! (Stage 2b's stand-in for the browser's `addEventListener`).
+//! (Stage 2b's stand-in for the browser's `addEventListener`) plus the parallel
+//! key-handler registry (Stage 3b, which also defines focusability).
 
 use std::collections::HashMap;
 
@@ -29,6 +30,14 @@ use xilem_core::{Environment, ViewId, ViewPathTracker};
 /// [`NodeId`] it wraps. Native dispatch (the runner) walks the hit node's
 /// ancestor chain, looks each node up here, and routes a message down the
 /// recorded path — exactly the `id_path` Xilem's message cycle expects.
+///
+/// Stage 3b adds the parallel [`key_handlers`](Self::key_handlers) registry,
+/// populated by [`OnKey`](crate::OnKey) the same way. It does double duty: it
+/// is both the key-event routing table *and* the focusability set — a node is
+/// focusable iff it carries a key handler (i.e. is present here). The runner's
+/// [`dispatch_click`](crate::ServalAppRunner::dispatch_click) consults it to
+/// move focus, and [`dispatch_key`](crate::ServalAppRunner::dispatch_key) walks
+/// it from the focused node.
 pub struct ServalCtx {
     id_path: Vec<ViewId>,
     environment: Environment,
@@ -38,6 +47,11 @@ pub struct ServalCtx {
     /// the `view_path()` captured inside the handler's `with_id`, ending in
     /// `ON_CLICK_ID`.
     click_handlers: HashMap<NodeId, Vec<ViewId>>,
+    /// `NodeId → routing view path` for key handlers, the parallel of
+    /// [`click_handlers`](Self::click_handlers). The path is the `view_path()`
+    /// captured inside [`OnKey`](crate::OnKey)'s `with_id`, ending in
+    /// `ON_KEY_ID`. Presence in this map is the definition of *focusable*.
+    key_handlers: HashMap<NodeId, Vec<ViewId>>,
 }
 
 impl ServalCtx {
@@ -48,6 +62,7 @@ impl ServalCtx {
             environment: Environment::new(),
             dom,
             click_handlers: HashMap::new(),
+            key_handlers: HashMap::new(),
         }
     }
 
@@ -76,6 +91,34 @@ impl ServalCtx {
     /// registered. The runner's dispatch walk consults this per ancestor.
     pub fn click_path(&self, node: NodeId) -> Option<&[ViewId]> {
         self.click_handlers.get(&node).map(Vec::as_slice)
+    }
+
+    /// Register `path` as the routing path for key events targeting `node`,
+    /// which also marks `node` focusable.
+    ///
+    /// Called by [`OnKey::build`](crate::OnKey) (and on rebuild when the wrapped
+    /// node changes). `path` is the `view_path()` captured *inside* the handler's
+    /// `with_id`, so it ends in `ON_KEY_ID` and routes straight to the handler's
+    /// `message`.
+    pub fn register_key(&mut self, node: NodeId, path: Vec<ViewId>) {
+        self.key_handlers.insert(node, path);
+    }
+
+    /// Drop the key handler registered for `node` (teardown, or before a
+    /// re-register onto a different node). This also un-marks `node` focusable.
+    pub fn unregister_key(&mut self, node: NodeId) {
+        self.key_handlers.remove(&node);
+    }
+
+    /// The routing view path of the key handler on `node`, if one is registered.
+    ///
+    /// `Some(_)` also means `node` is *focusable*: the runner's
+    /// [`dispatch_click`](crate::ServalAppRunner::dispatch_click) uses this both
+    /// to find the focus target (nearest focusable ancestor of a click) and, in
+    /// [`dispatch_key`](crate::ServalAppRunner::dispatch_key), to route from the
+    /// focused node up its ancestor chain.
+    pub fn key_path(&self, node: NodeId) -> Option<&[ViewId]> {
+        self.key_handlers.get(&node).map(Vec::as_slice)
     }
 }
 
