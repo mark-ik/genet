@@ -1,0 +1,24 @@
+[package]
+name = "xilem-serval"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "A xilem_core backend that diffs a Xilem view tree into serval's mutable ScriptedDom."
+
+[lib]
+name = "xilem_serval"
+path = "src/lib.rs"
+
+# Third reactive backend beside Masonry (`xilem`) and the browser DOM
+# (`xilem_web`), pointed at serval's `LayoutDomMut`. Path-dep on the local
+# Linebender fork's `xilem_core` (the same fork pelt-viewer consumes via
+# `xilem = { workspace = true }`); we take only the diff/message core, not the
+# Masonry renderer, so we depend on `xilem_core` directly rather than `xilem`.
+[dependencies]
+xilem_core = { path = "../../../../crates/xilem/xilem_core" }
+serval-scripted-dom = { path = "../serval-scripted-dom" }
+layout_dom_api = { package = "layout-dom-api", path = "../shared/layout-dom" }

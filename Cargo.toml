@@ -11,6 +11,7 @@ members = [
     "components/serval-scripted-dom",
     "components/serval-scripted",
     "components/serval-static-html",
+    "components/xilem-serval",
     "components/shared/layout-dom",
     "components/script-engine-api",
     # script-engine-boa joined the workspace 2026-05-25. The old blocker (boa
