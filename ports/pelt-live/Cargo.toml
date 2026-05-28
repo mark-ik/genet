@@ -7,11 +7,18 @@ edition.workspace = true
 publish.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "Headless Xilem-on-serval host probe: ServalAppRunner drives a ScriptedDom through serval layout/paint, offline (no window yet)."
+description = "Xilem-on-serval host probe: the lib drives a ScriptedDom through serval layout/paint offline; the pelt-live-counter bin runs the same ServalAppRunner counter in a winit window, presented via netrender."
 
 [lib]
 name = "pelt_live"
 path = "src/lib.rs"
+
+# Stage 1b-window: a real on-screen winit window that runs the xilem-serval
+# counter, rendered by serval and presented via netrender. The lib stays
+# headless/GPU-free; this bin carries the windowing + present stack.
+[[bin]]
+name = "pelt-live-counter"
+path = "src/main.rs"
 
 [dependencies]
 # Reactive backend: app state -> view tree -> diff -> ScriptedDom mutations.
@@ -35,3 +42,13 @@ engine_observables_api = { workspace = true }
 taffy = { version = "=0.11.0-experimental-cache-fix.3", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "detailed_layout_info"] }
 
 euclid = { workspace = true }
+
+# Windowing + present stack for the `pelt-live-counter` bin (the lib half stays
+# GPU-free). Versions copied from ports/pelt-desktop's Cargo.toml. The window
+# creates a `wgpu::Surface`; serval renders the counter scene to an
+# `Rgba8Unorm` texture via netrender, which is then blitted onto the surface's
+# (typically `Bgra8UnormSrgb`) backbuffer through netrender's own
+# `Renderer::compose_external_texture` pass — the same format-bridging blit the
+# zero-copy `<img>` overlay path uses, so the bin improvises no GPU code.
+winit = { workspace = true }
+wgpu = { version = "29", default-features = false, features = ["std", "wgsl"] }

@@ -5400,6 +5400,8 @@ dependencies = [
  "serval-scripted-dom",
  "servo-paint",
  "taffy 0.11.0-experimental-cache-fix.3",
+ "wgpu",
+ "winit",
  "xilem-serval",
 ]
 
