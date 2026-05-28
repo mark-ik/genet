@@ -67,10 +67,33 @@ pub struct PointerClick {
 /// `OA` is not a struct field; it is introduced by the `View` impl (mirroring
 /// `xilem_web`'s `OnEvent`), so the wrapper type stays `OnClick<V, State,
 /// Action, F>`.
+///
+/// The propagation phase is the `capture` field: `false` (the default, matching
+/// the browser and `xilem_web`'s `OnEvent::capture`) means the listener fires in
+/// the bubble pass (`target → root`); `true`, set via [`OnClick::capture`],
+/// means it fires in the capture pass (`root → target`). A node's single click
+/// listener fires in whichever one phase it registered, never both.
 pub struct OnClick<V, State, Action, F> {
     child: V,
     handler: F,
+    /// The propagation phase: `true` = capture, `false` = bubble (default).
+    capture: bool,
     phantom: PhantomData<fn() -> (State, Action)>,
+}
+
+impl<V, State, Action, F> OnClick<V, State, Action, F> {
+    /// Set whether this listener fires in the **capture** phase
+    /// (`root → target`) instead of the default **bubble** phase
+    /// (`target → root`). Default `false`, mirroring the browser and
+    /// `xilem_web`'s [`OnEvent::capture`](https://docs.rs/xilem_web).
+    ///
+    /// A capture listener on an ancestor fires *before* a bubble listener on a
+    /// descendant (or the target). A listener fires in exactly one phase, so
+    /// switching this never double-fires the same handler.
+    pub fn capture(mut self, value: bool) -> Self {
+        self.capture = value;
+        self
+    }
 }
 
 /// Attach a native click handler to `child`.
@@ -96,6 +119,9 @@ where
     OnClick {
         child,
         handler,
+        // Default to the bubble phase, matching the browser and `xilem_web`.
+        // `.capture(true)` opts into the capture phase.
+        capture: false,
         phantom: PhantomData,
     }
 }
@@ -128,9 +154,11 @@ where
         ctx.with_id(ON_CLICK_ID, |ctx| {
             let (element, child_state) = self.child.build(ctx, app_state);
             let node = element.node;
-            // The routing path *to this handler*: it ends in `ON_CLICK_ID`.
+            // The routing path *to this handler*: it ends in `ON_CLICK_ID`. The
+            // phase (`self.capture`) is stored alongside it so dispatch routes
+            // this listener in the matching pass.
             let path = ctx.view_path().to_vec();
-            ctx.register_click(node, path);
+            ctx.register_click(node, path, self.capture);
             (element, OnClickState { child_state, node })
         })
     }
@@ -161,7 +189,7 @@ where
             if node != prev_node {
                 ctx.unregister_click(prev_node);
                 let path = ctx.view_path().to_vec();
-                ctx.register_click(node, path);
+                ctx.register_click(node, path, self.capture);
                 view_state.node = node;
             }
         });

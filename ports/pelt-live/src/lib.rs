@@ -768,4 +768,179 @@ mod tests {
             "key on the focused child bubbles to the parent div's handler"
         );
     }
+
+    // --- MARK: Stage 3 — capture phase --------------------------------------
+
+    /// The capture-phase suite through the full host: per-listener phase
+    /// (`.capture(true)` vs default bubble) and the dispatch order it produces
+    /// (capture → target → bubble), with each handler appending a label to a
+    /// shared `Vec<String>` log on the app state, and the render path still
+    /// building over the live `ScriptedDom` after dispatch.
+    struct Log {
+        events: Vec<String>,
+    }
+
+    /// `<div on_click(capture)><button on_click /></div>`: a capture-phase parent
+    /// handler and a default (bubble) child handler, each logging its label.
+    fn click_phase_view(_s: &Log) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+        on_click(
+            el::<_, Log, ()>(
+                "div",
+                on_click(el::<_, Log, ()>("button", "+"), |s: &mut Log, _ev| {
+                    s.events.push("bubble-child".to_string());
+                }),
+            ),
+            |s: &mut Log, _ev| s.events.push("capture-parent".to_string()),
+        )
+        .capture(true)
+    }
+
+    /// Clicking the child fires the capture parent before the bubble child.
+    #[test]
+    fn click_capture_parent_fires_before_bubble_child() {
+        let dom: Rc<RefCell<ScriptedDom>> = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            click_phase_view,
+            Log { events: Vec::new() },
+        );
+        let root = runner.root();
+
+        let button = {
+            let dom_ref = dom.borrow();
+            find_element_by_name(&dom_ref, root, "button").expect("a <button> must exist")
+        };
+
+        runner.dispatch_click(button, PointerClick { local: (0.0, 0.0) });
+        assert_eq!(
+            runner.state().events,
+            vec!["capture-parent".to_string(), "bubble-child".to_string()],
+            "capture ancestor fires before the bubble target (capture → target → bubble)"
+        );
+
+        // The render path still builds over the live ScriptedDom after dispatch.
+        let scene = scene_from_scripted_dom(&dom.borrow(), SHEET, 800, 600);
+        assert_eq!(scene.viewport_width, 800);
+    }
+
+    /// `<div on_key(capture)><span on_key /></div>`: a capture-phase key handler
+    /// on the div, a default (bubble) key handler on the focusable span. Focus
+    /// the span and dispatch a key — the capture div fires before the bubble span.
+    fn key_phase_view(_s: &Log) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+        on_key(
+            el::<_, Log, ()>(
+                "div",
+                on_key(el::<_, Log, ()>("span", "x"), |s: &mut Log, _ev| {
+                    s.events.push("bubble-child".to_string());
+                }),
+            ),
+            |s: &mut Log, _ev| s.events.push("capture-parent".to_string()),
+        )
+        .capture(true)
+    }
+
+    #[test]
+    fn key_capture_parent_fires_before_bubble_child() {
+        let dom: Rc<RefCell<ScriptedDom>> = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            key_phase_view,
+            Log { events: Vec::new() },
+        );
+        let root = runner.root();
+
+        let span = {
+            let dom_ref = dom.borrow();
+            find_element_by_name(&dom_ref, root, "span").expect("a <span> must exist")
+        };
+
+        // The span carries a (bubble) key handler, so it is focusable.
+        runner.set_focus(Some(span));
+        runner.dispatch_key(ch("a"));
+        assert_eq!(
+            runner.state().events,
+            vec!["capture-parent".to_string(), "bubble-child".to_string()],
+            "capture key ancestor fires before the bubble focused node"
+        );
+    }
+
+    /// `<section on_click(capture)><button on_click /></section>`: a default
+    /// (no `.capture()`) child handler sits in the bubble pass, *after* the
+    /// capture ancestor — proving the default-bubble listener never runs before a
+    /// `.capture(true)` ancestor.
+    fn default_is_bubble_view(
+        _s: &Log,
+    ) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+        on_click(
+            el::<_, Log, ()>(
+                "section",
+                on_click(el::<_, Log, ()>("button", "+"), |s: &mut Log, _ev| {
+                    s.events.push("default-child".to_string());
+                }),
+            ),
+            |s: &mut Log, _ev| s.events.push("capture-grandparent".to_string()),
+        )
+        .capture(true)
+    }
+
+    #[test]
+    fn default_on_click_only_fires_in_bubble_pass() {
+        let dom: Rc<RefCell<ScriptedDom>> = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            default_is_bubble_view,
+            Log { events: Vec::new() },
+        );
+        let root = runner.root();
+
+        let button = {
+            let dom_ref = dom.borrow();
+            find_element_by_name(&dom_ref, root, "button").expect("a <button> must exist")
+        };
+
+        runner.dispatch_click(button, PointerClick { local: (0.0, 0.0) });
+        assert_eq!(
+            runner.state().events,
+            vec![
+                "capture-grandparent".to_string(),
+                "default-child".to_string()
+            ],
+            "a default `on_click` fires only in the bubble pass, after the capture ancestor"
+        );
+    }
+
+    /// A capture-only ancestor fires when a handler-less descendant is clicked.
+    fn capture_only_ancestor_view(
+        _s: &Log,
+    ) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+        on_click(
+            el::<_, Log, ()>("div", el::<_, Log, ()>("button", "+")),
+            |s: &mut Log, _ev| s.events.push("capture-ancestor".to_string()),
+        )
+        .capture(true)
+    }
+
+    #[test]
+    fn capture_only_ancestor_fires_on_descendant_click() {
+        let dom: Rc<RefCell<ScriptedDom>> = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            capture_only_ancestor_view,
+            Log { events: Vec::new() },
+        );
+        let root = runner.root();
+
+        let button = {
+            let dom_ref = dom.borrow();
+            find_element_by_name(&dom_ref, root, "button").expect("a <button> must exist")
+        };
+        assert_ne!(button, root, "button is a descendant of the capture div");
+
+        runner.dispatch_click(button, PointerClick { local: (0.0, 0.0) });
+        assert_eq!(
+            runner.state().events,
+            vec!["capture-ancestor".to_string()],
+            "a capture-only ancestor fires when a handler-less descendant is clicked"
+        );
+    }
 }
