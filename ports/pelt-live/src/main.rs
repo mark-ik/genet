@@ -5,12 +5,14 @@
 //! `pelt-live-counter`: Stage 1b-window of
 //! `docs/2026-05-27_serval_as_host_xilem_serval_plan.md`.
 //!
-//! The visible payoff of the headless Stages 1a/1b/2a/2b: a real on-screen
-//! winit window running an [`xilem_serval`] counter, rendered by serval and
-//! presented through netrender. The window shows a big count number plus a
-//! clickable `[ + ]` button. A background timer bumps the count ~1/s so the
-//! number climbs on its own; clicking `[ + ]` bumps it too, proving the full
-//! input loop on screen.
+//! The visible payoff of the headless Stages 1a/1b/2a/2b/3: a real on-screen
+//! winit window running an [`xilem_serval`] demo, rendered by serval and
+//! presented through netrender. The window shows a big count number, a clickable
+//! `[ + ]` button, and (Stage 3, the form-control slice) a typeable text field —
+//! a [`text_field`] lensed onto the app state. A background timer bumps the count
+//! ~1/s so the number climbs on its own; clicking `[ + ]` bumps it too; clicking
+//! the field focuses it and typing edits it — proving the full input loop
+//! (pointer *and* keyboard) on screen.
 //!
 //! The spine (the same one the headless probe asserts on, now driven by a
 //! window):
@@ -45,55 +47,89 @@ use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
+use winit::keyboard::{Key as WinitKey, NamedKey as WinitNamedKey};
 use winit::window::{Window, WindowId};
-use xilem_serval::{El, OnClick, PointerClick, ServalAppRunner, el, on_click};
+use xilem_serval::{
+    El, Key, KeyEvent, Lens, NamedKey, OnClick, PointerClick, ServalAppRunner, TextField, el, lens,
+    on_click, text_field_typed,
+};
 
 use pelt_live::{hit_test_node, scene_from_scripted_dom};
 
 // ── App state + view ───────────────────────────────────────────────────────
 
-/// The app state: a single counter, mirroring the lib's Stage 1b probe.
-struct Counter {
+/// The app state: a counter plus an editable text buffer. The counter is the
+/// Stage 1b probe; the `text` field is the Stage 3 form-control slice — a
+/// `text_field` lensed onto it edits it as you type.
+struct Demo {
     count: u32,
+    text: String,
 }
 
-/// The concrete button-counter view type, copied from the lib's test module:
-/// `<div><p>{count}</p><button>+</button></div>`, the `<button>` carrying an
-/// `on_click` that increments the count. The handler is a non-capturing
-/// closure, so it coerces to a `fn` pointer and the view type is nameable
-/// (no boxing). `<p>` carries the count text on its own line; `<button>` is
-/// the click target.
-type ButtonView = El<
+/// The concrete demo view type: `<div>` holding the count `<p>`, the `+`
+/// `<button>` (an `on_click` that increments the count), a `<label>` prompt, and
+/// a `text_field` lensed onto `Demo::text`. Every handler is a non-capturing
+/// closure that coerces to a `fn` pointer, so the whole type is nameable (no
+/// boxing). The lensed field carries the reusable [`TextField`] type bridged
+/// onto `Demo` by `xilem_core`'s `Lens`.
+type DemoView = El<
     (
-        El<String, Counter, ()>,
-        OnClick<El<&'static str, Counter, ()>, Counter, (), fn(&mut Counter, PointerClick)>,
+        El<String, Demo, ()>,
+        OnClick<El<&'static str, Demo, ()>, Demo, (), fn(&mut Demo, PointerClick)>,
+        El<&'static str, Demo, ()>,
+        // `Lens<CF, V, F, ParentState, ChildState, Action, Context>`: the field
+        // component (`fn(&mut String) -> TextField`), the inner view
+        // (`TextField`), the projection (`fn(&mut Demo) -> &mut String`), then
+        // the parent/child state, action, and context types.
+        Lens<
+            fn(&mut String) -> TextField,
+            TextField,
+            fn(&mut Demo) -> &mut String,
+            Demo,
+            String,
+            (),
+            xilem_serval::ServalCtx,
+        >,
     ),
-    Counter,
+    Demo,
     (),
 >;
 
-fn button_counter_view(s: &Counter) -> ButtonView {
-    let increment: fn(&mut Counter, PointerClick) = |s: &mut Counter, _ev| s.count += 1;
-    el::<_, Counter, ()>(
+fn demo_view(s: &Demo) -> DemoView {
+    let increment: fn(&mut Demo, PointerClick) = |s: &mut Demo, _ev| s.count += 1;
+    // `text_field_typed` is `text_field` with its concrete return type named, so
+    // the `Lens<…>` in `DemoView` can be spelled. A thin `|t| text_field_typed(t)`
+    // adapter bridges its `&str` argument to the `Fn(&mut ChildState) -> View`
+    // shape `lens` expects. Both the adapter and the lens projection are `fn`
+    // pointers so `DemoView` stays nameable (no boxing).
+    let make_field: fn(&mut String) -> TextField = |t: &mut String| text_field_typed(t);
+    let to_text: fn(&mut Demo) -> &mut String = |d: &mut Demo| &mut d.text;
+    el::<_, Demo, ()>(
         "div",
         (
-            el::<_, Counter, ()>("p", s.count.to_string()),
-            on_click(el::<_, Counter, ()>("button", "+"), increment),
+            el::<_, Demo, ()>("p", s.count.to_string()),
+            on_click(el::<_, Demo, ()>("button", "+"), increment),
+            el::<_, Demo, ()>("label", "Click the field below, then type:"),
+            lens(make_field, to_text),
         ),
     )
 }
 
 /// The author stylesheet. Block boxes so layout reaches every element; a large
 /// font on the `<p>` makes the count visibly big; the `<button>` gets a little
-/// padding/colour so the `[ + ]` target reads as a button. Kept minimal and
-/// within what serval's cascade supports. The page background is the white
-/// clear in [`App::render`] (the runner attaches the `<div>` directly under the
-/// document root — there is no `<body>` element to style).
+/// padding/colour so the `[ + ]` target reads as a button; the `<input>` field
+/// gets a light background and padding so it reads as a typeable box. Kept
+/// minimal and within what serval's cascade supports. The page background is the
+/// white clear in [`App::render`] (the runner attaches the `<div>` directly
+/// under the document root — there is no `<body>` element to style).
 const SHEET: &[&str] = &[
-    "div, p, button { display: block; }",
+    "div, p, button, label, input { display: block; }",
     "p { font-size: 96px; color: rgb(30, 30, 50); }",
     "button { font-size: 48px; color: rgb(255, 255, 255); \
         background-color: rgb(60, 120, 220); padding: 12px; }",
+    "label { font-size: 28px; color: rgb(60, 60, 80); padding: 8px; }",
+    "input { font-size: 40px; color: rgb(20, 20, 20); \
+        background-color: rgb(235, 238, 245); padding: 12px; }",
 ];
 
 // ── winit user event ───────────────────────────────────────────────────────
@@ -104,6 +140,41 @@ const SHEET: &[&str] = &[
 #[derive(Debug, Clone, Copy)]
 enum UserEvent {
     Tick,
+}
+
+// ── winit → serval key mapping ───────────────────────────────────────────────
+
+/// Map a winit logical key to the serval-native [`KeyEvent`], or `None` for a
+/// key with no text and no named mapping (skipped).
+///
+/// `Key::Character(s)` carries the text the key produced and maps straight to
+/// [`Key::Character`]. The named keys the editing foundation cares about
+/// ([`NamedKey`]) map one-to-one; in particular **Space maps to
+/// [`NamedKey::Space`]** (not `Character(" ")`) per the Stage 3b convention, and
+/// **Backspace maps to [`NamedKey::Backspace`]** so the field's edit handler can
+/// pop a char. Any other named key becomes [`NamedKey::Other`] (a real event the
+/// field currently ignores). `Dead`/`Unidentified` keys produce no text and have
+/// no mapping, so they are skipped.
+fn key_event_from_winit(key: &WinitKey) -> Option<KeyEvent> {
+    let mapped = match key {
+        WinitKey::Character(s) => Key::Character(s.to_string()),
+        WinitKey::Named(named) => Key::Named(match named {
+            WinitNamedKey::Backspace => NamedKey::Backspace,
+            WinitNamedKey::Enter => NamedKey::Enter,
+            WinitNamedKey::Tab => NamedKey::Tab,
+            WinitNamedKey::Escape => NamedKey::Escape,
+            WinitNamedKey::Space => NamedKey::Space,
+            WinitNamedKey::ArrowLeft => NamedKey::ArrowLeft,
+            WinitNamedKey::ArrowRight => NamedKey::ArrowRight,
+            WinitNamedKey::ArrowUp => NamedKey::ArrowUp,
+            WinitNamedKey::ArrowDown => NamedKey::ArrowDown,
+            WinitNamedKey::Delete => NamedKey::Delete,
+            _ => NamedKey::Other,
+        }),
+        // No text, no named mapping: nothing to route.
+        WinitKey::Dead(_) | WinitKey::Unidentified(_) => return None,
+    };
+    Some(KeyEvent { key: mapped })
 }
 
 // ── GPU state (created on resume) ────────────────────────────────────────────
@@ -118,13 +189,13 @@ struct Gpu {
 
 // ── The application ─────────────────────────────────────────────────────────
 
-/// Logic alias: `button_counter_view` as the runner's logic closure type.
-type Logic = fn(&Counter) -> ButtonView;
+/// Logic alias: `demo_view` as the runner's logic closure type.
+type Logic = fn(&Demo) -> DemoView;
 
 struct App {
     /// The shared document the runner mutates and the render path reads.
     dom: Rc<RefCell<ScriptedDom>>,
-    runner: ServalAppRunner<Counter, Logic, ButtonView>,
+    runner: ServalAppRunner<Demo, Logic, DemoView>,
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
     /// Last cursor position in physical pixels (window space == content space:
@@ -139,8 +210,11 @@ impl App {
         let dom: Rc<RefCell<ScriptedDom>> = Rc::new(RefCell::new(ScriptedDom::new()));
         let runner = ServalAppRunner::new(
             dom.clone(),
-            button_counter_view as Logic,
-            Counter { count: 0 },
+            demo_view as Logic,
+            Demo {
+                count: 0,
+                text: String::new(),
+            },
         );
         Self {
             dom,
@@ -389,6 +463,23 @@ impl ApplicationHandler<UserEvent> for App {
                         .dispatch_click(node, PointerClick { local: (x, y) });
                     if let Some(window) = self.window.as_ref() {
                         window.request_redraw();
+                    }
+                }
+            },
+
+            WindowEvent::KeyboardInput { event, .. } => {
+                // Keyboard input: only presses type (include auto-repeat so a
+                // held key keeps typing); releases do nothing. Map winit's
+                // logical key to the serval `KeyEvent` and dispatch it to the
+                // focused node — which `dispatch_click` set to the text field
+                // when it was clicked. Keys with no text and no named mapping
+                // (e.g. dead keys) are skipped.
+                if event.state == ElementState::Pressed {
+                    if let Some(key_event) = key_event_from_winit(&event.logical_key) {
+                        self.runner.dispatch_key(key_event);
+                        if let Some(window) = self.window.as_ref() {
+                            window.request_redraw();
+                        }
                     }
                 }
             },
