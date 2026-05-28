@@ -138,11 +138,30 @@ pub trait LayoutDomMut: LayoutDom {
     /// previous parent first.
     fn append_child(&mut self, parent: Self::NodeId, child: Self::NodeId);
 
+    /// Insert `child` immediately before `reference` among `parent`'s children,
+    /// detaching `child` from any previous parent first. Appends if `reference`
+    /// is `None`, or if `reference` is not a child of `parent` (defensive: the
+    /// DOM `insertBefore` throws in that case, but the layout-side contract
+    /// stays total). The ordered-insertion primitive a reactive differ needs;
+    /// `append_child` is the `reference == None` tail case.
+    fn insert_before(
+        &mut self,
+        parent: Self::NodeId,
+        child: Self::NodeId,
+        reference: Option<Self::NodeId>,
+    );
+
     /// Detach `node` from its parent and drop its subtree.
     fn remove(&mut self, node: Self::NodeId);
 
     /// Set (or replace) an attribute on an element.
     fn set_attribute(&mut self, node: Self::NodeId, name: QualName, value: &str);
+
+    /// Remove the attribute named `name` from `node` (no-op if absent). Records
+    /// an [`DomMutation::AttributeChanged`] carrying the removed value as
+    /// `old_value` (the live DOM then reads as absent), so serval-layout builds
+    /// the Stylo snapshot the same way it does for a value change.
+    fn remove_attribute(&mut self, node: Self::NodeId, name: QualName);
 
     /// Replace a text/comment node's character data.
     fn set_text(&mut self, node: Self::NodeId, data: &str);

@@ -260,6 +260,24 @@ impl LayoutDomMut for ScriptedDom {
             .push(DomMutation::Inserted { node: child, parent });
     }
 
+    fn insert_before(&mut self, parent: NodeId, child: NodeId, reference: Option<NodeId>) {
+        self.detach(child);
+        self.node_mut(child).parent = Some(parent);
+        // Resolve the insertion index *after* detaching (so a move within the
+        // same parent reflects the post-detach positions). A missing or
+        // non-child reference falls back to append.
+        let idx = reference.and_then(|r| {
+            self.node(parent).children.iter().position(|&c| c == r)
+        });
+        let kids = &mut self.node_mut(parent).children;
+        match idx {
+            Some(i) => kids.insert(i, child),
+            None => kids.push(child),
+        }
+        self.mutations
+            .push(DomMutation::Inserted { node: child, parent });
+    }
+
     fn remove(&mut self, node: NodeId) {
         let former_parent = self.node(node).parent;
         self.detach(node);
@@ -292,6 +310,26 @@ impl LayoutDomMut for ScriptedDom {
             name,
             old_value,
         });
+    }
+
+    fn remove_attribute(&mut self, node: NodeId, name: QualName) {
+        // Drop the matching attribute and capture its prior value; the
+        // borrow ends before we record the mutation. No-op (and no record)
+        // when the attribute is absent.
+        let removed = {
+            let attrs = &mut self.node_mut(node).attrs;
+            attrs
+                .iter()
+                .position(|(n, _)| n.ns == name.ns && n.local == name.local)
+                .map(|pos| attrs.remove(pos).1)
+        };
+        if let Some(old) = removed {
+            self.mutations.push(DomMutation::AttributeChanged {
+                node,
+                name,
+                old_value: Some(old),
+            });
+        }
     }
 
     fn set_text(&mut self, node: NodeId, data: &str) {
@@ -420,5 +458,72 @@ mod tests {
             muts.as_slice(),
             [DomMutation::Removed { .. }]
         ));
+    }
+
+    #[test]
+    fn insert_before_orders_and_appends() {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let a = dom.create_element(qual("a"));
+        let c = dom.create_element(qual("c"));
+        dom.append_child(root, a);
+        dom.append_child(root, c);
+        let mut drained = Vec::new();
+        dom.drain_mutations(&mut drained); // clear the two appends
+
+        // Insert b before c → [a, b, c].
+        let b = dom.create_element(qual("b"));
+        dom.insert_before(root, b, Some(c));
+        assert_eq!(dom.dom_children(root).collect::<Vec<_>>(), vec![a, b, c]);
+        assert_eq!(dom.parent(b), Some(root));
+
+        // reference = None appends → [a, b, c, d].
+        let d = dom.create_element(qual("d"));
+        dom.insert_before(root, d, None);
+        assert_eq!(dom.dom_children(root).collect::<Vec<_>>(), vec![a, b, c, d]);
+
+        // A reference that isn't a child of root falls back to append → [a, b, c, d, e].
+        let orphan = dom.create_element(qual("orphan"));
+        let e = dom.create_element(qual("e"));
+        dom.insert_before(root, e, Some(orphan));
+        assert_eq!(dom.dom_children(root).collect::<Vec<_>>(), vec![a, b, c, d, e]);
+
+        // Each insert recorded exactly one Inserted under root.
+        let mut muts = Vec::new();
+        dom.drain_mutations(&mut muts);
+        assert_eq!(muts.len(), 3);
+        assert!(muts.iter().all(
+            |m| matches!(m, DomMutation::Inserted { parent, .. } if *parent == root)
+        ));
+    }
+
+    #[test]
+    fn remove_attribute_records_and_noops() {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let div = dom.create_element(qual("div"));
+        dom.append_child(root, div);
+        dom.set_attribute(div, qual("id"), "main");
+        let mut drained = Vec::new();
+        dom.drain_mutations(&mut drained); // clear the append + set
+
+        // Removing a present attribute drops it and records the old value.
+        dom.remove_attribute(div, qual("id"));
+        assert_eq!(
+            dom.attribute(div, &Namespace::from(""), &LocalName::from("id")),
+            None
+        );
+        let mut muts = Vec::new();
+        dom.drain_mutations(&mut muts);
+        assert!(matches!(
+            muts.as_slice(),
+            [DomMutation::AttributeChanged { old_value: Some(v), .. }] if v.as_str() == "main"
+        ));
+
+        // Removing an absent attribute is a no-op and records nothing.
+        dom.remove_attribute(div, qual("id"));
+        let mut again = Vec::new();
+        dom.drain_mutations(&mut again);
+        assert!(again.is_empty());
     }
 }
