@@ -9,7 +9,7 @@
 //! batteries-included adapter that real hosts (the live viewer, the WPT
 //! runner) share so the resolution rules live in one place.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
 
