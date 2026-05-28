@@ -1,13 +1,19 @@
 # serval as host: the `xilem_serval` reactive backend
 
-Status: **plan (2026-05-27).** Scopes using serval as the application
-host (chrome and content rendered by one engine), and the reactive
-authoring layer that requires. The finding: that layer is mostly *reuse*
-of `xilem_core` (a third backend beside Masonry and `xilem_web`), not a
-from-scratch Dioxus-style framework. Sibling to the
-[scripted render loop](#relationship-to-existing-docs): both need the same
+Status: **implemented through Stage 2 + on-screen demo (2026-05-28);
+Stage 3 (breadth) open.** Scopes using serval as the application host
+(chrome and content rendered by one engine), and the reactive authoring
+layer that requires. The finding held: that layer is mostly *reuse* of
+`xilem_core` (a third backend beside Masonry and `xilem_web`), not a
+from-scratch Dioxus-style framework. The full loop — `xilem_core` diff →
+serval DOM → layout → paint → netrender → present, with input routed back
+through serval's hit-test + faithful xilem message dispatch — is validated
+on screen (`pelt-live-counter`: a counter that ticks on a timer and
+responds to clicks), serval the sole engine. Sibling to the
+[scripted render loop](#relationship-to-existing-docs): both share that
 native dispatch substrate, which wires serval's *existing* hit-test query
-into event routing rather than building a new one.
+into event routing rather than building a new one. Per-stage status and
+commits are in [Staging](#staging).
 
 ## The three serval-GUI architectures
 
@@ -200,31 +206,58 @@ already exposes (`run_microtasks`, `run_event_loop`).
 
 ## Staging
 
-- **Stage 0:** `insert_before` + `remove_attribute` on
-  `LayoutDomMut`/`ScriptedDom` (producer-side; coordinate with the
-  scripting tier). Done when both record correct mutations and the JS DOM
-  surface can expose `insertBefore`/`removeAttribute`.
-- **Stage 1a (backend probe, no host):** a minimal `xilem_serval` over
-  `ScriptedDom`, exercised by a test rather than a window — build an
-  initial tree, then a middle `insert`, a `delete`, and an attribute
-  removal through the `ElementSplice`, asserting the resulting
-  `ScriptedDom` and drained mutations. Proves the diff → DOM mapping in
-  isolation.
-- **Stage 1b (flagship, no input):** the `ServalAppRunner` (the real
-  artifact) plus the `ServalCtx` / `ServalNode` / element-view vocabulary
-  (`el`, `text`, `attr`) copy-adapted from `xilem_web`, driving a counter
-  that updates on a timer, rendered through serval layout/paint in a pelt
-  example host (state → DOM diff → `IncrementalLayout` → netrender →
-  present). The runner, not the counter, is the deliverable. This proves
-  the thesis: Xilem authoring on serval as the sole engine.
-- **Stage 2 (input, shared with the render loop):** wire pointer input
-  through the existing `ServalLaneView::hit_test`, add the reverse index
-  and the listener/message dispatch path (converging with the JS W0c event
-  algorithm); `on_click` fires and the counter responds. Done when a
-  pointer event routes through serval's DOM to a Rust handler and triggers
-  a rebuild + repaint.
-- **Stage 3 (breadth):** form controls, `DOM → AccessKit` emission, a
-  wider element/view vocabulary.
+- **Stage 0 — done (`cc4b30a`).** `insert_before` + `remove_attribute` on
+  `LayoutDomMut`/`ScriptedDom`. Both record correct mutations; they are
+  also the real DOM methods (`insertBefore`/`removeAttribute`) the JS
+  surface wants.
+- **Stage 1a — done (`84d7381`).** A minimal `xilem-serval` over
+  `ScriptedDom`, exercised by tests, not a window: build an initial tree,
+  then a middle `insert`, a `delete`, and an attribute set/remove through
+  the `ElementSplice`, asserting the resulting `ScriptedDom` and drained
+  mutations. The uniform element type (every node is a `NodeId`) drops
+  `xilem_web`'s `AnyNode`/`Box`/downcast and makes `SuperElement` the
+  identity; mutations apply eagerly (the `drain_mutations` boundary is the
+  batch).
+- **Stage 1b — done, decomposed into core + window.**
+  - **1b-core (`2e4c2e8`):** `ServalAppRunner` (the real artifact —
+    state + view tree + rebuild-on-update) plus the `el`/`text`/`attr`
+    vocabulary, and a headless render driver in the new `pelt-live`
+    (`scene_from_scripted_dom`: cascade → layout → paint → `netrender::Scene`),
+    proven by a counter test offline. `IncrementalLayout` is the eventual
+    relayout engine; the probe uses the stateless cascade+layout path.
+  - **1b-window (`ef4c026`):** the `pelt-live-counter` bin — a real winit
+    window presenting the counter via `netrender::boot` + `render_vello` +
+    `compose_external_texture` (the format-bridging blit), a 1 Hz timer
+    tick, and click input. Validated on screen 2026-05-28.
+- **Stage 2 — done, in two slices.**
+  - **2a (`ff22abc`):** the `point → NodeId` half, wiring serval's existing
+    `ServalLaneView::hit_test` (no new spatial index). The reverse
+    `SourceNodeId → NodeId` is trivial for `ScriptedDom` (`opaque_id` is the
+    raw arena index, so `NodeId::from_raw` inverts it — no cached reverse
+    map needed).
+  - **2b (`9c01c27`):** faithful event dispatch (the chosen path over a
+    native handler registry). `on_click` is an `OnEvent`-shaped view that
+    registers its `view_path` in `ServalCtx`; `dispatch_click` bubble-walks
+    `parentNode` and routes a `PointerClick` through the stock `xilem_core`
+    message cycle (`MessageCtx`/`DynMessage`/`View::message`), then
+    rebuilds. No `Rc<dyn Fn>` registry, no fork patch.
+- **Stage 3 (breadth) — open.** Grows from "counter" toward authoring real
+  chrome:
+  - **`Element` / `Text` split** — wrappers are all `Node` today; element
+    vs character-data views with the appropriate read surface.
+  - **Capture phase + per-listener phase flags** — the dispatch walk is
+    bubble-only; add the `root → target` capture pre-pass (the walk is
+    already structured target-first for this).
+  - **`OptionalAction` / Action-bubbling** — handlers return `()` today;
+    let them return an `Action` that composes up to parent views, as
+    `OnEvent` does, feeding `MessageResult::Action`.
+  - **Keyboard + more events** — focus model, key events, `pointermove`/
+    `pointerup`, beyond `click`.
+  - **Form controls** — the genuine engine-completeness cost (browsers
+    ship these; serval needs real ones).
+  - **`DOM → AccessKit`** — emit an accessibility tree from the semantic
+    DOM (more natural than from a widget tree).
+  - **Wider element/view vocabulary** and per-tag ergonomics.
 
 ## What serval makes simpler
 
