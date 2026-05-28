@@ -54,6 +54,9 @@ pub fn run_test(
         Ok(rt) => rt,
         Err(e) => return HarnessOutcome::Threw(format!("runtime init: {e}")),
     };
+    // The test's body becomes the live DOM, so scripts querying body elements
+    // (getElementById / querySelector / document.body) see them.
+    rt.load_dom(&doc);
     match rt.run_testharness(testharness_js, &test_src) {
         Ok(results) => HarnessOutcome::Ran(results),
         // Boa's `JsError` Display is concise (the Debug form carries a full

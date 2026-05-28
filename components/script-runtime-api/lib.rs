@@ -35,6 +35,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use layout_dom_api::LayoutDom;
 use script_engine_api::{CallCx, NativeFn, ScriptEngine};
 use serval_scripted_dom::ScriptedDom;
 
@@ -84,6 +85,17 @@ impl<E: ScriptEngine> Runtime<E> {
     /// Evaluate `source` in the runtime's global scope.
     pub fn eval(&mut self, source: &str) -> Result<E::Value, E::Error> {
         self.engine.eval(source)
+    }
+
+    /// Populate the live document from a parsed source document (any
+    /// [`LayoutDom`] — e.g. a `StaticDocument` of a test's HTML), so script can
+    /// query it (`document.body`, `getElementById`, `querySelector`). Clones the
+    /// element/text tree under the scripted document root. Call before running
+    /// script.
+    pub fn load_dom<D: layout_dom_api::LayoutDom>(&mut self, src: &D) {
+        let mut host = self.host.borrow_mut();
+        let root = host.dom.document();
+        dom::clone_into(src, src.document(), &mut host.dom, root);
     }
 
     /// Drain pending microtasks (Promise reaction jobs) to quiescence — a microtask

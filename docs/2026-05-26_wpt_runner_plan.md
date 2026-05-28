@@ -93,12 +93,28 @@ A real `MANIFEST.json` reader can replace this later for exactness
    an aggregate subtest count. First run on `dom/nodes` (331 files):
    1 all-pass, 219 with-failures, 58 errored, 7 no-results, 46 skipped;
    **30/1858 subtests passed.** The low rate is the expected signal — the
-   error lines are a punch-list of missing DOM breadth (`requestAnimationFrame`,
-   `customElements`, attribute reflection, and the big one: the test starts
-   with an empty DOM, so tests querying body elements fail). **Next:** parse
-   the test HTML body into the scripted DOM, attribute reflection, and the
-   `Element`/`Text` split — each lifts the pass rate. The harness, results
-   capture, and aggregation are done; raising the number is DOM-breadth work.
+   error lines are a punch-list of missing DOM breadth.
+
+   **Body-DOM parsing (done 2026-05-28).** `Runtime::load_dom` clones the
+   test's parsed HTML (any `LayoutDom`) into the scripted document before
+   running script, and `document.body` / `documentElement` / `head` resolve.
+   So tests querying body elements run instead of erroring at the first
+   query. On `dom/nodes` this broadened *execution* — subtests run
+   1858 → 2538, hard errors 58 → 54 — without yet lifting the pass count
+   (still 30). The honest finding: body-DOM is necessary but not
+   sufficient; the now-running subtests hit the *next* wall immediately.
+   The failure messages name it precisely: missing `Element`/`Node` methods
+   (`toggleAttribute`, `hasAttribute`, `matches`, `querySelector`,
+   `classList`), attribute reflection getters (`el.id`, `el.className`), and
+   `assert_throws_dom` needing a real `DOMException` with `.code`. Example:
+   `dom/nodes/attributes.html` now runs 4/67 (was erroring at 0).
+
+   **Next (the pass-rate lever):** `querySelector`/`querySelectorAll` +
+   `matches` (selector matching, reusing the `selectors` crate), the
+   `Element` method set (`hasAttribute`/`removeAttribute`/`toggleAttribute`/
+   `classList`), attribute-reflection getters, and `DOMException`. The
+   harness, results capture, aggregation, and body-DOM are done; the number
+   moves with method breadth.
 4. **Expectations.** A checked-in expected-results file so known
    failures are tolerated and regressions surface (the WPT metadata
    model, serval-shaped).

@@ -28,6 +28,8 @@ layout-dom-api = { path = "../shared/layout-dom" }
 # Validate the host surface against a real backend. Boa is pure Rust (all targets);
 # Nova is native-only.
 script-engine-boa = { path = "../script-engine-boa" }
+# Parse HTML to a LayoutDom for the `load_dom` test (a real source document).
+serval-static-dom = { path = "../serval-static-dom" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 script-engine-nova = { path = "../script-engine-nova" }

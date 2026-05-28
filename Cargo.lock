@@ -6545,6 +6545,7 @@ dependencies = [
  "script-engine-boa",
  "script-engine-nova",
  "serval-scripted-dom",
+ "serval-static-dom",
 ]
 
 [[package]]

@@ -23,17 +23,57 @@
 //!
 //! Dispatch is prototype-based (`Node`/`Document` prototypes, `instanceof`), and
 //! nodes are `EventTarget`s with real tree propagation (capture → target → bubble
-//! over `parentNode`, with `stopPropagation`). Not yet: the `Element`/`Text` split
-//! (all wrappers are `Node` today), and broader reflection (W2). See
+//! over `parentNode`, with `stopPropagation`). A source document can be cloned in
+//! ([`clone_into`] / [`crate::Runtime::load_dom`]), with `document.body` /
+//! `documentElement` / `head` resolving over it. Not yet: the `Element`/`Text`
+//! split (all wrappers are `Node`), the `Element` method set
+//! (`querySelector` / `matches` / `hasAttribute` / `classList`), attribute
+//! reflection getters, and `DOMException`. See
 //! `docs/2026-05-26_pluggable_engines_testharness_plan.md`.
 
 use std::cell::RefCell;
 
-use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, QualName};
+use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, NodeKind, QualName};
 use script_engine_api::{CallCx, NativeFn, ScriptEngine};
 use serval_scripted_dom::{NodeId, ScriptedDom};
 
 use crate::HostState;
+
+/// Clone `src`'s tree (elements with attributes + text) under `dst_parent` in the
+/// scripted DOM, recursively. Backs [`crate::Runtime::load_dom`]: a test's parsed
+/// HTML (any [`LayoutDom`]) becomes the live document scripts query. Comments /
+/// doctypes / PIs are dropped (scripts rarely query them; the `Comment` node type
+/// is later breadth).
+pub(crate) fn clone_into<D: LayoutDom>(
+    src: &D,
+    src_node: D::NodeId,
+    dst: &mut ScriptedDom,
+    dst_parent: NodeId,
+) {
+    for child in src.dom_children(src_node) {
+        match src.kind(child) {
+            NodeKind::Element => {
+                let Some(name) = src.element_name(child) else { continue };
+                let el = dst.create_element(name.clone());
+                for attr in src.attributes(child) {
+                    dst.set_attribute(el, attr.name.clone(), attr.value);
+                }
+                dst.append_child(dst_parent, el);
+                clone_into(src, child, dst, el);
+            },
+            NodeKind::Text => {
+                let t = dst.create_text(src.text(child).unwrap_or(""));
+                dst.append_child(dst_parent, t);
+            },
+            _ => {},
+        }
+    }
+}
+
+/// First element child of `node` (e.g. `<html>` under the document).
+fn first_element_child(dom: &ScriptedDom, node: NodeId) -> Option<NodeId> {
+    dom.dom_children(node).find(|&c| dom.element_name(c).is_some())
+}
 
 /// Install the `document`/`Node` surface: native sinks, then the JS bootstrap that
 /// builds `document` and the node wrappers over them.
@@ -51,6 +91,9 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     engine.set_function::<ParentNode>("__parentNode", 1)?;
     engine.set_function::<ElementsByTagNameCount>("__elementsByTagNameCount", 1)?;
     engine.set_function::<ElementsByTagNameItem>("__elementsByTagNameItem", 2)?;
+    engine.set_function::<DocumentElement>("__documentElement", 0)?;
+    engine.set_function::<DocumentBody>("__documentBody", 0)?;
+    engine.set_function::<DocumentHead>("__documentHead", 0)?;
     engine.eval(DOM_BOOTSTRAP)?;
     Ok(())
 }
@@ -316,6 +359,39 @@ impl<E: ScriptEngine> NativeFn<E> for ParentNode {
     }
 }
 
+/// `__documentElement()` → the root element (`<html>`), or `undefined`.
+struct DocumentElement;
+impl<E: ScriptEngine> NativeFn<E> for DocumentElement {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        match with_dom::<E, _>(cx, |dom| first_element_child(dom, dom.document())).flatten() {
+            Some(node) => cx.reflector_for(node.raw() as u64),
+            None => Ok(cx.undefined()),
+        }
+    }
+}
+
+/// `__documentBody()` → the first `<body>`, or `undefined`.
+struct DocumentBody;
+impl<E: ScriptEngine> NativeFn<E> for DocumentBody {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        match with_dom::<E, _>(cx, |dom| collect_by_tag(dom, "body").first().copied()).flatten() {
+            Some(node) => cx.reflector_for(node.raw() as u64),
+            None => Ok(cx.undefined()),
+        }
+    }
+}
+
+/// `__documentHead()` → the first `<head>`, or `undefined`.
+struct DocumentHead;
+impl<E: ScriptEngine> NativeFn<E> for DocumentHead {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        match with_dom::<E, _>(cx, |dom| collect_by_tag(dom, "head").first().copied()).flatten() {
+            Some(node) => cx.reflector_for(node.raw() as u64),
+            None => Ok(cx.undefined()),
+        }
+    }
+}
+
 /// `document` plus node wrappers. A wrapper is a plain object carrying its reflector
 /// (`__ref`) and the methods that drive the native sinks. ES5-style (no arrows /
 /// classes / let) for the widest backend coverage, matching the other bootstraps.
@@ -421,6 +497,15 @@ const DOM_BOOTSTRAP: &str = r#"
     for (var i = 0; i < n; i++) { out.push(wrapNode(__elementsByTagNameItem(String(tag), String(i)))); }
     return out;
   };
+  Object.defineProperty(Document.prototype, 'documentElement', {
+    configurable: true, get: function() { return wrapNode(__documentElement()); }
+  });
+  Object.defineProperty(Document.prototype, 'body', {
+    configurable: true, get: function() { return wrapNode(__documentBody()); }
+  });
+  Object.defineProperty(Document.prototype, 'head', {
+    configurable: true, get: function() { return wrapNode(__documentHead()); }
+  });
 
   globalThis.Node = Node;
   globalThis.Document = Document;
@@ -561,9 +646,43 @@ mod tests {
         assert_eq!(rt.host().borrow().console, vec!["true", "true", "true", "true", "true"]);
     }
 
+    /// `load_dom`, against any backend: a parsed source document becomes the live
+    /// DOM, so script sees `document.body`, `getElementById`, and tag queries over
+    /// the pre-existing tree.
+    fn load_dom_works<E: ScriptEngine>() {
+        use serval_static_dom::StaticDocument;
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        let src = StaticDocument::parse(
+            "<html><head></head><body><div id='main'><p>hi</p></div></body></html>",
+        );
+        rt.load_dom(&src);
+
+        rt.eval(
+            "console.log(document.body ? document.body.tagName : 'no-body');\
+             console.log(document.documentElement ? document.documentElement.tagName : 'no-root');\
+             var m = document.getElementById('main');\
+             console.log(m ? m.tagName : 'not-found');\
+             console.log(String(document.getElementsByTagName('p').length));",
+        )
+        .expect("query script");
+
+        assert_eq!(rt.host().borrow().console, vec!["BODY", "HTML", "DIV", "1"]);
+    }
+
     #[test]
     fn dom_construction_on_boa() {
         dom_construction_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[test]
+    fn load_dom_on_boa() {
+        load_dom_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn load_dom_on_nova() {
+        load_dom_works::<script_engine_nova::NovaEngine>();
     }
 
     /// Node-level EventTarget with tree propagation, against any backend: a
