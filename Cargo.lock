@@ -6850,6 +6850,8 @@ dependencies = [
  "layout-dom-api",
  "netrender",
  "paint_list_api",
+ "script-engine-boa",
+ "script-runtime-api",
  "serval-layout",
  "serval-static-dom",
  "servo-base",

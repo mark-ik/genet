@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use layout_dom_api::{LayoutDom, LocalName};
 use serval_static_dom::StaticDocument;
 
+mod harness;
 mod render;
 
 // The upstream WPT checkout lives under `tests/wpt/tests/`
@@ -194,9 +195,10 @@ fn usage() -> String {
 serval-wpt - serval-native web-platform-tests runner (phase 1: crash-smoke)
 
 Usage:
-    serval-wpt list    <subset>       enumerate + classify tests in a subset
-    serval-wpt run     <subset>       crash-smoke a subset (parse + layout)
-    serval-wpt reftest <subset>       render + pixel-compare reftests (needs a GPU)
+    serval-wpt list        <subset>   enumerate + classify tests in a subset
+    serval-wpt run         <subset>   crash-smoke a subset (parse + layout)
+    serval-wpt reftest     <subset>   render + pixel-compare reftests (needs a GPU)
+    serval-wpt testharness <subset>   run testharness.js tests + collect results (Boa)
 
 Options:
     --tests-root <dir>   tests root (default: tests/wpt)
@@ -235,6 +237,7 @@ fn main() {
         "list" => list(&tests, &args),
         "run" => run(&tests, &args),
         "reftest" => reftest(&tests, &args),
+        "testharness" => testharness(&tests, &args),
         other => {
             eprintln!("unknown command: {other}\n{}", usage());
             std::process::exit(2);
@@ -317,6 +320,96 @@ fn run(tests: &[PathBuf], args: &Args) {
     if failed > 0 || errored > 0 {
         std::process::exit(1);
     }
+}
+
+/// Phase 3: run testharness.js tests and report per-subtest results.
+fn testharness(tests: &[PathBuf], args: &Args) {
+    let tests_root = Path::new(&args.tests_root);
+    let th_path = tests_root.join("resources/testharness.js");
+    let testharness_js = match fs::read_to_string(&th_path) {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!("testharness.js not found at {}", th_path.display());
+            std::process::exit(2);
+        }
+    };
+
+    // Boa / the bridge can panic on unimplemented paths; report, don't spam.
+    let prev = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+
+    let (mut all_pass, mut with_fail, mut errored, mut no_results, mut skipped) = (0, 0, 0, 0, 0);
+    let (mut sub_passed, mut sub_total) = (0usize, 0usize);
+
+    for path in tests {
+        let html = match fs::read(path) {
+            Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+            Err(_) => {
+                errored += 1;
+                println!("ERROR read    {}", rel(path, &args.tests_root));
+                continue;
+            }
+        };
+        if classify(path, &html) != Kind::Testharness {
+            skipped += 1;
+            if args.verbose {
+                println!("SKIP  non-testharness {}", rel(path, &args.tests_root));
+            }
+            continue;
+        }
+
+        let base_dir = path.parent().unwrap_or(tests_root);
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            harness::run_test(&testharness_js, &html, base_dir, tests_root)
+        }));
+        let name = rel(path, &args.tests_root);
+
+        match result {
+            Err(_) => {
+                errored += 1;
+                println!("ERROR panic   {name}");
+            }
+            Ok(harness::HarnessOutcome::Threw(msg)) => {
+                errored += 1;
+                println!("ERROR {name}  ({msg})");
+            }
+            Ok(harness::HarnessOutcome::Ran(results)) => {
+                let total = results.len();
+                let passed = results.iter().filter(|r| r.passed()).count();
+                sub_passed += passed;
+                sub_total += total;
+                if total == 0 {
+                    no_results += 1;
+                    if args.verbose {
+                        println!("NORES {name}  (harness ran but reported no subtests)");
+                    }
+                } else if passed == total {
+                    all_pass += 1;
+                    if args.verbose {
+                        println!("PASS  {name}  ({passed}/{total})");
+                    }
+                } else {
+                    with_fail += 1;
+                    println!("FAIL  {name}  ({passed}/{total} subtests)");
+                    if args.verbose {
+                        for r in results.iter().filter(|r| !r.passed()) {
+                            let msg = r.message.as_deref().unwrap_or("");
+                            println!("        [{}] {} {msg}", r.status, r.name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    panic::set_hook(prev);
+
+    println!(
+        "\ntestharness: {all_pass} all-pass, {with_fail} with-failures, {errored} errored, \
+         {no_results} no-results, {skipped} skipped (of {} files); \
+         subtests {sub_passed}/{sub_total} passed",
+        tests.len(),
+    );
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -1,8 +1,9 @@
 # serval-native WPT runner
 
-Status: **in progress (2026-05-26).** Phase 1 (crash-smoke) and phase 2
+Status: **in progress (2026-05-28).** Phase 1 (crash-smoke), phase 2
 (reftest pixel compare, with linked-resource loading + fuzzy + ref
-chains) built; phase 3 scoped below.
+chains), and phase 3 (testharness.js results, Boa) all built. Phase 4
+(expectations) scoped below.
 
 ## Goal
 
@@ -78,10 +79,26 @@ A real `MANIFEST.json` reader can replace this later for exactness
    paths run without error but their pass-changing effect is not yet
    demonstrated on a specific subset. **Still out:** remote resources (the
    WPT server), `mismatch` chains.
-3. **testharness.js.** Once the scripting tier runs testharness, capture
-   subtest results. Gated on JS execution maturity; the binding work and
-   per-engine cost are scoped in
-   [2026-05-26_pluggable_engines_testharness_plan.md](./2026-05-26_pluggable_engines_testharness_plan.md).
+3. **testharness.js (done 2026-05-28).** `serval-wpt testharness <subset>`
+   runs each testharness test on the host surface and collects per-subtest
+   results. For each test it extracts the test's own scripts (inline
+   `<script>` + local `<script src>`, skipping `testharness.js` / the
+   report hook), loads `testharness.js` on a fresh `Runtime`, runs the
+   scripts, drives completion (dispatch `load` + drain the loop), and reads
+   results via the bridge (`Runtime::run_testharness`, `script-runtime-api`).
+   Engine: **Boa** (Nova's regex engine rejects the harness's surrogate
+   sanitizer — see the
+   [pluggable-engines plan](./2026-05-26_pluggable_engines_testharness_plan.md)).
+   Reports per test (all-pass / with-failures / errored / no-results) and
+   an aggregate subtest count. First run on `dom/nodes` (331 files):
+   1 all-pass, 219 with-failures, 58 errored, 7 no-results, 46 skipped;
+   **30/1858 subtests passed.** The low rate is the expected signal — the
+   error lines are a punch-list of missing DOM breadth (`requestAnimationFrame`,
+   `customElements`, attribute reflection, and the big one: the test starts
+   with an empty DOM, so tests querying body elements fail). **Next:** parse
+   the test HTML body into the scripted DOM, attribute reflection, and the
+   `Element`/`Text` split — each lifts the pass rate. The harness, results
+   capture, and aggregation are done; raising the number is DOM-breadth work.
 4. **Expectations.** A checked-in expected-results file so known
    failures are tolerated and regressions surface (the WPT metadata
    model, serval-shaped).

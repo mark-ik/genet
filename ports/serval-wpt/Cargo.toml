@@ -34,3 +34,9 @@ euclid = { workspace = true }
 image = { workspace = true }
 # Must match serval-layout's experimental pin (layout() takes a taffy::Size).
 taffy = { version = "=0.11.0-experimental-cache-fix.3", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "detailed_layout_info"] }
+
+# Phase 3 (testharness): run testharness.js + the test's scripts on the host
+# surface and read results. Boa is the engine (pure Rust, the conformance oracle;
+# Nova's regex engine rejects the harness's surrogate ranges — see the plan doc).
+script-runtime-api = { path = "../../components/script-runtime-api" }
+script-engine-boa = { path = "../../components/script-engine-boa" }
