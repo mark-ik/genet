@@ -30,7 +30,7 @@ use xilem_core::{
 };
 
 use crate::pod::ServalElement;
-use crate::ServalCtx;
+use crate::{OptionalAction, ServalCtx};
 
 // A distinctive number, mirroring `OnEvent`'s `ON_EVENT_VIEW_ID`, so a stray
 // message routed here on a wrong path is caught rather than silently matching.
@@ -54,10 +54,19 @@ pub struct PointerClick {
 /// Construct with [`on_click`]. The wrapped child must produce a
 /// [`ServalElement`] (so the view has a DOM node to key the registry on).
 ///
-/// Stage 2b's handler is a unit handler (`Fn(&mut State, PointerClick)`): it may
-/// mutate app state but does not bubble an `Action`. A later extension can take
-/// `Fn(&mut State, PointerClick) -> OA` over `OptionalAction<Action>`, exactly
-/// as `OnEvent` does, to feed the elm-style `MessageResult::Action` path.
+/// Stage 3a's handler returns an [`OptionalAction`] (`OA`): it may mutate app
+/// state and *also* bubble an `Action`. The two ends of that polymorphism are
+///   * a **unit** handler (`Fn(&mut State, PointerClick)`, `OA = ()`), the
+///     Stage 2b shape — `action()` is `None`, so `message` returns
+///     [`MessageResult::Nop`] exactly as before; and
+///   * an **action** handler (`Fn(&mut State, PointerClick) -> A`, `OA = A`) —
+///     `action()` is `Some(a)`, so `message` returns
+///     [`MessageResult::Action(a)`], which composes up through
+///     [`map_action`](xilem_core::map_action), as `OnEvent` does.
+///
+/// `OA` is not a struct field; it is introduced by the `View` impl (mirroring
+/// `xilem_web`'s `OnEvent`), so the wrapper type stays `OnClick<V, State,
+/// Action, F>`.
 pub struct OnClick<V, State, Action, F> {
     child: V,
     handler: F,
@@ -68,9 +77,12 @@ pub struct OnClick<V, State, Action, F> {
 ///
 /// `handler` runs when [`dispatch_click`](crate::ServalAppRunner::dispatch_click)
 /// routes a [`PointerClick`] to this view (directly on `child`'s node, or via
-/// the bubble walk from a descendant). It mutates the app state; the runner
-/// rebuilds the view tree afterwards so the change reaches the DOM.
-pub fn on_click<V, State, Action, F>(
+/// the bubble walk from a descendant). It mutates the app state and may return
+/// an action (anything implementing [`OptionalAction<Action>`] — `()`, an
+/// `Action`, or `Option<Action>`); a returned action becomes a
+/// [`MessageResult::Action`]. The runner rebuilds the view tree afterwards so
+/// any state change reaches the DOM.
+pub fn on_click<V, State, Action, OA, F>(
     child: V,
     handler: F,
 ) -> OnClick<V, State, Action, F>
@@ -78,7 +90,8 @@ where
     State: 'static,
     Action: 'static,
     V: View<State, Action, ServalCtx, Element = ServalElement>,
-    F: Fn(&mut State, PointerClick) + 'static,
+    OA: OptionalAction<Action>,
+    F: Fn(&mut State, PointerClick) -> OA + 'static,
 {
     OnClick {
         child,
@@ -97,12 +110,13 @@ pub struct OnClickState<S> {
 
 impl<V, State, Action, F> ViewMarker for OnClick<V, State, Action, F> {}
 
-impl<V, State, Action, F> View<State, Action, ServalCtx> for OnClick<V, State, Action, F>
+impl<V, State, Action, OA, F> View<State, Action, ServalCtx> for OnClick<V, State, Action, F>
 where
     State: 'static,
     Action: 'static,
     V: View<State, Action, ServalCtx, Element = ServalElement>,
-    F: Fn(&mut State, PointerClick) + 'static,
+    OA: OptionalAction<Action>,
+    F: Fn(&mut State, PointerClick) -> OA + 'static,
 {
     type ViewState = OnClickState<V::ViewState>;
 
@@ -184,10 +198,14 @@ where
         }
         if message.remaining_path().is_empty() {
             match message.take_message::<PointerClick>() {
-                Some(event) => {
-                    (self.handler)(app_state, *event);
-                    MessageResult::Nop
-                }
+                // The handler runs and may yield an action; `OptionalAction`
+                // collapses `()`/`A`/`Option<A>` to `Option<A>` — `Some(a)`
+                // bubbles as `MessageResult::Action(a)`, `None` (incl. every
+                // unit handler) is a `Nop`, preserving Stage 2b behaviour.
+                Some(event) => match (self.handler)(app_state, *event).action() {
+                    Some(a) => MessageResult::Action(a),
+                    None => MessageResult::Nop,
+                },
                 // Wrong message type routed to this path: be robust.
                 None => MessageResult::Stale,
             }

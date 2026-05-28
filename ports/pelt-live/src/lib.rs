@@ -32,7 +32,10 @@ mod tests {
 
     use layout_dom_api::{LayoutDom, NodeKind};
     use serval_scripted_dom::{NodeId, ScriptedDom};
-    use xilem_serval::{El, OnClick, PointerClick, ServalAppRunner, el, on_click};
+    use xilem_serval::{
+        El, OnClick, PointerClick, ServalAppRunner, ServalCtx, ServalElement, View, el, lens,
+        map_action, on_click,
+    };
 
     use crate::render::{fragments_from_scripted_dom, hit_test_node, scene_from_scripted_dom};
 
@@ -286,6 +289,254 @@ mod tests {
             runner.state().count,
             0,
             "dispatching on an unhandled node must not change state"
+        );
+    }
+
+    // --- MARK: Stage 3a — component composition -------------------------------
+
+    /// All elements in `node`'s subtree (pre-order) whose local name is `name`.
+    /// The plural counterpart of [`find_element_by_name`]: the `lens` test needs
+    /// to find *both* counter buttons and address each one independently.
+    fn collect_elements_by_name(dom: &ScriptedDom, node: NodeId, name: &str) -> Vec<NodeId> {
+        let mut out = Vec::new();
+        fn walk(dom: &ScriptedDom, node: NodeId, name: &str, out: &mut Vec<NodeId>) {
+            if dom.kind(node) == NodeKind::Element
+                && dom
+                    .element_name(node)
+                    .is_some_and(|q| q.local.as_ref() == name)
+            {
+                out.push(node);
+            }
+            for c in dom.dom_children(node) {
+                walk(dom, c, name, out);
+            }
+        }
+        walk(dom, node, name, &mut out);
+        out
+    }
+
+    /// A reusable, independently-stateful component: a `<button>` whose text is
+    /// the current count and whose click increments it. Its state is a bare
+    /// `u32`, so it knows nothing about whatever larger app embeds it — that is
+    /// exactly what makes it reusable.
+    ///
+    /// This is the canonical `xilem_core::lens` *component* shape
+    /// (`Fn(&mut ChildState) -> impl View<ChildState, …>`, as in the upstream
+    /// `lens(date_picker, |state| &mut state.date)` example), so it slots into
+    /// `lens` directly. (The plan sketched a zero-arg `counter_button()`; the
+    /// component must read the count to render its text, so it takes `&mut u32`,
+    /// the real `lens` component signature.)
+    fn counter_button(
+        count: &mut u32,
+    ) -> impl View<u32, (), ServalCtx, Element = ServalElement> + use<> {
+        on_click(
+            el::<_, u32, ()>("button", count.to_string()),
+            |c: &mut u32, _ev| *c += 1,
+        )
+    }
+
+    /// The composing app: two independent counters, each a `counter_button`
+    /// lensed onto its own field of `App`. `lens` is a stock `xilem_core` view —
+    /// it is generic over `Context: ViewPathTracker`, so it drives `ServalCtx`
+    /// with no serval-side impl.
+    struct App {
+        left: u32,
+        right: u32,
+    }
+
+    fn app_view(_s: &App) -> impl View<App, (), ServalCtx, Element = ServalElement> + use<> {
+        el::<_, App, ()>(
+            "div",
+            (
+                lens(counter_button, |s: &mut App| &mut s.left),
+                lens(counter_button, |s: &mut App| &mut s.right),
+            ),
+        )
+    }
+
+    /// State composition via `lens`: two independently-stateful counter buttons,
+    /// each lensed onto its own `App` field. Clicking the *left* button must
+    /// increment only `App::left` (sub-state isolation), and the rebuild must
+    /// reflect the new count in the *left* button's DOM text while the right
+    /// button's text is untouched.
+    #[test]
+    fn lens_composes_two_independent_counters() {
+        let dom: Rc<RefCell<ScriptedDom>> = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner =
+            ServalAppRunner::<_, _, _, ()>::new(dom.clone(), app_view, App { left: 0, right: 0 });
+        let root = runner.root();
+
+        // Two <button>s, addressable by DOM order (left first, right second).
+        let (left_button, right_button) = {
+            let dom_ref = dom.borrow();
+            let buttons = collect_elements_by_name(&dom_ref, root, "button");
+            assert_eq!(buttons.len(), 2, "the app should render two buttons");
+            (buttons[0], buttons[1])
+        };
+
+        // The button text reads its own count.
+        let button_text = |dom: &ScriptedDom, b: NodeId| text_child(dom, b);
+        {
+            let dom_ref = dom.borrow();
+            assert_eq!(button_text(&dom_ref, left_button).as_deref(), Some("0"));
+            assert_eq!(button_text(&dom_ref, right_button).as_deref(), Some("0"));
+        }
+        assert_eq!((runner.state().left, runner.state().right), (0, 0));
+
+        // Click ONLY the left button.
+        runner.dispatch_click(left_button, PointerClick { local: (0.0, 0.0) });
+
+        // (a) sub-state isolation: only `left` incremented.
+        assert_eq!(
+            (runner.state().left, runner.state().right),
+            (1, 0),
+            "clicking the left counter must touch only App::left"
+        );
+
+        // (b) the rebuild updated the left button's DOM text, not the right's.
+        // Node identity is stable across the rebuild (the text node is mutated in
+        // place), so the captured `NodeId`s still address the same buttons.
+        {
+            let dom_ref = dom.borrow();
+            let buttons = collect_elements_by_name(&dom_ref, runner.root(), "button");
+            assert_eq!(buttons.len(), 2);
+            assert_eq!(
+                button_text(&dom_ref, buttons[0]).as_deref(),
+                Some("1"),
+                "left button text should follow App::left"
+            );
+            assert_eq!(
+                button_text(&dom_ref, buttons[1]).as_deref(),
+                Some("0"),
+                "right button text must be unchanged"
+            );
+        }
+
+        // And the mirror: clicking the right button now moves only `right`.
+        runner.dispatch_click(right_button, PointerClick { local: (0.0, 0.0) });
+        assert_eq!(
+            (runner.state().left, runner.state().right),
+            (1, 1),
+            "clicking the right counter must touch only App::right"
+        );
+    }
+
+    // --- MARK: Stage 3a — action bubbling (OptionalAction + map_action) --------
+
+    /// A child component with its *own* `Action`: a `<button>` whose click does
+    /// not mutate any state directly but returns a [`Bump`] action. The action
+    /// is meaningless on its own — a parent decides what it means, via
+    /// [`map_action`]. `Bump` opts into [`xilem_serval::Action`] so
+    /// `OptionalAction` treats it as a bubbling action rather than `()`.
+    #[derive(Clone, Debug, PartialEq)]
+    struct Bump;
+    impl xilem_serval::Action for Bump {}
+
+    /// The child view's state is a bare `()`: it owns no state, it only emits
+    /// `Bump`. This is the action-first analogue of `counter_button`.
+    fn bump_button() -> impl View<(), Bump, ServalCtx, Element = ServalElement> + use<> {
+        on_click(el::<_, (), Bump>("button", "+"), |_s: &mut (), _ev| Bump)
+    }
+
+    /// The parent app: it owns the count and interprets the child's `Bump` as
+    /// "increment me". `map_action(child, |state, action| …)` is the stock
+    /// `xilem_core` view that turns the child's `Action = Bump` into a parent
+    /// effect (mutating `Parent::count`) and a parent `Action = ()`. The child's
+    /// `State` is `()`, so it is wrapped in a `lens` onto a throwaway field to
+    /// bridge it under the parent state.
+    struct Parent {
+        count: u32,
+        /// A unit sub-state the child component is lensed onto (the child's
+        /// `State = ()`), so `map_action` can sit over it under `Parent`.
+        unit: (),
+    }
+
+    fn parent_view(
+        _s: &Parent,
+    ) -> impl View<Parent, (), ServalCtx, Element = ServalElement> + use<> {
+        // The child emits `Bump` over `State = ()`; lens it onto `Parent::unit`
+        // so it composes under `Parent`, then `map_action` interprets the
+        // bubbled `Bump` as a parent-side increment.
+        let child = lens(|_unit: &mut ()| bump_button(), |p: &mut Parent| &mut p.unit);
+        el::<_, Parent, ()>(
+            "div",
+            map_action(child, |p: &mut Parent, _action: Bump| {
+                p.count += 1;
+            }),
+        )
+    }
+
+    /// Action bubbling: the child's `on_click` returns a `Bump` action (not
+    /// unit), which `OptionalAction` turns into `MessageResult::Action(Bump)`;
+    /// `map_action` intercepts it, applies the parent effect (`count += 1`), and
+    /// re-labels the result as the parent's action type. Dispatching the click
+    /// must run that mapped effect — the parent *observes and handles* the mapped
+    /// child action.
+    #[test]
+    fn action_bubbles_and_maps_to_parent_effect() {
+        let dom: Rc<RefCell<ScriptedDom>> = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            parent_view,
+            Parent { count: 0, unit: () },
+        );
+        let root = runner.root();
+
+        let button = {
+            let dom_ref = dom.borrow();
+            find_element_by_name(&dom_ref, root, "button").expect("a <button> must exist")
+        };
+
+        assert_eq!(runner.state().count, 0);
+
+        // The child's `Bump` bubbles as `MessageResult::Action(Bump)`;
+        // `map_action`'s map fn runs the *parent effect* (`count += 1`) and
+        // re-labels the result as the parent's `Action` — here `()`. So the
+        // primary observable is the parent state mutation. (`map_action` maps the
+        // action type rather than swallowing it, so the relabelled `()` still
+        // surfaces at the root; the runner collects it as one `()` entry — that
+        // is expected, not a failure.)
+        let bubbled = runner.dispatch_click(button, PointerClick { local: (0.0, 0.0) });
+        assert_eq!(
+            runner.state().count,
+            1,
+            "the child Bump action must map to the parent's increment effect"
+        );
+        assert_eq!(
+            bubbled,
+            vec![()],
+            "map_action relabels Bump -> parent () action, which reaches the root"
+        );
+    }
+
+    /// The complementary half: an action that is *not* consumed by any
+    /// `map_action` reaches the root, where the runner collects it from
+    /// `dispatch_click`. This proves `MessageResult::Action` threads all the way
+    /// through the runner's `Action` home, and that the runner is generic over a
+    /// non-`()` root action.
+    #[test]
+    fn unmapped_action_reaches_the_runner() {
+        let dom: Rc<RefCell<ScriptedDom>> = Rc::new(RefCell::new(ScriptedDom::new()));
+        // The root view's Action IS `Bump`: the child's action bubbles straight
+        // to the root with no `map_action` in between, so the runner's Action
+        // type unifies to `Bump`.
+        fn root_view(_s: &()) -> impl View<(), Bump, ServalCtx, Element = ServalElement> + use<> {
+            el::<_, (), Bump>("div", bump_button())
+        }
+
+        let mut runner = ServalAppRunner::<_, _, _, Bump>::new(dom.clone(), root_view, ());
+        let root = runner.root();
+
+        let button = {
+            let dom_ref = dom.borrow();
+            find_element_by_name(&dom_ref, root, "button").expect("a <button> must exist")
+        };
+
+        let bubbled = runner.dispatch_click(button, PointerClick { local: (0.0, 0.0) });
+        assert_eq!(
+            bubbled,
+            vec![Bump],
+            "an unmapped child action must surface from dispatch_click as a root Action"
         );
     }
 }

@@ -24,9 +24,11 @@
 //! DOM. The timer tick that drives [`update`](ServalAppRunner::update) and the
 //! window event that drives dispatch are the host's concern.
 
+use core::marker::PhantomData;
+
 use layout_dom_api::{LayoutDom, LayoutDomMut};
 use serval_scripted_dom::NodeId;
-use xilem_core::{DynMessage, Environment, MessageCtx, View, ViewId};
+use xilem_core::{DynMessage, Environment, MessageCtx, MessageResult, View, ViewId};
 
 use crate::{DomHandle, PointerClick, ServalCtx, ServalElement, ServalElementMut};
 
@@ -37,11 +39,20 @@ use crate::{DomHandle, PointerClick, ServalCtx, ServalElement, ServalElementMut}
 /// minus the `&mut State` — Stage 1b has no message handlers mutating state
 /// from inside a view, so the logic only *reads* state). `V` is the root view;
 /// its element is always the uniform [`ServalElement`].
-pub struct ServalAppRunner<State, Logic, V>
+///
+/// `Action` is the root view's action type. Stage 2b used `()` exclusively (a
+/// handler mutates state and the runner rebuilds). Stage 3a generalizes it so an
+/// action can *reach the root*: when a click handler returns an action that no
+/// parent [`map_action`](xilem_core::map_action) consumes, it surfaces as a
+/// [`MessageResult::Action`] which [`dispatch_click`](Self::dispatch_click)
+/// collects and returns. The common `Action = ()` case is the no-op it was — a
+/// `()` action carries nothing to observe.
+pub struct ServalAppRunner<State, Logic, V, Action = ()>
 where
     State: 'static,
+    Action: 'static,
     Logic: FnMut(&State) -> V,
-    V: View<State, (), ServalCtx, Element = ServalElement>,
+    V: View<State, Action, ServalCtx, Element = ServalElement>,
 {
     dom: DomHandle,
     ctx: ServalCtx,
@@ -52,13 +63,15 @@ where
     /// The retained root element produced by the current `view`. Its `node`
     /// stays attached under the document root for the runner's lifetime.
     root: ServalElement,
+    phantom: PhantomData<fn() -> Action>,
 }
 
-impl<State, Logic, V> ServalAppRunner<State, Logic, V>
+impl<State, Logic, V, Action> ServalAppRunner<State, Logic, V, Action>
 where
     State: 'static,
+    Action: 'static,
     Logic: FnMut(&State) -> V,
-    V: View<State, (), ServalCtx, Element = ServalElement>,
+    V: View<State, Action, ServalCtx, Element = ServalElement>,
 {
     /// Build the initial tree from `state` and attach its root under the
     /// document root.
@@ -83,6 +96,7 @@ where
             view,
             view_state,
             root,
+            phantom: PhantomData,
         }
     }
 
@@ -149,7 +163,15 @@ where
     ///
     /// Paths are collected **before** any routing so the immutable `ctx`/`dom`
     /// borrows are released before the `&mut self` message + rebuild borrows.
-    pub fn dispatch_click(&mut self, target: NodeId, event: PointerClick) {
+    ///
+    /// Returns the [`Action`]s that bubbled all the way to the root — i.e. any
+    /// handler action no parent [`map_action`](xilem_core::map_action) absorbed,
+    /// surfacing as [`MessageResult::Action`]. With `Action = ()` (the Stage 2b
+    /// path) handlers mutate state in place and this is an empty `Vec`, so old
+    /// call sites can ignore the return; an action-bubbling app reads it to drive
+    /// the next effect. This is the runner's minimal home for `Action` — no
+    /// callback sink, just the collected results.
+    pub fn dispatch_click(&mut self, target: NodeId, event: PointerClick) -> Vec<Action> {
         // 1. + 2. Bubble walk (target → … → document), collecting the routing
         //    path of every ancestor that carries a click handler. Done under
         //    short-lived shared borrows of `dom` and `ctx`, fully released
@@ -169,12 +191,14 @@ where
 
         if paths.is_empty() {
             // No handler anywhere on the chain: nothing routed, no rebuild.
-            return;
+            return Vec::new();
         }
 
         // 3. Route the event down each collected path through the faithful
         //    message cycle. The disjoint-field destructure mirrors `rebuild`,
-        //    so `View::message`'s borrow set does not alias `self`.
+        //    so `View::message`'s borrow set does not alias `self`. Any action
+        //    that reaches the root (a `MessageResult::Action`) is collected.
+        let mut actions = Vec::new();
         {
             // `ctx` is not needed for routing: the recorded path is the full
             // routing target, so `View::message` walks it without the context.
@@ -197,16 +221,24 @@ where
                     node: &mut root.node,
                     dom: dom.clone(),
                 };
-                // The result is ignored: Stage 2b handlers mutate state in place
-                // (unit handler), so a rebuild below reflects the change. Action
-                // bubbling is a later extension.
-                let _ = view.message(view_state, &mut msg, mut_ref, state);
+                // Handlers may mutate state in place (a rebuild below reflects
+                // that) and/or bubble an `Action` up to the root. A root-level
+                // `MessageResult::Action(a)` is the runner's `Action` home: we
+                // collect it for the caller. `Action = ()` collects nothing
+                // meaningful (the Stage 2b path).
+                if let MessageResult::Action(a) =
+                    view.message(view_state, &mut msg, mut_ref, state)
+                {
+                    actions.push(a);
+                }
             }
         }
 
         // 4. Rebuild so the handler's state mutation reaches the DOM — the same
         //    tail `update` runs.
         self.rebuild();
+
+        actions
     }
 
     /// The shared document handle the runner mutates.
