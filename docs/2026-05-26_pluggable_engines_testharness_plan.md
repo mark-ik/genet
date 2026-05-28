@@ -178,9 +178,22 @@ lifetime.
 
    **W0 is essentially complete.** Remaining DOM breadth is later tiers:
    the `Element` / `Text` split (all wrappers are `Node` today) and W2
-   reflection. Remaining at the shell toward loading `testharness.js`:
-   Promise microtask draining (needs an engine `pump_microtasks`
-   primitive) and `postMessage`.
+   reflection.
+
+   **Microtasks (done 2026-05-27).** `ScriptEngine::pump_microtasks`
+   drains the Promise job queue to quiescence — the last engine-trait
+   gap (everything else rode `eval` + `set_function` + host data). Nova
+   needed a custom `HostHooks` capturing promise/generic/timeout jobs
+   into a shared queue (`Job`s are `'static`, so queuing across GC is
+   safe; the hooks are leaked per engine for the `&'static` requirement);
+   Boa forwards to `Context::run_jobs`. The runtime runs a microtask
+   checkpoint via `run_microtasks` and around the timer batch in
+   `run_event_loop` (coarse interleaving; per-task checkpoints later).
+   Validated on both backends: `.then` continuations, chained drains,
+   and a promise resolved inside a timer.
+
+   Remaining at the shell toward loading `testharness.js`: `postMessage`,
+   then the harness load + results bridge (step 3).
 3. **Load `testharness.js` on Nova** and add the results bridge. This is
    WPT runner phase 3
    ([wpt runner plan](./2026-05-26_wpt_runner_plan.md), gated here).

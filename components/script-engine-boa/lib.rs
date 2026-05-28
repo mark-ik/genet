@@ -179,6 +179,12 @@ impl ScriptEngine for BoaEngine {
             NativeFunction::from_fn_ptr(trampoline::<F>),
         )
     }
+
+    fn pump_microtasks(&mut self) {
+        // Boa's default executor (SimpleJobExecutor) runs the promise-job queue to
+        // completion, including jobs enqueued while running.
+        let _ = self.ctx.run_jobs();
+    }
 }
 
 impl ScriptEngineLive for BoaEngine {

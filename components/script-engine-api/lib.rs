@@ -84,6 +84,13 @@ pub trait ScriptEngine: Sized {
         name: &str,
         length: usize,
     ) -> Result<(), Self::Error>;
+
+    /// Run pending microtasks (Promise reaction jobs) to quiescence: drain the job
+    /// queue, including jobs enqueued while draining. The host calls this at task
+    /// boundaries (after the initial script, between timer tasks) so Promise
+    /// continuations resolve. Errors thrown by a job are swallowed (an unhandled
+    /// rejection is not the host's failure).
+    fn pump_microtasks(&mut self);
 }
 
 /// A native (Rust) callback exposed to JS, implemented by a zero-sized type so the

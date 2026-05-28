@@ -12,19 +12,53 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
+    use std::any::Any;
     use std::cell::RefCell;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
     use std::rc::Rc;
 
     use nova_vm::{
         ecmascript::{
-            Agent, AgentOptions, ArgumentsList, Behaviour, BuiltinFunctionArgs, DefaultHostHooks,
-            EmbedderObject, ExceptionType, GcAgent, InternalMethods, PropertyDescriptor,
+            Agent, AgentOptions, ArgumentsList, Behaviour, BuiltinFunctionArgs, EmbedderObject,
+            ExceptionType, GcAgent, HostHooks, InternalMethods, Job, PropertyDescriptor,
             PropertyKey, RealmRoot, String as JsString, Value, create_builtin_function,
             parse_script, script_evaluation,
         },
         engine::{Bindable, GcScope, Global},
     };
+
+    /// Host hooks that capture promise/generic/timeout jobs into a shared queue the
+    /// engine drains in `pump_microtasks`. Nova hands jobs to the host via these
+    /// hooks (which take only `&self`), so the queue lives here and is shared with
+    /// the engine by `Rc`. Jobs are `'static` (they own rooted handles), so queuing
+    /// them across GC is safe.
+    struct ServalHostHooks {
+        jobs: Rc<RefCell<VecDeque<Job>>>,
+    }
+
+    // `HostHooks: Debug`, but `Job` is not `Debug`, so report the queue length only.
+    impl std::fmt::Debug for ServalHostHooks {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("ServalHostHooks").field("queued", &self.jobs.borrow().len()).finish()
+        }
+    }
+
+    impl HostHooks for ServalHostHooks {
+        fn enqueue_generic_job(&self, job: Job) {
+            self.jobs.borrow_mut().push_back(job);
+        }
+        fn enqueue_promise_job(&self, job: Job) {
+            self.jobs.borrow_mut().push_back(job);
+        }
+        fn enqueue_timeout_job(&self, job: Job, _milliseconds: u64) {
+            self.jobs.borrow_mut().push_back(job);
+        }
+        fn get_host_data(&self) -> &dyn Any {
+            // Unused: serval reaches host state through the realm `[[HostDefined]]`
+            // slot, not this hook.
+            &()
+        }
+    }
     use script_engine_api::{
         CallCx, HostData, NativeFn, ReflectorData, ScriptEngine, ScriptEngineLive,
     };
@@ -174,6 +208,7 @@ mod native {
     pub struct NovaEngine {
         agent: GcAgent,
         realm: RealmRoot,
+        jobs: Rc<RefCell<VecDeque<Job>>>,
     }
 
     impl ScriptEngine for NovaEngine {
@@ -183,12 +218,18 @@ mod native {
         type CallCx<'a> = NovaCallCx<'a>;
 
         fn new() -> Result<Self, Self::Error> {
-            let mut agent = GcAgent::new(AgentOptions::default(), &DefaultHostHooks);
+            // The hooks must be `&'static`; leak one per engine (a few words +
+            // shared queue handle). Acceptable for the engine lifetime; the proper
+            // fix is a non-'static hooks API upstream.
+            let jobs: Rc<RefCell<VecDeque<Job>>> = Rc::new(RefCell::new(VecDeque::new()));
+            let hooks: &'static ServalHostHooks =
+                Box::leak(Box::new(ServalHostHooks { jobs: jobs.clone() }));
+            let mut agent = GcAgent::new(AgentOptions::default(), hooks);
             let realm = agent.create_default_realm();
             // The realm owns the host slot (neutral DOM + reflector cache) for its
             // whole life; `set_host_data` later fills the neutral half.
             realm.initialize_host_defined(&mut agent, Rc::new(NovaHostSlot::new()));
-            Ok(Self { agent, realm })
+            Ok(Self { agent, realm, jobs })
         }
 
         fn eval(&mut self, source: &str) -> Result<Self::Value, Self::Error> {
@@ -215,7 +256,7 @@ mod native {
 
         fn value_to_string(&mut self, value: &Self::Value) -> Result<String, Self::Error> {
             let mut out = Err("value_to_string did not run".to_string());
-            self.agent.run_in_realm(&self.realm, |agent, mut gc| {
+            self.agent.run_in_realm(&self.realm, |agent, gc| {
                 let v = value.get(agent, gc.nogc()).unbind();
                 match v.to_string(agent, gc) {
                     Ok(s) => out = Ok(s.to_string_lossy(agent).into_owned()),
@@ -278,6 +319,17 @@ mod native {
                 }
             });
             out
+        }
+
+        fn pump_microtasks(&mut self) {
+            // Drain to quiescence: a job may enqueue more (chained `.then`), so loop
+            // until the queue empties. Each job consumes itself in `run`.
+            loop {
+                let Some(job) = self.jobs.borrow_mut().pop_front() else { break };
+                self.agent.run_in_realm(&self.realm, |agent, gc| {
+                    let _ = job.run(agent, gc);
+                });
+            }
         }
     }
 

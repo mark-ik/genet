@@ -80,12 +80,22 @@ impl<E: ScriptEngine> Runtime<E> {
         self.engine.eval(source)
     }
 
+    /// Drain pending microtasks (Promise reaction jobs) to quiescence — a microtask
+    /// checkpoint. Run it after evaluating script so Promise continuations resolve.
+    pub fn run_microtasks(&mut self) {
+        self.engine.pump_microtasks();
+    }
+
     /// Drive the event loop: fire pending timers in `(delay, insertion-order)`
     /// order, up to `budget` firings (the cap bounds `setInterval`, which
-    /// re-enqueues itself). Cooperative: delays order tasks, they do not wait.
-    /// Returns when the queue drains or the budget is spent.
+    /// re-enqueues itself). Cooperative: delays order tasks, they do not wait. A
+    /// microtask checkpoint runs before and after the timer batch (coarse
+    /// interleaving; per-task checkpoints are a later refinement). Returns when the
+    /// queue drains or the budget is spent.
     pub fn run_event_loop(&mut self, budget: u32) -> Result<(), E::Error> {
+        self.engine.pump_microtasks();
         self.engine.eval(&format!("globalThis.__runTimers({budget})"))?;
+        self.engine.pump_microtasks();
         Ok(())
     }
 
@@ -312,9 +322,48 @@ mod tests {
         assert_eq!(rt.host().borrow().console, vec!["false", "true"]);
     }
 
+    /// Microtasks, against any backend: Promise continuations do not run until a
+    /// checkpoint, then drain to quiescence (chained `.then` runs fully), and a
+    /// promise resolved inside a timer callback drains during the event loop.
+    fn microtasks_work<E: ScriptEngine>() {
+        let mut rt = Runtime::<E>::new().expect("runtime");
+
+        rt.eval(
+            "Promise.resolve('v').then(function(v){ console.log('then:' + v); });\
+             Promise.resolve().then(function(){ console.log('a'); }).then(function(){ console.log('b'); });",
+        )
+        .expect("promise script");
+
+        // Nothing runs until the checkpoint.
+        assert!(rt.host().borrow().console.is_empty());
+
+        rt.run_microtasks();
+        // Both chains drained, in enqueue order (a's second .then is queued after the
+        // first then: and a callbacks run).
+        assert_eq!(rt.host().borrow().console, vec!["then:v", "a", "b"]);
+
+        // A promise resolved inside a timer callback drains during run_event_loop.
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.eval("setTimeout(function(){ Promise.resolve().then(function(){ console.log('timer-microtask'); }); }, 0);")
+            .expect("timer script");
+        rt.run_event_loop(10).expect("loop");
+        assert_eq!(rt.host().borrow().console, vec!["timer-microtask"]);
+    }
+
     #[test]
     fn host_surface_on_boa() {
         host_surface_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[test]
+    fn microtasks_on_boa() {
+        microtasks_work::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn microtasks_on_nova() {
+        microtasks_work::<script_engine_nova::NovaEngine>();
     }
 
     #[test]
