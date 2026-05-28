@@ -112,10 +112,33 @@ pub struct KeyEvent {
 /// unit handler is a [`MessageResult::Nop`], an action handler bubbles a
 /// [`MessageResult::Action`] that composes up through
 /// [`map_action`](xilem_core::map_action).
+///
+/// The propagation phase is the `capture` field, exactly as
+/// [`OnClick`](crate::OnClick): `false` (default) = bubble (`focus → root`),
+/// `true` (via [`OnKey::capture`]) = capture (`root → focus`). Registering a key
+/// handler marks the element focusable in *either* phase.
 pub struct OnKey<V, State, Action, F> {
     child: V,
     handler: F,
+    /// The propagation phase: `true` = capture, `false` = bubble (default).
+    capture: bool,
     phantom: PhantomData<fn() -> (State, Action)>,
+}
+
+impl<V, State, Action, F> OnKey<V, State, Action, F> {
+    /// Set whether this listener fires in the **capture** phase (`root → focus`)
+    /// instead of the default **bubble** phase (`focus → root`). Default
+    /// `false`, mirroring [`OnClick::capture`](crate::OnClick::capture) and the
+    /// browser.
+    ///
+    /// A capture key listener on an ancestor fires *before* a bubble listener on
+    /// the focused node (or a descendant). A listener fires in exactly one
+    /// phase, so switching this never double-fires the same handler.
+    /// Focusability is unaffected: the element is focusable in either phase.
+    pub fn capture(mut self, value: bool) -> Self {
+        self.capture = value;
+        self
+    }
 }
 
 /// Attach a native key handler to `child`, making `child`'s element focusable.
@@ -128,9 +151,9 @@ pub struct OnKey<V, State, Action, F> {
 /// [`MessageResult::Action`]. The runner rebuilds the view tree afterwards so
 /// any state change reaches the DOM.
 ///
-/// Registering a key handler is also what makes `child`'s node *focusable*:
-/// [`ServalCtx::key_path`](crate::ServalCtx::key_path) returns `Some` for it, and
-/// a click on it (or a descendant) focuses it.
+/// Registering a key handler is also what makes `child`'s node *focusable*
+/// (in either phase): [`ServalCtx::is_focusable`](crate::ServalCtx::is_focusable)
+/// returns `true` for it, and a click on it (or a descendant) focuses it.
 pub fn on_key<V, State, Action, OA, F>(child: V, handler: F) -> OnKey<V, State, Action, F>
 where
     State: 'static,
@@ -142,6 +165,8 @@ where
     OnKey {
         child,
         handler,
+        // Default to the bubble phase, matching the browser and `OnClick`.
+        capture: false,
         phantom: PhantomData,
     }
 }
@@ -174,9 +199,11 @@ where
         ctx.with_id(ON_KEY_ID, |ctx| {
             let (element, child_state) = self.child.build(ctx, app_state);
             let node = element.node;
-            // The routing path *to this handler*: it ends in `ON_KEY_ID`.
+            // The routing path *to this handler*: it ends in `ON_KEY_ID`. The
+            // phase (`self.capture`) is stored alongside it so dispatch routes
+            // this listener in the matching pass.
             let path = ctx.view_path().to_vec();
-            ctx.register_key(node, path);
+            ctx.register_key(node, path, self.capture);
             (element, OnKeyState { child_state, node })
         })
     }
@@ -206,7 +233,7 @@ where
             if node != prev_node {
                 ctx.unregister_key(prev_node);
                 let path = ctx.view_path().to_vec();
-                ctx.register_key(node, path);
+                ctx.register_key(node, path, self.capture);
                 view_state.node = node;
             }
         });

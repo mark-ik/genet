@@ -152,6 +152,47 @@ where
         *view = next;
     }
 
+    /// Build the routing paths for `chain` in DOM propagation order
+    /// (**capture → target → bubble**), the shared core of
+    /// [`dispatch_click`](Self::dispatch_click) and
+    /// [`dispatch_key`](Self::dispatch_key).
+    ///
+    /// `chain` is the ancestor list in `target → … → document` order. `lookup`
+    /// resolves a node's [`Handler`](crate::context::Handler) for the relevant
+    /// event type (click or key). The result interleaves the two phases:
+    ///   * **Capture pass** — `chain` *reversed* (`root → target`), keeping only
+    ///     handlers whose `capture == true`.
+    ///   * **Bubble pass** — `chain` as given (`target → root`), keeping only
+    ///     handlers whose `capture == false`.
+    ///
+    /// Each node's lone listener matches exactly one phase, so it contributes at
+    /// most one path and never double-fires. Collected entirely under a shared
+    /// `&self` borrow (clones the paths) so the borrow releases before routing.
+    fn phase_ordered_paths(
+        &self,
+        chain: &[NodeId],
+        lookup: impl Fn(&ServalCtx, NodeId) -> Option<&crate::context::Handler>,
+    ) -> Vec<Vec<ViewId>> {
+        let mut paths = Vec::new();
+        // Capture pass: root → target (chain reversed), capture listeners only.
+        for &node in chain.iter().rev() {
+            if let Some(handler) = lookup(&self.ctx, node) {
+                if handler.capture {
+                    paths.push(handler.path.clone());
+                }
+            }
+        }
+        // Bubble pass: target → root (chain order), bubble listeners only.
+        for &node in chain {
+            if let Some(handler) = lookup(&self.ctx, node) {
+                if !handler.capture {
+                    paths.push(handler.path.clone());
+                }
+            }
+        }
+        paths
+    }
+
     /// Dispatch a native pointer click that hit `target`.
     ///
     /// `target` is the node serval's hit-test resolved the pointer to (the
@@ -159,13 +200,18 @@ where
     /// faithful-routing dispatch: no native handler registry of `Rc<dyn Fn>`,
     /// just the `xilem_core` message cycle the browser path also uses.
     ///
-    /// The walk is **bubble phase** (target → root), the DOM default. For each
-    /// ancestor, if [`ServalCtx::click_path`] has a handler, its routing path is
-    /// collected; then each collected path is routed through `view.message`. A
-    /// later refinement can add a capture phase (root → target before bubble)
-    /// and per-listener phase flags — the walk is structured target-first so
-    /// capture is a reversed pre-pass, not a rewrite. Bubble-only here avoids
-    /// double-firing a single handler.
+    /// Dispatch runs the full DOM propagation order, **capture → target →
+    /// bubble**. The ancestor chain (`target → … → document`) is collected once;
+    /// then the event is routed in two passes:
+    ///   * **Capture pass** — the chain *reversed* (`root → target` order),
+    ///     routing only handlers registered with `capture == true`.
+    ///   * **Bubble pass** — the chain in its natural `target → root` order,
+    ///     routing only handlers with `capture == false` (the default).
+    ///
+    /// A node's single click listener is registered in exactly one phase, so it
+    /// appears in exactly one pass and never double-fires. A `.capture(true)`
+    /// ancestor therefore fires before a default (bubble) descendant/target,
+    /// yielding the browser/`xilem_web` ordering.
     ///
     /// Paths are collected **before** any routing so the immutable `ctx`/`dom`
     /// borrows are released before the `&mut self` message + rebuild borrows.
@@ -180,39 +226,45 @@ where
     ///
     /// Stage 3b — **click-to-focus.** After routing + rebuild, focus is set to
     /// the nearest ancestor of `target` (including `target` itself) that carries
-    /// a key handler (is focusable, per [`ServalCtx::key_path`]); if none is
-    /// found, focus is cleared to `None`. So clicking a focusable element focuses
-    /// it and clicking elsewhere defocuses. This is independent of whether any
-    /// *click* handler fired — a focusable element need not have an `on_click`.
+    /// a key handler (is focusable, per
+    /// [`ServalCtx::is_focusable`](crate::ServalCtx::is_focusable), in either
+    /// phase); if none is found, focus is cleared to `None`. So clicking a
+    /// focusable element focuses it and clicking elsewhere defocuses. This is
+    /// independent of whether any *click* handler fired — a focusable element
+    /// need not have an `on_click`.
     pub fn dispatch_click(&mut self, target: NodeId, event: PointerClick) -> Vec<Action> {
-        // 1. + 2. Bubble walk (target → … → document), collecting the routing
-        //    path of every ancestor that carries a click handler, and — in the
-        //    same walk — finding the nearest focusable (key-handler-bearing)
-        //    ancestor for click-to-focus. Done under short-lived shared borrows
-        //    of `dom` and `ctx`, fully released before routing.
-        let (paths, new_focus): (Vec<Vec<ViewId>>, Option<NodeId>) = {
+        // 1. Collect the ancestor chain (target → … → document) once, and — in
+        //    the same walk — find the nearest focusable (key-handler-bearing)
+        //    ancestor for click-to-focus. Done under a short-lived shared borrow
+        //    of `dom`, fully released before routing.
+        let (chain, new_focus): (Vec<NodeId>, Option<NodeId>) = {
             let dom = self.dom.borrow();
-            let mut paths = Vec::new();
+            let mut chain = Vec::new();
             let mut focus = None;
             let mut current = Some(target);
             while let Some(node) = current {
-                if let Some(path) = self.ctx.click_path(node) {
-                    paths.push(path.to_vec());
-                }
+                chain.push(node);
                 // The first (nearest) focusable ancestor wins; the walk runs
-                // target → root, so the first hit is the deepest.
-                if focus.is_none() && self.ctx.key_path(node).is_some() {
+                // target → root, so the first hit is the deepest. Focusability
+                // is phase-independent (presence in the key registry).
+                if focus.is_none() && self.ctx.is_focusable(node) {
                     focus = Some(node);
                 }
                 current = dom.parent(node);
             }
-            (paths, focus)
+            (chain, focus)
         };
 
         // Click-to-focus: focus the nearest focusable ancestor, or clear it when
         // the click landed outside any focusable element. Independent of whether
         // a click handler fired below.
         self.focus = new_focus;
+
+        // 2. Build the routing paths in propagation order: capture pass first
+        //    (chain reversed → root → target, capture==true handlers only), then
+        //    bubble pass (chain as-is → target → root, capture==false only). A
+        //    node's lone listener is in exactly one phase, so it routes once.
+        let paths = self.phase_ordered_paths(&chain, |ctx, node| ctx.click_handler(node));
 
         if paths.is_empty() {
             // No click handler anywhere on the chain: nothing routed, no rebuild.
@@ -292,15 +344,16 @@ where
     /// `Vec` and runs no routing or rebuild (no focused node = nowhere to send
     /// keys). Otherwise it mirrors [`dispatch_click`](Self::dispatch_click)
     /// exactly, but rooted at the *focused* node rather than a hit-test target:
-    /// it bubble-walks `focus → … → document` over `dom.parent`, collects each
-    /// ancestor's [`key_path`](ServalCtx::key_path), routes a [`KeyEvent`] down
-    /// each via the faithful `MessageCtx`/`View::message` cycle, then rebuilds —
-    /// returning the actions that reached the root.
+    /// it collects the chain `focus → … → document` over `dom.parent`, then
+    /// routes a [`KeyEvent`] in **capture → target → bubble** order through the
+    /// faithful `MessageCtx`/`View::message` cycle, then rebuilds — returning the
+    /// actions that reached the root.
     ///
-    /// The walk is **bubble phase** (focus → root): a key handler on a parent
-    /// fires when the focused descendant has none, matching DOM key bubbling. A
-    /// capture pre-pass and per-listener phase flags are the same later
-    /// refinement noted on `dispatch_click`.
+    /// The two passes match [`dispatch_click`](Self::dispatch_click): the capture
+    /// pass walks the chain reversed (`root → focus`, capture listeners), the
+    /// bubble pass walks it as-is (`focus → root`, bubble listeners). A key
+    /// handler on a parent fires when the focused descendant has none, matching
+    /// DOM key bubbling; a capture key handler on an ancestor fires first.
     ///
     /// As in `dispatch_click`, paths are collected **before** any routing so the
     /// immutable `ctx`/`dom` borrows release before the `&mut self` message +
@@ -311,20 +364,21 @@ where
             return Vec::new();
         };
 
-        // 1. + 2. Bubble walk (focus → … → document), collecting the routing
-        //    path of every ancestor that carries a key handler.
-        let paths: Vec<Vec<ViewId>> = {
+        // 1. Collect the ancestor chain (focus → … → document) once.
+        let chain: Vec<NodeId> = {
             let dom = self.dom.borrow();
-            let mut paths = Vec::new();
+            let mut chain = Vec::new();
             let mut current = Some(focus);
             while let Some(node) = current {
-                if let Some(path) = self.ctx.key_path(node) {
-                    paths.push(path.to_vec());
-                }
+                chain.push(node);
                 current = dom.parent(node);
             }
-            paths
+            chain
         };
+
+        // 2. Build the routing paths in propagation order (capture then bubble),
+        //    exactly as `dispatch_click` does for clicks.
+        let paths = self.phase_ordered_paths(&chain, |ctx, node| ctx.key_handler(node));
 
         if paths.is_empty() {
             // The focused node (and its ancestors) carry no key handler — e.g.

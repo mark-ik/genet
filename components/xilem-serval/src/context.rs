@@ -10,12 +10,37 @@
 //! [`ScriptedDom`] every view mutates, and the native click-handler registry
 //! (Stage 2b's stand-in for the browser's `addEventListener`) plus the parallel
 //! key-handler registry (Stage 3b, which also defines focusability).
+//!
+//! The capture-phase slice of Stage 3 gives each registered handler a *phase*
+//! ([`Handler::capture`]): a listener registered with `capture == true` fires in
+//! the `root → target` capture pass, one with `capture == false` (the
+//! browser/`xilem_web` default) in the `target → root` bubble pass. A node still
+//! has at most one click and one key handler, so the registry value carries the
+//! phase alongside the routing path rather than holding a list.
 
 use std::collections::HashMap;
 
 use crate::DomHandle;
 use serval_scripted_dom::NodeId;
 use xilem_core::{Environment, ViewId, ViewPathTracker};
+
+/// A registered event handler: its routing view path plus the propagation phase
+/// it listens in.
+///
+/// One per node per event type (a node carries at most one `on_click` and one
+/// `on_key`). `path` is the `view_path()` captured inside the handler's
+/// `with_id` (so it ends in the handler's marker id and routes straight to its
+/// `message`); `capture` is the per-listener phase set by
+/// [`OnClick::capture`](crate::OnClick::capture) /
+/// [`OnKey::capture`](crate::OnKey::capture) — `true` = capture phase
+/// (`root → target`), `false` (default) = bubble phase (`target → root`).
+#[derive(Clone, Debug)]
+pub struct Handler {
+    /// The routing view path to the handler's `message`.
+    pub path: Vec<ViewId>,
+    /// The phase this listener fires in: `true` = capture, `false` = bubble.
+    pub capture: bool,
+}
 
 /// The [`ViewPathTracker`] context for all serval views.
 ///
@@ -42,16 +67,17 @@ pub struct ServalCtx {
     id_path: Vec<ViewId>,
     environment: Environment,
     dom: DomHandle,
-    /// `NodeId → routing view path` for click handlers. One handler per node is
-    /// enough for Stage 2b (a node carries at most one `on_click`); the path is
+    /// `NodeId → `[`Handler`] for click handlers. One handler per node is
+    /// enough (a node carries at most one `on_click`); the [`Handler::path`] is
     /// the `view_path()` captured inside the handler's `with_id`, ending in
-    /// `ON_CLICK_ID`.
-    click_handlers: HashMap<NodeId, Vec<ViewId>>,
-    /// `NodeId → routing view path` for key handlers, the parallel of
+    /// `ON_CLICK_ID`, and [`Handler::capture`] is its propagation phase.
+    click_handlers: HashMap<NodeId, Handler>,
+    /// `NodeId → `[`Handler`] for key handlers, the parallel of
     /// [`click_handlers`](Self::click_handlers). The path is the `view_path()`
     /// captured inside [`OnKey`](crate::OnKey)'s `with_id`, ending in
-    /// `ON_KEY_ID`. Presence in this map is the definition of *focusable*.
-    key_handlers: HashMap<NodeId, Vec<ViewId>>,
+    /// `ON_KEY_ID`. Presence in this map is the definition of *focusable*,
+    /// **regardless of the handler's phase**.
+    key_handlers: HashMap<NodeId, Handler>,
 }
 
 impl ServalCtx {
@@ -71,14 +97,15 @@ impl ServalCtx {
         self.dom.clone()
     }
 
-    /// Register `path` as the routing path for click events targeting `node`.
+    /// Register `path` (in phase `capture`) as the click handler for `node`.
     ///
     /// Called by [`OnClick::build`](crate::OnClick) (and on rebuild when the
     /// wrapped node changes). `path` is the `view_path()` captured *inside* the
     /// handler's `with_id`, so it ends in `ON_CLICK_ID` and routes straight to
-    /// the handler's `message`.
-    pub fn register_click(&mut self, node: NodeId, path: Vec<ViewId>) {
-        self.click_handlers.insert(node, path);
+    /// the handler's `message`; `capture` is the per-listener phase
+    /// ([`OnClick::capture`](crate::OnClick::capture), default `false` = bubble).
+    pub fn register_click(&mut self, node: NodeId, path: Vec<ViewId>, capture: bool) {
+        self.click_handlers.insert(node, Handler { path, capture });
     }
 
     /// Drop the click handler registered for `node` (teardown, or before a
@@ -87,21 +114,23 @@ impl ServalCtx {
         self.click_handlers.remove(&node);
     }
 
-    /// The routing view path of the click handler on `node`, if one is
-    /// registered. The runner's dispatch walk consults this per ancestor.
-    pub fn click_path(&self, node: NodeId) -> Option<&[ViewId]> {
-        self.click_handlers.get(&node).map(Vec::as_slice)
+    /// The click [`Handler`] (routing path + phase) on `node`, if one is
+    /// registered. The runner's dispatch walk consults this per ancestor, in
+    /// both the capture and bubble passes.
+    pub fn click_handler(&self, node: NodeId) -> Option<&Handler> {
+        self.click_handlers.get(&node)
     }
 
-    /// Register `path` as the routing path for key events targeting `node`,
-    /// which also marks `node` focusable.
+    /// Register `path` (in phase `capture`) as the key handler for `node`, which
+    /// also marks `node` focusable.
     ///
     /// Called by [`OnKey::build`](crate::OnKey) (and on rebuild when the wrapped
     /// node changes). `path` is the `view_path()` captured *inside* the handler's
     /// `with_id`, so it ends in `ON_KEY_ID` and routes straight to the handler's
-    /// `message`.
-    pub fn register_key(&mut self, node: NodeId, path: Vec<ViewId>) {
-        self.key_handlers.insert(node, path);
+    /// `message`; `capture` is the per-listener phase
+    /// ([`OnKey::capture`](crate::OnKey::capture), default `false` = bubble).
+    pub fn register_key(&mut self, node: NodeId, path: Vec<ViewId>, capture: bool) {
+        self.key_handlers.insert(node, Handler { path, capture });
     }
 
     /// Drop the key handler registered for `node` (teardown, or before a
@@ -110,15 +139,26 @@ impl ServalCtx {
         self.key_handlers.remove(&node);
     }
 
-    /// The routing view path of the key handler on `node`, if one is registered.
+    /// The key [`Handler`] (routing path + phase) on `node`, if one is
+    /// registered.
     ///
-    /// `Some(_)` also means `node` is *focusable*: the runner's
-    /// [`dispatch_click`](crate::ServalAppRunner::dispatch_click) uses this both
-    /// to find the focus target (nearest focusable ancestor of a click) and, in
-    /// [`dispatch_key`](crate::ServalAppRunner::dispatch_key), to route from the
-    /// focused node up its ancestor chain.
-    pub fn key_path(&self, node: NodeId) -> Option<&[ViewId]> {
-        self.key_handlers.get(&node).map(Vec::as_slice)
+    /// `Some(_)` also means `node` is *focusable* — independent of the handler's
+    /// phase: the runner's
+    /// [`dispatch_click`](crate::ServalAppRunner::dispatch_click) uses
+    /// [`is_focusable`](Self::is_focusable) to find the focus target (nearest
+    /// focusable ancestor of a click), and
+    /// [`dispatch_key`](crate::ServalAppRunner::dispatch_key) routes from the
+    /// focused node up its ancestor chain through the per-phase passes.
+    pub fn key_handler(&self, node: NodeId) -> Option<&Handler> {
+        self.key_handlers.get(&node)
+    }
+
+    /// Whether `node` is *focusable*: it carries a key handler, in **either**
+    /// phase. Focusability is "node is in the key registry" and must not depend
+    /// on the handler's capture/bubble phase, so click-to-focus keeps working
+    /// for a capture-phase key listener too.
+    pub fn is_focusable(&self, node: NodeId) -> bool {
+        self.key_handlers.contains_key(&node)
     }
 }
 
