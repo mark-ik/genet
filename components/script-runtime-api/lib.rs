@@ -129,6 +129,11 @@ fn install_host_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error>
     engine.eval(EVENT_LOOP_BOOTSTRAP)?;
     engine.eval(EVENT_TARGET_BOOTSTRAP)?;
 
+    // postMessage (async 'message' delivery to the global) + minimal location /
+    // navigator stubs the harness reads at load. Depends on the event loop +
+    // EventTarget above.
+    engine.eval(SHELL_GLOBALS_BOOTSTRAP)?;
+
     // `document` + the Node/Element construction surface, bound to the `ScriptedDom`
     // in host state. Native sinks mutate the arena; a JS bootstrap wraps reflectors
     // into ergonomic node objects.
@@ -240,6 +245,24 @@ impl<E: ScriptEngine> NativeFn<E> for ConsoleError {
         record_console::<E>(cx)
     }
 }
+
+/// `postMessage` (async `message` delivery to the global) plus minimal `location`
+/// and `navigator` stubs the harness touches at load. Async delivery rides the
+/// event loop, so a `postMessage` only arrives after `run_event_loop`.
+const SHELL_GLOBALS_BOOTSTRAP: &str = r#"
+(function() {
+  globalThis.postMessage = function(data) {
+    var event = new Event('message');
+    event.data = data;
+    setTimeout(function() { dispatchEvent(event); }, 0);
+  };
+  globalThis.location = {
+    href: 'about:blank', protocol: 'about:', host: '', hostname: '',
+    port: '', pathname: '', search: '', hash: '', origin: 'null'
+  };
+  globalThis.navigator = { userAgent: 'serval', platform: '', language: 'en-US' };
+})();
+"#;
 
 #[cfg(test)]
 mod tests {
@@ -355,9 +378,72 @@ mod tests {
         host_surface_works::<script_engine_boa::BoaEngine>();
     }
 
+    /// postMessage, against any backend: delivery is async (nothing until the loop
+    /// runs), then the `message` event carries `data` to a global listener.
+    fn post_message_works<E: ScriptEngine>() {
+        let mut rt = Runtime::<E>::new().expect("runtime");
+
+        rt.eval(
+            "self.addEventListener('message', function(e){ console.log('msg:' + e.data); });\
+             self.postMessage('hi');",
+        )
+        .expect("postMessage script");
+
+        assert!(rt.host().borrow().console.is_empty(), "delivery is async");
+        rt.run_event_loop(10).expect("loop");
+        assert_eq!(rt.host().borrow().console, vec!["msg:hi"]);
+    }
+
     #[test]
     fn microtasks_on_boa() {
         microtasks_work::<script_engine_boa::BoaEngine>();
+    }
+
+    /// Milestone: the real WPT `testharness.js` loads on the host surface and
+    /// defines its API (`test` / `async_test` / `promise_test`). Skips gracefully if
+    /// the corpus is absent. The first end-to-end signal that the shell is harness-
+    /// ready.
+    fn testharness_loads<E: ScriptEngine>() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/wpt/tests/resources/testharness.js"
+        );
+        let Ok(src) = std::fs::read_to_string(path) else {
+            eprintln!("skipping testharness_loads: not found at {path}");
+            return;
+        };
+
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.eval(&src).expect("testharness.js evaluates");
+        rt.eval(
+            "if (typeof test !== 'function') throw new Error('test missing');\
+             if (typeof async_test !== 'function') throw new Error('async_test missing');\
+             if (typeof promise_test !== 'function') throw new Error('promise_test missing');\
+             if (typeof done !== 'function') throw new Error('done missing');",
+        )
+        .expect("testharness API present after load");
+    }
+
+    #[test]
+    fn post_message_on_boa() {
+        post_message_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[test]
+    fn testharness_loads_on_boa() {
+        testharness_loads::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn testharness_loads_on_nova() {
+        testharness_loads::<script_engine_nova::NovaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn post_message_on_nova() {
+        post_message_works::<script_engine_nova::NovaEngine>();
     }
 
     #[cfg(not(target_arch = "wasm32"))]

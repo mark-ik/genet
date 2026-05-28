@@ -17,9 +17,9 @@
 //!
 //! Construction/mutation half: `createElement`, `createTextNode`, `appendChild`,
 //! `setAttribute`, `textContent` (setter), `getElementById`. Read half
-//! (`getAttribute`, `tagName`, `textContent` getter), via `CallCx::make_string` /
-//! `make_null`. Generic over the backend; tested on Boa + Nova like the rest of the
-//! host surface.
+//! (`getAttribute`, `tagName`, `textContent` getter, `getElementsByTagName`,
+//! `parentNode`), via `CallCx::make_string` / `make_null`. Generic over the
+//! backend; tested on Boa + Nova like the rest of the host surface.
 //!
 //! Dispatch is prototype-based (`Node`/`Document` prototypes, `instanceof`), and
 //! nodes are `EventTarget`s with real tree propagation (capture → target → bubble
@@ -49,6 +49,8 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     engine.set_function::<TagName>("__tagName", 1)?;
     engine.set_function::<GetTextContent>("__getTextContent", 1)?;
     engine.set_function::<ParentNode>("__parentNode", 1)?;
+    engine.set_function::<ElementsByTagNameCount>("__elementsByTagNameCount", 1)?;
+    engine.set_function::<ElementsByTagNameItem>("__elementsByTagNameItem", 2)?;
     engine.eval(DOM_BOOTSTRAP)?;
     Ok(())
 }
@@ -250,6 +252,54 @@ impl<E: ScriptEngine> NativeFn<E> for GetTextContent {
     }
 }
 
+/// Collect, in document order, the elements whose local name matches `tag`
+/// (ASCII case-insensitive). Shared by the `getElementsByTagName` count/item sinks.
+fn collect_by_tag(dom: &ScriptedDom, tag: &str) -> Vec<NodeId> {
+    fn walk(dom: &ScriptedDom, node: NodeId, tag: &str, out: &mut Vec<NodeId>) {
+        if dom.element_name(node).is_some_and(|q| q.local.as_ref().eq_ignore_ascii_case(tag)) {
+            out.push(node);
+        }
+        for child in dom.dom_children(node).collect::<Vec<_>>() {
+            walk(dom, child, tag, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(dom, dom.document(), tag, &mut out);
+    out
+}
+
+/// `__elementsByTagNameCount(tag)` → how many elements match. Paired with
+/// `__elementsByTagNameItem` so the JS `getElementsByTagName` builds the list
+/// without an array-minting primitive (re-walks per item; fine for load-time
+/// `meta`/`script`/`title` queries, mostly empty).
+struct ElementsByTagNameCount;
+impl<E: ScriptEngine> NativeFn<E> for ElementsByTagNameCount {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let arg = cx.arg(0);
+        let tag = cx.value_to_string(&arg)?;
+        let n = with_dom::<E, _>(cx, |dom| collect_by_tag(dom, &tag).len()).unwrap_or(0);
+        // Returned as a string; the JS wrapper coerces with `+` (avoids a
+        // number-minting primitive for now).
+        cx.make_string(&n.to_string())
+    }
+}
+
+/// `__elementsByTagNameItem(tag, i)` → the i-th matching element's reflector, or
+/// `undefined`.
+struct ElementsByTagNameItem;
+impl<E: ScriptEngine> NativeFn<E> for ElementsByTagNameItem {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let tag_v = cx.arg(0);
+        let tag = cx.value_to_string(&tag_v)?;
+        let i_v = cx.arg(1);
+        let i = cx.value_to_string(&i_v)?.parse::<usize>().unwrap_or(usize::MAX);
+        match with_dom::<E, _>(cx, |dom| collect_by_tag(dom, &tag).get(i).copied()).flatten() {
+            Some(node) => cx.reflector_for(node.raw() as u64),
+            None => Ok(cx.undefined()),
+        }
+    }
+}
+
 /// `__parentNode(node)` → a reflector for the parent, or `undefined` if unparented.
 /// Used by the `parentNode` getter and event propagation.
 struct ParentNode;
@@ -365,6 +415,12 @@ const DOM_BOOTSTRAP: &str = r#"
   Document.prototype.createElement = function(tag) { return wrapNode(__createElement(String(tag))); };
   Document.prototype.createTextNode = function(data) { return wrapNode(__createTextNode(String(data))); };
   Document.prototype.getElementById = function(id) { return wrapNode(__getElementById(String(id))); };
+  Document.prototype.getElementsByTagName = function(tag) {
+    var n = +__elementsByTagNameCount(String(tag));
+    var out = [];
+    for (var i = 0; i < n; i++) { out.push(wrapNode(__elementsByTagNameItem(String(tag), String(i)))); }
+    return out;
+  };
 
   globalThis.Node = Node;
   globalThis.Document = Document;

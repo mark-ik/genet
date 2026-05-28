@@ -192,11 +192,23 @@ lifetime.
    Validated on both backends: `.then` continuations, chained drains,
    and a promise resolved inside a timer.
 
-   Remaining at the shell toward loading `testharness.js`: `postMessage`,
-   then the harness load + results bridge (step 3).
-3. **Load `testharness.js` on Nova** and add the results bridge. This is
-   WPT runner phase 3
-   ([wpt runner plan](./2026-05-26_wpt_runner_plan.md), gated here).
+   **postMessage (done 2026-05-27):** async `message` delivery to the
+   global over the event loop, plus minimal `location` / `navigator`
+   stubs the harness reads at load.
+3. **`testharness.js` loads (done 2026-05-27).** The real WPT
+   `testharness.js` (5,207 lines) parses and evaluates to completion on
+   **both** Nova and Boa, and its API (`test` / `async_test` /
+   `promise_test` / `done`) is present. It builds a `WindowTestEnvironment`,
+   wires `error` / `unhandledrejection` / `message` handlers, and reaches
+   `on_tests_ready` without throwing. The one blocker found and fixed was
+   `document.getElementsByTagName` (the harness reads `<meta name=timeout>`
+   at startup); added as a tree-walk (count + item sinks, no array-minting
+   primitive yet). **Remaining for real WPT numbers:** run an actual test
+   and read results back via `add_completion_callback` (the results
+   bridge), then wire WPT runner phase 3
+   ([wpt runner plan](./2026-05-26_wpt_runner_plan.md)). Likely needs more
+   DOM breadth (attribute reflection for `meta.name`/`content`, the
+   `Element`/`Text` split) as real tests exercise it.
 4. **Run the same harness through Boa.** The `Backend` dispatch enum
    (parent plan, Part 1) lets the runner A/B both in one process, making
    the engine-axis delta observable (parent plan, Part 4, two axes).
