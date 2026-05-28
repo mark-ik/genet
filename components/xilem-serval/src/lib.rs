@@ -24,9 +24,10 @@
 //!
 //! # Status
 //!
-//! Stage 1a of `docs/2026-05-27_serval_as_host_xilem_serval_plan.md`: a backend
-//! probe exercised by tests, not a window. No `ServalAppRunner`, no event
-//! dispatch — those are Stages 1b and 2.
+//! Stage 1b of `docs/2026-05-27_serval_as_host_xilem_serval_plan.md`: the
+//! backend probe (Stage 1a) plus [`ServalAppRunner`], the serval-native owner
+//! of app state + the retained view tree that rebuilds the DOM on state change.
+//! Still exercised by tests, not a window; event dispatch is Stage 2.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -37,6 +38,7 @@ use serval_scripted_dom::ScriptedDom;
 mod context;
 mod element;
 mod pod;
+mod runner;
 mod splice;
 mod text;
 
@@ -46,6 +48,7 @@ mod tests;
 pub use context::ServalCtx;
 pub use element::{Element, El, el};
 pub use pod::{ServalElement, ServalElementMut};
+pub use runner::ServalAppRunner;
 pub use splice::ServalChildrenSplice;
 
 /// The HTML namespace. serval views build elements in this namespace, matching

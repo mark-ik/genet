@@ -25,6 +25,7 @@ members = [
     "ports/pelt-core",
     "ports/pelt-desktop",
     "ports/pelt-viewer",
+    "ports/pelt-live",
     "ports/pelt",
     "ports/serval-wpt",
     "tests/unit/*",

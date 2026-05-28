@@ -1,0 +1,34 @@
+[package]
+name = "pelt-live"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Headless Xilem-on-serval host probe: ServalAppRunner drives a ScriptedDom through serval layout/paint, offline (no window yet)."
+
+[lib]
+name = "pelt_live"
+path = "src/lib.rs"
+
+[dependencies]
+# Reactive backend: app state -> view tree -> diff -> ScriptedDom mutations.
+# Thin (xilem_core + the serval DOM only); the layout/paint stack lives here.
+xilem-serval = { path = "../../components/xilem-serval" }
+serval-scripted-dom = { path = "../../components/serval-scripted-dom" }
+layout_dom_api = { workspace = true }
+
+# serval engine + render path (same set + versions pelt-viewer's static
+# viewer uses). serval-layout is a path dep; the rest are workspace deps.
+serval-layout = { path = "../../components/serval-layout" }
+paint = { workspace = true }
+paint_list_api = { workspace = true }
+netrender = { workspace = true }
+
+# taffy must match serval-layout's experimental pin (layout() takes a
+# taffy::Size viewport). Copied verbatim from pelt-viewer.
+taffy = { version = "=0.11.0-experimental-cache-fix.3", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "detailed_layout_info"] }
+
+euclid = { workspace = true }

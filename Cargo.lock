@@ -5388,6 +5388,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "pelt-live"
+version = "0.2.0"
+dependencies = [
+ "euclid",
+ "layout-dom-api",
+ "netrender",
+ "paint_list_api",
+ "serval-layout",
+ "serval-scripted-dom",
+ "servo-paint",
+ "taffy 0.11.0-experimental-cache-fix.3",
+ "xilem-serval",
+]
+
+[[package]]
 name = "pelt-viewer"
 version = "0.2.0"
 dependencies = [
