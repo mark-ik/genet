@@ -24,10 +24,14 @@
 //!
 //! # Status
 //!
-//! Stage 1b of `docs/2026-05-27_serval_as_host_xilem_serval_plan.md`: the
+//! Stage 2b of `docs/2026-05-27_serval_as_host_xilem_serval_plan.md`: the
 //! backend probe (Stage 1a) plus [`ServalAppRunner`], the serval-native owner
-//! of app state + the retained view tree that rebuilds the DOM on state change.
-//! Still exercised by tests, not a window; event dispatch is Stage 2.
+//! of app state + the retained view tree that rebuilds the DOM on state change,
+//! plus native click dispatch — an [`on_click`] event view registers a routing
+//! path in [`ServalCtx`], and [`ServalAppRunner::dispatch_click`] walks the hit
+//! node's ancestor chain and routes a [`PointerClick`] down each registered
+//! path via the faithful `xilem_core` message cycle. Still exercised by tests,
+//! not a window; the window → hit-test wiring lives in the `pelt-live` host.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -37,6 +41,7 @@ use serval_scripted_dom::ScriptedDom;
 
 mod context;
 mod element;
+mod event;
 mod pod;
 mod runner;
 mod splice;
@@ -47,6 +52,7 @@ mod tests;
 
 pub use context::ServalCtx;
 pub use element::{Element, El, el};
+pub use event::{OnClick, OnClickState, PointerClick, on_click};
 pub use pod::{ServalElement, ServalElementMut};
 pub use runner::ServalAppRunner;
 pub use splice::ServalChildrenSplice;
