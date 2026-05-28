@@ -24,14 +24,20 @@
 //!
 //! # Status
 //!
-//! Stage 2b of `docs/2026-05-27_serval_as_host_xilem_serval_plan.md`: the
+//! Stage 3a of `docs/2026-05-27_serval_as_host_xilem_serval_plan.md`: the
 //! backend probe (Stage 1a) plus [`ServalAppRunner`], the serval-native owner
 //! of app state + the retained view tree that rebuilds the DOM on state change,
 //! plus native click dispatch — an [`on_click`] event view registers a routing
 //! path in [`ServalCtx`], and [`ServalAppRunner::dispatch_click`] walks the hit
 //! node's ancestor chain and routes a [`PointerClick`] down each registered
-//! path via the faithful `xilem_core` message cycle. Still exercised by tests,
-//! not a window; the window → hit-test wiring lives in the `pelt-live` host.
+//! path via the faithful `xilem_core` message cycle. Stage 3a adds *component
+//! composition*: `xilem_core`'s generic `lens`/`map_state`/`map_action`/
+//! `memoize` views work over [`ServalCtx`] unchanged (re-exported here), and
+//! [`on_click`] handlers may return an [`OptionalAction`] that bubbles as a
+//! [`MessageResult::Action`](xilem_core::MessageResult::Action) and composes up
+//! through `map_action`; [`ServalAppRunner::dispatch_click`] returns the actions
+//! that reach the root. Still exercised by tests, not a window; the window →
+//! hit-test wiring lives in the `pelt-live` host.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -42,6 +48,7 @@ use serval_scripted_dom::ScriptedDom;
 mod context;
 mod element;
 mod event;
+mod optional_action;
 mod pod;
 mod runner;
 mod splice;
@@ -53,9 +60,20 @@ mod tests;
 pub use context::ServalCtx;
 pub use element::{Element, El, el};
 pub use event::{OnClick, OnClickState, PointerClick, on_click};
+pub use optional_action::{Action, OptionalAction};
 pub use pod::{ServalElement, ServalElementMut};
 pub use runner::ServalAppRunner;
 pub use splice::ServalChildrenSplice;
+
+// The generic, backend-agnostic composition vocabulary from `xilem_core`. These
+// views are parametric over any `Context: ViewPathTracker`, so they work over
+// `ServalCtx` with no serval-side impl; re-exported here so chrome authors can
+// reach the whole vocabulary from `xilem_serval` without a second `use`. The
+// `View`/`MessageResult` core traits come along so `impl View<…, ServalCtx, …>`
+// return types and the action path can be named from this crate alone.
+pub use xilem_core::{
+    lens, map_action, map_message_result, map_state, memoize, MessageResult, View,
+};
 
 /// The HTML namespace. serval views build elements in this namespace, matching
 /// `xilem_web`'s `HTML_NS`.
