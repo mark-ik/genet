@@ -745,3 +745,188 @@ mod keyboard {
         );
     }
 }
+
+// --- MARK: Stage 3 — form controls (text_field, backend-only) -----------------
+//
+// The headless twin of `pelt-live`'s Stage 3 form-control coverage: a reusable
+// `text_field` whose state is its own `String`, edited through the focus + key
+// dispatch foundation, and composed under a larger struct via `lens` — proven
+// over the `ScriptedDom` with no serval-layout/netrender, so a regression in the
+// field's edit handler or its `lens` composition is caught with the engine stack
+// absent. (NB: per Stage 3b, space arrives as `Named(Space)`, not
+// `Character(" ")`, so the sequence below exercises that path explicitly.)
+
+#[cfg(test)]
+mod controls {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use layout_dom_api::{LayoutDom, NodeKind};
+    use serval_scripted_dom::{NodeId, ScriptedDom};
+
+    use crate::{
+        DomHandle, Key, KeyEvent, NamedKey, ServalAppRunner, ServalCtx, ServalElement, View, el,
+        lens, text_field,
+    };
+
+    /// The text data of the single text child under `node`, if any.
+    fn text_child(dom: &ScriptedDom, node: NodeId) -> Option<String> {
+        dom.dom_children(node)
+            .find(|&c| dom.kind(c) == NodeKind::Text)
+            .and_then(|c| dom.text(c).map(str::to_string))
+    }
+
+    /// The first element in `node`'s subtree (pre-order) named `name`.
+    fn find_element_by_name(dom: &ScriptedDom, node: NodeId, name: &str) -> Option<NodeId> {
+        if dom.kind(node) == NodeKind::Element
+            && dom
+                .element_name(node)
+                .is_some_and(|q| q.local.as_ref() == name)
+        {
+            return Some(node);
+        }
+        dom.dom_children(node)
+            .find_map(|c| find_element_by_name(dom, c, name))
+    }
+
+    fn ch(s: &str) -> KeyEvent {
+        KeyEvent {
+            key: Key::Character(s.to_string()),
+        }
+    }
+
+    fn named(k: NamedKey) -> KeyEvent {
+        KeyEvent { key: Key::Named(k) }
+    }
+
+    /// Type the canonical sequence into a focused field and assert both the
+    /// state `String` and the field's DOM text read `"hi y"`:
+    ///   "h", "i", Space, "y", "o", Backspace
+    ///     → "h", "hi", "hi ", "hi y", "hi yo", "hi y"
+    /// Space goes through `Named(Space)` (the Stage 3b convention), Backspace
+    /// pops the trailing "o", and every typed char appends.
+    fn type_hi_y(runner: &mut impl FieldRunner) {
+        runner.key(ch("h"));
+        runner.key(ch("i"));
+        runner.key(named(NamedKey::Space));
+        runner.key(ch("y"));
+        runner.key(ch("o"));
+        runner.key(named(NamedKey::Backspace));
+    }
+
+    /// Minimal shim so `type_hi_y` drives either runner shape (the bare-`String`
+    /// runner and the `lens`-composed struct runner) through one `dispatch_key`.
+    trait FieldRunner {
+        fn key(&mut self, ev: KeyEvent);
+    }
+
+    // --- bare String state ----------------------------------------------------
+
+    impl<Logic, V> FieldRunner for ServalAppRunner<String, Logic, V, ()>
+    where
+        Logic: FnMut(&String) -> V,
+        V: View<String, (), ServalCtx, Element = ServalElement>,
+    {
+        fn key(&mut self, ev: KeyEvent) {
+            self.dispatch_key(ev);
+        }
+    }
+
+    /// A `text_field` over bare `String` state: focus it, type the sequence, and
+    /// assert the state and the field's `<input>` text both read `"hi y"`.
+    #[test]
+    fn text_field_edits_its_own_string() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            // The field's state IS the whole app state here: a `String`.
+            |s: &String| text_field(s),
+            String::new(),
+        );
+        let root = runner.root();
+
+        // The field renders an <input> (the focusable element).
+        let input = {
+            let d = dom.borrow();
+            find_element_by_name(&d, root, "input").expect("the field renders an <input>")
+        };
+
+        runner.set_focus(Some(input));
+        type_hi_y(&mut runner);
+
+        assert_eq!(
+            runner.state().as_str(),
+            "hi y",
+            "the field edited its own String"
+        );
+        assert_eq!(
+            text_child(&dom.borrow(), runner.root()).as_deref(),
+            Some("hi y"),
+            "the rebuild reflected the edits into the <input> DOM text"
+        );
+    }
+
+    // --- lens-composed struct field -------------------------------------------
+
+    /// A larger app with an independently-edited text field plus a sibling field
+    /// the edits must *not* touch — proving the `text_field` composes via `lens`.
+    struct Form {
+        name: String,
+        other: String,
+    }
+
+    impl<Logic, V> FieldRunner for ServalAppRunner<Form, Logic, V, ()>
+    where
+        Logic: FnMut(&Form) -> V,
+        V: View<Form, (), ServalCtx, Element = ServalElement>,
+    {
+        fn key(&mut self, ev: KeyEvent) {
+            self.dispatch_key(ev);
+        }
+    }
+
+    /// `lens(text_field, |f| &mut f.name)` under a `<div>`: the field edits only
+    /// `Form::name`, leaving `Form::other` untouched. The same key sequence as
+    /// the bare-`String` test, proving the field is a drop-in `lens` component.
+    #[test]
+    fn text_field_composes_under_lens() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            |_f: &Form| {
+                // `text_field` takes `&str` (the field renders from a shared
+                // read), so a thin `|s: &mut String| text_field(s)` adapter
+                // bridges it to the `Fn(&mut ChildState) -> View` shape `lens`
+                // wants — the same adapter the Stage 3a `bump_button` test uses.
+                el::<_, Form, ()>(
+                    "div",
+                    lens(|s: &mut String| text_field(s), |f: &mut Form| &mut f.name),
+                )
+            },
+            Form {
+                name: String::new(),
+                other: "untouched".to_string(),
+            },
+        );
+        let root = runner.root();
+
+        let input = {
+            let d = dom.borrow();
+            find_element_by_name(&d, root, "input").expect("the field renders an <input>")
+        };
+
+        runner.set_focus(Some(input));
+        type_hi_y(&mut runner);
+
+        assert_eq!(runner.state().name, "hi y", "only the lensed field changed");
+        assert_eq!(
+            runner.state().other, "untouched",
+            "the sibling field must be untouched"
+        );
+        assert_eq!(
+            text_child(&dom.borrow(), input).as_deref(),
+            Some("hi y"),
+            "the rebuild reflected the edits into the lensed field's <input> text"
+        );
+    }
+}

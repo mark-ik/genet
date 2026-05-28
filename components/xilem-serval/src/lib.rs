@@ -43,9 +43,12 @@
 //! [`dispatch_click`](ServalAppRunner::dispatch_click) sets focus to the nearest
 //! focusable ancestor of the click (click-to-focus), and
 //! [`dispatch_key`](ServalAppRunner::dispatch_key) bubble-walks a [`KeyEvent`]
-//! from the focused node. Still exercised by tests, not a window; the window →
-//! hit-test and winit→[`KeyEvent`] wiring lives in the `pelt-live` host (a later
-//! slice).
+//! from the focused node. Stage 3 adds the first *form control* on that
+//! foundation: [`text_field`] is a reusable editable text field whose state is
+//! its own [`String`], so it composes onto a larger app's field through
+//! [`lens`] like the Stage 3a `counter_button`. The backend stays headless; the
+//! window → hit-test and winit→[`KeyEvent`] wiring lives in the `pelt-live`
+//! host.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -54,6 +57,7 @@ use layout_dom_api::{LocalName, Namespace, QualName};
 use serval_scripted_dom::ScriptedDom;
 
 mod context;
+mod controls;
 mod element;
 mod event;
 mod key;
@@ -67,6 +71,7 @@ mod text;
 mod tests;
 
 pub use context::ServalCtx;
+pub use controls::{text_field, text_field_typed, TextField};
 pub use element::{Element, El, el};
 pub use event::{OnClick, OnClickState, PointerClick, on_click};
 pub use key::{Key, KeyEvent, NamedKey, OnKey, OnKeyState, on_key};
@@ -82,7 +87,7 @@ pub use splice::ServalChildrenSplice;
 // `View`/`MessageResult` core traits come along so `impl View<…, ServalCtx, …>`
 // return types and the action path can be named from this crate alone.
 pub use xilem_core::{
-    lens, map_action, map_message_result, map_state, memoize, MessageResult, View,
+    lens, map_action, map_message_result, map_state, memoize, Lens, MessageResult, View,
 };
 
 /// The HTML namespace. serval views build elements in this namespace, matching
