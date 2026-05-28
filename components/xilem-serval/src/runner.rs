@@ -30,7 +30,7 @@ use layout_dom_api::{LayoutDom, LayoutDomMut};
 use serval_scripted_dom::NodeId;
 use xilem_core::{DynMessage, Environment, MessageCtx, MessageResult, View, ViewId};
 
-use crate::{DomHandle, PointerClick, ServalCtx, ServalElement, ServalElementMut};
+use crate::{DomHandle, KeyEvent, PointerClick, ServalCtx, ServalElement, ServalElementMut};
 
 /// Owns the app state, the view-producing logic, and the retained view tree,
 /// rebuilding the [`ScriptedDom`] whenever the state changes.
@@ -63,6 +63,11 @@ where
     /// The retained root element produced by the current `view`. Its `node`
     /// stays attached under the document root for the runner's lifetime.
     root: ServalElement,
+    /// The currently focused node, if any. A click sets this to the nearest
+    /// focusable (key-handler-bearing) ancestor of the click target, or clears
+    /// it to `None` when the click lands outside any focusable element.
+    /// [`dispatch_key`](Self::dispatch_key) walks from here. Stage 3b.
+    focus: Option<NodeId>,
     phantom: PhantomData<fn() -> Action>,
 }
 
@@ -96,6 +101,7 @@ where
             view,
             view_state,
             root,
+            focus: None,
             phantom: PhantomData,
         }
     }
@@ -171,26 +177,46 @@ where
     /// call sites can ignore the return; an action-bubbling app reads it to drive
     /// the next effect. This is the runner's minimal home for `Action` — no
     /// callback sink, just the collected results.
+    ///
+    /// Stage 3b — **click-to-focus.** After routing + rebuild, focus is set to
+    /// the nearest ancestor of `target` (including `target` itself) that carries
+    /// a key handler (is focusable, per [`ServalCtx::key_path`]); if none is
+    /// found, focus is cleared to `None`. So clicking a focusable element focuses
+    /// it and clicking elsewhere defocuses. This is independent of whether any
+    /// *click* handler fired — a focusable element need not have an `on_click`.
     pub fn dispatch_click(&mut self, target: NodeId, event: PointerClick) -> Vec<Action> {
         // 1. + 2. Bubble walk (target → … → document), collecting the routing
-        //    path of every ancestor that carries a click handler. Done under
-        //    short-lived shared borrows of `dom` and `ctx`, fully released
-        //    before routing.
-        let paths: Vec<Vec<ViewId>> = {
+        //    path of every ancestor that carries a click handler, and — in the
+        //    same walk — finding the nearest focusable (key-handler-bearing)
+        //    ancestor for click-to-focus. Done under short-lived shared borrows
+        //    of `dom` and `ctx`, fully released before routing.
+        let (paths, new_focus): (Vec<Vec<ViewId>>, Option<NodeId>) = {
             let dom = self.dom.borrow();
             let mut paths = Vec::new();
+            let mut focus = None;
             let mut current = Some(target);
             while let Some(node) = current {
                 if let Some(path) = self.ctx.click_path(node) {
                     paths.push(path.to_vec());
                 }
+                // The first (nearest) focusable ancestor wins; the walk runs
+                // target → root, so the first hit is the deepest.
+                if focus.is_none() && self.ctx.key_path(node).is_some() {
+                    focus = Some(node);
+                }
                 current = dom.parent(node);
             }
-            paths
+            (paths, focus)
         };
 
+        // Click-to-focus: focus the nearest focusable ancestor, or clear it when
+        // the click landed outside any focusable element. Independent of whether
+        // a click handler fired below.
+        self.focus = new_focus;
+
         if paths.is_empty() {
-            // No handler anywhere on the chain: nothing routed, no rebuild.
+            // No click handler anywhere on the chain: nothing routed, no rebuild.
+            // Focus was still updated above.
             return Vec::new();
         }
 
@@ -236,6 +262,110 @@ where
 
         // 4. Rebuild so the handler's state mutation reaches the DOM — the same
         //    tail `update` runs.
+        self.rebuild();
+
+        actions
+    }
+
+    /// The currently focused node, if any.
+    ///
+    /// Set by [`dispatch_click`](Self::dispatch_click) (click-to-focus) or
+    /// [`set_focus`](Self::set_focus); read by [`dispatch_key`](Self::dispatch_key)
+    /// as the root of its bubble walk. Stage 3b.
+    pub fn focus(&self) -> Option<NodeId> {
+        self.focus
+    }
+
+    /// Set (or clear, with `None`) the focused node directly.
+    ///
+    /// The keyboard counterpart of a programmatic `element.focus()`. No
+    /// validation that `node` is focusable: a test (or a host) may aim focus at
+    /// any node, and [`dispatch_key`](Self::dispatch_key) simply finds no key
+    /// handler to route to if it is not focusable. Stage 3b.
+    pub fn set_focus(&mut self, node: Option<NodeId>) {
+        self.focus = node;
+    }
+
+    /// Dispatch a native key event to the focused node.
+    ///
+    /// If [`focus`](Self::focus) is `None`, this is a no-op: it returns an empty
+    /// `Vec` and runs no routing or rebuild (no focused node = nowhere to send
+    /// keys). Otherwise it mirrors [`dispatch_click`](Self::dispatch_click)
+    /// exactly, but rooted at the *focused* node rather than a hit-test target:
+    /// it bubble-walks `focus → … → document` over `dom.parent`, collects each
+    /// ancestor's [`key_path`](ServalCtx::key_path), routes a [`KeyEvent`] down
+    /// each via the faithful `MessageCtx`/`View::message` cycle, then rebuilds —
+    /// returning the actions that reached the root.
+    ///
+    /// The walk is **bubble phase** (focus → root): a key handler on a parent
+    /// fires when the focused descendant has none, matching DOM key bubbling. A
+    /// capture pre-pass and per-listener phase flags are the same later
+    /// refinement noted on `dispatch_click`.
+    ///
+    /// As in `dispatch_click`, paths are collected **before** any routing so the
+    /// immutable `ctx`/`dom` borrows release before the `&mut self` message +
+    /// rebuild borrows.
+    pub fn dispatch_key(&mut self, event: KeyEvent) -> Vec<Action> {
+        // No focus: nothing to route to, nothing to do.
+        let Some(focus) = self.focus else {
+            return Vec::new();
+        };
+
+        // 1. + 2. Bubble walk (focus → … → document), collecting the routing
+        //    path of every ancestor that carries a key handler.
+        let paths: Vec<Vec<ViewId>> = {
+            let dom = self.dom.borrow();
+            let mut paths = Vec::new();
+            let mut current = Some(focus);
+            while let Some(node) = current {
+                if let Some(path) = self.ctx.key_path(node) {
+                    paths.push(path.to_vec());
+                }
+                current = dom.parent(node);
+            }
+            paths
+        };
+
+        if paths.is_empty() {
+            // The focused node (and its ancestors) carry no key handler — e.g.
+            // focus was aimed at a non-focusable node via `set_focus`. Nothing
+            // routed, no rebuild.
+            return Vec::new();
+        }
+
+        // 3. Route the event down each collected path through the faithful
+        //    message cycle, the same disjoint-field destructure as `rebuild` /
+        //    `dispatch_click`. Any action that reaches the root is collected.
+        let mut actions = Vec::new();
+        {
+            let Self {
+                state,
+                view,
+                view_state,
+                root,
+                dom,
+                ..
+            } = self;
+
+            for path in paths {
+                let mut msg = MessageCtx::new(
+                    Environment::new(),
+                    path,
+                    DynMessage::new(event.clone()),
+                );
+                let mut_ref = ServalElementMut {
+                    node: &mut root.node,
+                    dom: dom.clone(),
+                };
+                if let MessageResult::Action(a) =
+                    view.message(view_state, &mut msg, mut_ref, state)
+                {
+                    actions.push(a);
+                }
+            }
+        }
+
+        // 4. Rebuild so the handler's state mutation reaches the DOM.
         self.rebuild();
 
         actions

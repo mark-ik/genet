@@ -33,8 +33,8 @@ mod tests {
     use layout_dom_api::{LayoutDom, NodeKind};
     use serval_scripted_dom::{NodeId, ScriptedDom};
     use xilem_serval::{
-        El, OnClick, PointerClick, ServalAppRunner, ServalCtx, ServalElement, View, el, lens,
-        map_action, on_click,
+        El, Key, KeyEvent, NamedKey, OnClick, OnKey, PointerClick, ServalAppRunner, ServalCtx,
+        ServalElement, View, el, lens, map_action, on_click, on_key,
     };
 
     use crate::render::{fragments_from_scripted_dom, hit_test_node, scene_from_scripted_dom};
@@ -537,6 +537,235 @@ mod tests {
             bubbled,
             vec![Bump],
             "an unmapped child action must surface from dispatch_click as a root Action"
+        );
+    }
+
+    // --- MARK: Stage 3b — keyboard + focus ------------------------------------
+
+    /// An editor app: a text buffer a key handler edits, rendered as
+    /// `<div id="editor"><input/>{text}</div>` so the render path (cascade →
+    /// layout → paint) covers it as it does the counter.
+    struct Editor {
+        text: String,
+    }
+
+    /// Apply a key to the buffer: append typed chars, Backspace deletes the last.
+    fn edit(s: &mut Editor, ev: KeyEvent) {
+        match ev.key {
+            Key::Character(c) => s.text.push_str(&c),
+            Key::Named(NamedKey::Backspace) => {
+                s.text.pop();
+            }
+            Key::Named(_) => {}
+        }
+    }
+
+    fn ch(s: &str) -> KeyEvent {
+        KeyEvent {
+            key: Key::Character(s.to_string()),
+        }
+    }
+
+    fn named(k: NamedKey) -> KeyEvent {
+        KeyEvent { key: Key::Named(k) }
+    }
+
+    /// `<div id="editor"><input on_key=edit/>{text}</div>`: the focusable
+    /// `<input>` carries the key handler; the div's text mirrors the buffer so a
+    /// rebuild after each key is observable in the DOM. Concrete `fn`-pointer
+    /// handler keeps the type nameable.
+    type EditorView = El<
+        (
+            OnKey<El<&'static str, Editor, ()>, Editor, (), fn(&mut Editor, KeyEvent)>,
+            String,
+        ),
+        Editor,
+        (),
+    >;
+
+    fn editor_view(s: &Editor) -> EditorView {
+        let handler: fn(&mut Editor, KeyEvent) = edit;
+        el::<_, Editor, ()>(
+            "div",
+            (
+                on_key(el::<_, Editor, ()>("input", ""), handler),
+                s.text.clone(),
+            ),
+        )
+        .attr("id", "editor")
+    }
+
+    /// Focus routing through the full host: focus the `<input>`, type "h"+"i"
+    /// (buffer "hi"), Backspace (buffer "h"); each key's rebuild must reach the
+    /// DOM text, and the render path (layout + paint) must still build over the
+    /// live `ScriptedDom`.
+    #[test]
+    fn typed_keys_reach_focused_input_and_rebuild() {
+        let dom: Rc<RefCell<ScriptedDom>> = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            editor_view,
+            Editor {
+                text: String::new(),
+            },
+        );
+        let root = runner.root();
+
+        let input = {
+            let dom_ref = dom.borrow();
+            find_element_by_name(&dom_ref, root, "input").expect("an <input> must exist")
+        };
+
+        runner.set_focus(Some(input));
+        assert_eq!(runner.focus(), Some(input));
+
+        runner.dispatch_key(ch("h"));
+        runner.dispatch_key(ch("i"));
+        assert_eq!(runner.state().text, "hi");
+        assert_eq!(
+            text_child(&dom.borrow(), runner.root()).as_deref(),
+            Some("hi"),
+            "the rebuild after each key must reach the DOM text"
+        );
+
+        runner.dispatch_key(named(NamedKey::Backspace));
+        assert_eq!(runner.state().text, "h", "Backspace deletes the last char");
+        assert_eq!(
+            text_child(&dom.borrow(), runner.root()).as_deref(),
+            Some("h")
+        );
+
+        // The render path still builds over the edited DOM.
+        let scene = scene_from_scripted_dom(&dom.borrow(), SHEET, 800, 600);
+        assert_eq!(scene.viewport_width, 800);
+        assert!(
+            fragments_from_scripted_dom(&dom.borrow(), SHEET, 800, 600)
+                .rect_of(runner.root())
+                .is_some(),
+            "the editor div must still lay out after edits"
+        );
+    }
+
+    /// No focus → `dispatch_key` is a no-op (empty return, state unchanged).
+    #[test]
+    fn no_focus_key_dispatch_is_a_noop() {
+        let dom: Rc<RefCell<ScriptedDom>> = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            editor_view,
+            Editor {
+                text: String::new(),
+            },
+        );
+
+        assert_eq!(runner.focus(), None);
+        let out = runner.dispatch_key(ch("h"));
+        assert!(out.is_empty(), "no focus → empty action vec");
+        assert_eq!(runner.state().text, "", "no focus → state unchanged");
+    }
+
+    /// Click-to-focus through the host: a `<div on_key=edit>` with a `<label>`
+    /// child. Hit-testing a point inside the div (Stage 2a) yields a node;
+    /// dispatching a click there focuses the div; a subsequent key routes there;
+    /// clicking the document (outside any focusable element) clears focus.
+    type ClickFocusView =
+        OnKey<El<El<&'static str, Editor, ()>, Editor, ()>, Editor, (), fn(&mut Editor, KeyEvent)>;
+
+    fn click_focus_view(_s: &Editor) -> ClickFocusView {
+        let handler: fn(&mut Editor, KeyEvent) = edit;
+        on_key(
+            el::<_, Editor, ()>("div", el::<_, Editor, ()>("label", "L")),
+            handler,
+        )
+    }
+
+    #[test]
+    fn click_focuses_focusable_div_and_routes_keys() {
+        let dom: Rc<RefCell<ScriptedDom>> = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            click_focus_view,
+            Editor {
+                text: String::new(),
+            },
+        );
+        let div = runner.root();
+
+        // Hit-test a point inside the laid-out div (the Stage 2a path), then
+        // dispatch a click there — the hit lands on the div or a descendant, and
+        // either way click-to-focus picks the nearest focusable ancestor: the div.
+        let hit = {
+            let dom_ref = dom.borrow();
+            hit_test_node(&dom_ref, &["div { display: block; }"], 800, 600, 5.0, 5.0)
+                .expect("a point inside the div should hit something")
+        };
+        runner.dispatch_click(hit, PointerClick { local: (0.0, 0.0) });
+        assert_eq!(
+            runner.focus(),
+            Some(div),
+            "clicking inside the focusable div focuses it"
+        );
+
+        runner.dispatch_key(ch("a"));
+        assert_eq!(runner.state().text, "a", "key routes to the focused div");
+
+        // Clicking the document (no focusable ancestor) clears focus.
+        let doc = dom.borrow().document();
+        runner.dispatch_click(doc, PointerClick { local: (0.0, 0.0) });
+        assert_eq!(runner.focus(), None, "clicking outside clears focus");
+    }
+
+    /// Key bubbling through the host: a key handler on the parent div fires when
+    /// the focused child (`<button>`, click-only, not focusable) has none.
+    type BubbleKeyView = OnKey<
+        El<
+            OnClick<El<&'static str, Editor, ()>, Editor, (), fn(&mut Editor, PointerClick)>,
+            Editor,
+            (),
+        >,
+        Editor,
+        (),
+        fn(&mut Editor, KeyEvent),
+    >;
+
+    fn bubble_key_view(_s: &Editor) -> BubbleKeyView {
+        let key_handler: fn(&mut Editor, KeyEvent) = edit;
+        let click_noop: fn(&mut Editor, PointerClick) = |_s, _ev| {};
+        on_key(
+            el::<_, Editor, ()>(
+                "div",
+                on_click(el::<_, Editor, ()>("button", "+"), click_noop),
+            ),
+            key_handler,
+        )
+    }
+
+    #[test]
+    fn key_bubbles_from_focused_child_to_parent() {
+        let dom: Rc<RefCell<ScriptedDom>> = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            bubble_key_view,
+            Editor {
+                text: String::new(),
+            },
+        );
+        let div = runner.root();
+
+        let button = {
+            let dom_ref = dom.borrow();
+            find_element_by_name(&dom_ref, div, "button").expect("a <button> must exist")
+        };
+        assert_ne!(button, div, "button is a descendant of the handler-bearing div");
+
+        // The button is click-only (not focusable); aim focus at it to exercise
+        // the bubble: a key on a child with no key handler reaches the parent.
+        runner.set_focus(Some(button));
+        runner.dispatch_key(ch("z"));
+        assert_eq!(
+            runner.state().text,
+            "z",
+            "key on the focused child bubbles to the parent div's handler"
         );
     }
 }
