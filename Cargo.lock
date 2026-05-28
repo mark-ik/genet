@@ -5391,6 +5391,7 @@ dependencies = [
 name = "pelt-live"
 version = "0.2.0"
 dependencies = [
+ "engine-observables-api",
  "euclid",
  "layout-dom-api",
  "netrender",

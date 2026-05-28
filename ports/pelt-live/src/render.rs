@@ -21,10 +21,11 @@
 //! separable, and the test driver asserts on the produced `Scene`/layout
 //! without a window.
 
+use engine_observables_api::{FragmentQuery, Point};
 use paint_list_api::DeviceIntSize;
 use serval_layout::{
-    BackgroundImagePlane, FragmentPlane, ImagePlane, StylePlane, emit_paint_list_with_layouts,
-    layout, run_cascade,
+    BackgroundImagePlane, FragmentPlane, ImagePlane, ServalLaneView, StylePlane,
+    emit_paint_list_with_layouts, layout, run_cascade,
 };
 use serval_scripted_dom::{NodeId, ScriptedDom};
 
@@ -99,4 +100,41 @@ pub fn fragments_from_scripted_dom(
     };
     let (fragments, _built, _text_ctx) = layout(dom, &styles, &images, viewport);
     fragments
+}
+
+/// Lay out `dom` and hit-test the point `(x, y)`, returning the topmost
+/// (paint-order) node containing it — the `point → NodeId` half of input
+/// dispatch (Stage 2a). `None` if the point falls outside every fragment.
+///
+/// This consumes serval's existing query surface
+/// ([`ServalLaneView::hit_test`], part of `engine_observables_api`) rather than
+/// adding a new spatial index. The reverse `SourceNodeId → NodeId` is trivial
+/// here: `ScriptedDom::opaque_id(id)` is just `id`'s raw arena index, so
+/// [`NodeId::from_raw`] inverts it directly (no O(n) walk like the generic
+/// `ServalLaneView::find_by_source_id`).
+pub fn hit_test_node(
+    dom: &ScriptedDom,
+    stylesheets: &[&str],
+    width: u32,
+    height: u32,
+    x: f32,
+    y: f32,
+) -> Option<NodeId> {
+    let mut styles: StylePlane<NodeId> = StylePlane::new();
+    run_cascade(
+        dom,
+        &mut styles,
+        euclid::Size2D::new(width as f32, height as f32),
+        stylesheets,
+    );
+    let images = ImagePlane::new();
+    let viewport = taffy::Size {
+        width: taffy::AvailableSpace::Definite(width as f32),
+        height: taffy::AvailableSpace::Definite(height as f32),
+    };
+    let (fragments, _built, _text_ctx) = layout(dom, &styles, &images, viewport);
+
+    let view = ServalLaneView::new(dom, &styles, &fragments);
+    view.hit_test(Point::new(x, y))
+        .map(|hit| NodeId::from_raw(hit.source_node.0 as usize))
 }

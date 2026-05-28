@@ -26,6 +26,9 @@ serval-layout = { path = "../../components/serval-layout" }
 paint = { workspace = true }
 paint_list_api = { workspace = true }
 netrender = { workspace = true }
+# Engine-observable query surface: ServalLaneView::hit_test (point -> node)
+# lives behind FragmentQuery, whose types (Point, SourceNodeId) come from here.
+engine_observables_api = { workspace = true }
 
 # taffy must match serval-layout's experimental pin (layout() takes a
 # taffy::Size viewport). Copied verbatim from pelt-viewer.

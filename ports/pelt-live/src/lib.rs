@@ -23,7 +23,7 @@
 
 pub mod render;
 
-pub use render::{fragments_from_scripted_dom, scene_from_scripted_dom};
+pub use render::{fragments_from_scripted_dom, hit_test_node, scene_from_scripted_dom};
 
 #[cfg(test)]
 mod tests {
@@ -34,7 +34,7 @@ mod tests {
     use serval_scripted_dom::{NodeId, ScriptedDom};
     use xilem_serval::{El, ServalAppRunner, el};
 
-    use crate::render::{fragments_from_scripted_dom, scene_from_scripted_dom};
+    use crate::render::{fragments_from_scripted_dom, hit_test_node, scene_from_scripted_dom};
 
     /// The app state under test.
     struct Counter {
@@ -108,5 +108,33 @@ mod tests {
                 "tick {expected}: paint emission should produce draw ops"
             );
         }
+    }
+
+    /// Stage 2a: serval's existing hit-test query, wired over the live
+    /// `ScriptedDom`. A point inside the laid-out `<div>` recovers a live node in
+    /// its subtree; a point far outside recovers nothing. This is the
+    /// `point → NodeId` half of input dispatch (the dispatch walk + handlers are
+    /// Stage 2b).
+    #[test]
+    fn hit_test_recovers_live_node_in_subtree() {
+        let dom: Rc<RefCell<ScriptedDom>> = Rc::new(RefCell::new(ScriptedDom::new()));
+        let runner = ServalAppRunner::new(dom.clone(), counter_view, Counter { count: 0 });
+        let root = runner.root();
+
+        let dom_ref = dom.borrow();
+        // (5, 5) is inside the top-left block <div> (full-width, one text line
+        // tall), so the hit-test lands on the div or its text child.
+        let hit = hit_test_node(&dom_ref, SHEET, 800, 600, 5.0, 5.0)
+            .expect("a point inside the div should hit something");
+        assert!(
+            hit == root || dom_ref.parent(hit) == Some(root),
+            "hit {hit:?} should be the div or a child of it (root {root:?})"
+        );
+
+        // A point well outside every fragment recovers nothing.
+        assert!(
+            hit_test_node(&dom_ref, SHEET, 800, 600, 10_000.0, 10_000.0).is_none(),
+            "a point outside all fragments should miss"
+        );
     }
 }
