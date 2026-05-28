@@ -16,15 +16,19 @@
 //! crate (`pelt-live`) drives the render side over the
 //! [`ScriptedDom`](serval_scripted_dom::ScriptedDom) the runner mutates.
 //!
-//! No event/message-thunk wiring yet (that is Stage 2). "Messages" here are
-//! just external state updates via [`ServalAppRunner::update`]; the timer tick
-//! that drives them is the caller's concern.
+//! Stage 2b adds native event dispatch: [`ServalAppRunner::dispatch_click`]
+//! takes a hit [`NodeId`] (the `point → NodeId` half is the `pelt-live` host's
+//! `hit_test_node`), walks the node's ancestor chain, and routes a
+//! [`PointerClick`] down each registered click handler's path via the faithful
+//! `xilem_core` message cycle, then rebuilds so handler state changes reach the
+//! DOM. The timer tick that drives [`update`](ServalAppRunner::update) and the
+//! window event that drives dispatch are the host's concern.
 
 use layout_dom_api::{LayoutDom, LayoutDomMut};
 use serval_scripted_dom::NodeId;
-use xilem_core::View;
+use xilem_core::{DynMessage, Environment, MessageCtx, View, ViewId};
 
-use crate::{DomHandle, ServalCtx, ServalElement, ServalElementMut};
+use crate::{DomHandle, PointerClick, ServalCtx, ServalElement, ServalElementMut};
 
 /// Owns the app state, the view-producing logic, and the retained view tree,
 /// rebuilding the [`ScriptedDom`] whenever the state changes.
@@ -86,17 +90,24 @@ where
     ///
     /// `f` is the externally-driven "message": it mutates the owned state. The
     /// runner then reruns the logic and diffs the produced view against the
-    /// retained one, emitting `DomMutation`s into the `ScriptedDom`.
+    /// retained one (via [`rebuild`](Self::rebuild)), emitting `DomMutation`s
+    /// into the `ScriptedDom`.
+    pub fn update(&mut self, f: impl FnOnce(&mut State)) {
+        f(&mut self.state);
+        self.rebuild();
+    }
+
+    /// Re-run the logic against the current state and diff the produced view
+    /// into the retained one (the shared rebuild tail of [`update`](Self::update)
+    /// and [`dispatch_click`](Self::dispatch_click)).
     ///
     /// The disjoint-field borrows matter: `rebuild` needs `&prev_view`,
     /// `&mut view_state`, `&mut ctx`, the root `Mut`, and `&mut state` all at
     /// once, so the fields are destructured into separate `&mut`s. The root
-    /// `ServalElementMut` is constructed exactly as the `Harness::rebuild` does
-    /// — borrowing `root.node` so a view *could* swap the root node, and
-    /// cloning the shared `dom` handle.
-    pub fn update(&mut self, f: impl FnOnce(&mut State)) {
-        f(&mut self.state);
-
+    /// `ServalElementMut` is constructed exactly as `Harness::rebuild` does —
+    /// borrowing `root.node` so a view *could* swap the root node, and cloning
+    /// the shared `dom` handle.
+    fn rebuild(&mut self) {
         let next = (self.logic)(&self.state);
 
         // Disjoint borrows: each field separately so `rebuild`'s argument set
@@ -119,6 +130,83 @@ where
 
         // The freshly diffed view becomes the retained `prev` for the next tick.
         *view = next;
+    }
+
+    /// Dispatch a native pointer click that hit `target`.
+    ///
+    /// `target` is the node serval's hit-test resolved the pointer to (the
+    /// `point → NodeId` half lives in the host's `hit_test_node`). This is the
+    /// faithful-routing dispatch: no native handler registry of `Rc<dyn Fn>`,
+    /// just the `xilem_core` message cycle the browser path also uses.
+    ///
+    /// The walk is **bubble phase** (target → root), the DOM default. For each
+    /// ancestor, if [`ServalCtx::click_path`] has a handler, its routing path is
+    /// collected; then each collected path is routed through `view.message`. A
+    /// later refinement can add a capture phase (root → target before bubble)
+    /// and per-listener phase flags — the walk is structured target-first so
+    /// capture is a reversed pre-pass, not a rewrite. Bubble-only here avoids
+    /// double-firing a single handler.
+    ///
+    /// Paths are collected **before** any routing so the immutable `ctx`/`dom`
+    /// borrows are released before the `&mut self` message + rebuild borrows.
+    pub fn dispatch_click(&mut self, target: NodeId, event: PointerClick) {
+        // 1. + 2. Bubble walk (target → … → document), collecting the routing
+        //    path of every ancestor that carries a click handler. Done under
+        //    short-lived shared borrows of `dom` and `ctx`, fully released
+        //    before routing.
+        let paths: Vec<Vec<ViewId>> = {
+            let dom = self.dom.borrow();
+            let mut paths = Vec::new();
+            let mut current = Some(target);
+            while let Some(node) = current {
+                if let Some(path) = self.ctx.click_path(node) {
+                    paths.push(path.to_vec());
+                }
+                current = dom.parent(node);
+            }
+            paths
+        };
+
+        if paths.is_empty() {
+            // No handler anywhere on the chain: nothing routed, no rebuild.
+            return;
+        }
+
+        // 3. Route the event down each collected path through the faithful
+        //    message cycle. The disjoint-field destructure mirrors `rebuild`,
+        //    so `View::message`'s borrow set does not alias `self`.
+        {
+            // `ctx` is not needed for routing: the recorded path is the full
+            // routing target, so `View::message` walks it without the context.
+            let Self {
+                state,
+                view,
+                view_state,
+                root,
+                dom,
+                ..
+            } = self;
+
+            for path in paths {
+                let mut msg = MessageCtx::new(
+                    Environment::new(),
+                    path,
+                    DynMessage::new(event.clone()),
+                );
+                let mut_ref = ServalElementMut {
+                    node: &mut root.node,
+                    dom: dom.clone(),
+                };
+                // The result is ignored: Stage 2b handlers mutate state in place
+                // (unit handler), so a rebuild below reflects the change. Action
+                // bubbling is a later extension.
+                let _ = view.message(view_state, &mut msg, mut_ref, state);
+            }
+        }
+
+        // 4. Rebuild so the handler's state mutation reaches the DOM — the same
+        //    tail `update` runs.
+        self.rebuild();
     }
 
     /// The shared document handle the runner mutates.
