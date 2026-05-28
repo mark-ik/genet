@@ -203,12 +203,36 @@ lifetime.
    `on_tests_ready` without throwing. The one blocker found and fixed was
    `document.getElementsByTagName` (the harness reads `<meta name=timeout>`
    at startup); added as a tree-walk (count + item sinks, no array-minting
-   primitive yet). **Remaining for real WPT numbers:** run an actual test
-   and read results back via `add_completion_callback` (the results
-   bridge), then wire WPT runner phase 3
-   ([wpt runner plan](./2026-05-26_wpt_runner_plan.md)). Likely needs more
-   DOM breadth (attribute reflection for `meta.name`/`content`, the
-   `Element`/`Text` split) as real tests exercise it.
+   primitive yet).
+
+   **Results bridge (done 2026-05-28).** `Runtime::run_testharness` loads
+   the harness, registers an `add_completion_callback` that forwards each
+   subtest to a `__reportResult` native sink (into `HostState::results`),
+   evaluates the test, and drives completion by dispatching the window
+   `load` event + draining the loop. A real test (a passing and a failing
+   `assert_true`) runs end-to-end and the per-subtest pass/fail comes
+   back. Two more host needs were found and met along the way: `window`'s
+   self-referential `parent`/`top` (testharness walks `while (w != w.parent)`)
+   and disabling HTML output via `setup({output:false})` (the output path
+   renders a results table through `createElementNS`/`body`, which we don't
+   implement — a headless runner reads results programmatically instead).
+
+   **First cross-backend engine-axis delta, concretely.** The bridge
+   passes on **Boa** (the conformance oracle). On **Nova** it loads and runs
+   the DOM/event/microtask paths fine, but the harness's completion step
+   (`sanitize_all_unpaired_surrogates`) compiles a regex with lone-surrogate
+   ranges (`[\ud800-\udbff]`) that Nova's regex engine rejects ("not a
+   Unicode scalar value"). JS regex is UTF-16; the engine wants scalar
+   values. This is an upstream Nova gap, not a binding-layer bug — exactly
+   the engine-axis delta the two-axis framing predicts. The Nova results
+   test is `#[ignore]`d with that reason until Nova handles surrogate
+   escapes.
+
+   **Remaining for real WPT numbers:** wire `run_testharness` into WPT
+   runner phase 3 ([wpt runner plan](./2026-05-26_wpt_runner_plan.md)) over
+   real test files, which will need more DOM breadth (attribute reflection
+   for `meta.name`/`content`, `querySelector`, the `Element`/`Text` split)
+   as the suite exercises it.
 4. **Run the same harness through Boa.** The `Backend` dispatch enum
    (parent plan, Part 1) lets the runner A/B both in one process, making
    the engine-axis delta observable (parent plan, Part 4, two axes).

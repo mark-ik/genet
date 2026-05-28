@@ -246,9 +246,22 @@ mod native {
                         return;
                     }
                 };
-                match script_evaluation(agent, script.unbind(), gc.reborrow()) {
-                    Ok(value) => out = Ok(Global::new(agent, value.unbind())),
-                    Err(_) => out = Err("evaluation threw".to_string()),
+                // The thrown value borrows the match's `gc`; unbind it out of the
+                // match, then stringify with a fresh reborrow (better than an opaque
+                // "evaluation threw").
+                let thrown = match script_evaluation(agent, script.unbind(), gc.reborrow()) {
+                    Ok(value) => {
+                        out = Ok(Global::new(agent, value.unbind()));
+                        None
+                    },
+                    Err(err) => Some(err.value().unbind()),
+                };
+                if let Some(v) = thrown {
+                    let msg = v
+                        .to_string(agent, gc.reborrow())
+                        .map(|s| s.to_string_lossy(agent).into_owned())
+                        .unwrap_or_else(|_| "<unprintable>".to_string());
+                    out = Err(format!("evaluation threw: {msg}"));
                 }
             });
             out

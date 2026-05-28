@@ -25,11 +25,11 @@
 //! `CallCx::make_reflector` (mint an outgoing node), added alongside the existing
 //! `reflector_data` (recover an incoming one).
 //!
-//! Not yet: the DOM **read** surface (`getAttribute`, `textContent` getter,
-//! `tagName`), which needs a string-minting primitive on `CallCx`; Promise
-//! microtask draining (needs an engine `pump_microtasks` primitive); and real
-//! timer delays (the loop fires in `(delay, insertion)` order, cooperatively).
-//! Those are the next rungs toward loading `testharness.js`. See
+//! Present: global scope (`self` / `window`), `console`, the event loop
+//! (`setTimeout` / `setInterval`, drained by `run_event_loop` with microtask
+//! checkpoints), global + node-level `EventTarget` with tree propagation,
+//! `postMessage`, the `document` / `Node` surface, and a `testharness.js` results
+//! bridge ([`Runtime::run_testharness`]). See
 //! `docs/2026-05-26_pluggable_engines_testharness_plan.md`.
 
 use std::cell::RefCell;
@@ -39,6 +39,9 @@ use script_engine_api::{CallCx, NativeFn, ScriptEngine};
 use serval_scripted_dom::ScriptedDom;
 
 mod dom;
+mod harness;
+
+pub use harness::TestResult;
 
 /// State the runtime's native callbacks share, stored as the engine's single
 /// host-data slot (`Rc<dyn Any>`). One aggregate so every host object reaches the
@@ -51,6 +54,9 @@ pub struct HostState {
     /// The live document the `document`/`Node` surface mutates. Native DOM
     /// callbacks reach it through `CallCx::host_data` (a `RefCell<HostState>`).
     pub dom: ScriptedDom,
+    /// Per-subtest results collected from `testharness.js` via the completion
+    /// callback (the results bridge). Populated by [`Runtime::run_testharness`].
+    pub results: Vec<TestResult>,
 }
 
 /// Shared handle to the runtime's [`HostState`]. The host reads it after running
@@ -99,6 +105,23 @@ impl<E: ScriptEngine> Runtime<E> {
         Ok(())
     }
 
+    /// Load `harness_src` (`testharness.js`), run `test_src` against it, and return
+    /// the per-subtest results. Completion is triggered by dispatching the window
+    /// `load` event (when the `WindowTestEnvironment` reports) and draining the
+    /// event loop + microtasks. Results also remain in [`HostState::results`].
+    pub fn run_testharness(
+        &mut self,
+        harness_src: &str,
+        test_src: &str,
+    ) -> Result<Vec<TestResult>, E::Error> {
+        self.engine.eval(harness_src)?;
+        harness::install_bridge(&mut self.engine)?;
+        self.engine.eval(test_src)?;
+        self.engine.eval("window.dispatchEvent(new Event('load'));")?;
+        self.run_event_loop(1000)?;
+        Ok(self.host.borrow().results.clone())
+    }
+
     /// The shared host state (e.g. to read `console` output after a run).
     pub fn host(&self) -> &SharedHost {
         &self.host
@@ -138,6 +161,10 @@ fn install_host_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error>
     // in host state. Native sinks mutate the arena; a JS bootstrap wraps reflectors
     // into ergonomic node objects.
     dom::install_dom_surface(engine)?;
+
+    // The `__reportResult` sink for the testharness results bridge. The completion
+    // callback that calls it is registered later (after testharness loads).
+    harness::install_report_sink(engine)?;
     Ok(())
 }
 
@@ -256,6 +283,11 @@ const SHELL_GLOBALS_BOOTSTRAP: &str = r#"
     event.data = data;
     setTimeout(function() { dispatchEvent(event); }, 0);
   };
+  // A top-level window: parent/top are itself, no opener. testharness walks
+  // `while (w != w.parent)`, so a self-referential parent terminates the walk.
+  globalThis.parent = globalThis;
+  globalThis.top = globalThis;
+  globalThis.opener = null;
   globalThis.location = {
     href: 'about:blank', protocol: 'about:', host: '', hostname: '',
     port: '', pathname: '', search: '', hash: '', origin: 'null'
@@ -429,9 +461,58 @@ mod tests {
         post_message_works::<script_engine_boa::BoaEngine>();
     }
 
+    /// The end-to-end milestone: a real `testharness.js` test runs and its per-
+    /// subtest results come back through the bridge (a passing and a failing
+    /// `assert_true`). Skips if the corpus is absent.
+    fn testharness_results<E: ScriptEngine>() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/wpt/tests/resources/testharness.js"
+        );
+        let Ok(harness) = std::fs::read_to_string(path) else {
+            eprintln!("skipping testharness_results: not found at {path}");
+            return;
+        };
+
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        let results = rt
+            .run_testharness(
+                &harness,
+                "test(function(){ assert_true(true); }, 'pass-test');\
+                 test(function(){ assert_true(false, 'boom'); }, 'fail-test');",
+            )
+            .expect("run_testharness");
+
+        assert_eq!(results.len(), 2, "two subtests reported: {results:?}");
+        let pass = results.iter().find(|r| r.name == "pass-test").expect("pass-test present");
+        let fail = results.iter().find(|r| r.name == "fail-test").expect("fail-test present");
+        assert!(pass.passed(), "pass-test should PASS: {pass:?}");
+        assert_eq!(fail.status, 1, "fail-test should FAIL: {fail:?}");
+    }
+
     #[test]
     fn testharness_loads_on_boa() {
         testharness_loads::<script_engine_boa::BoaEngine>();
+    }
+
+    #[test]
+    fn testharness_results_on_boa() {
+        testharness_results::<script_engine_boa::BoaEngine>();
+    }
+
+    // Nova's regex engine rejects lone-surrogate ranges (`[\ud800-\udbff]`), which
+    // testharness compiles in `sanitize_all_unpaired_surrogates` during completion
+    // ("regex parse error: hexadecimal literal is not a Unicode scalar value"). This
+    // is an upstream Nova conformance gap (JS regex is UTF-16; the engine wants
+    // scalar values), not a binding-layer issue — the exact cross-backend
+    // engine-axis delta the plan expects, with Boa (the oracle) passing. Un-ignore
+    // when Nova handles surrogate escapes. Loading + DOM/event/microtask paths all
+    // pass on Nova (the other tests); only the harness's completion sanitizer trips.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    #[ignore = "Nova regex engine rejects surrogate ranges in testharness sanitize step"]
+    fn testharness_results_on_nova() {
+        testharness_results::<script_engine_nova::NovaEngine>();
     }
 
     #[cfg(not(target_arch = "wasm32"))]
