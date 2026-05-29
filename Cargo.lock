@@ -3502,6 +3502,7 @@ checksum = "09e54e57b4c48b40f7aec75635392b12b3421fa26fe8b4332e63138ed278459c"
 [[package]]
 name = "imaging"
 version = "0.0.1"
+source = "git+https://github.com/mark-ik/imaging?branch=mere-wgpu-29-vello-0-9#a8ac08d498b4266cd340b6a3cd66eef8fc4a5ab9"
 dependencies = [
  "kurbo 0.13.1",
  "peniko",
@@ -3510,6 +3511,7 @@ dependencies = [
 [[package]]
 name = "imaging_vello"
 version = "0.0.1"
+source = "git+https://github.com/mark-ik/imaging?branch=mere-wgpu-29-vello-0-9#a8ac08d498b4266cd340b6a3cd66eef8fc4a5ab9"
 dependencies = [
  "imaging",
  "imaging_wgpu",
@@ -3521,6 +3523,7 @@ dependencies = [
 [[package]]
 name = "imaging_wgpu"
 version = "0.0.1"
+source = "git+https://github.com/mark-ik/imaging?branch=mere-wgpu-29-vello-0-9#a8ac08d498b4266cd340b6a3cd66eef8fc4a5ab9"
 dependencies = [
  "imaging",
  "wgpu",

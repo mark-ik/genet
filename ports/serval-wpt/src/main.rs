@@ -357,6 +357,16 @@ fn testharness(tests: &[PathBuf], args: &Args) {
             }
             continue;
         }
+        // XHTML is a distinct (XML) parse mode serval's HTML parser doesn't handle;
+        // skip rather than report spurious syntax errors.
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ext.eq_ignore_ascii_case("xhtml") || ext.eq_ignore_ascii_case("xht") {
+            skipped += 1;
+            if args.verbose {
+                println!("SKIP  xhtml          {}", rel(path, &args.tests_root));
+            }
+            continue;
+        }
 
         let base_dir = path.parent().unwrap_or(tests_root);
         let result = panic::catch_unwind(AssertUnwindSafe(|| {

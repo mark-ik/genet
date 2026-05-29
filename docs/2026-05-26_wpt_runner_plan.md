@@ -126,11 +126,29 @@ A real `MANIFEST.json` reader can replace this later for exactness
    2538 → **3341**, subtests passed 30 → **61**, errored files 58 → **46**,
    all-pass files 0 → **2**. The arc (harness + results + body-DOM +
    Element surface) is a working conformance loop with a rising number.
-   **Next levers:** `DOMException`-throwing on bad input (so
-   `assert_throws_dom` tests pass, not just run), `createElementNS` /
-   namespaces, `Node` breadth (`childNodes`/`firstChild`/`nextSibling`/
-   `removeChild`/`insertBefore`), and the missing globals
-   (`customElements`, etc.).
+
+   **Node/Element traversal (done 2026-05-29).** The tree-navigation
+   surface `dom/nodes` is mostly about: `childNodes` / `firstChild` /
+   `lastChild` / `nextSibling` / `previousSibling` / `parentElement`,
+   element-filtered `children` / `firstElementChild` /
+   `nextElementSibling` / `childElementCount`, `nodeName` / `nodeValue`,
+   `hasChildNodes` / `contains`, the mutators `removeChild` /
+   `insertBefore` / `replaceChild` (throwing `NotFoundError` when the node
+   isn't a child — so `assert_throws_dom` starts passing), and the
+   `ChildNode` mixin (`remove` / `before` / `after` / `replaceWith`). Plus
+   two correctness fixes: the runner now **skips `.xhtml`** (XML parse mode
+   serval's HTML parser doesn't handle — was ~14 spurious syntax errors),
+   and `serval-scripted-dom` gained `remove_child` (DOM `removeChild`
+   *orphans* a node, keeping it alive + re-insertable, vs `LayoutDomMut::
+   remove` which drops the subtree — script holds references to removed
+   nodes).
+
+   Effect on `dom/nodes`: all-pass files 2 → **14**, subtests passed
+   61 → **95**, errored files 46 → **28** (the xhtml skips moved ~14 false
+   errors to skipped). **Next levers:** DOM methods throwing `DOMException`
+   on bad input more broadly, `createElementNS` / namespaces, `Comment` /
+   `DocumentFragment` node types, `cloneNode`, and missing globals
+   (`customElements`).
 4. **Expectations.** A checked-in expected-results file so known
    failures are tolerated and regressions surface (the WPT metadata
    model, serval-shaped).

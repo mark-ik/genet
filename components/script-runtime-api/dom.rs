@@ -29,9 +29,11 @@
 //! `head` over it. The `Element` surface: `getAttribute` / `setAttribute` /
 //! `hasAttribute` / `removeAttribute` / `toggleAttribute`, `id` / `className`
 //! reflection, `classList`, and `querySelector` / `querySelectorAll` / `matches`
-//! (via [`crate::selector`]). Not yet: namespaced creation (`createElementNS`),
-//! `Node` traversal breadth (`childNodes` / `firstChild` / `removeChild` /
-//! `insertBefore`), and DOM methods *throwing* `DOMException` on bad input. See
+//! (via [`crate::selector`]). Node traversal: `childNodes` / `firstChild` /
+//! siblings / element-filtered views, `nodeName` / `nodeValue`, the mutators
+//! `removeChild` / `insertBefore` / `replaceChild` (throwing `NotFoundError`), and
+//! the `ChildNode` mixin. Not yet: namespaced creation (`createElementNS`),
+//! `Comment` / `DocumentFragment` node types, `cloneNode`. See
 //! `docs/2026-05-26_pluggable_engines_testharness_plan.md`.
 
 use std::cell::RefCell;
@@ -103,6 +105,16 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     engine.set_function::<QuerySelector>("__querySelector", 2)?;
     engine.set_function::<QuerySelectorAllCount>("__querySelectorAllCount", 2)?;
     engine.set_function::<QuerySelectorAllItem>("__querySelectorAllItem", 3)?;
+    engine.set_function::<FirstChild>("__firstChild", 1)?;
+    engine.set_function::<LastChild>("__lastChild", 1)?;
+    engine.set_function::<NextSibling>("__nextSibling", 1)?;
+    engine.set_function::<PrevSibling>("__prevSibling", 1)?;
+    engine.set_function::<ChildNodesCount>("__childNodesCount", 1)?;
+    engine.set_function::<ChildNodesItem>("__childNodesItem", 2)?;
+    engine.set_function::<NodeName>("__nodeName", 1)?;
+    engine.set_function::<NodeValue>("__nodeValue", 1)?;
+    engine.set_function::<RemoveChild>("__removeChild", 2)?;
+    engine.set_function::<InsertBefore>("__insertBefore", 3)?;
     engine.eval(DOM_BOOTSTRAP)?;
     Ok(())
 }
@@ -547,6 +559,170 @@ impl<E: ScriptEngine> NativeFn<E> for QuerySelectorAllItem {
     }
 }
 
+/// `__firstChild(node)` → first child reflector, or `undefined`.
+struct FirstChild;
+impl<E: ScriptEngine> NativeFn<E> for FirstChild {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        child_at::<E>(cx, |dom, node| dom.dom_children(node).next())
+    }
+}
+
+/// `__lastChild(node)` → last child reflector, or `undefined`.
+struct LastChild;
+impl<E: ScriptEngine> NativeFn<E> for LastChild {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        child_at::<E>(cx, |dom, node| dom.dom_children(node).last())
+    }
+}
+
+/// `__nextSibling(node)` → next sibling reflector, or `undefined`.
+struct NextSibling;
+impl<E: ScriptEngine> NativeFn<E> for NextSibling {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        child_at::<E>(cx, |dom, node| dom.next_sibling(node))
+    }
+}
+
+/// `__prevSibling(node)` → previous sibling reflector, or `undefined`.
+struct PrevSibling;
+impl<E: ScriptEngine> NativeFn<E> for PrevSibling {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        child_at::<E>(cx, |dom, node| dom.prev_sibling(node))
+    }
+}
+
+/// Shared helper for the single-node traversal sinks: recover the arg-0 node, run
+/// `pick` against the DOM, reflect the result (or `undefined`).
+fn child_at<E: ScriptEngine>(
+    cx: &mut E::CallCx<'_>,
+    pick: impl FnOnce(&ScriptedDom, NodeId) -> Option<NodeId>,
+) -> Result<E::Value, E::Error> {
+    let node = cx.arg(0);
+    let Some(id) = cx.reflector_data(&node) else {
+        return Ok(cx.undefined());
+    };
+    match with_dom::<E, _>(cx, |dom| pick(dom, NodeId::from_raw(id as usize))).flatten() {
+        Some(n) => cx.reflector_for(n.raw() as u64),
+        None => Ok(cx.undefined()),
+    }
+}
+
+/// `__childNodesCount(node)` → child count (string). With `__childNodesItem`, backs
+/// `childNodes` (and, JS-filtered, `children`).
+struct ChildNodesCount;
+impl<E: ScriptEngine> NativeFn<E> for ChildNodesCount {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let node = cx.arg(0);
+        let Some(id) = cx.reflector_data(&node) else {
+            return cx.make_string("0");
+        };
+        let n = with_dom::<E, _>(cx, |dom| dom.dom_children(NodeId::from_raw(id as usize)).count())
+            .unwrap_or(0);
+        cx.make_string(&n.to_string())
+    }
+}
+
+/// `__childNodesItem(node, i)` → the i-th child's reflector, or `undefined`.
+struct ChildNodesItem;
+impl<E: ScriptEngine> NativeFn<E> for ChildNodesItem {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let node = cx.arg(0);
+        let Some(id) = cx.reflector_data(&node) else {
+            return Ok(cx.undefined());
+        };
+        let i_v = cx.arg(1);
+        let i = cx.value_to_string(&i_v)?.parse::<usize>().unwrap_or(usize::MAX);
+        match with_dom::<E, _>(cx, |dom| dom.dom_children(NodeId::from_raw(id as usize)).nth(i))
+            .flatten()
+        {
+            Some(n) => cx.reflector_for(n.raw() as u64),
+            None => Ok(cx.undefined()),
+        }
+    }
+}
+
+/// `__nodeName(node)`: element → uppercase tag; text → `#text`; comment →
+/// `#comment`; document → `#document`; else the kind's conventional name.
+struct NodeName;
+impl<E: ScriptEngine> NativeFn<E> for NodeName {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let node = cx.arg(0);
+        let Some(id) = cx.reflector_data(&node) else {
+            return cx.make_string("");
+        };
+        let name = with_dom::<E, _>(cx, |dom| {
+            let n = NodeId::from_raw(id as usize);
+            match dom.kind(n) {
+                NodeKind::Element => {
+                    dom.element_name(n).map(|q| q.local.as_ref().to_ascii_uppercase()).unwrap_or_default()
+                },
+                NodeKind::Text => "#text".to_string(),
+                NodeKind::Comment => "#comment".to_string(),
+                NodeKind::Document => "#document".to_string(),
+                NodeKind::Doctype => "html".to_string(),
+                NodeKind::ProcessingInstruction => "#processing-instruction".to_string(),
+            }
+        })
+        .unwrap_or_default();
+        cx.make_string(&name)
+    }
+}
+
+/// `__nodeValue(node)`: text/comment → its data; otherwise `null`.
+struct NodeValue;
+impl<E: ScriptEngine> NativeFn<E> for NodeValue {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let node = cx.arg(0);
+        let Some(id) = cx.reflector_data(&node) else {
+            return Ok(cx.make_null());
+        };
+        let value = with_dom::<E, _>(cx, |dom| {
+            let n = NodeId::from_raw(id as usize);
+            match dom.kind(n) {
+                NodeKind::Text | NodeKind::Comment => Some(dom.text(n).unwrap_or("").to_string()),
+                _ => None,
+            }
+        })
+        .flatten();
+        match value {
+            Some(s) => cx.make_string(&s),
+            None => Ok(cx.make_null()),
+        }
+    }
+}
+
+/// `__removeChild(parent, child)` — detach `child` (the JS side has already checked
+/// it is a child of `parent`).
+struct RemoveChild;
+impl<E: ScriptEngine> NativeFn<E> for RemoveChild {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let child = cx.arg(1);
+        if let Some(c) = cx.reflector_data(&child) {
+            // Orphan (keep alive + re-insertable), not drop — DOM `removeChild`.
+            with_dom::<E, _>(cx, |dom| dom.remove_child(NodeId::from_raw(c as usize)));
+        }
+        Ok(cx.undefined())
+    }
+}
+
+/// `__insertBefore(parent, node, ref)` — insert `node` before `ref` (a reflector),
+/// or append when `ref` is not a reflector (undefined/null).
+struct InsertBefore;
+impl<E: ScriptEngine> NativeFn<E> for InsertBefore {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let parent = cx.arg(0);
+        let node = cx.arg(1);
+        let reference = cx.arg(2);
+        if let (Some(p), Some(n)) = (cx.reflector_data(&parent), cx.reflector_data(&node)) {
+            let r = cx.reflector_data(&reference).map(|r| NodeId::from_raw(r as usize));
+            with_dom::<E, _>(cx, |dom| {
+                dom.insert_before(NodeId::from_raw(p as usize), NodeId::from_raw(n as usize), r)
+            });
+        }
+        Ok(cx.undefined())
+    }
+}
+
 /// `document` plus node wrappers. A wrapper is a plain object carrying its reflector
 /// (`__ref`) and the methods that drive the native sinks. ES5-style (no arrows /
 /// classes / let) for the widest backend coverage, matching the other bootstraps.
@@ -594,6 +770,65 @@ const DOM_BOOTSTRAP: &str = r#"
     configurable: true,
     get: function() { return wrapNode(__parentNode(this.__ref)); }
   });
+  Object.defineProperty(Node.prototype, 'parentElement', {
+    configurable: true,
+    get: function() { var p = this.parentNode; return (p && p.nodeType === 1) ? p : null; }
+  });
+  Object.defineProperty(Node.prototype, 'firstChild', {
+    configurable: true, get: function() { return wrapNode(__firstChild(this.__ref)); }
+  });
+  Object.defineProperty(Node.prototype, 'lastChild', {
+    configurable: true, get: function() { return wrapNode(__lastChild(this.__ref)); }
+  });
+  Object.defineProperty(Node.prototype, 'nextSibling', {
+    configurable: true, get: function() { return wrapNode(__nextSibling(this.__ref)); }
+  });
+  Object.defineProperty(Node.prototype, 'previousSibling', {
+    configurable: true, get: function() { return wrapNode(__prevSibling(this.__ref)); }
+  });
+  Object.defineProperty(Node.prototype, 'childNodes', {
+    configurable: true,
+    get: function() {
+      var n = +__childNodesCount(this.__ref);
+      var out = [];
+      for (var i = 0; i < n; i++) { out.push(wrapNode(__childNodesItem(this.__ref, String(i)))); }
+      return out;
+    }
+  });
+  Object.defineProperty(Node.prototype, 'nodeName', {
+    configurable: true, get: function() { return __nodeName(this.__ref); }
+  });
+  Object.defineProperty(Node.prototype, 'nodeValue', {
+    configurable: true, get: function() { return __nodeValue(this.__ref); }
+  });
+  Node.prototype.hasChildNodes = function() { return +__childNodesCount(this.__ref) > 0; };
+  Node.prototype.contains = function(other) {
+    var n = other;
+    while (n) { if (n === this) return true; n = n.parentNode; }
+    return false;
+  };
+  Node.prototype.removeChild = function(child) {
+    if (!child || child.parentNode !== this) {
+      throw new DOMException("The node to be removed is not a child of this node.", "NotFoundError");
+    }
+    __removeChild(this.__ref, child.__ref);
+    return child;
+  };
+  Node.prototype.insertBefore = function(node, ref) {
+    if (ref !== null && ref !== undefined && ref.parentNode !== this) {
+      throw new DOMException("The reference node is not a child of this node.", "NotFoundError");
+    }
+    __insertBefore(this.__ref, node.__ref, ref ? ref.__ref : undefined);
+    return node;
+  };
+  Node.prototype.replaceChild = function(newChild, oldChild) {
+    if (!oldChild || oldChild.parentNode !== this) {
+      throw new DOMException("The node to be replaced is not a child of this node.", "NotFoundError");
+    }
+    this.insertBefore(newChild, oldChild);
+    __removeChild(this.__ref, oldChild.__ref);
+    return oldChild;
+  };
 
   // Node-level EventTarget with real tree propagation (capture → target → bubble)
   // over the parentNode chain. Listeners live on the (cached) wrapper, keyed by
@@ -724,6 +959,49 @@ const DOM_BOOTSTRAP: &str = r#"
   }
   Element.prototype.querySelector = querySelector;
   Element.prototype.querySelectorAll = querySelectorAll;
+
+  // Element-only tree views: children (elements), the element siblings, count.
+  Object.defineProperty(Element.prototype, 'children', {
+    configurable: true,
+    get: function() { return this.childNodes.filter(function(n) { return n.nodeType === 1; }); }
+  });
+  Object.defineProperty(Element.prototype, 'firstElementChild', {
+    configurable: true, get: function() { var c = this.children; return c.length ? c[0] : null; }
+  });
+  Object.defineProperty(Element.prototype, 'lastElementChild', {
+    configurable: true, get: function() { var c = this.children; return c.length ? c[c.length - 1] : null; }
+  });
+  Object.defineProperty(Element.prototype, 'childElementCount', {
+    configurable: true, get: function() { return this.children.length; }
+  });
+  Object.defineProperty(Element.prototype, 'nextElementSibling', {
+    configurable: true,
+    get: function() { var n = this.nextSibling; while (n) { if (n.nodeType === 1) return n; n = n.nextSibling; } return null; }
+  });
+  Object.defineProperty(Element.prototype, 'previousElementSibling', {
+    configurable: true,
+    get: function() { var n = this.previousSibling; while (n) { if (n.nodeType === 1) return n; n = n.previousSibling; } return null; }
+  });
+
+  // ChildNode mixin: remove / before / after / replaceWith. String arguments
+  // become text nodes (per spec).
+  function toNode(arg) { return (typeof arg === 'string') ? document.createTextNode(arg) : arg; }
+  Element.prototype.remove = function() { var p = this.parentNode; if (p) p.removeChild(this); };
+  Element.prototype.before = function() {
+    var p = this.parentNode; if (!p) return;
+    for (var i = 0; i < arguments.length; i++) { p.insertBefore(toNode(arguments[i]), this); }
+  };
+  Element.prototype.after = function() {
+    var p = this.parentNode; if (!p) return;
+    var ref = this.nextSibling;
+    for (var i = 0; i < arguments.length; i++) { p.insertBefore(toNode(arguments[i]), ref); }
+  };
+  Element.prototype.replaceWith = function() {
+    var p = this.parentNode; if (!p) return;
+    var ref = this.nextSibling;
+    p.removeChild(this);
+    for (var i = 0; i < arguments.length; i++) { p.insertBefore(toNode(arguments[i]), ref); }
+  };
 
   // Document : Node, with the construction/lookup methods.
   function Document() {}
@@ -964,9 +1242,68 @@ mod tests {
         dom_construction_works::<script_engine_boa::BoaEngine>();
     }
 
+    /// Node/Element traversal + mutation, against any backend: child/sibling
+    /// navigation (incl. element-filtered), `nodeName`/`nodeValue`, `childNodes`,
+    /// `removeChild` / `insertBefore` / `replaceChild`, and the ChildNode mixin.
+    fn dom_traversal_works<E: ScriptEngine>() {
+        use serval_static_dom::StaticDocument;
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.load_dom(&StaticDocument::parse(
+            "<html><body><div id='p'>text<span id='a'></span><span id='b'></span></div></body></html>",
+        ));
+
+        rt.eval(
+            "var p = document.getElementById('p');\
+             console.log(String(p.childNodes.length));\
+             console.log(p.firstChild.nodeName + ',' + p.firstChild.nodeValue);\
+             console.log(String(p.childElementCount));\
+             console.log(p.firstElementChild.id + ',' + p.lastElementChild.id);\
+             var a = document.getElementById('a');\
+             console.log(a.nextElementSibling.id + ',' + String(a.previousElementSibling));\
+             var c = document.createElement('span'); c.id = 'c';\
+             p.insertBefore(c, document.getElementById('b'));\
+             console.log(p.children.map(function(e){return e.id;}).join(','));\
+             p.removeChild(a);\
+             console.log(p.children.map(function(e){return e.id;}).join(','));\
+             var d = document.createElement('span'); d.id = 'd'; c.after(d);\
+             console.log(p.children.map(function(e){return e.id;}).join(','));\
+             d.remove();\
+             console.log(p.children.map(function(e){return e.id;}).join(','));\
+             console.log(String(p.contains(c)) + ',' + String(p.contains(a)));",
+        )
+        .expect("traversal script");
+
+        assert_eq!(
+            rt.host().borrow().console,
+            vec![
+                "3",            // childNodes: text + span#a + span#b
+                "#text,text",   // firstChild nodeName/nodeValue
+                "2",            // childElementCount (two spans)
+                "a,b",          // first/last element child ids
+                "b,null",       // a.nextElementSibling=b, previousElementSibling=null
+                "a,c,b",        // after insertBefore(c, b)
+                "c,b",          // after removeChild(a)
+                "c,d,b",        // after c.after(d)
+                "c,b",          // after d.remove()
+                "true,false",   // contains c (yes), a (removed, no)
+            ],
+        );
+    }
+
     #[test]
     fn dom_element_surface_on_boa() {
         dom_element_surface_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[test]
+    fn dom_traversal_on_boa() {
+        dom_traversal_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dom_traversal_on_nova() {
+        dom_traversal_works::<script_engine_nova::NovaEngine>();
     }
 
     #[cfg(not(target_arch = "wasm32"))]

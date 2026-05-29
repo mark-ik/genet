@@ -90,6 +90,19 @@ impl ScriptedDom {
         }
     }
 
+    /// DOM `removeChild`: orphan `child` from its parent but keep it (and its
+    /// subtree) alive and re-insertable, recording a [`DomMutation::Removed`].
+    /// Unlike [`LayoutDomMut::remove`](layout_dom_api::LayoutDomMut::remove), which
+    /// also drops the subtree — script may hold a reference to a removed node and
+    /// re-insert it, so the scripted DOM orphans rather than frees.
+    pub fn remove_child(&mut self, child: NodeId) {
+        let former_parent = self.node(child).parent;
+        self.detach(child);
+        if let Some(former_parent) = former_parent {
+            self.mutations.push(DomMutation::Removed { node: child, former_parent });
+        }
+    }
+
     fn node(&self, id: NodeId) -> &Node {
         self.nodes[id.0]
             .as_ref()
