@@ -50,20 +50,21 @@ use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, NamedKey as WinitNamedKey};
 use winit::window::{Window, WindowId};
 use xilem_serval::{
-    El, Key, KeyEvent, Lens, NamedKey, OnClick, PointerClick, ServalAppRunner, TextField, el, lens,
-    on_click, text_field_typed,
+    El, Key, KeyEvent, Lens, NamedKey, OnClick, PointerClick, ServalAppRunner, TextField, TextInput,
+    el, lens, on_click, text_field_typed,
 };
 
 use pelt_live::{hit_test_node, scene_from_scripted_dom};
 
 // ── App state + view ───────────────────────────────────────────────────────
 
-/// The app state: a counter plus an editable text buffer. The counter is the
-/// Stage 1b probe; the `text` field is the Stage 3 form-control slice — a
-/// `text_field` lensed onto it edits it as you type.
+/// The app state: a counter plus an editable text field. The counter is the
+/// Stage 1b probe; `field` (a [`TextInput`] — buffer + caret) is the Stage 3
+/// form-control slice — a `text_field` lensed onto it edits it as you type, with
+/// ←/→ moving the caret.
 struct Demo {
     count: u32,
-    text: String,
+    field: TextInput,
 }
 
 /// The concrete demo view type: `<div>` holding the count `<p>`, the `+`
@@ -78,15 +79,15 @@ type DemoView = El<
         OnClick<El<&'static str, Demo, ()>, Demo, (), fn(&mut Demo, PointerClick)>,
         El<&'static str, Demo, ()>,
         // `Lens<CF, V, F, ParentState, ChildState, Action, Context>`: the field
-        // component (`fn(&mut String) -> TextField`), the inner view
-        // (`TextField`), the projection (`fn(&mut Demo) -> &mut String`), then
+        // component (`fn(&mut TextInput) -> TextField`), the inner view
+        // (`TextField`), the projection (`fn(&mut Demo) -> &mut TextInput`), then
         // the parent/child state, action, and context types.
         Lens<
-            fn(&mut String) -> TextField,
+            fn(&mut TextInput) -> TextField,
             TextField,
-            fn(&mut Demo) -> &mut String,
+            fn(&mut Demo) -> &mut TextInput,
             Demo,
-            String,
+            TextInput,
             (),
             xilem_serval::ServalCtx,
         >,
@@ -102,15 +103,15 @@ fn demo_view(s: &Demo) -> DemoView {
     // adapter bridges its `&str` argument to the `Fn(&mut ChildState) -> View`
     // shape `lens` expects. Both the adapter and the lens projection are `fn`
     // pointers so `DemoView` stays nameable (no boxing).
-    let make_field: fn(&mut String) -> TextField = |t: &mut String| text_field_typed(t);
-    let to_text: fn(&mut Demo) -> &mut String = |d: &mut Demo| &mut d.text;
+    let make_field: fn(&mut TextInput) -> TextField = |t: &mut TextInput| text_field_typed(t);
+    let to_field: fn(&mut Demo) -> &mut TextInput = |d: &mut Demo| &mut d.field;
     el::<_, Demo, ()>(
         "div",
         (
             el::<_, Demo, ()>("p", s.count.to_string()),
             on_click(el::<_, Demo, ()>("button", "+"), increment),
-            el::<_, Demo, ()>("label", "Click the field below, then type:"),
-            lens(make_field, to_text),
+            el::<_, Demo, ()>("label", "Click the field below, then type (←/→ move the caret):"),
+            lens(make_field, to_field),
         ),
     )
 }
@@ -213,7 +214,7 @@ impl App {
             demo_view as Logic,
             Demo {
                 count: 0,
-                text: String::new(),
+                field: TextInput::default(),
             },
         );
         Self {
