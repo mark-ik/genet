@@ -109,12 +109,28 @@ A real `MANIFEST.json` reader can replace this later for exactness
    `assert_throws_dom` needing a real `DOMException` with `.code`. Example:
    `dom/nodes/attributes.html` now runs 4/67 (was erroring at 0).
 
-   **Next (the pass-rate lever):** `querySelector`/`querySelectorAll` +
-   `matches` (selector matching, reusing the `selectors` crate), the
-   `Element` method set (`hasAttribute`/`removeAttribute`/`toggleAttribute`/
-   `classList`), attribute-reflection getters, and `DOMException`. The
-   harness, results capture, aggregation, and body-DOM are done; the number
-   moves with method breadth.
+   **Element surface (done 2026-05-28).** The Element method/reflection
+   breadth the failures named: a JS `Element`/`Text`/`Document` prototype
+   split (`instanceof`, `nodeType`), `hasAttribute`/`removeAttribute`/
+   `toggleAttribute`, `id`/`className` reflection, `classList` (a
+   `DOMTokenList` over the class attribute), and `querySelector`/
+   `querySelectorAll`/`matches` backed by a self-contained selector matcher
+   (`selector.rs`: type/`*`/`#id`/`.class`/`[attr]`/`[a=v]`/`[a~=v]` +
+   descendant/child combinators; unsupported syntax safely matches
+   nothing). Plus `DOMException` (name→code table), `requestAnimationFrame`,
+   and a real `textContent` getter (aggregates descendant text). Found and
+   fixed in passing: `textContent` was reading only the node's own text;
+   now it concatenates descendant text nodes per spec.
+
+   Effect on `dom/nodes` — the number moved on every axis: subtests run
+   2538 → **3341**, subtests passed 30 → **61**, errored files 58 → **46**,
+   all-pass files 0 → **2**. The arc (harness + results + body-DOM +
+   Element surface) is a working conformance loop with a rising number.
+   **Next levers:** `DOMException`-throwing on bad input (so
+   `assert_throws_dom` tests pass, not just run), `createElementNS` /
+   namespaces, `Node` breadth (`childNodes`/`firstChild`/`nextSibling`/
+   `removeChild`/`insertBefore`), and the missing globals
+   (`customElements`, etc.).
 4. **Expectations.** A checked-in expected-results file so known
    failures are tolerated and regressions surface (the WPT metadata
    model, serval-shaped).

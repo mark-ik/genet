@@ -21,14 +21,17 @@
 //! `parentNode`), via `CallCx::make_string` / `make_null`. Generic over the
 //! backend; tested on Boa + Nova like the rest of the host surface.
 //!
-//! Dispatch is prototype-based (`Node`/`Document` prototypes, `instanceof`), and
-//! nodes are `EventTarget`s with real tree propagation (capture → target → bubble
-//! over `parentNode`, with `stopPropagation`). A source document can be cloned in
-//! ([`clone_into`] / [`crate::Runtime::load_dom`]), with `document.body` /
-//! `documentElement` / `head` resolving over it. Not yet: the `Element`/`Text`
-//! split (all wrappers are `Node`), the `Element` method set
-//! (`querySelector` / `matches` / `hasAttribute` / `classList`), attribute
-//! reflection getters, and `DOMException`. See
+//! Dispatch is prototype-based with an `Element` / `Text` / `Document` split over
+//! `Node` (`instanceof`, `nodeType`); nodes are `EventTarget`s with real tree
+//! propagation (capture → target → bubble over `parentNode`, `stopPropagation`).
+//! A source document can be cloned in ([`clone_into`] /
+//! [`crate::Runtime::load_dom`]), with `document.body` / `documentElement` /
+//! `head` over it. The `Element` surface: `getAttribute` / `setAttribute` /
+//! `hasAttribute` / `removeAttribute` / `toggleAttribute`, `id` / `className`
+//! reflection, `classList`, and `querySelector` / `querySelectorAll` / `matches`
+//! (via [`crate::selector`]). Not yet: namespaced creation (`createElementNS`),
+//! `Node` traversal breadth (`childNodes` / `firstChild` / `removeChild` /
+//! `insertBefore`), and DOM methods *throwing* `DOMException` on bad input. See
 //! `docs/2026-05-26_pluggable_engines_testharness_plan.md`.
 
 use std::cell::RefCell;
@@ -94,6 +97,12 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     engine.set_function::<DocumentElement>("__documentElement", 0)?;
     engine.set_function::<DocumentBody>("__documentBody", 0)?;
     engine.set_function::<DocumentHead>("__documentHead", 0)?;
+    engine.set_function::<NodeType>("__nodeType", 1)?;
+    engine.set_function::<RemoveAttribute>("__removeAttribute", 2)?;
+    engine.set_function::<Matches>("__matches", 2)?;
+    engine.set_function::<QuerySelector>("__querySelector", 2)?;
+    engine.set_function::<QuerySelectorAllCount>("__querySelectorAllCount", 2)?;
+    engine.set_function::<QuerySelectorAllItem>("__querySelectorAllItem", 3)?;
     engine.eval(DOM_BOOTSTRAP)?;
     Ok(())
 }
@@ -280,6 +289,30 @@ impl<E: ScriptEngine> NativeFn<E> for TagName {
     }
 }
 
+/// `node.textContent`: for a text/comment node its own data; for an element the
+/// concatenation of all descendant text nodes, in document order (per the DOM).
+fn text_content(dom: &ScriptedDom, node: NodeId) -> String {
+    match dom.kind(node) {
+        NodeKind::Text | NodeKind::Comment => dom.text(node).unwrap_or("").to_string(),
+        _ => {
+            fn collect(dom: &ScriptedDom, node: NodeId, out: &mut String) {
+                for child in dom.dom_children(node).collect::<Vec<_>>() {
+                    if dom.kind(child) == NodeKind::Text {
+                        out.push_str(dom.text(child).unwrap_or(""));
+                    }
+                    collect(dom, child, out);
+                }
+            }
+            // An element may carry text directly (the `set_text` / `textContent`
+            // setter representation) or via text-node children (parsed / appended);
+            // include both.
+            let mut s = dom.text(node).unwrap_or("").to_string();
+            collect(dom, node, &mut s);
+            s
+        },
+    }
+}
+
 /// `__getTextContent(node)` → the node's text content (empty string if none).
 struct GetTextContent;
 impl<E: ScriptEngine> NativeFn<E> for GetTextContent {
@@ -288,8 +321,7 @@ impl<E: ScriptEngine> NativeFn<E> for GetTextContent {
         let Some(id) = cx.reflector_data(&node) else {
             return Ok(cx.make_null());
         };
-        let text = with_dom::<E, _>(cx, |dom| dom.text(NodeId::from_raw(id as usize)).map(str::to_string))
-            .flatten()
+        let text = with_dom::<E, _>(cx, |dom| text_content(dom, NodeId::from_raw(id as usize)))
             .unwrap_or_default();
         cx.make_string(&text)
     }
@@ -392,6 +424,129 @@ impl<E: ScriptEngine> NativeFn<E> for DocumentHead {
     }
 }
 
+/// `__nodeType(node)` → the DOM `nodeType` integer (as a string): 1 element,
+/// 3 text, 8 comment, 9 document, 10 doctype, 7 processing-instruction. Drives the
+/// JS `Element` / `Text` prototype split in `wrapNode`.
+struct NodeType;
+impl<E: ScriptEngine> NativeFn<E> for NodeType {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let node = cx.arg(0);
+        let Some(id) = cx.reflector_data(&node) else {
+            return cx.make_string("0");
+        };
+        let n = with_dom::<E, _>(cx, |dom| match dom.kind(NodeId::from_raw(id as usize)) {
+            NodeKind::Element => 1,
+            NodeKind::Text => 3,
+            NodeKind::ProcessingInstruction => 7,
+            NodeKind::Comment => 8,
+            NodeKind::Document => 9,
+            NodeKind::Doctype => 10,
+        })
+        .unwrap_or(0);
+        cx.make_string(&n.to_string())
+    }
+}
+
+/// `__removeAttribute(element, name)`.
+struct RemoveAttribute;
+impl<E: ScriptEngine> NativeFn<E> for RemoveAttribute {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let el = cx.arg(0);
+        let Some(id) = cx.reflector_data(&el) else {
+            return Ok(cx.undefined());
+        };
+        let name_v = cx.arg(1);
+        let name = cx.value_to_string(&name_v)?;
+        with_dom::<E, _>(cx, |dom| {
+            dom.remove_attribute(NodeId::from_raw(id as usize), attr_qual(&name))
+        });
+        Ok(cx.undefined())
+    }
+}
+
+/// `__matches(element, selector)` → `"true"`/`"false"`.
+struct Matches;
+impl<E: ScriptEngine> NativeFn<E> for Matches {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let el = cx.arg(0);
+        let Some(id) = cx.reflector_data(&el) else {
+            return cx.make_string("false");
+        };
+        let sel_v = cx.arg(1);
+        let sel = cx.value_to_string(&sel_v)?;
+        let matched = with_dom::<E, _>(cx, |dom| {
+            crate::selector::parse(&sel).matches(dom, NodeId::from_raw(id as usize))
+        })
+        .unwrap_or(false);
+        cx.make_string(if matched { "true" } else { "false" })
+    }
+}
+
+/// `__querySelector(scope, selector)` → the first matching descendant's reflector,
+/// or `null`. `scope` is an element or the document.
+struct QuerySelector;
+impl<E: ScriptEngine> NativeFn<E> for QuerySelector {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let scope = cx.arg(0);
+        let Some(id) = cx.reflector_data(&scope) else {
+            return Ok(cx.make_null());
+        };
+        let sel_v = cx.arg(1);
+        let sel = cx.value_to_string(&sel_v)?;
+        match with_dom::<E, _>(cx, |dom| {
+            crate::selector::parse(&sel).query_first(dom, NodeId::from_raw(id as usize))
+        })
+        .flatten()
+        {
+            Some(node) => cx.reflector_for(node.raw() as u64),
+            None => Ok(cx.make_null()),
+        }
+    }
+}
+
+/// `__querySelectorAllCount(scope, selector)` → match count (as a string). Paired
+/// with `__querySelectorAllItem`, the count/item pattern used elsewhere.
+struct QuerySelectorAllCount;
+impl<E: ScriptEngine> NativeFn<E> for QuerySelectorAllCount {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let scope = cx.arg(0);
+        let Some(id) = cx.reflector_data(&scope) else {
+            return cx.make_string("0");
+        };
+        let sel_v = cx.arg(1);
+        let sel = cx.value_to_string(&sel_v)?;
+        let n = with_dom::<E, _>(cx, |dom| {
+            crate::selector::parse(&sel).query_all(dom, NodeId::from_raw(id as usize)).len()
+        })
+        .unwrap_or(0);
+        cx.make_string(&n.to_string())
+    }
+}
+
+/// `__querySelectorAllItem(scope, selector, i)` → the i-th match's reflector, or
+/// `undefined`.
+struct QuerySelectorAllItem;
+impl<E: ScriptEngine> NativeFn<E> for QuerySelectorAllItem {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let scope = cx.arg(0);
+        let Some(id) = cx.reflector_data(&scope) else {
+            return Ok(cx.undefined());
+        };
+        let sel_v = cx.arg(1);
+        let sel = cx.value_to_string(&sel_v)?;
+        let i_v = cx.arg(2);
+        let i = cx.value_to_string(&i_v)?.parse::<usize>().unwrap_or(usize::MAX);
+        match with_dom::<E, _>(cx, |dom| {
+            crate::selector::parse(&sel).query_all(dom, NodeId::from_raw(id as usize)).get(i).copied()
+        })
+        .flatten()
+        {
+            Some(node) => cx.reflector_for(node.raw() as u64),
+            None => Ok(cx.undefined()),
+        }
+    }
+}
+
 /// `document` plus node wrappers. A wrapper is a plain object carrying its reflector
 /// (`__ref`) and the methods that drive the native sinks. ES5-style (no arrows /
 /// classes / let) for the widest backend coverage, matching the other bootstraps.
@@ -403,26 +558,33 @@ const DOM_BOOTSTRAP: &str = r#"
   var wrappers = new Map();
 
   // wrapNode is hoisted (function declaration), so the prototype methods defined
-  // below may reference it before this point — they only run when called.
+  // below may reference it before this point — they only run when called. The
+  // prototype is chosen by nodeType, giving the Element / Text split (`instanceof
+  // Element`, `node.nodeType`).
   function wrapNode(ref) {
     if (ref === undefined || ref === null) return null;
     if (wrappers.has(ref)) return wrappers.get(ref);
-    var node = Object.create(Node.prototype);
+    var nt = +__nodeType(ref);
+    var proto = nt === 1 ? Element.prototype
+              : nt === 9 ? Document.prototype
+              : nt === 3 ? Text.prototype
+              : Node.prototype;
+    var node = Object.create(proto);
     node.__ref = ref;
+    node.nodeType = nt;
     wrappers.set(ref, node);
     return node;
   }
 
-  // Node: methods live on the prototype (shared, instanceof-able), not as
-  // per-object closures. `this.__ref` is the node's reflector.
+  // Node: the base every node shares (tree + events + textContent). Methods live
+  // on the prototype (shared, instanceof-able), not per-object. `this.__ref` is
+  // the node's reflector.
   function Node() {}
+  Node.ELEMENT_NODE = Node.prototype.ELEMENT_NODE = 1;
+  Node.TEXT_NODE = Node.prototype.TEXT_NODE = 3;
+  Node.COMMENT_NODE = Node.prototype.COMMENT_NODE = 8;
+  Node.DOCUMENT_NODE = Node.prototype.DOCUMENT_NODE = 9;
   Node.prototype.appendChild = function(child) { __appendChild(this.__ref, child.__ref); return child; };
-  Node.prototype.setAttribute = function(name, value) { __setAttribute(this.__ref, String(name), String(value)); };
-  Node.prototype.getAttribute = function(name) { return __getAttribute(this.__ref, String(name)); };
-  Object.defineProperty(Node.prototype, 'tagName', {
-    configurable: true,
-    get: function() { return __tagName(this.__ref); }
-  });
   Object.defineProperty(Node.prototype, 'textContent', {
     configurable: true,
     get: function() { return __getTextContent(this.__ref); },
@@ -485,6 +647,84 @@ const DOM_BOOTSTRAP: &str = r#"
     globalThis.Event.prototype.stopPropagation = function() { this.__stop = true; };
   }
 
+  // Text : Node (no extra surface yet beyond textContent on Node).
+  function Text() {}
+  Text.prototype = Object.create(Node.prototype);
+
+  // Element : Node — attributes, reflection, selectors.
+  function Element() {}
+  Element.prototype = Object.create(Node.prototype);
+  Element.prototype.setAttribute = function(name, value) { __setAttribute(this.__ref, String(name), String(value)); };
+  Element.prototype.getAttribute = function(name) { return __getAttribute(this.__ref, String(name)); };
+  Element.prototype.hasAttribute = function(name) { return __getAttribute(this.__ref, String(name)) !== null; };
+  Element.prototype.removeAttribute = function(name) { __removeAttribute(this.__ref, String(name)); };
+  Element.prototype.toggleAttribute = function(name, force) {
+    var has = this.hasAttribute(name);
+    if (force === undefined) force = !has;
+    if (force) { if (!has) this.setAttribute(name, ''); return true; }
+    if (has) this.removeAttribute(name);
+    return false;
+  };
+  Element.prototype.matches = function(sel) { return __matches(this.__ref, String(sel)) === 'true'; };
+  Object.defineProperty(Element.prototype, 'tagName', {
+    configurable: true, get: function() { return __tagName(this.__ref); }
+  });
+  Object.defineProperty(Element.prototype, 'id', {
+    configurable: true,
+    get: function() { return this.getAttribute('id') || ''; },
+    set: function(v) { this.setAttribute('id', String(v)); }
+  });
+  Object.defineProperty(Element.prototype, 'className', {
+    configurable: true,
+    get: function() { return this.getAttribute('class') || ''; },
+    set: function(v) { this.setAttribute('class', String(v)); }
+  });
+  Object.defineProperty(Element.prototype, 'classList', {
+    configurable: true,
+    get: function() {
+      var el = this;
+      function tokens() {
+        var c = el.getAttribute('class') || '';
+        return c.trim().split(/\s+/).filter(function(s) { return s.length; });
+      }
+      function write(arr) { el.setAttribute('class', arr.join(' ')); }
+      return {
+        get length() { return tokens().length; },
+        item: function(i) { var t = tokens(); return i < t.length ? t[i] : null; },
+        contains: function(tok) { return tokens().indexOf(tok) !== -1; },
+        add: function() {
+          var t = tokens();
+          for (var i = 0; i < arguments.length; i++) { if (t.indexOf(arguments[i]) === -1) t.push(arguments[i]); }
+          write(t);
+        },
+        remove: function() {
+          var t = tokens();
+          for (var i = 0; i < arguments.length; i++) { var x = t.indexOf(arguments[i]); if (x !== -1) t.splice(x, 1); }
+          write(t);
+        },
+        toggle: function(tok, force) {
+          var t = tokens(); var has = t.indexOf(tok) !== -1;
+          if (force === true || (force === undefined && !has)) { if (!has) { t.push(tok); write(t); } return true; }
+          if (has) { t.splice(t.indexOf(tok), 1); write(t); }
+          return false;
+        },
+        toString: function() { return el.getAttribute('class') || ''; }
+      };
+    }
+  });
+
+  // querySelector / querySelectorAll, shared by Element and Document (scope is the
+  // receiver). querySelectorAll returns an array (NodeList-approximate).
+  function querySelector(sel) { return wrapNode(__querySelector(this.__ref, String(sel))); }
+  function querySelectorAll(sel) {
+    var n = +__querySelectorAllCount(this.__ref, String(sel));
+    var out = [];
+    for (var i = 0; i < n; i++) { out.push(wrapNode(__querySelectorAllItem(this.__ref, String(sel), String(i)))); }
+    return out;
+  }
+  Element.prototype.querySelector = querySelector;
+  Element.prototype.querySelectorAll = querySelectorAll;
+
   // Document : Node, with the construction/lookup methods.
   function Document() {}
   Document.prototype = Object.create(Node.prototype);
@@ -497,6 +737,8 @@ const DOM_BOOTSTRAP: &str = r#"
     for (var i = 0; i < n; i++) { out.push(wrapNode(__elementsByTagNameItem(String(tag), String(i)))); }
     return out;
   };
+  Document.prototype.querySelector = querySelector;
+  Document.prototype.querySelectorAll = querySelectorAll;
   Object.defineProperty(Document.prototype, 'documentElement', {
     configurable: true, get: function() { return wrapNode(__documentElement()); }
   });
@@ -508,6 +750,8 @@ const DOM_BOOTSTRAP: &str = r#"
   });
 
   globalThis.Node = Node;
+  globalThis.Element = Element;
+  globalThis.Text = Text;
   globalThis.Document = Document;
 
   // The document is a Document instance over the root reflector, registered in the
@@ -515,6 +759,7 @@ const DOM_BOOTSTRAP: &str = r#"
   var docRef = __documentRoot();
   var document = Object.create(Document.prototype);
   document.__ref = docRef;
+  document.nodeType = 9;
   wrappers.set(docRef, document);
   globalThis.document = document;
 })();
@@ -669,9 +914,65 @@ mod tests {
         assert_eq!(rt.host().borrow().console, vec!["BODY", "HTML", "DIV", "1"]);
     }
 
+    /// The Element surface, against any backend: prototype split (`instanceof
+    /// Element`, `nodeType`), attribute methods (`hasAttribute` / `removeAttribute`
+    /// / `toggleAttribute`), reflection (`id` / `className`), `classList`, and
+    /// `querySelector` / `querySelectorAll` / `matches` over a loaded tree.
+    fn dom_element_surface_works<E: ScriptEngine>() {
+        use serval_static_dom::StaticDocument;
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.load_dom(&StaticDocument::parse(
+            "<html><body><div id='a' class='x y'><p class='x'>hi</p><span></span></div></body></html>",
+        ));
+
+        rt.eval(
+            "var div = document.getElementById('a');\
+             console.log(String(div instanceof Element));\
+             console.log(String(div.nodeType));\
+             console.log(div.id + ',' + div.className);\
+             console.log(String(div.hasAttribute('class')) + ',' + String(div.hasAttribute('nope')));\
+             div.classList.add('z'); div.classList.remove('y');\
+             console.log(div.className + ',' + String(div.classList.contains('x')) + ',' + String(div.classList.length));\
+             div.toggleAttribute('hidden');\
+             console.log(String(div.hasAttribute('hidden')));\
+             console.log(String(document.querySelectorAll('.x').length));\
+             console.log(document.querySelector('div > p').textContent);\
+             console.log(String(div.querySelectorAll('span').length));\
+             console.log(String(document.querySelector('p').matches('.x')));",
+        )
+        .expect("element script");
+
+        assert_eq!(
+            rt.host().borrow().console,
+            vec![
+                "true",        // div instanceof Element
+                "1",           // nodeType ELEMENT_NODE
+                "a,x y",       // id, className
+                "true,false",  // hasAttribute
+                "x z,true,2",  // className after add('z')/remove('y'); classList has x; length 2
+                "true",        // toggleAttribute added 'hidden'
+                "2",           // .x matches div + p
+                "hi",          // div > p textContent
+                "1",           // div's span descendants
+                "true",        // p matches .x
+            ],
+        );
+    }
+
     #[test]
     fn dom_construction_on_boa() {
         dom_construction_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[test]
+    fn dom_element_surface_on_boa() {
+        dom_element_surface_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dom_element_surface_on_nova() {
+        dom_element_surface_works::<script_engine_nova::NovaEngine>();
     }
 
     #[test]
