@@ -6544,6 +6544,7 @@ name = "script-runtime-api"
 version = "0.0.0"
 dependencies = [
  "layout-dom-api",
+ "markup5ever",
  "script-engine-api",
  "script-engine-boa",
  "script-engine-nova",

@@ -23,6 +23,8 @@ script-engine-api = { path = "../script-engine-api" }
 serval-scripted-dom = { path = "../serval-scripted-dom" }
 # QualName / Namespace / LocalName for create_element.
 layout-dom-api = { path = "../shared/layout-dom" }
+# Prefix (not re-exported by layout-dom-api) for createElementNS qualified names.
+markup5ever = { workspace = true }
 
 [dev-dependencies]
 # Validate the host surface against a real backend. Boa is pure Rust (all targets);

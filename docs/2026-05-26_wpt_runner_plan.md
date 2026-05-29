@@ -145,10 +145,44 @@ A real `MANIFEST.json` reader can replace this later for exactness
 
    Effect on `dom/nodes`: all-pass files 2 → **14**, subtests passed
    61 → **95**, errored files 46 → **28** (the xhtml skips moved ~14 false
-   errors to skipped). **Next levers:** DOM methods throwing `DOMException`
-   on bad input more broadly, `createElementNS` / namespaces, `Comment` /
-   `DocumentFragment` node types, `cloneNode`, and missing globals
-   (`customElements`).
+   errors to skipped).
+
+   **Reflected IDL attributes + namespaces + traversal (done 2026-05-29),
+   the biggest single lift.** Chosen by a fan-out gap analysis across six
+   subsets (a Workflow: an analyzer per failure-log → a synthesis ranking
+   levers by subtests-per-cost). The dominant lever was the **reflected
+   IDL attribute layer**: the WPT reflection harness checks
+   `typeof element[idlName]` for every (element, attribute) pair, and the
+   global attributes (`title`/`lang`/`hidden`/`dir`/`tabIndex`/…) are tested
+   on *every* element, so present getters of the right kind unlock tens of
+   thousands of subtests. Shipped as one increment on the Element/Document
+   prototype surface:
+   - **Reflected attributes** (Lever 1): a table-driven installer on
+     `Element.prototype` for DOMString, boolean, approximate-enumerated
+     (lowercased pass-through), and long kinds, all over the existing
+     `get`/`set`/`has`/`toggle`/`removeAttribute` sinks. Table built from
+     the WPT metadata, conflict-free (idlNames with >1 kind across
+     interfaces dropped, since there is one `Element.prototype`). URL /
+     tokenlist / double kinds deferred (need URL parsing / exotic objects).
+   - **Namespaces** (Lever 2): `localName` / `namespaceURI` / `prefix`
+     getters, namespace-gated `tagName` (upper-case only in XHTML),
+     `createElementNS` — all from the `QualName` already in the arena.
+   - **TreeWalker / NodeIterator / NodeFilter** (Lever 3): pure JS over
+     the child/sibling sinks, with the spec filter + traversal algorithms.
+   - **Document accessors** (Lever 10): `title` (whitespace-collapsed
+     getter + `<title>`-creating setter), `body` setter, `dir`,
+     `compatMode`, `readyState`.
+
+   Effect, every measured suite up: **html/dom 4936 → 35366** subtests
+   (the reflection volume), **dom/nodes 95 → 832**, **dom/lists 1 → 100**,
+   **dom/traversal 1 → 32** (TreeWalker recovered the ERROR files, 7
+   all-pass). ~31k subtests gained in one increment. **Next levers** (need
+   a new engine primitive or more plumbing, so deferred): live
+   HTMLCollection / NodeList and `dataset` (an exotic/named-property object
+   — `CallCx` has no `make_object`/exotic primitive today), `DOMParser` /
+   `createHTMLDocument` (a second detached document), `Comment` /
+   `DocumentFragment` node types, the URL/tokenlist reflected kinds, and
+   per-tag HTML element interfaces.
 4. **Expectations.** A checked-in expected-results file so known
    failures are tolerated and regressions surface (the WPT metadata
    model, serval-shaped).

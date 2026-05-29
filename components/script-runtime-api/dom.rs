@@ -32,17 +32,25 @@
 //! (via [`crate::selector`]). Node traversal: `childNodes` / `firstChild` /
 //! siblings / element-filtered views, `nodeName` / `nodeValue`, the mutators
 //! `removeChild` / `insertBefore` / `replaceChild` (throwing `NotFoundError`), and
-//! the `ChildNode` mixin. Not yet: namespaced creation (`createElementNS`),
-//! `Comment` / `DocumentFragment` node types, `cloneNode`. See
+//! the `ChildNode` mixin. Namespaces: `localName` / `namespaceURI` / `prefix`,
+//! namespace-gated `tagName`, `createElementNS`. A **reflected IDL attribute**
+//! layer on `Element.prototype` (DOMString / boolean / approximate-enumerated /
+//! long kinds, table-driven) and `TreeWalker` / `NodeIterator` / `NodeFilter`.
+//! Not yet: `Comment` / `DocumentFragment` node types, `cloneNode`, URL/tokenlist
+//! reflected kinds, live HTMLCollection. See
 //! `docs/2026-05-26_pluggable_engines_testharness_plan.md`.
 
 use std::cell::RefCell;
 
 use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, NodeKind, QualName};
+use markup5ever::Prefix;
 use script_engine_api::{CallCx, NativeFn, ScriptEngine};
 use serval_scripted_dom::{NodeId, ScriptedDom};
 
 use crate::HostState;
+
+/// The XHTML namespace — HTML elements live here; `tagName` upper-cases only in it.
+const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 
 /// Clone `src`'s tree (elements with attributes + text) under `dst_parent` in the
 /// scripted DOM, recursively. Backs [`crate::Runtime::load_dom`]: a test's parsed
@@ -115,6 +123,10 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     engine.set_function::<NodeValue>("__nodeValue", 1)?;
     engine.set_function::<RemoveChild>("__removeChild", 2)?;
     engine.set_function::<InsertBefore>("__insertBefore", 3)?;
+    engine.set_function::<LocalNameOf>("__localName", 1)?;
+    engine.set_function::<NamespaceUri>("__namespaceURI", 1)?;
+    engine.set_function::<PrefixOf>("__prefix", 1)?;
+    engine.set_function::<CreateElementNS>("__createElementNS", 2)?;
     engine.eval(DOM_BOOTSTRAP)?;
     Ok(())
 }
@@ -291,7 +303,14 @@ impl<E: ScriptEngine> NativeFn<E> for TagName {
             return Ok(cx.make_null());
         };
         let name = with_dom::<E, _>(cx, |dom| {
-            dom.element_name(NodeId::from_raw(id as usize)).map(|q| q.local.as_ref().to_ascii_uppercase())
+            // `tagName` upper-cases only for HTML-namespaced elements.
+            dom.element_name(NodeId::from_raw(id as usize)).map(|q| {
+                if q.ns.as_ref() == XHTML_NS {
+                    q.local.as_ref().to_ascii_uppercase()
+                } else {
+                    q.local.as_ref().to_string()
+                }
+            })
         })
         .flatten();
         match name {
@@ -723,6 +742,87 @@ impl<E: ScriptEngine> NativeFn<E> for InsertBefore {
     }
 }
 
+/// `__localName(element)` → the element's local name (as stored, lowercase for
+/// HTML), or `null`.
+struct LocalNameOf;
+impl<E: ScriptEngine> NativeFn<E> for LocalNameOf {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let el = cx.arg(0);
+        let Some(id) = cx.reflector_data(&el) else {
+            return Ok(cx.make_null());
+        };
+        let name = with_dom::<E, _>(cx, |dom| {
+            dom.element_name(NodeId::from_raw(id as usize)).map(|q| q.local.as_ref().to_string())
+        })
+        .flatten();
+        match name {
+            Some(s) => cx.make_string(&s),
+            None => Ok(cx.make_null()),
+        }
+    }
+}
+
+/// `__namespaceURI(element)` → the element's namespace, or `null` when empty.
+struct NamespaceUri;
+impl<E: ScriptEngine> NativeFn<E> for NamespaceUri {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let el = cx.arg(0);
+        let Some(id) = cx.reflector_data(&el) else {
+            return Ok(cx.make_null());
+        };
+        let ns = with_dom::<E, _>(cx, |dom| {
+            dom.element_name(NodeId::from_raw(id as usize)).map(|q| q.ns.as_ref().to_string())
+        })
+        .flatten();
+        match ns {
+            Some(s) if !s.is_empty() => cx.make_string(&s),
+            _ => Ok(cx.make_null()),
+        }
+    }
+}
+
+/// `__prefix(element)` → the element's namespace prefix, or `null`.
+struct PrefixOf;
+impl<E: ScriptEngine> NativeFn<E> for PrefixOf {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let el = cx.arg(0);
+        let Some(id) = cx.reflector_data(&el) else {
+            return Ok(cx.make_null());
+        };
+        let prefix = with_dom::<E, _>(cx, |dom| {
+            dom.element_name(NodeId::from_raw(id as usize))
+                .and_then(|q| q.prefix.as_ref().map(|p| p.as_ref().to_string()))
+        })
+        .flatten();
+        match prefix {
+            Some(s) => cx.make_string(&s),
+            None => Ok(cx.make_null()),
+        }
+    }
+}
+
+/// `__createElementNS(ns, qualifiedName)` → a reflector for the new element. The
+/// qualified name is split on `:` into prefix + local. (Strict name validation /
+/// `InvalidCharacterError` is deferred; a malformed name still creates an element.)
+struct CreateElementNS;
+impl<E: ScriptEngine> NativeFn<E> for CreateElementNS {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let ns_v = cx.arg(0);
+        let qname_v = cx.arg(1);
+        let ns = cx.value_to_string(&ns_v)?;
+        let qname = cx.value_to_string(&qname_v)?;
+        let (prefix, local) = match qname.split_once(':') {
+            Some((p, l)) => (Some(Prefix::from(p)), l.to_string()),
+            None => (None, qname),
+        };
+        let qual = QualName::new(prefix, Namespace::from(ns.as_str()), LocalName::from(local.as_str()));
+        match with_dom::<E, _>(cx, |dom| dom.create_element(qual)) {
+            Some(node) => cx.reflector_for(node.raw() as u64),
+            None => Ok(cx.undefined()),
+        }
+    }
+}
+
 /// `document` plus node wrappers. A wrapper is a plain object carrying its reflector
 /// (`__ref`) and the methods that drive the native sinks. ES5-style (no arrows /
 /// classes / let) for the widest backend coverage, matching the other bootstraps.
@@ -914,6 +1014,15 @@ const DOM_BOOTSTRAP: &str = r#"
     get: function() { return this.getAttribute('class') || ''; },
     set: function(v) { this.setAttribute('class', String(v)); }
   });
+  Object.defineProperty(Element.prototype, 'localName', {
+    configurable: true, get: function() { return __localName(this.__ref); }
+  });
+  Object.defineProperty(Element.prototype, 'namespaceURI', {
+    configurable: true, get: function() { return __namespaceURI(this.__ref); }
+  });
+  Object.defineProperty(Element.prototype, 'prefix', {
+    configurable: true, get: function() { return __prefix(this.__ref); }
+  });
   Object.defineProperty(Element.prototype, 'classList', {
     configurable: true,
     get: function() {
@@ -1007,6 +1116,9 @@ const DOM_BOOTSTRAP: &str = r#"
   function Document() {}
   Document.prototype = Object.create(Node.prototype);
   Document.prototype.createElement = function(tag) { return wrapNode(__createElement(String(tag))); };
+  Document.prototype.createElementNS = function(ns, qname) {
+    return wrapNode(__createElementNS(ns === null ? '' : String(ns), String(qname)));
+  };
   Document.prototype.createTextNode = function(data) { return wrapNode(__createTextNode(String(data))); };
   Document.prototype.getElementById = function(id) { return wrapNode(__getElementById(String(id))); };
   Document.prototype.getElementsByTagName = function(tag) {
@@ -1021,16 +1133,289 @@ const DOM_BOOTSTRAP: &str = r#"
     configurable: true, get: function() { return wrapNode(__documentElement()); }
   });
   Object.defineProperty(Document.prototype, 'body', {
-    configurable: true, get: function() { return wrapNode(__documentBody()); }
+    configurable: true,
+    get: function() { return wrapNode(__documentBody()); },
+    set: function(v) {
+      var old = this.body;
+      if (old) { old.parentNode.replaceChild(v, old); }
+      else { var root = this.documentElement; if (root) root.appendChild(v); }
+    }
   });
   Object.defineProperty(Document.prototype, 'head', {
     configurable: true, get: function() { return wrapNode(__documentHead()); }
+  });
+  // Document IDL accessors (Lever 10): title walks to <title> (whitespace-collapsed);
+  // dir reflects documentElement's dir; compatMode/readyState are constants.
+  Object.defineProperty(Document.prototype, 'title', {
+    configurable: true,
+    get: function() {
+      var titles = this.getElementsByTagName('title');
+      if (!titles.length) return '';
+      return (titles[0].textContent || '').replace(/[ \t\n\f\r]+/g, ' ').replace(/^ | $/g, '');
+    },
+    set: function(v) {
+      var titles = this.getElementsByTagName('title');
+      var t = titles.length ? titles[0] : null;
+      if (!t) {
+        var head = this.head; if (!head) return;
+        t = this.createElement('title'); head.appendChild(t);
+      }
+      t.textContent = String(v);
+    }
+  });
+  Object.defineProperty(Document.prototype, 'dir', {
+    configurable: true,
+    get: function() { var r = this.documentElement; return r ? r.dir : ''; },
+    set: function(v) { var r = this.documentElement; if (r) r.dir = v; }
+  });
+  Object.defineProperty(Document.prototype, 'compatMode', {
+    configurable: true, get: function() { return 'CSS1Compat'; }
+  });
+  Object.defineProperty(Document.prototype, 'readyState', {
+    configurable: true, get: function() { return 'complete'; }
   });
 
   globalThis.Node = Node;
   globalThis.Element = Element;
   globalThis.Text = Text;
   globalThis.Document = Document;
+
+  installReflectedAttributes();
+  installTraversal();
+
+  // Reflected IDL attribute accessors on Element.prototype (Lever 1). Driven by a
+  // table of [idlName, attr, kind]; kinds: s=DOMString, b=boolean, e=enumerated
+  // (approximate: lowercased pass-through, '' default — keyword canonicalization
+  // deferred), l=long. url/tokenlist/double are deferred (need URL parsing /
+  // exotic objects). All over the existing get/set/has/toggle/removeAttribute.
+  function installReflectedAttributes() {
+    function parseHtmlLong(s) {
+      if (s === null || s === undefined) return null;
+      var m = /^[ \t\n\f\r]*([+-]?[0-9]+)/.exec(String(s));
+      return m ? parseInt(m[1], 10) : null;
+    }
+    function toLong(v) {
+      v = Number(v);
+      if (!isFinite(v)) return 0;
+      return (v < 0 ? Math.ceil(v) : Math.floor(v)) | 0;
+    }
+    function def(idl, kind, attr) {
+      attr = attr || idl;
+      var desc = { configurable: true, enumerable: true };
+      if (kind === 's') {
+        desc.get = function() { var v = this.getAttribute(attr); return v === null ? '' : v; };
+        desc.set = function(v) { this.setAttribute(attr, String(v)); };
+      } else if (kind === 'b') {
+        desc.get = function() { return this.hasAttribute(attr); };
+        desc.set = function(v) { this.toggleAttribute(attr, !!v); };
+      } else if (kind === 'e') {
+        desc.get = function() { var v = this.getAttribute(attr); return v === null ? '' : String(v).toLowerCase(); };
+        desc.set = function(v) { this.setAttribute(attr, String(v)); };
+      } else if (kind === 'l') {
+        desc.get = function() { var n = parseHtmlLong(this.getAttribute(attr)); return n === null ? -1 : n; };
+        desc.set = function(v) { this.setAttribute(attr, String(toLong(v))); };
+      }
+      Object.defineProperty(Element.prototype, idl, desc);
+    }
+    // Global attributes (tested on every element by the WPT reflection harness).
+    def('title', 's'); def('lang', 's'); def('accessKey', 's');
+    def('autofocus', 'b'); def('hidden', 'b'); def('dir', 'e'); def('tabIndex', 'l');
+    // Per-element DOMString attributes (conflict-free union from the WPT metadata).
+    var S = ['aLink','abbr','accept','align','alt','archive','axis','background','bgColor','border',
+             'cellPadding','cellSpacing','charset','clear','code','codeType','color','content','coords',
+             'dateTime','dirName','download','event','face','formTarget','frame','frameBorder','headers',
+             'hreflang','integrity','label','link','marginHeight','marginWidth','media','name','nonce',
+             'pattern','ping','placeholder','rel','rev','rules','scheme','scrolling','shape','sizes',
+             'srcdoc','srclang','srcset','standby','step','summary','target','text','useMap','vAlign',
+             'vLink','valueType','version','wrap'];
+    for (var i = 0; i < S.length; i++) def(S[i], 's');
+    // DOMString with a differing content-attribute name.
+    def('acceptCharset', 's', 'accept-charset'); def('ch', 's', 'char'); def('chOff', 's', 'charoff');
+    def('defaultValue', 's', 'value'); def('httpEquiv', 's', 'http-equiv');
+    // Boolean attributes.
+    var B = ['allowFullscreen','autoplay','compact','controls','declare','defer','disabled',
+             'formNoValidate','isMap','loop','multiple','noHref','noModule','noResize','noShade',
+             'noValidate','noWrap','open','playsInline','readOnly','required','reversed','trueSpeed'];
+    for (var j = 0; j < B.length; j++) def(B[j], 'b');
+    def('defaultChecked', 'b', 'checked'); def('defaultMuted', 'b', 'muted'); def('defaultSelected', 'b', 'selected');
+  }
+
+  // NodeFilter + createTreeWalker / createNodeIterator (Lever 3), pure JS over the
+  // wrapNode tree (firstChild/nextSibling/parentNode). Implements the DOM filter
+  // semantics (whatToShow bitmask + ACCEPT/REJECT/SKIP) and the spec traversal.
+  function installTraversal() {
+    var NodeFilter = {
+      FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3,
+      SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 0x1, SHOW_ATTRIBUTE: 0x2, SHOW_TEXT: 0x4,
+      SHOW_CDATA_SECTION: 0x8, SHOW_PROCESSING_INSTRUCTION: 0x40, SHOW_COMMENT: 0x80,
+      SHOW_DOCUMENT: 0x100, SHOW_DOCUMENT_TYPE: 0x200, SHOW_DOCUMENT_FRAGMENT: 0x400
+    };
+    globalThis.NodeFilter = NodeFilter;
+
+    function filterNode(node, whatToShow, filter) {
+      if (!((whatToShow >>> 0) & (1 << (node.nodeType - 1)))) return NodeFilter.FILTER_SKIP;
+      if (!filter) return NodeFilter.FILTER_ACCEPT;
+      return (typeof filter === 'function') ? filter(node) : filter.acceptNode(node);
+    }
+
+    function TreeWalker(root, whatToShow, filter) {
+      this.root = root;
+      this.whatToShow = whatToShow >>> 0;
+      this.filter = filter || null;
+      this.currentNode = root;
+    }
+    TreeWalker.prototype._f = function(n) { return filterNode(n, this.whatToShow, this.filter); };
+    TreeWalker.prototype.parentNode = function() {
+      var node = this.currentNode;
+      while (node !== null && node !== this.root) {
+        node = node.parentNode;
+        if (node !== null && this._f(node) === 1) { this.currentNode = node; return node; }
+      }
+      return null;
+    };
+    TreeWalker.prototype._traverseChildren = function(first) {
+      var node = first ? this.currentNode.firstChild : this.currentNode.lastChild;
+      while (node !== null) {
+        var result = this._f(node);
+        if (result === 1) { this.currentNode = node; return node; }
+        if (result === 3) {
+          var child = first ? node.firstChild : node.lastChild;
+          if (child !== null) { node = child; continue; }
+        }
+        while (node !== null) {
+          var sibling = first ? node.nextSibling : node.previousSibling;
+          if (sibling !== null) { node = sibling; break; }
+          var parent = node.parentNode;
+          if (parent === null || parent === this.root || parent === this.currentNode) return null;
+          node = parent;
+        }
+      }
+      return null;
+    };
+    TreeWalker.prototype.firstChild = function() { return this._traverseChildren(true); };
+    TreeWalker.prototype.lastChild = function() { return this._traverseChildren(false); };
+    TreeWalker.prototype._traverseSiblings = function(next) {
+      var node = this.currentNode;
+      if (node === this.root) return null;
+      while (true) {
+        var sibling = next ? node.nextSibling : node.previousSibling;
+        while (sibling !== null) {
+          node = sibling;
+          var result = this._f(node);
+          if (result === 1) { this.currentNode = node; return node; }
+          sibling = next ? node.firstChild : node.lastChild;
+          if (result === 2 || sibling === null) { sibling = next ? node.nextSibling : node.previousSibling; }
+        }
+        node = node.parentNode;
+        if (node === null || node === this.root) return null;
+        if (this._f(node) === 1) return null;
+      }
+    };
+    TreeWalker.prototype.nextSibling = function() { return this._traverseSiblings(true); };
+    TreeWalker.prototype.previousSibling = function() { return this._traverseSiblings(false); };
+    TreeWalker.prototype.nextNode = function() {
+      var node = this.currentNode;
+      var result = 1;
+      while (true) {
+        while (result !== 2 && node.firstChild !== null) {
+          node = node.firstChild;
+          result = this._f(node);
+          if (result === 1) { this.currentNode = node; return node; }
+        }
+        var temporary = node;
+        var sibling = null;
+        while (temporary !== null) {
+          if (temporary === this.root) return null;
+          sibling = temporary.nextSibling;
+          if (sibling !== null) break;
+          temporary = temporary.parentNode;
+        }
+        if (sibling === null) return null;
+        node = sibling;
+        result = this._f(node);
+        if (result === 1) { this.currentNode = node; return node; }
+      }
+    };
+    TreeWalker.prototype.previousNode = function() {
+      var node = this.currentNode;
+      while (node !== this.root) {
+        var sibling = node.previousSibling;
+        while (sibling !== null) {
+          node = sibling;
+          var result = this._f(node);
+          while (result !== 2 && node.lastChild !== null) {
+            node = node.lastChild;
+            result = this._f(node);
+          }
+          if (result === 1) { this.currentNode = node; return node; }
+          sibling = node.previousSibling;
+        }
+        if (node === this.root) return null;
+        var parent = node.parentNode;
+        if (parent === null) return null;
+        node = parent;
+        if (this._f(node) === 1) { this.currentNode = node; return node; }
+      }
+      return null;
+    };
+    globalThis.TreeWalker = TreeWalker;
+    Document.prototype.createTreeWalker = function(root, whatToShow, filter) {
+      return new TreeWalker(root, whatToShow === undefined ? 0xFFFFFFFF : whatToShow, filter);
+    };
+
+    // NodeIterator over document order within root's subtree.
+    function following(node, root) {
+      if (node.firstChild) return node.firstChild;
+      var n = node;
+      while (n) {
+        if (n === root) return null;
+        if (n.nextSibling) return n.nextSibling;
+        n = n.parentNode;
+      }
+      return null;
+    }
+    function preceding(node, root) {
+      if (node === root) return null;
+      if (node.previousSibling) {
+        var n = node.previousSibling;
+        while (n.lastChild) n = n.lastChild;
+        return n;
+      }
+      return node.parentNode === root ? null : node.parentNode;
+    }
+    function NodeIterator(root, whatToShow, filter) {
+      this.root = root;
+      this.whatToShow = whatToShow >>> 0;
+      this.filter = filter || null;
+      this.referenceNode = root;
+      this.pointerBeforeReferenceNode = true;
+    }
+    NodeIterator.prototype._traverse = function(next) {
+      var node = this.referenceNode;
+      var beforeNode = this.pointerBeforeReferenceNode;
+      while (true) {
+        if (next) {
+          if (!beforeNode) { node = following(node, this.root); if (node === null) return null; }
+          else { beforeNode = false; }
+        } else {
+          if (beforeNode) { node = preceding(node, this.root); if (node === null) return null; }
+          else { beforeNode = true; }
+        }
+        if (filterNode(node, this.whatToShow, this.filter) === 1) {
+          this.referenceNode = node;
+          this.pointerBeforeReferenceNode = beforeNode;
+          return node;
+        }
+      }
+    };
+    NodeIterator.prototype.nextNode = function() { return this._traverse(true); };
+    NodeIterator.prototype.previousNode = function() { return this._traverse(false); };
+    NodeIterator.prototype.detach = function() {};
+    globalThis.NodeIterator = NodeIterator;
+    Document.prototype.createNodeIterator = function(root, whatToShow, filter) {
+      return new NodeIterator(root, whatToShow === undefined ? 0xFFFFFFFF : whatToShow, filter);
+    };
+  }
 
   // The document is a Document instance over the root reflector, registered in the
   // wrapper cache so wrapNode(rootRef) returns this same object.
@@ -1295,9 +1680,64 @@ mod tests {
         dom_element_surface_works::<script_engine_boa::BoaEngine>();
     }
 
+    /// Reflected IDL attributes + namespace getters + createElementNS + tree
+    /// walker + document.title, against any backend.
+    fn dom_reflection_ns_works<E: ScriptEngine>() {
+        use serval_static_dom::StaticDocument;
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.load_dom(&StaticDocument::parse(
+            "<html><head><title>  Hi   there </title></head><body><a id='x'></a></body></html>",
+        ));
+
+        rt.eval(
+            "var a = document.getElementById('x');\
+             console.log(typeof a.title + ',' + typeof a.hidden + ',' + typeof a.tabIndex);\
+             a.title = 'T'; console.log(a.title + ',' + a.getAttribute('title'));\
+             a.hidden = true; console.log(String(a.hidden) + ',' + String(a.hasAttribute('hidden')));\
+             a.hidden = false; console.log(String(a.hidden));\
+             a.tabIndex = 3; console.log(String(a.tabIndex));\
+             console.log(a.localName + ',' + a.namespaceURI + ',' + a.tagName);\
+             var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg:rect');\
+             console.log(svg.localName + ',' + svg.namespaceURI + ',' + svg.prefix + ',' + svg.tagName);\
+             console.log(document.title);\
+             console.log(typeof NodeFilter + ',' + NodeFilter.SHOW_ELEMENT);\
+             var tw = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);\
+             var seen = []; var n; while ((n = tw.nextNode())) { seen.push(n.localName); }\
+             console.log(seen.join(','));",
+        )
+        .expect("reflection/ns script");
+
+        assert_eq!(
+            rt.host().borrow().console,
+            vec![
+                "string,boolean,number",       // typeof reflected attrs
+                "T,T",                          // title set reflects to attribute
+                "true,true",                    // hidden boolean reflects
+                "false",                        // hidden cleared
+                "3",                            // tabIndex long roundtrip
+                "a,http://www.w3.org/1999/xhtml,A", // localName/namespaceURI/tagName (HTML upper)
+                "rect,http://www.w3.org/2000/svg,svg,rect", // createElementNS: not upper-cased, prefix kept
+                "Hi there",                     // document.title whitespace-collapsed
+                "object,1",                     // NodeFilter present
+                "a",                            // tree walker over body finds the <a>
+            ],
+        );
+    }
+
     #[test]
     fn dom_traversal_on_boa() {
         dom_traversal_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[test]
+    fn dom_reflection_ns_on_boa() {
+        dom_reflection_ns_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dom_reflection_ns_on_nova() {
+        dom_reflection_ns_works::<script_engine_nova::NovaEngine>();
     }
 
     #[cfg(not(target_arch = "wasm32"))]
