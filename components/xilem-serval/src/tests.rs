@@ -749,7 +749,7 @@ mod keyboard {
 // --- MARK: Stage 3 — form controls (text_field, backend-only) -----------------
 //
 // The headless twin of `pelt-live`'s Stage 3 form-control coverage: a reusable
-// `text_field` whose state is its own `String`, edited through the focus + key
+// `text_field` whose state is its own `TextInput` (buffer + caret), edited through the focus + key
 // dispatch foundation, and composed under a larger struct via `lens` — proven
 // over the `ScriptedDom` with no serval-layout/netrender, so a regression in the
 // field's edit handler or its `lens` composition is caught with the engine stack
@@ -765,8 +765,8 @@ mod controls {
     use serval_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{
-        DomHandle, Key, KeyEvent, NamedKey, ServalAppRunner, ServalCtx, ServalElement, View, el,
-        lens, text_field,
+        DomHandle, Key, KeyEvent, NamedKey, ServalAppRunner, ServalCtx, ServalElement, TextInput,
+        View, el, lens, text_field,
     };
 
     /// The text data of the single text child under `node`, if any.
@@ -799,12 +799,12 @@ mod controls {
         KeyEvent { key: Key::Named(k) }
     }
 
-    /// Type the canonical sequence into a focused field and assert both the
-    /// state `String` and the field's DOM text read `"hi y"`:
+    /// Type the canonical sequence into a focused field; the buffer progresses:
     ///   "h", "i", Space, "y", "o", Backspace
     ///     → "h", "hi", "hi ", "hi y", "hi yo", "hi y"
-    /// Space goes through `Named(Space)` (the Stage 3b convention), Backspace
-    /// pops the trailing "o", and every typed char appends.
+    /// Space goes through `Named(Space)` (the Stage 3b convention); the caret
+    /// stays at the end throughout, so each char inserts there and Backspace
+    /// removes the trailing "o". Callers assert the resulting buffer / DOM text.
     fn type_hi_y(runner: &mut impl FieldRunner) {
         runner.key(ch("h"));
         runner.key(ch("i"));
@@ -822,26 +822,27 @@ mod controls {
 
     // --- bare String state ----------------------------------------------------
 
-    impl<Logic, V> FieldRunner for ServalAppRunner<String, Logic, V, ()>
+    impl<Logic, V> FieldRunner for ServalAppRunner<TextInput, Logic, V, ()>
     where
-        Logic: FnMut(&String) -> V,
-        V: View<String, (), ServalCtx, Element = ServalElement>,
+        Logic: FnMut(&TextInput) -> V,
+        V: View<TextInput, (), ServalCtx, Element = ServalElement>,
     {
         fn key(&mut self, ev: KeyEvent) {
             self.dispatch_key(ev);
         }
     }
 
-    /// A `text_field` over bare `String` state: focus it, type the sequence, and
-    /// assert the state and the field's `<input>` text both read `"hi y"`.
+    /// A `text_field` over bare `TextInput` state: focus it, type the sequence,
+    /// and assert the buffer reads `"hi y"` (caret at the end) and the field's
+    /// `<input>` text shows the rendered buffer with the caret marker (`"hi y|"`).
     #[test]
-    fn text_field_edits_its_own_string() {
+    fn text_field_edits_its_own_buffer() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
         let mut runner = ServalAppRunner::<_, _, _, ()>::new(
             dom.clone(),
-            // The field's state IS the whole app state here: a `String`.
-            |s: &String| text_field(s),
-            String::new(),
+            // The field's state IS the whole app state here: a `TextInput`.
+            |s: &TextInput| text_field(s),
+            TextInput::default(),
         );
         let root = runner.root();
 
@@ -854,16 +855,77 @@ mod controls {
         runner.set_focus(Some(input));
         type_hi_y(&mut runner);
 
-        assert_eq!(
-            runner.state().as_str(),
-            "hi y",
-            "the field edited its own String"
-        );
+        assert_eq!(runner.state().text(), "hi y", "the field edited its buffer");
+        assert_eq!(runner.state().caret(), 4, "caret sits at the end after typing");
         assert_eq!(
             text_child(&dom.borrow(), runner.root()).as_deref(),
-            Some("hi y"),
-            "the rebuild reflected the edits into the <input> DOM text"
+            Some("hi y|"),
+            "the <input> DOM text shows the buffer with the caret marker at the end"
         );
+    }
+
+    /// Caret movement + insert/delete at the caret: type, move left, insert in the
+    /// middle, then delete on both sides. Proves the field is an insertion-point
+    /// editor (not append-only), and that the rendered caret marker tracks the
+    /// caret position.
+    #[test]
+    fn text_field_caret_moves_and_edits() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            |s: &TextInput| text_field(s),
+            TextInput::default(),
+        );
+        let input = {
+            let d = dom.borrow();
+            find_element_by_name(&d, runner.root(), "input").expect("an <input>")
+        };
+        runner.set_focus(Some(input));
+
+        runner.key(ch("h"));
+        runner.key(ch("i")); // "hi", caret 2
+        runner.key(named(NamedKey::ArrowLeft)); // caret 1: "h|i"
+        runner.key(ch("X")); // insert at 1: "hXi", caret 2
+        assert_eq!(runner.state().text(), "hXi");
+        assert_eq!(
+            text_child(&dom.borrow(), runner.root()).as_deref(),
+            Some("hX|i"),
+            "marker after the inserted X"
+        );
+
+        runner.key(named(NamedKey::ArrowLeft));
+        runner.key(named(NamedKey::ArrowLeft)); // caret 0: "|hXi"
+        runner.key(named(NamedKey::Delete)); // delete after caret (h): "Xi", caret 0
+        assert_eq!(runner.state().text(), "Xi");
+        assert_eq!(runner.state().caret(), 0);
+
+        runner.key(named(NamedKey::ArrowRight)); // caret 1
+        runner.key(named(NamedKey::Backspace)); // delete before caret (X): "i", caret 0
+        assert_eq!(runner.state().text(), "i");
+        assert_eq!(
+            text_child(&dom.borrow(), runner.root()).as_deref(),
+            Some("|i"),
+            "caret at the start"
+        );
+    }
+
+    /// `TextInput`'s edits are character-correct across a multi-byte char (`é` is
+    /// two UTF-8 bytes), exercised directly on the model (no runner): a byte-index
+    /// bug would split `é` and panic or corrupt the buffer.
+    #[test]
+    fn text_input_edits_are_char_correct() {
+        let mut t = TextInput::new("aé"); // 2 chars, caret at 2
+        assert_eq!(t.caret(), 2);
+        t.move_left(); // caret 1 (between 'a' and 'é')
+        t.insert_str("X"); // "aXé", caret 2
+        assert_eq!(t.text(), "aXé");
+        assert_eq!(t.caret(), 2);
+        t.backspace(); // remove 'X' before caret: "aé", caret 1
+        assert_eq!(t.text(), "aé");
+        t.delete(); // remove 'é' after caret: "a", caret 1
+        assert_eq!(t.text(), "a");
+        assert_eq!(t.caret(), 1);
+        assert_eq!(t.display(), "a|");
     }
 
     // --- lens-composed struct field -------------------------------------------
@@ -871,7 +933,7 @@ mod controls {
     /// A larger app with an independently-edited text field plus a sibling field
     /// the edits must *not* touch — proving the `text_field` composes via `lens`.
     struct Form {
-        name: String,
+        name: TextInput,
         other: String,
     }
 
@@ -894,17 +956,18 @@ mod controls {
         let mut runner = ServalAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |_f: &Form| {
-                // `text_field` takes `&str` (the field renders from a shared
-                // read), so a thin `|s: &mut String| text_field(s)` adapter
-                // bridges it to the `Fn(&mut ChildState) -> View` shape `lens`
-                // wants — the same adapter the Stage 3a `bump_button` test uses.
+                // `text_field` takes `&TextInput` (the field renders from a
+                // shared read), so a thin `|s: &mut TextInput| text_field(s)`
+                // adapter bridges it to the `Fn(&mut ChildState) -> View` shape
+                // `lens` wants — the same adapter the Stage 3a `bump_button` test
+                // uses.
                 el::<_, Form, ()>(
                     "div",
-                    lens(|s: &mut String| text_field(s), |f: &mut Form| &mut f.name),
+                    lens(|s: &mut TextInput| text_field(s), |f: &mut Form| &mut f.name),
                 )
             },
             Form {
-                name: String::new(),
+                name: TextInput::default(),
                 other: "untouched".to_string(),
             },
         );
@@ -918,15 +981,19 @@ mod controls {
         runner.set_focus(Some(input));
         type_hi_y(&mut runner);
 
-        assert_eq!(runner.state().name, "hi y", "only the lensed field changed");
+        assert_eq!(
+            runner.state().name.text(),
+            "hi y",
+            "only the lensed field changed"
+        );
         assert_eq!(
             runner.state().other, "untouched",
             "the sibling field must be untouched"
         );
         assert_eq!(
             text_child(&dom.borrow(), input).as_deref(),
-            Some("hi y"),
-            "the rebuild reflected the edits into the lensed field's <input> text"
+            Some("hi y|"),
+            "the rebuild reflected the edits (with caret marker) into the lensed field's <input> text"
         );
     }
 }

@@ -71,7 +71,7 @@ mod text;
 mod tests;
 
 pub use context::ServalCtx;
-pub use controls::{text_field, text_field_typed, TextField};
+pub use controls::{text_field, text_field_typed, TextField, TextInput};
 pub use element::{Element, El, el};
 pub use event::{OnClick, OnClickState, PointerClick, on_click};
 pub use key::{Key, KeyEvent, NamedKey, OnKey, OnKeyState, on_key};
