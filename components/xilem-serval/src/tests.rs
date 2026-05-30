@@ -810,12 +810,12 @@ mod controls {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use layout_dom_api::{LayoutDom, NodeKind};
+    use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
     use serval_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{
-        DomHandle, Key, KeyEvent, NamedKey, ServalAppRunner, ServalCtx, ServalElement, TextInput,
-        View, el, lens, text_field,
+        DomHandle, Key, KeyEvent, NamedKey, PointerClick, ServalAppRunner, ServalCtx,
+        ServalElement, TextInput, View, button, checkbox, el, lens, text_field,
     };
 
     /// The text data of the single text child under `node`, if any.
@@ -1080,6 +1080,59 @@ mod controls {
             Some("abc"),
             "End moves the caret, not the buffer text"
         );
+    }
+
+    /// Read a null-namespace attribute of `node`.
+    fn attr(dom: &ScriptedDom, node: NodeId, name: &str) -> Option<String> {
+        dom.attribute(node, &Namespace::from(""), &LocalName::from(name))
+            .map(str::to_string)
+    }
+
+    /// A `checkbox` over a `bool`: clicking toggles the bool and reflects it as
+    /// `aria-checked` + the `checked` class (for a11y + styling).
+    #[test]
+    fn checkbox_toggles_and_reflects_state() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner =
+            ServalAppRunner::<_, _, _, ()>::new(dom.clone(), |c: &bool| checkbox(*c), false);
+        let cb = runner.root(); // the checkbox is the whole view → its root element
+
+        assert_eq!(runner.state(), &false);
+        assert_eq!(attr(&dom.borrow(), cb, "aria-checked").as_deref(), Some("false"));
+        assert_eq!(attr(&dom.borrow(), cb, "class").as_deref(), Some("checkbox"));
+
+        // Click → checked.
+        runner.dispatch_click(cb, PointerClick { local: (0.0, 0.0) });
+        assert_eq!(runner.state(), &true);
+        assert_eq!(attr(&dom.borrow(), cb, "aria-checked").as_deref(), Some("true"));
+        assert_eq!(
+            attr(&dom.borrow(), cb, "class").as_deref(),
+            Some("checkbox checked")
+        );
+
+        // Click again → back to unchecked.
+        runner.dispatch_click(cb, PointerClick { local: (0.0, 0.0) });
+        assert_eq!(runner.state(), &false);
+    }
+
+    /// A `button(label, handler)`: renders a `<button>` with the label, and a
+    /// click runs the handler.
+    #[test]
+    fn button_runs_its_handler() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let inc: fn(&mut u32, PointerClick) = |n, _| *n += 1;
+        let mut runner =
+            ServalAppRunner::<_, _, _, ()>::new(dom.clone(), move |_: &u32| button("inc", inc), 0u32);
+        let btn = runner.root();
+
+        assert_eq!(
+            dom.borrow().element_name(btn).unwrap().local.as_ref(),
+            "button"
+        );
+        assert_eq!(text_child(&dom.borrow(), btn).as_deref(), Some("inc"));
+
+        runner.dispatch_click(btn, PointerClick { local: (0.0, 0.0) });
+        assert_eq!(runner.state(), &1);
     }
 }
 

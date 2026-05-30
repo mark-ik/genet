@@ -72,7 +72,10 @@ mod text;
 mod tests;
 
 pub use context::ServalCtx;
-pub use controls::{text_field, text_field_typed, TextField, TextInput};
+pub use controls::{
+    button, checkbox, checkbox_typed, text_field, text_field_typed, toggle, Checkbox, TextField,
+    TextInput,
+};
 pub use element::{El, Element, ElementView, el};
 pub use event::{OnClick, OnClickState, PointerClick, on_click};
 pub use key::{Key, KeyEvent, Modifiers, NamedKey, OnKey, OnKeyState, on_key};
@@ -80,8 +83,9 @@ pub use optional_action::{Action, OptionalAction};
 pub use pod::{ServalElement, ServalElementMut};
 pub use runner::ServalAppRunner;
 pub use splice::ServalChildrenSplice;
-// Per-tag element-view helpers: `div`, `span`, `p`, `button`, `input`, `label`,
-// `a`, `h1`/`h2`/`h3`, `ul`/`ol`/`li`.
+// Per-tag element-view helpers: `div`, `span`, `p`, `input`, `label`, `a`,
+// `h1`/`h2`/`h3`, `ul`/`ol`/`li`. (No `button` here — `controls::button` is the
+// button view, with a handler.)
 pub use tags::*;
 pub use text::text;
 

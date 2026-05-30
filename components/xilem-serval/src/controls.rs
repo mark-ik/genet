@@ -31,7 +31,10 @@
 //! renders on screen.
 
 use crate::pod::ServalElement;
-use crate::{El, Key, KeyEvent, NamedKey, OnKey, ServalCtx, View, el, on_key};
+use crate::{
+    El, Key, KeyEvent, NamedKey, OnClick, OnKey, OptionalAction, PointerClick, ServalCtx, View, el,
+    on_click, on_key,
+};
 
 /// The caret marker inserted into [`TextInput::display`]'s *textual* rendering
 /// (never into the buffer). The on-screen field paints a real caret bar instead;
@@ -234,4 +237,82 @@ pub fn text_field(input: &TextInput) -> impl View<TextInput, (), ServalCtx, Elem
 /// than `lens(|s| text_field(s), …)` (whose inner view is opaque).
 pub fn text_field_typed(input: &TextInput) -> TextField {
     build_text_field(input)
+}
+
+// --- MARK: checkbox / toggle -------------------------------------------------
+
+/// The toggle handler for [`checkbox`] / [`toggle`]: flip the bool on click.
+fn flip(checked: &mut bool, _: PointerClick) {
+    *checked = !*checked;
+}
+
+/// The concrete view type a checkbox / toggle produces: an `on_click`-wrapped
+/// element reflecting the checked state.
+pub type Checkbox = OnClick<El<&'static str, bool, ()>, bool, (), fn(&mut bool, PointerClick)>;
+
+/// Build a checkbox-style control with the given `kind` class (`"checkbox"` /
+/// `"toggle"`), reflecting `checked` as a textual indicator, an ARIA state, and
+/// a `checked` class for styling.
+fn build_check(kind: &'static str, checked: bool) -> Checkbox {
+    // ASCII indicator (reliably renders without special fonts); the host styles
+    // the `kind` / `checked` classes for the real look.
+    let indicator = if checked { "[x]" } else { "[ ]" };
+    let class = if checked { kind_checked(kind) } else { kind };
+    let aria = if checked { "true" } else { "false" };
+    let handler: fn(&mut bool, PointerClick) = flip;
+    on_click(
+        el::<_, bool, ()>("span", indicator)
+            .attr("role", "checkbox")
+            .attr("aria-checked", aria)
+            .attr("class", class),
+        handler,
+    )
+}
+
+/// `"checkbox checked"` / `"toggle checked"` — the class string for a checked
+/// control of the given `kind`.
+fn kind_checked(kind: &'static str) -> &'static str {
+    match kind {
+        "toggle" => "toggle checked",
+        _ => "checkbox checked",
+    }
+}
+
+/// A reusable checkbox whose state *is* a `bool`. Clicking it toggles the bool;
+/// it reflects the state as `role="checkbox"` + `aria-checked` (for the a11y
+/// tree) and a `checkbox` / `checkbox checked` class (for host styling), with an
+/// ASCII `[x]` / `[ ]` fallback indicator. Composes onto an app's bool field via
+/// [`lens`](crate::lens), like [`text_field`] onto a `TextInput`.
+pub fn checkbox(checked: bool) -> impl View<bool, (), ServalCtx, Element = ServalElement> + use<> {
+    build_check("checkbox", checked)
+}
+
+/// [`checkbox`] with its concrete return type named (for a host storing the
+/// runner in a struct field; see [`text_field_typed`]).
+pub fn checkbox_typed(checked: bool) -> Checkbox {
+    build_check("checkbox", checked)
+}
+
+/// A toggle switch — behaviourally a [`checkbox`] (a `bool`, flipped on click),
+/// distinguished only by a `toggle` class so the host styles it as a switch.
+pub fn toggle(checked: bool) -> impl View<bool, (), ServalCtx, Element = ServalElement> + use<> {
+    build_check("toggle", checked)
+}
+
+// --- MARK: button ------------------------------------------------------------
+
+/// A `<button>` view: `label` text plus an `on_click` handler — the ergonomic
+/// form of `on_click(el("button", label), handler)`. The handler may return an
+/// action (it is an [`OptionalAction`]) exactly as [`on_click`].
+pub fn button<State, Action, OA, F>(
+    label: impl Into<String>,
+    handler: F,
+) -> OnClick<El<String, State, Action>, State, Action, F>
+where
+    State: 'static,
+    Action: 'static,
+    OA: OptionalAction<Action>,
+    F: Fn(&mut State, PointerClick) -> OA + 'static,
+{
+    on_click(el::<_, State, Action>("button", label.into()), handler)
 }
