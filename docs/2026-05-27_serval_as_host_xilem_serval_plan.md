@@ -10,8 +10,9 @@ layer is mostly *reuse* of `xilem_core` (a third backend beside Masonry and
 input routed back through serval's hit-test + faithful xilem message
 dispatch — is validated on screen (`pelt-live-counter`), serval the sole
 engine. Stage 3 has since added component composition, keyboard/focus, a
-caret-aware text field, and capture-phase events; the demo now also has a
-typeable field with a moving caret. Sibling to the
+caret-aware text field, capture-phase events, and `DOM → AccessKit`
+emission; the demo now also has a typeable field with a moving caret.
+Sibling to the
 [scripted render loop](#relationship-to-existing-docs): both share that
 native dispatch substrate, which wires serval's *existing* hit-test query
 into event routing rather than building a new one. Per-stage status and
@@ -268,14 +269,24 @@ already exposes (`run_microtasks`, `run_event_loop`).
     capture pass then the `target → root` bubble pass, completing
     capture → target → bubble. Each node's lone listener fires in exactly
     one phase.
+  - **`DOM → AccessKit` (production half) — done (`4f18f89`).**
+    `accesskit_tree(dom, fragments, focus) -> accesskit::TreeUpdate` in
+    `pelt-live`: walks the live `ScriptedDom`, maps each tag to a `Role`,
+    takes accessible names from text content, reads bounds from the
+    `FragmentPlane`, and points focus at the runner's focused node.
+    Concretely demonstrates the thesis that a semantic DOM maps to an a11y
+    tree directly (no widget→a11y translation). The live `accesskit_winit`
+    adapter that surfaces it to a screen reader is the remaining half (see
+    below).
 
   Still open:
-  - **`DOM → AccessKit`** — emit an accessibility tree from the semantic
-    DOM (more natural than from a widget tree); the other genuine
-    engine-completeness cost named below. Best paired with the live winit
-    a11y adapter so it is demonstrable.
+  - **Live a11y adapter** — wire `accesskit_winit::Adapter` into the demo
+    window so a screen reader actually sees the emitted tree (the builder
+    `accesskit_tree` is ready; this is the host-side glue + the thing a real
+    window + screen reader verify).
   - **Real caret painting** — a measured glyph-position caret rect
-    (blinking), replacing the `|` marker; and selection.
+    (blinking), replacing the `|` marker; and selection. Touches
+    serval-layout's text paint, so it is a heavier, core-crate change.
   - **`Element` / `Text` split** — wrappers are all `Node` today; element
     vs character-data views with the appropriate read surface. (Lower
     value for a Rust authoring layer than for the JS DOM surface.)
