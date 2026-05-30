@@ -87,6 +87,14 @@ WPT":
   fallback), `white-space` / line-breaking / `text-overflow`, `@font-face` / web
   fonts. parley-backed; the glyph-runs-to-pixels translator is the immediate
   gap (shared-spine, below).
+- **Accessibility (content-side)** — the `DOM → AccessKit` emission (the
+  `accesskit_tree` builder, Lane H item 5) applied to *content* documents, so
+  real pages expose an a11y tree, not just chrome. Same primitive, content
+  consumer; reinforces the R0 a11y contract.
+- **Animations / transitions** — CSS transitions/animations and the Web
+  Animations API: interpolated styles (Paint axis) driven by a timing model
+  (`requestAnimationFrame`, the event loop). Shared with Lane H chrome
+  animation; a later tier.
 - **Security (later)** — same-origin enforcement, CSP, sandboxing, and
   mixed-content beyond netfetcher's network-side checks. Real for arbitrary web
   content; a future tier, named so it is not forgotten rather than scheduled now.
@@ -131,6 +139,33 @@ engine.
    natural here than from a widget tree).
 6. **Separate-document authority** between chrome (xilem-serval-owned root)
    and content (page-JS-owned root), made real in code rather than asserted.
+
+**Completeness axes.** The backlog above is the *authoring + event + forms +
+a11y* axis (the reactive layer and its handlers). "Author the chrome as
+documents" needs things a document engine does not give for free the way a
+widget toolkit would; naming them so they are designed, not discovered:
+
+- **Overlays / popups** — dropdowns (`<select>`), context menus, tooltips,
+  modals/dialogs. A document engine has no layer above the flow; serval-as-host
+  must provide one, either in-document (needs Lane C's `position` + stacking) or
+  as separate surfaces (true popups / multi-window). `<select>` in form breadth
+  already requires it.
+- **Pointer gestures / drag-and-drop** — drag-to-resize / rearrange / tear-out
+  (platen tiling), canvas pan/zoom (the orrery camera). A gesture layer over raw
+  `pointerdown` / `move` / `up` (item 3): drag threshold, drag state, drop
+  targets — above click/key.
+- **Scrolling / overflow interaction** — scrollable panes/lists, scrollbars,
+  wheel/scroll events, the infinite-canvas navigation defaults (wheel=pan,
+  ctrl+wheel=zoom, inertia). overflow *layout* is Lane C; the *interaction* is
+  here.
+- **Styling / theming authoring** — "chrome as CSS" made real: where chrome
+  stylesheets live, design tokens, dark/light + runtime theme swap, and how an
+  `xilem_serval` view sets style (a `class` + host sheet today). Appearance
+  renders through Lane C's Paint axis; *authoring* it is Lane H's.
+
+Adjacent / owned elsewhere: multi-window with synced panels and the
+chrome-update perf spike (transform-only motion on the `RepaintOnly` path), both
+in the Mere host brief; animations/transitions in the shared spine (below).
 
 **Done-conditions.** Real Mere chrome (a panel, a shellbar) authored end to end
 through `xilem_serval` with serval as the sole engine, input and a11y working.
