@@ -833,8 +833,8 @@ mod controls {
     }
 
     /// A `text_field` over bare `TextInput` state: focus it, type the sequence,
-    /// and assert the buffer reads `"hi y"` (caret at the end) and the field's
-    /// `<input>` text shows the rendered buffer with the caret marker (`"hi y|"`).
+    /// and assert the buffer reads `"hi y"` with the caret at the end, and the
+    /// `<input>` DOM text is the clean buffer (the caret is painted, not in text).
     #[test]
     fn text_field_edits_its_own_buffer() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
@@ -859,15 +859,15 @@ mod controls {
         assert_eq!(runner.state().caret(), 4, "caret sits at the end after typing");
         assert_eq!(
             text_child(&dom.borrow(), runner.root()).as_deref(),
-            Some("hi y|"),
-            "the <input> DOM text shows the buffer with the caret marker at the end"
+            Some("hi y"),
+            "the <input> DOM text is the clean buffer"
         );
     }
 
     /// Caret movement + insert/delete at the caret: type, move left, insert in the
     /// middle, then delete on both sides. Proves the field is an insertion-point
-    /// editor (not append-only), and that the rendered caret marker tracks the
-    /// caret position.
+    /// editor (not append-only), tracking the caret index as it moves. The DOM
+    /// text is the clean buffer (the caret is painted on screen, not in the text).
     #[test]
     fn text_field_caret_moves_and_edits() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
@@ -887,10 +887,11 @@ mod controls {
         runner.key(named(NamedKey::ArrowLeft)); // caret 1: "h|i"
         runner.key(ch("X")); // insert at 1: "hXi", caret 2
         assert_eq!(runner.state().text(), "hXi");
+        assert_eq!(runner.state().caret(), 2, "caret after the inserted X");
         assert_eq!(
             text_child(&dom.borrow(), runner.root()).as_deref(),
-            Some("hX|i"),
-            "marker after the inserted X"
+            Some("hXi"),
+            "DOM text is the clean buffer; the caret is painted, not in the text"
         );
 
         runner.key(named(NamedKey::ArrowLeft));
@@ -902,10 +903,11 @@ mod controls {
         runner.key(named(NamedKey::ArrowRight)); // caret 1
         runner.key(named(NamedKey::Backspace)); // delete before caret (X): "i", caret 0
         assert_eq!(runner.state().text(), "i");
+        assert_eq!(runner.state().caret(), 0, "caret back at the start");
         assert_eq!(
             text_child(&dom.borrow(), runner.root()).as_deref(),
-            Some("|i"),
-            "caret at the start"
+            Some("i"),
+            "DOM text is the clean buffer"
         );
     }
 
@@ -992,8 +994,8 @@ mod controls {
         );
         assert_eq!(
             text_child(&dom.borrow(), input).as_deref(),
-            Some("hi y|"),
-            "the rebuild reflected the edits (with caret marker) into the lensed field's <input> text"
+            Some("hi y"),
+            "the rebuild reflected the edits into the lensed field's <input> text"
         );
     }
 
@@ -1020,16 +1022,16 @@ mod controls {
         assert_eq!(runner.state().caret(), 0, "Home jumps to the start");
         assert_eq!(
             text_child(&dom.borrow(), runner.root()).as_deref(),
-            Some("|abc"),
-            "marker at the start after Home"
+            Some("abc"),
+            "Home moves the caret, not the buffer text"
         );
 
         runner.key(named(NamedKey::End));
         assert_eq!(runner.state().caret(), 3, "End jumps to the end");
         assert_eq!(
             text_child(&dom.borrow(), runner.root()).as_deref(),
-            Some("abc|"),
-            "marker at the end after End"
+            Some("abc"),
+            "End moves the caret, not the buffer text"
         );
     }
 }
