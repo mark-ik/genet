@@ -95,6 +95,19 @@ pub enum NamedKey {
     Other,
 }
 
+/// Active keyboard modifiers at the time of a [`KeyEvent`].
+///
+/// Enough for chrome shortcuts and focus traversal (`Shift+Tab`). The host maps
+/// its platform modifier state into this; handlers and the runner read it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Modifiers {
+    pub shift: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+    /// The platform "command" key (⌘ on macOS, Super/Win elsewhere).
+    pub meta: bool,
+}
+
 /// A native keyboard event payload.
 ///
 /// [`Clone`] because one dispatch may fire it to multiple listeners up the
@@ -105,6 +118,20 @@ pub enum NamedKey {
 pub struct KeyEvent {
     /// The key this event is for.
     pub key: Key,
+    /// Modifiers held when the key was pressed.
+    pub mods: Modifiers,
+}
+
+impl KeyEvent {
+    /// A key event with no modifiers.
+    pub fn new(key: Key) -> Self {
+        Self { key, mods: Modifiers::default() }
+    }
+
+    /// A key event with explicit modifiers.
+    pub fn with_mods(key: Key, mods: Modifiers) -> Self {
+        Self { key, mods }
+    }
 }
 
 /// Wraps a [`View`] `V` and registers a native key handler on its element,

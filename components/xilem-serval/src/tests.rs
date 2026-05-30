@@ -498,8 +498,8 @@ mod keyboard {
     use serval_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{
-        DomHandle, El, Key, KeyEvent, NamedKey, OnClick, OnKey, PointerClick, ServalAppRunner, el,
-        on_click, on_key,
+        DomHandle, El, Key, KeyEvent, Modifiers, NamedKey, OnClick, OnKey, PointerClick,
+        ServalAppRunner, el, on_click, on_key,
     };
 
     /// The app state: a text buffer a key handler edits.
@@ -533,13 +533,62 @@ mod keyboard {
     }
 
     fn ch(s: &str) -> KeyEvent {
-        KeyEvent {
-            key: Key::Character(s.to_string()),
-        }
+        KeyEvent::new(Key::Character(s.to_string()))
     }
 
     fn named(k: NamedKey) -> KeyEvent {
-        KeyEvent { key: Key::Named(k) }
+        KeyEvent::new(Key::Named(k))
+    }
+
+    /// A `Tab` key event, optionally with `Shift` (for reverse traversal).
+    fn tab(shift: bool) -> KeyEvent {
+        KeyEvent::with_mods(
+            Key::Named(NamedKey::Tab),
+            Modifiers { shift, ..Default::default() },
+        )
+    }
+
+    /// Tab / Shift+Tab move focus across the focusable set in document order,
+    /// wrapping — the runner-level traversal default (a document engine has no
+    /// built-in tab order). Two focusable elements (each carries an `on_key`).
+    #[test]
+    fn tab_traverses_focusables() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let noop: fn(&mut (), KeyEvent) = |_, _| {};
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            move |_: &()| {
+                el::<_, (), ()>(
+                    "div",
+                    (
+                        on_key(el::<_, (), ()>("a", ()), noop),
+                        on_key(el::<_, (), ()>("b", ()), noop),
+                    ),
+                )
+            },
+            (),
+        );
+        let (a, b) = {
+            let d = dom.borrow();
+            let root = runner.root();
+            (
+                find_element_by_name(&d, root, "a").expect("<a>"),
+                find_element_by_name(&d, root, "b").expect("<b>"),
+            )
+        };
+
+        // Nothing focused → Tab focuses the first; Tab advances; Tab wraps.
+        assert_eq!(runner.focus(), None);
+        runner.dispatch_key(tab(false));
+        assert_eq!(runner.focus(), Some(a), "Tab from nothing focuses the first");
+        runner.dispatch_key(tab(false));
+        assert_eq!(runner.focus(), Some(b), "Tab advances");
+        runner.dispatch_key(tab(false));
+        assert_eq!(runner.focus(), Some(a), "Tab wraps to the first");
+
+        // Shift+Tab goes backward (wrapping to the last).
+        runner.dispatch_key(tab(true));
+        assert_eq!(runner.focus(), Some(b), "Shift+Tab goes backward (wraps)");
     }
 
     // --- focus routing --------------------------------------------------------
@@ -790,13 +839,11 @@ mod controls {
     }
 
     fn ch(s: &str) -> KeyEvent {
-        KeyEvent {
-            key: Key::Character(s.to_string()),
-        }
+        KeyEvent::new(Key::Character(s.to_string()))
     }
 
     fn named(k: NamedKey) -> KeyEvent {
-        KeyEvent { key: Key::Named(k) }
+        KeyEvent::new(Key::Named(k))
     }
 
     /// Type the canonical sequence into a focused field; the buffer progresses:
@@ -1076,9 +1123,7 @@ mod capture {
     }
 
     fn ch(s: &str) -> KeyEvent {
-        KeyEvent {
-            key: Key::Character(s.to_string()),
-        }
+        KeyEvent::new(Key::Character(s.to_string()))
     }
 
     // --- click ordering: capture parent before bubble child -------------------

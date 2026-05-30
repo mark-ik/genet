@@ -27,10 +27,12 @@
 use core::marker::PhantomData;
 
 use layout_dom_api::{LayoutDom, LayoutDomMut};
-use serval_scripted_dom::NodeId;
+use serval_scripted_dom::{NodeId, ScriptedDom};
 use xilem_core::{DynMessage, Environment, MessageCtx, MessageResult, View, ViewId};
 
-use crate::{DomHandle, KeyEvent, PointerClick, ServalCtx, ServalElement, ServalElementMut};
+use crate::{
+    DomHandle, Key, KeyEvent, NamedKey, PointerClick, ServalCtx, ServalElement, ServalElementMut,
+};
 
 /// Owns the app state, the view-producing logic, and the retained view tree,
 /// rebuilding the [`ScriptedDom`] whenever the state changes.
@@ -338,6 +340,40 @@ where
         self.focus = node;
     }
 
+    /// Move focus to the next (`forward`) or previous focusable element in
+    /// document order, wrapping. The Tab-traversal default: a document engine has
+    /// no built-in tab order, so the runner provides one over the focusable set
+    /// (elements carrying a key handler, per [`ServalCtx::is_focusable`]) in DOM
+    /// pre-order. With nothing focused, `forward` focuses the first focusable and
+    /// backward the last. Rebuilds after (focus may drive `:focus` styling
+    /// later). No-op when there are no focusable elements.
+    pub fn focus_traverse(&mut self, forward: bool) {
+        let focusables: Vec<NodeId> = {
+            let dom = self.dom.borrow();
+            let mut out = Vec::new();
+            collect_focusables(&dom, &self.ctx, dom.document(), &mut out);
+            out
+        };
+        if focusables.is_empty() {
+            return;
+        }
+        let next = match self.focus.and_then(|f| focusables.iter().position(|&n| n == f)) {
+            Some(i) => {
+                let len = focusables.len();
+                if forward { (i + 1) % len } else { (i + len - 1) % len }
+            },
+            None => {
+                if forward {
+                    0
+                } else {
+                    focusables.len() - 1
+                }
+            },
+        };
+        self.set_focus(Some(focusables[next]));
+        self.rebuild();
+    }
+
     /// Dispatch a native key event to the focused node.
     ///
     /// If [`focus`](Self::focus) is `None`, this is a no-op: it returns an empty
@@ -359,6 +395,15 @@ where
     /// immutable `ctx`/`dom` borrows release before the `&mut self` message +
     /// rebuild borrows.
     pub fn dispatch_key(&mut self, event: KeyEvent) -> Vec<Action> {
+        // Tab / Shift+Tab is focus traversal — a runner-level default, because a
+        // document engine has no built-in tab order. Intercept it before routing
+        // (so it works even with nothing focused) and move focus across the
+        // focusable set; Tab is not delivered to the focused element's handlers.
+        if matches!(event.key, Key::Named(NamedKey::Tab)) {
+            self.focus_traverse(!event.mods.shift);
+            return Vec::new();
+        }
+
         // No focus: nothing to route to, nothing to do.
         let Some(focus) = self.focus else {
             return Vec::new();
@@ -439,6 +484,17 @@ where
     /// The current app state.
     pub fn state(&self) -> &State {
         &self.state
+    }
+}
+
+/// Append `node`'s focusable descendants (including itself), in document
+/// pre-order, to `out`. Focusable = carries a key handler ([`ServalCtx::is_focusable`]).
+fn collect_focusables(dom: &ScriptedDom, ctx: &ServalCtx, node: NodeId, out: &mut Vec<NodeId>) {
+    if ctx.is_focusable(node) {
+        out.push(node);
+    }
+    for child in dom.dom_children(node) {
+        collect_focusables(dom, ctx, child, out);
     }
 }
 
