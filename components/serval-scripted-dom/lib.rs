@@ -103,6 +103,20 @@ impl ScriptedDom {
         }
     }
 
+    /// Create a detached `Document` node (a second document root, for
+    /// `DOMImplementation.createDocument` / `createHTMLDocument`). Lives in the same
+    /// arena as the primary document, so `NodeId`s stay globally unique.
+    pub fn create_document(&mut self) -> NodeId {
+        self.push(Node::new(NodeKind::Document))
+    }
+
+    /// Create a detached `Comment` node carrying `data`.
+    pub fn create_comment(&mut self, data: &str) -> NodeId {
+        let mut node = Node::new(NodeKind::Comment);
+        node.text = Some(data.to_owned());
+        self.push(node)
+    }
+
     fn node(&self, id: NodeId) -> &Node {
         self.nodes[id.0]
             .as_ref()

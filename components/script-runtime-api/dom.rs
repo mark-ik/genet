@@ -97,16 +97,18 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     engine.set_function::<AppendChild>("__appendChild", 2)?;
     engine.set_function::<SetAttribute>("__setAttribute", 3)?;
     engine.set_function::<SetTextContent>("__setTextContent", 2)?;
-    engine.set_function::<GetElementById>("__getElementById", 1)?;
+    engine.set_function::<GetElementById>("__getElementById", 2)?;
     engine.set_function::<GetAttribute>("__getAttribute", 2)?;
     engine.set_function::<TagName>("__tagName", 1)?;
     engine.set_function::<GetTextContent>("__getTextContent", 1)?;
     engine.set_function::<ParentNode>("__parentNode", 1)?;
-    engine.set_function::<ElementsByTagNameCount>("__elementsByTagNameCount", 1)?;
-    engine.set_function::<ElementsByTagNameItem>("__elementsByTagNameItem", 2)?;
-    engine.set_function::<DocumentElement>("__documentElement", 0)?;
-    engine.set_function::<DocumentBody>("__documentBody", 0)?;
-    engine.set_function::<DocumentHead>("__documentHead", 0)?;
+    engine.set_function::<ElementsByTagNameCount>("__elementsByTagNameCount", 2)?;
+    engine.set_function::<ElementsByTagNameItem>("__elementsByTagNameItem", 3)?;
+    engine.set_function::<DocumentElement>("__documentElement", 1)?;
+    engine.set_function::<DocumentBody>("__documentBody", 1)?;
+    engine.set_function::<DocumentHead>("__documentHead", 1)?;
+    engine.set_function::<CreateDocument>("__createDocument", 0)?;
+    engine.set_function::<CreateComment>("__createComment", 1)?;
     engine.set_function::<NodeType>("__nodeType", 1)?;
     engine.set_function::<RemoveAttribute>("__removeAttribute", 2)?;
     engine.set_function::<Matches>("__matches", 2)?;
@@ -158,8 +160,10 @@ fn with_dom<E: ScriptEngine, R>(
     Some(f(&mut host.dom))
 }
 
-/// Depth-first search for the first element whose null-namespace `id` equals `target`.
-fn find_by_id(dom: &ScriptedDom, target: &str) -> Option<NodeId> {
+/// Depth-first search under `root` for the first element whose null-namespace `id`
+/// equals `target`. `root` lets queries scope to a created document, not just the
+/// primary one.
+fn find_by_id(dom: &ScriptedDom, root: NodeId, target: &str) -> Option<NodeId> {
     fn walk(dom: &ScriptedDom, node: NodeId, target: &str) -> Option<NodeId> {
         if dom.attribute(node, &Namespace::from(""), &LocalName::from("id")) == Some(target) {
             return Some(node);
@@ -171,7 +175,7 @@ fn find_by_id(dom: &ScriptedDom, target: &str) -> Option<NodeId> {
         }
         None
     }
-    walk(dom, dom.document(), target)
+    walk(dom, root, target)
 }
 
 /// `__documentRoot()` → a reflector for the document node.
@@ -260,13 +264,18 @@ impl<E: ScriptEngine> NativeFn<E> for SetTextContent {
     }
 }
 
-/// `__getElementById(id)` → a reflector for the match, or `undefined`.
+/// `__getElementById(scope, id)` → a reflector for the match under `scope`, or
+/// `undefined`.
 struct GetElementById;
 impl<E: ScriptEngine> NativeFn<E> for GetElementById {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
-        let arg = cx.arg(0);
+        let scope = cx.arg(0);
+        let Some(root) = cx.reflector_data(&scope) else {
+            return Ok(cx.undefined());
+        };
+        let arg = cx.arg(1);
         let id = cx.value_to_string(&arg)?;
-        match with_dom::<E, _>(cx, |dom| find_by_id(dom, &id)).flatten() {
+        match with_dom::<E, _>(cx, |dom| find_by_id(dom, NodeId::from_raw(root as usize), &id)).flatten() {
             Some(node) => cx.reflector_for(node.raw() as u64),
             None => Ok(cx.undefined()),
         }
@@ -359,48 +368,58 @@ impl<E: ScriptEngine> NativeFn<E> for GetTextContent {
     }
 }
 
-/// Collect, in document order, the elements whose local name matches `tag`
-/// (ASCII case-insensitive). Shared by the `getElementsByTagName` count/item sinks.
-fn collect_by_tag(dom: &ScriptedDom, tag: &str) -> Vec<NodeId> {
+/// Collect, in document order under `root`, the elements whose local name matches
+/// `tag` (ASCII case-insensitive; `*` matches all). Shared by the
+/// `getElementsByTagName` count/item sinks. `root` itself is not included (the
+/// document/element receiver is the scope, descendants are the result).
+fn collect_by_tag(dom: &ScriptedDom, root: NodeId, tag: &str) -> Vec<NodeId> {
     fn walk(dom: &ScriptedDom, node: NodeId, tag: &str, out: &mut Vec<NodeId>) {
-        if dom.element_name(node).is_some_and(|q| q.local.as_ref().eq_ignore_ascii_case(tag)) {
-            out.push(node);
-        }
         for child in dom.dom_children(node).collect::<Vec<_>>() {
+            if dom.element_name(child).is_some_and(|q| tag == "*" || q.local.as_ref().eq_ignore_ascii_case(tag)) {
+                out.push(child);
+            }
             walk(dom, child, tag, out);
         }
     }
     let mut out = Vec::new();
-    walk(dom, dom.document(), tag, &mut out);
+    walk(dom, root, tag, &mut out);
     out
 }
 
-/// `__elementsByTagNameCount(tag)` → how many elements match. Paired with
-/// `__elementsByTagNameItem` so the JS `getElementsByTagName` builds the list
-/// without an array-minting primitive (re-walks per item; fine for load-time
-/// `meta`/`script`/`title` queries, mostly empty).
+/// `__elementsByTagNameCount(scope, tag)` → how many descendant elements of `scope`
+/// match. Paired with `__elementsByTagNameItem` so JS `getElementsByTagName` builds
+/// the list without an array-minting primitive (re-walks per item).
 struct ElementsByTagNameCount;
 impl<E: ScriptEngine> NativeFn<E> for ElementsByTagNameCount {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
-        let arg = cx.arg(0);
-        let tag = cx.value_to_string(&arg)?;
-        let n = with_dom::<E, _>(cx, |dom| collect_by_tag(dom, &tag).len()).unwrap_or(0);
-        // Returned as a string; the JS wrapper coerces with `+` (avoids a
-        // number-minting primitive for now).
+        let scope = cx.arg(0);
+        let Some(root) = cx.reflector_data(&scope) else {
+            return cx.make_string("0");
+        };
+        let tag_v = cx.arg(1);
+        let tag = cx.value_to_string(&tag_v)?;
+        let n = with_dom::<E, _>(cx, |dom| collect_by_tag(dom, NodeId::from_raw(root as usize), &tag).len())
+            .unwrap_or(0);
         cx.make_string(&n.to_string())
     }
 }
 
-/// `__elementsByTagNameItem(tag, i)` → the i-th matching element's reflector, or
-/// `undefined`.
+/// `__elementsByTagNameItem(scope, tag, i)` → the i-th matching descendant's
+/// reflector, or `undefined`.
 struct ElementsByTagNameItem;
 impl<E: ScriptEngine> NativeFn<E> for ElementsByTagNameItem {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
-        let tag_v = cx.arg(0);
+        let scope = cx.arg(0);
+        let Some(root) = cx.reflector_data(&scope) else {
+            return Ok(cx.undefined());
+        };
+        let tag_v = cx.arg(1);
         let tag = cx.value_to_string(&tag_v)?;
-        let i_v = cx.arg(1);
+        let i_v = cx.arg(2);
         let i = cx.value_to_string(&i_v)?.parse::<usize>().unwrap_or(usize::MAX);
-        match with_dom::<E, _>(cx, |dom| collect_by_tag(dom, &tag).get(i).copied()).flatten() {
+        match with_dom::<E, _>(cx, |dom| collect_by_tag(dom, NodeId::from_raw(root as usize), &tag).get(i).copied())
+            .flatten()
+        {
             Some(node) => cx.reflector_for(node.raw() as u64),
             None => Ok(cx.undefined()),
         }
@@ -423,33 +442,75 @@ impl<E: ScriptEngine> NativeFn<E> for ParentNode {
     }
 }
 
-/// `__documentElement()` → the root element (`<html>`), or `undefined`.
+/// `__documentElement(scope)` → the root element child of `scope` (the document),
+/// or `undefined`.
 struct DocumentElement;
 impl<E: ScriptEngine> NativeFn<E> for DocumentElement {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
-        match with_dom::<E, _>(cx, |dom| first_element_child(dom, dom.document())).flatten() {
+        let scope = cx.arg(0);
+        let Some(root) = cx.reflector_data(&scope) else {
+            return Ok(cx.undefined());
+        };
+        match with_dom::<E, _>(cx, |dom| first_element_child(dom, NodeId::from_raw(root as usize))).flatten() {
             Some(node) => cx.reflector_for(node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
 }
 
-/// `__documentBody()` → the first `<body>`, or `undefined`.
+/// `__documentBody(scope)` → the first `<body>` under `scope`, or `undefined`.
 struct DocumentBody;
 impl<E: ScriptEngine> NativeFn<E> for DocumentBody {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
-        match with_dom::<E, _>(cx, |dom| collect_by_tag(dom, "body").first().copied()).flatten() {
+        let scope = cx.arg(0);
+        let Some(root) = cx.reflector_data(&scope) else {
+            return Ok(cx.undefined());
+        };
+        match with_dom::<E, _>(cx, |dom| collect_by_tag(dom, NodeId::from_raw(root as usize), "body").first().copied())
+            .flatten()
+        {
             Some(node) => cx.reflector_for(node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
 }
 
-/// `__documentHead()` → the first `<head>`, or `undefined`.
+/// `__documentHead(scope)` → the first `<head>` under `scope`, or `undefined`.
 struct DocumentHead;
 impl<E: ScriptEngine> NativeFn<E> for DocumentHead {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
-        match with_dom::<E, _>(cx, |dom| collect_by_tag(dom, "head").first().copied()).flatten() {
+        let scope = cx.arg(0);
+        let Some(root) = cx.reflector_data(&scope) else {
+            return Ok(cx.undefined());
+        };
+        match with_dom::<E, _>(cx, |dom| collect_by_tag(dom, NodeId::from_raw(root as usize), "head").first().copied())
+            .flatten()
+        {
+            Some(node) => cx.reflector_for(node.raw() as u64),
+            None => Ok(cx.undefined()),
+        }
+    }
+}
+
+/// `__createDocument()` → a reflector for a fresh detached `Document` node (for
+/// `DOMImplementation.createDocument` / `createHTMLDocument`).
+struct CreateDocument;
+impl<E: ScriptEngine> NativeFn<E> for CreateDocument {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        match with_dom::<E, _>(cx, |dom| dom.create_document()) {
+            Some(node) => cx.reflector_for(node.raw() as u64),
+            None => Ok(cx.undefined()),
+        }
+    }
+}
+
+/// `__createComment(data)` → a reflector for a fresh detached `Comment` node.
+struct CreateComment;
+impl<E: ScriptEngine> NativeFn<E> for CreateComment {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let arg = cx.arg(0);
+        let data = cx.value_to_string(&arg)?;
+        match with_dom::<E, _>(cx, |dom| dom.create_comment(&data)) {
             Some(node) => cx.reflector_for(node.raw() as u64),
             None => Ok(cx.undefined()),
         }
@@ -1060,6 +1121,36 @@ const DOM_BOOTSTRAP: &str = r#"
   Element.prototype.querySelector = querySelector;
   Element.prototype.querySelectorAll = querySelectorAll;
 
+  // getElementsByTagName / getElementsByClassName, shared by Element and Document
+  // (scope is the receiver), returning live HTMLCollections.
+  function getElementsByTagName(tag) {
+    var ref = this.__ref; tag = String(tag);
+    return makeCollection(function() {
+      var n = +__elementsByTagNameCount(ref, tag);
+      var out = [];
+      for (var i = 0; i < n; i++) { out.push(wrapNode(__elementsByTagNameItem(ref, tag, String(i)))); }
+      return out;
+    }, true);
+  }
+  function getElementsByClassName(cls) {
+    var ref = this.__ref;
+    var want = String(cls).trim().split(/\s+/).filter(function(s) { return s.length; });
+    return makeCollection(function() {
+      var n = +__elementsByTagNameCount(ref, '*');
+      var out = [];
+      for (var i = 0; i < n; i++) {
+        var el = wrapNode(__elementsByTagNameItem(ref, '*', String(i)));
+        var have = (el.getAttribute('class') || '').trim().split(/\s+/);
+        var ok = true;
+        for (var j = 0; j < want.length; j++) { if (have.indexOf(want[j]) === -1) { ok = false; break; } }
+        if (ok && want.length) out.push(el);
+      }
+      return out;
+    }, true);
+  }
+  Element.prototype.getElementsByTagName = getElementsByTagName;
+  Element.prototype.getElementsByClassName = getElementsByClassName;
+
   // Element-only tree views: children (a live HTMLCollection of element children),
   // the element siblings, count.
   Object.defineProperty(Element.prototype, 'children', {
@@ -1117,25 +1208,18 @@ const DOM_BOOTSTRAP: &str = r#"
     return wrapNode(__createElementNS(ns === null ? '' : String(ns), String(qname)));
   };
   Document.prototype.createTextNode = function(data) { return wrapNode(__createTextNode(String(data))); };
-  Document.prototype.getElementById = function(id) { return wrapNode(__getElementById(String(id))); };
-  Document.prototype.getElementsByTagName = function(tag) {
-    // Live HTMLCollection: re-query the DOM on each access.
-    tag = String(tag);
-    return makeCollection(function() {
-      var n = +__elementsByTagNameCount(tag);
-      var out = [];
-      for (var i = 0; i < n; i++) { out.push(wrapNode(__elementsByTagNameItem(tag, String(i)))); }
-      return out;
-    }, true);
-  };
+  Document.prototype.createComment = function(data) { return wrapNode(__createComment(String(data))); };
+  Document.prototype.getElementById = function(id) { return wrapNode(__getElementById(this.__ref, String(id))); };
+  Document.prototype.getElementsByTagName = getElementsByTagName;
+  Document.prototype.getElementsByClassName = getElementsByClassName;
   Document.prototype.querySelector = querySelector;
   Document.prototype.querySelectorAll = querySelectorAll;
   Object.defineProperty(Document.prototype, 'documentElement', {
-    configurable: true, get: function() { return wrapNode(__documentElement()); }
+    configurable: true, get: function() { return wrapNode(__documentElement(this.__ref)); }
   });
   Object.defineProperty(Document.prototype, 'body', {
     configurable: true,
-    get: function() { return wrapNode(__documentBody()); },
+    get: function() { return wrapNode(__documentBody(this.__ref)); },
     set: function(v) {
       var old = this.body;
       if (old) { old.parentNode.replaceChild(v, old); }
@@ -1143,7 +1227,33 @@ const DOM_BOOTSTRAP: &str = r#"
     }
   });
   Object.defineProperty(Document.prototype, 'head', {
-    configurable: true, get: function() { return wrapNode(__documentHead()); }
+    configurable: true, get: function() { return wrapNode(__documentHead(this.__ref)); }
+  });
+  // DOMImplementation: hasFeature (always true, per spec), plus createDocument /
+  // createHTMLDocument / createDocumentType building fresh detached documents.
+  Object.defineProperty(Document.prototype, 'implementation', {
+    configurable: true,
+    get: function() {
+      return {
+        hasFeature: function() { return true; },
+        createDocumentType: function(name, pub, sys) {
+          var d = wrapNode(__createElement('!doctype')); d.__name = String(name); return d;
+        },
+        createHTMLDocument: function(title) {
+          var doc = wrapNode(__createDocument());
+          var html = doc.createElement('html'); doc.appendChild(html);
+          var head = doc.createElement('head'); html.appendChild(head);
+          if (title !== undefined) { var t = doc.createElement('title'); t.textContent = String(title); head.appendChild(t); }
+          html.appendChild(doc.createElement('body'));
+          return doc;
+        },
+        createDocument: function(ns, qname, doctype) {
+          var doc = wrapNode(__createDocument());
+          if (qname) { doc.appendChild(doc.createElementNS(ns === null ? '' : String(ns), String(qname))); }
+          return doc;
+        }
+      };
+    }
   });
   // Document IDL accessors (Lever 10): title walks to <title> (whitespace-collapsed);
   // dir reflects documentElement's dir; compatMode/readyState are constants.
@@ -2058,9 +2168,54 @@ mod tests {
         dom_collections_works::<script_engine_boa::BoaEngine>();
     }
 
+    /// DOMImplementation + multi-document, against any backend: hasFeature,
+    /// createHTMLDocument (with title + body), createDocument with a root element,
+    /// and queries scoping to the created document, not the primary one.
+    fn dom_implementation_works<E: ScriptEngine>() {
+        use serval_static_dom::StaticDocument;
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.load_dom(&StaticDocument::parse("<html><body><p id='main'></p></body></html>"));
+
+        rt.eval(
+            "console.log(String(document.implementation.hasFeature('x', 'y')));\
+             var d = document.implementation.createHTMLDocument('Hello');\
+             console.log(d.title + ',' + d.documentElement.tagName + ',' + (d.body ? d.body.tagName : 'no-body'));\
+             var p = d.createElement('p'); p.id = 'sub'; d.body.appendChild(p);\
+             console.log(d.getElementById('sub') ? d.getElementById('sub').id : 'not-found');\
+             console.log(String(document.getElementById('sub')));\
+             console.log(String(document.getElementById('main') ? 'main-here' : 'no-main'));\
+             var xml = document.implementation.createDocument('urn:ns', 'root', null);\
+             console.log(xml.documentElement.tagName + ',' + xml.documentElement.namespaceURI);",
+        )
+        .expect("implementation script");
+
+        assert_eq!(
+            rt.host().borrow().console,
+            vec![
+                "true",                  // hasFeature always true
+                "Hello,HTML,BODY",       // createHTMLDocument: title, <html>, <body>
+                "sub",                   // getElementById scoped to the created doc
+                "null",                  // primary document does NOT see the created doc's #sub
+                "main-here",             // primary document still finds its own #main
+                "root,urn:ns",           // createDocument: root element + namespace
+            ],
+        );
+    }
+
     #[test]
     fn dom_tokenlist_dataset_on_boa() {
         dom_tokenlist_dataset_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[test]
+    fn dom_implementation_on_boa() {
+        dom_implementation_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dom_implementation_on_nova() {
+        dom_implementation_works::<script_engine_nova::NovaEngine>();
     }
 
     #[cfg(not(target_arch = "wasm32"))]
