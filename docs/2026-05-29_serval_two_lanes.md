@@ -60,6 +60,44 @@ subtests, dom/nodes 832 (Boa). Reftests render real CSS (floats 7 passing).
 7. **Fullweb tier** later (navigation, workers, storage), per the profile
    ladder, gated on real demand.
 
+**Completeness axes.** The backlog above is largely the *scripting / DOM-API*
+axis (testharness-scored). "Run the real web faithfully" has parallel axes the
+backlog had not enumerated; each fails for different reasons, is reftest- or
+testharness-scored, and ratchets independently. Naming them so CSS/rendering
+work does not fall through the gap between "DOM-API backlog" and "measured by
+WPT":
+
+- **Layout** — where boxes go. Done: block, flex, grid, floats, replaced
+  `<img>`, the planes model + restyle damage. Missing: `display: inline-block`
+  and `table`/multicol, `position` (relative/absolute/fixed/sticky),
+  overflow/clipping, writing-modes, the long tail of sizing/units. `inline-block`
+  extends the existing inline path rather than adding a mode from scratch: lay
+  the element out via taffy for its intrinsic size, then feed it into the parent
+  inline formatting context as an `InlineBoxItem` on the same seam `<img>` uses
+  (`InlineContent` / opaque-leaf, per
+  [blitz float/linebox study](./2026-05-20_blitz_float_linebox_study.md)).
+  Reftest-scored.
+- **Paint / visual styling** — whether each *computed* property actually
+  *renders*. Cascade resolves the values (Stylo, largely free); paint emission
+  must draw them: backgrounds, borders + `border-radius`, `box-shadow`,
+  gradients, `opacity`, clipping, `transform`, z-index/stacking. Distinct from
+  layout (placement vs. appearance). Reftest-scored. The headline
+  `text-to-pixels` gap is the text-shaped corner of this.
+- **Text / typography** — shaping breadth (bidi, complex scripts, font
+  fallback), `white-space` / line-breaking / `text-overflow`, `@font-face` / web
+  fonts. parley-backed; the glyph-runs-to-pixels translator is the immediate
+  gap (shared-spine, below).
+- **Security (later)** — same-origin enforcement, CSP, sandboxing, and
+  mixed-content beyond netfetcher's network-side checks. Real for arbitrary web
+  content; a future tier, named so it is not forgotten rather than scheduled now.
+
+Adjacent and *already owned elsewhere*, so cross-referenced not duplicated:
+resources/media (netfetcher = network, net-media = a/v — organs this lane
+consumes; SVG / `<canvas>` are Lane-C content but later); navigation / workers /
+storage (the fullweb tier, item 7 above). Forms are cross-cutting — element
+interfaces fall under DOM-API, sizing under Layout, rendering under Paint, and
+host-authored controls under Lane H — not a separate axis.
+
 **Done-conditions.** Per-directory, per-backend WPT pass rates published and
 ratcheted; the Nova-vs-Boa delta read as the engine-axis tax (the two-axis
 framing). Owner docs:
