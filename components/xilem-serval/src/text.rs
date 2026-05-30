@@ -15,6 +15,17 @@ use crate::{ServalCtx, DomHandle};
 use layout_dom_api::LayoutDomMut;
 use xilem_core::{MessageCtx, MessageResult, Mut, OrphanView};
 
+/// Create a text view holding `s` — the text half of the Element/Text split.
+///
+/// Symmetric with [`el`](crate::el) for readability. The returned `String` is a
+/// text view via `xilem_core`'s `OrphanView` (bare `&str`/`String` work as text
+/// views too). Text views are deliberately *not*
+/// [`ElementView`](crate::ElementView), so element-only operations
+/// (`on_click` / `on_key` / `El::attr`) reject them at compile time.
+pub fn text(s: impl Into<String>) -> String {
+    s.into()
+}
+
 /// Create a text node holding `data` and wrap it as a [`ServalElement`].
 fn build_text(dom: &DomHandle, data: &str) -> ServalElement {
     let node = dom.borrow_mut().create_text(data);
