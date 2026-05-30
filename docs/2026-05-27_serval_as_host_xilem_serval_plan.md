@@ -1,15 +1,17 @@
 # serval as host: the `xilem_serval` reactive backend
 
-Status: **implemented through Stage 2 + on-screen demo (2026-05-28);
-Stage 3 (breadth) open.** Scopes using serval as the application host
-(chrome and content rendered by one engine), and the reactive authoring
-layer that requires. The finding held: that layer is mostly *reuse* of
-`xilem_core` (a third backend beside Masonry and `xilem_web`), not a
-from-scratch Dioxus-style framework. The full loop — `xilem_core` diff →
-serval DOM → layout → paint → netrender → present, with input routed back
-through serval's hit-test + faithful xilem message dispatch — is validated
-on screen (`pelt-live-counter`: a counter that ticks on a timer and
-responds to clicks), serval the sole engine. Sibling to the
+Status: **implemented through Stage 2 + on-screen demo, and most of
+Stage 3 (2026-05-28); remaining Stage 3 breadth open.** Scopes using
+serval as the application host (chrome and content rendered by one engine),
+and the reactive authoring layer that requires. The finding held: that
+layer is mostly *reuse* of `xilem_core` (a third backend beside Masonry and
+`xilem_web`), not a from-scratch Dioxus-style framework. The full loop —
+`xilem_core` diff → serval DOM → layout → paint → netrender → present, with
+input routed back through serval's hit-test + faithful xilem message
+dispatch — is validated on screen (`pelt-live-counter`), serval the sole
+engine. Stage 3 has since added component composition, keyboard/focus, a
+caret-aware text field, and capture-phase events; the demo now also has a
+typeable field with a moving caret. Sibling to the
 [scripted render loop](#relationship-to-existing-docs): both share that
 native dispatch substrate, which wires serval's *existing* hit-test query
 into event routing rather than building a new one. Per-stage status and
@@ -241,23 +243,44 @@ already exposes (`run_microtasks`, `run_event_loop`).
     `parentNode` and routes a `PointerClick` through the stock `xilem_core`
     message cycle (`MessageCtx`/`DynMessage`/`View::message`), then
     rebuilds. No `Rc<dyn Fn>` registry, no fork patch.
-- **Stage 3 (breadth) — open.** Grows from "counter" toward authoring real
-  chrome:
-  - **`Element` / `Text` split** — wrappers are all `Node` today; element
-    vs character-data views with the appropriate read surface.
-  - **Capture phase + per-listener phase flags** — the dispatch walk is
-    bubble-only; add the `root → target` capture pre-pass (the walk is
-    already structured target-first for this).
-  - **`OptionalAction` / Action-bubbling** — handlers return `()` today;
-    let them return an `Action` that composes up to parent views, as
-    `OnEvent` does, feeding `MessageResult::Action`.
-  - **Keyboard + more events** — focus model, key events, `pointermove`/
-    `pointerup`, beyond `click`.
-  - **Form controls** — the genuine engine-completeness cost (browsers
-    ship these; serval needs real ones).
+- **Stage 3 (breadth) — partly done.** Grows from "counter" toward
+  authoring real chrome. Done so far:
+  - **Component composition + Action-bubbling — done (`84fceae`).**
+    `xilem_core`'s generic `lens` / `map_state` / `map_action` / `memoize`
+    drive `ServalCtx` with **zero** backend impls (the identity
+    `SuperElement` is the only bound they need), so reusable
+    independently-stateful components compose for free. A sealed
+    `OptionalAction` (mirroring `xilem_web`) lets `on_click`/`on_key`
+    handlers return `()` or an `Action`; the runner gained a defaulted
+    `Action = ()` generic and `dispatch_*` collect bubbled actions.
+  - **Keyboard + focus — done (`09f2bf1`).** `on_key` (the faithful-routing
+    twin of `on_click`), a serval-native `KeyEvent`/`Key`/`NamedKey`, a key
+    registry on `ServalCtx`, runner `focus` with click-to-focus, and
+    `dispatch_key` bubbling from the focused node.
+  - **Form controls (text field) — done (`61135de`, caret `4ceac56`).**
+    `text_field` over a `TextInput { text, caret }` model: a real
+    insertion-point editor (char-indexed, Unicode-correct) with insert /
+    Backspace / Delete / ←→, composable via `lens`, plus the winit→`KeyEvent`
+    wiring in the demo bin. Caret rendered as a placeholder `|` marker
+    (real glyph-positioned caret painting is later).
+  - **Capture phase — done (`abde0a9`).** `.capture(bool)` per listener
+    (default bubble); `dispatch_click`/`dispatch_key` run a `root → target`
+    capture pass then the `target → root` bubble pass, completing
+    capture → target → bubble. Each node's lone listener fires in exactly
+    one phase.
+
+  Still open:
   - **`DOM → AccessKit`** — emit an accessibility tree from the semantic
-    DOM (more natural than from a widget tree).
-  - **Wider element/view vocabulary** and per-tag ergonomics.
+    DOM (more natural than from a widget tree); the other genuine
+    engine-completeness cost named below. Best paired with the live winit
+    a11y adapter so it is demonstrable.
+  - **Real caret painting** — a measured glyph-position caret rect
+    (blinking), replacing the `|` marker; and selection.
+  - **`Element` / `Text` split** — wrappers are all `Node` today; element
+    vs character-data views with the appropriate read surface. (Lower
+    value for a Rust authoring layer than for the JS DOM surface.)
+  - **More events + vocabulary** — `pointermove`/`pointerup`/wheel, more
+    named keys (Home/End), and per-tag ergonomic view helpers.
 
 ## What serval makes simpler
 
