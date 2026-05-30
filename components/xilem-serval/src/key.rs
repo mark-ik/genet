@@ -87,6 +87,10 @@ pub enum NamedKey {
     ArrowDown,
     /// Delete the character after the cursor.
     Delete,
+    /// Move the cursor to the start of the line.
+    Home,
+    /// Move the cursor to the end of the line.
+    End,
     /// Any other named key not yet special-cased.
     Other,
 }

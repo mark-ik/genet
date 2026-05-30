@@ -996,6 +996,42 @@ mod controls {
             "the rebuild reflected the edits (with caret marker) into the lensed field's <input> text"
         );
     }
+
+    /// Home / End jump the caret to the line ends (the new named keys), driven
+    /// through the full key-dispatch + edit path.
+    #[test]
+    fn text_field_home_end_move_caret() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            |s: &TextInput| text_field(s),
+            TextInput::default(),
+        );
+        let input = {
+            let d = dom.borrow();
+            find_element_by_name(&d, runner.root(), "input").expect("an <input>")
+        };
+        runner.set_focus(Some(input));
+
+        runner.key(ch("a"));
+        runner.key(ch("b"));
+        runner.key(ch("c")); // "abc", caret 3
+        runner.key(named(NamedKey::Home));
+        assert_eq!(runner.state().caret(), 0, "Home jumps to the start");
+        assert_eq!(
+            text_child(&dom.borrow(), runner.root()).as_deref(),
+            Some("|abc"),
+            "marker at the start after Home"
+        );
+
+        runner.key(named(NamedKey::End));
+        assert_eq!(runner.state().caret(), 3, "End jumps to the end");
+        assert_eq!(
+            text_child(&dom.borrow(), runner.root()).as_deref(),
+            Some("abc|"),
+            "marker at the end after End"
+        );
+    }
 }
 
 // --- MARK: Stage 3 — capture phase (backend-only) -----------------------------
