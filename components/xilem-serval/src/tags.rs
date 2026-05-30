@@ -38,8 +38,9 @@ tag_fns! {
     span => "span",
     /// A `<p>` (paragraph) element view.
     p => "p",
-    /// A `<button>` element view.
-    button => "button",
+    // Note: no `button` tag helper — `controls::button(label, handler)` is the
+    // button view (a button without a handler does nothing). For a `<button>`
+    // with custom children, use `on_click(el("button", children), handler)`.
     /// An `<input>` element view.
     input => "input",
     /// A `<label>` element view.
@@ -69,14 +70,14 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    /// `div(button("+"))` builds a `<div>` element with a `<button>` child —
+    /// `div(span("hi"))` builds a `<div>` element with a `<span>` child —
     /// confirming the helpers name their tags and nest like `el`.
     #[test]
     fn tag_helpers_build_named_elements() {
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
         let runner = ServalAppRunner::<_, _, _, ()>::new(
             dom.clone(),
-            |_: &()| div::<_, (), ()>(button::<_, (), ()>("+")),
+            |_: &()| div::<_, (), ()>(span::<_, (), ()>("hi")),
             (),
         );
         let d = dom.borrow();
@@ -84,6 +85,6 @@ mod tests {
         assert_eq!(d.kind(root), NodeKind::Element);
         assert_eq!(d.element_name(root).unwrap().local.as_ref(), "div");
         let child = d.dom_children(root).next().expect("div has a child");
-        assert_eq!(d.element_name(child).unwrap().local.as_ref(), "button");
+        assert_eq!(d.element_name(child).unwrap().local.as_ref(), "span");
     }
 }
