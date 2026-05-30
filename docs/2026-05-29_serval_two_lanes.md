@@ -43,16 +43,26 @@ engines (Nova native, Boa wasm/oracle) behind `ScriptEngine`/`CallCx`;
 subtests, dom/nodes 832 (Boa). Reftests render real CSS (floats 7 passing).
 
 **Backlog (ordered).**
-1. **Exotic-object `CallCx` primitive** (shared-spine; see below). Unblocks
-   live HTMLCollection / NodeList / `dataset` / indexed DOMTokenList, the
-   largest remaining WPT bucket after reflection.
-2. **Broader `DOMException`-throwing on bad input** (`setAttribute` invalid
-   names, `createElementNS` validation, index ranges) so `assert_throws_dom`
-   tests pass, not just run.
+
+1. ~~**Exotic-object primitive**~~ **(done 2026-05-30).** Settled via JS
+   `Proxy` (both engines support the traps), not a new `CallCx` primitive:
+   live HTMLCollection / NodeList, DOMTokenList (incl. indexed), `dataset`.
+2. ~~**Broader `DOMException`-throwing on bad input**~~ **(done 2026-05-30).**
+   `createElement` / `setAttribute` validate the XML Name production
+   (`InvalidCharacterError`); `createElementNS` / `setAttributeNS` validate
+   QName + namespace constraints (`NamespaceError`); `appendChild` /
+   `insertBefore` reject ancestor cycles (`HierarchyRequestError`). Fixed
+   two latent bugs: HTML `createElement` lowercasing, and `tagName`
+   returning the qualified name (`prefix:local`).
 3. **`Comment` / `DocumentFragment` / `CharacterData`** node types and
-   `createComment` / `createDocumentFragment`.
-4. **`DOMParser` / `createHTMLDocument`** (needs a second detached document
-   root in the host).
+   `createComment` / `createDocumentFragment`. (`createComment` sink +
+   the `Comment` node kind landed with item 4's multi-document work; the
+   JS `CharacterData` / `Comment` prototypes + `createDocumentFragment`
+   remain.)
+4. ~~**`createDocument` / `createHTMLDocument`**~~ **(done 2026-05-30)** with
+   the multi-document increment (a second detached document root in the
+   host, scoped queries, `document.implementation`). **`DOMParser.parseFromString`**
+   still open (reuses that same plumbing).
 5. **Per-tag HTML element interfaces** (`HTMLElement` + `HTMLDivElement` ...,
    `wrapNode` picks prototype by tag) for `instanceof` and `cloneNode`.
 6. **Cross-engine breadth**: the Nova regex gap (surrogate ranges in

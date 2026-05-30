@@ -313,12 +313,17 @@ impl<E: ScriptEngine> NativeFn<E> for TagName {
             return Ok(cx.make_null());
         };
         let name = with_dom::<E, _>(cx, |dom| {
-            // `tagName` upper-cases only for HTML-namespaced elements.
             dom.element_name(NodeId::from_raw(id as usize)).map(|q| {
+                // `tagName` is the qualified name (`prefix:local`), upper-cased
+                // only for HTML-namespaced elements.
+                let qualified = match q.prefix.as_ref() {
+                    Some(p) => format!("{}:{}", p.as_ref(), q.local.as_ref()),
+                    None => q.local.as_ref().to_string(),
+                };
                 if q.ns.as_ref() == XHTML_NS {
-                    q.local.as_ref().to_ascii_uppercase()
+                    qualified.to_ascii_uppercase()
                 } else {
-                    q.local.as_ref().to_string()
+                    qualified
                 }
             })
         })
@@ -915,6 +920,46 @@ const DOM_BOOTSTRAP: &str = r#"
   // wrapper: document.getElementById('x') === document.getElementById('x').
   var wrappers = new Map();
 
+  // Name validation (DOM "validate" / XML Name + QName productions), used by
+  // createElement(NS) / setAttribute(NS) to throw the spec exceptions. The ranges
+  // are the XML NameStartChar / NameChar sets; a colon is allowed in a plain Name
+  // (createElement does not split on it).
+  var NAME_START = ":A-Z_a-z\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD";
+  var NAME_CHAR = NAME_START + "\\-.0-9\\u00B7\\u0300-\\u036F\\u203F-\\u2040";
+  var NAME_RE = new RegExp("^[" + NAME_START + "][" + NAME_CHAR + "]*$");
+  function validateName(name) {
+    if (!NAME_RE.test(name)) {
+      throw new DOMException("The string '" + name + "' is not a valid name.", "InvalidCharacterError");
+    }
+  }
+  // QName: a Name with at most one colon, neither side empty (DOM validate-and-extract,
+  // throwing InvalidCharacterError for a malformed qualified name).
+  function validateQName(qname) {
+    validateName(qname);
+    var parts = qname.split(':');
+    if (parts.length > 2 || (parts.length === 2 && (parts[0] === '' || parts[1] === ''))) {
+      throw new DOMException("The qualified name '" + qname + "' is not valid.", "InvalidCharacterError");
+    }
+  }
+  // validate-and-extract namespace constraints (DOM): a prefix requires a namespace;
+  // the `xml`/`xmlns` prefixes are bound to their canonical namespaces.
+  function validateNS(ns, qname) {
+    validateQName(qname);
+    var prefix = qname.indexOf(':') !== -1 ? qname.split(':')[0] : null;
+    if (prefix !== null && ns === null) {
+      throw new DOMException("A prefix requires a namespace.", "NamespaceError");
+    }
+    if (prefix === 'xml' && ns !== 'http://www.w3.org/XML/1998/namespace') {
+      throw new DOMException("The 'xml' prefix is bound to the XML namespace.", "NamespaceError");
+    }
+    if ((qname === 'xmlns' || prefix === 'xmlns') && ns !== 'http://www.w3.org/2000/xmlns/') {
+      throw new DOMException("The 'xmlns' prefix is bound to the xmlns namespace.", "NamespaceError");
+    }
+    if (ns === 'http://www.w3.org/2000/xmlns/' && qname !== 'xmlns' && prefix !== 'xmlns') {
+      throw new DOMException("The xmlns namespace requires the 'xmlns' prefix.", "NamespaceError");
+    }
+  }
+
   // wrapNode is hoisted (function declaration), so the prototype methods defined
   // below may reference it before this point — they only run when called. The
   // prototype is chosen by nodeType, giving the Element / Text split (`instanceof
@@ -942,7 +987,17 @@ const DOM_BOOTSTRAP: &str = r#"
   Node.TEXT_NODE = Node.prototype.TEXT_NODE = 3;
   Node.COMMENT_NODE = Node.prototype.COMMENT_NODE = 8;
   Node.DOCUMENT_NODE = Node.prototype.DOCUMENT_NODE = 9;
-  Node.prototype.appendChild = function(child) { __appendChild(this.__ref, child.__ref); return child; };
+  // Pre-insertion validity (DOM): the inserted node must not be an inclusive
+  // ancestor of the parent (would form a cycle) → HierarchyRequestError.
+  function ensureInsertable(parent, node) {
+    if (node === parent || (node.contains && node.contains(parent))) {
+      throw new DOMException("The new child is an ancestor of the parent.", "HierarchyRequestError");
+    }
+  }
+  Node.prototype.appendChild = function(child) {
+    ensureInsertable(this, child);
+    __appendChild(this.__ref, child.__ref); return child;
+  };
   Object.defineProperty(Node.prototype, 'textContent', {
     configurable: true,
     get: function() { return __getTextContent(this.__ref); },
@@ -992,6 +1047,7 @@ const DOM_BOOTSTRAP: &str = r#"
     return child;
   };
   Node.prototype.insertBefore = function(node, ref) {
+    ensureInsertable(this, node);
     if (ref !== null && ref !== undefined && ref.parentNode !== this) {
       throw new DOMException("The reference node is not a child of this node.", "NotFoundError");
     }
@@ -1066,8 +1122,21 @@ const DOM_BOOTSTRAP: &str = r#"
   // Element : Node — attributes, reflection, selectors.
   function Element() {}
   Element.prototype = Object.create(Node.prototype);
-  Element.prototype.setAttribute = function(name, value) { __setAttribute(this.__ref, String(name), String(value)); };
+  Element.prototype.setAttribute = function(name, value) {
+    name = String(name); validateName(name);
+    // In an HTML element, the qualified name is lowercased.
+    if (this.namespaceURI === 'http://www.w3.org/1999/xhtml') name = name.toLowerCase();
+    __setAttribute(this.__ref, name, String(value));
+  };
   Element.prototype.getAttribute = function(name) { return __getAttribute(this.__ref, String(name)); };
+  Element.prototype.setAttributeNS = function(ns, qname, value) {
+    ns = (ns === null || ns === undefined) ? null : String(ns);
+    qname = String(qname); validateNS(ns, qname);
+    // Stored by qualified name (the attribute namespace is not yet modeled
+    // separately; getAttribute(qname) round-trips, which is what the tests read).
+    __setAttribute(this.__ref, qname, String(value));
+  };
+  Element.prototype.getAttributeNS = function(ns, local) { return __getAttribute(this.__ref, String(local)); };
   Element.prototype.hasAttribute = function(name) { return __getAttribute(this.__ref, String(name)) !== null; };
   Element.prototype.removeAttribute = function(name) { __removeAttribute(this.__ref, String(name)); };
   Element.prototype.toggleAttribute = function(name, force) {
@@ -1203,9 +1272,16 @@ const DOM_BOOTSTRAP: &str = r#"
   // Document : Node, with the construction/lookup methods.
   function Document() {}
   Document.prototype = Object.create(Node.prototype);
-  Document.prototype.createElement = function(tag) { return wrapNode(__createElement(String(tag))); };
+  Document.prototype.createElement = function(tag) {
+    tag = String(tag); validateName(tag);
+    // HTML document: the local name is lowercased.
+    return wrapNode(__createElement(tag.toLowerCase()));
+  };
   Document.prototype.createElementNS = function(ns, qname) {
-    return wrapNode(__createElementNS(ns === null ? '' : String(ns), String(qname)));
+    ns = (ns === null || ns === undefined) ? null : String(ns);
+    qname = String(qname);
+    validateNS(ns, qname);
+    return wrapNode(__createElementNS(ns === null ? '' : ns, qname));
   };
   Document.prototype.createTextNode = function(data) { return wrapNode(__createTextNode(String(data))); };
   Document.prototype.createComment = function(data) { return wrapNode(__createComment(String(data))); };
@@ -1504,7 +1580,10 @@ const DOM_BOOTSTRAP: &str = r#"
       return (v < 0 ? Math.ceil(v) : Math.floor(v)) | 0;
     }
     function def(idl, kind, attr) {
-      attr = attr || idl;
+      // Reflected HTML content-attribute names are lowercase (tabIndex ->
+      // tabindex); this also keeps get/set consistent with HTML setAttribute,
+      // which lowercases. Explicit names passed in are already lowercase.
+      attr = (attr || idl).toLowerCase();
       var desc = { configurable: true, enumerable: true };
       if (kind === 's') {
         desc.get = function() { var v = this.getAttribute(attr); return v === null ? '' : v; };
@@ -2026,7 +2105,7 @@ mod tests {
                 "false",                        // hidden cleared
                 "3",                            // tabIndex long roundtrip
                 "a,http://www.w3.org/1999/xhtml,A", // localName/namespaceURI/tagName (HTML upper)
-                "rect,http://www.w3.org/2000/svg,svg,rect", // createElementNS: not upper-cased, prefix kept
+                "rect,http://www.w3.org/2000/svg,svg,svg:rect", // createElementNS: localName=rect, tagName=qualified (prefix kept, not upper-cased)
                 "Hi there",                     // document.title whitespace-collapsed
                 "object,1",                     // NodeFilter present
                 "a",                            // tree walker over body finds the <a>
@@ -2366,5 +2445,58 @@ mod tests {
     #[test]
     fn dom_read_surface_on_nova() {
         dom_read_surface_works::<script_engine_nova::NovaEngine>();
+    }
+
+    /// DOMException-throwing on bad input (Lane C item 2), against any backend:
+    /// invalid names on createElement/setAttribute → InvalidCharacterError, NS
+    /// validation → NamespaceError, hierarchy cycles → HierarchyRequestError, and
+    /// createElement lowercases in an HTML document.
+    fn dom_throwing_works<E: ScriptEngine>() {
+        use serval_static_dom::StaticDocument;
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.load_dom(&StaticDocument::parse("<html><body><div id='p'></div></body></html>"));
+
+        rt.eval(
+            "function thrown(fn){ try { fn(); return 'no-throw'; } catch(e){ return (e && e.name) || 'err'; } }\
+             console.log(thrown(function(){ document.createElement('1foo'); }));\
+             console.log(thrown(function(){ document.createElement('f<oo'); }));\
+             console.log(document.createElement('DIV').localName);\
+             console.log(document.createElement(':foo').localName);\
+             console.log(thrown(function(){ document.getElementById('p').setAttribute('a b', 'x'); }));\
+             console.log(thrown(function(){ document.createElementNS(null, 'p:q'); }));\
+             console.log(thrown(function(){ document.createElementNS('urn:x', 'a:b:c'); }));\
+             console.log(document.createElementNS('urn:x', 'a:b').tagName);\
+             var p = document.getElementById('p'); var c = document.createElement('span'); p.appendChild(c);\
+             console.log(thrown(function(){ c.appendChild(p); }));\
+             console.log(thrown(function(){ p.appendChild(p); }));",
+        )
+        .expect("throwing script");
+
+        assert_eq!(
+            rt.host().borrow().console,
+            vec![
+                "InvalidCharacterError",  // createElement('1foo')
+                "InvalidCharacterError",  // createElement('f<oo')
+                "div",                    // createElement('DIV') lowercases
+                ":foo",                   // ':foo' is a valid Name, not lowercased away
+                "InvalidCharacterError",  // setAttribute('a b', ...)
+                "NamespaceError",         // createElementNS(null, 'p:q') — prefix needs ns
+                "InvalidCharacterError",  // 'a:b:c' — malformed qualified name
+                "a:b",                    // valid NS element, tagName not upper (non-HTML ns)
+                "HierarchyRequestError",  // c.appendChild(p) — p is ancestor of c
+                "HierarchyRequestError",  // p.appendChild(p) — self
+            ],
+        );
+    }
+
+    #[test]
+    fn dom_throwing_on_boa() {
+        dom_throwing_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dom_throwing_on_nova() {
+        dom_throwing_works::<script_engine_nova::NovaEngine>();
     }
 }
