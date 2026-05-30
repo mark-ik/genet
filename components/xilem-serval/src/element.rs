@@ -23,6 +23,32 @@ use xilem_core::{
 /// type per view. Here there is only one.
 pub use crate::pod::ServalElement as Element;
 
+/// Marker for views that produce an **element** node (not text or other
+/// content) — the Element/Text type split.
+///
+/// Element-only operations — [`on_click`](crate::on_click),
+/// [`on_key`](crate::on_key), and [`El::attr`] — require `ElementView`, so they
+/// reject text views (`&str` / `String` / [`text`](crate::text)): a text node is
+/// not a sensible click / key / attribute target. Every node in serval is still
+/// one runtime type ([`ServalElement`]) — this is a *compile-time* distinction
+/// over views, not a second element type, so the children sequence stays
+/// heterogeneous (text and elements mix freely as children).
+///
+/// Implemented by [`El`] and the element-preserving wrappers
+/// [`OnClick`](crate::OnClick) / [`OnKey`](crate::OnKey) (whose `Element` is
+/// their child's), so handlers compose: `on_key(on_click(el(..), ..), ..)`.
+///
+/// The split in action — a text view cannot be a click target:
+/// ```compile_fail
+/// use xilem_serval::{on_click, text, PointerClick};
+/// // `text(..)` is not an `ElementView`, so this fails to compile.
+/// let _ = on_click::<_, (), (), (), _>(text("hi"), |_: &mut (), _: PointerClick| {});
+/// ```
+pub trait ElementView<State: 'static, Action>:
+    View<State, Action, ServalCtx, Element = ServalElement>
+{
+}
+
 /// An HTML element view: a tag name, a child [`ViewSequence`], and attributes.
 ///
 /// Construct with [`el`]. Add attributes with [`El::attr`].
@@ -217,4 +243,14 @@ where
         self.children
             .seq_message(&mut view_state.seq_state, message, &mut splice, app_state)
     }
+}
+
+// `El` produces an element node, so it is the canonical `ElementView` (same
+// bounds as its `View` impl).
+impl<Seq, State, Action> ElementView<State, Action> for El<Seq, State, Action>
+where
+    State: 'static,
+    Action: 'static,
+    Seq: ViewSequence<State, Action, ServalCtx, ServalElement>,
+{
 }

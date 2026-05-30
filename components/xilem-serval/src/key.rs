@@ -39,7 +39,7 @@ use xilem_core::{
 };
 
 use crate::pod::ServalElement;
-use crate::{OptionalAction, ServalCtx};
+use crate::{ElementView, OptionalAction, ServalCtx};
 
 // A distinctive number, mirroring [`OnClick`](crate::OnClick)'s `ON_CLICK_ID`,
 // so a stray message routed here on a wrong path is caught rather than silently
@@ -158,7 +158,7 @@ pub fn on_key<V, State, Action, OA, F>(child: V, handler: F) -> OnKey<V, State, 
 where
     State: 'static,
     Action: 'static,
-    V: View<State, Action, ServalCtx, Element = ServalElement>,
+    V: ElementView<State, Action>,
     OA: OptionalAction<Action>,
     F: Fn(&mut State, KeyEvent) -> OA + 'static,
 {
@@ -185,7 +185,7 @@ impl<V, State, Action, OA, F> View<State, Action, ServalCtx> for OnKey<V, State,
 where
     State: 'static,
     Action: 'static,
-    V: View<State, Action, ServalCtx, Element = ServalElement>,
+    V: ElementView<State, Action>,
     OA: OptionalAction<Action>,
     F: Fn(&mut State, KeyEvent) -> OA + 'static,
 {
@@ -286,4 +286,16 @@ where
                 .message(&mut view_state.child_state, message, element, app_state)
         }
     }
+}
+
+// `OnKey` passes its child's element through, so a key-wrapped element is itself
+// an `ElementView` (the twin of `OnClick`'s impl), letting handlers compose.
+impl<V, State, Action, OA, F> ElementView<State, Action> for OnKey<V, State, Action, F>
+where
+    State: 'static,
+    Action: 'static,
+    V: ElementView<State, Action>,
+    OA: OptionalAction<Action>,
+    F: Fn(&mut State, KeyEvent) -> OA + 'static,
+{
 }

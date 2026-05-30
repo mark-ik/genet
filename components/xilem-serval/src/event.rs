@@ -30,7 +30,7 @@ use xilem_core::{
 };
 
 use crate::pod::ServalElement;
-use crate::{OptionalAction, ServalCtx};
+use crate::{ElementView, OptionalAction, ServalCtx};
 
 // A distinctive number, mirroring `OnEvent`'s `ON_EVENT_VIEW_ID`, so a stray
 // message routed here on a wrong path is caught rather than silently matching.
@@ -112,7 +112,9 @@ pub fn on_click<V, State, Action, OA, F>(
 where
     State: 'static,
     Action: 'static,
-    V: View<State, Action, ServalCtx, Element = ServalElement>,
+    // `ElementView` (not just `Element = ServalElement`): a click target must be
+    // an element, so a text view is rejected at compile time.
+    V: ElementView<State, Action>,
     OA: OptionalAction<Action>,
     F: Fn(&mut State, PointerClick) -> OA + 'static,
 {
@@ -140,7 +142,7 @@ impl<V, State, Action, OA, F> View<State, Action, ServalCtx> for OnClick<V, Stat
 where
     State: 'static,
     Action: 'static,
-    V: View<State, Action, ServalCtx, Element = ServalElement>,
+    V: ElementView<State, Action>,
     OA: OptionalAction<Action>,
     F: Fn(&mut State, PointerClick) -> OA + 'static,
 {
@@ -242,4 +244,17 @@ where
                 .message(&mut view_state.child_state, message, element, app_state)
         }
     }
+}
+
+// `OnClick` passes its child's element through (`Element = ServalElement`), so a
+// click-wrapped element is itself an `ElementView` — letting handlers compose,
+// e.g. `on_key(on_click(el(..), ..), ..)` for an element with both.
+impl<V, State, Action, OA, F> ElementView<State, Action> for OnClick<V, State, Action, F>
+where
+    State: 'static,
+    Action: 'static,
+    V: ElementView<State, Action>,
+    OA: OptionalAction<Action>,
+    F: Fn(&mut State, PointerClick) -> OA + 'static,
+{
 }
