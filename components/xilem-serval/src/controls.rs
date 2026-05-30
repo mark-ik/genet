@@ -54,15 +54,21 @@ const CARET_MARKER: char = '|';
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TextInput {
     text: String,
+    /// The caret — the *moving* end of the selection (where the caret paints and
+    /// where insertion happens once collapsed). A char index in `0..=char_count`.
     caret: usize,
+    /// The selection's *fixed* end. `anchor == caret` means no selection (a
+    /// collapsed caret); otherwise the selection spans
+    /// `[min(anchor, caret), max(anchor, caret))`.
+    anchor: usize,
 }
 
 impl TextInput {
-    /// A field holding `text`, with the caret at the end.
+    /// A field holding `text`, with the caret collapsed at the end.
     pub fn new(text: impl Into<String>) -> Self {
         let text = text.into();
         let caret = text.chars().count();
-        Self { text, caret }
+        Self { text, caret, anchor: caret }
     }
 
     /// The buffer, without the caret marker.
@@ -70,9 +76,26 @@ impl TextInput {
         &self.text
     }
 
-    /// The caret position: a character index in `0..=char_count`.
+    /// The caret (moving end): a character index in `0..=char_count`.
     pub fn caret(&self) -> usize {
         self.caret
+    }
+
+    /// The selection's fixed end (anchor); equals [`caret`](Self::caret) when
+    /// nothing is selected.
+    pub fn anchor(&self) -> usize {
+        self.anchor
+    }
+
+    /// Whether a non-empty range is selected.
+    pub fn has_selection(&self) -> bool {
+        self.anchor != self.caret
+    }
+
+    /// The selected char range `[start, end)`, ordered. Empty (`start == end`)
+    /// when nothing is selected.
+    pub fn selection(&self) -> (usize, usize) {
+        (self.anchor.min(self.caret), self.anchor.max(self.caret))
     }
 
     /// The number of characters in the buffer (the caret's upper bound).
@@ -90,16 +113,37 @@ impl TextInput {
             .unwrap_or(self.text.len())
     }
 
-    /// Insert `s` at the caret, advancing the caret past it.
+    /// Delete the selected range and collapse the caret to its start. No-op when
+    /// nothing is selected.
+    fn delete_selection(&mut self) {
+        if !self.has_selection() {
+            return;
+        }
+        let (lo, hi) = self.selection();
+        let start = self.byte_of(lo);
+        let end = self.byte_of(hi);
+        self.text.replace_range(start..end, "");
+        self.caret = lo;
+        self.anchor = lo;
+    }
+
+    /// Insert `s` at the caret, replacing any selection first; collapses the
+    /// caret after the inserted text.
     pub fn insert_str(&mut self, s: &str) {
+        self.delete_selection();
         let at = self.byte_of(self.caret);
         self.text.insert_str(at, s);
         self.caret += s.chars().count();
+        self.anchor = self.caret;
     }
 
-    /// Delete the character *before* the caret and step left (Backspace). No-op
-    /// at the start of the buffer.
+    /// Backspace: delete the selection if any, else the character before the
+    /// caret. No-op at the start of an unselected buffer.
     pub fn backspace(&mut self) {
+        if self.has_selection() {
+            self.delete_selection();
+            return;
+        }
         if self.caret == 0 {
             return;
         }
@@ -107,39 +151,69 @@ impl TextInput {
         let end = self.byte_of(self.caret);
         self.text.replace_range(start..end, "");
         self.caret -= 1;
+        self.anchor = self.caret;
     }
 
-    /// Delete the character *after* the caret, leaving the caret put (Delete).
-    /// No-op at the end of the buffer.
+    /// Delete: remove the selection if any, else the character after the caret.
+    /// No-op at the end of an unselected buffer.
     pub fn delete(&mut self) {
+        if self.has_selection() {
+            self.delete_selection();
+            return;
+        }
         if self.caret >= self.char_count() {
             return;
         }
         let start = self.byte_of(self.caret);
         let end = self.byte_of(self.caret + 1);
         self.text.replace_range(start..end, "");
+        self.anchor = self.caret;
     }
 
-    /// Move the caret one character left (clamped at the start).
-    pub fn move_left(&mut self) {
-        self.caret = self.caret.saturating_sub(1);
-    }
-
-    /// Move the caret one character right (clamped at the end).
-    pub fn move_right(&mut self) {
-        if self.caret < self.char_count() {
-            self.caret += 1;
+    /// Move the caret one character left. `extend` keeps the anchor (growing the
+    /// selection, Shift+←); otherwise it collapses — to the selection's left edge
+    /// if one exists, else one char left.
+    pub fn move_left(&mut self, extend: bool) {
+        if !extend && self.has_selection() {
+            self.caret = self.selection().0;
+        } else {
+            self.caret = self.caret.saturating_sub(1);
+        }
+        if !extend {
+            self.anchor = self.caret;
         }
     }
 
-    /// Move the caret to the start of the buffer (Home).
-    pub fn home(&mut self) {
-        self.caret = 0;
+    /// Move the caret one character right. `extend` keeps the anchor (Shift+→);
+    /// otherwise it collapses to the selection's right edge if one exists, else
+    /// one char right.
+    pub fn move_right(&mut self, extend: bool) {
+        if !extend && self.has_selection() {
+            self.caret = self.selection().1;
+        } else if self.caret < self.char_count() {
+            self.caret += 1;
+        }
+        if !extend {
+            self.anchor = self.caret;
+        }
     }
 
-    /// Move the caret to the end of the buffer (End).
-    pub fn end(&mut self) {
+    /// Move the caret to the start (Home). `extend` keeps the anchor (selecting
+    /// to the start).
+    pub fn home(&mut self, extend: bool) {
+        self.caret = 0;
+        if !extend {
+            self.anchor = 0;
+        }
+    }
+
+    /// Move the caret to the end (End). `extend` keeps the anchor (selecting to
+    /// the end).
+    pub fn end(&mut self, extend: bool) {
         self.caret = self.char_count();
+        if !extend {
+            self.anchor = self.caret;
+        }
     }
 
     /// The buffer with a [`CARET_MARKER`] inserted at the caret — the field's
@@ -165,21 +239,25 @@ impl TextInput {
 /// * [`NamedKey::Space`] inserts a literal space — per Stage 3b, the space bar
 ///   arrives as [`NamedKey::Space`], *not* `Character(" ")`, so the field handles
 ///   it explicitly.
-/// * [`NamedKey::Backspace`] / [`NamedKey::Delete`] remove the char before / after
-///   the caret; [`NamedKey::ArrowLeft`] / [`NamedKey::ArrowRight`] move it one
-///   char, and [`NamedKey::Home`] / [`NamedKey::End`] jump to the line ends.
+/// * [`NamedKey::Backspace`] / [`NamedKey::Delete`] remove the selection if any,
+///   else the char before / after the caret. [`NamedKey::ArrowLeft`] /
+///   [`NamedKey::ArrowRight`] move one char and [`NamedKey::Home`] /
+///   [`NamedKey::End`] jump to the line ends — and with **Shift held**
+///   (`ev.mods.shift`) they *extend the selection* instead of collapsing it.
+/// * Any `Key::Character` / `Space` insert replaces a non-empty selection first.
 /// * [`NamedKey::Enter`], `Tab`, `Escape`, ↑/↓, and `Other` have no effect in a
 ///   single-line field yet (multi-line / commit are later slices).
 fn edit(input: &mut TextInput, ev: KeyEvent) {
+    let extend = ev.mods.shift;
     match ev.key {
         Key::Character(s) => input.insert_str(&s),
         Key::Named(NamedKey::Space) => input.insert_str(" "),
         Key::Named(NamedKey::Backspace) => input.backspace(),
         Key::Named(NamedKey::Delete) => input.delete(),
-        Key::Named(NamedKey::ArrowLeft) => input.move_left(),
-        Key::Named(NamedKey::ArrowRight) => input.move_right(),
-        Key::Named(NamedKey::Home) => input.home(),
-        Key::Named(NamedKey::End) => input.end(),
+        Key::Named(NamedKey::ArrowLeft) => input.move_left(extend),
+        Key::Named(NamedKey::ArrowRight) => input.move_right(extend),
+        Key::Named(NamedKey::Home) => input.home(extend),
+        Key::Named(NamedKey::End) => input.end(extend),
         Key::Named(_) => {},
     }
 }
