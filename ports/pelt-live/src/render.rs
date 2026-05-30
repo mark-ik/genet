@@ -22,12 +22,17 @@
 //! without a window.
 
 use engine_observables_api::{FragmentQuery, Point};
-use paint_list_api::DeviceIntSize;
+use paint_list_api::{ColorF, DeviceIntSize};
 use serval_layout::{
-    BackgroundImagePlane, FragmentPlane, ImagePlane, ServalLaneView, StylePlane,
+    BackgroundImagePlane, FragmentPlane, ImagePlane, ServalLaneView, StylePlane, caret_rect,
     emit_paint_list_with_layouts, layout, run_cascade,
 };
 use serval_scripted_dom::{NodeId, ScriptedDom};
+
+/// Caret bar thickness, device px.
+const CARET_WIDTH: f32 = 2.0;
+/// Caret bar colour (near-black, opaque).
+const CARET_COLOR: ColorF = ColorF { r: 0.12, g: 0.12, b: 0.20, a: 1.0 };
 
 /// Run cascade → layout → paint-emit over `dom` and translate the paint list to
 /// a [`netrender::Scene`] at `width`×`height`.
@@ -36,11 +41,18 @@ use serval_scripted_dom::{NodeId, ScriptedDom};
 /// the static viewer there is no inline `<style>` / `<link>` collection: the
 /// chrome DOM the runner builds carries no document-embedded stylesheets, so the
 /// caller's sheets are the whole author set.
+///
+/// `caret` is `Some((node, byte_offset))` to paint a text caret at that offset
+/// within `node`'s laid-out text — typically the focused field's element and its
+/// cursor position. Drawn as a thin filled bar via
+/// [`serval_layout::caret_rect`], appended after the layout walk (absolute
+/// coords). `None` paints no caret.
 pub fn scene_from_scripted_dom(
     dom: &ScriptedDom,
     stylesheets: &[&str],
     width: u32,
     height: u32,
+    caret: Option<(NodeId, usize)>,
 ) -> netrender::Scene {
     let mut styles: StylePlane<NodeId> = StylePlane::new();
     run_cascade(
@@ -60,7 +72,7 @@ pub fn scene_from_scripted_dom(
         height: taffy::AvailableSpace::Definite(height as f32),
     };
     let (fragments, built, text_ctx) = layout(dom, &styles, &images, viewport);
-    let plist = emit_paint_list_with_layouts(
+    let mut plist = emit_paint_list_with_layouts(
         dom,
         &styles,
         &fragments,
@@ -70,6 +82,16 @@ pub fn scene_from_scripted_dom(
         &bg_images,
         DeviceIntSize::new(width as i32, height as i32),
     );
+
+    // Overlay the caret (if any) as a thin bar at its absolute position. Appended
+    // after emit, so it draws over the text at scene coordinates.
+    if let Some((node, byte_offset)) = caret {
+        if let Some(rect) =
+            caret_rect(dom, node, byte_offset, &built, &text_ctx, &fragments, CARET_WIDTH)
+        {
+            plist.push_caret(rect, CARET_COLOR);
+        }
+    }
 
     paint::translate_paint_list(&plist)
 }

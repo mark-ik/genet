@@ -279,8 +279,19 @@ impl App {
         let Some(gpu) = self.gpu.as_ref() else { return };
         let (w, h) = (self.width.max(1), self.height.max(1));
 
-        // 1. Engine pipeline → Scene.
-        let scene: Scene = scene_from_scripted_dom(&self.dom.borrow(), SHEET, w, h);
+        // 1. Engine pipeline → Scene. When a field is focused, paint its caret:
+        //    the focused element + the byte offset of the field's char-index caret.
+        let caret = self.runner.focus().map(|node| {
+            let field = &self.runner.state().field;
+            let byte_offset = field
+                .text()
+                .char_indices()
+                .nth(field.caret())
+                .map(|(b, _)| b)
+                .unwrap_or(field.text().len());
+            (node, byte_offset)
+        });
+        let scene: Scene = scene_from_scripted_dom(&self.dom.borrow(), SHEET, w, h, caret);
 
         // 2. Render the scene into a fresh Rgba8Unorm target. vello binds this
         //    as a storage texture (STORAGE_BINDING) and also reads it back via

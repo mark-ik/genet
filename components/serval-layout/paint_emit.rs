@@ -90,6 +90,23 @@ impl ServalPaintList {
             images: Vec::new(),
         }
     }
+
+    /// Append a text caret as a filled rect at its absolute position.
+    ///
+    /// Pushed *after* the emit walk, which balances its `PushTransform` stack
+    /// back to identity, so [`CaretRect`](crate::caret::CaretRect)'s absolute
+    /// scene coordinates (from [`caret_rect`](crate::caret::caret_rect)) place
+    /// the bar correctly with no active transform. A host overlays the focused
+    /// field's caret this way — the painted successor to the placeholder marker.
+    pub fn push_caret(&mut self, caret: crate::caret::CaretRect, color: ColorF) {
+        self.commands.push(PaintCmd::DrawRect(RectItem {
+            placement: CommonPlacement::new(LayoutRect::new(
+                LayoutPoint::new(caret.x, caret.y),
+                LayoutPoint::new(caret.x + caret.width, caret.y + caret.height),
+            )),
+            color,
+        }));
+    }
 }
 
 impl PaintList for ServalPaintList {

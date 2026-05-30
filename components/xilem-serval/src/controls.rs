@@ -23,16 +23,19 @@
 //! The field is a real insertion-point editor, not append-only: [`TextInput`]
 //! carries a `caret` (a *character* index, so editing is Unicode-correct), and
 //! the handler inserts at the caret, deletes before/after it (Backspace/Delete),
-//! and moves it (←/→). Rendering shows the caret as a `|` marker
-//! ([`TextInput::display`]) — a placeholder visible cursor; real caret painting
-//! (a measured glyph-position rect, blinking) is a later slice. The marker is
-//! render-only; [`TextInput::text`] stays the clean buffer.
+//! and moves it (←/→ and Home/End). The field renders the **clean** buffer; the
+//! host paints the caret as a thin bar at the cursor via
+//! `serval_layout::caret_rect` overlaid on the scene (see `pelt-live`'s render
+//! path). [`TextInput::display`] — the buffer with a `|` at the caret — is a
+//! *textual* representation for headless tests / debug, not what the field
+//! renders on screen.
 
 use crate::pod::ServalElement;
 use crate::{El, Key, KeyEvent, NamedKey, OnKey, ServalCtx, View, el, on_key};
 
-/// The placeholder caret marker inserted into the *rendered* string (never into
-/// the buffer). A stand-in for real caret painting.
+/// The caret marker inserted into [`TextInput::display`]'s *textual* rendering
+/// (never into the buffer). The on-screen field paints a real caret bar instead;
+/// this is for headless tests / debug.
 const CARET_MARKER: char = '|';
 
 /// The state of an editable text field: the `text` buffer plus a `caret`
@@ -192,7 +195,10 @@ pub type TextField = OnKey<El<String, TextInput, ()>, TextInput, (), fn(&mut Tex
 /// behind both [`text_field`] and [`text_field_typed`]).
 fn build_text_field(input: &TextInput) -> TextField {
     let handler: fn(&mut TextInput, KeyEvent) = edit;
-    on_key(el::<_, TextInput, ()>("input", input.display()), handler)
+    // Render the clean buffer; the host paints the caret over it (see the module
+    // docs). `display()` (with the `|` marker) is the textual representation, not
+    // what the field shows on screen.
+    on_key(el::<_, TextInput, ()>("input", input.text().to_string()), handler)
 }
 
 /// A reusable, editable text field whose state *is* a [`TextInput`].
