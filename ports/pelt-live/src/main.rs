@@ -50,8 +50,8 @@ use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, NamedKey as WinitNamedKey};
 use winit::window::{Window, WindowId};
 use xilem_serval::{
-    El, Key, KeyEvent, Lens, NamedKey, OnClick, PointerClick, ServalAppRunner, TextField, TextInput,
-    el, lens, on_click, text_field_typed,
+    El, Key, KeyEvent, Lens, Modifiers, NamedKey, OnClick, PointerClick, ServalAppRunner, TextField,
+    TextInput, el, lens, on_click, text_field_typed,
 };
 
 use accesskit_winit::{Adapter, Event as AkEvent, WindowEvent as AkWindowEvent};
@@ -170,7 +170,7 @@ impl From<AkEvent> for UserEvent {
 /// pop a char. Any other named key becomes [`NamedKey::Other`] (a real event the
 /// field currently ignores). `Dead`/`Unidentified` keys produce no text and have
 /// no mapping, so they are skipped.
-fn key_event_from_winit(key: &WinitKey) -> Option<KeyEvent> {
+fn key_event_from_winit(key: &WinitKey, mods: Modifiers) -> Option<KeyEvent> {
     let mapped = match key {
         WinitKey::Character(s) => Key::Character(s.to_string()),
         WinitKey::Named(named) => Key::Named(match named {
@@ -191,7 +191,7 @@ fn key_event_from_winit(key: &WinitKey) -> Option<KeyEvent> {
         // No text, no named mapping: nothing to route.
         WinitKey::Dead(_) | WinitKey::Unidentified(_) => return None,
     };
-    Some(KeyEvent { key: mapped })
+    Some(KeyEvent::with_mods(mapped, mods))
 }
 
 // ── GPU state (created on resume) ────────────────────────────────────────────
@@ -224,6 +224,9 @@ struct App {
     /// Last cursor position in physical pixels (window space == content space:
     /// the surface fills the window, so window coords are layout coords).
     cursor: (f32, f32),
+    /// Current keyboard modifiers (tracked from `ModifiersChanged`), folded into
+    /// each `KeyEvent` — so `Shift+Tab` reverses focus traversal.
+    modifiers: Modifiers,
     width: u32,
     height: u32,
 }
@@ -247,6 +250,7 @@ impl App {
             adapter: None,
             proxy,
             cursor: (0.0, 0.0),
+            modifiers: Modifiers::default(),
             width: 800,
             height: 600,
         }
@@ -531,6 +535,17 @@ impl ApplicationHandler<UserEvent> for App {
                 self.cursor = (position.x as f32, position.y as f32);
             },
 
+            WindowEvent::ModifiersChanged(mods) => {
+                // Track modifiers so each KeyEvent carries them (Shift+Tab, …).
+                let s = mods.state();
+                self.modifiers = Modifiers {
+                    shift: s.shift_key(),
+                    ctrl: s.control_key(),
+                    alt: s.alt_key(),
+                    meta: s.super_key(),
+                };
+            },
+
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
@@ -560,7 +575,7 @@ impl ApplicationHandler<UserEvent> for App {
                 // when it was clicked. Keys with no text and no named mapping
                 // (e.g. dead keys) are skipped.
                 if event.state == ElementState::Pressed {
-                    if let Some(key_event) = key_event_from_winit(&event.logical_key) {
+                    if let Some(key_event) = key_event_from_winit(&event.logical_key, self.modifiers) {
                         self.runner.dispatch_key(key_event);
                         self.push_a11y();
                         if let Some(window) = self.window.as_ref() {

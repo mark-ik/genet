@@ -75,7 +75,7 @@ pub use context::ServalCtx;
 pub use controls::{text_field, text_field_typed, TextField, TextInput};
 pub use element::{El, Element, ElementView, el};
 pub use event::{OnClick, OnClickState, PointerClick, on_click};
-pub use key::{Key, KeyEvent, NamedKey, OnKey, OnKeyState, on_key};
+pub use key::{Key, KeyEvent, Modifiers, NamedKey, OnKey, OnKeyState, on_key};
 pub use optional_action::{Action, OptionalAction};
 pub use pod::{ServalElement, ServalElementMut};
 pub use runner::ServalAppRunner;

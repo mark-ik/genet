@@ -563,13 +563,11 @@ mod tests {
     }
 
     fn ch(s: &str) -> KeyEvent {
-        KeyEvent {
-            key: Key::Character(s.to_string()),
-        }
+        KeyEvent::new(Key::Character(s.to_string()))
     }
 
     fn named(k: NamedKey) -> KeyEvent {
-        KeyEvent { key: Key::Named(k) }
+        KeyEvent::new(Key::Named(k))
     }
 
     /// `<div id="editor"><input on_key=edit/>{text}</div>`: the focusable
