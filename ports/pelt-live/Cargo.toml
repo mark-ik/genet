@@ -40,6 +40,10 @@ engine_observables_api = { workspace = true }
 # concern (a screen-reader adapter consumes it), so it lives here, not in the
 # core layout crate.
 accesskit = { workspace = true }
+# The winit screen-reader adapter for the bin (not a workspace dep; resolves to
+# the 0.32.2 already in the lock via masonry_winit, sharing this accesskit 0.24
+# and winit 0.30). Bin-only — the lib's a11y builder needs only accesskit.
+accesskit_winit = "0.32"
 
 # taffy must match serval-layout's experimental pin (layout() takes a
 # taffy::Size viewport). Copied verbatim from pelt-viewer.

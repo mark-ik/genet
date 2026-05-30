@@ -54,7 +54,8 @@ use xilem_serval::{
     el, lens, on_click, text_field_typed,
 };
 
-use pelt_live::{hit_test_node, scene_from_scripted_dom};
+use accesskit_winit::{Adapter, Event as AkEvent, WindowEvent as AkWindowEvent};
+use pelt_live::{accesskit_tree, fragments_from_scripted_dom, hit_test_node, scene_from_scripted_dom};
 
 // ── App state + view ───────────────────────────────────────────────────────
 
@@ -135,12 +136,25 @@ const SHEET: &[&str] = &[
 
 // ── winit user event ───────────────────────────────────────────────────────
 
-/// The only user-injected event: the ~1Hz timer tick. A background thread
-/// sleeps 1s and sends this through an [`EventLoopProxy`], so the timer lives
-/// off the event loop without a busy-poll.
-#[derive(Debug, Clone, Copy)]
+/// Events injected into the loop from off the main thread / from accesskit.
+///
+/// `Tick` is the ~1Hz timer (a background thread sleeps 1s and sends it through
+/// an [`EventLoopProxy`], so the timer lives off the event loop without a
+/// busy-poll). `Accessibility` carries an [`accesskit_winit::Event`]: the
+/// adapter's deferred-event model delivers a11y requests (initial-tree, action,
+/// deactivation) as user events, which is why [`UserEvent`] implements
+/// `From<accesskit_winit::Event>` (the bound `Adapter::with_event_loop_proxy`
+/// requires). Not `Copy`/`Clone`: the a11y event isn't.
+#[derive(Debug)]
 enum UserEvent {
     Tick,
+    Accessibility(AkEvent),
+}
+
+impl From<AkEvent> for UserEvent {
+    fn from(event: AkEvent) -> Self {
+        UserEvent::Accessibility(event)
+    }
 }
 
 // ── winit → serval key mapping ───────────────────────────────────────────────
@@ -199,6 +213,12 @@ struct App {
     runner: ServalAppRunner<Demo, Logic, DemoView>,
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
+    /// The accesskit screen-reader adapter (created on resume, once a window
+    /// exists). `update_if_active` no-ops until a screen reader activates a11y.
+    adapter: Option<Adapter>,
+    /// A proxy clone for building the adapter on resume (it delivers a11y
+    /// requests back as `UserEvent::Accessibility`).
+    proxy: EventLoopProxy<UserEvent>,
     /// Last cursor position in physical pixels (window space == content space:
     /// the surface fills the window, so window coords are layout coords).
     cursor: (f32, f32),
@@ -207,7 +227,7 @@ struct App {
 }
 
 impl App {
-    fn new() -> Self {
+    fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
         let dom: Rc<RefCell<ScriptedDom>> = Rc::new(RefCell::new(ScriptedDom::new()));
         let runner = ServalAppRunner::new(
             dom.clone(),
@@ -222,9 +242,27 @@ impl App {
             runner,
             window: None,
             gpu: None,
+            adapter: None,
+            proxy,
             cursor: (0.0, 0.0),
             width: 800,
             height: 600,
+        }
+    }
+
+    /// Push the current accessibility tree to the adapter. Builds it eagerly
+    /// from the live DOM + a fresh layout (`fragments`) + the runner's focus,
+    /// then hands it to `update_if_active`, which only does work when a screen
+    /// reader is active. (The spare layout pass when inactive is acceptable for
+    /// a demo; a real host would gate on activation.)
+    fn push_a11y(&mut self) {
+        let (w, h) = (self.width.max(1), self.height.max(1));
+        let dom = self.dom.borrow();
+        let fragments = fragments_from_scripted_dom(&dom, SHEET, w, h);
+        let tree = accesskit_tree(&dom, &fragments, self.runner.focus());
+        drop(dom);
+        if let Some(adapter) = self.adapter.as_mut() {
+            adapter.update_if_active(|| tree);
         }
     }
 
@@ -333,10 +371,13 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         }
 
-        // 1. Window.
+        // 1. Window — created *invisible*: the accesskit adapter must be built
+        //    before the window is first shown (it panics otherwise), so we show
+        //    it at the end of resume, after the adapter exists.
         let attributes = Window::default_attributes()
             .with_title("Pelt Live — xilem-serval counter")
-            .with_inner_size(PhysicalSize::new(self.width, self.height));
+            .with_inner_size(PhysicalSize::new(self.width, self.height))
+            .with_visible(false);
         let window = Arc::new(
             event_loop
                 .create_window(attributes)
@@ -345,6 +386,16 @@ impl ApplicationHandler<UserEvent> for App {
         let size = window.inner_size();
         self.width = size.width.max(1);
         self.height = size.height.max(1);
+
+        // 1b. AccessKit adapter, while the window is still invisible. The
+        //     deferred-event model: a11y requests arrive as
+        //     `UserEvent::Accessibility` via the proxy; we answer them (and push
+        //     tree updates on state changes) through `push_a11y`.
+        self.adapter = Some(Adapter::with_event_loop_proxy(
+            event_loop,
+            &window,
+            self.proxy.clone(),
+        ));
 
         // 2. wgpu handles via netrender::boot (standalone instance/adapter/
         //    device/queue), then the netrender renderer over them.
@@ -412,6 +463,8 @@ impl ApplicationHandler<UserEvent> for App {
             surface_config,
             renderer,
         });
+        // The adapter exists now, so it is safe to show the window.
+        window.set_visible(true);
         window.request_redraw();
         self.window = Some(window);
     }
@@ -420,11 +473,22 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             UserEvent::Tick => {
                 // Timer tick: bump the count through the runner (state → DOM
-                // diff), then redraw so the new number shows.
+                // diff), then push the updated a11y tree and redraw.
                 self.runner.update(|s| s.count += 1);
+                self.push_a11y();
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
+            },
+            UserEvent::Accessibility(event) => match event.window_event {
+                // A screen reader activated (or re-requested): hand it the tree.
+                AkWindowEvent::InitialTreeRequested => self.push_a11y(),
+                // SR-initiated actions (activate / focus a node) are a follow-up:
+                // mapping `ActionRequest` -> `dispatch_click`/`set_focus` wants a
+                // screen reader in the loop to verify, so for now the tree is
+                // read-only (perceivable, not actuable via a11y).
+                AkWindowEvent::ActionRequested(_) => {},
+                AkWindowEvent::AccessibilityDeactivated => {},
             },
         }
     }
@@ -437,6 +501,12 @@ impl ApplicationHandler<UserEvent> for App {
     ) {
         if self.window.as_ref().map(|w| w.id()) != Some(window_id) {
             return;
+        }
+
+        // Let the accesskit adapter observe every window event (focus, resize,
+        // etc.) before we handle it. Borrows the adapter + window fields (disjoint).
+        if let (Some(adapter), Some(window)) = (self.adapter.as_mut(), self.window.as_ref()) {
+            adapter.process_event(window, &event);
         }
 
         match event {
@@ -462,6 +532,7 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(node) = hit {
                     self.runner
                         .dispatch_click(node, PointerClick { local: (x, y) });
+                    self.push_a11y();
                     if let Some(window) = self.window.as_ref() {
                         window.request_redraw();
                     }
@@ -478,6 +549,7 @@ impl ApplicationHandler<UserEvent> for App {
                 if event.state == ElementState::Pressed {
                     if let Some(key_event) = key_event_from_winit(&event.logical_key) {
                         self.runner.dispatch_key(key_event);
+                        self.push_a11y();
                         if let Some(window) = self.window.as_ref() {
                             window.request_redraw();
                         }
@@ -517,7 +589,7 @@ fn main() {
         }
     });
 
-    let mut app = App::new();
+    let mut app = App::new(event_loop.create_proxy());
     event_loop
         .run_app(&mut app)
         .expect("pelt-live-counter event loop failed");

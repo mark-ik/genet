@@ -85,8 +85,12 @@ checksum = "b016ca8db0ea0ea2ceff29a9d6240391492d960716aa471967c00e8cc8cb197c"
 dependencies = [
  "accesskit",
  "accesskit_atspi_common",
+ "async-channel",
+ "async-executor",
+ "async-task",
  "atspi",
  "futures-lite",
+ "futures-util",
  "serde",
  "tokio",
  "tokio-stream",
@@ -5395,6 +5399,7 @@ name = "pelt-live"
 version = "0.2.0"
 dependencies = [
  "accesskit",
+ "accesskit_winit",
  "engine-observables-api",
  "euclid",
  "layout-dom-api",
