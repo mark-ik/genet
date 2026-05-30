@@ -814,7 +814,7 @@ mod controls {
     use serval_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{
-        DomHandle, Key, KeyEvent, NamedKey, PointerClick, ServalAppRunner, ServalCtx,
+        DomHandle, Key, KeyEvent, Modifiers, NamedKey, PointerClick, ServalAppRunner, ServalCtx,
         ServalElement, TextInput, View, button, checkbox, el, lens, text_field,
     };
 
@@ -965,7 +965,7 @@ mod controls {
     fn text_input_edits_are_char_correct() {
         let mut t = TextInput::new("aé"); // 2 chars, caret at 2
         assert_eq!(t.caret(), 2);
-        t.move_left(); // caret 1 (between 'a' and 'é')
+        t.move_left(false); // caret 1 (between 'a' and 'é')
         t.insert_str("X"); // "aXé", caret 2
         assert_eq!(t.text(), "aXé");
         assert_eq!(t.caret(), 2);
@@ -1133,6 +1133,88 @@ mod controls {
 
         runner.dispatch_click(btn, PointerClick { local: (0.0, 0.0) });
         assert_eq!(runner.state(), &1);
+    }
+
+    // --- selection (model + keyboard) -----------------------------------------
+
+    /// A `Shift`-held key event (extends the selection).
+    fn shift_named(k: NamedKey) -> KeyEvent {
+        KeyEvent::with_mods(
+            Key::Named(k),
+            Modifiers { shift: true, ..Default::default() },
+        )
+    }
+
+    /// `TextInput` selection: extending, replacing, deleting, and collapsing —
+    /// exercised directly on the model.
+    #[test]
+    fn text_input_selection_model() {
+        // Select all (Home, then Shift+End) and replace it.
+        let mut t = TextInput::new("hello");
+        assert!(!t.has_selection());
+        t.home(false);
+        t.end(true);
+        assert!(t.has_selection());
+        assert_eq!(t.selection(), (0, 5));
+        t.insert_str("X"); // replaces the whole selection
+        assert_eq!(t.text(), "X");
+        assert_eq!(t.caret(), 1);
+        assert!(!t.has_selection());
+
+        // Select "bc" in "abcd" (Shift+→ from index 1) and backspace it away.
+        let mut t = TextInput::new("abcd");
+        t.home(false);
+        t.move_right(false); // caret 1
+        t.move_right(true); // sel 1..2
+        t.move_right(true); // sel 1..3 = "bc"
+        assert_eq!(t.selection(), (1, 3));
+        t.backspace();
+        assert_eq!(t.text(), "ad");
+        assert_eq!(t.caret(), 1);
+        assert!(!t.has_selection());
+
+        // Shift+← extends; a plain ← collapses to the selection's left edge.
+        let mut t = TextInput::new("abc");
+        t.move_left(true);
+        t.move_left(true); // sel 1..3
+        assert_eq!(t.selection(), (1, 3));
+        t.move_left(false); // collapse to the left edge, no extra move
+        assert!(!t.has_selection());
+        assert_eq!(t.caret(), 1);
+    }
+
+    /// Keyboard selection through the field: type, `Shift+←` to select, then type
+    /// to replace — proving the edit handler reads `ev.mods.shift`.
+    #[test]
+    fn text_field_keyboard_selection_replaces() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            |s: &TextInput| text_field(s),
+            TextInput::default(),
+        );
+        let input = {
+            let d = dom.borrow();
+            find_element_by_name(&d, runner.root(), "input").expect("an <input>")
+        };
+        runner.set_focus(Some(input));
+
+        runner.key(ch("a"));
+        runner.key(ch("b"));
+        runner.key(ch("c")); // "abc", caret 3
+        runner.key(shift_named(NamedKey::ArrowLeft)); // sel 2..3
+        runner.key(shift_named(NamedKey::ArrowLeft)); // sel 1..3 = "bc"
+        assert!(runner.state().has_selection());
+        assert_eq!(runner.state().selection(), (1, 3));
+
+        runner.key(ch("X")); // replaces the selection
+        assert_eq!(runner.state().text(), "aX");
+        assert!(!runner.state().has_selection());
+        assert_eq!(
+            text_child(&dom.borrow(), runner.root()).as_deref(),
+            Some("aX"),
+            "DOM text is the clean buffer after the replace"
+        );
     }
 }
 
