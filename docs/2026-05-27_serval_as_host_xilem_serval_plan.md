@@ -293,6 +293,83 @@ already exposes (`run_microtasks`, `run_event_loop`).
   - **More events + vocabulary** — `pointermove`/`pointerup`/wheel, more
     named keys (Home/End), and per-tag ergonomic view helpers.
 
+## Toward the Mere flip gate: IME + form-control breadth
+
+Mere's [serval-as-host decision brief](../../mere/design_docs/mere_docs/technical_architecture/2026-05-29_serval_as_host_evaluation.md)
+gates flipping Mere's chrome onto serval on serval reaching Masonry's
+interactive bar — concretely **IME + form-control breadth + the orrery
+element decision** (its §8). The orrery is Mere-side; the two pieces this
+backend owns are scoped here. Neither is a from-scratch build: both extend
+the keyboard/focus + `text_field` foundation already landed.
+
+### IME (the long pole)
+
+Composed text input (CJK, dead-key accents, transliteration) goes through
+the platform input-method editor: the OS reports *preedit* (in-progress
+composition) and *commit* (final text), and wants the focused caret's
+screen rect to place its candidate window. winit surfaces this as
+`WindowEvent::Ime(Ime::{Enabled, Preedit(text, cursor), Commit(text),
+Disabled})`, gated by `window.set_ime_allowed(true)` and steered by
+`window.set_ime_cursor_area(position, size)`.
+
+What the backend needs, in tiers:
+
+- **T1 — commit-only.** Route `Ime::Commit(text)` to the focused element as
+  an insertion (the existing `dispatch_key` path, or a sibling
+  `dispatch_ime`), and call `set_ime_allowed(true)` when a text field
+  focuses. This alone makes most Latin + accent input and basic CJK commit
+  work; it ignores the in-progress composition display.
+- **T2 — preedit display.** `TextInput` grows a `preedit: Option<Preedit>`
+  (composing text + its internal cursor) shown inline at the caret
+  (conventionally underlined) but not in the committed buffer;
+  `Ime::Preedit` updates it, `Ime::Commit` folds it into the buffer.
+  Needs a way to style the preedit run (an inline element, or a run
+  attribute).
+- **T3 — candidate placement.** Report the focused caret's screen rect via
+  `set_ime_cursor_area` so the candidate window appears at the cursor. This
+  needs the **caret rect** (see shared capability below).
+
+IME pays once for the whole engine: serval needs it for content text entry
+regardless, so the host chrome gets it for free once content has it (the
+brief's §4 framing). It is the one interactive gap not yet in the backend.
+
+### Form-control breadth
+
+The demo has one control (`text_field`). Mere chrome needs a small but real
+set, each a reusable `xilem_serval` component over a tiny state model (the
+`text_field`/`counter_button` pattern), built on `on_click`/`on_key`/focus:
+
+- **T1 — the chrome essentials.** `button` (have, as `on_click` on an
+  element), `checkbox`/`toggle` (a bool over `on_click`), single-line text
+  input (have), and **focus traversal** — `Tab`/`Shift+Tab` moving focus
+  across focusable elements in document order (the `Tab` key already arrives
+  as `NamedKey::Tab`, currently ignored; the runner has the focus model and
+  the key registry to walk).
+- **T2 — the common rest.** `radio` group, `select`/dropdown (a popup of
+  options — needs simple overlay/popup positioning), `slider`/range (pointer
+  drag over a track — needs `pointermove`/`pointerup`, the "more events"
+  item), and multi-line `textarea` (the `text_field` model with line breaks).
+- **T3 — text-editing depth.** Selection (caret → anchor+focus range, shown
+  as a highlight), and clipboard (cut/copy/paste via winit's clipboard +
+  the selection). Selection geometry shares the caret-rect capability.
+
+The tiering matches platen's needs (§7 of the brief): docked-tile chrome
+wants buttons, text fields, and tab-traversable focus first; richer controls
+follow as the chrome demands them.
+
+### Shared capability: caret + selection geometry
+
+Three open items — **real caret painting**, **IME candidate placement**
+(T3 above), and **text selection** (form T3) — all need the same primitive:
+*the screen rect of a character offset within a text node's laid-out run.*
+serval already caches the `parley::Layout` per text leaf
+([text_measure.rs](../components/serval-layout/text_measure.rs)); the
+primitive is a query over it (parley's cursor/selection geometry) returning
+a rect for `(text node, byte offset)`. Building it once unblocks all three,
+so it is the natural next serval-layout addition when this gate work starts —
+and it is the reason caret painting is grouped here rather than treated as a
+cosmetic one-off.
+
 ## What serval makes simpler
 
 `xilem_web` defers prop application to `PodMut::drop` to batch DOM writes.
