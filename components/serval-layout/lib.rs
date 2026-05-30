@@ -42,7 +42,7 @@ mod ua_defaults;
 pub use adapter::NodeRef;
 pub use adapter_stylo::StyleNodeRef;
 pub use box_tree::{build_box_tree, layout_via_box_tree, BoxTree};
-pub use caret::{caret_rect, CaretRect};
+pub use caret::{caret_rect, selection_rects, CaretRect};
 pub use cascade::{restyle_structural, restyle_with_snapshots, run_cascade, RestyleOutcome};
 pub use cell::ArcRefCell;
 pub use fragment::FragmentPlane;

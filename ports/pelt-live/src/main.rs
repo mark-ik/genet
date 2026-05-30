@@ -55,7 +55,9 @@ use xilem_serval::{
 };
 
 use accesskit_winit::{Adapter, Event as AkEvent, WindowEvent as AkWindowEvent};
-use pelt_live::{accesskit_tree, fragments_from_scripted_dom, hit_test_node, scene_from_scripted_dom};
+use pelt_live::{
+    accesskit_tree, fragments_from_scripted_dom, hit_test_node, scene_from_scripted_dom, TextCursor,
+};
 
 // ── App state + view ───────────────────────────────────────────────────────
 
@@ -283,19 +285,28 @@ impl App {
         let Some(gpu) = self.gpu.as_ref() else { return };
         let (w, h) = (self.width.max(1), self.height.max(1));
 
-        // 1. Engine pipeline → Scene. When a field is focused, paint its caret:
-        //    the focused element + the byte offset of the field's char-index caret.
-        let caret = self.runner.focus().map(|node| {
+        // 1. Engine pipeline → Scene. When a field is focused, paint its caret
+        //    and selection: the focused element plus the field's caret / selection
+        //    converted from char indices to byte offsets.
+        let cursor = self.runner.focus().map(|node| {
             let field = &self.runner.state().field;
-            let byte_offset = field
-                .text()
-                .char_indices()
-                .nth(field.caret())
-                .map(|(b, _)| b)
-                .unwrap_or(field.text().len());
-            (node, byte_offset)
+            let byte_of = |char_idx: usize| {
+                field
+                    .text()
+                    .char_indices()
+                    .nth(char_idx)
+                    .map(|(b, _)| b)
+                    .unwrap_or(field.text().len())
+            };
+            let selection = field
+                .has_selection()
+                .then(|| {
+                    let (s, e) = field.selection();
+                    (byte_of(s), byte_of(e))
+                });
+            TextCursor { node, caret: byte_of(field.caret()), selection }
         });
-        let scene: Scene = scene_from_scripted_dom(&self.dom.borrow(), SHEET, w, h, caret);
+        let scene: Scene = scene_from_scripted_dom(&self.dom.borrow(), SHEET, w, h, cursor);
 
         // 2. Render the scene into a fresh Rgba8Unorm target. vello binds this
         //    as a storage texture (STORAGE_BINDING) and also reads it back via

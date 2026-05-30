@@ -19,7 +19,7 @@
 use std::hash::Hash;
 
 use layout_dom_api::LayoutDom;
-use parley::layout::{Affinity, Cursor};
+use parley::layout::{Affinity, Cursor, Selection};
 
 use crate::box_tree::BoxTree;
 use crate::fragment::FragmentPlane;
@@ -76,6 +76,59 @@ where
         width: (bb.x1 - bb.x0) as f32,
         height: (bb.y1 - bb.y0) as f32,
     })
+}
+
+/// The highlight rectangles for the selected byte range `[start, end)` within
+/// `node`'s laid-out text, in absolute (scene) coordinates — one rect per line
+/// the selection covers. Empty when `node` has no cached text layout / fragment,
+/// or the range is collapsed.
+///
+/// The selection-highlight companion to [`caret_rect`], sharing the same
+/// layout-lookup + absolute-origin path. parley's [`Selection`] (built from two
+/// cursors) supplies the per-line geometry.
+pub fn selection_rects<D>(
+    dom: &D,
+    node: D::NodeId,
+    start: usize,
+    end: usize,
+    built: &BoxTree<D::NodeId>,
+    text_ctx: &TextMeasureCtx,
+    fragments: &FragmentPlane<D::NodeId>,
+) -> Vec<CaretRect>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    if start == end {
+        return Vec::new();
+    }
+    let Some(taffy_id) = built.node_map.get(&node) else {
+        return Vec::new();
+    };
+    let Some(layout) = text_ctx.layouts.get(taffy_id) else {
+        return Vec::new();
+    };
+    let Some((ox, oy)) = absolute_origin(dom, fragments, node) else {
+        return Vec::new();
+    };
+    let Some(frame) = fragments.rect_of(node) else {
+        return Vec::new();
+    };
+    let content_x = ox + frame.border.left + frame.padding.left;
+    let content_y = oy + frame.border.top + frame.padding.top;
+
+    let anchor = Cursor::from_byte_index(layout, start, Affinity::default());
+    let focus = Cursor::from_byte_index(layout, end, Affinity::default());
+    Selection::new(anchor, focus)
+        .geometry(layout)
+        .into_iter()
+        .map(|(bb, _line)| CaretRect {
+            x: content_x + bb.x0 as f32,
+            y: content_y + bb.y0 as f32,
+            width: (bb.x1 - bb.x0) as f32,
+            height: (bb.y1 - bb.y0) as f32,
+        })
+        .collect()
 }
 
 /// Absolute border-box origin of `target`: walk from the document root,
@@ -178,5 +231,31 @@ mod tests {
         // An offset on a node with no cached text layout is None.
         let body = doc.document(); // document root: no text layout
         assert!(caret_rect(&doc, body, 0, &built, &text_ctx, &fragments, 2.0).is_none());
+    }
+
+    /// A non-collapsed selection over the text yields highlight rects with
+    /// positive width; a collapsed range yields none.
+    #[test]
+    fn selection_covers_range() {
+        let doc = StaticDocument::parse("<html><body><p>abc</p></body></html>");
+        let sheet = &["html, body, p { display: block; margin: 0; padding: 0; border: 0; }"];
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet);
+        let images = ImagePlane::new();
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&doc, &styles, &images, viewport);
+        let p = find_p(&doc);
+
+        // Select all of "abc" (bytes 0..3, all ASCII).
+        let rects = selection_rects(&doc, p, 0, 3, &built, &text_ctx, &fragments);
+        assert!(!rects.is_empty(), "a non-empty selection produces rects");
+        let total_width: f32 = rects.iter().map(|r| r.width).sum();
+        assert!(total_width > 0.0, "selection has positive width: {rects:?}");
+
+        // A collapsed range selects nothing.
+        assert!(selection_rects(&doc, p, 1, 1, &built, &text_ctx, &fragments).is_empty());
     }
 }

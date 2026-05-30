@@ -107,6 +107,23 @@ impl ServalPaintList {
             color,
         }));
     }
+
+    /// Append selection-highlight rects (from
+    /// [`selection_rects`](crate::caret::selection_rects)) as filled rects. Use a
+    /// translucent `color`: appended after the emit walk, the highlight draws
+    /// *over* the text, so the text shows through. Push the selection before the
+    /// caret so the caret sits on top.
+    pub fn push_selection(&mut self, rects: &[crate::caret::CaretRect], color: ColorF) {
+        for r in rects {
+            self.commands.push(PaintCmd::DrawRect(RectItem {
+                placement: CommonPlacement::new(LayoutRect::new(
+                    LayoutPoint::new(r.x, r.y),
+                    LayoutPoint::new(r.x + r.width, r.y + r.height),
+                )),
+                color,
+            }));
+        }
+    }
 }
 
 impl PaintList for ServalPaintList {

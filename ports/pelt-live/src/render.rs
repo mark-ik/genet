@@ -25,7 +25,7 @@ use engine_observables_api::{FragmentQuery, Point};
 use paint_list_api::{ColorF, DeviceIntSize};
 use serval_layout::{
     BackgroundImagePlane, FragmentPlane, ImagePlane, ServalLaneView, StylePlane, caret_rect,
-    emit_paint_list_with_layouts, layout, run_cascade,
+    emit_paint_list_with_layouts, layout, run_cascade, selection_rects,
 };
 use serval_scripted_dom::{NodeId, ScriptedDom};
 
@@ -33,6 +33,18 @@ use serval_scripted_dom::{NodeId, ScriptedDom};
 const CARET_WIDTH: f32 = 2.0;
 /// Caret bar colour (near-black, opaque).
 const CARET_COLOR: ColorF = ColorF { r: 0.12, g: 0.12, b: 0.20, a: 1.0 };
+/// Selection highlight colour (translucent blue — text shows through, since the
+/// highlight paints over the text).
+const SELECTION_COLOR: ColorF = ColorF { r: 0.40, g: 0.60, b: 0.95, a: 0.40 };
+
+/// What to paint for a focused text field's cursor: the element, the caret's
+/// byte offset, and an optional selected byte range. Byte offsets (the layer
+/// works in bytes); the host converts from its char-index model.
+pub struct TextCursor {
+    pub node: NodeId,
+    pub caret: usize,
+    pub selection: Option<(usize, usize)>,
+}
 
 /// Run cascade → layout → paint-emit over `dom` and translate the paint list to
 /// a [`netrender::Scene`] at `width`×`height`.
@@ -42,17 +54,17 @@ const CARET_COLOR: ColorF = ColorF { r: 0.12, g: 0.12, b: 0.20, a: 1.0 };
 /// chrome DOM the runner builds carries no document-embedded stylesheets, so the
 /// caller's sheets are the whole author set.
 ///
-/// `caret` is `Some((node, byte_offset))` to paint a text caret at that offset
-/// within `node`'s laid-out text — typically the focused field's element and its
-/// cursor position. Drawn as a thin filled bar via
-/// [`serval_layout::caret_rect`], appended after the layout walk (absolute
-/// coords). `None` paints no caret.
+/// `cursor` is `Some(TextCursor)` to paint a focused field's selection highlight
+/// (translucent, via [`serval_layout::selection_rects`]) and caret bar (via
+/// [`serval_layout::caret_rect`]) over its laid-out text. Both are appended after
+/// the layout walk (absolute coords); the selection goes under the caret. `None`
+/// paints neither.
 pub fn scene_from_scripted_dom(
     dom: &ScriptedDom,
     stylesheets: &[&str],
     width: u32,
     height: u32,
-    caret: Option<(NodeId, usize)>,
+    cursor: Option<TextCursor>,
 ) -> netrender::Scene {
     let mut styles: StylePlane<NodeId> = StylePlane::new();
     run_cascade(
@@ -83,11 +95,16 @@ pub fn scene_from_scripted_dom(
         DeviceIntSize::new(width as i32, height as i32),
     );
 
-    // Overlay the caret (if any) as a thin bar at its absolute position. Appended
-    // after emit, so it draws over the text at scene coordinates.
-    if let Some((node, byte_offset)) = caret {
+    // Overlay the focused field's selection highlight (under) then caret (over),
+    // both at absolute positions — appended after emit, so they draw over the
+    // text at scene coordinates.
+    if let Some(c) = cursor {
+        if let Some((start, end)) = c.selection {
+            let rects = selection_rects(dom, c.node, start, end, &built, &text_ctx, &fragments);
+            plist.push_selection(&rects, SELECTION_COLOR);
+        }
         if let Some(rect) =
-            caret_rect(dom, node, byte_offset, &built, &text_ctx, &fragments, CARET_WIDTH)
+            caret_rect(dom, c.node, c.caret, &built, &text_ctx, &fragments, CARET_WIDTH)
         {
             plist.push_caret(rect, CARET_COLOR);
         }
