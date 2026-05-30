@@ -971,6 +971,7 @@ const DOM_BOOTSTRAP: &str = r#"
     var proto = nt === 1 ? Element.prototype
               : nt === 9 ? Document.prototype
               : nt === 3 ? Text.prototype
+              : nt === 8 ? Comment.prototype
               : Node.prototype;
     var node = Object.create(proto);
     node.__ref = ref;
@@ -1038,6 +1039,78 @@ const DOM_BOOTSTRAP: &str = r#"
     var n = other;
     while (n) { if (n === this) return true; n = n.parentNode; }
     return false;
+  };
+
+  // Node identity / connectivity. ownerDocument is the primary document (created
+  // nodes are minted in the same arena); a Document's ownerDocument is null.
+  Object.defineProperty(Node.prototype, 'ownerDocument', {
+    configurable: true, get: function() { return this.nodeType === 9 ? null : document; }
+  });
+  Object.defineProperty(Node.prototype, 'isConnected', {
+    configurable: true,
+    get: function() {
+      // Connected iff the root reached via parentNode is the live document.
+      var n = this;
+      while (n.parentNode) n = n.parentNode;
+      return n.nodeType === 9;
+    }
+  });
+  Node.prototype.isSameNode = function(other) { return other === this; };
+  Node.prototype.getRootNode = function() {
+    var n = this; while (n.parentNode) n = n.parentNode; return n;
+  };
+  // DOCUMENT_POSITION_* bit constants (on both constructor and prototype).
+  var DP = {
+    DOCUMENT_POSITION_DISCONNECTED: 1, DOCUMENT_POSITION_PRECEDING: 2,
+    DOCUMENT_POSITION_FOLLOWING: 4, DOCUMENT_POSITION_CONTAINS: 8,
+    DOCUMENT_POSITION_CONTAINED_BY: 16, DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32
+  };
+  for (var dk in DP) { Node[dk] = Node.prototype[dk] = DP[dk]; }
+  Node.prototype.compareDocumentPosition = function(other) {
+    if (other === this) return 0;
+    // Ancestor chains, root -> node.
+    function chain(n) { var c = []; while (n) { c.unshift(n); n = n.parentNode; } return c; }
+    var a = chain(this), b = chain(other);
+    if (a[0] !== b[0]) {
+      // Different trees: disconnected (+ stable implementation-specific order).
+      return DP.DOCUMENT_POSITION_DISCONNECTED | DP.DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC |
+             DP.DOCUMENT_POSITION_PRECEDING;
+    }
+    // Containment.
+    if (this.contains(other)) return DP.DOCUMENT_POSITION_CONTAINED_BY | DP.DOCUMENT_POSITION_FOLLOWING;
+    if (other.contains(this)) return DP.DOCUMENT_POSITION_CONTAINS | DP.DOCUMENT_POSITION_PRECEDING;
+    // Find the divergence point; compare child order there.
+    var i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++;
+    var parent = a[i - 1];
+    var kids = parent.childNodes;
+    var ai = -1, bi = -1;
+    for (var k = 0; k < kids.length; k++) { if (kids[k] === a[i]) ai = k; if (kids[k] === b[i]) bi = k; }
+    return ai < bi ? DP.DOCUMENT_POSITION_FOLLOWING : DP.DOCUMENT_POSITION_PRECEDING;
+  };
+  Node.prototype.isEqualNode = function(other) {
+    if (!other) return false;
+    if (this.nodeType !== other.nodeType) return false;
+    switch (this.nodeType) {
+      case 1: // Element: localName/namespace/prefix + attributes + children
+        if (this.localName !== other.localName || this.namespaceURI !== other.namespaceURI ||
+            this.prefix !== other.prefix) return false;
+        var aAttrs = this.__ref !== undefined ? __attributeNames(this.__ref) : '';
+        var bAttrs = other.__ref !== undefined ? __attributeNames(other.__ref) : '';
+        var an = aAttrs ? aAttrs.split(' ').sort() : [];
+        var bn = bAttrs ? bAttrs.split(' ').sort() : [];
+        if (an.length !== bn.length) return false;
+        for (var j = 0; j < an.length; j++) {
+          if (an[j] !== bn[j] || this.getAttribute(an[j]) !== other.getAttribute(bn[j])) return false;
+        }
+        break;
+      case 3: case 8: // Text / Comment: same data
+        if (this.data !== other.data) return false;
+        break;
+    }
+    var ac = this.childNodes, bc = other.childNodes;
+    if (ac.length !== bc.length) return false;
+    for (var c = 0; c < ac.length; c++) { if (!ac[c].isEqualNode(bc[c])) return false; }
+    return true;
   };
   Node.prototype.removeChild = function(child) {
     if (!child || child.parentNode !== this) {
@@ -1115,9 +1188,83 @@ const DOM_BOOTSTRAP: &str = r#"
     globalThis.Event.prototype.stopPropagation = function() { this.__stop = true; };
   }
 
-  // Text : Node (no extra surface yet beyond textContent on Node).
-  function Text() {}
-  Text.prototype = Object.create(Node.prototype);
+  // CharacterData : Node — the shared text-bearing base for Text and Comment.
+  // `data` / `nodeValue` read/write the node's character data; the substring
+  // mutators use UTF-16 offsets and throw IndexSizeError out of range (DOM
+  // "CharacterData" interface). length is the UTF-16 code-unit count.
+  function CharacterData() {}
+  CharacterData.prototype = Object.create(Node.prototype);
+  Object.defineProperty(CharacterData.prototype, 'data', {
+    configurable: true,
+    get: function() { var v = __getTextContent(this.__ref); return v === null ? '' : v; },
+    set: function(v) { __setTextContent(this.__ref, v === null ? '' : String(v)); }
+  });
+  Object.defineProperty(CharacterData.prototype, 'length', {
+    configurable: true, get: function() { return this.data.length; }
+  });
+  CharacterData.prototype.substringData = function(offset, count) {
+    var d = this.data; offset = offset >>> 0;
+    if (offset > d.length) throw new DOMException("offset out of range", "IndexSizeError");
+    // slice (core ES), not substr (Annex B — not implemented on all backends).
+    return d.slice(offset, offset + (count >>> 0));
+  };
+  CharacterData.prototype.appendData = function(s) { this.data = this.data + String(s); };
+  CharacterData.prototype.insertData = function(offset, s) {
+    var d = this.data; offset = offset >>> 0;
+    if (offset > d.length) throw new DOMException("offset out of range", "IndexSizeError");
+    this.data = d.slice(0, offset) + String(s) + d.slice(offset);
+  };
+  CharacterData.prototype.deleteData = function(offset, count) {
+    var d = this.data; offset = offset >>> 0;
+    if (offset > d.length) throw new DOMException("offset out of range", "IndexSizeError");
+    count = count >>> 0;
+    this.data = d.slice(0, offset) + d.slice(offset + count);
+  };
+  CharacterData.prototype.replaceData = function(offset, count, s) {
+    var d = this.data; offset = offset >>> 0;
+    if (offset > d.length) throw new DOMException("offset out of range", "IndexSizeError");
+    count = count >>> 0;
+    this.data = d.slice(0, offset) + String(s) + d.slice(offset + count);
+  };
+  globalThis.CharacterData = CharacterData;
+
+  // Text : CharacterData. `new Text(data)` mints a detached text node;
+  // splitText / wholeText round out the interface.
+  function Text(data) {
+    if (!(this instanceof Text)) return new Text(data);
+    return wrapNode(__createTextNode(data === undefined ? '' : String(data)));
+  }
+  Text.prototype = Object.create(CharacterData.prototype);
+  Text.prototype.splitText = function(offset) {
+    var d = this.data; offset = offset >>> 0;
+    if (offset > d.length) throw new DOMException("offset out of range", "IndexSizeError");
+    var rest = d.slice(offset);
+    this.data = d.slice(0, offset);
+    var newNode = document.createTextNode(rest);
+    var parent = this.parentNode;
+    if (parent) parent.insertBefore(newNode, this.nextSibling);
+    return newNode;
+  };
+  Object.defineProperty(Text.prototype, 'wholeText', {
+    configurable: true,
+    get: function() {
+      // Concatenate this node's contiguous Text siblings (both directions).
+      var start = this;
+      while (start.previousSibling && start.previousSibling.nodeType === 3) start = start.previousSibling;
+      var out = ''; var n = start;
+      while (n && n.nodeType === 3) { out += n.data; n = n.nextSibling; }
+      return out;
+    }
+  });
+  globalThis.Text = Text;
+
+  // Comment : CharacterData. `new Comment(data)` mints a detached comment node.
+  function Comment(data) {
+    if (!(this instanceof Comment)) return new Comment(data);
+    return wrapNode(__createComment(data === undefined ? '' : String(data)));
+  }
+  Comment.prototype = Object.create(CharacterData.prototype);
+  globalThis.Comment = Comment;
 
   // Element : Node — attributes, reflection, selectors.
   function Element() {}
@@ -1364,8 +1511,8 @@ const DOM_BOOTSTRAP: &str = r#"
 
   globalThis.Node = Node;
   globalThis.Element = Element;
-  globalThis.Text = Text;
   globalThis.Document = Document;
+  // (Text / Comment / CharacterData exposed above, with their prototype chain.)
 
   installReflectedAttributes();
   installTraversal();
@@ -1579,7 +1726,7 @@ const DOM_BOOTSTRAP: &str = r#"
       if (!isFinite(v)) return 0;
       return (v < 0 ? Math.ceil(v) : Math.floor(v)) | 0;
     }
-    function def(idl, kind, attr) {
+    function def(idl, kind, attr, keywords, miss) {
       // Reflected HTML content-attribute names are lowercase (tabIndex ->
       // tabindex); this also keeps get/set consistent with HTML setAttribute,
       // which lowercases. Explicit names passed in are already lowercase.
@@ -1592,7 +1739,18 @@ const DOM_BOOTSTRAP: &str = r#"
         desc.get = function() { return this.hasAttribute(attr); };
         desc.set = function(v) { this.toggleAttribute(attr, !!v); };
       } else if (kind === 'e') {
-        desc.get = function() { var v = this.getAttribute(attr); return v === null ? '' : String(v).toLowerCase(); };
+        // Enumerated: canonicalize the stored token (ASCII case-insensitive) against
+        // the allowed keyword set; unknown/absent returns the missing-value default
+        // (`miss`, default ""). This is the limited-enum-with-"" case, which covers
+        // most reflected enums; per-attribute invalid-value defaults are later work.
+        var kw = keywords || [];
+        var missing = miss || '';
+        desc.get = function() {
+          var v = this.getAttribute(attr);
+          if (v === null) return missing;
+          v = String(v).toLowerCase();
+          return kw.indexOf(v) !== -1 ? v : missing;
+        };
         desc.set = function(v) { this.setAttribute(attr, String(v)); };
       } else if (kind === 'l') {
         desc.get = function() { var n = parseHtmlLong(this.getAttribute(attr)); return n === null ? -1 : n; };
@@ -1605,7 +1763,8 @@ const DOM_BOOTSTRAP: &str = r#"
     }
     // Global attributes (tested on every element by the WPT reflection harness).
     def('title', 's'); def('lang', 's'); def('accessKey', 's');
-    def('autofocus', 'b'); def('hidden', 'b'); def('dir', 'e'); def('tabIndex', 'l');
+    def('autofocus', 'b'); def('hidden', 'b'); def('tabIndex', 'l');
+    def('dir', 'e', 'dir', ['ltr', 'rtl', 'auto']);
     // Per-element DOMString attributes (conflict-free union from the WPT metadata).
     var S = ['aLink','abbr','accept','align','alt','archive','axis','background','bgColor','border',
              'cellPadding','cellSpacing','charset','clear','code','codeType','color','content','coords',
@@ -2312,9 +2471,75 @@ mod tests {
         );
     }
 
+    /// CharacterData / Text / Comment interface + Node identity, against any
+    /// backend: the prototype chain + instanceof, data/length, the substring
+    /// mutators with IndexSizeError, constructors, splitText, isEqualNode,
+    /// compareDocumentPosition, isConnected, ownerDocument.
+    fn dom_characterdata_identity_works<E: ScriptEngine>() {
+        use serval_static_dom::StaticDocument;
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.load_dom(&StaticDocument::parse("<html><body><div id='p'></div></body></html>"));
+
+        rt.eval(
+            "function thrown(fn){ try { fn(); return 'no-throw'; } catch(e){ return e.name; } }\
+             var t = new Text('hello');\
+             console.log(String(t instanceof Text) + ',' + String(t instanceof CharacterData) + ',' + String(t instanceof Node));\
+             console.log(t.data + ',' + String(t.length) + ',' + t.nodeValue);\
+             console.log(String(t.ownerDocument === document));\
+             t.appendData(' world'); console.log(t.data);\
+             t.insertData(5, ','); console.log(t.data);\
+             t.deleteData(0, 6); console.log(t.data);\
+             console.log(t.substringData(0, 5));\
+             t.replaceData(0, 5, 'WORLD'); console.log(t.data);\
+             console.log(thrown(function(){ t.substringData(999, 1); }));\
+             var c = new Comment('cm'); console.log(String(c instanceof Comment) + ',' + String(c instanceof CharacterData) + ',' + c.data);\
+             var a = document.createElement('div'); a.setAttribute('x','1'); a.textContent='hi';\
+             var b = document.createElement('div'); b.setAttribute('x','1'); b.textContent='hi';\
+             console.log(String(a.isEqualNode(b)));\
+             b.setAttribute('x','2'); console.log(String(a.isEqualNode(b)));\
+             var p = document.getElementById('p'); var s1=document.createElement('span'); var s2=document.createElement('span');\
+             p.appendChild(s1); p.appendChild(s2);\
+             var fol = s1.compareDocumentPosition(s2);\
+             console.log(String(!!(fol & Node.DOCUMENT_POSITION_FOLLOWING)) + ',' + String(!!(s2.compareDocumentPosition(s1) & Node.DOCUMENT_POSITION_PRECEDING)));\
+             console.log(String(s1.isConnected) + ',' + String(a.isConnected));",
+        )
+        .expect("characterdata/identity script");
+
+        assert_eq!(
+            rt.host().borrow().console,
+            vec![
+                "true,true,true",   // Text instanceof chain
+                "hello,5,hello",    // data, length, nodeValue
+                "true",             // ownerDocument === document
+                "hello world",      // appendData
+                "hello, world",     // insertData at 5
+                " world",           // deleteData first 6
+                " worl",            // substringData(0,5) — read-only, data stays " world"
+                "WORLDd",           // replaceData(0,5,'WORLD') over " world" keeps the 6th char
+                "IndexSizeError",   // substringData out of range
+                "true,true,cm",     // Comment instanceof + data
+                "true",             // isEqualNode: identical
+                "false",            // isEqualNode: differing attr
+                "true,true",        // compareDocumentPosition FOLLOWING / PRECEDING
+                "true,false",       // isConnected: in-tree vs detached
+            ],
+        );
+    }
+
     #[test]
     fn dom_created_doc_queryable_on_boa() {
         dom_created_doc_queryable::<script_engine_boa::BoaEngine>();
+    }
+
+    #[test]
+    fn dom_characterdata_identity_on_boa() {
+        dom_characterdata_identity_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dom_characterdata_identity_on_nova() {
+        dom_characterdata_identity_works::<script_engine_nova::NovaEngine>();
     }
 
     #[test]

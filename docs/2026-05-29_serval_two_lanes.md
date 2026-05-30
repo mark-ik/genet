@@ -54,11 +54,16 @@ subtests, dom/nodes 832 (Boa). Reftests render real CSS (floats 7 passing).
    `insertBefore` reject ancestor cycles (`HierarchyRequestError`). Fixed
    two latent bugs: HTML `createElement` lowercasing, and `tagName`
    returning the qualified name (`prefix:local`).
-3. **`Comment` / `DocumentFragment` / `CharacterData`** node types and
-   `createComment` / `createDocumentFragment`. (`createComment` sink +
-   the `Comment` node kind landed with item 4's multi-document work; the
-   JS `CharacterData` / `Comment` prototypes + `createDocumentFragment`
-   remain.)
+3. **`Comment` / `CharacterData`** node types **(done 2026-05-30).** The
+   `CharacterData` → `Text` / `Comment` prototype chain (`instanceof`,
+   `data` / `length`, `appendData` / `insertData` / `deleteData` /
+   `replaceData` / `substringData` with `IndexSizeError`), `new Text()` /
+   `new Comment()`, `splitText` / `wholeText`, and Node identity
+   (`isEqualNode` / `compareDocumentPosition` + constants / `isConnected` /
+   `isSameNode` / `ownerDocument` / `getRootNode`). Also fixed the
+   enumerated reflected-attribute getter to a real keyword table
+   (limited-enum with `""` missing-value default), starting with the
+   global `dir`. `DocumentFragment` remains.
 4. ~~**`createDocument` / `createHTMLDocument`**~~ **(done 2026-05-30)** with
    the multi-document increment (a second detached document root in the
    host, scoped queries, `document.implementation`). **`DOMParser.parseFromString`**
