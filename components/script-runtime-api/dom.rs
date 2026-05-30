@@ -2207,6 +2207,37 @@ mod tests {
         dom_tokenlist_dataset_works::<script_engine_boa::BoaEngine>();
     }
 
+    /// Repro of the WPT reflection harness's setup (reflection.js getDocument):
+    /// `document.implementation.createHTMLDocument("")` then query the created doc.
+    /// This path regressed reflection-* files to ERROR; the assertion diff pinpoints
+    /// what is non-callable / wrong on the created document.
+    fn dom_created_doc_queryable<E: ScriptEngine>() {
+        use serval_static_dom::StaticDocument;
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.load_dom(&StaticDocument::parse("<html><body></body></html>"));
+
+        rt.eval(
+            "var d = document.implementation.createHTMLDocument('');\
+             console.log(typeof d.getElementsByTagName);\
+             console.log(typeof d.createElement);\
+             var bodies = d.getElementsByTagName('body');\
+             console.log(typeof bodies + ',' + String(bodies.length));\
+             var p = d.createElement('p'); d.body.appendChild(p);\
+             console.log(String(d.getElementsByTagName('p').length));",
+        )
+        .expect("created-doc query script");
+
+        assert_eq!(
+            rt.host().borrow().console,
+            vec!["function", "function", "object,1", "1"],
+        );
+    }
+
+    #[test]
+    fn dom_created_doc_queryable_on_boa() {
+        dom_created_doc_queryable::<script_engine_boa::BoaEngine>();
+    }
+
     #[test]
     fn dom_implementation_on_boa() {
         dom_implementation_works::<script_engine_boa::BoaEngine>();
