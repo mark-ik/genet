@@ -176,13 +176,28 @@ A real `MANIFEST.json` reader can replace this later for exactness
    Effect, every measured suite up: **html/dom 4936 → 35366** subtests
    (the reflection volume), **dom/nodes 95 → 832**, **dom/lists 1 → 100**,
    **dom/traversal 1 → 32** (TreeWalker recovered the ERROR files, 7
-   all-pass). ~31k subtests gained in one increment. **Next levers** (need
-   a new engine primitive or more plumbing, so deferred): live
-   HTMLCollection / NodeList and `dataset` (an exotic/named-property object
-   — `CallCx` has no `make_object`/exotic primitive today), `DOMParser` /
-   `createHTMLDocument` (a second detached document), `Comment` /
-   `DocumentFragment` node types, the URL/tokenlist reflected kinds, and
-   per-tag HTML element interfaces.
+   all-pass). ~31k subtests gained in one increment.
+
+   **Live collections (done 2026-05-29), Lane C item 1.** HTMLCollection /
+   NodeList as legacy-platform exotic objects, via a JS `Proxy` in the
+   bootstrap (route b) rather than a new per-backend engine primitive
+   (route a) — after verifying both Nova and Boa support the
+   `get`/`has`/`ownKeys`/`getOwnPropertyDescriptor` traps the exotic needs
+   (`proxy_capability` test). `getElementsByTagName` + `children` return
+   live HTMLCollections (length / item / namedItem / indexed + named access
+   / `Symbol.iterator`, no `forEach`/`values`); `childNodes` a live
+   NodeList, `querySelectorAll` a static one (both with
+   `forEach`/`entries`/`keys`/`values`). `getOwnPropertyNames` yields
+   indices then deduped non-empty id/name in tree order. So the route the
+   earlier note called "needs a new engine primitive" turned out to be a
+   pure-JS bootstrap once Proxy was confirmed. Effect: **dom/collections
+   3 → 20** (1 all-pass); dom/nodes 832 → 834 (no regression from rewiring
+   childNodes/querySelectorAll); html/dom held at 35366. **Still deferred:**
+   `DOMTokenList` indexed access (classList still a plain object →
+   dom/lists), `dataset` (now tractable via the same Proxy route),
+   `Element.getElementsByTagName` + the NS variants, `DOMParser` /
+   `createHTMLDocument`, `Comment` / `DocumentFragment`, URL/tokenlist
+   reflected kinds, per-tag HTML interfaces.
 4. **Expectations.** A checked-in expected-results file so known
    failures are tolerated and regressions surface (the WPT metadata
    model, serval-shaped).

@@ -888,12 +888,7 @@ const DOM_BOOTSTRAP: &str = r#"
   });
   Object.defineProperty(Node.prototype, 'childNodes', {
     configurable: true,
-    get: function() {
-      var n = +__childNodesCount(this.__ref);
-      var out = [];
-      for (var i = 0; i < n; i++) { out.push(wrapNode(__childNodesItem(this.__ref, String(i)))); }
-      return out;
-    }
+    get: function() { var self = this; return makeCollection(function() { return rawChildNodes(self); }, false); }
   });
   Object.defineProperty(Node.prototype, 'nodeName', {
     configurable: true, get: function() { return __nodeName(this.__ref); }
@@ -1061,18 +1056,26 @@ const DOM_BOOTSTRAP: &str = r#"
   // receiver). querySelectorAll returns an array (NodeList-approximate).
   function querySelector(sel) { return wrapNode(__querySelector(this.__ref, String(sel))); }
   function querySelectorAll(sel) {
+    // querySelectorAll returns a *static* NodeList: snapshot now, captured by the
+    // collection's getItems closure.
     var n = +__querySelectorAllCount(this.__ref, String(sel));
     var out = [];
     for (var i = 0; i < n; i++) { out.push(wrapNode(__querySelectorAllItem(this.__ref, String(sel), String(i)))); }
-    return out;
+    return makeCollection(function() { return out; }, false);
   }
   Element.prototype.querySelector = querySelector;
   Element.prototype.querySelectorAll = querySelectorAll;
 
-  // Element-only tree views: children (elements), the element siblings, count.
+  // Element-only tree views: children (a live HTMLCollection of element children),
+  // the element siblings, count.
   Object.defineProperty(Element.prototype, 'children', {
     configurable: true,
-    get: function() { return this.childNodes.filter(function(n) { return n.nodeType === 1; }); }
+    get: function() {
+      var self = this;
+      return makeCollection(function() {
+        return rawChildNodes(self).filter(function(n) { return n.nodeType === 1; });
+      }, true);
+    }
   });
   Object.defineProperty(Element.prototype, 'firstElementChild', {
     configurable: true, get: function() { var c = this.children; return c.length ? c[0] : null; }
@@ -1122,10 +1125,14 @@ const DOM_BOOTSTRAP: &str = r#"
   Document.prototype.createTextNode = function(data) { return wrapNode(__createTextNode(String(data))); };
   Document.prototype.getElementById = function(id) { return wrapNode(__getElementById(String(id))); };
   Document.prototype.getElementsByTagName = function(tag) {
-    var n = +__elementsByTagNameCount(String(tag));
-    var out = [];
-    for (var i = 0; i < n; i++) { out.push(wrapNode(__elementsByTagNameItem(String(tag), String(i)))); }
-    return out;
+    // Live HTMLCollection: re-query the DOM on each access.
+    tag = String(tag);
+    return makeCollection(function() {
+      var n = +__elementsByTagNameCount(tag);
+      var out = [];
+      for (var i = 0; i < n; i++) { out.push(wrapNode(__elementsByTagNameItem(tag, String(i)))); }
+      return out;
+    }, true);
   };
   Document.prototype.querySelector = querySelector;
   Document.prototype.querySelectorAll = querySelectorAll;
@@ -1182,6 +1189,91 @@ const DOM_BOOTSTRAP: &str = r#"
 
   installReflectedAttributes();
   installTraversal();
+
+  // Live HTMLCollection / NodeList as legacy-platform exotic objects, modeled with
+  // a JS Proxy (both backends support the get/has/ownKeys/getOwnPropertyDescriptor
+  // traps — verified by `proxy_capability`). `getItems()` returns the current
+  // element/node array, re-read per access for liveness. `isHtml` selects
+  // HTMLCollection (named access + namedItem, no forEach/values/entries/keys) vs
+  // NodeList (forEach/entries/keys/values, no named access).
+  function isArrayIndex(k) {
+    return typeof k === 'string' && /^(0|[1-9][0-9]*)$/.test(k) && k <= 4294967294;
+  }
+  function collectionIterator(getItems) {
+    var i = 0;
+    var it = { next: function() {
+      var a = getItems();
+      return i < a.length ? { value: a[i++], done: false } : { value: undefined, done: true };
+    } };
+    it[Symbol.iterator] = function() { return it; };
+    return it;
+  }
+  function supportedNames(getItems) {
+    var a = getItems(); var seen = {}; var out = [];
+    for (var i = 0; i < a.length; i++) {
+      var id = a[i].getAttribute && a[i].getAttribute('id');
+      if (id && !seen['$' + id]) { seen['$' + id] = 1; out.push(id); }
+      var nm = a[i].getAttribute && a[i].getAttribute('name');
+      if (nm && !seen['$' + nm]) { seen['$' + nm] = 1; out.push(nm); }
+    }
+    return out;
+  }
+  function namedMatch(getItems, name) {
+    var a = getItems();
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].getAttribute && (a[i].getAttribute('id') === name || a[i].getAttribute('name') === name)) return a[i];
+    }
+    return null;
+  }
+  function makeCollection(getItems, isHtml) {
+    var handler = {
+      get: function(t, k) {
+        if (k === 'length') return getItems().length;
+        if (k === 'item') return function(i) { var a = getItems(); i = i >>> 0; return i < a.length ? a[i] : null; };
+        if (k === Symbol.iterator) return function() { return collectionIterator(getItems); };
+        if (isHtml) {
+          if (k === 'namedItem') return function(name) {
+            name = String(name); return name === '' ? null : namedMatch(getItems, name);
+          };
+        } else {
+          if (k === 'forEach') return function(cb, thisArg) { var a = getItems(); for (var i = 0; i < a.length; i++) cb.call(thisArg, a[i], i, this); };
+          if (k === 'values') return function() { return collectionIterator(getItems); };
+          if (k === 'keys') return function() { var i = 0; var a = getItems(); var o = { next: function() { return i < a.length ? { value: i++, done: false } : { value: undefined, done: true }; } }; o[Symbol.iterator] = function() { return o; }; return o; };
+          if (k === 'entries') return function() { var i = 0; var a = getItems(); var o = { next: function() { return i < a.length ? { value: [i, a[i++]], done: false } : { value: undefined, done: true }; } }; o[Symbol.iterator] = function() { return o; }; return o; };
+        }
+        if (isArrayIndex(k)) { var a = getItems(); var idx = +k; return idx < a.length ? a[idx] : undefined; }
+        if (isHtml && typeof k === 'string') { var m = namedMatch(getItems, k); if (m) return m; }
+        return t[k];
+      },
+      has: function(t, k) {
+        if (k === 'length' || k === 'item' || k === Symbol.iterator) return true;
+        if (isHtml && k === 'namedItem') return true;
+        if (!isHtml && (k === 'forEach' || k === 'values' || k === 'keys' || k === 'entries')) return true;
+        if (isArrayIndex(k)) return (+k) < getItems().length;
+        if (isHtml && typeof k === 'string' && namedMatch(getItems, k)) return true;
+        return k in t;
+      },
+      ownKeys: function() {
+        var a = getItems(); var keys = [];
+        for (var i = 0; i < a.length; i++) keys.push(String(i));
+        if (isHtml) { var names = supportedNames(getItems); for (var j = 0; j < names.length; j++) keys.push(names[j]); }
+        return keys;
+      },
+      getOwnPropertyDescriptor: function(t, k) {
+        if (isArrayIndex(k)) { var a = getItems(); var idx = +k; if (idx < a.length) return { value: a[idx], writable: false, enumerable: true, configurable: true }; return undefined; }
+        if (isHtml && typeof k === 'string') { var m = namedMatch(getItems, k); if (m) return { value: m, writable: false, enumerable: true, configurable: true }; }
+        return Object.getOwnPropertyDescriptor(t, k);
+      }
+    };
+    return new Proxy({}, handler);
+  }
+  // Raw (real Array) child nodes — internal, for collection backing and filtering.
+  function rawChildNodes(node) {
+    var n = +__childNodesCount(node.__ref);
+    var out = [];
+    for (var i = 0; i < n; i++) { out.push(wrapNode(__childNodesItem(node.__ref, String(i)))); }
+    return out;
+  }
 
   // Reflected IDL attribute accessors on Element.prototype (Lever 1). Driven by a
   // table of [idlName, attr, kind]; kinds: s=DOMString, b=boolean, e=enumerated
@@ -1638,7 +1730,8 @@ mod tests {
         ));
 
         rt.eval(
-            "var p = document.getElementById('p');\
+            "function ids(c){ var o=[]; for (var i=0;i<c.length;i++) o.push(c[i].id); return o.join(','); }\
+             var p = document.getElementById('p');\
              console.log(String(p.childNodes.length));\
              console.log(p.firstChild.nodeName + ',' + p.firstChild.nodeValue);\
              console.log(String(p.childElementCount));\
@@ -1647,13 +1740,13 @@ mod tests {
              console.log(a.nextElementSibling.id + ',' + String(a.previousElementSibling));\
              var c = document.createElement('span'); c.id = 'c';\
              p.insertBefore(c, document.getElementById('b'));\
-             console.log(p.children.map(function(e){return e.id;}).join(','));\
+             console.log(ids(p.children));\
              p.removeChild(a);\
-             console.log(p.children.map(function(e){return e.id;}).join(','));\
+             console.log(ids(p.children));\
              var d = document.createElement('span'); d.id = 'd'; c.after(d);\
-             console.log(p.children.map(function(e){return e.id;}).join(','));\
+             console.log(ids(p.children));\
              d.remove();\
-             console.log(p.children.map(function(e){return e.id;}).join(','));\
+             console.log(ids(p.children));\
              console.log(String(p.contains(c)) + ',' + String(p.contains(a)));",
         )
         .expect("traversal script");
@@ -1738,6 +1831,93 @@ mod tests {
     #[test]
     fn dom_reflection_ns_on_nova() {
         dom_reflection_ns_works::<script_engine_nova::NovaEngine>();
+    }
+
+    /// Probe: does the backend's `Proxy` support the traps a live HTMLCollection
+    /// needs (get for integer index, has, ownKeys)? Determines whether the exotic
+    /// collection can be a JS Proxy in the bootstrap vs needing an engine primitive.
+    fn proxy_capability<E: ScriptEngine>() {
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.eval(
+            "var p = new Proxy({}, {\
+               get: function(t, k) { if (k === '0') return 'zero'; if (k === 'length') return 1; return undefined; },\
+               has: function(t, k) { return k === '0'; },\
+               ownKeys: function(t) { return ['0', 'length']; },\
+               getOwnPropertyDescriptor: function(t, k) { return { value: (k==='0'?'zero':1), enumerable: true, configurable: true }; }\
+             });\
+             console.log(String(p[0]));\
+             console.log(String(p.length));\
+             console.log(String('0' in p));\
+             console.log(Object.keys(p).join(','));",
+        )
+        .expect("proxy eval");
+        assert_eq!(rt.host().borrow().console, vec!["zero", "1", "true", "0,length"]);
+    }
+
+    /// Live HTMLCollection / NodeList exotic semantics, against any backend:
+    /// liveness, item/namedItem, indexed + named access, Symbol.iterator, the
+    /// HTMLCollection-lacks-forEach / NodeList-has-forEach distinction, and
+    /// getOwnPropertyNames order (indices then deduped non-empty id/name).
+    fn dom_collections_works<E: ScriptEngine>() {
+        use serval_static_dom::StaticDocument;
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.load_dom(&StaticDocument::parse(
+            "<html><body><span id='x'></span><span name='y'></span></body></html>",
+        ));
+
+        rt.eval(
+            "var c = document.getElementsByTagName('span');\
+             console.log(String(c.length) + ',' + c[0].id + ',' + c.item(1).getAttribute('name'));\
+             console.log(c.namedItem('x').id + ',' + String(c.namedItem('nope')));\
+             console.log(c['y'].getAttribute('name'));\
+             console.log(String(Symbol.iterator in c) + ',' + String('forEach' in c) + ',' + String('values' in c));\
+             console.log(Object.getOwnPropertyNames(c).join(','));\
+             var seen = []; for (var i = 0; i < c.length; i++) seen.push(c[i].nodeName); \
+             var it = ''; var a = c; for (var k = 0; k < a.length; k++) {} \
+             document.body.appendChild(document.createElement('span'));\
+             console.log(String(c.length));\
+             var nl = document.body.childNodes;\
+             console.log(String(nl.length) + ',' + String(typeof nl.forEach) + ',' + String('namedItem' in nl));\
+             var acc = []; nl.forEach(function(n){ acc.push(n.nodeName); });\
+             console.log(acc.join(','));",
+        )
+        .expect("collections script");
+
+        assert_eq!(
+            rt.host().borrow().console,
+            vec![
+                "2,x,y",          // length, [0].id, item(1) name
+                "x,null",         // namedItem hit / miss
+                "y",              // named access c['y']
+                "true,false,false", // Symbol.iterator yes; forEach/values no (HTMLCollection)
+                "0,1,x,y",        // getOwnPropertyNames: indices 0,1 then names x,y
+                "3",              // live: after appending a third span
+                "3,function,false", // childNodes NodeList: 3 kids, has forEach, no namedItem
+                "SPAN,SPAN,SPAN", // forEach over the NodeList
+            ],
+        );
+    }
+
+    #[test]
+    fn proxy_capability_on_boa() {
+        proxy_capability::<script_engine_boa::BoaEngine>();
+    }
+
+    #[test]
+    fn dom_collections_on_boa() {
+        dom_collections_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dom_collections_on_nova() {
+        dom_collections_works::<script_engine_nova::NovaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn proxy_capability_on_nova() {
+        proxy_capability::<script_engine_nova::NovaEngine>();
     }
 
     #[cfg(not(target_arch = "wasm32"))]
