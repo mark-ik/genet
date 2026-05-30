@@ -204,10 +204,25 @@ A real `MANIFEST.json` reader can replace this later for exactness
    to/from `data-kebab`, get/set/has/delete/ownKeys), backed by a new
    `__attributeNames` sink. Effect: **dom/lists 100 → 115** (1 all-pass),
    **dom/collections 20 → 25** (2 all-pass), **html/dom 35366 → 35399**
-   (11 all-pass), no regressions. **Still deferred:**
-   `Element.getElementsByTagName` + the NS variants, `DOMParser` /
-   `createHTMLDocument`, `Comment` / `DocumentFragment`, URL reflected kind,
-   per-tag HTML interfaces.
+   (11 all-pass), no regressions.
+
+   **DOMImplementation + multi-document (done 2026-05-29).** A fresh
+   dom/nodes failure tally showed the dominant lever had shifted to
+   `document.implementation`: `hasFeature` (118 subtests) plus the hundreds
+   of "createElement(NS) in {HTML,XHTML,XML} document" tests, all failing
+   with "cannot convert null/undefined" because the created document was
+   undefined. `ScriptedDom` gained `create_document` / `create_comment`
+   (detached nodes in the same arena, NodeIds stay unique); the document
+   query sinks (getElementById / elementsByTagName / documentElement /
+   body / head) now take a **scope ref** so a created document queries its
+   own subtree; JS got `document.implementation` (hasFeature /
+   createHTMLDocument / createDocument / createDocumentType), `createComment`,
+   and `getElementsByTagName` + `getElementsByClassName` shared by Element
+   and Document (scoped, live). Effect: **dom/nodes 834 → 1003** (+169),
+   **html/dom 35399 → 35515** (+116, 12 all-pass), dom/collections held.
+   **Still deferred:** `CharacterData`/`Comment` methods, `Node` identity
+   (`isEqualNode`/`compareDocumentPosition`), `DocumentFragment`,
+   `cloneNode`, `DOMParser`, URL reflected kind, per-tag HTML interfaces.
 4. **Expectations.** A checked-in expected-results file so known
    failures are tolerated and regressions surface (the WPT metadata
    model, serval-shaped).
