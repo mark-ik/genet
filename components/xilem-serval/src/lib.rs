@@ -65,6 +65,7 @@ mod optional_action;
 mod pod;
 mod runner;
 mod splice;
+mod tags;
 mod text;
 
 #[cfg(test)]
@@ -79,6 +80,9 @@ pub use optional_action::{Action, OptionalAction};
 pub use pod::{ServalElement, ServalElementMut};
 pub use runner::ServalAppRunner;
 pub use splice::ServalChildrenSplice;
+// Per-tag element-view helpers: `div`, `span`, `p`, `button`, `input`, `label`,
+// `a`, `h1`/`h2`/`h3`, `ul`/`ol`/`li`.
+pub use tags::*;
 pub use text::text;
 
 // The generic, backend-agnostic composition vocabulary from `xilem_core`. These

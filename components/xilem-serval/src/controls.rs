@@ -126,6 +126,16 @@ impl TextInput {
         }
     }
 
+    /// Move the caret to the start of the buffer (Home).
+    pub fn home(&mut self) {
+        self.caret = 0;
+    }
+
+    /// Move the caret to the end of the buffer (End).
+    pub fn end(&mut self) {
+        self.caret = self.char_count();
+    }
+
     /// The buffer with a [`CARET_MARKER`] inserted at the caret — the field's
     /// rendered text (a placeholder visible cursor). Render-only: [`text`](Self::text)
     /// is unchanged.
@@ -150,9 +160,10 @@ impl TextInput {
 ///   arrives as [`NamedKey::Space`], *not* `Character(" ")`, so the field handles
 ///   it explicitly.
 /// * [`NamedKey::Backspace`] / [`NamedKey::Delete`] remove the char before / after
-///   the caret; [`NamedKey::ArrowLeft`] / [`NamedKey::ArrowRight`] move it.
+///   the caret; [`NamedKey::ArrowLeft`] / [`NamedKey::ArrowRight`] move it one
+///   char, and [`NamedKey::Home`] / [`NamedKey::End`] jump to the line ends.
 /// * [`NamedKey::Enter`], `Tab`, `Escape`, ↑/↓, and `Other` have no effect in a
-///   single-line field yet (multi-line / commit / Home-End are later slices).
+///   single-line field yet (multi-line / commit are later slices).
 fn edit(input: &mut TextInput, ev: KeyEvent) {
     match ev.key {
         Key::Character(s) => input.insert_str(&s),
@@ -161,6 +172,8 @@ fn edit(input: &mut TextInput, ev: KeyEvent) {
         Key::Named(NamedKey::Delete) => input.delete(),
         Key::Named(NamedKey::ArrowLeft) => input.move_left(),
         Key::Named(NamedKey::ArrowRight) => input.move_right(),
+        Key::Named(NamedKey::Home) => input.home(),
+        Key::Named(NamedKey::End) => input.end(),
         Key::Named(_) => {},
     }
 }

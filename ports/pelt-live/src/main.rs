@@ -184,6 +184,8 @@ fn key_event_from_winit(key: &WinitKey) -> Option<KeyEvent> {
             WinitNamedKey::ArrowUp => NamedKey::ArrowUp,
             WinitNamedKey::ArrowDown => NamedKey::ArrowDown,
             WinitNamedKey::Delete => NamedKey::Delete,
+            WinitNamedKey::Home => NamedKey::Home,
+            WinitNamedKey::End => NamedKey::End,
             _ => NamedKey::Other,
         }),
         // No text, no named mapping: nothing to route.
