@@ -21,8 +21,10 @@
 //! consumer; `xilem-serval` itself stays thin (no serval-layout/netrender dep),
 //! and this crate carries the engine stack.
 
+pub mod a11y;
 pub mod render;
 
+pub use a11y::accesskit_tree;
 pub use render::{fragments_from_scripted_dom, hit_test_node, scene_from_scripted_dom};
 
 #[cfg(test)]

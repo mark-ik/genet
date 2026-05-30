@@ -36,6 +36,10 @@ netrender = { workspace = true }
 # Engine-observable query surface: ServalLaneView::hit_test (point -> node)
 # lives behind FragmentQuery, whose types (Point, SourceNodeId) come from here.
 engine_observables_api = { workspace = true }
+# Accessibility tree emission: ScriptedDom -> accesskit::TreeUpdate. A host
+# concern (a screen-reader adapter consumes it), so it lives here, not in the
+# core layout crate.
+accesskit = { workspace = true }
 
 # taffy must match serval-layout's experimental pin (layout() takes a
 # taffy::Size viewport). Copied verbatim from pelt-viewer.
