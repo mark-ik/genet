@@ -192,12 +192,22 @@ A real `MANIFEST.json` reader can replace this later for exactness
    earlier note called "needs a new engine primitive" turned out to be a
    pure-JS bootstrap once Proxy was confirmed. Effect: **dom/collections
    3 → 20** (1 all-pass); dom/nodes 832 → 834 (no regression from rewiring
-   childNodes/querySelectorAll); html/dom held at 35366. **Still deferred:**
-   `DOMTokenList` indexed access (classList still a plain object →
-   dom/lists), `dataset` (now tractable via the same Proxy route),
+   childNodes/querySelectorAll); html/dom held at 35366.
+
+   **DOMTokenList + dataset (done 2026-05-29), same Proxy route.** With the
+   exotic route proven, the cluster the earlier note deferred became cheap.
+   `DOMTokenList` is now a real branded iterable (`[object DOMTokenList]`,
+   `values`/`keys`/`entries`/`forEach`/`Symbol.iterator`, `.value`, `replace`,
+   `supports`, indexed access via a Proxy over a prototype-backed instance);
+   `classList` and the `relList` tokenlist reflected kind both route through
+   it. `dataset` is a `DOMStringMap` named-property exotic (camelCase
+   to/from `data-kebab`, get/set/has/delete/ownKeys), backed by a new
+   `__attributeNames` sink. Effect: **dom/lists 100 → 115** (1 all-pass),
+   **dom/collections 20 → 25** (2 all-pass), **html/dom 35366 → 35399**
+   (11 all-pass), no regressions. **Still deferred:**
    `Element.getElementsByTagName` + the NS variants, `DOMParser` /
-   `createHTMLDocument`, `Comment` / `DocumentFragment`, URL/tokenlist
-   reflected kinds, per-tag HTML interfaces.
+   `createHTMLDocument`, `Comment` / `DocumentFragment`, URL reflected kind,
+   per-tag HTML interfaces.
 4. **Expectations.** A checked-in expected-results file so known
    failures are tolerated and regressions surface (the WPT metadata
    model, serval-shaped).

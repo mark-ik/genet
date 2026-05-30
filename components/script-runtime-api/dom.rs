@@ -127,6 +127,7 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     engine.set_function::<NamespaceUri>("__namespaceURI", 1)?;
     engine.set_function::<PrefixOf>("__prefix", 1)?;
     engine.set_function::<CreateElementNS>("__createElementNS", 2)?;
+    engine.set_function::<AttributeNames>("__attributeNames", 1)?;
     engine.eval(DOM_BOOTSTRAP)?;
     Ok(())
 }
@@ -823,6 +824,26 @@ impl<E: ScriptEngine> NativeFn<E> for CreateElementNS {
     }
 }
 
+/// `__attributeNames(element)` → the element's attribute local names, space-joined
+/// (attribute names contain no spaces). Backs `dataset` ownKeys / enumeration.
+struct AttributeNames;
+impl<E: ScriptEngine> NativeFn<E> for AttributeNames {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let el = cx.arg(0);
+        let Some(id) = cx.reflector_data(&el) else {
+            return cx.make_string("");
+        };
+        let names = with_dom::<E, _>(cx, |dom| {
+            dom.attributes(NodeId::from_raw(id as usize))
+                .map(|a| a.name.local.as_ref().to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default();
+        cx.make_string(&names)
+    }
+}
+
 /// `document` plus node wrappers. A wrapper is a plain object carrying its reflector
 /// (`__ref`) and the methods that drive the native sinks. ES5-style (no arrows /
 /// classes / let) for the widest backend coverage, matching the other bootstraps.
@@ -1019,37 +1040,10 @@ const DOM_BOOTSTRAP: &str = r#"
     configurable: true, get: function() { return __prefix(this.__ref); }
   });
   Object.defineProperty(Element.prototype, 'classList', {
-    configurable: true,
-    get: function() {
-      var el = this;
-      function tokens() {
-        var c = el.getAttribute('class') || '';
-        return c.trim().split(/\s+/).filter(function(s) { return s.length; });
-      }
-      function write(arr) { el.setAttribute('class', arr.join(' ')); }
-      return {
-        get length() { return tokens().length; },
-        item: function(i) { var t = tokens(); return i < t.length ? t[i] : null; },
-        contains: function(tok) { return tokens().indexOf(tok) !== -1; },
-        add: function() {
-          var t = tokens();
-          for (var i = 0; i < arguments.length; i++) { if (t.indexOf(arguments[i]) === -1) t.push(arguments[i]); }
-          write(t);
-        },
-        remove: function() {
-          var t = tokens();
-          for (var i = 0; i < arguments.length; i++) { var x = t.indexOf(arguments[i]); if (x !== -1) t.splice(x, 1); }
-          write(t);
-        },
-        toggle: function(tok, force) {
-          var t = tokens(); var has = t.indexOf(tok) !== -1;
-          if (force === true || (force === undefined && !has)) { if (!has) { t.push(tok); write(t); } return true; }
-          if (has) { t.splice(t.indexOf(tok), 1); write(t); }
-          return false;
-        },
-        toString: function() { return el.getAttribute('class') || ''; }
-      };
-    }
+    configurable: true, get: function() { return makeDOMTokenList(this, 'class'); }
+  });
+  Object.defineProperty(Element.prototype, 'dataset', {
+    configurable: true, get: function() { return makeDataset(this); }
   });
 
   // querySelector / querySelectorAll, shared by Element and Document (scope is the
@@ -1275,6 +1269,114 @@ const DOM_BOOTSTRAP: &str = r#"
     return out;
   }
 
+  // DOMTokenList: a real iterable, branded object over a whitespace-separated
+  // attribute (class, rel). Prototype carries the methods; a Proxy adds indexed
+  // access + ownKeys (the exotic index machinery, same Proxy route as collections).
+  function DOMTokenList() {}
+  DOMTokenList.prototype._toks = function() {
+    var c = this.__el.getAttribute(this.__attr);
+    return c ? c.trim().split(/\s+/).filter(function(s) { return s.length; }) : [];
+  };
+  DOMTokenList.prototype._write = function(a) { this.__el.setAttribute(this.__attr, a.join(' ')); };
+  Object.defineProperty(DOMTokenList.prototype, 'length', {
+    configurable: true, get: function() { return this._toks().length; }
+  });
+  Object.defineProperty(DOMTokenList.prototype, 'value', {
+    configurable: true,
+    get: function() { return this.__el.getAttribute(this.__attr) || ''; },
+    set: function(v) { this.__el.setAttribute(this.__attr, String(v)); }
+  });
+  DOMTokenList.prototype.item = function(i) { var t = this._toks(); i = i >>> 0; return i < t.length ? t[i] : null; };
+  DOMTokenList.prototype.contains = function(tok) { return this._toks().indexOf(String(tok)) !== -1; };
+  DOMTokenList.prototype.add = function() { var t = this._toks(); for (var i = 0; i < arguments.length; i++) { if (t.indexOf(String(arguments[i])) === -1) t.push(String(arguments[i])); } this._write(t); };
+  DOMTokenList.prototype.remove = function() { var t = this._toks(); for (var i = 0; i < arguments.length; i++) { var x = t.indexOf(String(arguments[i])); if (x !== -1) t.splice(x, 1); } this._write(t); };
+  DOMTokenList.prototype.toggle = function(tok, force) {
+    tok = String(tok); var t = this._toks(); var has = t.indexOf(tok) !== -1;
+    if (force === true || (force === undefined && !has)) { if (!has) { t.push(tok); this._write(t); } return true; }
+    if (has) { t.splice(t.indexOf(tok), 1); this._write(t); }
+    return false;
+  };
+  DOMTokenList.prototype.replace = function(oldT, newT) {
+    oldT = String(oldT); newT = String(newT); var t = this._toks(); var i = t.indexOf(oldT);
+    if (i === -1) return false;
+    if (t.indexOf(newT) !== -1 && newT !== oldT) { t.splice(i, 1); } else { t[i] = newT; }
+    this._write(t); return true;
+  };
+  DOMTokenList.prototype.supports = function() { return true; };
+  DOMTokenList.prototype.forEach = function(cb, thisArg) { var t = this._toks(); for (var i = 0; i < t.length; i++) cb.call(thisArg, t[i], i, this); };
+  DOMTokenList.prototype.values = function() { var t = this._toks(); var i = 0; var o = { next: function() { return i < t.length ? { value: t[i++], done: false } : { value: undefined, done: true }; } }; o[Symbol.iterator] = function() { return o; }; return o; };
+  DOMTokenList.prototype.keys = function() { var t = this._toks(); var i = 0; var o = { next: function() { return i < t.length ? { value: i++, done: false } : { value: undefined, done: true }; } }; o[Symbol.iterator] = function() { return o; }; return o; };
+  DOMTokenList.prototype.entries = function() { var t = this._toks(); var i = 0; var o = { next: function() { return i < t.length ? { value: [i, t[i++]], done: false } : { value: undefined, done: true }; } }; o[Symbol.iterator] = function() { return o; }; return o; };
+  DOMTokenList.prototype[Symbol.iterator] = DOMTokenList.prototype.values;
+  DOMTokenList.prototype[Symbol.toStringTag] = 'DOMTokenList';
+  DOMTokenList.prototype.toString = function() { return this.value; };
+  globalThis.DOMTokenList = DOMTokenList;
+  function makeDOMTokenList(el, attr) {
+    var inst = Object.create(DOMTokenList.prototype);
+    inst.__el = el; inst.__attr = attr;
+    return new Proxy(inst, {
+      get: function(t, k) {
+        if (isArrayIndex(k)) { var toks = t._toks(); var i = +k; return i < toks.length ? toks[i] : undefined; }
+        return t[k];
+      },
+      has: function(t, k) { if (isArrayIndex(k)) return (+k) < t._toks().length; return k in t; },
+      ownKeys: function(t) { var toks = t._toks(); var keys = []; for (var i = 0; i < toks.length; i++) keys.push(String(i)); return keys; },
+      getOwnPropertyDescriptor: function(t, k) {
+        if (isArrayIndex(k)) { var toks = t._toks(); var i = +k; if (i < toks.length) return { value: toks[i], writable: false, enumerable: true, configurable: true }; return undefined; }
+        return Object.getOwnPropertyDescriptor(t, k);
+      }
+    });
+  }
+
+  // dataset: a DOMStringMap named-property exotic. IDL key `fooBar` maps to the
+  // content attribute `data-foo-bar` and back. A Proxy intercepts get/set/has/
+  // delete/ownKeys over the element's data-* attributes.
+  function datasetToContent(k) {
+    // camelCase -> data-kebab; an uppercase becomes -lowercase.
+    return 'data-' + k.replace(/[A-Z]/g, function(c) { return '-' + c.toLowerCase(); });
+  }
+  function datasetToIdl(name) {
+    // data-foo-bar -> fooBar; -x becomes X.
+    return name.slice(5).replace(/-([a-z])/g, function(_, c) { return c.toUpperCase(); });
+  }
+  function makeDataset(el) {
+    return new Proxy({ __el: el }, {
+      get: function(t, k) {
+        if (typeof k !== 'string') return t[k];
+        var v = t.__el.getAttribute(datasetToContent(k));
+        return v === null ? undefined : v;
+      },
+      set: function(t, k, v) {
+        if (typeof k === 'string') t.__el.setAttribute(datasetToContent(k), String(v));
+        return true;
+      },
+      has: function(t, k) {
+        if (typeof k !== 'string') return k in t;
+        return t.__el.getAttribute(datasetToContent(k)) !== null;
+      },
+      deleteProperty: function(t, k) {
+        if (typeof k === 'string') t.__el.removeAttribute(datasetToContent(k));
+        return true;
+      },
+      ownKeys: function(t) {
+        var names = __attributeNames(t.__el.__ref);
+        var out = [];
+        if (names) {
+          var parts = names.split(' ');
+          for (var i = 0; i < parts.length; i++) { if (parts[i].indexOf('data-') === 0) out.push(datasetToIdl(parts[i])); }
+        }
+        return out;
+      },
+      getOwnPropertyDescriptor: function(t, k) {
+        if (typeof k === 'string') {
+          var v = t.__el.getAttribute(datasetToContent(k));
+          if (v !== null) return { value: v, writable: true, enumerable: true, configurable: true };
+        }
+        return undefined;
+      }
+    });
+  }
+
   // Reflected IDL attribute accessors on Element.prototype (Lever 1). Driven by a
   // table of [idlName, attr, kind]; kinds: s=DOMString, b=boolean, e=enumerated
   // (approximate: lowercased pass-through, '' default — keyword canonicalization
@@ -1306,6 +1408,9 @@ const DOM_BOOTSTRAP: &str = r#"
       } else if (kind === 'l') {
         desc.get = function() { var n = parseHtmlLong(this.getAttribute(attr)); return n === null ? -1 : n; };
         desc.set = function(v) { this.setAttribute(attr, String(toLong(v))); };
+      } else if (kind === 't') {
+        // tokenlist: a DOMTokenList over the content attribute (e.g. relList -> rel).
+        desc.get = function() { return makeDOMTokenList(this, attr); };
       }
       Object.defineProperty(Element.prototype, idl, desc);
     }
@@ -1330,6 +1435,8 @@ const DOM_BOOTSTRAP: &str = r#"
              'noValidate','noWrap','open','playsInline','readOnly','required','reversed','trueSpeed'];
     for (var j = 0; j < B.length; j++) def(B[j], 'b');
     def('defaultChecked', 'b', 'checked'); def('defaultMuted', 'b', 'muted'); def('defaultSelected', 'b', 'selected');
+    // Tokenlist reflected attributes (DOMTokenList over the content attribute).
+    def('relList', 't', 'rel');
   }
 
   // NodeFilter + createTreeWalker / createNodeIterator (Lever 3), pure JS over the
@@ -1903,9 +2010,63 @@ mod tests {
         proxy_capability::<script_engine_boa::BoaEngine>();
     }
 
+    /// DOMTokenList (classList/relList) + dataset exotics, against any backend:
+    /// the iterable surface + brand + value + indexed access + replace, and
+    /// dataset camelCase<->kebab get/set/has/keys.
+    fn dom_tokenlist_dataset_works<E: ScriptEngine>() {
+        use serval_static_dom::StaticDocument;
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.load_dom(&StaticDocument::parse("<html><body><a id='a' class='x y'></a></body></html>"));
+
+        rt.eval(
+            "var a = document.getElementById('a');\
+             var cl = a.classList;\
+             console.log(Object.prototype.toString.call(cl));\
+             console.log(String(typeof cl.values) + ',' + String(typeof cl.forEach) + ',' + String(Symbol.iterator in cl));\
+             console.log(cl.value + ',' + String(cl.length) + ',' + cl[0] + ',' + cl[1]);\
+             console.log(String(cl.replace('x', 'z')) + ',' + cl.value);\
+             var seen = []; cl.forEach(function(t){ seen.push(t); }); console.log(seen.join(','));\
+             a.rel = 'next prev'; console.log(String(a.relList.length) + ',' + a.relList.contains('prev'));\
+             a.dataset.fooBar = 'v'; console.log(a.getAttribute('data-foo-bar'));\
+             a.setAttribute('data-baz', 'w'); console.log(a.dataset.baz);\
+             console.log(String('fooBar' in a.dataset) + ',' + String('nope' in a.dataset));\
+             console.log(Object.keys(a.dataset).sort().join(','));\
+             delete a.dataset.baz; console.log(String(a.hasAttribute('data-baz')));",
+        )
+        .expect("tokenlist/dataset script");
+
+        assert_eq!(
+            rt.host().borrow().console,
+            vec![
+                "[object DOMTokenList]",     // brand
+                "function,function,true",    // values, forEach, Symbol.iterator
+                "x y,2,x,y",                 // value, length, [0], [1]
+                "true,z y",                  // replace('x','z') -> 'z y'
+                "z,y",                       // forEach over tokens
+                "2,true",                    // relList from rel='next prev'
+                "v",                         // dataset.fooBar -> data-foo-bar
+                "w",                         // data-baz -> dataset.baz
+                "true,false",                // 'fooBar' in dataset, 'nope' not
+                "baz,fooBar",                // Object.keys(dataset) (sorted)
+                "false",                     // delete dataset.baz removed the attr
+            ],
+        );
+    }
+
     #[test]
     fn dom_collections_on_boa() {
         dom_collections_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[test]
+    fn dom_tokenlist_dataset_on_boa() {
+        dom_tokenlist_dataset_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dom_tokenlist_dataset_on_nova() {
+        dom_tokenlist_dataset_works::<script_engine_nova::NovaEngine>();
     }
 
     #[cfg(not(target_arch = "wasm32"))]
