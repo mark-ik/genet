@@ -19,11 +19,12 @@
 use std::hash::Hash;
 
 use layout_dom_api::LayoutDom;
-use parley::layout::{Affinity, Cursor, Selection};
+use parley::Layout;
+use parley::layout::{Affinity, Cluster, Cursor, Selection};
 
 use crate::box_tree::BoxTree;
 use crate::fragment::FragmentPlane;
-use crate::text_measure::TextMeasureCtx;
+use crate::text_measure::{ColorBrush, TextMeasureCtx};
 
 /// A caret rectangle in absolute layout (scene) coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -70,11 +71,16 @@ where
     let content_x = ox + frame.border.left + frame.padding.left;
     let content_y = oy + frame.border.top + frame.padding.top;
 
+    // Take the x extent from parley's caret geometry but the vertical extent from
+    // the snug glyph band — `bb`'s height is the full line box (leading included,
+    // and the font's tall ascent above), which paints a caret bar towering over
+    // low-x-height words.
+    let (top, height) = caret_band(layout, byte_offset);
     Some(CaretRect {
         x: content_x + bb.x0 as f32,
-        y: content_y + bb.y0 as f32,
+        y: content_y + top,
         width: (bb.x1 - bb.x0) as f32,
-        height: (bb.y1 - bb.y0) as f32,
+        height,
     })
 }
 
@@ -119,6 +125,9 @@ where
 
     let anchor = Cursor::from_byte_index(layout, start, Affinity::default());
     let focus = Cursor::from_byte_index(layout, end, Affinity::default());
+    // Selection stays browser-faithful: parley's per-line geometry is the full
+    // line box (`block_min..block_max`), which is what a text selection highlights
+    // — unlike the caret, we do not tighten to the glyph band.
     Selection::new(anchor, focus)
         .geometry(layout)
         .into_iter()
@@ -129,6 +138,34 @@ where
             height: (bb.y1 - bb.y0) as f32,
         })
         .collect()
+}
+
+/// The caret bar's *snug* vertical extent `(top, height)` in layout space: from
+/// the top of capitals (the run's `cap_height`) down to below descenders
+/// (`baseline + descent`), hugging the visible glyph band. The font's typographic
+/// `ascent` reserves empty room above the caps (for accents that low lowercase
+/// words don't use), so an em-box-tall caret towers over text like "says"; the
+/// cap-height top avoids that.
+///
+/// Mid-text the run comes from the cluster at `byte`; at end-of-text (no cluster
+/// contains the final index) it falls back to the last line and its last run.
+/// When the font reports no `cap_height`, falls back to the full `ascent`. `(0,0)`
+/// for an empty layout.
+fn caret_band(layout: &Layout<ColorBrush>, byte: usize) -> (f32, f32) {
+    let cluster = Cluster::from_byte_index(layout, byte);
+    let (line, cap) = match &cluster {
+        Some(c) => (c.line(), c.run().metrics().cap_height),
+        None => {
+            let Some(line) = layout.get(layout.len().saturating_sub(1)) else {
+                return (0.0, 0.0);
+            };
+            let cap = line.runs().last().and_then(|r| r.metrics().cap_height);
+            (line, cap)
+        },
+    };
+    let m = line.metrics();
+    let cap = cap.unwrap_or(m.ascent);
+    (m.baseline - cap, cap + m.descent)
 }
 
 /// Absolute border-box origin of `target`: walk from the document root,
