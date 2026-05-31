@@ -262,8 +262,8 @@ already exposes (`run_microtasks`, `run_event_loop`).
     `text_field` over a `TextInput { text, caret }` model: a real
     insertion-point editor (char-indexed, Unicode-correct) with insert /
     Backspace / Delete / ←→, composable via `lens`, plus the winit→`KeyEvent`
-    wiring in the demo bin. Caret rendered as a placeholder `|` marker
-    (real glyph-positioned caret painting is later).
+    wiring in the demo bin. Now with a real glyph-positioned caret (see below),
+    selection, and system clipboard.
   - **Capture phase — done (`abde0a9`).** `.capture(bool)` per listener
     (default bubble); `dispatch_click`/`dispatch_key` run a `root → target`
     capture pass then the `target → root` bubble pass, completing
@@ -279,19 +279,44 @@ already exposes (`run_microtasks`, `run_event_loop`).
     adapter that surfaces it to a screen reader is the remaining half (see
     below).
 
+  Since done:
+  - **Live a11y adapter — done.** `accesskit_winit::Adapter` is wired into
+    the `pelt-live-counter` window (deferred-event model via `UserEvent::
+    Accessibility`), so the `accesskit_tree` builder's output reaches a real
+    screen reader.
+  - **Real caret painting — done.** `serval_layout::caret_rect` /
+    `selection_rects` compute glyph-positioned geometry from the parley layout;
+    the host overlays a caret bar (snug to the cap-height glyph band) and a
+    line-box selection highlight on the scene. Replaces the `|` marker.
+  - **`Element` / `Text` split — done.** An `ElementView` marker gates
+    element-only ops (`on_click`/`on_key`/`attr`) at compile time while every
+    node stays one runtime type (`ServalElement`), so children mix text +
+    elements freely.
+  - **Per-tag vocabulary + more named keys — done.** `div`/`span`/`p`/`input`/…
+    helpers; Home/End.
+
   Still open:
-  - **Live a11y adapter** — wire `accesskit_winit::Adapter` into the demo
-    window so a screen reader actually sees the emitted tree (the builder
-    `accesskit_tree` is ready; this is the host-side glue + the thing a real
-    window + screen reader verify).
-  - **Real caret painting** — a measured glyph-position caret rect
-    (blinking), replacing the `|` marker; and selection. Touches
-    serval-layout's text paint, so it is a heavier, core-crate change.
-  - **`Element` / `Text` split** — wrappers are all `Node` today; element
-    vs character-data views with the appropriate read surface. (Lower
-    value for a Rust authoring layer than for the JS DOM surface.)
-  - **More events + vocabulary** — `pointermove`/`pointerup`/wheel, more
-    named keys (Home/End), and per-tag ergonomic view helpers.
+  - **More pointer events** — `pointermove`/`pointerup`/wheel (the input half
+    of scrolling + pointer gestures — a future Lane H axis).
+
+- **Stage 4 (overlays + inline style) — done.** The host-overlay slice, and
+  the engine capability it forced.
+  - **Inline `style` support (`dfe8702`).** serval's stylo adapter returned
+    `None` from `TElement::style_attribute`, so dynamic per-element styling was
+    impossible. Now each element's `style="…"` is parsed (Author origin) before
+    the cascade and cached on its `StyleEntry`; `style_attribute()` hands the
+    block to the cascade, which applies it above author rules — like the
+    browser. This is a Lane C **Styling**-axis deliverable: it unblocks *all*
+    dynamic styling, not just overlays.
+  - **Overlay primitives (`4bf92fb`).** `overlay_at(x, y, content)` — a
+    `position: absolute` box placed by an inline style — plus `anchor_point(
+    trigger, popup, Placement)` (pure geometry; the host feeds it the trigger's
+    laid-out rect, since only the host has layout). The caller owns two serval
+    realities: a positioned ancestor (no true viewport-`fixed`), and
+    last-in-document order for stacking (the paint walk has no `z-index`).
+  - **Live demo (`63939fb`).** Clicking `[ + ]` toggles a `.popup` card
+    anchored below it: trigger → host rect query → `anchor_point` → inline-style
+    cascade → layout → top-of-stack paint. Validated on screen 2026-05-31.
 
 ## Toward the Mere flip gate: IME + form-control breadth
 
