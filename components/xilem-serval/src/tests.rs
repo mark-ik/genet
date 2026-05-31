@@ -814,8 +814,9 @@ mod controls {
     use serval_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{
-        DomHandle, Key, KeyEvent, Modifiers, NamedKey, PointerClick, ServalAppRunner, ServalCtx,
-        ServalElement, TextInput, View, button, checkbox, el, lens, overlay_at, text_field,
+        DomHandle, Key, KeyEvent, Modifiers, NamedKey, PointerClick, SelectState, ServalAppRunner,
+        ServalCtx, ServalElement, TextInput, View, button, checkbox, el, lens, overlay_at, select,
+        text_field,
     };
 
     /// The text data of the single text child under `node`, if any.
@@ -1154,6 +1155,46 @@ mod controls {
             attr(&dom.borrow(), ov, "style").as_deref(),
             Some("position: absolute; left: 30px; top: 15px;"),
         );
+    }
+
+    /// `select`: clicking the box opens the option list (an absolute `top: 100%`
+    /// child appears); clicking an option sets `selected` and closes the list.
+    #[test]
+    fn select_opens_picks_and_closes() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let opts = ["red", "green", "blue"];
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            move |s: &SelectState| select(s, &opts),
+            SelectState::new(0),
+        );
+        let root = runner.root();
+
+        // Closed: selected = 0, the root has only the box child (no list).
+        assert_eq!(runner.state().selected, 0);
+        assert!(!runner.state().open);
+        assert_eq!(dom.borrow().dom_children(root).count(), 1, "closed: box only");
+
+        // Click the box (root's first child) → the list opens.
+        let box_node = dom.borrow().dom_children(root).next().expect("box");
+        runner.dispatch_click(box_node, PointerClick { local: (0.0, 0.0) });
+        assert!(runner.state().open, "clicking the box opens the list");
+        assert_eq!(dom.borrow().dom_children(root).count(), 2, "open: box + list");
+
+        // Click the second option (index 1) → selected = 1, list closes.
+        let opt1 = {
+            let dom = dom.borrow();
+            let list = dom.dom_children(root).nth(1).expect("list");
+            dom.dom_children(list).nth(1).expect("second option")
+        };
+        runner.dispatch_click(opt1, PointerClick { local: (0.0, 0.0) });
+        assert_eq!(runner.state().selected, 1, "picking option 1 selects it");
+        assert!(!runner.state().open, "picking an option closes the list");
+        assert_eq!(dom.borrow().dom_children(root).count(), 1, "closed again: box only");
+
+        // The box now shows the new selection.
+        let box_node = dom.borrow().dom_children(root).next().expect("box");
+        assert_eq!(text_child(&dom.borrow(), box_node).as_deref(), Some("green"));
     }
 
     // --- selection (model + keyboard) -----------------------------------------
