@@ -815,7 +815,7 @@ mod controls {
 
     use crate::{
         DomHandle, Key, KeyEvent, Modifiers, NamedKey, PointerClick, ServalAppRunner, ServalCtx,
-        ServalElement, TextInput, View, button, checkbox, el, lens, text_field,
+        ServalElement, TextInput, View, button, checkbox, el, lens, overlay_at, text_field,
     };
 
     /// The text data of the single text child under `node`, if any.
@@ -1133,6 +1133,27 @@ mod controls {
 
         runner.dispatch_click(btn, PointerClick { local: (0.0, 0.0) });
         assert_eq!(runner.state(), &1);
+    }
+
+    /// `overlay_at(x, y, content)`: a `<div>` carrying its position in an inline
+    /// `style` (`position: absolute` + the insets), wrapping the content. The
+    /// inline style is what serval's cascade reads to place the overlay.
+    #[test]
+    fn overlay_at_carries_inline_position() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            |_: &()| overlay_at::<_, (), ()>(30.0, 15.0, "menu"),
+            (),
+        );
+        let ov = runner.root();
+
+        assert_eq!(dom.borrow().element_name(ov).unwrap().local.as_ref(), "div");
+        assert_eq!(text_child(&dom.borrow(), ov).as_deref(), Some("menu"));
+        assert_eq!(
+            attr(&dom.borrow(), ov, "style").as_deref(),
+            Some("position: absolute; left: 30px; top: 15px;"),
+        );
     }
 
     // --- selection (model + keyboard) -----------------------------------------
