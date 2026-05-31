@@ -117,6 +117,11 @@ impl ScriptedDom {
         self.push(node)
     }
 
+    /// Create a detached `DocumentFragment` node (a parentless container).
+    pub fn create_fragment(&mut self) -> NodeId {
+        self.push(Node::new(NodeKind::DocumentFragment))
+    }
+
     fn node(&self, id: NodeId) -> &Node {
         self.nodes[id.0]
             .as_ref()

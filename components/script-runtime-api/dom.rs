@@ -109,6 +109,7 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     engine.set_function::<DocumentHead>("__documentHead", 1)?;
     engine.set_function::<CreateDocument>("__createDocument", 0)?;
     engine.set_function::<CreateComment>("__createComment", 1)?;
+    engine.set_function::<CreateFragment>("__createFragment", 0)?;
     engine.set_function::<NodeType>("__nodeType", 1)?;
     engine.set_function::<RemoveAttribute>("__removeAttribute", 2)?;
     engine.set_function::<Matches>("__matches", 2)?;
@@ -522,6 +523,17 @@ impl<E: ScriptEngine> NativeFn<E> for CreateComment {
     }
 }
 
+/// `__createFragment()` → a reflector for a fresh detached `DocumentFragment`.
+struct CreateFragment;
+impl<E: ScriptEngine> NativeFn<E> for CreateFragment {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        match with_dom::<E, _>(cx, |dom| dom.create_fragment()) {
+            Some(node) => cx.reflector_for(node.raw() as u64),
+            None => Ok(cx.undefined()),
+        }
+    }
+}
+
 /// `__nodeType(node)` → the DOM `nodeType` integer (as a string): 1 element,
 /// 3 text, 8 comment, 9 document, 10 doctype, 7 processing-instruction. Drives the
 /// JS `Element` / `Text` prototype split in `wrapNode`.
@@ -539,6 +551,7 @@ impl<E: ScriptEngine> NativeFn<E> for NodeType {
             NodeKind::Comment => 8,
             NodeKind::Document => 9,
             NodeKind::Doctype => 10,
+            NodeKind::DocumentFragment => 11,
         })
         .unwrap_or(0);
         cx.make_string(&n.to_string())
@@ -747,6 +760,7 @@ impl<E: ScriptEngine> NativeFn<E> for NodeName {
                 NodeKind::Document => "#document".to_string(),
                 NodeKind::Doctype => "html".to_string(),
                 NodeKind::ProcessingInstruction => "#processing-instruction".to_string(),
+                NodeKind::DocumentFragment => "#document-fragment".to_string(),
             }
         })
         .unwrap_or_default();
@@ -972,6 +986,7 @@ const DOM_BOOTSTRAP: &str = r#"
               : nt === 9 ? Document.prototype
               : nt === 3 ? Text.prototype
               : nt === 8 ? Comment.prototype
+              : nt === 11 ? DocumentFragment.prototype
               : Node.prototype;
     var node = Object.create(proto);
     node.__ref = ref;
@@ -1111,6 +1126,35 @@ const DOM_BOOTSTRAP: &str = r#"
     if (ac.length !== bc.length) return false;
     for (var c = 0; c < ac.length; c++) { if (!ac[c].isEqualNode(bc[c])) return false; }
     return true;
+  };
+  Node.prototype.cloneNode = function(deep) {
+    // Shallow copy of this node by type, then (deep) recurse over children. Pure JS
+    // over the existing create* / setAttribute primitives.
+    var copy;
+    switch (this.nodeType) {
+      case 1: // Element: clone with namespace + every attribute.
+        copy = this.namespaceURI
+          ? document.createElementNS(this.namespaceURI, this.prefix ? this.prefix + ':' + this.localName : this.localName)
+          : document.createElement(this.localName);
+        var names = this.__ref !== undefined ? __attributeNames(this.__ref) : '';
+        if (names) {
+          var parts = names.split(' ');
+          for (var i = 0; i < parts.length; i++) {
+            if (parts[i]) copy.setAttribute(parts[i], this.getAttribute(parts[i]));
+          }
+        }
+        break;
+      case 3: copy = document.createTextNode(this.data); break;
+      case 8: copy = document.createComment(this.data); break;
+      case 11: copy = document.createDocumentFragment(); break;
+      case 9: copy = document.implementation.createHTMLDocument(); break;
+      default: copy = document.createTextNode('');
+    }
+    if (deep) {
+      var kids = this.childNodes;
+      for (var k = 0; k < kids.length; k++) { copy.appendChild(kids[k].cloneNode(true)); }
+    }
+    return copy;
   };
   Node.prototype.removeChild = function(child) {
     if (!child || child.parentNode !== this) {
@@ -1265,6 +1309,16 @@ const DOM_BOOTSTRAP: &str = r#"
   }
   Comment.prototype = Object.create(CharacterData.prototype);
   globalThis.Comment = Comment;
+
+  // DocumentFragment : Node. `new DocumentFragment()` mints a detached fragment;
+  // querySelector(All)/getElementById scope to it (assigned after Element defines
+  // the shared query functions, below).
+  function DocumentFragment() {
+    if (!(this instanceof DocumentFragment)) return new DocumentFragment();
+    return wrapNode(__createFragment());
+  }
+  DocumentFragment.prototype = Object.create(Node.prototype);
+  globalThis.DocumentFragment = DocumentFragment;
 
   // Element : Node — attributes, reflection, selectors.
   function Element() {}
@@ -1432,11 +1486,16 @@ const DOM_BOOTSTRAP: &str = r#"
   };
   Document.prototype.createTextNode = function(data) { return wrapNode(__createTextNode(String(data))); };
   Document.prototype.createComment = function(data) { return wrapNode(__createComment(String(data))); };
+  Document.prototype.createDocumentFragment = function() { return wrapNode(__createFragment()); };
   Document.prototype.getElementById = function(id) { return wrapNode(__getElementById(this.__ref, String(id))); };
   Document.prototype.getElementsByTagName = getElementsByTagName;
   Document.prototype.getElementsByClassName = getElementsByClassName;
   Document.prototype.querySelector = querySelector;
   Document.prototype.querySelectorAll = querySelectorAll;
+  // DocumentFragment is a query scope too (ParentNode mixin).
+  DocumentFragment.prototype.querySelector = querySelector;
+  DocumentFragment.prototype.querySelectorAll = querySelectorAll;
+  DocumentFragment.prototype.getElementById = function(id) { return wrapNode(__getElementById(this.__ref, String(id))); };
   Object.defineProperty(Document.prototype, 'documentElement', {
     configurable: true, get: function() { return wrapNode(__documentElement(this.__ref)); }
   });
@@ -1785,6 +1844,23 @@ const DOM_BOOTSTRAP: &str = r#"
     def('defaultChecked', 'b', 'checked'); def('defaultMuted', 'b', 'muted'); def('defaultSelected', 'b', 'selected');
     // Tokenlist reflected attributes (DOMTokenList over the content attribute).
     def('relList', 't', 'rel');
+    // Enumerated reflected attributes (limited-enum, "" missing-value default).
+    // Conflict-free idlName -> keyword set, extracted from the WPT metadata;
+    // `type` / `formMethod` are skipped (multiple keyword sets across interfaces).
+    def('autocomplete', 'e', 'autocomplete', ['on', 'off']);
+    def('crossOrigin', 'e', 'crossorigin', ['anonymous', 'use-credentials']);
+    def('decoding', 'e', 'decoding', ['async', 'sync', 'auto']);
+    def('encoding', 'e', 'encoding', ['application/x-www-form-urlencoded', 'multipart/form-data', 'text/plain']);
+    def('enctype', 'e', 'enctype', ['application/x-www-form-urlencoded', 'multipart/form-data', 'text/plain']);
+    def('formEnctype', 'e', 'formenctype', ['application/x-www-form-urlencoded', 'multipart/form-data', 'text/plain']);
+    def('enterKeyHint', 'e', 'enterkeyhint', ['enter', 'done', 'go', 'next', 'previous', 'search', 'send']);
+    def('inputMode', 'e', 'inputmode', ['none', 'text', 'tel', 'url', 'email', 'numeric', 'decimal', 'search']);
+    def('kind', 'e', 'kind', ['subtitles', 'captions', 'descriptions', 'chapters', 'metadata']);
+    def('loading', 'e', 'loading', ['lazy', 'eager']);
+    def('method', 'e', 'method', ['get', 'post', 'dialog']);
+    def('preload', 'e', 'preload', ['none', 'metadata', 'auto']);
+    def('referrerPolicy', 'e', 'referrerpolicy', ['', 'no-referrer', 'no-referrer-when-downgrade', 'same-origin', 'origin', 'strict-origin', 'origin-when-cross-origin', 'strict-origin-when-cross-origin', 'unsafe-url']);
+    def('scope', 'e', 'scope', ['row', 'col', 'rowgroup', 'colgroup']);
   }
 
   // NodeFilter + createTreeWalker / createNodeIterator (Lever 3), pure JS over the
@@ -2540,6 +2616,53 @@ mod tests {
     #[test]
     fn dom_characterdata_identity_on_nova() {
         dom_characterdata_identity_works::<script_engine_nova::NovaEngine>();
+    }
+
+    /// DocumentFragment + cloneNode, against any backend: a fragment is nodeType 11
+    /// and an `instanceof DocumentFragment`; it holds children and is queryable;
+    /// shallow vs deep cloneNode copy element attributes and (deep) the subtree.
+    fn dom_fragment_clone_works<E: ScriptEngine>() {
+        use serval_static_dom::StaticDocument;
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.load_dom(&StaticDocument::parse("<html><body></body></html>"));
+
+        rt.eval(
+            "var f = document.createDocumentFragment();\
+             console.log(String(f.nodeType) + ',' + String(f instanceof DocumentFragment) + ',' + String(f instanceof Node));\
+             var d = document.createElement('div'); d.id = 'x'; d.setAttribute('class','c'); f.appendChild(d);\
+             d.appendChild(document.createElement('span'));\
+             console.log(String(f.childNodes.length) + ',' + (f.getElementById ? (f.getElementById('x') ? 'found' : 'miss') : 'no-gebid'));\
+             console.log(String(f.querySelector('span') !== null));\
+             var shallow = d.cloneNode(false);\
+             console.log(shallow.tagName + ',' + shallow.id + ',' + shallow.getAttribute('class') + ',' + String(shallow.childNodes.length));\
+             var deep = d.cloneNode(true);\
+             console.log(String(deep.childNodes.length) + ',' + deep.firstChild.tagName);\
+             console.log(String(new DocumentFragment() instanceof DocumentFragment));",
+        )
+        .expect("fragment/clone script");
+
+        assert_eq!(
+            rt.host().borrow().console,
+            vec![
+                "11,true,true",   // fragment nodeType + instanceof chain
+                "1,found",        // one child; getElementById scoped to the fragment
+                "true",           // querySelector('span') finds the nested element
+                "DIV,x,c,0",      // shallow clone: tag/id/class copied, no children
+                "1,SPAN",         // deep clone: child subtree copied
+                "true",           // new DocumentFragment()
+            ],
+        );
+    }
+
+    #[test]
+    fn dom_fragment_clone_on_boa() {
+        dom_fragment_clone_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dom_fragment_clone_on_nova() {
+        dom_fragment_clone_works::<script_engine_nova::NovaEngine>();
     }
 
     #[test]

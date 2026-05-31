@@ -212,6 +212,9 @@ pub enum NodeKind {
     Text,
     Comment,
     ProcessingInstruction,
+    /// A `DocumentFragment` (nodeType 11): a parentless container, used as the
+    /// scripted-DOM holder for `createDocumentFragment` and fragment parsing.
+    DocumentFragment,
 }
 
 /// Borrowed view of one attribute on an element.

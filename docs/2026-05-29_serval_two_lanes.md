@@ -64,6 +64,19 @@ subtests, dom/nodes 832 (Boa). Reftests render real CSS (floats 7 passing).
    enumerated reflected-attribute getter to a real keyword table
    (limited-enum with `""` missing-value default), starting with the
    global `dir`. `DocumentFragment` remains.
+
+   **DocumentFragment + cloneNode + enum tables (done 2026-05-31),
+   finishing the bounded DOM-API set.** `NodeKind::DocumentFragment`
+   (nodeType 11) in the DOM crate + `create_fragment`; the JS
+   `DocumentFragment` prototype, `createDocumentFragment`, and the
+   `ParentNode` query mixin (`querySelector(All)` / `getElementById`)
+   scoped to it. `Node.cloneNode(deep)` (shallow copies element
+   attributes / namespace; deep recurses the subtree) over the existing
+   create* primitives. The enumerated keyword table extended to the
+   conflict-free per-element enums (`referrerPolicy`, `crossOrigin`,
+   `decoding`, `method`, `enctype`, `loading`, `preload`, `kind`,
+   `inputMode`, `enterKeyHint`, `autocomplete`, `scope`; `type` /
+   `formMethod` skipped — multiple keyword sets across interfaces).
 4. ~~**`createDocument` / `createHTMLDocument`**~~ **(done 2026-05-30)** with
    the multi-document increment (a second detached document root in the
    host, scoped queries, `document.implementation`). **`DOMParser.parseFromString`**
