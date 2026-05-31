@@ -51,9 +51,9 @@ use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, NamedKey as WinitNamedKey};
 use winit::window::{Window, WindowId};
 use xilem_serval::{
-    El, Key, KeyEvent, Lens, Modifiers, NamedKey, OnClick, Placement, PointerClick,
-    ServalAppRunner, TextField, TextInput, anchor_point, el, lens, on_click, overlay_at,
-    text_field_typed,
+    AnyView, El, Key, KeyEvent, Lens, Modifiers, NamedKey, OnClick, Placement, PointerClick,
+    SelectState, ServalCtx, ServalElement, ServalAppRunner, TextField, TextInput, anchor_point, el,
+    lens, on_click, overlay_at, select, text_field_typed,
 };
 
 use accesskit_winit::{Adapter, Event as AkEvent, WindowEvent as AkWindowEvent};
@@ -67,9 +67,15 @@ use pelt_live::{
 /// Stage 1b probe; `field` (a [`TextInput`] — buffer + caret) is the Stage 3
 /// form-control slice — a `text_field` lensed onto it edits it as you type, with
 /// ←/→ moving the caret.
+/// The colour options the demo's `select` dropdown offers.
+const COLOURS: &[&str] = &["red", "green", "blue"];
+
 struct Demo {
     count: u32,
     field: TextInput,
+    /// The `select` dropdown's state (which colour, open/closed). Composed onto
+    /// the view via `lens`, like `field`.
+    colour: SelectState,
     /// Whether the `[ + ]` button's popup overlay is showing. Toggled on each
     /// click of the button (which also still bumps the count).
     popup_open: bool,
@@ -109,10 +115,19 @@ type DemoView = El<
         // z-index). `Option<V>` is a `ViewSequence`, so this is the conditional
         // child slot.
         Option<El<&'static str, Demo, ()>>,
+        // The `select` dropdown, lensed onto `Demo::colour`. Its concrete type is
+        // unnameable (the per-option click closures), so it rides an erased
+        // `Box<dyn AnyView>` — the host capability that lets a named app hold an
+        // opaque-typed control.
+        AnyDemoView,
     ),
     Demo,
     (),
 >;
+
+/// An erased child view over `Demo` — used for controls whose concrete type
+/// can't be named in [`DemoView`].
+type AnyDemoView = Box<dyn AnyView<Demo, (), ServalCtx, ServalElement>>;
 
 fn demo_view(s: &Demo) -> DemoView {
     // Clicking `[ + ]` bumps the count *and* toggles its popup overlay, so a
@@ -137,11 +152,17 @@ fn demo_view(s: &Demo) -> DemoView {
             lens(make_field, to_field),
             // The popup: an overlay anchored below the button (its `(x, y)` is
             // the host-computed `popup_anchor`), styled by the `.popup` class.
-            // Last in the tuple → painted last → on top.
             s.popup_open.then(|| {
                 overlay_at::<_, Demo, ()>(s.popup_anchor.0, s.popup_anchor.1, "more")
                     .attr("class", "popup")
             }),
+            // The colour dropdown, lensed onto `Demo::colour`, boxed as an erased
+            // view. Self-positions its option list (top: 100%), so unlike the
+            // popup it needs no host anchor.
+            Box::new(lens(
+                |c: &mut SelectState| select(c, COLOURS),
+                |d: &mut Demo| &mut d.colour,
+            )) as AnyDemoView,
         ),
     )
 }
@@ -169,6 +190,13 @@ const SHEET: &[&str] = &[
     // The popup overlay box: a small tinted card with padding, drawn on top.
     ".popup { font-size: 28px; color: rgb(40, 40, 40); \
         background-color: rgb(245, 230, 140); padding: 10px; }",
+    // The colour dropdown: a clickable box; the option list (top: 100%) sits
+    // just below it, each option a tappable row.
+    ".select-box { font-size: 28px; color: rgb(20, 20, 20); \
+        background-color: rgb(220, 225, 235); padding: 10px; }",
+    ".select-list { background-color: rgb(255, 255, 255); }",
+    ".select-option { font-size: 24px; color: rgb(30, 30, 40); \
+        background-color: rgb(240, 242, 248); padding: 8px; }",
 ];
 
 // ── winit user event ───────────────────────────────────────────────────────
@@ -293,6 +321,7 @@ impl App {
             Demo {
                 count: 0,
                 field: TextInput::default(),
+                colour: SelectState::new(0),
                 popup_open: false,
                 popup_anchor: (0.0, 0.0),
             },
