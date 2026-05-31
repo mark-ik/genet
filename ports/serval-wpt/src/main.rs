@@ -520,6 +520,9 @@ fn images_match(a: &render::Image, b: &render::Image, fuzzy: Option<(u16, u64)>)
     if a.dimensions() != b.dimensions() {
         return false;
     }
+    // A pixel "differs" only if its per-channel delta exceeds `max_diff`; at most
+    // `max_pixels` such pixels are tolerated (WPT fuzzy semantics). Preserved
+    // exactly from the pre-diagnostics version.
     let (max_diff, max_pixels) = fuzzy.unwrap_or((0, 0));
     let mut differing = 0u64;
     for (pa, pb) in a.pixels().zip(b.pixels()) {
@@ -538,6 +541,56 @@ fn images_match(a: &render::Image, b: &render::Image, fuzzy: Option<(u16, u64)>)
         }
     }
     true
+}
+
+/// Full per-pixel diff between a test render and its reference. The shape of a
+/// failure buckets it (Lever 2 diagnosis): `differing == total` with a large
+/// `max_channel_diff` → whole render diverges (layout/parse/UA-stylesheet);
+/// `max_channel_diff` small with many `differing` → anti-aliasing / sub-pixel
+/// (a fuzzy-tolerance case); `max_channel_diff` large but `differing` localized →
+/// a specific paint/feature gap. `!same_dims` → a sizing divergence before paint.
+struct DiffStats {
+    same_dims: bool,
+    differing: u64,
+    total: u64,
+    max_channel_diff: u16,
+}
+
+fn diff_stats(a: &render::Image, b: &render::Image) -> DiffStats {
+    let total = u64::from(a.width()) * u64::from(a.height());
+    if a.dimensions() != b.dimensions() {
+        return DiffStats { same_dims: false, differing: total, total, max_channel_diff: 255 };
+    }
+    let (mut differing, mut max_channel_diff) = (0u64, 0u16);
+    for (pa, pb) in a.pixels().zip(b.pixels()) {
+        let channel_max = pa
+            .0
+            .iter()
+            .zip(pb.0.iter())
+            .map(|(x, y)| (i16::from(*x) - i16::from(*y)).unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        if channel_max > 0 {
+            differing += 1;
+            max_channel_diff = max_channel_diff.max(channel_max);
+        }
+    }
+    DiffStats { same_dims: true, differing, total, max_channel_diff }
+}
+
+/// One-line classification of a FAIL's diff shape, for `-v` triage.
+fn diff_label(s: &DiffStats) -> &'static str {
+    if !s.same_dims {
+        "dims"          // different output size — layout/sizing divergence pre-paint
+    } else if s.differing == 0 {
+        "equal?"        // identical yet failed match — a harness/tolerance quirk
+    } else if s.total > 0 && s.differing * 100 / s.total >= 50 {
+        "whole"         // >=50% of pixels differ — wholesale (layout / UA stylesheet)
+    } else if s.max_channel_diff <= 16 {
+        "aa"            // small per-channel diffs — anti-aliasing / sub-pixel
+    } else {
+        "local"         // localized large diffs — a specific paint/feature gap
+    }
 }
 
 /// Follow a `match` ref chain to its final reference, returning that
@@ -594,6 +647,7 @@ fn reftest(tests: &[PathBuf], args: &Args) {
     panic::set_hook(Box::new(|_| {}));
 
     let (mut passed, mut failed, mut skipped, mut errored) = (0, 0, 0, 0);
+    let mut buckets: std::collections::HashMap<&'static str, u64> = std::collections::HashMap::new();
     for path in tests {
         let Ok(bytes) = fs::read(path) else {
             errored += 1;
@@ -657,7 +711,27 @@ fn reftest(tests: &[PathBuf], args: &Args) {
         } else {
             failed += 1;
             let k = if kind == MatchKind::Match { "match   " } else { "mismatch" };
-            println!("FAIL  {k} {}", rel(path, &args.tests_root));
+            // Diagnose the diff shape (Lever 2 triage). `match` failures get a
+            // bucket from the test-vs-ref pixel diff; `mismatch` failures are
+            // "matched when it shouldn't", a different shape, tallied separately.
+            if kind == MatchKind::Match {
+                let s = diff_stats(&test_img, &ref_img);
+                let label = diff_label(&s);
+                *buckets.entry(label).or_insert(0) += 1;
+                if args.verbose {
+                    let pct = if s.total > 0 { s.differing * 100 / s.total } else { 0 };
+                    println!(
+                        "FAIL  {k} [{label:5}] diff={pct}% maxδ={} {}",
+                        s.max_channel_diff,
+                        rel(path, &args.tests_root)
+                    );
+                } else {
+                    println!("FAIL  {k} [{label:5}] {}", rel(path, &args.tests_root));
+                }
+            } else {
+                *buckets.entry("mismatch-eq").or_insert(0) += 1;
+                println!("FAIL  {k} {}", rel(path, &args.tests_root));
+            }
         }
     }
 
@@ -671,6 +745,15 @@ fn reftest(tests: &[PathBuf], args: &Args) {
         errored,
         tests.len()
     );
+    if !buckets.is_empty() {
+        let mut sorted: Vec<_> = buckets.iter().collect();
+        sorted.sort_by(|a, b| b.1.cmp(a.1));
+        let legend = "dims=size differs | whole=>=50% pixels (layout/UA) | \
+                      aa=small per-channel (anti-alias/tolerance) | \
+                      local=localized large (feature/paint) | equal?=identical-yet-failed";
+        println!("fail buckets: {}", sorted.iter().map(|(k, n)| format!("{k}={n}")).collect::<Vec<_>>().join("  "));
+        println!("  ({legend})");
+    }
     if failed > 0 || errored > 0 {
         std::process::exit(1);
     }

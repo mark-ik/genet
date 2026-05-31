@@ -137,6 +137,32 @@ The triage *is* the deliverable of this lever's first pass: it converts "15/1326
 cause unknown" into a ranked list of systematic fixes, each with an estimated
 reftest count, exactly as the WPT-gap-analysis workflow did for the DOM side.
 
+**Status: diagnosis done (2026-05-31), and it overturned the hypotheses.** The
+runner now reports diff shape: `diff_stats` (same-dims / differing-pixel count /
+max per-channel delta) + `diff_label` bucketing each FAIL (`dims` / `whole` /
+`aa` / `local` / `equal?`), with a per-run `fail buckets:` tally on the summary
+and `diff=N% maxδ=M` on each `-v` FAIL line. (Care taken: `images_match` keeps its
+exact WPT fuzzy semantics — `diff_stats` is a separate diagnostic pass; an initial
+refactor that merged them regressed fuzzy matching 15→9 and was reverted.)
+
+**The css-backgrounds verdict: `local=568, whole=6`.** Not the systematic causes
+guessed above — it is **neither** UA-stylesheet shift (would be `whole`/`dims`)
+**nor** anti-aliasing (would be `aa`). 568 of 574 failures are *localized*: 3-7%
+of pixels differ at maxδ=255 (a small, maximally-wrong region; the rest of the
+page matches). These are **specific unimplemented paint features**, named by the
+failing tests: `background-size` scaling (`background-334`: `100% auto`),
+`background-attachment: fixed`, `border-radius` background clipping, `dotted`/
+non-solid border styles, `background-clip`. So Lever 2's real work is a **ranked
+per-feature paint list**, not one systematic fix — the opposite of the DOM
+reflection lever's shape, and worth knowing before sinking effort into a
+UA-stylesheet or tolerance pass that the data says won't move the number.
+
+**Next:** rank the `local` features by failing-test count (group the `-v` output
+by test-name stem), implement the top paint features (likely `background-size`,
+border styles, `border-radius` clipping), re-measure. The `whole=6` minority is
+the separate small systematic bucket to glance at (likely the body→viewport
+propagation seed test among them).
+
 ## Sequencing
 
 1. **Lever 1 (XHTML wiring)** first — concrete, bounded, the dependency is already
