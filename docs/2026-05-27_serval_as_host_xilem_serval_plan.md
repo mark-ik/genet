@@ -318,6 +318,20 @@ already exposes (`run_microtasks`, `run_event_loop`).
     anchored below it: trigger → host rect query → `anchor_point` → inline-style
     cascade → layout → top-of-stack paint. Validated on screen 2026-05-31.
 
+- **Stage 5 (erased views + `select`) — done.** The first composable control on
+  the overlay/inline-style foundation, and the type-erasure it needed to reach
+  a named app.
+  - **Erased views / `AnyView` (`b6872ff`).** `impl AnyElement for ServalElement`
+    so `Box<dyn AnyView<…>>` is a usable view — the foundation for dynamic /
+    heterogeneous view trees (conditional content, mixed control types). The
+    element type stays uniform (`NodeId`); the one new op is `replace_inner`, the
+    in-place node swap when a boxed view changes concrete type, which needed the
+    element `Mut` to carry its `parent` (now threaded by the splice + runner).
+  - **`select` control (`31deed6`).** A self-positioning dropdown (see T2 below),
+    composable via `lens`. Its concrete type is unnameable (per-option closures),
+    so the demo holds it as `Box<dyn AnyView>` — the erased-view payoff: a named
+    app view (`DemoView`) carries an opaque-typed control (`07a8e3b`).
+
 ## Toward the Mere flip gate: IME + form-control breadth
 
 Mere's [serval-as-host decision brief](../../mere/design_docs/mere_docs/technical_architecture/2026-05-29_serval_as_host_evaluation.md)
@@ -370,10 +384,13 @@ set, each a reusable `xilem_serval` component over a tiny state model (the
   across focusable elements in document order (the `Tab` key already arrives
   as `NamedKey::Tab`, currently ignored; the runner has the focus model and
   the key registry to walk).
-- **T2 — the common rest.** `radio` group, `select`/dropdown (a popup of
-  options — needs simple overlay/popup positioning), `slider`/range (pointer
-  drag over a track — needs `pointermove`/`pointerup`, the "more events"
-  item), and multi-line `textarea` (the `text_field` model with line breaks).
+- **T2 — the common rest.** `select`/dropdown — **done** (`31deed6`): a
+  self-positioning control over a `SelectState { selected, open }`, its option
+  list `position: absolute; top: 100%` inside the relative select box (so it
+  needs no host anchor, unlike `overlay_at`). Still: `radio` group,
+  `slider`/range (pointer drag over a track — needs `pointermove`/`pointerup`,
+  the "more events" item), and multi-line `textarea` (the `text_field` model
+  with line breaks).
 - **T3 — text-editing depth.** Selection (caret → anchor+focus range, shown
   as a highlight), and clipboard (cut/copy/paste via winit's clipboard +
   the selection). Selection geometry shares the caret-rect capability.
