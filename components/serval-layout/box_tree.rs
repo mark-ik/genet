@@ -827,6 +827,26 @@ mod tests {
         assert!(approx(pop.size.width, 40.0), "inline width:40 → w=40, got {}", pop.size.width);
     }
 
+    /// A percentage inset on an absolutely-positioned box resolves against its
+    /// containing block: `top: 100%` lands the box at the bottom of its
+    /// positioned ancestor. This is the layout basis for a self-positioning
+    /// dropdown (`top: 100%` puts the option list directly below the select
+    /// box) — no host rect query needed.
+    #[test]
+    fn absolute_percent_inset_resolves_against_container() {
+        let (doc, frags) = lay(
+            "<html><body><div class=\"box\"><div class=\"pop\"></div></div></body></html>",
+            &[
+                ".box { position: relative; width: 100px; height: 60px; }",
+                ".pop { position: absolute; top: 100%; left: 0; width: 50px; height: 20px; }",
+            ],
+        );
+        let divs = find_all(&doc, html5ever::local_name!("div"));
+        let pop = frags.rect_of(divs[1]).expect(".pop fragment");
+        // top: 100% of the 60px-tall container → y = 60 (the box's bottom edge).
+        assert!(approx(pop.location.y, 60.0), "top:100% → y=60, got {}", pop.location.y);
+    }
+
     /// Border-box layout: content `width/height: 40` + `border: 10`
     /// each side lays out a 60×60 border box (CSS content-box default).
     #[test]
