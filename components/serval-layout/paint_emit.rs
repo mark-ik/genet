@@ -43,7 +43,7 @@ use paint_list_api::{
     RepeatingImageItem, TextOptions, TextRunItem, TransformSpec,
 };
 use paint_list_api::items::{BorderDetails, BorderItem, ShadowItem};
-use paint_list_api::specs::TransformKind;
+use paint_list_api::specs::{ClipKind, ClipSpec, TransformKind};
 use parley::PositionedLayoutItem;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -340,6 +340,9 @@ fn walk<D>(
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    // An overflow container clips its descendants to its padding box; captured
+    // here (while the layout is in scope) and applied around the children below.
+    let mut clip_rect: Option<LayoutRect> = None;
     let pushed = if let Some(l) = fragments.rect_of(id) {
         commands.push(PaintCmd::PushTransform(TransformSpec {
             origin: LayoutPoint::new(l.location.x, l.location.y),
@@ -463,15 +466,30 @@ fn walk<D>(
             }
             _ => {}
         }
+        if dom.kind(id) == NodeKind::Element && clips_overflow(styles, id) {
+            clip_rect = Some(LayoutRect::new(
+                LayoutPoint::new(l.border.left, l.border.top),
+                LayoutPoint::new(l.size.width - l.border.right, l.size.height - l.border.bottom),
+            ));
+        }
         true
     } else {
         false
     };
 
+    // Clip the descendants of an overflow container to its padding box. The
+    // container's own background/border (emitted above) are outside the clip.
+    if let Some(rect) = clip_rect {
+        commands.push(PaintCmd::PushClip(ClipSpec { kind: ClipKind::Rect(rect) }));
+    }
+
     for child in dom.dom_children(id) {
         walk(dom, styles, fragments, em, child, commands);
     }
 
+    if clip_rect.is_some() {
+        commands.push(PaintCmd::PopClip);
+    }
     if pushed {
         commands.push(PaintCmd::PopTransform);
     }
@@ -592,6 +610,23 @@ fn background_color_of<NodeId: Copy + Eq + std::hash::Hash>(
     let bg = &primary.get_background().background_color;
     let current = primary.get_inherited_text().color;
     stylo_color_to_paint(bg, current)
+}
+
+/// Whether `id` clips its overflow on either axis — i.e. `overflow-x` or
+/// `overflow-y` is anything other than `visible` (`hidden`/`scroll`/`auto`/
+/// `clip`). Such an element clips its descendants to its padding box (and, for
+/// the scrollable values, is a scroll container). `false` when the cascade
+/// hasn't run.
+fn clips_overflow<NodeId: Copy + Eq + std::hash::Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> bool {
+    use style::values::computed::Overflow;
+    let Some(entry) = styles.get(id) else { return false; };
+    let Some(data) = entry.borrow_data() else { return false; };
+    let box_style = data.styles.primary().get_box();
+    !matches!(box_style.overflow_x, Overflow::Visible)
+        || !matches!(box_style.overflow_y, Overflow::Visible)
 }
 
 /// Resolve a text node's effective color: walk to its parent
@@ -984,6 +1019,50 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// An `overflow: scroll` element clips its descendants: the emitted stream
+    /// wraps the container's subtree in a balanced `PushClip`/`PopClip`, with
+    /// the clip rect at the container's padding box.
+    #[test]
+    fn overflow_container_emits_clip() {
+        use crate::cascade::run_cascade;
+
+        let document = StaticDocument::parse(
+            "<html><body><div class=\"scroller\"><p>content</p></div></body></html>",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[
+                "html, body, div, p { display: block; margin: 0; padding: 0; border: 0; }",
+                ".scroller { overflow: scroll; width: 100px; height: 40px; }",
+            ],
+        );
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let plist = emit_paint_list(&document, &styles, &fragments, DeviceIntSize::new(800, 600));
+        let cmds = plist.commands();
+
+        let pushes = cmds.iter().filter(|c| matches!(c, PaintCmd::PushClip(_))).count();
+        let pops = cmds.iter().filter(|c| matches!(c, PaintCmd::PopClip)).count();
+        assert_eq!(pushes, pops, "PushClip / PopClip balanced: {pushes} vs {pops}");
+
+        // The scroller's clip is its 100×40 padding box (no border/padding).
+        let clip = cmds
+            .iter()
+            .find_map(|c| match c {
+                PaintCmd::PushClip(ClipSpec { kind: ClipKind::Rect(r) }) => Some(*r),
+                _ => None,
+            })
+            .expect("an overflow container emits a rect clip");
+        assert!((clip.width() - 100.0).abs() < 0.5, "clip width = box width, got {}", clip.width());
+        assert!((clip.height() - 40.0).abs() < 0.5, "clip height = box height, got {}", clip.height());
     }
 
     /// Probe DrawBorder emission: a CSS-declared border produces a
