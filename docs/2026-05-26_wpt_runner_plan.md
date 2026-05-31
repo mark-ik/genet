@@ -79,6 +79,14 @@ A real `MANIFEST.json` reader can replace this later for exactness
    paths run without error but their pass-changing effect is not yet
    demonstrated on a specific subset. **Still out:** remote resources (the
    WPT server), `mismatch` chains.
+
+   **XHTML (2026-05-31).** Reftests route `.xht`/`.xhtml`/`.xml` (by extension,
+   `is_xml_path`) through `StaticDocument::parse_xml` (xml5ever over the shared
+   sink) instead of skipping/mis-parsing them; the whole CSS2 `.xht` corpus now
+   renders crash-free (normal-flow: 0 errored of 1045) and is scored against its
+   ref. Passing those waits on the systematic reftest diff — see the
+   [CSS rendering conformance plan](./2026-05-31_css_rendering_conformance_plan.md).
+   (testharness `.xhtml` stays skipped — those are XML **+ JS**, a separate axis.)
 3. **testharness.js (done 2026-05-28).** `serval-wpt testharness <subset>`
    runs each testharness test on the host surface and collects per-subtest
    results. For each test it extracts the test's own scripts (inline

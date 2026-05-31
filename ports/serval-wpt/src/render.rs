@@ -80,8 +80,9 @@ impl Renderer {
         tests_root: &Path,
         width: u32,
         height: u32,
+        is_xml: bool,
     ) -> Image {
-        let envelope = html_to_envelope(html, base_dir, tests_root, width, height);
+        let envelope = html_to_envelope(html, base_dir, tests_root, width, height, is_xml);
         let paint = self.paint.borrow();
         paint.handle_messages(vec![paint_api::PaintMessage::SendPaintList {
             webview_id: self.webview_id,
@@ -134,8 +135,15 @@ fn html_to_envelope(
     tests_root: &Path,
     width: u32,
     height: u32,
+    is_xml: bool,
 ) -> PaintEnvelope {
-    let document = StaticDocument::parse(html);
+    // Route by the caller's explicit format (from the file extension), not a
+    // content sniff — sniffing misroutes HTML files that merely mention "xhtml".
+    let document = if is_xml {
+        StaticDocument::parse_xml(html)
+    } else {
+        StaticDocument::parse(html)
+    };
 
     let resolver = ResourceResolver {
         base_dir: Some(base_dir.to_path_buf()),

@@ -36,6 +36,36 @@ impl StaticDocument {
         parse_document(StaticTreeSink::new(), Default::default()).one(input)
     }
 
+    /// Parse a full XHTML / XML document with xml5ever, building the same
+    /// [`StaticDocument`] via the shared `StaticTreeSink`. XML is well-formedness-
+    /// strict (a parse error aborts, unlike HTML's error recovery); for the WPT
+    /// `.xht` corpus that is the intended behavior. See
+    /// `docs/2026-05-31_css_rendering_conformance_plan.md`.
+    pub fn parse_xml(input: &str) -> Self {
+        use xml5ever::driver::{parse_document as parse_xml_document, XmlParseOpts};
+        use xml5ever::tendril::TendrilSink;
+        parse_xml_document(StaticTreeSink::new(), XmlParseOpts::default()).one(input)
+    }
+
+    /// Parse choosing HTML vs XML by sniffing the source. XML/XHTML is marked by
+    /// an `<?xml` declaration or an XHTML `<!DOCTYPE ... XHTML ...>` (the WPT `.xht`
+    /// corpus uses the latter, no `<?xml`). Everything else is HTML. Lets callers
+    /// that hold only the source string route correctly; callers with a known
+    /// `.xht`/`.xhtml` extension or `application/xhtml+xml` content type should
+    /// prefer [`parse_xml`] directly.
+    pub fn parse_auto(input: &str) -> Self {
+        let head = input.trim_start();
+        let looks_xml = head.starts_with("<?xml")
+            || head
+                .get(..256.min(head.len()))
+                .is_some_and(|h| h.contains("XHTML") || h.contains("xhtml1"));
+        if looks_xml {
+            Self::parse_xml(input)
+        } else {
+            Self::parse(input)
+        }
+    }
+
     /// Return the document node id.
     pub fn document_node(&self) -> StaticNodeId {
         self.document
@@ -534,6 +564,35 @@ mod tests {
         };
         assert_eq!(name.ns, ns!(html));
         assert_eq!(name.local, local_name!("html"));
+    }
+
+    #[test]
+    fn parses_xhtml_via_xml5ever() {
+        // A namespaced XHTML document (the .xht corpus shape): xmlns on <html>,
+        // self-closing tags. parse_xml drives the same StaticTreeSink.
+        let document = StaticDocument::parse_xml(
+            "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+             <body><p>Hi</p><br/></body></html>",
+        );
+        let html = document
+            .document_element()
+            .expect("missing document element");
+        let StaticNodeKind::Element { name, .. } = document.node(html).kind() else {
+            panic!("document element should be an element");
+        };
+        assert_eq!(name.local, local_name!("html"));
+        assert_eq!(name.ns, ns!(html), "xmlns should put <html> in the HTML namespace");
+
+        // The body/p text round-trips through the shared sink.
+        let mut found_p_text = false;
+        for id in 0..document.nodes.len() {
+            if let StaticNodeKind::Text(t) = document.node(StaticNodeId(id)).kind() {
+                if t == "Hi" {
+                    found_p_text = true;
+                }
+            }
+        }
+        assert!(found_p_text, "<p>Hi</p> text should be in the parsed XHTML tree");
     }
 
     #[test]

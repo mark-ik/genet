@@ -73,6 +73,16 @@ fn is_html(path: &Path) -> bool {
     )
 }
 
+/// True for XHTML/XML documents (parse with xml5ever, not html5ever), keyed on the
+/// file extension — the reliable signal. Content sniffing misroutes HTML files
+/// that merely mention "xhtml" in a doctype or comment.
+fn is_xml_path(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
+        Some("xht" | "xhtml" | "xml")
+    )
+}
+
 /// Classify a test by filename + path conventions and a cheap content scan.
 fn classify(path: &Path, contents: &str) -> Kind {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -126,8 +136,10 @@ fn smoke_test(path: &Path) -> (Kind, Outcome) {
         return (kind, Outcome::Skipped);
     }
 
+    let is_xml = is_xml_path(path);
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
-        let document = StaticDocument::parse(&html);
+        let document =
+            if is_xml { StaticDocument::parse_xml(&html) } else { StaticDocument::parse(&html) };
         let sheets = serval_layout::inline_stylesheets_from_source(&html);
         let sheet_refs: Vec<&str> = sheets.iter().map(String::as_str).collect();
         let _fragments = serval_layout::render(&document, &sheet_refs, VIEWPORT_W, VIEWPORT_H);
@@ -437,7 +449,7 @@ enum MatchKind {
 
 /// The first `<link rel="match"|"mismatch" href="...">` in a reftest.
 fn reftest_ref(html: &str) -> Option<(MatchKind, String)> {
-    let doc = StaticDocument::parse(html);
+    let doc = StaticDocument::parse_auto(html);
     let no_ns = layout_dom_api::Namespace::default();
     let rel = LocalName::from("rel");
     let href = LocalName::from("href");
@@ -471,7 +483,7 @@ fn needs_script(html: &str) -> bool {
 /// `(max_per_channel_difference, max_differing_pixels)` upper bounds.
 /// Common forms: `maxDifference=0-2;totalPixels=0-100` or `0-2;0-100`.
 fn parse_fuzzy(html: &str) -> Option<(u16, u64)> {
-    let doc = StaticDocument::parse(html);
+    let doc = StaticDocument::parse_auto(html);
     let no_ns = layout_dom_api::Namespace::default();
     let name = LocalName::from("name");
     let content = LocalName::from("content");
@@ -616,9 +628,11 @@ fn reftest(tests: &[PathBuf], args: &Args) {
         let fuzzy = parse_fuzzy(&test_html);
         let test_dir = path.parent().unwrap_or(tests_root);
         let ref_dir = ref_path.parent().unwrap_or(tests_root);
+        let test_xml = is_xml_path(path);
+        let ref_xml = is_xml_path(&ref_path);
         let rendered = panic::catch_unwind(AssertUnwindSafe(|| {
-            let t = renderer.render_html(&test_html, test_dir, tests_root, REFTEST_W, REFTEST_H);
-            let r = renderer.render_html(&ref_html, ref_dir, tests_root, REFTEST_W, REFTEST_H);
+            let t = renderer.render_html(&test_html, test_dir, tests_root, REFTEST_W, REFTEST_H, test_xml);
+            let r = renderer.render_html(&ref_html, ref_dir, tests_root, REFTEST_W, REFTEST_H, ref_xml);
             (t, r)
         }));
         let (test_img, ref_img) = match rendered {
