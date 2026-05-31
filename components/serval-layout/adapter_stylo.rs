@@ -700,7 +700,14 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
     }
 
     fn style_attribute(&self) -> Option<ArcBorrow<'_, Locked<PropertyDeclarationBlock>>> {
-        None
+        // The inline `style` block parsed into this element's StyleEntry before
+        // the cascade (see `cascade::parse_inline_styles`). Borrowed from the
+        // plane (alive for the whole cascade via the TLS guard), so returning a
+        // borrow tied to `&self` is sound.
+        Self::plane_from_ctx()
+            .get(self.id)
+            .and_then(|entry| entry.inline_style.as_ref())
+            .map(|arc| arc.borrow_arc())
     }
 
     fn animation_rule(

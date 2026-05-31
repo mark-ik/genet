@@ -23,8 +23,11 @@ use std::hash::Hash;
 
 use rustc_hash::FxHashMap;
 use selectors::matching::ElementSelectorFlags;
+use servo_arc::Arc;
 use style::data::{ElementDataMut, ElementDataRef, ElementDataWrapper};
+use style::properties::PropertyDeclarationBlock;
 use style::selector_parser::RestyleDamage;
+use style::shared_lock::Locked;
 use stylo_dom::ElementState;
 
 /// Per-node style entry.
@@ -59,6 +62,14 @@ pub struct StyleEntry {
     /// reference — we can't return a freshly-interned atom from inside
     /// the method without a stable storage to anchor the borrow.
     pub id_atom: Option<style::Atom>,
+
+    /// Parsed inline `style="…"` declarations (Author origin), if the element
+    /// carries a non-empty `style` attribute. Populated before the cascade by
+    /// [`crate::cascade`]'s inline-style pass (which has the `SharedRwLock` to
+    /// wrap the block); the stylo adapter's `TElement::style_attribute` returns
+    /// a borrow of it, so the cascade applies it at the inline-style level
+    /// (above author stylesheet rules). `None` when there is no inline style.
+    pub inline_style: Option<Arc<Locked<PropertyDeclarationBlock>>>,
 
     /// Stylo's "dirty descendants" bit — set during incremental
     /// invalidation to mark that a descendant needs restyle, consulted by
@@ -145,6 +156,7 @@ impl Clone for StyleEntry {
             state: self.state,
             selector_flags: Cell::new(self.selector_flags.get()),
             id_atom: self.id_atom.clone(),
+            inline_style: self.inline_style.clone(),
             dirty_descendants: Cell::new(self.dirty_descendants.get()),
             handled_snapshot: Cell::new(self.handled_snapshot.get()),
         }
@@ -158,6 +170,7 @@ impl Default for StyleEntry {
             state: ElementState::empty(),
             selector_flags: Cell::new(ElementSelectorFlags::empty()),
             id_atom: None,
+            inline_style: None,
             dirty_descendants: Cell::new(false),
             handled_snapshot: Cell::new(false),
         }

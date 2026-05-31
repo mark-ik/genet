@@ -801,6 +801,32 @@ mod tests {
         assert!(approx(pop.size.width, 50.0), ".pop width 50, got {}", pop.size.width);
     }
 
+    /// Inline `style="…"` cascades and drives layout: a box positioned by
+    /// inline-style insets lands at those insets over its positioned container —
+    /// the same outcome as the stylesheet-driven
+    /// [`absolute_position_places_box_over_container`], proving the stylo
+    /// adapter's `style_attribute()` is wired end-to-end (parse → cascade →
+    /// layout). This is the engine half of host overlays/popups: an overlay can
+    /// carry its dynamic `(x, y)` in an inline style.
+    #[test]
+    fn inline_style_drives_layout() {
+        let (doc, frags) = lay(
+            "<html><body>\
+                <div class=\"box\">\
+                    <div style=\"position: absolute; top: 15px; left: 25px; \
+                        width: 40px; height: 40px;\"></div>\
+                </div>\
+            </body></html>",
+            &[".box { position: relative; width: 200px; height: 200px; }"],
+        );
+        let divs = find_all(&doc, html5ever::local_name!("div"));
+        // [.box, the inline-styled child]
+        let pop = frags.rect_of(divs[1]).expect("inline-styled box fragment");
+        assert!(approx(pop.location.x, 25.0), "inline left:25 → x=25, got {}", pop.location.x);
+        assert!(approx(pop.location.y, 15.0), "inline top:15 → y=15, got {}", pop.location.y);
+        assert!(approx(pop.size.width, 40.0), "inline width:40 → w=40, got {}", pop.size.width);
+    }
+
     /// Border-box layout: content `width/height: 40` + `border: 10`
     /// each side lays out a 60×60 border box (CSS content-box default).
     #[test]

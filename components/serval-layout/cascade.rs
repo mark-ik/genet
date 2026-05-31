@@ -52,13 +52,16 @@ use style::driver;
 use style::global_style_data::GLOBAL_STYLE_DATA;
 use style::media_queries::MediaType;
 use style::properties::ComputedValues;
+use style::properties::declaration_block::parse_style_attribute;
 use style::properties::style_structs::Font;
 use style::queries::values::PrefersColorScheme;
 use style::selector_parser::{RestyleDamage, SnapshotMap};
 use servo_arc::Arc as ServoArc;
 use style::media_queries::MediaList;
 use style::shared_lock::{SharedRwLock, StylesheetGuards};
-use style::stylesheets::{AllowImportRules, DocumentStyleSheet, Origin, Stylesheet, UrlExtraData};
+use style::stylesheets::{
+    AllowImportRules, CssRuleType, DocumentStyleSheet, Origin, Stylesheet, UrlExtraData,
+};
 use style::stylist::Stylist;
 use style::thread_state::{self, ThreadState};
 use style::traversal::{DomTraversal, PerLevelTraversalData, recalc_style_at};
@@ -345,6 +348,11 @@ fn cascade_traverse<D>(
         ua_or_user: &read,
     };
 
+    // Parse inline `style="…"` attributes into the plane now that the lock
+    // exists (to wrap each block) and before the traversal reads them back via
+    // the adapter's `style_attribute()`.
+    parse_inline_styles(dom, plane, &lock);
+
     // 3. Stylist setup. Prepend the baseline UA stylesheet
     //    (`ua_defaults::UA_DEFAULTS`) — `<html>`/`<body>` default to
     //    `display: block` and fill the viewport, structural block
@@ -405,6 +413,46 @@ fn cascade_traverse<D>(
     // 7. Drop guard (clears TLS), then exit thread state.
     drop(_guard);
     thread_state::exit(ThreadState::LAYOUT);
+}
+
+/// Parse each element's inline `style="…"` attribute into an Author-origin
+/// [`PropertyDeclarationBlock`](style::properties::PropertyDeclarationBlock),
+/// wrap it under the cascade's `SharedRwLock`, and stash it on the element's
+/// [`StyleEntry`](crate::style::StyleEntry). The stylo adapter's
+/// `TElement::style_attribute` returns a borrow of it, so the cascade applies
+/// inline declarations at the inline-style level (above author stylesheet
+/// rules), matching the browser. Elements with no / empty `style` attribute are
+/// left untouched. Walks the same DOM as `populate_for_elements`; kept a
+/// separate pass because parsing needs the lock, which is created after that.
+fn parse_inline_styles<D>(dom: &D, plane: &mut StylePlane<D::NodeId>, lock: &SharedRwLock)
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    use html5ever::{ns, LocalName, Namespace};
+    let no_ns: Namespace = ns!();
+    let style_local = LocalName::from("style");
+    let url = url::Url::parse("about:internal-stylesheet").expect("about: URL parses");
+    let url_data = UrlExtraData::from(url);
+
+    let mut queue = vec![dom.document()];
+    while let Some(id) = queue.pop() {
+        if matches!(dom.kind(id), layout_dom_api::NodeKind::Element) {
+            if let Some(css) = dom.attribute(id, &no_ns, &style_local) {
+                if !css.trim().is_empty() {
+                    let pdb = parse_style_attribute(
+                        css,
+                        &url_data,
+                        None, // no error reporter
+                        QuirksMode::NoQuirks,
+                        CssRuleType::Style,
+                    );
+                    plane.ensure_entry(id).inline_style = Some(ServoArc::new(lock.wrap(pdb)));
+                }
+            }
+        }
+        queue.extend(dom.dom_children(id));
+    }
 }
 
 /// Parse a single CSS source string as a UA-origin `DocumentStyleSheet`.
