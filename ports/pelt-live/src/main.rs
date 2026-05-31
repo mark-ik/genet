@@ -737,9 +737,24 @@ impl ApplicationHandler<UserEvent> for App {
                 // the count and the runner rebuilds.
                 let (x, y) = self.cursor;
                 let hit = hit_test_node(&self.dom.borrow(), SHEET, self.width, self.height, x, y);
+                match hit {
+                    Some(node) => {
+                        let tag = self
+                            .dom
+                            .borrow()
+                            .element_name(node)
+                            .map(|q| q.local.to_string());
+                        tracing::debug!(x, y, ?node, ?tag, "left click → hit");
+                    },
+                    None => tracing::debug!(x, y, "left click → miss"),
+                }
                 if let Some(node) = hit {
-                    self.runner
+                    let actions = self
+                        .runner
                         .dispatch_click(node, PointerClick { local: (x, y) });
+                    if !actions.is_empty() {
+                        tracing::debug!(n = actions.len(), "click bubbled actions to root");
+                    }
                     // The click may have toggled the button's popup. If it is now
                     // open, (re)place it under the button from the freshly
                     // laid-out button rect via `anchor_point`. The button is
@@ -751,6 +766,14 @@ impl ApplicationHandler<UserEvent> for App {
                             }
                         }
                     }
+                    let s = self.runner.state();
+                    tracing::info!(
+                        count = s.count,
+                        popup_open = s.popup_open,
+                        colour_selected = s.colour.selected,
+                        colour_open = s.colour.open,
+                        "click handled"
+                    );
                     self.push_a11y();
                     if let Some(window) = self.window.as_ref() {
                         window.request_redraw();
@@ -774,6 +797,7 @@ impl ApplicationHandler<UserEvent> for App {
                     } else if let Some(key_event) =
                         key_event_from_winit(&event.logical_key, self.modifiers)
                     {
+                        tracing::debug!(?key_event, focus = ?self.runner.focus(), "key → dispatch");
                         self.runner.dispatch_key(key_event);
                         self.push_a11y();
                         self.redraw();
@@ -796,6 +820,17 @@ impl ApplicationHandler<UserEvent> for App {
 }
 
 fn main() {
+    // Runtime diagnostics → stdout (the launcher pipes it to a readable log).
+    // Defaults to `pelt_live=info` when `RUST_LOG` is unset, so the interaction
+    // trace shows without any env setup; `RUST_LOG=pelt_live=debug` adds detail.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("pelt_live=info")),
+        )
+        .init();
+    tracing::info!("pelt-live-counter starting");
+
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
         .expect("failed to build event loop");

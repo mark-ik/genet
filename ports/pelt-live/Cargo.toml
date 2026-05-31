@@ -62,3 +62,9 @@ winit = { workspace = true }
 wgpu = { version = "29", default-features = false, features = ["std", "wgsl"] }
 # System clipboard for the bin's Ctrl/Cmd+C/X/V (copy / cut / paste). Bin-only.
 arboard = "3"
+# Runtime diagnostics for the windowed bin: `tracing` at the host↔runner seams
+# (hit-test, dispatch, focus, popup anchor), surfaced through a `fmt` subscriber
+# with an env filter. Both resolve to versions already in the lock (no new
+# downloads). Driven by `RUST_LOG` (defaults to `pelt_live=info`).
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
