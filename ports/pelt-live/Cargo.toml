@@ -60,3 +60,5 @@ euclid = { workspace = true }
 # zero-copy `<img>` overlay path uses, so the bin improvises no GPU code.
 winit = { workspace = true }
 wgpu = { version = "29", default-features = false, features = ["std", "wgsl"] }
+# System clipboard for the bin's Ctrl/Cmd+C/X/V (copy / cut / paste). Bin-only.
+arboard = "3"

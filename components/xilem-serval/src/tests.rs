@@ -1152,10 +1152,12 @@ mod controls {
         // Select all (Home, then Shift+End) and replace it.
         let mut t = TextInput::new("hello");
         assert!(!t.has_selection());
+        assert_eq!(t.selected_text(), "", "no selection → empty");
         t.home(false);
         t.end(true);
         assert!(t.has_selection());
         assert_eq!(t.selection(), (0, 5));
+        assert_eq!(t.selected_text(), "hello"); // copy/cut source
         t.insert_str("X"); // replaces the whole selection
         assert_eq!(t.text(), "X");
         assert_eq!(t.caret(), 1);
@@ -1168,6 +1170,7 @@ mod controls {
         t.move_right(true); // sel 1..2
         t.move_right(true); // sel 1..3 = "bc"
         assert_eq!(t.selection(), (1, 3));
+        assert_eq!(t.selected_text(), "bc");
         t.backspace();
         assert_eq!(t.text(), "ad");
         assert_eq!(t.caret(), 1);

@@ -229,6 +229,8 @@ struct App {
     /// Current keyboard modifiers (tracked from `ModifiersChanged`), folded into
     /// each `KeyEvent` — so `Shift+Tab` reverses focus traversal.
     modifiers: Modifiers,
+    /// The system clipboard, for Ctrl/Cmd+C/X/V. `None` if it failed to open.
+    clipboard: Option<arboard::Clipboard>,
     width: u32,
     height: u32,
 }
@@ -253,6 +255,7 @@ impl App {
             proxy,
             cursor: (0.0, 0.0),
             modifiers: Modifiers::default(),
+            clipboard: arboard::Clipboard::new().ok(),
             width: 800,
             height: 600,
         }
@@ -272,6 +275,75 @@ impl App {
         if let Some(adapter) = self.adapter.as_mut() {
             adapter.update_if_active(|| tree);
         }
+    }
+
+    /// Request a redraw if a window exists (after state-changing input).
+    fn redraw(&self) {
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
+        }
+    }
+
+    /// Handle a Ctrl/Cmd+C/X/V clipboard shortcut on the focused field, returning
+    /// `true` if it was one (so the key isn't also treated as text input). No-op
+    /// (`false`) without the modifier, without focus, or for other keys.
+    fn handle_clipboard_shortcut(&mut self, key: &WinitKey) -> bool {
+        if !(self.modifiers.ctrl || self.modifiers.meta) || self.runner.focus().is_none() {
+            return false;
+        }
+        let WinitKey::Character(s) = key else {
+            return false;
+        };
+        match s.as_str() {
+            "c" => {
+                self.clipboard_copy();
+                true
+            },
+            "x" => {
+                self.clipboard_cut();
+                true
+            },
+            "v" => {
+                self.clipboard_paste();
+                true
+            },
+            _ => false,
+        }
+    }
+
+    /// Copy the focused field's selection to the system clipboard.
+    fn clipboard_copy(&mut self) {
+        let text = self.runner.state().field.selected_text().to_string();
+        if text.is_empty() {
+            return;
+        }
+        if let Some(cb) = self.clipboard.as_mut() {
+            let _ = cb.set_text(text);
+        }
+    }
+
+    /// Cut: copy the selection, then delete it. No-op without a selection.
+    fn clipboard_cut(&mut self) {
+        if !self.runner.state().field.has_selection() {
+            return;
+        }
+        self.clipboard_copy();
+        self.runner.update(|d| d.field.backspace()); // deletes the selection
+        self.push_a11y();
+        self.redraw();
+    }
+
+    /// Paste: insert the clipboard text at the caret, replacing any selection.
+    fn clipboard_paste(&mut self) {
+        let Some(text) = self.clipboard.as_mut().and_then(|cb| cb.get_text().ok()) else {
+            return;
+        };
+        if text.is_empty() {
+            return;
+        }
+        self.runner.update(|d| d.field.insert_str(&text));
+        self.push_a11y();
+        self.redraw();
     }
 
     /// Render the current DOM and present it to the surface backbuffer.
@@ -586,12 +658,17 @@ impl ApplicationHandler<UserEvent> for App {
                 // when it was clicked. Keys with no text and no named mapping
                 // (e.g. dead keys) are skipped.
                 if event.state == ElementState::Pressed {
-                    if let Some(key_event) = key_event_from_winit(&event.logical_key, self.modifiers) {
+                    // Ctrl/Cmd+C/X/V are clipboard shortcuts on the focused field,
+                    // intercepted before text input (so "c"/"x"/"v" with the
+                    // modifier don't type). Otherwise map + dispatch the key.
+                    if self.handle_clipboard_shortcut(&event.logical_key) {
+                        // handled as a clipboard op (it did its own redraw).
+                    } else if let Some(key_event) =
+                        key_event_from_winit(&event.logical_key, self.modifiers)
+                    {
                         self.runner.dispatch_key(key_event);
                         self.push_a11y();
-                        if let Some(window) = self.window.as_ref() {
-                            window.request_redraw();
-                        }
+                        self.redraw();
                     }
                 }
             },

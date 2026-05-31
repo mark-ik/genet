@@ -98,6 +98,13 @@ impl TextInput {
         (self.anchor.min(self.caret), self.anchor.max(self.caret))
     }
 
+    /// The currently selected substring (empty when nothing is selected) — the
+    /// source for copy / cut.
+    pub fn selected_text(&self) -> &str {
+        let (lo, hi) = self.selection();
+        &self.text[self.byte_of(lo)..self.byte_of(hi)]
+    }
+
     /// The number of characters in the buffer (the caret's upper bound).
     fn char_count(&self) -> usize {
         self.text.chars().count()
