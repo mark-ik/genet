@@ -136,6 +136,7 @@ impl Harness {
         let mut_ref = crate::ServalElementMut {
             node: &mut node,
             dom: self.dom.clone(),
+            parent: None,
         };
         next.rebuild(
             &self.view,
@@ -322,6 +323,7 @@ fn message_to_unknown_path_is_handled() {
     let mut_ref = crate::ServalElementMut {
         node: &mut node,
         dom: dom.clone(),
+        parent: None,
     };
     let result: MessageResult<()> =
         View::<(), (), ServalCtx>::message(&view, &mut state, &mut msg, mut_ref, &mut ());
@@ -814,9 +816,9 @@ mod controls {
     use serval_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{
-        DomHandle, Key, KeyEvent, Modifiers, NamedKey, PointerClick, SelectState, ServalAppRunner,
-        ServalCtx, ServalElement, TextInput, View, button, checkbox, el, lens, overlay_at, select,
-        text_field,
+        AnyView, DomHandle, Key, KeyEvent, Modifiers, NamedKey, PointerClick, SelectState,
+        ServalAppRunner, ServalCtx, ServalElement, TextInput, View, button, checkbox, el, lens,
+        overlay_at, select, text_field,
     };
 
     /// The text data of the single text child under `node`, if any.
@@ -1195,6 +1197,53 @@ mod controls {
         // The box now shows the new selection.
         let box_node = dom.borrow().dom_children(root).next().expect("box");
         assert_eq!(text_child(&dom.borrow(), box_node).as_deref(), Some("green"));
+    }
+
+    /// `Box<dyn AnyView>` whose inner view changes *type* across a rebuild
+    /// (`<div>` → `<span>`): the element node is swapped in place via
+    /// `AnyElement::replace_inner`, staying attached under the document. Proves
+    /// erased/dynamic views work on serval's uniform element type.
+    #[test]
+    fn any_view_swaps_node_on_type_change() {
+        // The two branches are *different concrete View types* (their children
+        // sequences differ: a single text vs a two-text tuple → `El<&str,…>` vs
+        // `El<(&str,&str),…>`), so `AnyView` sees a type change and must take the
+        // `replace_inner` path — not a same-type rebuild (which wouldn't even
+        // re-tag the element).
+        fn view(on: &bool) -> Box<dyn AnyView<bool, (), ServalCtx, ServalElement>> {
+            if *on {
+                Box::new(el::<_, bool, ()>("span", ("on", "!")))
+            } else {
+                Box::new(el::<_, bool, ()>("div", "off"))
+            }
+        }
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            view as fn(&bool) -> Box<dyn AnyView<bool, (), ServalCtx, ServalElement>>,
+            false,
+        );
+
+        let root0 = runner.root();
+        {
+            let dom = dom.borrow();
+            assert_eq!(dom.element_name(root0).unwrap().local.as_ref(), "div");
+            assert_eq!(text_child(&dom, root0).as_deref(), Some("off"));
+            assert!(dom.dom_children(dom.document()).any(|c| c == root0));
+        }
+
+        // Flip → the boxed view switches <div> → <span>: a type change, so the
+        // node is replaced in place under the document.
+        runner.update(|s| *s = true);
+        let root1 = runner.root();
+        assert_ne!(root0, root1, "a type change swaps the node");
+        {
+            let dom = dom.borrow();
+            assert_eq!(dom.element_name(root1).unwrap().local.as_ref(), "span");
+            assert_eq!(dom.dom_children(root1).count(), 2, "span has its two text children");
+            assert!(dom.dom_children(dom.document()).any(|c| c == root1), "new node attached");
+            assert!(!dom.dom_children(dom.document()).any(|c| c == root0), "old node detached");
+        }
     }
 
     // --- selection (model + keyboard) -----------------------------------------

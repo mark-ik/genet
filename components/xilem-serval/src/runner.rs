@@ -147,6 +147,9 @@ where
         let mut_ref = ServalElementMut {
             node: &mut root.node,
             dom: dom.clone(),
+            // The root is attached under the document, so a type-changing
+            // `AnyView` root can swap its node there via `replace_inner`.
+            parent: Some(dom.borrow().document()),
         };
         next.rebuild(view, view_state, ctx, mut_ref, state);
 
@@ -300,6 +303,7 @@ where
                 let mut_ref = ServalElementMut {
                     node: &mut root.node,
                     dom: dom.clone(),
+                    parent: Some(dom.borrow().document()),
                 };
                 // Handlers may mutate state in place (a rebuild below reflects
                 // that) and/or bubble an `Action` up to the root. A root-level
@@ -455,6 +459,7 @@ where
                 let mut_ref = ServalElementMut {
                     node: &mut root.node,
                     dom: dom.clone(),
+                    parent: Some(dom.borrow().document()),
                 };
                 if let MessageResult::Action(a) =
                     view.message(view_state, &mut msg, mut_ref, state)

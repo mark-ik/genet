@@ -18,8 +18,9 @@
 
 use crate::DomHandle;
 use crate::context::ServalCtx;
+use layout_dom_api::LayoutDomMut;
 use serval_scripted_dom::NodeId;
-use xilem_core::{Mut, SuperElement, ViewElement};
+use xilem_core::{AnyElement, Mut, SuperElement, ViewElement};
 
 /// A retained backend element: a serval DOM node plus the handle needed to keep
 /// mutating it. This is the `View::Element` for every serval view, and also the
@@ -51,6 +52,12 @@ pub struct ServalElementMut<'a> {
     pub node: &'a mut NodeId,
     /// Shared handle to the document this node lives in.
     pub dom: DomHandle,
+    /// The parent node this element is attached under, if any. Threaded in by
+    /// whoever holds the parent (the children splice; the runner for the root),
+    /// so [`AnyElement::replace_inner`] can swap the node *in place* under its
+    /// parent on a type-changing [`AnyView`](xilem_core::AnyView) rebuild.
+    /// `None` for a detached element (no in-place swap possible).
+    pub parent: Option<NodeId>,
 }
 
 impl ServalElementMut<'_> {
@@ -59,6 +66,7 @@ impl ServalElementMut<'_> {
         ServalElementMut {
             node: self.node,
             dom: self.dom.clone(),
+            parent: self.parent,
         }
     }
 }
@@ -68,11 +76,13 @@ impl ViewElement for ServalElement {
 }
 
 impl ServalElement {
-    /// Borrow this element as a [`ServalElementMut`].
+    /// Borrow this element as a [`ServalElementMut`] with no known parent
+    /// (a detached / standalone borrow — `replace_inner` cannot swap in place).
     pub fn as_mut(&mut self) -> ServalElementMut<'_> {
         ServalElementMut {
             node: &mut self.node,
             dom: self.dom.clone(),
+            parent: None,
         }
     }
 }
@@ -92,5 +102,25 @@ impl SuperElement<Self, ServalCtx> for ServalElement {
     ) -> (Self::Mut<'_>, R) {
         let r = f(this.reborrow_mut());
         (this, r)
+    }
+}
+
+// `AnyElement` lets a `Box<dyn AnyView>` swap its concrete inner view for one of
+// a *different* type at rebuild. The element type is still uniform (`NodeId`),
+// so there is no boxing/downcast as in `xilem_web`'s `AnyPod` — but the node in
+// the DOM does change, so `replace_inner` performs the in-place node swap.
+impl AnyElement<Self, ServalCtx> for ServalElement {
+    fn replace_inner(this: Self::Mut<'_>, child: Self) -> Self::Mut<'_> {
+        // On a type-changing `AnyView` rebuild, the old view was torn down but
+        // its node is still attached under `parent`, and `child`'s node was just
+        // built detached. Splice `child` into the old node's slot: insert it
+        // before the old node, remove the old node, and repoint the reference.
+        if let Some(parent) = this.parent {
+            let mut dom = this.dom.borrow_mut();
+            dom.insert_before(parent, child.node, Some(*this.node));
+            dom.remove(*this.node);
+        }
+        *this.node = child.node;
+        this
     }
 }

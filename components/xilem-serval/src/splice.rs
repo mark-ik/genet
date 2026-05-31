@@ -171,10 +171,12 @@ impl ElementSplice<ServalElement> for ServalChildrenSplice<'_, '_, '_> {
 
     fn mutate<R>(&mut self, f: impl FnOnce(Mut<'_, ServalElement>) -> R) -> R {
         let dom = self.dom.clone();
+        let parent = self.parent;
         let child = self.children.mutate();
         let ret = f(ServalElementMut {
             node: &mut child.node,
             dom,
+            parent: Some(parent),
         });
         self.ix += 1;
         ret
@@ -191,11 +193,13 @@ impl ElementSplice<ServalElement> for ServalChildrenSplice<'_, '_, '_> {
 
     fn delete<R>(&mut self, f: impl FnOnce(Mut<'_, ServalElement>) -> R) -> R {
         let dom = self.dom.clone();
+        let parent = self.parent;
         let mut child = self.children.delete_next();
         let node = child.node;
         let ret = f(ServalElementMut {
             node: &mut child.node,
             dom,
+            parent: Some(parent),
         });
         // Eagerly remove from the DOM unless the whole parent subtree is being
         // dropped (an up-traversal would otherwise remove it redundantly).

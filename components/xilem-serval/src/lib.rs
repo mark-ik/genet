@@ -100,7 +100,7 @@ pub use text::text;
 // `View`/`MessageResult` core traits come along so `impl View<…, ServalCtx, …>`
 // return types and the action path can be named from this crate alone.
 pub use xilem_core::{
-    lens, map_action, map_message_result, map_state, memoize, Lens, MessageResult, View,
+    lens, map_action, map_message_result, map_state, memoize, AnyView, Lens, MessageResult, View,
 };
 
 /// The HTML namespace. serval views build elements in this namespace, matching
