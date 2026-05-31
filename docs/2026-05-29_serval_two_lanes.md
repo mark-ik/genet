@@ -107,10 +107,15 @@ WPT":
   Reftest-scored.
 - **Paint / visual styling** — whether each *computed* property actually
   *renders*. Cascade resolves the values (Stylo, largely free); paint emission
-  must draw them: backgrounds, borders + `border-radius`, `box-shadow`,
-  gradients, `opacity`, clipping, `transform`, z-index/stacking. Distinct from
-  layout (placement vs. appearance). Reftest-scored. The headline
-  `text-to-pixels` gap is the text-shaped corner of this.
+  must draw them. Done + e2e-tested (`html_to_pixels_e2e`): backgrounds, borders,
+  box-shadow (hard + blur), background-image tiling, `<img>`, text-glyph
+  rasterization. Missing: `border-radius`, gradients, `opacity`, clipping,
+  `transform`, z-index/stacking. Distinct from layout (placement vs. appearance).
+  Reftest-scored. **Correction (2026-05-31):** the audit's "text-to-pixels gap"
+  was stale — text rasterizes and passes its e2e test. The real headline gap is
+  the **reftest pass rate** (floats 7/197, css-backgrounds 15/1326): rendering
+  works in isolation but fails pixel-compare across the corpus. That systematic
+  gap is the [CSS rendering conformance plan](./2026-05-31_css_rendering_conformance_plan.md).
 - **Text / typography** — shaping breadth (bidi, complex scripts, font
   fallback), `white-space` / line-breaking / `text-overflow`, `@font-face` / web
   fonts. parley-backed; the glyph-runs-to-pixels translator is the immediate
@@ -123,9 +128,27 @@ WPT":
   Animations API: interpolated styles (Paint axis) driven by a timing model
   (`requestAnimationFrame`, the event loop). Shared with Lane H chrome
   animation; a later tier.
+- **Parsing / input formats** — what serval can turn into a `LayoutDom`.
+  Done: HTML5 (`html5ever` → `StaticTreeSink`). Wanted: **XHTML** (Mark, 2026-05-31:
+  in scope). `xml5ever` is *already a workspace dependency* (root `Cargo.toml`,
+  0.39, same `markup5ever` interface as html5ever) but unused; the cheap path is
+  to drive serval-static-dom's existing `StaticTreeSink` with `xml5ever::parse_document`
+  and route `.xht`/`.xhtml` (and `application/xhtml+xml`) to it — reusing the sink,
+  not writing a parser. Unlocks the large CSS2 `.xht` reftest corpus (961/1045 of
+  normal-flow), so it is the natural first lever of the rendering-conformance plan.
+  The runner's current `.xhtml` *skip* becomes a temporary measure, not permanent.
 - **Security (later)** — same-origin enforcement, CSP, sandboxing, and
   mixed-content beyond netfetcher's network-side checks. Real for arbitrary web
   content; a future tier, named so it is not forgotten rather than scheduled now.
+
+**Real-world conformance targets (Lane C litmus, not features).** Beyond WPT,
+named libraries are end-to-end proofs of scripted+fullweb completeness. **htmx**
+(Mark, 2026-05-31: would be cool) is the near-ideal first target — it is a
+*library* (`hx-*` attributes + `fetch` + DOM swapping), so "serval runs htmx
+unmodified" exercises DOM-API breadth (mostly there), `fetch`/XHR (the netfetcher
+organ, not yet wired to script), `history`/events, and attribute observation.
+Track it as a milestone the way `testharness.js` was the host-surface litmus, not
+as a thing to implement directly.
 
 Adjacent and *already owned elsewhere*, so cross-referenced not duplicated:
 resources/media (netfetcher = network, net-media = a/v — organs this lane
