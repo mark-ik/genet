@@ -220,6 +220,13 @@ fn main() {
         }
     };
 
+    // bench needs only the tests root (for resources/testharness.js), not a subset
+    // walk; handle it before the corpus collection below.
+    if args.command == "bench" {
+        harness::bench(&args.tests_root);
+        return;
+    }
+
     let root = Path::new(&args.tests_root).join(&args.subset);
     if !root.exists() {
         eprintln!("subset path does not exist: {}", root.display());

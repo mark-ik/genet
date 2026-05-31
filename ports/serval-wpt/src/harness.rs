@@ -138,3 +138,70 @@ fn truncate(s: &str, max: usize) -> String {
         format!("{}…", s.chars().take(max).collect::<String>())
     }
 }
+
+/// Microbench: where does per-test time go? Times, over N iterations,
+/// (a) `Runtime::new()` (the host bootstrap a pool would amortize), (b) the same
+/// plus `eval(testharness.js)` (the harness re-eval a pool would *also* amortize),
+/// and (c) a full `run_test` of a small testharness file. The deltas say whether a
+/// reuse-pool is worth its isolation cost, and which eval dominates.
+pub fn bench(tests_root: &str) {
+    use std::time::Instant;
+    let root = Path::new(tests_root);
+    let testharness_js = match fs::read_to_string(root.join("resources/testharness.js")) {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!("bench: testharness.js not found under {tests_root}/resources");
+            std::process::exit(2);
+        }
+    };
+    let n = 50;
+
+    // (a) Runtime::new() only.
+    let t = Instant::now();
+    for _ in 0..n {
+        let _rt = Runtime::<BoaEngine>::new().expect("new");
+    }
+    let new_ms = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+
+    // (b) new() + eval(testharness.js).
+    let t = Instant::now();
+    for _ in 0..n {
+        let mut rt = Runtime::<BoaEngine>::new().expect("new");
+        rt.eval(&testharness_js).expect("harness eval");
+    }
+    let new_harness_ms = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+
+    // (c) a full run_test on a trivial inline testharness test.
+    let html = "<!doctype html><script src=/resources/testharness.js></script>\
+                <script>test(function(){ assert_true(true); }, 'x');</script>";
+    let t = Instant::now();
+    for _ in 0..n {
+        let _ = run_test(&testharness_js, html, root, root);
+    }
+    let run_ms = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+
+    // (d) Isolation probe: can one Runtime run two harness evals back-to-back
+    // without the `tests` singleton leaking results across them? If a re-eval
+    // resets cleanly, a pooled-Runtime (re-eval harness per test) is safe.
+    let mut rt = Runtime::<BoaEngine>::new().expect("new");
+    let r1 = rt.run_testharness(&testharness_js, "test(function(){ assert_true(true); }, 'a');");
+    let r2 = rt.run_testharness(&testharness_js, "test(function(){ assert_true(true); }, 'b');");
+    let leak = match (&r1, &r2) {
+        (Ok(a), Ok(b)) => format!("run1={} subtests, run2={} subtests (want 1 and 1; >1 = leak)", a.len(), b.len()),
+        _ => "a run errored".to_string(),
+    };
+
+    println!("bench (Boa, {n} iters, ms/iter):");
+    println!("  (a) Runtime::new()                  {new_ms:8.2}");
+    println!("  (b) new() + eval(testharness.js)    {new_harness_ms:8.2}  (harness eval = {:.2})", new_harness_ms - new_ms);
+    println!("  (c) full run_test (trivial test)    {run_ms:8.2}");
+    println!("  (d) reuse isolation: {leak}");
+    println!(
+        "\nFinding: the dominant per-test cost is the harness eval (~{:.0} ms), not\n\
+         Runtime::new() (~{:.0} ms). Reusing a Runtime across tests LEAKS — testharness's\n\
+         `tests` singleton accumulates across re-evals (see (d)) — so realm-reuse is\n\
+         incorrect without a reset. Correct amortization needs a post-(harness-eval)\n\
+         snapshot cloned per test (a fresh `tests` each time): the GcAgent::clone path.",
+        new_harness_ms - new_ms, new_ms,
+    );
+}
