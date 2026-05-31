@@ -772,6 +772,35 @@ mod tests {
         assert!(approx(r.location.y, 20.0), "top:20 → y=20, got {}", r.location.y);
     }
 
+    /// `position: absolute` takes the box out of flow and places it by its
+    /// inset relative to the nearest positioned ancestor (the `relative`
+    /// container) — overlapping the in-flow sibling rather than stacking after
+    /// it. This is the layout half of host overlays/popups: an absolutely-placed
+    /// layer atop normal content.
+    #[test]
+    fn absolute_position_places_box_over_container() {
+        let (doc, frags) = lay(
+            "<html><body><div class=\"box\">\
+                <div class=\"flow\"></div><div class=\"pop\"></div>\
+            </div></body></html>",
+            &[
+                ".box { position: relative; width: 200px; height: 200px; }",
+                ".flow { width: 80px; height: 80px; }",
+                ".pop { position: absolute; top: 10px; left: 30px; width: 50px; height: 50px; }",
+            ],
+        );
+        let divs = find_all(&doc, html5ever::local_name!("div"));
+        // divs in document order: [.box, .flow, .pop]
+        let flow = frags.rect_of(divs[1]).expect(".flow fragment");
+        let pop = frags.rect_of(divs[2]).expect(".pop fragment");
+        // In-flow sibling at the container origin.
+        assert!(approx(flow.location.y, 0.0), ".flow in flow at y=0, got {}", flow.location.y);
+        // Absolute box placed by its own inset, not after the sibling.
+        assert!(approx(pop.location.x, 30.0), "left:30 → x=30, got {}", pop.location.x);
+        assert!(approx(pop.location.y, 10.0), "top:10 → y=10, got {}", pop.location.y);
+        assert!(approx(pop.size.width, 50.0), ".pop width 50, got {}", pop.size.width);
+    }
+
     /// Border-box layout: content `width/height: 40` + `border: 10`
     /// each side lays out a 60×60 border box (CSS content-box default).
     #[test]
