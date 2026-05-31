@@ -40,9 +40,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use layout_dom_api::LayoutDom;
 use netrender::external_texture::ExternalTexturePlacement;
 use netrender::{ColorLoad, NetrenderOptions, Renderer, Scene};
-use serval_scripted_dom::ScriptedDom;
+use serval_scripted_dom::{NodeId, ScriptedDom};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -50,8 +51,9 @@ use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, NamedKey as WinitNamedKey};
 use winit::window::{Window, WindowId};
 use xilem_serval::{
-    El, Key, KeyEvent, Lens, Modifiers, NamedKey, OnClick, PointerClick, ServalAppRunner, TextField,
-    TextInput, el, lens, on_click, text_field_typed,
+    El, Key, KeyEvent, Lens, Modifiers, NamedKey, OnClick, Placement, PointerClick,
+    ServalAppRunner, TextField, TextInput, anchor_point, el, lens, on_click, overlay_at,
+    text_field_typed,
 };
 
 use accesskit_winit::{Adapter, Event as AkEvent, WindowEvent as AkWindowEvent};
@@ -68,6 +70,14 @@ use pelt_live::{
 struct Demo {
     count: u32,
     field: TextInput,
+    /// Whether the `[ + ]` button's popup overlay is showing. Toggled on each
+    /// click of the button (which also still bumps the count).
+    popup_open: bool,
+    /// The popup's top-left, in the root `<div>`'s coordinate space — the
+    /// `Below`-anchor of the button, recomputed by the host from the button's
+    /// laid-out rect after each click (the button is static, so it settles
+    /// immediately). The view reads it to place the overlay.
+    popup_anchor: (f32, f32),
 }
 
 /// The concrete demo view type: `<div>` holding the count `<p>`, the `+`
@@ -94,13 +104,23 @@ type DemoView = El<
             (),
             xilem_serval::ServalCtx,
         >,
+        // The `[ + ]` button's popup overlay — shown when `popup_open`, placed
+        // last so it paints over everything before it (the paint walk has no
+        // z-index). `Option<V>` is a `ViewSequence`, so this is the conditional
+        // child slot.
+        Option<El<&'static str, Demo, ()>>,
     ),
     Demo,
     (),
 >;
 
 fn demo_view(s: &Demo) -> DemoView {
-    let increment: fn(&mut Demo, PointerClick) = |s: &mut Demo, _ev| s.count += 1;
+    // Clicking `[ + ]` bumps the count *and* toggles its popup overlay, so a
+    // click both advances the counter and shows/hides the anchored popup.
+    let increment: fn(&mut Demo, PointerClick) = |s: &mut Demo, _ev| {
+        s.count += 1;
+        s.popup_open = !s.popup_open;
+    };
     // `text_field_typed` is `text_field` with its concrete return type named, so
     // the `Lens<…>` in `DemoView` can be spelled. A thin `|t| text_field_typed(t)`
     // adapter bridges its `&str` argument to the `Fn(&mut ChildState) -> View`
@@ -115,6 +135,13 @@ fn demo_view(s: &Demo) -> DemoView {
             on_click(el::<_, Demo, ()>("button", "+"), increment),
             el::<_, Demo, ()>("label", "Click the field below, then type (←/→ move the caret):"),
             lens(make_field, to_field),
+            // The popup: an overlay anchored below the button (its `(x, y)` is
+            // the host-computed `popup_anchor`), styled by the `.popup` class.
+            // Last in the tuple → painted last → on top.
+            s.popup_open.then(|| {
+                overlay_at::<_, Demo, ()>(s.popup_anchor.0, s.popup_anchor.1, "more")
+                    .attr("class", "popup")
+            }),
         ),
     )
 }
@@ -128,12 +155,20 @@ fn demo_view(s: &Demo) -> DemoView {
 /// under the document root — there is no `<body>` element to style).
 const SHEET: &[&str] = &[
     "div, p, button, label, input { display: block; }",
+    // The root <div> is the positioned containing block for the popup overlay
+    // (an absolute child resolves against the nearest positioned ancestor). The
+    // overlay's own `position: absolute` rides an inline style, which outranks
+    // this rule, so only the root is made relative.
+    "div { position: relative; }",
     "p { font-size: 96px; color: rgb(30, 30, 50); }",
     "button { font-size: 48px; color: rgb(255, 255, 255); \
         background-color: rgb(60, 120, 220); padding: 12px; }",
     "label { font-size: 28px; color: rgb(60, 60, 80); padding: 8px; }",
     "input { font-size: 40px; color: rgb(20, 20, 20); \
         background-color: rgb(235, 238, 245); padding: 12px; }",
+    // The popup overlay box: a small tinted card with padding, drawn on top.
+    ".popup { font-size: 28px; color: rgb(40, 40, 40); \
+        background-color: rgb(245, 230, 140); padding: 10px; }",
 ];
 
 // ── winit user event ───────────────────────────────────────────────────────
@@ -196,6 +231,20 @@ fn key_event_from_winit(key: &WinitKey, mods: Modifiers) -> Option<KeyEvent> {
     Some(KeyEvent::with_mods(mapped, mods))
 }
 
+/// The first element named `tag` in `dom`, in document pre-order. Used to find
+/// the `[ + ]` button to anchor its popup. (`pop` makes the walk depth-first;
+/// order doesn't matter here — there is one button.)
+fn find_element_by_tag(dom: &ScriptedDom, tag: &str) -> Option<NodeId> {
+    let mut queue = vec![dom.document()];
+    while let Some(id) = queue.pop() {
+        if dom.element_name(id).is_some_and(|q| q.local.as_ref() == tag) {
+            return Some(id);
+        }
+        queue.extend(dom.dom_children(id));
+    }
+    None
+}
+
 // ── GPU state (created on resume) ────────────────────────────────────────────
 
 /// wgpu/netrender state, built once a window exists. Held together so the
@@ -244,6 +293,8 @@ impl App {
             Demo {
                 count: 0,
                 field: TextInput::default(),
+                popup_open: false,
+                popup_anchor: (0.0, 0.0),
             },
         );
         Self {
@@ -344,6 +395,23 @@ impl App {
         self.runner.update(|d| d.field.insert_str(&text));
         self.push_a11y();
         self.redraw();
+    }
+
+    /// The popup's `Below`-anchor: the `[ + ]` button's laid-out rect, run
+    /// through [`anchor_point`]. The button is a direct child of the root
+    /// `<div>`, so its parent-relative fragment rect is already in the overlay's
+    /// containing-block (root-`<div>`) space — no origin accumulation needed.
+    /// `None` if there is no button / it has no fragment yet.
+    fn button_anchor(&self) -> Option<(f32, f32)> {
+        let dom = self.dom.borrow();
+        let button = find_element_by_tag(&dom, "button")?;
+        let frags = fragments_from_scripted_dom(&dom, SHEET, self.width, self.height);
+        let r = frags.rect_of(button)?;
+        Some(anchor_point(
+            (r.location.x, r.location.y, r.size.width, r.size.height),
+            (0.0, 0.0),
+            Placement::Below,
+        ))
     }
 
     /// Render the current DOM and present it to the surface backbuffer.
@@ -643,6 +711,17 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(node) = hit {
                     self.runner
                         .dispatch_click(node, PointerClick { local: (x, y) });
+                    // The click may have toggled the button's popup. If it is now
+                    // open, (re)place it under the button from the freshly
+                    // laid-out button rect via `anchor_point`. The button is
+                    // static, so this settles on the first open.
+                    if self.runner.state().popup_open {
+                        if let Some(anchor) = self.button_anchor() {
+                            if anchor != self.runner.state().popup_anchor {
+                                self.runner.update(|d| d.popup_anchor = anchor);
+                            }
+                        }
+                    }
                     self.push_a11y();
                     if let Some(window) = self.window.as_ref() {
                         window.request_redraw();
