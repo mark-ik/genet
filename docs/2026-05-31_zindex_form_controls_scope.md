@@ -20,9 +20,11 @@ Grounding (verified against the tree, 2026-05-31):
 
 ## 1. z-index / stacking
 
-Consequence today (seen in the demo): a `position: absolute` overlay is emitted
-before a later sibling and gets painted under it, so the `select` dropdown had
-to be ordered last to stay on top and clickable.
+**Status: Tier 1 done (`e10a3211f82`).** Tier 2 deferred to CSS conformance.
+
+Consequence that motivated it (seen in the demo): a `position: absolute` overlay
+was emitted before a later sibling and painted under it, so the `select`
+dropdown had to be ordered last to stay on top and clickable. Tier 1 fixes that.
 
 ### Tier 1, positioned-on-top (recommended now)
 
@@ -56,6 +58,8 @@ for nesting and the long tail.
 
 ## 2. radio (group)
 
+**Status: done (`391af9f09d5`).**
+
 The analogue of `checkbox` / `select`: state is which option is selected;
 clicking one selects it and deselects the rest.
 
@@ -71,8 +75,13 @@ clicking one selects it and deselects the rest.
 
 ## 3. textarea (multiline text)
 
-`text_field` is single-line; parley already lays the buffer out multi-line and
-the caret geometry is line-aware, so the open work is the model and key handling.
+**Status: done (`99998dae76a`).** Confirmed serval feeds raw text to parley,
+which breaks at `\n`, so newlines render as line breaks with no engine work. Up
+/ down navigate `\n`-delimited (hard) lines; soft-wrap visual-line navigation
+(needs the layout) is the remaining refinement.
+
+`text_field` was single-line; parley already lays the buffer out multi-line and
+the caret geometry is line-aware, so the work was the model and key handling.
 
 - Needs: Enter inserts `\n`; ArrowUp / ArrowDown move the caret to the adjacent
   visual line; Home / End scope to the current line. The vertical motion (an
@@ -116,13 +125,11 @@ exists.
 
 ## Recommended sequence
 
-1. z-index Tier 1. Engine work; removes the overlay workaround and makes
-   dropdowns / popups robust. Independent.
-2. radio. Small, no dependencies; rounds out the simple controls.
-3. textarea. Medium; model and vertical caret on the existing line-aware
-   geometry.
-4. Pointer-drag foundation, then slider. Largest; the foundation is reusable for
-   scrollbar-drag, resize, and drag-tab-out.
+1. z-index Tier 1. **Done (`e10a3211f82`).**
+2. radio. **Done (`391af9f09d5`).**
+3. textarea. **Done (`99998dae76a`).**
+4. Pointer-drag foundation, then slider. **Next.** Largest; the foundation is
+   reusable for scrollbar-drag, resize, and drag-tab-out.
 
 IME (the Mere-flip long pole) sits outside this scope; see the staging section
 of `2026-05-27_serval_as_host_xilem_serval_plan.md`.

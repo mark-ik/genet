@@ -346,11 +346,31 @@ already exposes (`run_microtasks`, `run_event_loop`).
     offset/scrollable); and a hit-test offset so clicks inside a scrolled box map
     through the offset to the content's layout position (verified: at max scroll,
     line clicks log the bottom lines, not the top).
-  - **Known gap — no `z-index`.** Stacking is document order, so an overlay (the
-    `select` dropdown) is covered by a *later* sibling (the scroller); the demo
-    works around it by ordering the select last. True stacking contexts would
-    decouple paint order from in-flow position — a CSS-conformance item, not a
-    host one.
+  - **Known gap — no `z-index`.** (Closed by Stage 7 Tier 1 below.) Stacking was
+    document order, so an overlay (the `select` dropdown) was covered by a later
+    sibling (the scroller); the demo worked around it by ordering the select
+    last. Full stacking contexts remain a CSS-conformance item.
+
+- **Stage 7 (z-index Tier 1 + remaining form controls) — done.** Scoped in
+  `2026-05-31_zindex_form_controls_scope.md`; closes the Stage 6 z-index gap and
+  the open T2 controls.
+  - **z-index Tier 1 (`e10a3211f82`).** `paint_emit` paints in two passes:
+    in-flow in document order, then out-of-flow (`position: absolute`/`fixed`)
+    elements on top, ordered by `(z-index, document order)`, each placed at its
+    parent's accumulated absolute origin. So overlays paint above in-flow content
+    regardless of order — the `select`-last workaround is no longer needed. Full
+    CSS painting order / nested stacking contexts are Tier 2 (conformance).
+  - **radio (`391af9f09d5`).** `radio_group(state, options)` over a
+    `RadioGroup { selected }`: `select` minus the dropdown; `role=radiogroup` /
+    `role=radio` + `aria-checked`, composable via `lens`.
+  - **textarea (`99998dae76a`).** `textarea` over the existing `TextInput`:
+    Enter → `\n`, Up/Down line navigation, line-scoped Home/End. serval feeds
+    raw text to parley (which breaks at `\n`), so newlines render with no engine
+    work. Hard-line nav (Tier 1); soft-wrap visual-line nav is a later layout-fed
+    refinement.
+  - **Still open — slider.** Gated on a pointer-drag foundation
+    (`pointerdown`/`move`/`up` + capture) the runner does not yet have; that
+    foundation also unlocks scrollbar-thumb drag, resize handles, and drag-tab-out.
 
 ## Toward the Mere flip gate: IME + form-control breadth
 
