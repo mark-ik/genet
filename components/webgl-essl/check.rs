@@ -23,15 +23,18 @@ use crate::ast::*;
 use crate::span::{Span, line_column};
 use crate::visit::{Visit, Visitor, Walk, walk_translation_unit};
 
+mod registry;
 mod typing;
 
+pub use registry::Signature;
+use registry::{LookupOutcome, Registry};
 use typing::{binary_result, constructor_result, swizzle_result, unary_result};
 
 /// Public entry: run the first typecheck pass over a parsed
 /// translation unit. The result holds resolved types keyed by node
 /// span plus any diagnostics produced along the way.
 pub fn check(tu: &TranslationUnit) -> CheckResult {
-    let mut tc = TypeChecker::default();
+    let mut tc = TypeChecker::new();
     walk_translation_unit(&mut tc, tu);
     CheckResult {
         types: tc.types,
@@ -75,6 +78,12 @@ pub enum TypeDiagnosticKind {
     /// `.field` on a base that is not a vec, or a field that is not a
     /// valid swizzle for the base's component count.
     InvalidSwizzle { base: TypeKind, field: String },
+    /// `name(args)` where `name` is not a constructor, not a built-in,
+    /// and not in scope as a user-defined function.
+    UnknownFunction { name: String },
+    /// `name(args)` where overloads of `name` exist but none match the
+    /// actual argument types.
+    CallSignatureMismatch { name: String, candidates: Vec<Signature>, actual: Vec<TypeKind> },
 }
 
 impl TypeDiagnostic {
@@ -116,6 +125,22 @@ impl fmt::Display for DiagnosticDisplay<'_> {
             TypeDiagnosticKind::InvalidSwizzle { base, field } => {
                 write!(f, "{line}:{col}: invalid swizzle `.{field}` on {base:?}")
             },
+            TypeDiagnosticKind::UnknownFunction { name } => {
+                write!(f, "{line}:{col}: unknown function `{name}`")
+            },
+            TypeDiagnosticKind::CallSignatureMismatch { name, candidates, actual } => {
+                let actual_str = actual
+                    .iter()
+                    .map(|t| format!("{t:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "{line}:{col}: no overload of `{name}` accepts ({actual_str}); {n} candidate{s} known",
+                    n = candidates.len(),
+                    s = if candidates.len() == 1 { "" } else { "s" },
+                )
+            },
         }
     }
 }
@@ -131,11 +156,20 @@ pub enum SymbolKind {
     Builtin,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ScopeEntry {
     pub ty: TypeKind,
     pub decl_span: Span,
     pub kind: SymbolKind,
+    /// Function signature when `kind` is `Function` or `Builtin`; None
+    /// for vars / params / globals / scalar built-ins.
+    pub signature: Option<Signature>,
+}
+
+impl ScopeEntry {
+    fn var(ty: TypeKind, decl_span: Span, kind: SymbolKind) -> Self {
+        Self { ty, decl_span, kind, signature: None }
+    }
 }
 
 #[derive(Default)]
@@ -150,21 +184,30 @@ impl Scope {
         self.entries.insert(name.to_string(), entry);
     }
 
-    fn lookup(&self, name: &str) -> Option<ScopeEntry> {
-        self.entries.get(name).copied()
+    fn lookup(&self, name: &str) -> Option<&ScopeEntry> {
+        self.entries.get(name)
     }
 }
 
 // ---------- the typechecker visitor -----------------------------------
 
-#[derive(Default)]
 struct TypeChecker {
     scopes: Vec<Scope>,
     types: HashMap<Span, TypeKind>,
     diagnostics: Vec<TypeDiagnostic>,
+    registry: Registry,
 }
 
 impl TypeChecker {
+    fn new() -> Self {
+        Self {
+            scopes: Vec::new(),
+            types: HashMap::new(),
+            diagnostics: Vec::new(),
+            registry: Registry::with_builtins(),
+        }
+    }
+
     fn push_scope(&mut self) {
         self.scopes.push(Scope::default());
     }
@@ -179,35 +222,61 @@ impl TypeChecker {
         }
     }
 
-    fn lookup(&self, name: &str) -> Option<ScopeEntry> {
+    fn lookup(&self, name: &str) -> Option<&ScopeEntry> {
         self.scopes.iter().rev().find_map(|s| s.lookup(name))
     }
 
     /// Seed the global scope with the special variables every WebGL 1
     /// shader sees. Spec-faithful staging is a Step 4b refinement;
     /// today this just prevents spurious `UnknownIdentifier` noise.
-    fn populate_builtins(&mut self) {
+    fn seed_global_builtins(&mut self) {
         let zero = Span::new(0, 0);
-        let mut seed = |name: &str, ty: TypeKind| {
-            self.define_in_current(name, ScopeEntry { ty, decl_span: zero, kind: SymbolKind::Builtin });
+        let seed = |this: &mut Self, name: &str, ty: TypeKind| {
+            this.define_in_current(name, ScopeEntry::var(ty, zero, SymbolKind::Builtin));
         };
         // Vertex-only outputs (real spec gates these by stage; we don't yet).
-        seed("gl_Position", TypeKind::Vec4);
-        seed("gl_PointSize", TypeKind::Float);
+        seed(self, "gl_Position", TypeKind::Vec4);
+        seed(self, "gl_PointSize", TypeKind::Float);
         // Fragment-only outputs / inputs.
-        seed("gl_FragColor", TypeKind::Vec4);
-        seed("gl_FragCoord", TypeKind::Vec4);
-        seed("gl_PointCoord", TypeKind::Vec2);
-        seed("gl_FrontFacing", TypeKind::Bool);
+        seed(self, "gl_FragColor", TypeKind::Vec4);
+        seed(self, "gl_FragCoord", TypeKind::Vec4);
+        seed(self, "gl_PointCoord", TypeKind::Vec2);
+        seed(self, "gl_FrontFacing", TypeKind::Bool);
+    }
+
+    /// Pre-pass run at translation-unit Pre to register every user
+    /// function in the global scope, so forward references resolve.
+    fn register_user_function_signatures(&mut self, tu: &TranslationUnit) {
+        for decl in &tu.decls {
+            if let ExternalDecl::Function(f) = decl {
+                let signature = Signature {
+                    params: f.params.iter().map(|p| p.ty.kind).collect(),
+                    result: f.return_ty.kind,
+                };
+                self.define_in_current(
+                    &f.name,
+                    ScopeEntry {
+                        ty: f.return_ty.kind,
+                        decl_span: f.name_span,
+                        kind: SymbolKind::Function,
+                        signature: Some(signature),
+                    },
+                );
+            }
+        }
     }
 }
 
 impl<'tree> Visitor<'tree> for TypeChecker {
-    fn visit_translation_unit(&mut self, _: &'tree TranslationUnit, visit: Visit) -> Walk {
+    fn visit_translation_unit(&mut self, tu: &'tree TranslationUnit, visit: Visit) -> Walk {
         match visit {
             Visit::Pre => {
                 self.push_scope();
-                self.populate_builtins();
+                self.seed_global_builtins();
+                // Forward-reference pre-pass: register every user
+                // function in the global scope so a Call to a function
+                // declared later in source order still resolves.
+                self.register_user_function_signatures(tu);
             },
             Visit::Post => self.pop_scope(),
             Visit::In => {},
@@ -219,7 +288,7 @@ impl<'tree> Visitor<'tree> for TypeChecker {
         if visit == Visit::Pre {
             self.define_in_current(
                 &g.name,
-                ScopeEntry { ty: g.ty.kind, decl_span: g.name_span, kind: SymbolKind::Global },
+                ScopeEntry::var(g.ty.kind, g.name_span, SymbolKind::Global),
             );
         }
         Walk::Continue
@@ -228,22 +297,14 @@ impl<'tree> Visitor<'tree> for TypeChecker {
     fn visit_function_def(&mut self, fd: &'tree FunctionDef, visit: Visit) -> Walk {
         match visit {
             Visit::Pre => {
-                // Define the function name in the enclosing scope so
-                // sibling functions can reference it.
-                self.define_in_current(
-                    &fd.name,
-                    ScopeEntry {
-                        ty: fd.return_ty.kind,
-                        decl_span: fd.name_span,
-                        kind: SymbolKind::Function,
-                    },
-                );
-                // Push the function's own scope and seed params.
+                // Function name is already in the global scope from the
+                // pre-pass in visit_translation_unit; just push the body
+                // scope and seed params.
                 self.push_scope();
                 for p in &fd.params {
                     self.define_in_current(
                         &p.name,
-                        ScopeEntry { ty: p.ty.kind, decl_span: p.span, kind: SymbolKind::Param },
+                        ScopeEntry::var(p.ty.kind, p.span, SymbolKind::Param),
                     );
                 }
             },
@@ -269,7 +330,7 @@ impl<'tree> Visitor<'tree> for TypeChecker {
         if visit == Visit::Post {
             self.define_in_current(
                 &d.name,
-                ScopeEntry { ty: d.ty.kind, decl_span: d.name_span, kind: SymbolKind::Var },
+                ScopeEntry::var(d.ty.kind, d.name_span, SymbolKind::Var),
             );
         }
         Walk::Continue
@@ -287,16 +348,19 @@ impl<'tree> Visitor<'tree> for TypeChecker {
                 Expr::BoolLit { span, .. } => {
                     self.types.insert(*span, TypeKind::Bool);
                 },
-                Expr::Ident { name, span } => match self.lookup(name) {
-                    Some(entry) => {
-                        self.types.insert(*span, entry.ty);
-                    },
-                    None => {
-                        self.diagnostics.push(TypeDiagnostic {
-                            kind: TypeDiagnosticKind::UnknownIdentifier { name: name.clone() },
-                            span: *span,
-                        });
-                    },
+                Expr::Ident { name, span } => {
+                    let ty = self.lookup(name).map(|e| e.ty);
+                    match ty {
+                        Some(ty) => {
+                            self.types.insert(*span, ty);
+                        },
+                        None => {
+                            self.diagnostics.push(TypeDiagnostic {
+                                kind: TypeDiagnosticKind::UnknownIdentifier { name: name.clone() },
+                                span: *span,
+                            });
+                        },
+                    }
                 },
                 Expr::Binary { op, lhs, rhs, span } => {
                     let lt = self.types.get(&lhs.span()).copied();
@@ -397,18 +461,87 @@ impl<'tree> Visitor<'tree> for TypeChecker {
                     }
                 },
                 Expr::Call { callee, args, span, .. } => {
-                    // Step 4b ships constructor resolution. Other named
-                    // calls (built-ins like `texture2D`, `sin`, plus
-                    // user-defined helpers) are typed by the registry in
-                    // a follow-up; silent for now to avoid noise.
+                    // Three-stage Call resolution:
+                    //   1. Constructor (vec_n / mat_n / scalar) by
+                    //      structural rule in `typing::constructor_result`.
+                    //   2. Built-in registry lookup against the §8 table.
+                    //   3. User-defined function in the scope stack
+                    //      (registered up-front by the forward-ref pre-pass).
+                    // If all three miss the diagnostic differentiates between
+                    // "name unknown" and "name known but no overload accepts
+                    // these args".
                     let arg_types: Option<Vec<TypeKind>> = args
                         .iter()
                         .map(|a| self.types.get(&a.span()).copied())
                         .collect();
-                    if let Some(arg_types) = arg_types {
-                        if let Some(result) = constructor_result(callee, &arg_types) {
-                            self.types.insert(*span, result);
+                    let arg_types = match arg_types {
+                        Some(v) => v,
+                        None => return Walk::Continue,
+                    };
+
+                    // 1. Constructor.
+                    if let Some(result) = constructor_result(callee, &arg_types) {
+                        self.types.insert(*span, result);
+                        return Walk::Continue;
+                    }
+
+                    // 2. Built-in registry.
+                    match self.registry.lookup(callee, &arg_types) {
+                        LookupOutcome::Match(sig) => {
+                            self.types.insert(*span, sig.result);
+                            return Walk::Continue;
+                        },
+                        LookupOutcome::Mismatch(candidates) => {
+                            self.diagnostics.push(TypeDiagnostic {
+                                kind: TypeDiagnosticKind::CallSignatureMismatch {
+                                    name: callee.clone(),
+                                    candidates: candidates.to_vec(),
+                                    actual: arg_types,
+                                },
+                                span: *span,
+                            });
+                            return Walk::Continue;
+                        },
+                        LookupOutcome::Unknown => {},
+                    }
+
+                    // 3. User-defined function via scope lookup.
+                    let user = self.lookup(callee).and_then(|e| {
+                        if e.kind == SymbolKind::Function {
+                            e.signature.clone()
+                        } else {
+                            None
                         }
+                    });
+                    match user {
+                        Some(sig) => {
+                            if sig.matches(&arg_types) {
+                                self.types.insert(*span, sig.result);
+                            } else {
+                                self.diagnostics.push(TypeDiagnostic {
+                                    kind: TypeDiagnosticKind::CallSignatureMismatch {
+                                        name: callee.clone(),
+                                        candidates: vec![sig],
+                                        actual: arg_types,
+                                    },
+                                    span: *span,
+                                });
+                            }
+                        },
+                        None => {
+                            // Synthetic computed callee from a postfix
+                            // `(` on a non-ident base passes through
+                            // here too; don't emit a noisy diagnostic
+                            // for that case.
+                            if callee != "<computed>" {
+                                self.diagnostics.push(TypeDiagnostic {
+                                    kind: TypeDiagnosticKind::UnknownFunction {
+                                        name: callee.clone(),
+                                    },
+                                    span: *span,
+                                });
+                            }
+                        },
                     }
                 },
                 // Index expressions are deferred (Step 4b second chunk):
