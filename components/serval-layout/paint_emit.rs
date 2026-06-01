@@ -975,8 +975,9 @@ fn background_color_of<NodeId: Copy + Eq + std::hash::Hash>(
 /// `overflow-y` is anything other than `visible` (`hidden`/`scroll`/`auto`/
 /// `clip`). Such an element clips its descendants to its padding box (and, for
 /// the scrollable values, is a scroll container). `false` when the cascade
-/// hasn't run.
-fn clips_overflow<NodeId: Copy + Eq + std::hash::Hash>(
+/// hasn't run. `pub(crate)` so hit-testing ([`crate::serval_lane`]) clips the
+/// same boxes the paint does.
+pub(crate) fn clips_overflow<NodeId: Copy + Eq + std::hash::Hash>(
     styles: &StylePlane<NodeId>,
     id: NodeId,
 ) -> bool {

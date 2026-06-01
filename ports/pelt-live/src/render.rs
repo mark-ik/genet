@@ -215,6 +215,7 @@ pub fn hit_test_node(
     height: u32,
     x: f32,
     y: f32,
+    scroll_offsets: &ScrollOffsets<NodeId>,
 ) -> Option<NodeId> {
     let mut styles: StylePlane<NodeId> = StylePlane::new();
     run_cascade(
@@ -231,7 +232,7 @@ pub fn hit_test_node(
     };
     let (fragments, _built, _text_ctx) = layout(dom, &styles, &images, viewport);
 
-    let view = ServalLaneView::new(dom, &styles, &fragments);
+    let view = ServalLaneView::new(dom, &styles, &fragments).with_scroll_offsets(scroll_offsets);
     view.hit_test(Point::new(x, y))
         .map(|hit| NodeId::from_raw(hit.source_node.0 as usize))
 }

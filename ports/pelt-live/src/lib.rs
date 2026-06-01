@@ -132,7 +132,7 @@ mod tests {
         let dom_ref = dom.borrow();
         // (5, 5) is inside the top-left block <div> (full-width, one text line
         // tall), so the hit-test lands on the div or its text child.
-        let hit = hit_test_node(&dom_ref, SHEET, 800, 600, 5.0, 5.0)
+        let hit = hit_test_node(&dom_ref, SHEET, 800, 600, 5.0, 5.0, &Default::default())
             .expect("a point inside the div should hit something");
         assert!(
             hit == root || dom_ref.parent(hit) == Some(root),
@@ -141,7 +141,7 @@ mod tests {
 
         // A point well outside every fragment recovers nothing.
         assert!(
-            hit_test_node(&dom_ref, SHEET, 800, 600, 10_000.0, 10_000.0).is_none(),
+            hit_test_node(&dom_ref, SHEET, 800, 600, 10_000.0, 10_000.0, &Default::default()).is_none(),
             "a point outside all fragments should miss"
         );
     }
@@ -699,7 +699,7 @@ mod tests {
         // either way click-to-focus picks the nearest focusable ancestor: the div.
         let hit = {
             let dom_ref = dom.borrow();
-            hit_test_node(&dom_ref, &["div { display: block; }"], 800, 600, 5.0, 5.0)
+            hit_test_node(&dom_ref, &["div { display: block; }"], 800, 600, 5.0, 5.0, &Default::default())
                 .expect("a point inside the div should hit something")
         };
         runner.dispatch_click(hit, PointerClick::at((0.0, 0.0)));

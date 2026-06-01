@@ -42,6 +42,7 @@ use engine_observables_api::{
 use layout_dom_api::LayoutDom;
 
 use crate::fragment::FragmentPlane;
+use crate::paint_emit::{clips_overflow, ScrollOffsets};
 use crate::style::StylePlane;
 
 /// Borrowed view over Serval's planes, exposing the engine_observables_api
@@ -57,6 +58,11 @@ pub struct ServalLaneView<'a, D: LayoutDom> {
     /// Epoch — rolled by the producer whenever the planes regenerate.
     /// Consumers cache observations against this.
     pub generation: u64,
+    /// Per-node scroll offsets, for clip-aware hit-testing: inside a scroll
+    /// container the query point maps through `+offset` (the inverse of paint's
+    /// `-offset` content translate). `None` ⇒ nothing scrolls. The host (which
+    /// owns the offsets) supplies the same map it passes to paint.
+    scroll_offsets: Option<&'a ScrollOffsets<D::NodeId>>,
 }
 
 impl<'a, D: LayoutDom> ServalLaneView<'a, D> {
@@ -70,11 +76,20 @@ impl<'a, D: LayoutDom> ServalLaneView<'a, D> {
             styles,
             fragments,
             generation: 0,
+            scroll_offsets: None,
         }
     }
 
     pub fn with_generation(mut self, gen_id: u64) -> Self {
         self.generation = gen_id;
+        self
+    }
+
+    /// Supply per-node scroll offsets so hit-testing maps the query point
+    /// through scrolled containers (and clips to overflow boxes). Pass the same
+    /// map handed to paint.
+    pub fn with_scroll_offsets(mut self, offsets: &'a ScrollOffsets<D::NodeId>) -> Self {
+        self.scroll_offsets = Some(offsets);
         self
     }
 
@@ -109,7 +124,9 @@ where
         let mut hit: Option<FragmentHit<SourceNodeId>> = None;
         walk_for_hit(
             self.dom,
+            self.styles,
             self.fragments,
+            self.scroll_offsets,
             self.dom.document(),
             Point::new(0.0, 0.0),
             point,
@@ -180,12 +197,20 @@ where
     }
 }
 
-/// Walk in paint order accumulating origin; if `point` falls in this
-/// node's fragment, record the hit (overwriting any earlier hit —
-/// "topmost in paint order is later in the walk").
+/// Walk in paint order accumulating origin; if `point` falls in this node's
+/// fragment, record the hit (overwriting any earlier hit — "topmost in paint
+/// order is later in the walk"). Clip- and scroll-aware, mirroring paint:
+///   * an overflow container clips its descendants to its padding box, so a
+///     point outside that box skips the subtree (no leak onto elements below a
+///     scrolled box);
+///   * a scroll container's descendants are queried at `point + offset` (the
+///     inverse of paint's `-offset` content translate).
+#[allow(clippy::too_many_arguments)]
 fn walk_for_hit<D>(
     dom: &D,
+    styles: &StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
+    scroll_offsets: Option<&ScrollOffsets<D::NodeId>>,
     id: D::NodeId,
     parent_origin: Point,
     point: Point,
@@ -210,10 +235,31 @@ fn walk_for_hit<D>(
                 local_point: Point::new(point.x - origin.x, point.y - origin.y),
             });
         }
+
+        // Clip: an overflow container clips its descendants to its padding box.
+        // A point outside that box can't hit them — skip the subtree (this is
+        // what stops a scrolled box's clicks leaking onto the element below it).
+        if clips_overflow(styles, id) {
+            let pad = Rect::new(
+                Point::new(origin.x + l.border.left, origin.y + l.border.top),
+                l.size.width - l.border.left - l.border.right,
+                l.size.height - l.border.top - l.border.bottom,
+            );
+            if !pad.contains(point) {
+                return;
+            }
+        }
     }
 
+    // Scroll: descendants of a scroll container are painted translated by
+    // `-offset`, so query them at `point + offset`.
+    let child_point = match scroll_offsets.and_then(|m| m.get(&id)) {
+        Some(&(ox, oy)) => Point::new(point.x + ox, point.y + oy),
+        None => point,
+    };
+
     for child in dom.dom_children(id) {
-        walk_for_hit(dom, fragments, child, origin, point, out);
+        walk_for_hit(dom, styles, fragments, scroll_offsets, child, origin, child_point, out);
     }
 }
 
@@ -527,5 +573,88 @@ mod tests {
         assert!(view.selection().is_none());
         assert!(view.affordances_at(Point::new(10.0, 10.0)).is_empty());
         assert!(view.activation_target(Point::new(10.0, 10.0)).is_none());
+    }
+
+    /// Collect every `<div>` in document (pre-)order. The clip test builds a
+    /// three-div layout (`box`, `inner`, `below`) and indexes the result.
+    fn collect_divs<'a>(
+        start: NodeRef<'a, StaticDocument>,
+        out: &mut Vec<NodeRef<'a, StaticDocument>>,
+    ) {
+        if let Some(name) = start.dom().element_name(start.id()) {
+            if name.local == local_name!("div") {
+                out.push(start);
+            }
+        }
+        for child in start.dom_children() {
+            collect_divs(child, out);
+        }
+    }
+
+    /// Hit-testing respects overflow clips and per-node scroll offsets:
+    /// a `box` (overflow:scroll, 40px tall) holds an `inner` taller than itself
+    /// and is followed by a `below` sibling.
+    ///
+    ///   * A click *below* the box hits `below`, not the (clipped) `inner` —
+    ///     without clip awareness `inner`'s 200px-tall fragment would swallow it.
+    ///   * With the box scrolled down, a click at its top hits `inner` at the
+    ///     scrolled-in content offset (the click maps through `point + offset`).
+    #[test]
+    fn hit_test_is_clip_and_scroll_aware() {
+        use crate::cascade::run_cascade;
+
+        let document = StaticDocument::parse(
+            "<html><body>\
+                <div class=\"box\"><div class=\"inner\">tall</div></div>\
+                <div class=\"below\">b</div>\
+            </body></html>",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(200.0, 600.0),
+            &[
+                "html, body { display: block; margin: 0; padding: 0; }",
+                "div { display: block; margin: 0; padding: 0; border: 0; }",
+                ".box { overflow: scroll; width: 100px; height: 40px; }",
+                ".inner { height: 200px; }",
+                ".below { height: 30px; }",
+            ],
+            None,
+        );
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(200.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+
+        let mut divs = Vec::new();
+        collect_divs(NodeRef::document(&document), &mut divs);
+        assert_eq!(divs.len(), 3, "box, inner, below");
+        let id_of = |n: &NodeRef<StaticDocument>| SourceNodeId(document.opaque_id(n.id()));
+        let (box_id, inner_id, below_id) =
+            (id_of(&divs[0]), id_of(&divs[1]), id_of(&divs[2]));
+        let _ = box_id;
+
+        // (1) Clip: a point below the 40px box hits `below`, NOT the 200px
+        // `inner` clipped inside the box.
+        let view = ServalLaneView::new(&document, &styles, &fragments);
+        let hit = view.hit_test(Point::new(5.0, 50.0)).expect("hits below");
+        assert_eq!(hit.source_node, below_id, "click below the box hits `below`");
+
+        // (2) Scroll: with the box scrolled down 80px, a click at its top maps
+        // through the offset and hits `inner` at content-y ≈ 85.
+        let mut offsets = ScrollOffsets::<StaticNodeId>::default();
+        offsets.insert(divs[0].id(), (0.0, 80.0));
+        let scrolled =
+            ServalLaneView::new(&document, &styles, &fragments).with_scroll_offsets(&offsets);
+        let hit = scrolled.hit_test(Point::new(5.0, 5.0)).expect("hits inner");
+        assert_eq!(hit.source_node, inner_id, "click in the scrolled box hits `inner`");
+        assert!(
+            (hit.local_point.y - 85.0).abs() < 0.1,
+            "local point maps through the scroll offset: {}",
+            hit.local_point.y
+        );
     }
 }

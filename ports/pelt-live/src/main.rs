@@ -174,7 +174,16 @@ fn demo_view(s: &Demo) -> DemoView {
                 el::<_, Demo, ()>(
                     "div",
                     (1..=8)
-                        .map(|i| el::<_, Demo, ()>("p", format!("Scrollable line {i}")))
+                        .map(|i| {
+                            // Clickable: now that hit-testing is clip + scroll
+                            // aware, clicking a *scrolled* line logs its true
+                            // index (and clicks at the scroller's level no longer
+                            // leak onto the controls below).
+                            on_click(
+                                el::<_, Demo, ()>("p", format!("Scrollable line {i}")),
+                                move |_: &mut Demo, _| tracing::info!(line = i, "line clicked"),
+                            )
+                        })
                         .collect::<Vec<_>>(),
                 )
                 .attr("class", "scroller"),
@@ -540,6 +549,17 @@ impl App {
         })
     }
 
+    /// The scroller's node keyed to its current offset — the map handed to both
+    /// paint (to scroll the content) and hit-testing (to map clicks through the
+    /// scroll + clip). Empty when there is no scroller.
+    fn scroll_offsets_map(&self) -> ScrollOffsets<NodeId> {
+        let mut offsets = ScrollOffsets::default();
+        if let Some(node) = find_element_by_class(&self.dom.borrow(), "scroller") {
+            offsets.insert(node, self.scroll_offset);
+        }
+        offsets
+    }
+
     /// A node's laid-out box as `(x, y, w, h)` in root-relative coords (≈
     /// absolute for the demo's top-level elements). Used to turn a window cursor
     /// into an element-local `PointerEvent` for the drag slider. `None` if the
@@ -618,10 +638,7 @@ impl App {
             TextCursor { node, caret: field.caret_byte_in_render(), selection }
         });
         // Key the scroller's node with its current offset so emit scrolls it.
-        let mut scroll_offsets: ScrollOffsets<NodeId> = ScrollOffsets::default();
-        if let Some(node) = find_element_by_class(&self.dom.borrow(), "scroller") {
-            scroll_offsets.insert(node, self.scroll_offset);
-        }
+        let scroll_offsets = self.scroll_offsets_map();
         let scene: Scene =
             scene_from_scripted_dom(&self.dom.borrow(), SHEET, w, h, cursor, &scroll_offsets);
 
@@ -928,15 +945,14 @@ impl ApplicationHandler<UserEvent> for App {
                 // hit lands on (or under) the `[ + ]` button, its handler bumps
                 // the count and the runner rebuilds.
                 let (x, y) = self.cursor;
-                // NB: no scroll hit-test offset. Mapping a click through the
-                // scroll offset on the *global* (unclipped) layout leaks: a point
-                // inside the scroller can map past its clipped content onto the
-                // element below (here the slider), so clicks at the scroller's
-                // level wrongly hit the slider. Correctly hit-testing scrolled
-                // content needs clip-aware hit-testing in the engine (the
-                // ServalLaneView query must respect clips + per-node scroll); the
-                // scroller's content is display-only here, so we skip it.
-                let hit = hit_test_node(&self.dom.borrow(), SHEET, self.width, self.height, x, y);
+                // Clip-aware hit-test: pass the scroll offsets so the engine maps
+                // the click through scrolled containers and clips to overflow
+                // boxes (a click inside a scrolled box finds the scrolled content,
+                // and a click at the box's level no longer leaks onto the element
+                // below it).
+                let offsets = self.scroll_offsets_map();
+                let hit =
+                    hit_test_node(&self.dom.borrow(), SHEET, self.width, self.height, x, y, &offsets);
                 match hit {
                     Some(node) => {
                         let tag = self
