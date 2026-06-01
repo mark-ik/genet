@@ -1272,6 +1272,27 @@ mod controls {
         assert_eq!(attr(&dom.borrow(), opt0, "aria-checked").as_deref(), Some("false"));
     }
 
+    /// `TextInput` multi-line navigation (the textarea model): up/down move
+    /// between `\n`-delimited lines keeping the column, clamped to line length;
+    /// home/end scope to the current line.
+    #[test]
+    fn textinput_line_navigation() {
+        use crate::TextInput;
+        // "abc\nde\nfghi": chars a0 b1 c2 \n3 d4 e5 \n6 f7 g8 h9 i10 (len 11).
+        let mut t = TextInput::new("abc\nde\nfghi");
+        assert_eq!(t.caret(), 11, "new() puts the caret at the end");
+        t.move_up(false);
+        assert_eq!(t.caret(), 6, "up: col 4 clamps to end of 'de' (offset 6)");
+        t.move_up(false);
+        assert_eq!(t.caret(), 2, "up: col 2 of 'abc' (offset 2)");
+        t.move_down(false);
+        assert_eq!(t.caret(), 6, "down: col 2 of 'de' (offset 6)");
+        t.home_line(false);
+        assert_eq!(t.caret(), 4, "home: start of 'de' (offset 4)");
+        t.end_line(false);
+        assert_eq!(t.caret(), 6, "end: end of 'de' (offset 6)");
+    }
+
     // --- selection (model + keyboard) -----------------------------------------
 
     /// A `Shift`-held key event (extends the selection).

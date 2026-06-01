@@ -223,6 +223,84 @@ impl TextInput {
         }
     }
 
+    // --- multi-line navigation (textarea) -------------------------------------
+    //
+    // Lines are `\n`-delimited in the buffer (serval feeds the raw text to
+    // parley, which breaks at `\n`); a column is the char offset within a line.
+    // No sticky goal column: up/down recompute the column each step (Tier 1).
+
+    /// Char offsets where each line begins: 0, then one past each `\n`.
+    fn line_starts(&self) -> Vec<usize> {
+        let mut starts = vec![0];
+        for (i, ch) in self.text.chars().enumerate() {
+            if ch == '\n' {
+                starts.push(i + 1);
+            }
+        }
+        starts
+    }
+
+    /// The caret's `(line, column)`: `line` counts `\n`s before it, `column` is
+    /// the char offset since that line's start.
+    fn line_col(&self) -> (usize, usize) {
+        let starts = self.line_starts();
+        let line = starts.iter().rposition(|&s| s <= self.caret).unwrap_or(0);
+        (line, self.caret - starts[line])
+    }
+
+    /// The caret char-offset at `(line, column)`, clamping the column to the
+    /// line's length and the line to the last line.
+    fn offset_at(&self, line: usize, column: usize) -> usize {
+        let starts = self.line_starts();
+        let line = line.min(starts.len() - 1);
+        let start = starts[line];
+        // Line end: the char before the next line's start (the `\n`), or buffer
+        // end on the last line.
+        let end = starts.get(line + 1).map(|&s| s - 1).unwrap_or(self.char_count());
+        start.saturating_add(column).min(end)
+    }
+
+    /// Move the caret up one line, keeping the column (ArrowUp). At the first
+    /// line it goes to the buffer start. `extend` grows the selection.
+    pub fn move_up(&mut self, extend: bool) {
+        let (line, col) = self.line_col();
+        self.caret = if line == 0 { 0 } else { self.offset_at(line - 1, col) };
+        if !extend {
+            self.anchor = self.caret;
+        }
+    }
+
+    /// Move the caret down one line, keeping the column (ArrowDown). At the last
+    /// line it goes to the buffer end. `extend` grows the selection.
+    pub fn move_down(&mut self, extend: bool) {
+        let (line, col) = self.line_col();
+        let last = self.line_starts().len() - 1;
+        self.caret = if line == last { self.char_count() } else { self.offset_at(line + 1, col) };
+        if !extend {
+            self.anchor = self.caret;
+        }
+    }
+
+    /// Move the caret to the start of its line (Home, multi-line). `extend`
+    /// grows the selection.
+    pub fn home_line(&mut self, extend: bool) {
+        let (line, _) = self.line_col();
+        self.caret = self.offset_at(line, 0);
+        if !extend {
+            self.anchor = self.caret;
+        }
+    }
+
+    /// Move the caret to the end of its line (End, multi-line). `extend` grows
+    /// the selection.
+    pub fn end_line(&mut self, extend: bool) {
+        let (line, _) = self.line_col();
+        self.caret = self.offset_at(line, usize::MAX);
+        if !extend {
+            self.anchor = self.caret;
+        }
+    }
+
     /// The buffer with a [`CARET_MARKER`] inserted at the caret — the field's
     /// rendered text (a placeholder visible cursor). Render-only: [`text`](Self::text)
     /// is unchanged.
@@ -265,6 +343,29 @@ fn edit(input: &mut TextInput, ev: KeyEvent) {
         Key::Named(NamedKey::ArrowRight) => input.move_right(extend),
         Key::Named(NamedKey::Home) => input.home(extend),
         Key::Named(NamedKey::End) => input.end(extend),
+        Key::Named(_) => {},
+    }
+}
+
+/// The edit handler for [`textarea`]: like [`edit`] but multi-line. `Enter`
+/// inserts a newline; `ArrowUp` / `ArrowDown` move between lines; `Home` / `End`
+/// scope to the current line (`home_line` / `end_line`). Everything else
+/// (typing, Backspace/Delete, ←/→, Shift to extend) matches the single-line
+/// field.
+fn edit_multiline(input: &mut TextInput, ev: KeyEvent) {
+    let extend = ev.mods.shift;
+    match ev.key {
+        Key::Character(s) => input.insert_str(&s),
+        Key::Named(NamedKey::Space) => input.insert_str(" "),
+        Key::Named(NamedKey::Enter) => input.insert_str("\n"),
+        Key::Named(NamedKey::Backspace) => input.backspace(),
+        Key::Named(NamedKey::Delete) => input.delete(),
+        Key::Named(NamedKey::ArrowLeft) => input.move_left(extend),
+        Key::Named(NamedKey::ArrowRight) => input.move_right(extend),
+        Key::Named(NamedKey::ArrowUp) => input.move_up(extend),
+        Key::Named(NamedKey::ArrowDown) => input.move_down(extend),
+        Key::Named(NamedKey::Home) => input.home_line(extend),
+        Key::Named(NamedKey::End) => input.end_line(extend),
         Key::Named(_) => {},
     }
 }
@@ -322,6 +423,35 @@ pub fn text_field(input: &TextInput) -> impl View<TextInput, (), ServalCtx, Elem
 /// than `lens(|s| text_field(s), …)` (whose inner view is opaque).
 pub fn text_field_typed(input: &TextInput) -> TextField {
     build_text_field(input)
+}
+
+// --- MARK: textarea ----------------------------------------------------------
+
+/// Build the concrete view for a multi-line [`textarea`]. Structurally identical
+/// to a [`TextField`] (an `on_key`-wrapped element over a [`TextInput`]); the
+/// difference is the [`edit_multiline`] handler and a `<textarea>` tag. With
+/// `\n`s in the buffer, serval/parley break it into lines (serval feeds raw text
+/// to parley, which honors `\n`).
+fn build_textarea(input: &TextInput) -> TextField {
+    let handler: fn(&mut TextInput, KeyEvent) = edit_multiline;
+    on_key(el::<_, TextInput, ()>("textarea", input.text().to_string()), handler)
+}
+
+/// A reusable multi-line text field over a [`TextInput`] — [`text_field`]'s
+/// multi-line sibling. `Enter` inserts a newline (which renders as a line break),
+/// `ArrowUp` / `ArrowDown` move between lines, `Home` / `End` scope to the line.
+/// Composable via [`lens`](crate::lens) like [`text_field`].
+///
+/// Tier 1: lines are `\n`-delimited in the buffer; up/down navigate those hard
+/// lines (no soft-wrap visual-line navigation, which would need the layout).
+pub fn textarea(input: &TextInput) -> impl View<TextInput, (), ServalCtx, Element = ServalElement> + use<> {
+    build_textarea(input)
+}
+
+/// [`textarea`] with its concrete return type named (for a host storing the
+/// runner in a struct field; see [`text_field_typed`]).
+pub fn textarea_typed(input: &TextInput) -> TextField {
+    build_textarea(input)
 }
 
 // --- MARK: checkbox / toggle -------------------------------------------------
