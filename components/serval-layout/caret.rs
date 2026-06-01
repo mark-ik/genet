@@ -140,6 +140,65 @@ where
         .collect()
 }
 
+/// The caret byte after moving `delta` visual lines (−1 = up, +1 = down) from
+/// `byte_offset` within `node`'s laid-out text, keeping the horizontal position
+/// — soft-wrap-aware ArrowUp / ArrowDown. `None` if `node` has no cached layout.
+///
+/// Unlike the buffer's `\n`-counting navigation (which jumps whole hard lines),
+/// this honours parley's *visual* line breaks: a long unwrapped paragraph that
+/// the layout wrapped across several rows moves one wrapped row at a time. At the
+/// first/last line it lands at the line start/end. parley clamps a too-wide
+/// horizontal position to the target line's end.
+///
+/// Tier 1: a fresh [`Selection`] is built each call, so the goal column is the
+/// caret's current x — there is no sticky goal column preserved across a run of
+/// up/down presses (matching the hard-line navigation in `TextInput`).
+pub fn caret_byte_vertical<D>(
+    node: D::NodeId,
+    byte_offset: usize,
+    built: &BoxTree<D::NodeId>,
+    text_ctx: &TextMeasureCtx,
+    delta: isize,
+) -> Option<usize>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let taffy_id = built.node_map.get(&node)?;
+    let layout = text_ctx.layouts.get(taffy_id)?;
+    let moved = Selection::from_byte_index(layout, byte_offset, Affinity::default())
+        .move_lines(layout, delta, false);
+    Some(moved.focus().index())
+}
+
+/// The caret byte nearest the scene point `(x, y)` within `node`'s laid-out text,
+/// or `None` if `node` has no cached text layout / fragment — the inverse of
+/// [`caret_rect`]. Maps the point into the text layout's local space (subtracting
+/// the node's absolute content-box origin) and asks parley which cluster boundary
+/// it lands on. The `point → caret` primitive behind click-to-place-caret and the
+/// start/extend of a mouse text-selection.
+pub fn caret_byte_at_point<D>(
+    dom: &D,
+    node: D::NodeId,
+    x: f32,
+    y: f32,
+    built: &BoxTree<D::NodeId>,
+    text_ctx: &TextMeasureCtx,
+    fragments: &FragmentPlane<D::NodeId>,
+) -> Option<usize>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let taffy_id = built.node_map.get(&node)?;
+    let layout = text_ctx.layouts.get(taffy_id)?;
+    let (ox, oy) = absolute_origin(dom, fragments, node)?;
+    let frame = fragments.rect_of(node)?;
+    let local_x = x - (ox + frame.border.left + frame.padding.left);
+    let local_y = y - (oy + frame.border.top + frame.padding.top);
+    Some(Cursor::from_point(layout, local_x, local_y).index())
+}
+
 /// The caret bar's *snug* vertical extent `(top, height)` in layout space: from
 /// the top of capitals (the run's `cap_height`) down to below descenders
 /// (`baseline + descent`), hugging the visible glyph band. The font's typographic
@@ -294,5 +353,63 @@ mod tests {
 
         // A collapsed range selects nothing.
         assert!(selection_rects(&doc, p, 1, 1, &built, &text_ctx, &fragments).is_empty());
+    }
+
+    /// Soft-wrap navigation and point hit-testing operate on *visual* lines: a
+    /// narrow `<p>` wraps a space-separated run (no `\n`) across rows; moving down
+    /// then up returns to the first row, and a click on a wrapped row resolves to
+    /// a caret on that row.
+    #[test]
+    fn caret_navigates_visual_lines_and_points() {
+        // Each 4-char word is far wider than the 20px width at the default font,
+        // so parley puts one word per visual line — four rows, no `\n`.
+        let doc = StaticDocument::parse("<html><body><p>aaaa bbbb cccc dddd</p></body></html>");
+        let sheet = &[
+            "html, body, p { display: block; margin: 0; padding: 0; border: 0; }",
+            "p { width: 20px; }",
+        ];
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        let images = ImagePlane::new();
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&doc, &styles, &images, viewport);
+        let p = find_p(&doc);
+        let rect_at = |byte| caret_rect(&doc, p, byte, &built, &text_ctx, &fragments, 2.0).unwrap();
+
+        // Sanity: the run wrapped (the caret at the end sits below the start).
+        let start = rect_at(0);
+        assert!(rect_at(19).y > start.y, "text wrapped to multiple visual lines");
+
+        // Down one visual line lands on a later row (greater y) at a byte past
+        // the first wrapped word.
+        let down = caret_byte_vertical::<StaticDocument>(p, 0, &built, &text_ctx, 1).unwrap();
+        assert!(down > 0, "down moved off byte 0: {down}");
+        assert!(rect_at(down).y > start.y, "down moved to a lower visual line");
+
+        // Up from there returns to the first row.
+        let up = caret_byte_vertical::<StaticDocument>(p, down, &built, &text_ctx, -1).unwrap();
+        assert!((rect_at(up).y - start.y).abs() < 0.5, "up returned to the first row");
+
+        // A click on the wrapped row resolves to a caret on that same row.
+        let down_rect = rect_at(down);
+        let hit = caret_byte_at_point(
+            &doc,
+            p,
+            down_rect.x + 1.0,
+            down_rect.y + down_rect.height * 0.5,
+            &built,
+            &text_ctx,
+            &fragments,
+        )
+        .unwrap();
+        assert!((rect_at(hit).y - down_rect.y).abs() < 0.5, "click maps to the clicked row");
+
+        // A node with no cached text layout yields None for both.
+        let root = doc.document();
+        assert!(caret_byte_vertical::<StaticDocument>(root, 0, &built, &text_ctx, 1).is_none());
+        assert!(caret_byte_at_point(&doc, root, 1.0, 1.0, &built, &text_ctx, &fragments).is_none());
     }
 }

@@ -26,8 +26,8 @@ pub mod render;
 
 pub use a11y::accesskit_tree;
 pub use render::{
-    caret_screen_rect, fragments_from_scripted_dom, hit_test_node, scene_from_scripted_dom,
-    TextCursor,
+    caret_byte_at, caret_screen_rect, fragments_from_scripted_dom, hit_test_node,
+    scene_from_scripted_dom, soft_wrap_caret_byte, TextCursor,
 };
 
 #[cfg(test)]

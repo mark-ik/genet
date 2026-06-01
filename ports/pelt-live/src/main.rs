@@ -55,13 +55,13 @@ use xilem_serval::{
     AnyView, El, Key, KeyEvent, Lens, Modifiers, NamedKey, OnClick, Placement, PointerClick,
     PointerEvent, PointerPhase, SelectState, ServalCtx, ServalElement, ServalAppRunner, Slider,
     TextField, TextInput, anchor_point, el, lens, on_click, overlay_at, select, slider,
-    text_field_typed,
+    textarea_typed,
 };
 
 use accesskit_winit::{Adapter, Event as AkEvent, WindowEvent as AkWindowEvent};
 use pelt_live::{
-    accesskit_tree, caret_screen_rect, fragments_from_scripted_dom, hit_test_node,
-    scene_from_scripted_dom, TextCursor,
+    accesskit_tree, caret_byte_at, caret_screen_rect, fragments_from_scripted_dom, hit_test_node,
+    scene_from_scripted_dom, soft_wrap_caret_byte, TextCursor,
 };
 
 // ── App state + view ───────────────────────────────────────────────────────
@@ -147,14 +147,18 @@ fn demo_view(s: &Demo) -> DemoView {
     // adapter bridges its `&str` argument to the `Fn(&mut ChildState) -> View`
     // shape `lens` expects. Both the adapter and the lens projection are `fn`
     // pointers so `DemoView` stays nameable (no boxing).
-    let make_field: fn(&mut TextInput) -> TextField = |t: &mut TextInput| text_field_typed(t);
+    let make_field: fn(&mut TextInput) -> TextField = |t: &mut TextInput| textarea_typed(t);
     let to_field: fn(&mut Demo) -> &mut TextInput = |d: &mut Demo| &mut d.field;
     el::<_, Demo, ()>(
         "div",
         (
             el::<_, Demo, ()>("p", s.count.to_string()),
             on_click(el::<_, Demo, ()>("button", "+"), increment),
-            el::<_, Demo, ()>("label", "Click the field below, then type (←/→ move the caret):"),
+            el::<_, Demo, ()>(
+                "label",
+                "Click to place the caret, type to edit; a long line wraps and ↑/↓ \
+                 move by wrapped row (Enter adds a line):",
+            ),
             lens(make_field, to_field),
             // The popup: an overlay anchored below the button (its `(x, y)` is
             // the host-computed `popup_anchor`), styled by the `.popup` class.
@@ -213,7 +217,7 @@ fn demo_view(s: &Demo) -> DemoView {
 /// white clear in [`App::render`] (the runner attaches the `<div>` directly
 /// under the document root — there is no `<body>` element to style).
 const SHEET: &[&str] = &[
-    "div, p, button, label, input { display: block; }",
+    "div, p, button, label, input, textarea { display: block; }",
     // The root <div> is the positioned containing block for the popup overlay
     // (an absolute child resolves against the nearest positioned ancestor). The
     // overlay's own `position: absolute` rides an inline style, which outranks
@@ -223,8 +227,11 @@ const SHEET: &[&str] = &[
     "button { font-size: 48px; color: rgb(255, 255, 255); \
         background-color: rgb(60, 120, 220); padding: 12px; }",
     "label { font-size: 28px; color: rgb(60, 60, 80); padding: 8px; }",
-    "input { font-size: 40px; color: rgb(20, 20, 20); \
-        background-color: rgb(235, 238, 245); padding: 12px; }",
+    // The text field is a <textarea>: a fixed width so a long typed line wraps
+    // across visual rows (ArrowUp/ArrowDown navigate those wrapped rows, not just
+    // `\n` breaks). `input` keeps the same look should one reappear.
+    "input, textarea { font-size: 40px; color: rgb(20, 20, 20); \
+        background-color: rgb(235, 238, 245); padding: 12px; width: 360px; }",
     // The popup overlay box: a small tinted card with padding, drawn on top.
     ".popup { font-size: 28px; color: rgb(40, 40, 40); \
         background-color: rgb(245, 230, 140); padding: 10px; }",
@@ -606,6 +613,69 @@ impl App {
                 PhysicalPosition::new(x, y),
                 PhysicalSize::new(w.max(1.0), h.max(1.0)),
             );
+        }
+    }
+
+    /// The focused field's caret as a byte offset into its buffer (the layout
+    /// works in bytes; the field models the caret as a char index).
+    fn field_caret_byte(&self) -> usize {
+        let field = &self.runner.state().field;
+        field
+            .text()
+            .char_indices()
+            .nth(field.caret())
+            .map(|(b, _)| b)
+            .unwrap_or(field.text().len())
+    }
+
+    /// Handle ArrowUp / ArrowDown on the focused multi-line field as soft-wrap
+    /// navigation: move the caret one *visual* row (honouring parley's wrapping),
+    /// not one `\n`-delimited hard line. Returns `true` when it consumed the key
+    /// (so the caller skips the normal key dispatch). Only the `<textarea>` field
+    /// navigates this way; anything else falls through.
+    fn try_soft_wrap_nav(&mut self, key: &WinitKey) -> bool {
+        let delta: isize = match key {
+            WinitKey::Named(WinitNamedKey::ArrowUp) => -1,
+            WinitKey::Named(WinitNamedKey::ArrowDown) => 1,
+            _ => return false,
+        };
+        let Some(node) = self.runner.focus() else { return false };
+        if find_element_by_tag(&self.dom.borrow(), "textarea") != Some(node) {
+            return false;
+        }
+        let caret_byte = self.field_caret_byte();
+        let target = soft_wrap_caret_byte(
+            &self.dom.borrow(),
+            SHEET,
+            self.width,
+            self.height,
+            node,
+            caret_byte,
+            delta,
+        );
+        let Some(byte) = target else { return false };
+        let extend = self.modifiers.shift;
+        self.runner.update(|d| d.field.set_caret_byte(byte, extend));
+        self.push_a11y();
+        self.update_ime_cursor_area();
+        self.redraw();
+        true
+    }
+
+    /// If the focused field is the textarea, move its caret to the clicked point
+    /// (click-to-place-caret). Call after `dispatch_click`, which sets focus to
+    /// the clicked field. `Shift`-click extends the selection. No-op when the
+    /// focus is not the textarea or the point misses its text.
+    fn place_caret_at_click(&mut self, x: f32, y: f32) {
+        let Some(node) = self.runner.focus() else { return };
+        if find_element_by_tag(&self.dom.borrow(), "textarea") != Some(node) {
+            return;
+        }
+        let extend = self.modifiers.shift;
+        if let Some(byte) =
+            caret_byte_at(&self.dom.borrow(), SHEET, self.width, self.height, node, x, y)
+        {
+            self.runner.update(|d| d.field.set_caret_byte(byte, extend));
         }
     }
 
@@ -994,6 +1064,9 @@ impl ApplicationHandler<UserEvent> for App {
                     if !actions.is_empty() {
                         tracing::debug!(n = actions.len(), "click bubbled actions to root");
                     }
+                    // Click-to-place: if that focused the textarea, drop the caret
+                    // where the click landed (rather than leaving it where it was).
+                    self.place_caret_at_click(x, y);
                     // The click may have toggled the button's popup. If it is now
                     // open, (re)place it under the button from the freshly
                     // laid-out button rect via `anchor_point`. The button is
@@ -1052,6 +1125,9 @@ impl ApplicationHandler<UserEvent> for App {
                     // modifier don't type). Otherwise map + dispatch the key.
                     if self.handle_clipboard_shortcut(&event.logical_key) {
                         // handled as a clipboard op (it did its own redraw).
+                    } else if self.try_soft_wrap_nav(&event.logical_key) {
+                        // ArrowUp/Down moved the caret by a wrapped row in the
+                        // focused textarea (it did its own redraw).
                     } else if let Some(key_event) =
                         key_event_from_winit(&event.logical_key, self.modifiers)
                     {

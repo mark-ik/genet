@@ -25,7 +25,8 @@ use engine_observables_api::{FragmentQuery, Point};
 use paint_list_api::{ColorF, DeviceIntSize};
 use serval_layout::{
     BackgroundImagePlane, FragmentPlane, ImagePlane, ScrollOffsets, ServalLaneView, StylePlane,
-    caret_rect, emit_paint_list_with_layouts, layout, run_cascade, selection_rects,
+    caret_byte_at_point, caret_byte_vertical, caret_rect, emit_paint_list_with_layouts, layout,
+    run_cascade, selection_rects,
 };
 use serval_scripted_dom::{NodeId, ScriptedDom};
 
@@ -167,6 +168,67 @@ pub fn caret_screen_rect(
     let (fragments, built, text_ctx) = layout(dom, &styles, &images, viewport);
     let r = caret_rect(dom, node, caret_byte, &built, &text_ctx, &fragments, CARET_WIDTH)?;
     Some((r.x, r.y, r.width, r.height))
+}
+
+/// The caret byte after moving one visual line — `delta` is `-1` (up) or `+1`
+/// (down) — from `caret_byte` within `node`'s laid-out text. Runs cascade →
+/// layout, then [`caret_byte_vertical`], so ArrowUp / ArrowDown in a textarea
+/// follow parley's *wrapped* rows, not just `\n` breaks. `None` if `node` has no
+/// text layout. The host feeds the result to `TextInput::set_caret_byte`.
+pub fn soft_wrap_caret_byte(
+    dom: &ScriptedDom,
+    stylesheets: &[&str],
+    width: u32,
+    height: u32,
+    node: NodeId,
+    caret_byte: usize,
+    delta: isize,
+) -> Option<usize> {
+    let mut styles: StylePlane<NodeId> = StylePlane::new();
+    run_cascade(
+        dom,
+        &mut styles,
+        euclid::Size2D::new(width as f32, height as f32),
+        stylesheets,
+        None,
+    );
+    let images = ImagePlane::new();
+    let viewport = taffy::Size {
+        width: taffy::AvailableSpace::Definite(width as f32),
+        height: taffy::AvailableSpace::Definite(height as f32),
+    };
+    let (_fragments, built, text_ctx) = layout(dom, &styles, &images, viewport);
+    caret_byte_vertical::<ScriptedDom>(node, caret_byte, &built, &text_ctx, delta)
+}
+
+/// The caret byte nearest scene point `(x, y)` within `node`'s laid-out text —
+/// click-to-place-caret. Runs cascade → layout, then [`caret_byte_at_point`].
+/// `None` if `node` has no text layout. The host maps a click on a focused field
+/// to a caret position with this.
+pub fn caret_byte_at(
+    dom: &ScriptedDom,
+    stylesheets: &[&str],
+    width: u32,
+    height: u32,
+    node: NodeId,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
+    let mut styles: StylePlane<NodeId> = StylePlane::new();
+    run_cascade(
+        dom,
+        &mut styles,
+        euclid::Size2D::new(width as f32, height as f32),
+        stylesheets,
+        None,
+    );
+    let images = ImagePlane::new();
+    let viewport = taffy::Size {
+        width: taffy::AvailableSpace::Definite(width as f32),
+        height: taffy::AvailableSpace::Definite(height as f32),
+    };
+    let (fragments, built, text_ctx) = layout(dom, &styles, &images, viewport);
+    caret_byte_at_point(dom, node, x, y, &built, &text_ctx, &fragments)
 }
 
 /// Run only the cascade → layout half (no paint emission) over `dom`, returning

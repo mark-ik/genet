@@ -352,6 +352,22 @@ impl TextInput {
         }
     }
 
+    /// Set the caret to the character boundary at byte offset `byte` (clamped to
+    /// a valid boundary and the buffer end). `extend` keeps the anchor, growing
+    /// the selection. The host drives this from the laid-out text — soft-wrap
+    /// ArrowUp/ArrowDown and click-to-place hit-test parley and yield a byte
+    /// offset, which maps back to this char-index model here.
+    pub fn set_caret_byte(&mut self, byte: usize, extend: bool) {
+        let byte = byte.min(self.text.len());
+        // Snap to the char boundary at or below `byte` before counting chars
+        // (parley returns cluster boundaries, but clamp defensively).
+        let byte = (0..=byte).rev().find(|&b| self.text.is_char_boundary(b)).unwrap_or(0);
+        self.caret = self.text[..byte].chars().count();
+        if !extend {
+            self.anchor = self.caret;
+        }
+    }
+
     /// The buffer with a [`CARET_MARKER`] inserted at the caret — the field's
     /// rendered text (a placeholder visible cursor). Render-only: [`text`](Self::text)
     /// is unchanged.
