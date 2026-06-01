@@ -14,11 +14,12 @@ path = "lib.rs"
 
 [dependencies]
 script-engine-api = { path = "../script-engine-api" }
-boa_engine = "0.21"
-boa_gc = "0.21"
-# Both resolve to the crates/boa `serval` fork via serval's root [patch.crates-io]
-# (icu family bumped ~2.0 -> ~2.1), which unifies boa's icu_normalizer with parley
-# 0.9 at 2.1.1. That's why this crate is now a serval workspace member (was a
-# standalone [workspace] until 2026-05-25). See
-# ../../docs/2026-05-20_serval_script_engine_plan.md.
+boa_engine = "=1.0.0-dev"
+boa_gc = "=1.0.0-dev"
+# Both resolve to crates/boa via serval's root [patch.crates-io]. crates/boa now
+# mirrors boa-upstream main verbatim (synced 2026-06-01) — no serval patch: the
+# old icu-family widen is obsolete because upstream itself moved to the icu 2.2.x
+# line that serval's graph (nova -> temporal_rs -> icu_calendar, parley 0.9)
+# already forces. Upstream is on the 1.0.0-dev line, hence the `=1.0.0-dev`
+# pre-release match. See ../../docs/2026-05-20_serval_script_engine_plan.md.
 

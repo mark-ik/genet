@@ -437,12 +437,13 @@ gpu-allocator = { path = "support/patches/gpu-allocator" }
 # that script-engine-nova relies on. Local path for dev; the shippable form is the
 # git branch: nova_vm = { git = "https://github.com/mark-ik/nova", branch = "serval-embedder" }
 nova_vm = { path = "../../crates/nova/nova_vm" }
-# Boa fork (crates/boa, `serval` branch) carrying the icu family bump ~2.0 -> ~2.1
-# so boa's (non-optional) icu_normalizer unifies with parley 0.9's ^2.1.1 — the
-# conflict that kept script-engine-boa out of the workspace. boa_engine pulls its
-# sibling boa_* crates via the fork's own path deps; only boa_engine + boa_gc are
-# named from crates.io (by script-engine-boa), so only those two need patching.
-# See docs/2026-05-20_serval_script_engine_plan.md.
+# Boa: crates/boa mirrors boa-upstream main verbatim (synced 2026-06-01, the
+# 1.0.0-dev line). No serval patch — the old icu-family widen is obsolete now that
+# upstream pins the icu 2.2.x line serval's graph already forces. We carry the path
+# patch only to build boa from the local checkout (so a boa source change is picked
+# up without a publish); boa_engine pulls its sibling boa_* crates via boa's own
+# path deps, so only boa_engine + boa_gc are named from crates.io (by
+# script-engine-boa) and need patching. See docs/2026-05-20_serval_script_engine_plan.md.
 boa_engine = { path = "../../crates/boa/core/engine" }
 boa_gc = { path = "../../crates/boa/core/gc" }
 # stylo_taffy (serval-layout) depends on crates.io `stylo`/`stylo_atoms`

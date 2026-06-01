@@ -719,7 +719,7 @@ dependencies = [
 
 [[package]]
 name = "boa_ast"
-version = "0.21.1"
+version = "1.0.0-dev"
 dependencies = [
  "bitflags 2.11.1",
  "boa_interner",
@@ -728,14 +728,16 @@ dependencies = [
  "indexmap",
  "num-bigint",
  "rustc-hash 2.1.2",
+ "strum",
 ]
 
 [[package]]
 name = "boa_engine"
-version = "0.21.1"
+version = "1.0.0-dev"
 dependencies = [
  "aligned-vec",
  "arrayvec",
+ "async-channel",
  "bitflags 2.11.1",
  "boa_ast",
  "boa_gc",
@@ -750,10 +752,10 @@ dependencies = [
  "dynify",
  "fast-float2",
  "float16",
- "futures-channel",
  "futures-concurrency",
  "futures-lite",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
+ "icu_calendar",
  "icu_normalizer",
  "indexmap",
  "intrusive-collections",
@@ -762,9 +764,10 @@ dependencies = [
  "num-integer",
  "num-traits",
  "num_enum",
- "paste",
+ "oneshot",
+ "pastey 0.2.3",
  "portable-atomic",
- "rand 0.9.4",
+ "rand 0.10.1",
  "regress",
  "rustc-hash 2.1.2",
  "ryu-js",
@@ -774,29 +777,32 @@ dependencies = [
  "static_assertions",
  "tag_ptr",
  "tap",
+ "temporal_rs",
  "thin-vec",
  "thiserror 2.0.18",
  "time",
+ "timezone_provider",
  "xsum",
 ]
 
 [[package]]
 name = "boa_gc"
-version = "0.21.1"
+version = "1.0.0-dev"
 dependencies = [
+ "arrayvec",
  "boa_macros",
  "boa_string",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
  "thin-vec",
 ]
 
 [[package]]
 name = "boa_interner"
-version = "0.21.1"
+version = "1.0.0-dev"
 dependencies = [
  "boa_gc",
  "boa_macros",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
  "indexmap",
  "once_cell",
  "phf",
@@ -806,7 +812,7 @@ dependencies = [
 
 [[package]]
 name = "boa_macros"
-version = "0.21.1"
+version = "1.0.0-dev"
 dependencies = [
  "cfg-if",
  "cow-utils",
@@ -818,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "boa_parser"
-version = "0.21.1"
+version = "1.0.0-dev"
 dependencies = [
  "bitflags 2.11.1",
  "boa_ast",
@@ -834,11 +840,11 @@ dependencies = [
 
 [[package]]
 name = "boa_string"
-version = "0.21.1"
+version = "1.0.0-dev"
 dependencies = [
  "fast-float2",
  "itoa",
- "paste",
+ "pastey 0.2.3",
  "rustc-hash 2.1.2",
  "ryu-js",
  "static_assertions",
@@ -2065,7 +2071,7 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c20b425addb8661e97fe1d51c4d8bcec3ec29ed6ad0db983976a7521276b8f7"
 dependencies = [
- "hashbrown 0.17.0",
+ "hashbrown 0.17.1",
  "linebender_resource_handle",
  "memmap2",
  "objc2 0.6.4",
@@ -2536,7 +2542,7 @@ dependencies = [
  "num-integer",
  "num-rational",
  "option-operations",
- "pastey 0.2.2",
+ "pastey 0.2.3",
  "pin-project-lite",
  "smallvec",
  "thiserror 2.0.18",
@@ -2976,9 +2982,9 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.17.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
+checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
  "allocator-api2",
  "equivalent",
@@ -3573,7 +3579,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
- "hashbrown 0.17.0",
+ "hashbrown 0.17.1",
  "serde",
  "serde_core",
 ]
@@ -3591,9 +3597,9 @@ dependencies = [
 
 [[package]]
 name = "intrusive-collections"
-version = "0.9.7"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "189d0897e4cbe8c75efedf3502c18c887b05046e59d28404d4d8e46cbc4d1e86"
+checksum = "80e165935eba36cb526af8389effd2005a741adcbb6ed32106cc68e3f7b92960"
 dependencies = [
  "memoffset",
 ]
@@ -4452,7 +4458,7 @@ dependencies = [
  "ahash",
  "ecmascript_atomics",
  "fast-float",
- "hashbrown 0.17.0",
+ "hashbrown 0.17.1",
  "lexical",
  "num-bigint",
  "num-traits",
@@ -4991,6 +4997,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "oneshot"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfe21416a02c693fb9f980befcb230ecc70b0b3d1cc4abf88b9675c4c1457f0c"
+
+[[package]]
 name = "oorandom"
 version = "11.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5008,7 +5020,7 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aca39cf52b03268400c16eeb9b56382ea3c3353409309b63f5c8f0b1faf42754"
 dependencies = [
- "pastey 0.2.2",
+ "pastey 0.2.3",
 ]
 
 [[package]]
@@ -5354,7 +5366,7 @@ dependencies = [
  "accesskit",
  "fontique",
  "harfrust",
- "hashbrown 0.17.0",
+ "hashbrown 0.17.1",
  "icu_normalizer",
  "icu_properties 2.2.0",
  "icu_segmenter 2.2.0",
@@ -5387,9 +5399,9 @@ checksum = "35fb2e5f958ec131621fdd531e9fc186ed768cbe395337403ae56c17a74c68ec"
 
 [[package]]
 name = "pastey"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5a797f0e07bdf071d15742978fc3128ec6c22891c31a3a931513263904c982a"
+checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
 
 [[package]]
 name = "pelt"
@@ -6231,9 +6243,9 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "regress"
-version = "0.10.5"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2057b2325e68a893284d1538021ab90279adac1139957ca2a74426c6f118fb48"
+checksum = "158a764437582235e3501f683b93a0a6f8d825d04a789dbe5ed30b8799b8908a"
 dependencies = [
  "hashbrown 0.16.1",
  "memchr",
@@ -6315,7 +6327,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73389e0c99e664f919275ab5b5b0471391fe9a8de61e1dff9b1eaf56a90f16e3"
 dependencies = [
  "bytes",
- "hashbrown 0.17.0",
+ "hashbrown 0.17.1",
  "indexmap",
  "munge",
  "ptr_meta",
@@ -6739,9 +6751,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.149"
+version = "1.0.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
+checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
 dependencies = [
  "itoa",
  "memchr",
@@ -8614,6 +8626,7 @@ dependencies = [
  "jiff-tzdb",
  "tinystr 0.8.3",
  "tzif",
+ "zerofrom",
  "zerotrie",
  "zerovec 0.11.6",
 ]
@@ -8967,7 +8980,7 @@ dependencies = [
 name = "tree_arena"
 version = "0.2.0"
 dependencies = [
- "hashbrown 0.17.0",
+ "hashbrown 0.17.1",
 ]
 
 [[package]]
@@ -10626,7 +10639,7 @@ name = "xilem_core"
 version = "0.4.0"
 dependencies = [
  "anymore",
- "hashbrown 0.17.0",
+ "hashbrown 0.17.1",
  "tracing",
 ]
 
