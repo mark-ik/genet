@@ -46,7 +46,8 @@ calendar bet.
   (`texture2D` / `textureCube`), built-in math, unary prefixes, ternary.
   *Done condition:* a curated corpus (WebGL Conformance Suite shader
   examples, plus the corner cases mozangle's tests exercise) parses
-  cleanly, with no `Unsupported` errors. *Status: in progress.*
+  cleanly, with no `Unsupported` errors. *Status: primary grammar
+  coverage complete; conformance corpus is the next gate.*
   - **First pass shipped.** Pratt refactor of the expression layer
     (binding-power table + one driver, lessons borrowed from chumsky's
     `pratt` module and matklad's "Simple but Powerful Pratt Parsing");
@@ -59,12 +60,18 @@ calendar bet.
     Receipts at `tests/step2_breadth.rs`, 17/17 green. parse.rs split
     into `parse/{decl,stmt,expr}.rs` once it crossed 600 LOC; each
     submodule under 330 lines.
-  - **Still open under Step 2.** Struct declarations, ternary `?:`,
-    function definitions with non-empty parameters (the function-call
-    side works; function-def-with-params is unused by the canonical
-    corpus), `texture2D` / `textureCube` (just identifiers in the AST
-    today, validator will give them their built-in semantics), and the
-    long tail the conformance corpus surfaces.
+  - **Second pass shipped.** Function definitions with non-empty
+    parameter lists (the path existed; first explicit receipt confirms
+    it); ternary `?:` (right-associative, precedence between assign and
+    log-or, mixfix-handled inline in the Pratt loop with `TERNARY_BP`);
+    struct declarations at file scope (`struct Name { field; field; };`
+    with multi-name-per-line via `vec3 a, b;`). Receipts at
+    `tests/step2_remainder.rs`, 8/8 green.
+  - **Still open at this gate.** Conformance corpus actually run
+    against the parser (the Step 2 done condition); `texture2D` /
+    `textureCube` (lex as identifiers already; validator gives them
+    built-in semantics); the long tail of WebGL 1 shader idioms the
+    corpus will surface.
 
 - **Step 3 — ESSL 3.00 parser delta.** ESSL 3.00 adds `in` / `out` /
   `centroid` / `flat` / `smooth`, layout qualifiers, integer literal
@@ -136,36 +143,44 @@ reach.
   literals (incl. exponents and trailing `f`), line + block comments,
   single + double character punctuation, the operator set the WebGL 1
   precedence table needs.
-- AST: translation unit, external decls (precision, global, function),
-  parameters, types, storage and precision qualifiers, blocks,
+- AST: translation unit, external decls (precision, global, function,
+  struct), parameters, types, storage and precision qualifiers, blocks,
   statements (expr, return, decl, block, `if`, `while`, `for`, `do`,
   `break`, `continue`, `discard`), expressions (literals, idents,
   calls, assignments incl. compound, binary ops, unary prefix + postfix,
-  member access, indexing; precedence-respecting via a Pratt driver +
-  binding-power table).
+  member access, indexing, ternary; precedence-respecting via a Pratt
+  driver + binding-power table).
 - Parser: recursive-descent for declarations and statements (in
   `parse/decl.rs` and `parse/stmt.rs`); single Pratt loop per
   precedence level for expressions (in `parse/expr.rs`). Errors carry
   spans; an `Error::display(src)` adapter renders 1-based line / column.
 - Tests: canonical-triangle vertex + fragment, tinted vertex + fragment
   with uniform / varying / binary `*` arg, comment skipping, malformed-
-  input error path (6 tests); plus the Step 2 breadth corpus exercising
-  local decls (with / without init, `const`), `if` / `else`, nested
-  if-else chain, `while`, `do` / `while`, `for` with decl init / empty
-  slots, jump statements inside loops, swizzle access, swizzle after
-  call, unary `-` on float lit, unary `!` on bool lit, postfix `++` in
-  for-step, additive vs multiplicative precedence (17 tests). 23/23
-  green on Windows.
+  input error path (6 tests); Step 2 breadth corpus exercising local
+  decls (with / without init, `const`), `if` / `else`, nested if-else
+  chain, `while`, `do` / `while`, `for` with decl init / empty slots,
+  jump statements inside loops, swizzle access, swizzle after call,
+  unary `-` on float lit, unary `!` on bool lit, postfix `++` in
+  for-step, additive vs multiplicative precedence (17 tests); Step 2
+  remainder exercising function definitions with three params and with
+  `(void)` form, two-function translation units, ternary in assign-
+  rhs, right-associativity, log-or binding tighter than ternary, struct
+  decls with three typed fields and with multi-name-per-line (8 tests).
+  31/31 green on Windows.
 
 ## 5. What it doesn't ship (and the order to add)
 
-In step-2 remainder + step-3 priority order: struct declarations,
-ternary `?:`, function definitions with non-empty parameter lists,
-`texture2D` / `textureCube` validator semantics, then the ESSL 3.00
-delta (shift / bitwise / `in` / `out` / `centroid` / layout
-qualifiers / integer literal suffixes / `switch`). Each is a localized
-addition: one row in the binding-power table, one statement arm, or
-one decl variant.
+For Step 2 closure: run the WebGL Conformance Suite shader corpus
+through `parse_source` and fix whatever surfaces. For Step 3: the
+ESSL 3.00 delta (shift / bitwise / `in` / `out` / `centroid` / layout
+qualifiers / integer literal suffixes / `switch` / arrays with sized
+declarators / `length()` postfix). Each is a localized addition: one
+row in the binding-power table, one statement arm, or one decl variant.
+
+Also still parser-side but not exercised yet: struct types as type
+specifiers in declarations (the validator's symbol table resolves a
+struct name to a type; the parser today only recognizes built-in type
+keywords).
 
 ## 6. Lowering target — when to decide
 

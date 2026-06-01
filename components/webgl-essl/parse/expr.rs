@@ -42,7 +42,7 @@ impl Parser {
             self.primary_expr()?
         };
 
-        // Postfix + infix loop.
+        // Postfix + infix + ternary loop.
         loop {
             let p = match self.peek_kind() {
                 Some(TokenKind::Punct(p)) => *p,
@@ -55,6 +55,29 @@ impl Parser {
                 let op_span = self.peek_span();
                 self.bump();
                 lhs = self.apply_postfix(lhs, p, op_span)?;
+                continue;
+            }
+            if p == Punct::Question {
+                // Ternary `cond ? then : else_`. Binding power 3 sits
+                // between assign (2) and log-or (3 too, but checked
+                // after this arm). Right-associative: both branches
+                // accept assignment via `expr_bp(0)`, so a nested
+                // ternary in `else_` is grabbed via that recursion.
+                let l_bp = TERNARY_BP;
+                if l_bp < min_bp {
+                    break;
+                }
+                self.bump();
+                let then = self.expr_bp(0)?;
+                self.expect_punct(Punct::Colon, "`:` (ternary)")?;
+                let else_ = self.expr_bp(0)?;
+                let span = lhs.span().merge(else_.span());
+                lhs = Expr::Ternary {
+                    cond: Box::new(lhs),
+                    then: Box::new(then),
+                    else_: Box::new(else_),
+                    span,
+                };
                 continue;
             }
             if let Some((l_bp, r_bp)) = infix_bp(p) {
@@ -228,8 +251,13 @@ impl Parser {
 
 // ---------- binding-power tables --------------------------------------
 //
-// Numbers gapped by 2 so future operators (shift / bitwise / ternary)
-// slot in without renumbering.
+// Numbers gapped by 2 so future operators (shift / bitwise) slot in
+// without renumbering.
+
+/// Binding power for the ternary `?:` operator. Sits between
+/// assignment (l_bp = 2) and logical OR (l_bp = 3), checked as a
+/// special case in the Pratt loop because ternary is mixfix.
+const TERNARY_BP: u8 = 3;
 
 fn infix_bp(p: Punct) -> Option<(u8, u8)> {
     Some(match p {

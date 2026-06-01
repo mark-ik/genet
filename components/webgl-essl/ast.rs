@@ -24,6 +24,27 @@ pub enum ExternalDecl {
     Global(GlobalDecl),
     /// `<return-type> <name>(<params>) { <body> }`
     Function(FunctionDef),
+    /// `struct <name>? { <fields> };` at file scope.
+    Struct(StructDecl),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDecl {
+    /// Tag name. `None` is allowed by ESSL when the struct is used
+    /// inline as a type specifier, though the spike's parser always
+    /// expects one here.
+    pub name: Option<String>,
+    pub name_span: Option<Span>,
+    pub fields: Vec<StructField>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructField {
+    pub ty: TypeSpec,
+    pub name: String,
+    pub name_span: Span,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -235,6 +256,14 @@ pub enum Expr {
     Member { base: Box<Expr>, field: String, field_span: Span, span: Span },
     /// `<base>[<index>]` — array or vector subscript.
     Index { base: Box<Expr>, index: Box<Expr>, span: Span },
+    /// `<cond> ? <then> : <else_>`. Right-associative; precedence sits
+    /// between assignment (looser) and logical-or (tighter).
+    Ternary {
+        cond: Box<Expr>,
+        then: Box<Expr>,
+        else_: Box<Expr>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -293,7 +322,8 @@ impl Expr {
             | Expr::Binary { span, .. }
             | Expr::Unary { span, .. }
             | Expr::Member { span, .. }
-            | Expr::Index { span, .. } => *span,
+            | Expr::Index { span, .. }
+            | Expr::Ternary { span, .. } => *span,
         }
     }
 }

@@ -7,7 +7,7 @@
 
 use crate::ast::{
     ExternalDecl, FunctionDef, GlobalDecl, Param, PrecisionDecl, PrecisionQualifier,
-    StorageQualifier, TypeKind, TypeSpec,
+    StorageQualifier, StructDecl, StructField, TypeKind, TypeSpec,
 };
 use crate::error::{Error, ErrorKind};
 use crate::span::Span;
@@ -20,6 +20,9 @@ impl Parser {
         if let Some(start) = self.eat_keyword(Keyword::Precision) {
             return self.precision_decl(start);
         }
+        if let Some(start) = self.eat_keyword(Keyword::Struct) {
+            return self.struct_decl(start);
+        }
         if let Some(storage) = self.peek_storage_qualifier() {
             return self.global_decl(storage);
         }
@@ -27,6 +30,64 @@ impl Parser {
         // without a storage qualifier. The next-after-name token picks:
         // `(` => function, `;` => global.
         self.type_starting_decl()
+    }
+
+    fn struct_decl(&mut self, start: Span) -> Result<ExternalDecl, Error> {
+        let (name, name_span) = match self.peek_kind() {
+            Some(TokenKind::Ident(_)) => {
+                let (n, s) = self.expect_ident("struct name")?;
+                (Some(n), Some(s))
+            },
+            _ => (None, None),
+        };
+        self.expect_punct(Punct::LBrace, "`{` (struct body)")?;
+        let mut fields = Vec::new();
+        loop {
+            match self.peek_kind() {
+                Some(TokenKind::Punct(Punct::RBrace)) | None => break,
+                _ => self.struct_field_line(&mut fields)?,
+            }
+        }
+        self.expect_punct(Punct::RBrace, "`}` (struct body)")?;
+        let semi = self.expect_punct(Punct::Semi, "`;` after struct")?;
+        Ok(ExternalDecl::Struct(StructDecl {
+            name,
+            name_span,
+            fields,
+            span: start.merge(semi),
+        }))
+    }
+
+    fn struct_field_line(&mut self, fields: &mut Vec<StructField>) -> Result<(), Error> {
+        // `<type> <name> [, <name>]* ;` — multiple fields can share one type.
+        let ty = self.type_spec()?;
+        loop {
+            let (name, name_span) = self.expect_ident("field name")?;
+            let field_span = ty.span.merge(name_span);
+            fields.push(StructField { ty: ty.clone(), name, name_span, span: field_span });
+            match self.peek_kind() {
+                Some(TokenKind::Punct(Punct::Comma)) => {
+                    self.bump();
+                    continue;
+                },
+                Some(TokenKind::Punct(Punct::Semi)) => {
+                    self.bump();
+                    return Ok(());
+                },
+                Some(k) => {
+                    return Err(Error::new(
+                        ErrorKind::Expected { wanted: "`,` or `;`", got: k.label() },
+                        self.peek_span(),
+                    ));
+                },
+                None => {
+                    return Err(Error::new(
+                        ErrorKind::UnexpectedEof { wanted: "`,` or `;`" },
+                        self.peek_span(),
+                    ));
+                },
+            }
+        }
     }
 
     fn precision_decl(&mut self, kw_span: Span) -> Result<ExternalDecl, Error> {
