@@ -817,8 +817,9 @@ mod controls {
 
     use crate::{
         AnyView, DomHandle, Key, KeyEvent, Modifiers, NamedKey, PointerClick, PointerEvent,
-        PointerPhase, RadioGroup, SelectState, ServalAppRunner, ServalCtx, ServalElement, TextInput,
-        View, button, checkbox, el, lens, on_pointer, overlay_at, radio_group, select, text_field,
+        PointerPhase, RadioGroup, SelectState, ServalAppRunner, ServalCtx, ServalElement, Slider,
+        TextInput, View, button, checkbox, el, lens, on_pointer, overlay_at, radio_group, select,
+        slider, text_field,
     };
 
     /// The text data of the single text child under `node`, if any.
@@ -1338,6 +1339,48 @@ mod controls {
             vec![PointerPhase::Down, PointerPhase::Move, PointerPhase::Up]
         );
         assert_eq!(runner.state().last_x, 40.0, "the captured handler saw the move's local x");
+    }
+
+    /// `slider`: a press sets the value to the pointer fraction, and a drag
+    /// (move while captured) tracks it.
+    #[test]
+    fn slider_drag_sets_value() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            |s: &Slider| slider(s),
+            Slider::default(),
+        );
+        let track = runner.root();
+
+        // Press at 50/100 → value 0.5.
+        runner.dispatch_pointer_down(
+            track,
+            PointerEvent { phase: PointerPhase::Down, local: (50.0, 0.0), size: (100.0, 12.0) },
+        );
+        assert!((runner.state().value - 0.5).abs() < 0.001, "press sets 0.5");
+
+        // Drag to 80/100 → value 0.8.
+        runner.dispatch_pointer_move(PointerEvent {
+            phase: PointerPhase::Move,
+            local: (80.0, 0.0),
+            size: (100.0, 12.0),
+        });
+        assert!((runner.state().value - 0.8).abs() < 0.001, "drag tracks to 0.8");
+
+        // Past the right edge clamps to 1.0.
+        runner.dispatch_pointer_move(PointerEvent {
+            phase: PointerPhase::Move,
+            local: (130.0, 0.0),
+            size: (100.0, 12.0),
+        });
+        assert!((runner.state().value - 1.0).abs() < 0.001, "clamps to 1.0");
+        runner.dispatch_pointer_up(PointerEvent {
+            phase: PointerPhase::Up,
+            local: (130.0, 0.0),
+            size: (100.0, 12.0),
+        });
+        assert_eq!(runner.pointer_capture(), None, "release ends the drag");
     }
 
     // --- selection (model + keyboard) -----------------------------------------
