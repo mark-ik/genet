@@ -1185,18 +1185,18 @@ const DOM_BOOTSTRAP: &str = r#"
   // phase: 'c:'+type for capture, 'b:'+type for bubble/target.
   // The 3rd arg of add/removeEventListener is either a boolean `capture` or an
   // options object `{ capture, once, passive }` (DOM §dom-eventtarget-addeventlistener).
-  // Normalize to `{ capture, once }` (passive is parsed + accepted but has no
-  // scroll-blocking effect to gate yet — serval has no default scroll action).
   function eventOpts(arg) {
     if (arg && typeof arg === 'object') {
-      return { capture: !!arg.capture, once: !!arg.once };
+      return { capture: !!arg.capture, once: !!arg.once, passive: !!arg.passive };
     }
-    return { capture: !!arg, once: false };
+    return { capture: !!arg, once: false, passive: false };
   }
-  // A listener is stored as `{ cb, once }` so a `once` listener can be removed
-  // after it first fires. Listeners are keyed by phase ('c:'/'b:' + type), so a
-  // capture and a bubble listener for the same callback are distinct entries
-  // (matching the DOM's (type, callback, capture) listener identity).
+  // A listener is stored as `{ cb, once, passive }`: `once` so it can be removed
+  // after it first fires; `passive` so its `preventDefault()` is ignored (DOM:
+  // a passive listener cannot cancel the default action). Listeners are keyed by
+  // phase ('c:'/'b:' + type), so a capture and a bubble listener for the same
+  // callback are distinct entries (matching the DOM's (type, callback, capture)
+  // listener identity).
   Node.prototype.addEventListener = function(type, cb, opts) {
     if (typeof cb !== 'function') return;
     var o = eventOpts(opts);
@@ -1205,7 +1205,7 @@ const DOM_BOOTSTRAP: &str = r#"
     var l = this.__listeners[key] || (this.__listeners[key] = []);
     // Duplicate (type, callback, capture) listeners are ignored (DOM spec).
     for (var i = 0; i < l.length; i++) { if (l[i].cb === cb) return; }
-    l.push({ cb: cb, once: o.once });
+    l.push({ cb: cb, once: o.once, passive: o.passive });
   };
   Node.prototype.removeEventListener = function(type, cb, opts) {
     if (!this.__listeners) return;
@@ -1233,7 +1233,11 @@ const DOM_BOOTSTRAP: &str = r#"
         var j = l.indexOf(rec);
         if (j !== -1) l.splice(j, 1);
       }
+      // `passive`: preventDefault() must be a no-op for the duration of this
+      // listener (DOM). The flag is read by Event.preventDefault (lib.rs).
+      event.__inPassive = rec.passive;
       rec.cb.call(node, event);
+      event.__inPassive = false;
     }
   }
   Node.prototype.dispatchEvent = function(event) {
@@ -2900,7 +2904,11 @@ mod tests {
              var le = document.createEvent('Event');\
              child.addEventListener('legacy', function(e){ console.log('legacy:' + e.type + ':' + e.bubbles); });\
              le.initEvent('legacy', true, true);\
-             child.dispatchEvent(le);",
+             child.dispatchEvent(le);\
+             child.addEventListener('pasv', function(e){ e.preventDefault(); }, { passive: true });\
+             var pe = new Event('pasv', { cancelable: true });\
+             var notCanceled = child.dispatchEvent(pe);\
+             console.log('passive-noop:' + (notCanceled && !pe.defaultPrevented));",
         )
         .expect("events script");
 
@@ -2908,7 +2916,9 @@ mod tests {
         // halted at the child; stopImmediatePropagation halts the child's *second*
         // listener (imm-2) AND the bubble to parent (imm-parent), firing only imm-1;
         // a `once` listener fires on the first dispatch only (second is a no-op); a
-        // createEvent()+initEvent() event dispatches with the initialized type/bubbles.
+        // createEvent()+initEvent() event dispatches with the initialized type/bubbles;
+        // a {passive:true} listener's preventDefault() is ignored (dispatchEvent
+        // returns true, defaultPrevented stays false).
         assert_eq!(
             rt.host().borrow().console,
             vec![
@@ -2918,6 +2928,7 @@ mod tests {
                 "imm-1",
                 "once-fired",
                 "legacy:legacy:true",
+                "passive-noop:true",
             ]
         );
     }

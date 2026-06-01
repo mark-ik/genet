@@ -256,7 +256,13 @@ const EVENT_TARGET_BOOTSTRAP: &str = r#"
     this.__initialized = true;
   }
   Event.prototype.preventDefault = function() {
-    if (this.cancelable) { this.__canceled = true; this.defaultPrevented = true; }
+    // A passive listener (addEventListener {passive:true}) cannot cancel the
+    // default action — preventDefault is a no-op while one is firing (DOM;
+    // __inPassive is set around the listener call in dom.rs's `fire`).
+    if (this.cancelable && !this.__inPassive) {
+      this.__canceled = true;
+      this.defaultPrevented = true;
+    }
   };
   // Legacy alias: `event.returnValue = false` is preventDefault(); reading it
   // reflects whether the default is still allowed (DOM, Window event handlers).
