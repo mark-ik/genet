@@ -24,8 +24,8 @@
 use engine_observables_api::{FragmentQuery, Point};
 use paint_list_api::{ColorF, DeviceIntSize};
 use serval_layout::{
-    BackgroundImagePlane, FragmentPlane, ImagePlane, ServalLaneView, StylePlane, caret_rect,
-    emit_paint_list_with_layouts, layout, run_cascade, selection_rects,
+    BackgroundImagePlane, FragmentPlane, ImagePlane, ScrollOffsets, ServalLaneView, StylePlane,
+    caret_rect, emit_paint_list_with_layouts, layout, run_cascade, selection_rects,
 };
 use serval_scripted_dom::{NodeId, ScriptedDom};
 
@@ -65,6 +65,7 @@ pub fn scene_from_scripted_dom(
     width: u32,
     height: u32,
     cursor: Option<TextCursor>,
+    scroll_offsets: &ScrollOffsets<NodeId>,
 ) -> netrender::Scene {
     let mut styles: StylePlane<NodeId> = StylePlane::new();
     run_cascade(
@@ -92,6 +93,7 @@ pub fn scene_from_scripted_dom(
         &text_ctx,
         &images,
         &bg_images,
+        scroll_offsets,
         DeviceIntSize::new(width as i32, height as i32),
     );
 

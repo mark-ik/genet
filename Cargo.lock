@@ -5437,6 +5437,8 @@ dependencies = [
  "serval-scripted-dom",
  "servo-paint",
  "taffy 0.11.0-experimental-cache-fix.3",
+ "tracing",
+ "tracing-subscriber",
  "wgpu",
  "winit",
  "xilem-serval",

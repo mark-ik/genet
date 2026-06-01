@@ -54,6 +54,12 @@ use crate::image_decode::{BackgroundImagePlane, DecodedImage, ImagePlane};
 use crate::style::StylePlane;
 use crate::text_measure::TextMeasureCtx;
 
+/// Per-node scroll offsets (device px), keyed by DOM node. An overflow
+/// container with an entry here has its clipped content translated by
+/// `-offset` during emit, so it scrolls. The host owns this map (updated from
+/// wheel input); an empty map scrolls nothing.
+pub type ScrollOffsets<NodeId> = FxHashMap<NodeId, (f32, f32)>;
+
 /// Namespace for the font-instance keys this producer mints. Keys are
 /// unique within one paint list; the namespace just disambiguates them
 /// from other `FontInstanceKey` sources if they ever share a registry.
@@ -213,6 +219,10 @@ struct Emitter<'a, NodeId: Copy + Eq + Hash> {
     images_plane: &'a ImagePlane<NodeId>,
     /// Decoded CSS `background-image`s keyed by NodeId.
     bg_images_plane: &'a BackgroundImagePlane<NodeId>,
+    /// Per-node scroll offsets (device px). A clipping (overflow) container with
+    /// an entry here has its clipped content translated by `-offset`, so the
+    /// container scrolls. Empty ⇒ nothing scrolls.
+    scroll_offsets: &'a FxHashMap<NodeId, (f32, f32)>,
     fonts: FontCollector,
     images: ImageCollector,
 }
@@ -241,7 +251,8 @@ where
 {
     let empty_images = ImagePlane::new();
     let empty_bg = BackgroundImagePlane::new();
-    emit_inner(dom, styles, fragments, None, &empty_images, &empty_bg, viewport)
+    let no_scroll: FxHashMap<D::NodeId, (f32, f32)> = FxHashMap::default();
+    emit_inner(dom, styles, fragments, None, &empty_images, &empty_bg, &no_scroll, viewport)
 }
 
 /// Variant of [`emit_paint_list`] that consumes the cached text
@@ -260,6 +271,7 @@ pub fn emit_paint_list_with_layouts<D>(
     text_ctx: &TextMeasureCtx,
     images: &ImagePlane<D::NodeId>,
     bg_images: &BackgroundImagePlane<D::NodeId>,
+    scroll_offsets: &ScrollOffsets<D::NodeId>,
     viewport: DeviceIntSize,
 ) -> ServalPaintList
 where
@@ -273,6 +285,7 @@ where
         Some(GlyphSource { constructed, text_ctx }),
         images,
         bg_images,
+        scroll_offsets,
         viewport,
     )
 }
@@ -291,6 +304,7 @@ fn emit_inner<D>(
     glyphs: Option<GlyphSource<'_, D::NodeId>>,
     images_plane: &ImagePlane<D::NodeId>,
     bg_images_plane: &BackgroundImagePlane<D::NodeId>,
+    scroll_offsets: &FxHashMap<D::NodeId, (f32, f32)>,
     viewport: DeviceIntSize,
 ) -> ServalPaintList
 where
@@ -302,6 +316,7 @@ where
         glyphs,
         images_plane,
         bg_images_plane,
+        scroll_offsets,
         fonts: FontCollector::default(),
         images: ImageCollector::default(),
     };
@@ -483,10 +498,25 @@ fn walk<D>(
         commands.push(PaintCmd::PushClip(ClipSpec { kind: ClipKind::Rect(rect) }));
     }
 
+    // Scroll: inside the clip, translate the content by `-offset` so it scrolls
+    // under the fixed clip window. Only a clipping (overflow) container scrolls.
+    let scroll = clip_rect.and_then(|_| em.scroll_offsets.get(&id).copied());
+    if let Some((ox, oy)) = scroll {
+        commands.push(PaintCmd::PushTransform(TransformSpec {
+            origin: LayoutPoint::new(-ox, -oy),
+            transform: LayoutTransform::identity(),
+            kind: TransformKind::Standard,
+        }));
+    }
+
     for child in dom.dom_children(id) {
         walk(dom, styles, fragments, em, child, commands);
     }
 
+    // Unwind in reverse: scroll transform, then clip, then the origin transform.
+    if scroll.is_some() {
+        commands.push(PaintCmd::PopTransform);
+    }
     if clip_rect.is_some() {
         commands.push(PaintCmd::PopClip);
     }
@@ -594,6 +624,113 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
         }
     }
     emitted
+}
+
+/// CSS `background-repeat` keyword per axis, reduced to what the tiler
+/// needs. `space` / `round` adjust spacing / scaling; v1 approximates
+/// both as `repeat` (a small slice of the corpus).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BgRepeat {
+    Repeat,
+    NoRepeat,
+    Space,
+    Round,
+}
+
+/// First-layer `background-size` / `-repeat` / `-position` read from the
+/// cascade. Pixel geometry is resolved at emit time against the
+/// positioning area (see [`resolve_bg_tile`]).
+struct BgTileStyle {
+    size: style::values::computed::background::BackgroundSize,
+    repeat_x: BgRepeat,
+    repeat_y: BgRepeat,
+    pos_x: style::values::computed::LengthPercentage,
+    pos_y: style::values::computed::LengthPercentage,
+}
+
+/// Read the first background layer's size / repeat / position from an
+/// element's `ComputedValues`. `None` when the cascade has not run.
+fn bg_tile_style_of<NodeId: Copy + Eq + std::hash::Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> Option<BgTileStyle> {
+    use style::values::specified::background::BackgroundRepeatKeyword as K;
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    let bg = data.styles.primary().get_background();
+    let size = bg.background_size.0.first()?.clone();
+    let repeat = bg.background_repeat.0.first()?;
+    let pos_x = bg.background_position_x.0.first()?.clone();
+    let pos_y = bg.background_position_y.0.first()?.clone();
+    let map = |k: K| match k {
+        K::Repeat => BgRepeat::Repeat,
+        K::NoRepeat => BgRepeat::NoRepeat,
+        K::Space => BgRepeat::Space,
+        K::Round => BgRepeat::Round,
+    };
+    Some(BgTileStyle {
+        size,
+        repeat_x: map(repeat.0),
+        repeat_y: map(repeat.1),
+        pos_x,
+        pos_y,
+    })
+}
+
+/// Resolve a background layer's concrete tile geometry against the
+/// positioning area (`area_w` x `area_h`) and the image's intrinsic
+/// size (`int_w` x `int_h`, both > 0). Returns `(tile_w, tile_h,
+/// offset_x, offset_y)` in px: the tile size from `background-size`
+/// (cover / contain / explicit / auto, aspect-preserving when one axis
+/// is `auto`) and the anchor offset from `background-position`
+/// (percentages resolve against `area - tile`).
+fn resolve_bg_tile(
+    bg: &BgTileStyle,
+    area_w: f32,
+    area_h: f32,
+    int_w: f32,
+    int_h: f32,
+) -> (f32, f32, f32, f32) {
+    use style::values::computed::length::NonNegativeLengthPercentageOrAuto as Lpa;
+    use style::values::computed::Length;
+    use style::values::generics::background::BackgroundSize as Bs;
+    use style::values::generics::length::GenericLengthPercentageOrAuto as Loa;
+
+    let aspect = int_w / int_h;
+    let (tw, th) = match bg.size {
+        Bs::Cover | Bs::Contain => {
+            let scale_w = area_w / int_w;
+            let scale_h = area_h / int_h;
+            let scale = if matches!(bg.size, Bs::Cover) {
+                scale_w.max(scale_h)
+            } else {
+                scale_w.min(scale_h)
+            };
+            (int_w * scale, int_h * scale)
+        },
+        Bs::ExplicitSize { ref width, ref height } => {
+            let resolve = |v: &Lpa, basis: f32| -> Option<f32> {
+                match v {
+                    Loa::Auto => None,
+                    Loa::LengthPercentage(npl) => {
+                        Some(npl.0.resolve(Length::new(basis.max(0.0))).px().max(0.0))
+                    },
+                }
+            };
+            match (resolve(width, area_w), resolve(height, area_h)) {
+                (Some(w), Some(h)) => (w, h),
+                (Some(w), None) => (w, w / aspect),
+                (None, Some(h)) => (h * aspect, h),
+                (None, None) => (int_w, int_h),
+            }
+        },
+    };
+    let pos = |lp: &style::values::computed::LengthPercentage, basis: f32| -> f32 {
+        lp.resolve(Length::new(basis.max(0.0))).px()
+    };
+    let ox = pos(&bg.pos_x, area_w - tw);
+    let oy = pos(&bg.pos_y, area_h - th);
+    (tw, th, ox, oy)
 }
 
 /// Read an element's background color from its `ComputedValues`.
@@ -844,6 +981,7 @@ mod tests {
             &text_ctx,
             &crate::image_decode::ImagePlane::new(),
             &crate::image_decode::BackgroundImagePlane::new(),
+            &FxHashMap::default(),
             DeviceIntSize::new(800, 600),
         );
 
@@ -923,6 +1061,7 @@ mod tests {
             &text_ctx,
             &crate::image_decode::ImagePlane::new(),
             &crate::image_decode::BackgroundImagePlane::new(),
+            &FxHashMap::default(),
             DeviceIntSize::new(800, 600),
         );
 
@@ -963,6 +1102,7 @@ mod tests {
             &text_ctx,
             &crate::image_decode::ImagePlane::new(),
             &crate::image_decode::BackgroundImagePlane::new(),
+            &FxHashMap::default(),
             DeviceIntSize::new(800, 600),
         );
 
@@ -1063,6 +1203,77 @@ mod tests {
             .expect("an overflow container emits a rect clip");
         assert!((clip.width() - 100.0).abs() < 0.5, "clip width = box width, got {}", clip.width());
         assert!((clip.height() - 40.0).abs() < 0.5, "clip height = box height, got {}", clip.height());
+    }
+
+    /// A scroll offset on an overflow container emits a `PushTransform` of
+    /// `-offset` immediately inside its clip, so the clipped content scrolls
+    /// under the fixed clip window.
+    #[test]
+    fn scroll_offset_translates_clipped_content() {
+        use crate::cascade::run_cascade;
+        use crate::image_decode::BackgroundImagePlane;
+
+        let document = StaticDocument::parse(
+            "<html><body><div class=\"scroller\"><p>content</p></div></body></html>",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[
+                "html, body, div, p { display: block; margin: 0; padding: 0; border: 0; }",
+                ".scroller { overflow: scroll; width: 100px; height: 40px; }",
+            ],
+        );
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
+
+        // The scroller div, scrolled down 25 px.
+        let div = {
+            let mut q = vec![document.document()];
+            let mut found = None;
+            while let Some(id) = q.pop() {
+                if document.element_name(id).is_some_and(|n| n.local == local_name!("div")) {
+                    found = Some(id);
+                    break;
+                }
+                q.extend(document.dom_children(id));
+            }
+            found.expect("scroller div")
+        };
+        let mut offsets: FxHashMap<StaticNodeId, (f32, f32)> = FxHashMap::default();
+        offsets.insert(div, (0.0, 25.0));
+
+        let plist = emit_paint_list_with_layouts(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &offsets,
+            DeviceIntSize::new(800, 600),
+        );
+        let cmds = plist.commands();
+
+        // The command right after the container's PushClip is the scroll
+        // PushTransform with origin = -offset = (0, -25).
+        let clip_idx = cmds
+            .iter()
+            .position(|c| matches!(c, PaintCmd::PushClip(_)))
+            .expect("overflow container emits a clip");
+        match &cmds[clip_idx + 1] {
+            PaintCmd::PushTransform(t) => {
+                assert!(t.origin.x.abs() < 0.01, "scroll x origin 0, got {}", t.origin.x);
+                assert!((t.origin.y + 25.0).abs() < 0.01, "scroll y origin -25, got {}", t.origin.y);
+            },
+            other => panic!("expected scroll PushTransform after PushClip, got {other:?}"),
+        }
     }
 
     /// Probe DrawBorder emission: a CSS-declared border produces a

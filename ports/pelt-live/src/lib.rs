@@ -102,7 +102,7 @@ mod tests {
             // (b2) Paint emission + Scene translation builds without panic over
             // the live ScriptedDom (paint-over-ScriptedDom works — no fallback
             // needed). The Scene carries the requested viewport.
-            let scene = scene_from_scripted_dom(&dom_ref, SHEET, 800, 600, None);
+            let scene = scene_from_scripted_dom(&dom_ref, SHEET, 800, 600, None, &Default::default());
             assert_eq!(scene.viewport_width, 800);
             assert_eq!(scene.viewport_height, 600);
             // The counter's text paints: emission produces at least one draw op
@@ -636,7 +636,7 @@ mod tests {
         );
 
         // The render path still builds over the edited DOM.
-        let scene = scene_from_scripted_dom(&dom.borrow(), SHEET, 800, 600, None);
+        let scene = scene_from_scripted_dom(&dom.borrow(), SHEET, 800, 600, None, &Default::default());
         assert_eq!(scene.viewport_width, 800);
         assert!(
             fragments_from_scripted_dom(&dom.borrow(), SHEET, 800, 600)
@@ -819,7 +819,7 @@ mod tests {
         );
 
         // The render path still builds over the live ScriptedDom after dispatch.
-        let scene = scene_from_scripted_dom(&dom.borrow(), SHEET, 800, 600, None);
+        let scene = scene_from_scripted_dom(&dom.borrow(), SHEET, 800, 600, None, &Default::default());
         assert_eq!(scene.viewport_width, 800);
     }
 

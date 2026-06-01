@@ -475,7 +475,8 @@ impl App {
                 });
             TextCursor { node, caret: byte_of(field.caret()), selection }
         });
-        let scene: Scene = scene_from_scripted_dom(&self.dom.borrow(), SHEET, w, h, cursor);
+        let scene: Scene =
+            scene_from_scripted_dom(&self.dom.borrow(), SHEET, w, h, cursor, &Default::default());
 
         // 2. Render the scene into a fresh Rgba8Unorm target. vello binds this
         //    as a storage texture (STORAGE_BINDING) and also reads it back via

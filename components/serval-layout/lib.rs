@@ -56,7 +56,9 @@ pub use image_decode::{
 };
 pub use invalidate::{classify, coalesce, Invalidation};
 pub use layout::layout;
-pub use paint_emit::{emit_paint_list, emit_paint_list_with_layouts, ServalPaintList};
+pub use paint_emit::{
+    emit_paint_list, emit_paint_list_with_layouts, ScrollOffsets, ServalPaintList,
+};
 pub use serval_lane::ServalLaneView;
 pub use snapshot::build_snapshot_map;
 pub use style::{StyleEntry, StylePlane};
