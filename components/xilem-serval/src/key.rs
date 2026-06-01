@@ -120,17 +120,39 @@ pub struct KeyEvent {
     pub key: Key,
     /// Modifiers held when the key was pressed.
     pub mods: Modifiers,
+    /// Shared cancellation state (`stopPropagation` / `preventDefault`); clones
+    /// share one cell. The native twin of the JS `Event`'s `__stop`/`__canceled`.
+    /// See [`Propagation`](crate::Propagation).
+    pub prop: crate::Propagation,
 }
 
 impl KeyEvent {
     /// A key event with no modifiers.
     pub fn new(key: Key) -> Self {
-        Self { key, mods: Modifiers::default() }
+        Self { key, mods: Modifiers::default(), prop: crate::Propagation::new() }
     }
 
     /// A key event with explicit modifiers.
     pub fn with_mods(key: Key, mods: Modifiers) -> Self {
-        Self { key, mods }
+        Self { key, mods, prop: crate::Propagation::new() }
+    }
+
+    /// Stop the event reaching later nodes
+    /// ([`Propagation::stop_propagation`](crate::Propagation::stop_propagation)).
+    pub fn stop_propagation(&self) {
+        self.prop.stop_propagation();
+    }
+
+    /// Stop the event reaching any later listener
+    /// ([`Propagation::stop_immediate_propagation`](crate::Propagation::stop_immediate_propagation)).
+    pub fn stop_immediate_propagation(&self) {
+        self.prop.stop_immediate_propagation();
+    }
+
+    /// Cancel the default action
+    /// ([`Propagation::prevent_default`](crate::Propagation::prevent_default)).
+    pub fn prevent_default(&self) {
+        self.prop.prevent_default();
     }
 }
 

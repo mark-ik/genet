@@ -421,7 +421,7 @@ mod composition {
             (bs[0], bs[1])
         };
 
-        runner.dispatch_click(left, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(left, PointerClick::at((0.0, 0.0)));
         assert_eq!(
             (runner.state().left, runner.state().right),
             (1, 0),
@@ -475,7 +475,7 @@ mod composition {
             elements_named(&d, root, "button")[0]
         };
 
-        runner.dispatch_click(button, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(button, PointerClick::at((0.0, 0.0)));
         assert_eq!(
             runner.state().count,
             1,
@@ -713,7 +713,7 @@ mod keyboard {
 
         // Click the label (a child of the focusable div) → focus the div, since
         // the nearest focusable ancestor of the label is the div.
-        runner.dispatch_click(label, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(label, PointerClick::at((0.0, 0.0)));
         assert_eq!(
             runner.focus(),
             Some(div),
@@ -727,7 +727,7 @@ mod keyboard {
         // Clicking a node whose ancestor chain has no key handler clears focus.
         // The document root is such a node (above the div, no handler).
         let doc = dom.borrow().document();
-        runner.dispatch_click(doc, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(doc, PointerClick::at((0.0, 0.0)));
         assert_eq!(
             runner.focus(),
             None,
@@ -1106,7 +1106,7 @@ mod controls {
         assert_eq!(attr(&dom.borrow(), cb, "class").as_deref(), Some("checkbox"));
 
         // Click → checked.
-        runner.dispatch_click(cb, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(cb, PointerClick::at((0.0, 0.0)));
         assert_eq!(runner.state(), &true);
         assert_eq!(attr(&dom.borrow(), cb, "aria-checked").as_deref(), Some("true"));
         assert_eq!(
@@ -1115,7 +1115,7 @@ mod controls {
         );
 
         // Click again → back to unchecked.
-        runner.dispatch_click(cb, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(cb, PointerClick::at((0.0, 0.0)));
         assert_eq!(runner.state(), &false);
     }
 
@@ -1135,7 +1135,7 @@ mod controls {
         );
         assert_eq!(text_child(&dom.borrow(), btn).as_deref(), Some("inc"));
 
-        runner.dispatch_click(btn, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(btn, PointerClick::at((0.0, 0.0)));
         assert_eq!(runner.state(), &1);
     }
 
@@ -1180,7 +1180,7 @@ mod controls {
 
         // Click the box (root's first child) → the list opens.
         let box_node = dom.borrow().dom_children(root).next().expect("box");
-        runner.dispatch_click(box_node, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(box_node, PointerClick::at((0.0, 0.0)));
         assert!(runner.state().open, "clicking the box opens the list");
         assert_eq!(dom.borrow().dom_children(root).count(), 2, "open: box + list");
 
@@ -1190,7 +1190,7 @@ mod controls {
             let list = dom.dom_children(root).nth(1).expect("list");
             dom.dom_children(list).nth(1).expect("second option")
         };
-        runner.dispatch_click(opt1, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(opt1, PointerClick::at((0.0, 0.0)));
         assert_eq!(runner.state().selected, 1, "picking option 1 selects it");
         assert!(!runner.state().open, "picking an option closes the list");
         assert_eq!(dom.borrow().dom_children(root).count(), 1, "closed again: box only");
@@ -1263,7 +1263,7 @@ mod controls {
 
         // Click the third option (index 2).
         let opt2 = { dom.borrow().dom_children(root).nth(2).expect("third option") };
-        runner.dispatch_click(opt2, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(opt2, PointerClick::at((0.0, 0.0)));
         assert_eq!(runner.state().selected, 2, "clicking option 2 selects it");
 
         // aria-checked reflects the selection: option 2 true, option 0 false.
@@ -1546,7 +1546,7 @@ mod capture {
             find_element_by_name(&d, root, "button").expect("a <button>")
         };
 
-        runner.dispatch_click(button, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(button, PointerClick::at((0.0, 0.0)));
 
         assert_eq!(
             runner.state().events,
@@ -1636,7 +1636,7 @@ mod capture {
             find_element_by_name(&d, root, "button").expect("a <button>")
         };
 
-        runner.dispatch_click(button, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(button, PointerClick::at((0.0, 0.0)));
 
         assert_eq!(
             runner.state().events,
@@ -1680,7 +1680,7 @@ mod capture {
         };
         assert_ne!(button, root, "button is a descendant of the capture div");
 
-        runner.dispatch_click(button, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(button, PointerClick::at((0.0, 0.0)));
 
         assert_eq!(
             runner.state().events,
@@ -1713,12 +1713,96 @@ mod capture {
         );
         let button = runner.root();
 
-        runner.dispatch_click(button, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(button, PointerClick::at((0.0, 0.0)));
 
         assert_eq!(
             runner.state().events,
             vec!["fired".to_string()],
             "a capture listener on the target itself fires once, not in both passes"
+        );
+    }
+
+    // --- MARK: native cancellation (stopPropagation / preventDefault) ---------
+    //
+    // The native twin of dom.rs's `__stop` / `__canceled`. These mirror the JS
+    // dispatcher's behaviour so the two paths satisfy one contract
+    // (docs/2026-06-01_event_model_convergence_plan.md). The JS-side equivalents
+    // live in `script-runtime-api`'s `dom_node_events_work` (run on Boa + Nova);
+    // the assertions here are the native column of the same scenario table.
+
+    /// `<div on_click><button on_click(stops) /></div>`: the child (target,
+    /// bubble) calls `stop_propagation`, so the parent's bubble handler must NOT
+    /// fire — the native counterpart of the JS `stop` scenario.
+    fn click_stop_view(_s: &Log) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+        on_click(
+            el::<_, Log, ()>(
+                "div",
+                on_click(el::<_, Log, ()>("button", "+"), |s: &mut Log, ev: PointerClick| {
+                    s.events.push("child".to_string());
+                    ev.stop_propagation();
+                }),
+            ),
+            |s: &mut Log, _ev| s.events.push("parent-SHOULD-NOT".to_string()),
+        )
+    }
+
+    #[test]
+    fn stop_propagation_halts_the_bubble_walk() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            click_stop_view,
+            Log { events: Vec::new() },
+        );
+        let root = runner.root();
+        let button = {
+            let d = dom.borrow();
+            find_element_by_name(&d, root, "button").expect("a <button>")
+        };
+
+        runner.dispatch_click(button, PointerClick::at((0.0, 0.0)));
+
+        assert_eq!(
+            runner.state().events,
+            vec!["child".to_string()],
+            "stop_propagation on the target halts the bubble to the parent"
+        );
+    }
+
+    /// A handler that calls `prevent_default`; the caller reads the shared
+    /// Propagation cell *after* dispatch (cloning the handle before the event is
+    /// moved in) and sees the cancellation — the seam the host uses to gate a
+    /// default action (form activation, drag start).
+    fn click_prevent_view(_s: &Log) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+        on_click(el::<_, Log, ()>("button", "+"), |s: &mut Log, ev: PointerClick| {
+            s.events.push("fired".to_string());
+            ev.prevent_default();
+        })
+    }
+
+    #[test]
+    fn prevent_default_is_visible_to_the_caller() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            click_prevent_view,
+            Log { events: Vec::new() },
+        );
+        let button = runner.root();
+
+        // Build the event and keep a clone of its propagation handle; the event
+        // is moved into dispatch but the handle shares the same cell, so the
+        // host reads the handler's cancellation back here.
+        let ev = PointerClick::at((0.0, 0.0));
+        let prop = ev.prop.clone();
+        assert!(!prop.default_prevented(), "not canceled before dispatch");
+
+        runner.dispatch_click(button, ev);
+
+        assert_eq!(runner.state().events, vec!["fired".to_string()]);
+        assert!(
+            prop.default_prevented(),
+            "the handler's prevent_default is visible through the shared cell after dispatch"
         );
     }
 }

@@ -324,6 +324,13 @@ where
                 {
                     actions.push(a);
                 }
+                // stopPropagation / stopImmediatePropagation: a handler that
+                // canceled propagation halts the capture/bubble walk here, after
+                // its path fired (every event clone shares one Propagation cell).
+                // The native twin of dom.rs's per-node `__stop` check.
+                if event.prop.stopped() {
+                    break;
+                }
             }
         }
 
@@ -475,6 +482,11 @@ where
                 {
                     actions.push(a);
                 }
+                // stopPropagation halts the bubble walk (shared Propagation cell),
+                // matching dispatch_click and the JS dispatcher.
+                if event.prop.stopped() {
+                    break;
+                }
             }
         }
 
@@ -539,6 +551,23 @@ where
     /// `up` to know which element's rect to measure for the move's local coords.
     pub fn pointer_capture(&self) -> Option<NodeId> {
         self.pointer_capture
+    }
+
+    /// The nearest ancestor of `hit` (including itself) carrying an
+    /// [`on_pointer`](crate::on_pointer) handler — the element a press there
+    /// would capture, resolved *without* starting a drag. The host calls this on
+    /// a press to find the drag element so it can measure that element's rect for
+    /// the press's local coords before [`dispatch_pointer_down`](Self::dispatch_pointer_down).
+    pub fn pointer_target(&self, hit: NodeId) -> Option<NodeId> {
+        let dom = self.dom.borrow();
+        let mut current = Some(hit);
+        while let Some(node) = current {
+            if self.ctx.pointer_handler(node).is_some() {
+                return Some(node);
+            }
+            current = dom.parent(node);
+        }
+        None
     }
 
     /// Route a [`PointerEvent`] down `node`'s registered pointer path through the

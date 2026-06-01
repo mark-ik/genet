@@ -47,6 +47,36 @@ const ON_CLICK_ID: ViewId = ViewId::new(0x5546_2453);
 pub struct PointerClick {
     /// The hit point in the target element's local coordinate space.
     pub local: (f32, f32),
+    /// Shared cancellation state (`stopPropagation` / `preventDefault`).
+    /// Clones share one cell, so a handler's call is seen by the dispatch loop
+    /// and the host — the native twin of the JS `Event`'s `__stop`/`__canceled`.
+    /// See [`Propagation`](crate::Propagation).
+    pub prop: crate::Propagation,
+}
+
+impl PointerClick {
+    /// A click at `local` (element-local coords) with fresh propagation state.
+    pub fn at(local: (f32, f32)) -> Self {
+        Self { local, prop: crate::Propagation::new() }
+    }
+
+    /// Stop the event reaching later nodes in the propagation path
+    /// ([`Propagation::stop_propagation`](crate::Propagation::stop_propagation)).
+    pub fn stop_propagation(&self) {
+        self.prop.stop_propagation();
+    }
+
+    /// Stop the event reaching any later listener, incl. the current node's
+    /// ([`Propagation::stop_immediate_propagation`](crate::Propagation::stop_immediate_propagation)).
+    pub fn stop_immediate_propagation(&self) {
+        self.prop.stop_immediate_propagation();
+    }
+
+    /// Cancel the default action
+    /// ([`Propagation::prevent_default`](crate::Propagation::prevent_default)).
+    pub fn prevent_default(&self) {
+        self.prop.prevent_default();
+    }
 }
 
 /// Wraps a [`View`] `V` and registers a native click handler on its element.
