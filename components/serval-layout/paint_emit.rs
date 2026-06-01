@@ -477,6 +477,22 @@ pub(crate) fn walk<D>(
                         clip_mode: BoxShadowClipMode::Outset,
                     }));
                 }
+                // border-radius: clip the background (color + image) to the
+                // rounded border-box. The border itself rounds via its own
+                // `radius` (border_of); replaced <img> content is not clipped
+                // here yet (a follow-up). Pushed only when a corner is non-zero,
+                // so square boxes keep a flat command stream.
+                let bg_radius =
+                    border_radius_of(styles, id, local_bounds.width(), local_bounds.height());
+                if let Some(radius) = bg_radius {
+                    commands.push(PaintCmd::PushClip(ClipSpec {
+                        kind: ClipKind::RoundedRect {
+                            rect: local_bounds,
+                            radius,
+                            clip_out: false,
+                        },
+                    }));
+                }
                 // Background, then replaced content (image), then
                 // border — CSS paint order.
                 commands.push(PaintCmd::DrawRect(RectItem {
@@ -567,6 +583,10 @@ pub(crate) fn walk<D>(
                         }));
                     }
                 }
+                // Close the border-radius clip around the background layers.
+                if bg_radius.is_some() {
+                    commands.push(PaintCmd::PopClip);
+                }
                 if let Some(decoded) = em.images_plane.get(id) {
                     let key = em.images.add(decoded);
                     commands.push(PaintCmd::DrawImage(ImageItem {
@@ -577,7 +597,9 @@ pub(crate) fn walk<D>(
                         color: ColorF::WHITE, // identity tint
                     }));
                 }
-                if let Some((widths, normal)) = border_of(styles, id) {
+                if let Some((widths, normal)) =
+                    border_of(styles, id, local_bounds.width(), local_bounds.height())
+                {
                     commands.push(PaintCmd::DrawBorder(BorderItem {
                         placement: CommonPlacement::new(local_bounds),
                         widths,
@@ -1020,6 +1042,45 @@ fn stylo_color_to_paint(
     ColorF::new(r, g, b, a)
 }
 
+/// Read an element's `border-radius` from `ComputedValues`, resolved
+/// against the border-box size (`w` x `h`) into a paint [`BorderRadius`]
+/// (per-corner x/y in px). Percentages resolve against the box per axis
+/// (CSS: horizontal radii vs width, vertical vs height). `None` when the
+/// cascade has not run or every corner is zero (the common case — keeps
+/// the paint stream free of no-op rounded clips). Independent of
+/// [`border_of`]: a rounded box need not have a border.
+fn border_radius_of<NodeId: Copy + Eq + std::hash::Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+    w: f32,
+    h: f32,
+) -> Option<BorderRadius> {
+    use style::values::computed::Length;
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    let b = data.styles.primary().get_border();
+    // A `BorderCornerRadius` is a Size2D of NonNegativeLengthPercentage:
+    // `.0.width` is the horizontal radius, `.0.height` the vertical.
+    let corner = |c: &style::values::computed::BorderCornerRadius| -> LayoutSize {
+        let rx = c.0.width.0.resolve(Length::new(w.max(0.0))).px().max(0.0);
+        let ry = c.0.height.0.resolve(Length::new(h.max(0.0))).px().max(0.0);
+        LayoutSize::new(rx, ry)
+    };
+    let radius = BorderRadius {
+        top_left: corner(&b.border_top_left_radius),
+        top_right: corner(&b.border_top_right_radius),
+        bottom_right: corner(&b.border_bottom_right_radius),
+        bottom_left: corner(&b.border_bottom_left_radius),
+    };
+    let zero = |s: LayoutSize| s.width <= 0.0 && s.height <= 0.0;
+    if zero(radius.top_left) && zero(radius.top_right)
+        && zero(radius.bottom_right) && zero(radius.bottom_left)
+    {
+        return None;
+    }
+    Some(radius)
+}
+
 /// Read an element's border (widths + per-side color/style) from
 /// `ComputedValues`. Returns `None` if no side has a renderable
 /// border (all widths zero or all sides are `none`/`hidden`) — keeps
@@ -1027,6 +1088,8 @@ fn stylo_color_to_paint(
 fn border_of<NodeId: Copy + Eq + std::hash::Hash>(
     styles: &StylePlane<NodeId>,
     id: NodeId,
+    w: f32,
+    h: f32,
 ) -> Option<(LayoutSideOffsets, NormalBorder)> {
     let entry = styles.get(id)?;
     let data = entry.borrow_data()?;
@@ -1074,7 +1137,7 @@ fn border_of<NodeId: Copy + Eq + std::hash::Hash>(
             color: stylo_color_to_paint(&border.border_left_color, current_color),
             style: left_style,
         },
-        radius: BorderRadius::zero(),
+        radius: border_radius_of(styles, id, w, h).unwrap_or_else(BorderRadius::zero),
         do_aa: true,
     };
     Some((widths, details))
@@ -1683,6 +1746,57 @@ mod tests {
         assert!(
             found_p_border,
             "expected a 4px solid blue DrawBorder for the <p> element"
+        );
+    }
+
+    /// `border-radius` reaches the emit: a rounded element's border carries the
+    /// resolved per-corner radius, and its background is wrapped in a
+    /// `PushClip(RoundedRect)` so it clips to the curve. A 100px-wide box with
+    /// `border-radius: 20px` must emit a 20px top-left radius on both.
+    #[test]
+    fn border_radius_rounds_border_and_clips_background() {
+        use crate::cascade::run_cascade;
+        use paint_list_api::items::BorderDetails;
+        use paint_list_api::specs::ClipKind;
+
+        let document = StaticDocument::parse("<html><body><div></div></body></html>");
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &["div { display: block; width: 100px; height: 100px; margin: 0; \
+               border: 4px solid black; border-radius: 20px; \
+               background-color: rgb(0, 128, 0); }"],
+            None,
+        );
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let plist = emit_paint_list(&document, &styles, &fragments, DeviceIntSize::new(800, 600));
+
+        let border_radius = plist.commands().iter().find_map(|c| match c {
+            PaintCmd::DrawBorder(BorderItem { details: BorderDetails::Normal(n), .. }) => {
+                Some(n.radius.top_left.width)
+            },
+            _ => None,
+        });
+        assert!(
+            border_radius.is_some_and(|r| (r - 20.0).abs() < 0.5),
+            "border carries the 20px corner radius, got {border_radius:?}"
+        );
+
+        let clip_radius = plist.commands().iter().find_map(|c| match c {
+            PaintCmd::PushClip(ClipSpec { kind: ClipKind::RoundedRect { radius, .. } }) => {
+                Some(radius.top_left.width)
+            },
+            _ => None,
+        });
+        assert!(
+            clip_radius.is_some_and(|r| (r - 20.0).abs() < 0.5),
+            "background wrapped in a 20px rounded clip, got {clip_radius:?}"
         );
     }
 
