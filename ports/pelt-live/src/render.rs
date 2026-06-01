@@ -36,6 +36,10 @@ const CARET_COLOR: ColorF = ColorF { r: 0.12, g: 0.12, b: 0.20, a: 1.0 };
 /// Selection highlight colour (translucent blue — text shows through, since the
 /// highlight paints over the text).
 const SELECTION_COLOR: ColorF = ColorF { r: 0.40, g: 0.60, b: 0.95, a: 0.40 };
+/// Scrollbar thumb colour (translucent dark grey, on the container's right edge).
+const SCROLLBAR_COLOR: ColorF = ColorF { r: 0.30, g: 0.30, b: 0.36, a: 0.65 };
+/// Scrollbar thumb width, device px.
+const SCROLLBAR_WIDTH: f32 = 8.0;
 
 /// What to paint for a focused text field's cursor: the element, the caret's
 /// byte offset, and an optional selected byte range. Byte offsets (the layer
@@ -73,6 +77,7 @@ pub fn scene_from_scripted_dom(
         &mut styles,
         euclid::Size2D::new(width as f32, height as f32),
         stylesheets,
+        None,
     );
 
     // A counter has no replaced content and no CSS backgrounds, so both image
@@ -112,6 +117,25 @@ pub fn scene_from_scripted_dom(
         }
     }
 
+    // A scrollbar thumb for each scrolled container: a bar on the box's right
+    // edge, height ∝ visible/content, position ∝ offset/scrollable. Absolute
+    // coords (the scroller's parent-relative box ≈ absolute for a top-level
+    // container; nested scrollers would need origin accumulation).
+    for (&node, &(_ox, oy)) in scroll_offsets {
+        let Some(r) = fragments.rect_of(node) else { continue };
+        let inner_h =
+            r.size.height - r.padding.top - r.padding.bottom - r.border.top - r.border.bottom;
+        let content_h = r.content_size.height;
+        let scrollable = content_h - inner_h;
+        if scrollable <= 0.5 {
+            continue;
+        }
+        let thumb_h = (r.size.height * (inner_h / content_h)).max(24.0);
+        let thumb_y = r.location.y + (oy / scrollable) * (r.size.height - thumb_h);
+        let thumb_x = r.location.x + r.size.width - SCROLLBAR_WIDTH;
+        plist.push_fill(thumb_x, thumb_y, SCROLLBAR_WIDTH, thumb_h, SCROLLBAR_COLOR);
+    }
+
     paint::translate_paint_list(&plist)
 }
 
@@ -133,6 +157,7 @@ pub fn fragments_from_scripted_dom(
         &mut styles,
         euclid::Size2D::new(width as f32, height as f32),
         stylesheets,
+        None,
     );
     let images = ImagePlane::new();
     let viewport = taffy::Size {
@@ -167,6 +192,7 @@ pub fn hit_test_node(
         &mut styles,
         euclid::Size2D::new(width as f32, height as f32),
         stylesheets,
+        None,
     );
     let images = ImagePlane::new();
     let viewport = taffy::Size {

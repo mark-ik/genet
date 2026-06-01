@@ -97,21 +97,26 @@ impl ServalPaintList {
         }
     }
 
-    /// Append a text caret as a filled rect at its absolute position.
-    ///
-    /// Pushed *after* the emit walk, which balances its `PushTransform` stack
-    /// back to identity, so [`CaretRect`](crate::caret::CaretRect)'s absolute
-    /// scene coordinates (from [`caret_rect`](crate::caret::caret_rect)) place
-    /// the bar correctly with no active transform. A host overlays the focused
-    /// field's caret this way — the painted successor to the placeholder marker.
-    pub fn push_caret(&mut self, caret: crate::caret::CaretRect, color: ColorF) {
+    /// Append a filled rect at an absolute scene position. The shared primitive
+    /// behind the host overlays ([`push_caret`](Self::push_caret) /
+    /// [`push_selection`](Self::push_selection) / a scrollbar thumb): pushed
+    /// *after* the emit walk, which balances its `PushTransform` stack back to
+    /// identity, so absolute scene coordinates place it with no active transform.
+    pub fn push_fill(&mut self, x: f32, y: f32, w: f32, h: f32, color: ColorF) {
         self.commands.push(PaintCmd::DrawRect(RectItem {
             placement: CommonPlacement::new(LayoutRect::new(
-                LayoutPoint::new(caret.x, caret.y),
-                LayoutPoint::new(caret.x + caret.width, caret.y + caret.height),
+                LayoutPoint::new(x, y),
+                LayoutPoint::new(x + w, y + h),
             )),
             color,
         }));
+    }
+
+    /// Append a text caret as a filled bar at its absolute position. A host
+    /// overlays the focused field's caret this way (from
+    /// [`caret_rect`](crate::caret::caret_rect)).
+    pub fn push_caret(&mut self, caret: crate::caret::CaretRect, color: ColorF) {
+        self.push_fill(caret.x, caret.y, caret.width, caret.height, color);
     }
 
     /// Append selection-highlight rects (from
@@ -121,13 +126,7 @@ impl ServalPaintList {
     /// caret so the caret sits on top.
     pub fn push_selection(&mut self, rects: &[crate::caret::CaretRect], color: ColorF) {
         for r in rects {
-            self.commands.push(PaintCmd::DrawRect(RectItem {
-                placement: CommonPlacement::new(LayoutRect::new(
-                    LayoutPoint::new(r.x, r.y),
-                    LayoutPoint::new(r.x + r.width, r.y + r.height),
-                )),
-                color,
-            }));
+            self.push_fill(r.x, r.y, r.width, r.height, color);
         }
     }
 }
@@ -187,18 +186,31 @@ impl FontCollector {
 /// Collects `<img>` images into the paint list's image side-table,
 /// assigning each an [`ImageKey`]. One key per `<img>` element for the
 /// probe (no cross-element src dedup yet).
+/// Process-global image-key counter. Image keys must be unique across
+/// the *renderer's* lifetime, not just within one paint list: the
+/// netrender tile rasterizer caches decoded images by key across renders
+/// and `debug_assert`s that a re-encountered key carries identical bytes
+/// (`vello_tile_rasterizer`). A per-list counter restarting at 0 made
+/// every list's first image collide on `ImageKey(_, 0)` with different
+/// bytes, poisoning the rasterizer lock. Minting from a monotonic global
+/// counter guarantees no cross-list collision. (Identical images across
+/// lists get distinct keys — a small cache-churn cost, bounded by the
+/// rasterizer's own LRU; within-list dedup is a possible follow-up.)
+static NEXT_IMAGE_KEY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 #[derive(Default)]
 struct ImageCollector {
     images: Vec<ImageResource>,
-    next_idx: u32,
 }
 
 impl ImageCollector {
     /// Add a decoded image, returning the key the matching
-    /// `ImageItem::image_key` should carry.
+    /// `ImageItem::image_key` should carry. The key is drawn from a
+    /// process-global counter so it never collides with a key from a
+    /// prior paint list (see [`NEXT_IMAGE_KEY`]).
     fn add(&mut self, decoded: &DecodedImage) -> ImageKey {
-        let key = ImageKey::new(SERVAL_IMAGE_NAMESPACE, self.next_idx);
-        self.next_idx += 1;
+        let idx = NEXT_IMAGE_KEY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let key = ImageKey::new(SERVAL_IMAGE_NAMESPACE, idx);
         self.images.push(ImageResource {
             key,
             width: decoded.width,
@@ -396,23 +408,56 @@ fn walk<D>(
                     color: background_color_of(styles, id),
                 }));
                 // CSS background-image paints over the background color,
-                // under content + border. Default background-repeat is
-                // `repeat`, so tile at the image's intrinsic size across
-                // the element box (DrawRepeatingImage).
+                // under content + border. Resolve background-size /
+                // -position / -repeat for the first layer; the defaults
+                // (auto / 0 0 / repeat) reproduce the prior intrinsic-size
+                // tiling exactly.
                 if let Some(decoded) = em.bg_images_plane.get(id) {
+                    let int_w = decoded.width as f32;
+                    let int_h = decoded.height as f32;
                     let key = em.images.add(decoded);
-                    commands.push(PaintCmd::DrawRepeatingImage(RepeatingImageItem {
-                        placement: CommonPlacement::new(local_bounds),
-                        image_key: key,
-                        stretch_size: LayoutSize::new(
-                            decoded.width as f32,
-                            decoded.height as f32,
-                        ),
-                        tile_spacing: LayoutSize::zero(),
-                        image_rendering: ImageRendering::Auto,
-                        alpha_type: AlphaType::PremultipliedAlpha,
-                        color: ColorF::WHITE, // identity tint
-                    }));
+                    let aw = local_bounds.width();
+                    let ah = local_bounds.height();
+                    let bg_style = bg_tile_style_of(styles, id);
+                    let (tw, th, ox, oy) = match (&bg_style, int_w > 0.0 && int_h > 0.0) {
+                        (Some(s), true) => resolve_bg_tile(s, aw, ah, int_w, int_h),
+                        _ => (int_w, int_h, 0.0, 0.0),
+                    };
+                    let (rx, ry) = bg_style
+                        .as_ref()
+                        .map(|s| (s.repeat_x, s.repeat_y))
+                        .unwrap_or((BgRepeat::Repeat, BgRepeat::Repeat));
+                    // Per axis: `repeat` tiles from the area origin across
+                    // the full extent (phase 0, exact for position 0, the
+                    // common case); `no-repeat` paints one tile at the
+                    // resolved offset. The placement is clipped to the
+                    // border box (background-clip: border-box default).
+                    let (x0, sw) = match rx {
+                        BgRepeat::NoRepeat => (ox, tw),
+                        _ => (0.0, aw),
+                    };
+                    let (y0, sh) = match ry {
+                        BgRepeat::NoRepeat => (oy, th),
+                        _ => (0.0, ah),
+                    };
+                    let px0 = x0.max(0.0);
+                    let py0 = y0.max(0.0);
+                    let px1 = (x0 + sw).min(aw);
+                    let py1 = (y0 + sh).min(ah);
+                    if tw > 0.0 && th > 0.0 && px1 > px0 && py1 > py0 {
+                        commands.push(PaintCmd::DrawRepeatingImage(RepeatingImageItem {
+                            placement: CommonPlacement::new(LayoutRect::new(
+                                LayoutPoint::new(px0, py0),
+                                LayoutPoint::new(px1, py1),
+                            )),
+                            image_key: key,
+                            stretch_size: LayoutSize::new(tw, th),
+                            tile_spacing: LayoutSize::zero(),
+                            image_rendering: ImageRendering::Auto,
+                            alpha_type: AlphaType::PremultipliedAlpha,
+                            color: ColorF::WHITE, // identity tint
+                        }));
+                    }
                 }
                 if let Some(decoded) = em.images_plane.get(id) {
                     let key = em.images.add(decoded);
@@ -955,6 +1000,7 @@ mod tests {
             &mut plane,
             euclid::Size2D::new(800.0, 600.0),
             &["p, div { display: block; width: 200px; height: 50px; }"],
+            None,
         );
         plane
     }
@@ -1180,6 +1226,7 @@ mod tests {
                 "html, body, div, p { display: block; margin: 0; padding: 0; border: 0; }",
                 ".scroller { overflow: scroll; width: 100px; height: 40px; }",
             ],
+            None,
         );
         let viewport = Size {
             width: AvailableSpace::Definite(800.0),
@@ -1225,6 +1272,7 @@ mod tests {
                 "html, body, div, p { display: block; margin: 0; padding: 0; border: 0; }",
                 ".scroller { overflow: scroll; width: 100px; height: 40px; }",
             ],
+            None,
         );
         let viewport = Size {
             width: AvailableSpace::Definite(800.0),
@@ -1295,6 +1343,7 @@ mod tests {
                 "p { display: block; width: 100px; height: 50px; \
                     border: 4px solid rgb(0, 128, 255); }",
             ],
+            None,
         );
 
         let viewport = Size {
@@ -1349,6 +1398,7 @@ mod tests {
             &mut styles,
             euclid::Size2D::new(800.0, 600.0),
             &["p { background-color: rgb(255, 0, 0); }"],
+            None,
         );
 
         let viewport = Size {
@@ -1384,6 +1434,7 @@ mod tests {
             &mut styles,
             euclid::Size2D::new(800.0, 600.0),
             &["body { background-color: rgb(255, 0, 0); }"],
+            None,
         );
 
         let viewport = Size {
@@ -1414,6 +1465,65 @@ mod tests {
         assert!(
             found_red,
             "expected at least one DrawRect with cascade-applied red background"
+        );
+    }
+
+    /// `background-size` reaches the emit: a 20×20 data-URI image on a
+    /// 100×100 box with `background-size: 50%` must emit a
+    /// `DrawRepeatingImage` whose `stretch_size` is the scaled 50×50,
+    /// NOT the intrinsic 20×20. This is the runtime receipt that
+    /// [`bg_tile_style_of`] + [`resolve_bg_tile`] run on the cascade path.
+    #[test]
+    fn background_size_percent_scales_emitted_tile() {
+        use base64::Engine as _;
+        use crate::image_decode::{BackgroundImagePlane, NoImageLoader};
+
+        // 20×20 solid image, inline data-URI so decode_from_cascade
+        // decodes it with the no-op loader (no filesystem).
+        let img = image::RgbaImage::from_pixel(20, 20, image::Rgba([0, 128, 0, 255]));
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .expect("encode test PNG");
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        let html = format!(
+            "<html><body><div></div></body></html>"
+        );
+        let document = StaticDocument::parse(&html);
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        let sheet = format!(
+            "div {{ display: block; width: 100px; height: 100px; margin: 0; \
+             background-image: url(data:image/png;base64,{b64}); \
+             background-size: 50%; background-repeat: no-repeat; }}"
+        );
+        run_cascade(&document, &mut styles, euclid::Size2D::new(800.0, 600.0), &[sheet.as_str()], None);
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let bg = BackgroundImagePlane::decode_from_cascade(&document, &styles, &NoImageLoader);
+        assert_eq!(bg.len(), 1, "the div's background-image must decode (else the emit branch never runs)");
+
+        let plist = emit_paint_list_with_layouts(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &bg,
+            &FxHashMap::default(),
+            DeviceIntSize::new(800, 600),
+        );
+        let tile = plist.commands().iter().find_map(|c| match c {
+            PaintCmd::DrawRepeatingImage(item) => Some(item.stretch_size),
+            _ => None,
+        });
+        let tile = tile.expect("a DrawRepeatingImage must be emitted for the background-image");
+        assert!(
+            (tile.width - 50.0).abs() < 0.5 && (tile.height - 50.0).abs() < 0.5,
+            "background-size: 50% of a 100px box must scale the 20px image to 50×50, got {}×{}",
+            tile.width, tile.height,
         );
     }
 

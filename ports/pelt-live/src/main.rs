@@ -170,7 +170,16 @@ fn demo_view(s: &Demo) -> DemoView {
                 el::<_, Demo, ()>(
                     "div",
                     (1..=8)
-                        .map(|i| el::<_, Demo, ()>("p", format!("Scrollable line {i}")))
+                        .map(|i| {
+                            // Each line is clickable: clicking a *scrolled* line
+                            // logs its true index, which verifies the host's
+                            // hit-test offset maps the screen point through the
+                            // scroll offset into the content's layout space.
+                            on_click(
+                                el::<_, Demo, ()>("p", format!("Scrollable line {i}")),
+                                move |_: &mut Demo, _| tracing::info!(line = i, "line clicked"),
+                            )
+                        })
                         .collect::<Vec<_>>(),
                 )
                 .attr("class", "scroller"),
@@ -852,7 +861,20 @@ impl ApplicationHandler<UserEvent> for App {
                 // hit lands on (or under) the `[ + ]` button, its handler bumps
                 // the count and the runner rebuilds.
                 let (x, y) = self.cursor;
-                let hit = hit_test_node(&self.dom.borrow(), SHEET, self.width, self.height, x, y);
+                // Hit-test offset: inside a scrolled container the content is
+                // painted translated by -offset, so a screen point maps to the
+                // layout point +offset. Query there so the hit-test (which works
+                // in unscrolled layout space) finds the scrolled content under
+                // the cursor.
+                let (qx, qy) = match self.scroll_box() {
+                    Some(sb)
+                        if x >= sb.x && x <= sb.x + sb.w && y >= sb.y && y <= sb.y + sb.h =>
+                    {
+                        (x + self.scroll_offset.0, y + self.scroll_offset.1)
+                    },
+                    _ => (x, y),
+                };
+                let hit = hit_test_node(&self.dom.borrow(), SHEET, self.width, self.height, qx, qy);
                 match hit {
                     Some(node) => {
                         let tag = self
