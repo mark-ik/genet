@@ -32,6 +32,7 @@ mod incremental;
 mod invalidate;
 mod layout;
 mod paint_emit;
+mod paint_stacking;
 mod serval_lane;
 mod snapshot;
 mod style;

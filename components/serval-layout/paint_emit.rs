@@ -221,7 +221,7 @@ impl ImageCollector {
 /// Bundles the per-emission mutable collectors + immutable resource
 /// sources, so the recursive `walk` takes one `&mut Emitter` rather
 /// than a half-dozen separate parameters.
-struct Emitter<'a, NodeId: Copy + Eq + Hash> {
+pub(crate) struct Emitter<'a, NodeId: Copy + Eq + Hash> {
     /// Shaped-glyph source (None on the cache-less probe path).
     glyphs: Option<GlyphSource<'a, NodeId>>,
     /// Decoded `<img>` images keyed by NodeId.
@@ -329,10 +329,13 @@ where
         fonts: FontCollector::default(),
         images: ImageCollector::default(),
     };
-    // In-flow pass: walk document order, deferring out-of-flow positioned
-    // elements (absolute/fixed) into `deferred`.
-    let mut deferred: Vec<Deferred<D::NodeId>> = Vec::new();
-    walk(
+    // Paint the document as the root stacking context. The recursive painter
+    // (crate::paint_stacking) walks each context's own tree for in-flow content,
+    // collects its positioned/z-index layers, and orders them per CSS 2.1
+    // Appendix E (negative-z behind, then in-flow, then zero/positive on top),
+    // scoped to that context — so a nested context sorts its own layers rather
+    // than all layers sharing one global z-order (the Tier 1 limitation).
+    crate::paint_stacking::paint_context(
         dom,
         styles,
         fragments,
@@ -340,35 +343,7 @@ where
         dom.document(),
         (0.0, 0.0),
         &mut commands,
-        &mut deferred,
-        true,
     );
-    // Positioned pass: out-of-flow elements paint on top, ordered by (z-index,
-    // document order). Each is placed at its parent's accumulated absolute origin
-    // (the point its parent-relative location is measured from), then walked with
-    // `defer = false` so its subtree emits inline. (Nested stacking contexts are
-    // Tier 2 / CSS-conformance work; Tier 1 is positioned-on-top.)
-    deferred.sort_by_key(|d| (d.z, d.seq));
-    let mut nested = Vec::new();
-    for d in deferred {
-        commands.push(PaintCmd::PushTransform(TransformSpec {
-            origin: LayoutPoint::new(d.origin.0, d.origin.1),
-            transform: LayoutTransform::identity(),
-            kind: TransformKind::Standard,
-        }));
-        walk(
-            dom,
-            styles,
-            fragments,
-            &mut emitter,
-            d.node,
-            d.origin,
-            &mut commands,
-            &mut nested,
-            false,
-        );
-        commands.push(PaintCmd::PopTransform);
-    }
     ServalPaintList {
         viewport,
         commands,
@@ -378,21 +353,26 @@ where
     }
 }
 
-/// An out-of-flow positioned element deferred from the in-flow pass to the
-/// positioned pass (painted on top, z-index ordered). `origin` is the parent's
-/// accumulated absolute origin; `seq` is document order (the z-index tiebreak).
-struct Deferred<NodeId> {
-    node: NodeId,
-    origin: (f32, f32),
-    z: i32,
-    seq: usize,
+/// A positioned / z-index element lifted out of its context's in-flow walk into
+/// a stacking layer (crate::paint_stacking orders the layers per Appendix E).
+/// `origin` is the parent's accumulated absolute origin (where the layer's
+/// parent-relative location is measured from); `z` is its paint-bucket z-index
+/// (`auto` → 0); `seq` is document order (the z tiebreak).
+pub(crate) struct Deferred<NodeId> {
+    pub(crate) node: NodeId,
+    pub(crate) origin: (f32, f32),
+    pub(crate) z: i32,
+    pub(crate) seq: usize,
 }
 
-/// Whether `id` is out of normal flow (`position: absolute`/`fixed`), so it
-/// paints in the positioned pass rather than in document order. `relative` /
-/// `sticky` stay in flow (Tier 1: they are commonly containing-block anchors
-/// without stacking intent; full painting order is Tier 2).
-fn is_out_of_flow<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId) -> bool {
+/// Whether `id` is out of normal flow (`position: absolute`/`fixed`). Out-of-flow
+/// elements are always lifted into a stacking layer; in-flow positioned elements
+/// (`relative`/`sticky`) are lifted only when they carry an explicit `z-index`
+/// (see [`crate::paint_stacking::defers_to_stacking`]).
+pub(crate) fn is_out_of_flow<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> bool {
     use style::values::computed::PositionProperty;
     let Some(entry) = styles.get(id) else {
         return false;
@@ -404,18 +384,6 @@ fn is_out_of_flow<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: Nod
         data.styles.primary().get_box().position,
         PositionProperty::Absolute | PositionProperty::Fixed
     )
-}
-
-/// The element's `z-index` as an integer (`auto` → 0), to order the positioned
-/// pass.
-fn z_index_of<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId) -> i32 {
-    let Some(entry) = styles.get(id) else {
-        return 0;
-    };
-    let Some(data) = entry.borrow_data() else {
-        return 0;
-    };
-    data.styles.primary().get_position().z_index.integer_or(0)
 }
 
 /// Recursive paint-order walk emitting compositor-model commands:
@@ -432,7 +400,7 @@ fn z_index_of<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId)
 ///
 /// Nodes without fragments (synthetic / skipped) don't push or pop,
 /// but children still descend in the current coord space.
-fn walk<D>(
+pub(crate) fn walk<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
@@ -441,16 +409,23 @@ fn walk<D>(
     origin: (f32, f32),
     commands: &mut Vec<PaintCmd>,
     deferred: &mut Vec<Deferred<D::NodeId>>,
-    defer: bool,
+    is_root: bool,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    // Out-of-flow positioned elements are deferred to the positioned pass
-    // (recorded with their parent's absolute origin + z-index, skipped here).
-    // `defer` is false during that pass, so the subtree then emits inline.
-    if defer && is_out_of_flow(styles, id) {
-        deferred.push(Deferred { node: id, origin, z: z_index_of(styles, id), seq: deferred.len() });
+    // A positioned / z-index descendant is lifted out of this context's in-flow
+    // walk into a stacking layer (recorded with its parent's absolute origin +
+    // paint-bucket z, skipped here); the recursive stacking painter places it.
+    // `is_root` is the one node we always emit — the context root the painter
+    // entered on, which would otherwise re-defer itself into an infinite loop.
+    if !is_root && crate::paint_stacking::defers_to_stacking(styles, id) {
+        deferred.push(Deferred {
+            node: id,
+            origin,
+            z: crate::paint_stacking::bucket_z(styles, id),
+            seq: deferred.len(),
+        });
         return;
     }
 
@@ -461,8 +436,18 @@ fn walk<D>(
     // so a deferred descendant records where to place itself.
     let mut child_origin = origin;
     let pushed = if let Some(l) = fragments.rect_of(id) {
+        // Children push their own parent-relative location, composing with this
+        // node's transform. The context root has no enclosing transform on the
+        // stack (the stacking painter emits each layer on a clean stack), so it
+        // folds its absolute `origin` into its own push — its body is then
+        // absolute without an extra wrapper transform.
+        let push_origin = if is_root {
+            LayoutPoint::new(origin.0 + l.location.x, origin.1 + l.location.y)
+        } else {
+            LayoutPoint::new(l.location.x, l.location.y)
+        };
         commands.push(PaintCmd::PushTransform(TransformSpec {
-            origin: LayoutPoint::new(l.location.x, l.location.y),
+            origin: push_origin,
             transform: LayoutTransform::identity(),
             kind: TransformKind::Standard,
         }));
@@ -678,7 +663,7 @@ fn walk<D>(
     }
 
     for child in dom.dom_children(id) {
-        walk(dom, styles, fragments, em, child, child_origin, commands, deferred, defer);
+        walk(dom, styles, fragments, em, child, child_origin, commands, deferred, false);
     }
 
     // Unwind in reverse: scroll transform, then clip, then the origin transform.
