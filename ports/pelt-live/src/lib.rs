@@ -206,7 +206,7 @@ mod tests {
         assert_eq!(runner.state().count, 0);
         assert_eq!(text_child(&dom.borrow(), root).as_deref(), Some("0"));
 
-        runner.dispatch_click(button, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(button, PointerClick::at((0.0, 0.0)));
 
         // (a) state mutated through the faithful message route.
         assert_eq!(runner.state().count, 1, "handler should have incremented");
@@ -260,7 +260,7 @@ mod tests {
         // The button is genuinely a descendant of the handler-bearing div.
         assert_ne!(button, root, "button must be the child, not the root div");
 
-        runner.dispatch_click(button, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(button, PointerClick::at((0.0, 0.0)));
 
         assert_eq!(
             runner.state().count,
@@ -288,7 +288,7 @@ mod tests {
                 .expect("the div has a text child")
         };
 
-        runner.dispatch_click(text_node, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(text_node, PointerClick::at((0.0, 0.0)));
 
         assert_eq!(
             runner.state().count,
@@ -389,7 +389,7 @@ mod tests {
         assert_eq!((runner.state().left, runner.state().right), (0, 0));
 
         // Click ONLY the left button.
-        runner.dispatch_click(left_button, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(left_button, PointerClick::at((0.0, 0.0)));
 
         // (a) sub-state isolation: only `left` incremented.
         assert_eq!(
@@ -418,7 +418,7 @@ mod tests {
         }
 
         // And the mirror: clicking the right button now moves only `right`.
-        runner.dispatch_click(right_button, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(right_button, PointerClick::at((0.0, 0.0)));
         assert_eq!(
             (runner.state().left, runner.state().right),
             (1, 1),
@@ -501,7 +501,7 @@ mod tests {
         // action type rather than swallowing it, so the relabelled `()` still
         // surfaces at the root; the runner collects it as one `()` entry — that
         // is expected, not a failure.)
-        let bubbled = runner.dispatch_click(button, PointerClick { local: (0.0, 0.0) });
+        let bubbled = runner.dispatch_click(button, PointerClick::at((0.0, 0.0)));
         assert_eq!(
             runner.state().count,
             1,
@@ -537,7 +537,7 @@ mod tests {
             find_element_by_name(&dom_ref, root, "button").expect("a <button> must exist")
         };
 
-        let bubbled = runner.dispatch_click(button, PointerClick { local: (0.0, 0.0) });
+        let bubbled = runner.dispatch_click(button, PointerClick::at((0.0, 0.0)));
         assert_eq!(
             bubbled,
             vec![Bump],
@@ -702,7 +702,7 @@ mod tests {
             hit_test_node(&dom_ref, &["div { display: block; }"], 800, 600, 5.0, 5.0)
                 .expect("a point inside the div should hit something")
         };
-        runner.dispatch_click(hit, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(hit, PointerClick::at((0.0, 0.0)));
         assert_eq!(
             runner.focus(),
             Some(div),
@@ -714,7 +714,7 @@ mod tests {
 
         // Clicking the document (no focusable ancestor) clears focus.
         let doc = dom.borrow().document();
-        runner.dispatch_click(doc, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(doc, PointerClick::at((0.0, 0.0)));
         assert_eq!(runner.focus(), None, "clicking outside clears focus");
     }
 
@@ -814,7 +814,7 @@ mod tests {
             find_element_by_name(&dom_ref, root, "button").expect("a <button> must exist")
         };
 
-        runner.dispatch_click(button, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(button, PointerClick::at((0.0, 0.0)));
         assert_eq!(
             runner.state().events,
             vec!["capture-parent".to_string(), "bubble-child".to_string()],
@@ -901,7 +901,7 @@ mod tests {
             find_element_by_name(&dom_ref, root, "button").expect("a <button> must exist")
         };
 
-        runner.dispatch_click(button, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(button, PointerClick::at((0.0, 0.0)));
         assert_eq!(
             runner.state().events,
             vec![
@@ -939,7 +939,7 @@ mod tests {
         };
         assert_ne!(button, root, "button is a descendant of the capture div");
 
-        runner.dispatch_click(button, PointerClick { local: (0.0, 0.0) });
+        runner.dispatch_click(button, PointerClick::at((0.0, 0.0)));
         assert_eq!(
             runner.state().events,
             vec!["capture-ancestor".to_string()],
