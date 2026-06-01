@@ -392,6 +392,12 @@ struct App {
     /// mouse wheel, clamped to the content; applied at render by keying the
     /// scroller's node in the [`ScrollOffsets`] map passed to the scene builder.
     scroll_offset: (f32, f32),
+    /// A pointer-drag move arrived since the last frame. `CursorMoved` sets it
+    /// instead of dispatching immediately; `RedrawRequested` drains it once per
+    /// frame at the latest cursor. Coalescing a burst of moves into one dispatch
+    /// keeps the rebuilt DOM and the painted frame in agreement, so the slider
+    /// thumb never tears between two positions on a fast drag.
+    pointer_move_pending: bool,
     width: u32,
     height: u32,
 }
@@ -422,6 +428,7 @@ impl App {
             modifiers: Modifiers::default(),
             clipboard: arboard::Clipboard::new().ok(),
             scroll_offset: (0.0, 0.0),
+            pointer_move_pending: false,
             width: 800,
             height: 600,
         }
@@ -883,14 +890,16 @@ impl ApplicationHandler<UserEvent> for App {
 
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x as f32, position.y as f32);
-                // Drive an in-progress pointer drag: route a Move to the captured
-                // element (local coords measured from its rect + the new cursor).
-                if let Some(node) = self.runner.pointer_capture() {
-                    if let Some(ev) = self.pointer_event_for(node, PointerPhase::Move) {
-                        self.runner.dispatch_pointer_move(ev);
-                        if let Some(window) = self.window.as_ref() {
-                            window.request_redraw();
-                        }
+                // Drive an in-progress pointer drag — but don't dispatch the move
+                // here. A fast drag fires many CursorMoved events between frames;
+                // dispatching each one rebuilds the thumb's `left` style, and a
+                // frame presented mid-burst can show the thumb torn between two
+                // positions. Flag the move instead and let RedrawRequested coalesce
+                // the burst into a single dispatch at the latest cursor.
+                if self.runner.pointer_capture().is_some() {
+                    self.pointer_move_pending = true;
+                    if let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
                     }
                 }
             },
@@ -1088,6 +1097,17 @@ impl ApplicationHandler<UserEvent> for App {
             },
 
             WindowEvent::RedrawRequested => {
+                // Drain a coalesced pointer-drag move (see CursorMoved): a single
+                // dispatch per frame at the latest cursor, so the rebuilt DOM and
+                // the frame about to paint always agree — no torn thumb.
+                if self.pointer_move_pending {
+                    self.pointer_move_pending = false;
+                    if let Some(node) = self.runner.pointer_capture() {
+                        if let Some(ev) = self.pointer_event_for(node, PointerPhase::Move) {
+                            self.runner.dispatch_pointer_move(ev);
+                        }
+                    }
+                }
                 self.render();
                 // Continuous loop: keep redrawing so the timer-driven climb is
                 // always reflected promptly (and the window stays responsive).
