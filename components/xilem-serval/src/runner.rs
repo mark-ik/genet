@@ -31,7 +31,8 @@ use serval_scripted_dom::{NodeId, ScriptedDom};
 use xilem_core::{DynMessage, Environment, MessageCtx, MessageResult, View, ViewId};
 
 use crate::{
-    DomHandle, Key, KeyEvent, NamedKey, PointerClick, ServalCtx, ServalElement, ServalElementMut,
+    DomHandle, Key, KeyEvent, NamedKey, PointerClick, PointerEvent, ServalCtx, ServalElement,
+    ServalElementMut,
 };
 
 /// Owns the app state, the view-producing logic, and the retained view tree,
@@ -70,6 +71,13 @@ where
     /// it to `None` when the click lands outside any focusable element.
     /// [`dispatch_key`](Self::dispatch_key) walks from here. Stage 3b.
     focus: Option<NodeId>,
+    /// The element capturing the current pointer drag, if any. Set by
+    /// [`dispatch_pointer_down`](Self::dispatch_pointer_down) to the nearest
+    /// pointer-handler ancestor of the press, consulted by
+    /// [`dispatch_pointer_move`](Self::dispatch_pointer_move) to route moves, and
+    /// cleared by [`dispatch_pointer_up`](Self::dispatch_pointer_up). So a drag
+    /// keeps reaching the element it started on even if the cursor leaves it.
+    pointer_capture: Option<NodeId>,
     phantom: PhantomData<fn() -> Action>,
 }
 
@@ -104,6 +112,7 @@ where
             view_state,
             root,
             focus: None,
+            pointer_capture: None,
             phantom: PhantomData,
         }
     }
@@ -472,6 +481,88 @@ where
         // 4. Rebuild so the handler's state mutation reaches the DOM.
         self.rebuild();
 
+        actions
+    }
+
+    /// Begin a pointer drag: the press hit `target`. Capture is set to the
+    /// nearest ancestor of `target` (including itself) carrying an
+    /// [`on_pointer`](crate::on_pointer) handler, and a `Down`
+    /// [`PointerEvent`] is routed to it. Subsequent
+    /// [`dispatch_pointer_move`](Self::dispatch_pointer_move) /
+    /// [`dispatch_pointer_up`](Self::dispatch_pointer_up) go to that captured
+    /// element until release. Returns the actions that bubbled to the root.
+    ///
+    /// `event.local` / `event.size` are the press point + element box in the
+    /// captured element's coordinate space; the host computes them from the
+    /// laid-out rect (the headless view layer has no layout).
+    pub fn dispatch_pointer_down(&mut self, target: NodeId, event: PointerEvent) -> Vec<Action> {
+        let captured = {
+            let dom = self.dom.borrow();
+            let mut current = Some(target);
+            let mut found = None;
+            while let Some(node) = current {
+                if self.ctx.pointer_handler(node).is_some() {
+                    found = Some(node);
+                    break;
+                }
+                current = dom.parent(node);
+            }
+            found
+        };
+        self.pointer_capture = captured;
+        match captured {
+            Some(node) => self.route_pointer(node, event),
+            None => Vec::new(),
+        }
+    }
+
+    /// Route a `Move` to the element capturing the drag (if any). No-op when no
+    /// drag is active.
+    pub fn dispatch_pointer_move(&mut self, event: PointerEvent) -> Vec<Action> {
+        match self.pointer_capture {
+            Some(node) => self.route_pointer(node, event),
+            None => Vec::new(),
+        }
+    }
+
+    /// Route an `Up` to the capturing element and end the drag (clearing
+    /// capture). No-op when no drag is active.
+    pub fn dispatch_pointer_up(&mut self, event: PointerEvent) -> Vec<Action> {
+        match self.pointer_capture.take() {
+            Some(node) => self.route_pointer(node, event),
+            None => Vec::new(),
+        }
+    }
+
+    /// The element currently capturing a pointer drag, if any. The host reads
+    /// this between [`dispatch_pointer_down`](Self::dispatch_pointer_down) and
+    /// `up` to know which element's rect to measure for the move's local coords.
+    pub fn pointer_capture(&self) -> Option<NodeId> {
+        self.pointer_capture
+    }
+
+    /// Route a [`PointerEvent`] down `node`'s registered pointer path through the
+    /// faithful message cycle, then rebuild. The disjoint-field destructure
+    /// mirrors [`dispatch_click`](Self::dispatch_click).
+    fn route_pointer(&mut self, node: NodeId, event: PointerEvent) -> Vec<Action> {
+        let Some(path) = self.ctx.pointer_handler(node).map(<[ViewId]>::to_vec) else {
+            return Vec::new();
+        };
+        let mut actions = Vec::new();
+        {
+            let Self { state, view, view_state, root, dom, .. } = self;
+            let mut msg =
+                MessageCtx::new(Environment::new(), path, DynMessage::new(event));
+            let mut_ref = ServalElementMut {
+                node: &mut root.node,
+                dom: dom.clone(),
+                parent: Some(dom.borrow().document()),
+            };
+            if let MessageResult::Action(a) = view.message(view_state, &mut msg, mut_ref, state) {
+                actions.push(a);
+            }
+        }
+        self.rebuild();
         actions
     }
 

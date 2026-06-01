@@ -78,6 +78,13 @@ pub struct ServalCtx {
     /// `ON_KEY_ID`. Presence in this map is the definition of *focusable*,
     /// **regardless of the handler's phase**.
     key_handlers: HashMap<NodeId, Handler>,
+    /// `NodeId → routing path` for pointer-drag handlers
+    /// ([`OnPointer`](crate::OnPointer)). Unlike click/key there is no
+    /// capture/bubble phase: a drag routes straight to the captured target, so
+    /// the value is just the path (ending in `ON_POINTER_ID`). The runner walks a
+    /// hit node's ancestor chain through this on `pointerdown` to find the
+    /// element that captures the drag.
+    pointer_handlers: HashMap<NodeId, Vec<ViewId>>,
 }
 
 impl ServalCtx {
@@ -89,6 +96,7 @@ impl ServalCtx {
             dom,
             click_handlers: HashMap::new(),
             key_handlers: HashMap::new(),
+            pointer_handlers: HashMap::new(),
         }
     }
 
@@ -159,6 +167,25 @@ impl ServalCtx {
     /// for a capture-phase key listener too.
     pub fn is_focusable(&self, node: NodeId) -> bool {
         self.key_handlers.contains_key(&node)
+    }
+
+    /// Register `path` as the pointer-drag handler for `node`
+    /// ([`OnPointer`](crate::OnPointer) build/rebuild). The path ends in
+    /// `ON_POINTER_ID` and routes straight to the handler's `message`.
+    pub fn register_pointer(&mut self, node: NodeId, path: Vec<ViewId>) {
+        self.pointer_handlers.insert(node, path);
+    }
+
+    /// Drop the pointer handler for `node` (teardown / re-key on node swap).
+    pub fn unregister_pointer(&mut self, node: NodeId) {
+        self.pointer_handlers.remove(&node);
+    }
+
+    /// The pointer-drag routing path on `node`, if one is registered. The
+    /// runner's `dispatch_pointer_down` walks the hit node's ancestors through
+    /// this to find the drag-capturing element.
+    pub fn pointer_handler(&self, node: NodeId) -> Option<&[ViewId]> {
+        self.pointer_handlers.get(&node).map(Vec::as_slice)
     }
 }
 

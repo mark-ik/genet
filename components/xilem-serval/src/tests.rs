@@ -816,9 +816,9 @@ mod controls {
     use serval_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{
-        AnyView, DomHandle, Key, KeyEvent, Modifiers, NamedKey, PointerClick, RadioGroup,
-        SelectState, ServalAppRunner, ServalCtx, ServalElement, TextInput, View, button, checkbox,
-        el, lens, overlay_at, radio_group, select, text_field,
+        AnyView, DomHandle, Key, KeyEvent, Modifiers, NamedKey, PointerClick, PointerEvent,
+        PointerPhase, RadioGroup, SelectState, ServalAppRunner, ServalCtx, ServalElement, TextInput,
+        View, button, checkbox, el, lens, on_pointer, overlay_at, radio_group, select, text_field,
     };
 
     /// The text data of the single text child under `node`, if any.
@@ -1291,6 +1291,53 @@ mod controls {
         assert_eq!(t.caret(), 4, "home: start of 'de' (offset 4)");
         t.end_line(false);
         assert_eq!(t.caret(), 6, "end: end of 'de' (offset 6)");
+    }
+
+    /// Pointer drag: `down` captures the element and routes a `Down`, `move`
+    /// routes to the captured element (cursor wherever), `up` routes `Up` and
+    /// clears capture — the foundation under sliders / scrollbar-drag.
+    #[test]
+    fn pointer_drag_captures_and_routes() {
+        #[derive(Default)]
+        struct Drag {
+            phases: Vec<PointerPhase>,
+            last_x: f32,
+        }
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            |_: &Drag| {
+                on_pointer(el::<_, Drag, ()>("div", "track"), |s: &mut Drag, e: PointerEvent| {
+                    s.phases.push(e.phase);
+                    s.last_x = e.local.0;
+                })
+            },
+            Drag::default(),
+        );
+        let node = runner.root();
+
+        runner.dispatch_pointer_down(
+            node,
+            PointerEvent { phase: PointerPhase::Down, local: (5.0, 0.0), size: (100.0, 10.0) },
+        );
+        assert_eq!(runner.pointer_capture(), Some(node), "down captures the element");
+
+        runner.dispatch_pointer_move(PointerEvent {
+            phase: PointerPhase::Move,
+            local: (40.0, 0.0),
+            size: (100.0, 10.0),
+        });
+        runner.dispatch_pointer_up(PointerEvent {
+            phase: PointerPhase::Up,
+            local: (40.0, 0.0),
+            size: (100.0, 10.0),
+        });
+        assert_eq!(runner.pointer_capture(), None, "up clears capture");
+        assert_eq!(
+            runner.state().phases,
+            vec![PointerPhase::Down, PointerPhase::Move, PointerPhase::Up]
+        );
+        assert_eq!(runner.state().last_x, 40.0, "the captured handler saw the move's local x");
     }
 
     // --- selection (model + keyboard) -----------------------------------------
