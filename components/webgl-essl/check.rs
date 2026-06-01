@@ -23,6 +23,10 @@ use crate::ast::*;
 use crate::span::{Span, line_column};
 use crate::visit::{Visit, Visitor, Walk, walk_translation_unit};
 
+mod typing;
+
+use typing::{binary_result, constructor_result, swizzle_result, unary_result};
+
 /// Public entry: run the first typecheck pass over a parsed
 /// translation unit. The result holds resolved types keyed by node
 /// span plus any diagnostics produced along the way.
@@ -57,6 +61,20 @@ pub enum TypeDiagnosticKind {
     /// Identifier appears in expression position without a matching
     /// declaration in the scope stack at that point.
     UnknownIdentifier { name: String },
+    /// Binary operator does not accept the operand pair under ESSL
+    /// rules (e.g., `bool + bool` or `mat3 * mat4`).
+    BinaryOpMismatch { op: BinOp, lhs: TypeKind, rhs: TypeKind },
+    /// Unary operator does not accept this operand type (e.g., `!float`).
+    UnaryOpMismatch { op: UnaryOp, operand: TypeKind },
+    /// Assignment LHS / RHS type mismatch.
+    AssignTypeMismatch { lhs: TypeKind, rhs: TypeKind },
+    /// Ternary condition is not `bool`.
+    TernaryCondNotBool { cond: TypeKind },
+    /// Ternary then / else_ branches resolve to different types.
+    TernaryBranchMismatch { then: TypeKind, else_: TypeKind },
+    /// `.field` on a base that is not a vec, or a field that is not a
+    /// valid swizzle for the base's component count.
+    InvalidSwizzle { base: TypeKind, field: String },
 }
 
 impl TypeDiagnostic {
@@ -76,6 +94,27 @@ impl fmt::Display for DiagnosticDisplay<'_> {
         match &self.diag.kind {
             TypeDiagnosticKind::UnknownIdentifier { name } => {
                 write!(f, "{line}:{col}: unknown identifier `{name}`")
+            },
+            TypeDiagnosticKind::BinaryOpMismatch { op, lhs, rhs } => {
+                write!(f, "{line}:{col}: binary `{op:?}` does not accept {lhs:?} and {rhs:?}")
+            },
+            TypeDiagnosticKind::UnaryOpMismatch { op, operand } => {
+                write!(f, "{line}:{col}: unary `{op:?}` does not accept {operand:?}")
+            },
+            TypeDiagnosticKind::AssignTypeMismatch { lhs, rhs } => {
+                write!(f, "{line}:{col}: cannot assign {rhs:?} to {lhs:?}")
+            },
+            TypeDiagnosticKind::TernaryCondNotBool { cond } => {
+                write!(f, "{line}:{col}: ternary condition must be bool, got {cond:?}")
+            },
+            TypeDiagnosticKind::TernaryBranchMismatch { then, else_ } => {
+                write!(
+                    f,
+                    "{line}:{col}: ternary branches differ: then is {then:?}, else is {else_:?}"
+                )
+            },
+            TypeDiagnosticKind::InvalidSwizzle { base, field } => {
+                write!(f, "{line}:{col}: invalid swizzle `.{field}` on {base:?}")
             },
         }
     }
@@ -259,12 +298,125 @@ impl<'tree> Visitor<'tree> for TypeChecker {
                         });
                     },
                 },
-                // Other expression kinds are not typed by the first
-                // pass; binary-op result types and constructor /
-                // function-call signatures come in Step 4b.
-                _ => {},
+                Expr::Binary { op, lhs, rhs, span } => {
+                    let lt = self.types.get(&lhs.span()).copied();
+                    let rt = self.types.get(&rhs.span()).copied();
+                    if let (Some(lt), Some(rt)) = (lt, rt) {
+                        match binary_result(*op, lt, rt) {
+                            Some(result) => {
+                                self.types.insert(*span, result);
+                            },
+                            None => {
+                                self.diagnostics.push(TypeDiagnostic {
+                                    kind: TypeDiagnosticKind::BinaryOpMismatch {
+                                        op: *op,
+                                        lhs: lt,
+                                        rhs: rt,
+                                    },
+                                    span: *span,
+                                });
+                            },
+                        }
+                    }
+                },
+                Expr::Unary { op, expr, span } => {
+                    if let Some(t) = self.types.get(&expr.span()).copied() {
+                        match unary_result(*op, t) {
+                            Some(result) => {
+                                self.types.insert(*span, result);
+                            },
+                            None => {
+                                self.diagnostics.push(TypeDiagnostic {
+                                    kind: TypeDiagnosticKind::UnaryOpMismatch {
+                                        op: *op,
+                                        operand: t,
+                                    },
+                                    span: *span,
+                                });
+                            },
+                        }
+                    }
+                },
+                Expr::Assign { lhs, rhs, span, .. } => {
+                    // Result of an assignment is the LHS's type; mismatch
+                    // is a diagnostic, but we still annotate so callers
+                    // get a type to carry on with.
+                    let lt = self.types.get(&lhs.span()).copied();
+                    let rt = self.types.get(&rhs.span()).copied();
+                    if let Some(lt) = lt {
+                        self.types.insert(*span, lt);
+                        if let Some(rt) = rt {
+                            if lt != rt {
+                                self.diagnostics.push(TypeDiagnostic {
+                                    kind: TypeDiagnosticKind::AssignTypeMismatch { lhs: lt, rhs: rt },
+                                    span: *span,
+                                });
+                            }
+                        }
+                    }
+                },
+                Expr::Ternary { cond, then, else_, span } => {
+                    let ct = self.types.get(&cond.span()).copied();
+                    let tt = self.types.get(&then.span()).copied();
+                    let et = self.types.get(&else_.span()).copied();
+                    if let Some(ct) = ct {
+                        if ct != TypeKind::Bool {
+                            self.diagnostics.push(TypeDiagnostic {
+                                kind: TypeDiagnosticKind::TernaryCondNotBool { cond: ct },
+                                span: *span,
+                            });
+                        }
+                    }
+                    if let (Some(tt), Some(et)) = (tt, et) {
+                        if tt == et {
+                            self.types.insert(*span, tt);
+                        } else {
+                            self.diagnostics.push(TypeDiagnostic {
+                                kind: TypeDiagnosticKind::TernaryBranchMismatch { then: tt, else_: et },
+                                span: *span,
+                            });
+                        }
+                    }
+                },
+                Expr::Member { base, field, span, .. } => {
+                    if let Some(bt) = self.types.get(&base.span()).copied() {
+                        match swizzle_result(bt, field) {
+                            Some(result) => {
+                                self.types.insert(*span, result);
+                            },
+                            None => {
+                                self.diagnostics.push(TypeDiagnostic {
+                                    kind: TypeDiagnosticKind::InvalidSwizzle {
+                                        base: bt,
+                                        field: field.clone(),
+                                    },
+                                    span: *span,
+                                });
+                            },
+                        }
+                    }
+                },
+                Expr::Call { callee, args, span, .. } => {
+                    // Step 4b ships constructor resolution. Other named
+                    // calls (built-ins like `texture2D`, `sin`, plus
+                    // user-defined helpers) are typed by the registry in
+                    // a follow-up; silent for now to avoid noise.
+                    let arg_types: Option<Vec<TypeKind>> = args
+                        .iter()
+                        .map(|a| self.types.get(&a.span()).copied())
+                        .collect();
+                    if let Some(arg_types) = arg_types {
+                        if let Some(result) = constructor_result(callee, &arg_types) {
+                            self.types.insert(*span, result);
+                        }
+                    }
+                },
+                // Index expressions are deferred (Step 4b second chunk):
+                // need component-type rules for vec / array / matrix.
+                Expr::Index { .. } => {},
             }
         }
         Walk::Continue
     }
 }
+

@@ -77,6 +77,7 @@ void b() {
     assert_eq!(r.diagnostics.len(), 1, "x should be unknown in b()");
     match &r.diagnostics[0].kind {
         TypeDiagnosticKind::UnknownIdentifier { name } => assert_eq!(name, "x"),
+        other => panic!("expected UnknownIdentifier, got {other:?}"),
     }
 }
 
@@ -129,6 +130,7 @@ void main() {
     assert_eq!(r.diagnostics.len(), 1);
     match &r.diagnostics[0].kind {
         TypeDiagnosticKind::UnknownIdentifier { name } => assert_eq!(name, "x"),
+        other => panic!("expected UnknownIdentifier, got {other:?}"),
     }
 }
 
@@ -220,6 +222,7 @@ void main() {
     assert_eq!(r.diagnostics.len(), 1, "inside should be unknown after the if block");
     match &r.diagnostics[0].kind {
         TypeDiagnosticKind::UnknownIdentifier { name } => assert_eq!(name, "inside"),
+        other => panic!("expected UnknownIdentifier, got {other:?}"),
     }
 }
 
@@ -246,6 +249,7 @@ fn unknown_ident_diagnostic_carries_name_and_span() {
     let d = &r.diagnostics[0];
     match &d.kind {
         TypeDiagnosticKind::UnknownIdentifier { name } => assert_eq!(name, "unknown_var"),
+        other => panic!("expected UnknownIdentifier, got {other:?}"),
     }
     // Span points at the identifier reference, not the declaration.
     let rendered = format!("{}", d.display(src));
