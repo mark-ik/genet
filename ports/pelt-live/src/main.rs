@@ -40,13 +40,14 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use layout_dom_api::LayoutDom;
+use layout_dom_api::{LayoutDom, LocalName, Namespace};
+use serval_layout::ScrollOffsets;
 use netrender::external_texture::ExternalTexturePlacement;
 use netrender::{ColorLoad, NetrenderOptions, Renderer, Scene};
 use serval_scripted_dom::{NodeId, ScriptedDom};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, NamedKey as WinitNamedKey};
 use winit::window::{Window, WindowId};
@@ -115,10 +116,11 @@ type DemoView = El<
         // z-index). `Option<V>` is a `ViewSequence`, so this is the conditional
         // child slot.
         Option<El<&'static str, Demo, ()>>,
-        // The `select` dropdown, lensed onto `Demo::colour`. Its concrete type is
-        // unnameable (the per-option click closures), so it rides an erased
-        // `Box<dyn AnyView>` — the host capability that lets a named app hold an
-        // opaque-typed control.
+        // Two erased (`Box<dyn AnyView>`) children — concrete types unnameable
+        // (closures / `Vec`). In paint/stacking (document) order: the scrollable
+        // box (`overflow: scroll`, wheel-scrolled), then the `select` dropdown
+        // last so its option list paints over the scroller.
+        AnyDemoView,
         AnyDemoView,
     ),
     Demo,
@@ -159,6 +161,23 @@ fn demo_view(s: &Demo) -> DemoView {
             // The colour dropdown, lensed onto `Demo::colour`, boxed as an erased
             // view. Self-positions its option list (top: 100%), so unlike the
             // popup it needs no host anchor.
+            // The scrollable box: eight lines exceeding its fixed height. The
+            // host wheel-scrolls it; emit clips + translates the content. Placed
+            // before the select so the select's dropdown (which opens over this
+            // area) paints on top — the paint walk has no z-index, so stacking
+            // is document order.
+            Box::new(
+                el::<_, Demo, ()>(
+                    "div",
+                    (1..=8)
+                        .map(|i| el::<_, Demo, ()>("p", format!("Scrollable line {i}")))
+                        .collect::<Vec<_>>(),
+                )
+                .attr("class", "scroller"),
+            ) as AnyDemoView,
+            // The colour dropdown, lensed onto `Demo::colour`, boxed as an erased
+            // view. Self-positions its option list (top: 100%). Last child, so
+            // the open list paints over the scroller above it.
             Box::new(lens(
                 |c: &mut SelectState| select(c, COLOURS),
                 |d: &mut Demo| &mut d.colour,
@@ -197,6 +216,12 @@ const SHEET: &[&str] = &[
     ".select-list { background-color: rgb(255, 255, 255); }",
     ".select-option { font-size: 24px; color: rgb(30, 30, 40); \
         background-color: rgb(240, 242, 248); padding: 8px; }",
+    // The scrollable box: fixed height with `overflow: scroll`; its eight lines
+    // are taller than that, so the wheel scrolls them. `.scroller p` overrides
+    // the big count-`<p>` font so the lines are list-sized.
+    ".scroller { overflow: scroll; height: 140px; \
+        background-color: rgb(250, 245, 235); padding: 8px; }",
+    ".scroller p { font-size: 28px; color: rgb(60, 50, 40); padding: 4px; margin: 0; }",
 ];
 
 // ── winit user event ───────────────────────────────────────────────────────
@@ -273,6 +298,37 @@ fn find_element_by_tag(dom: &ScriptedDom, tag: &str) -> Option<NodeId> {
     None
 }
 
+/// The first element whose `class` attribute contains `class` (whitespace-
+/// separated), in document pre-order. Used to find the scroll container.
+fn find_element_by_class(dom: &ScriptedDom, class: &str) -> Option<NodeId> {
+    let ns = Namespace::from("");
+    let local = LocalName::from("class");
+    let mut queue = vec![dom.document()];
+    while let Some(id) = queue.pop() {
+        if dom
+            .attribute(id, &ns, &local)
+            .is_some_and(|c| c.split_whitespace().any(|t| t == class))
+        {
+            return Some(id);
+        }
+        queue.extend(dom.dom_children(id));
+    }
+    None
+}
+
+/// The scroll container's node, its box (location + size, root-relative — the
+/// scroller is a direct child of the positioned root, so parent-relative ≈
+/// absolute here), and its max vertical scroll extent (content beyond the
+/// visible box). `None` if there is no `.scroller` or it has no fragment.
+struct ScrollBox {
+    node: NodeId,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    scrollable_y: f32,
+}
+
 // ── GPU state (created on resume) ────────────────────────────────────────────
 
 /// wgpu/netrender state, built once a window exists. Held together so the
@@ -308,6 +364,10 @@ struct App {
     modifiers: Modifiers,
     /// The system clipboard, for Ctrl/Cmd+C/X/V. `None` if it failed to open.
     clipboard: Option<arboard::Clipboard>,
+    /// The scrollable box's current scroll offset (device px). Updated by the
+    /// mouse wheel, clamped to the content; applied at render by keying the
+    /// scroller's node in the [`ScrollOffsets`] map passed to the scene builder.
+    scroll_offset: (f32, f32),
     width: u32,
     height: u32,
 }
@@ -336,6 +396,7 @@ impl App {
             cursor: (0.0, 0.0),
             modifiers: Modifiers::default(),
             clipboard: arboard::Clipboard::new().ok(),
+            scroll_offset: (0.0, 0.0),
             width: 800,
             height: 600,
         }
@@ -443,6 +504,26 @@ impl App {
         ))
     }
 
+    /// Locate the `.scroller` and measure its box + scroll extent from a fresh
+    /// layout. `scrollable_y` is how far the content overflows the visible box
+    /// (the clamp ceiling for the wheel); `0` when it fits.
+    fn scroll_box(&self) -> Option<ScrollBox> {
+        let dom = self.dom.borrow();
+        let node = find_element_by_class(&dom, "scroller")?;
+        let frags = fragments_from_scripted_dom(&dom, SHEET, self.width, self.height);
+        let r = frags.rect_of(node)?;
+        let inner_h =
+            r.size.height - r.padding.top - r.padding.bottom - r.border.top - r.border.bottom;
+        Some(ScrollBox {
+            node,
+            x: r.location.x,
+            y: r.location.y,
+            w: r.size.width,
+            h: r.size.height,
+            scrollable_y: (r.content_size.height - inner_h).max(0.0),
+        })
+    }
+
     /// Render the current DOM and present it to the surface backbuffer.
     ///
     /// 1. `scene_from_scripted_dom` runs the serval engine (cascade → layout →
@@ -475,8 +556,13 @@ impl App {
                 });
             TextCursor { node, caret: byte_of(field.caret()), selection }
         });
+        // Key the scroller's node with its current offset so emit scrolls it.
+        let mut scroll_offsets: ScrollOffsets<NodeId> = ScrollOffsets::default();
+        if let Some(node) = find_element_by_class(&self.dom.borrow(), "scroller") {
+            scroll_offsets.insert(node, self.scroll_offset);
+        }
         let scene: Scene =
-            scene_from_scripted_dom(&self.dom.borrow(), SHEET, w, h, cursor, &Default::default());
+            scene_from_scripted_dom(&self.dom.borrow(), SHEET, w, h, cursor, &scroll_offsets);
 
         // 2. Render the scene into a fresh Rgba8Unorm target. vello binds this
         //    as a storage texture (STORAGE_BINDING) and also reads it back via
@@ -714,6 +800,35 @@ impl ApplicationHandler<UserEvent> for App {
 
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x as f32, position.y as f32);
+            },
+
+            WindowEvent::MouseWheel { delta, .. } => {
+                // Convert to pixels (≈30 px/line) and scroll the box under the
+                // cursor. Wheel up (positive) reveals earlier content, so the
+                // offset decreases; clamp to the content's scroll extent.
+                let dy = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y * 30.0,
+                    MouseScrollDelta::PixelDelta(p) => p.y as f32,
+                };
+                if let Some(sb) = self.scroll_box() {
+                    let (cx, cy) = self.cursor;
+                    let inside =
+                        cx >= sb.x && cx <= sb.x + sb.w && cy >= sb.y && cy <= sb.y + sb.h;
+                    if inside {
+                        let new_y = (self.scroll_offset.1 - dy).clamp(0.0, sb.scrollable_y);
+                        if new_y != self.scroll_offset.1 {
+                            self.scroll_offset.1 = new_y;
+                            tracing::info!(
+                                offset_y = new_y,
+                                scrollable = sb.scrollable_y,
+                                "scroll"
+                            );
+                            if let Some(window) = self.window.as_ref() {
+                                window.request_redraw();
+                            }
+                        }
+                    }
+                }
             },
 
             WindowEvent::ModifiersChanged(mods) => {
