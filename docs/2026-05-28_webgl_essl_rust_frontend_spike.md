@@ -46,8 +46,12 @@ calendar bet.
   (`texture2D` / `textureCube`), built-in math, unary prefixes, ternary.
   *Done condition:* a curated corpus (WebGL Conformance Suite shader
   examples, plus the corner cases mozangle's tests exercise) parses
-  cleanly, with no `Unsupported` errors. *Status: primary grammar
-  coverage complete; conformance corpus is the next gate.*
+  cleanly, with no `Unsupported` errors. *Status: closed. 10/10 in
+  `tests/conformance_corpus.rs` covering solid-color fragment, MVP
+  transform vertex, textured fragment with swizzle, struct decl plus
+  lighting math, toon shading with mixed control flow, fog blending,
+  const-bound loop accumulator, alpha-test discard, helper function with
+  parameters, gamma correction with `pow`.*
   - **First pass shipped.** Pratt refactor of the expression layer
     (binding-power table + one driver, lessons borrowed from chumsky's
     `pratt` module and matklad's "Simple but Powerful Pratt Parsing");
@@ -67,11 +71,12 @@ calendar bet.
     struct declarations at file scope (`struct Name { field; field; };`
     with multi-name-per-line via `vec3 a, b;`). Receipts at
     `tests/step2_remainder.rs`, 8/8 green.
-  - **Still open at this gate.** Conformance corpus actually run
-    against the parser (the Step 2 done condition); `texture2D` /
-    `textureCube` (lex as identifiers already; validator gives them
-    built-in semantics); the long tail of WebGL 1 shader idioms the
-    corpus will surface.
+  - **Third pass shipped.** Curated conformance corpus of 10
+    real-shape WebGL 1 shaders parsed cleanly on first run; no parser
+    gaps surfaced. Receipts at `tests/conformance_corpus.rs`.
+  - **Still open at this gate.** Wider conformance corpus (this is
+    Step 7 territory: full WebGL CTS). `texture2D` / `textureCube`
+    semantic resolution belongs to the validator (Step 5).
 
 - **Step 3 — ESSL 3.00 parser delta.** ESSL 3.00 adds `in` / `out` /
   `centroid` / `flat` / `smooth`, layout qualifiers, integer literal
@@ -166,7 +171,12 @@ reach.
   `(void)` form, two-function translation units, ternary in assign-
   rhs, right-associativity, log-or binding tighter than ternary, struct
   decls with three typed fields and with multi-name-per-line (8 tests).
-  31/31 green on Windows.
+  Plus the Step 2 done-condition corpus exercising solid-color
+  fragment, MVP transform vertex, textured fragment with swizzle,
+  struct + lighting math, toon shading with mixed control flow, fog
+  blending, const-bound loop accumulator, alpha-test discard, helper
+  function with parameters, gamma correction (10 tests). 41/41 green
+  on Windows.
 
 ## 5. What it doesn't ship (and the order to add)
 
