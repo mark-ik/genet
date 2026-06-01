@@ -332,6 +332,26 @@ already exposes (`run_microtasks`, `run_event_loop`).
     so the demo holds it as `Box<dyn AnyView>` — the erased-view payoff: a named
     app view (`DemoView`) carries an opaque-typed control (`07a8e3b`).
 
+- **Stage 6 (scrolling) — done.** A Lane H axis, wired from existing netrender
+  primitives (`PushClip`/`PushTransform`) rather than a renderer change.
+  - **Overflow clip (`3909fe7`).** `paint_emit` wraps an element's descendants
+    in `PushClip`/`PopClip` (padding box) when `overflow != visible` — also fixes
+    `overflow: hidden`/`clip` generally.
+  - **Scroll-offset transform (`aa4fc14`).** A clipping container with an entry
+    in a `ScrollOffsets<NodeId>` map translates its clipped content by `-offset`,
+    so it scrolls under the fixed clip window.
+  - **Host wheel + scrollbar + hit-test (`d3606eb`, `1709ef6`).** `pelt-live`
+    wheel input → clamped offset (vs `content_size` from the fragment); a
+    scrollbar thumb on the right edge (height ∝ visible/content, pos ∝
+    offset/scrollable); and a hit-test offset so clicks inside a scrolled box map
+    through the offset to the content's layout position (verified: at max scroll,
+    line clicks log the bottom lines, not the top).
+  - **Known gap — no `z-index`.** Stacking is document order, so an overlay (the
+    `select` dropdown) is covered by a *later* sibling (the scroller); the demo
+    works around it by ordering the select last. True stacking contexts would
+    decouple paint order from in-flow position — a CSS-conformance item, not a
+    host one.
+
 ## Toward the Mere flip gate: IME + form-control breadth
 
 Mere's [serval-as-host decision brief](../../mere/design_docs/mere_docs/technical_architecture/2026-05-29_serval_as_host_evaluation.md)
