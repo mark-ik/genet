@@ -829,6 +829,25 @@ mod controls {
             .and_then(|c| dom.text(c).map(str::to_string))
     }
 
+    /// All text in `node`'s subtree concatenated in document order. The field
+    /// renders its content as `(before, preedit-span, after)`, so its rendered
+    /// text is the concatenation, not a single child.
+    fn field_text(dom: &ScriptedDom, node: NodeId) -> String {
+        fn go(dom: &ScriptedDom, node: NodeId, out: &mut String) {
+            if dom.kind(node) == NodeKind::Text {
+                if let Some(t) = dom.text(node) {
+                    out.push_str(t);
+                }
+            }
+            for c in dom.dom_children(node) {
+                go(dom, c, out);
+            }
+        }
+        let mut out = String::new();
+        go(dom, node, &mut out);
+        out
+    }
+
     /// The first element in `node`'s subtree (pre-order) named `name`.
     fn find_element_by_name(dom: &ScriptedDom, node: NodeId, name: &str) -> Option<NodeId> {
         if dom.kind(node) == NodeKind::Element
@@ -909,8 +928,8 @@ mod controls {
         assert_eq!(runner.state().text(), "hi y", "the field edited its buffer");
         assert_eq!(runner.state().caret(), 4, "caret sits at the end after typing");
         assert_eq!(
-            text_child(&dom.borrow(), runner.root()).as_deref(),
-            Some("hi y"),
+            field_text(&dom.borrow(), runner.root()),
+            "hi y",
             "the <input> DOM text is the clean buffer"
         );
     }
@@ -940,8 +959,8 @@ mod controls {
         assert_eq!(runner.state().text(), "hXi");
         assert_eq!(runner.state().caret(), 2, "caret after the inserted X");
         assert_eq!(
-            text_child(&dom.borrow(), runner.root()).as_deref(),
-            Some("hXi"),
+            field_text(&dom.borrow(), runner.root()),
+            "hXi",
             "DOM text is the clean buffer; the caret is painted, not in the text"
         );
 
@@ -956,8 +975,8 @@ mod controls {
         assert_eq!(runner.state().text(), "i");
         assert_eq!(runner.state().caret(), 0, "caret back at the start");
         assert_eq!(
-            text_child(&dom.borrow(), runner.root()).as_deref(),
-            Some("i"),
+            field_text(&dom.borrow(), runner.root()),
+            "i",
             "DOM text is the clean buffer"
         );
     }
@@ -1072,16 +1091,16 @@ mod controls {
         runner.key(named(NamedKey::Home));
         assert_eq!(runner.state().caret(), 0, "Home jumps to the start");
         assert_eq!(
-            text_child(&dom.borrow(), runner.root()).as_deref(),
-            Some("abc"),
+            field_text(&dom.borrow(), runner.root()),
+            "abc",
             "Home moves the caret, not the buffer text"
         );
 
         runner.key(named(NamedKey::End));
         assert_eq!(runner.state().caret(), 3, "End jumps to the end");
         assert_eq!(
-            text_child(&dom.borrow(), runner.root()).as_deref(),
-            Some("abc"),
+            field_text(&dom.borrow(), runner.root()),
+            "abc",
             "End moves the caret, not the buffer text"
         );
     }
@@ -1480,8 +1499,8 @@ mod controls {
         assert_eq!(runner.state().text(), "aX");
         assert!(!runner.state().has_selection());
         assert_eq!(
-            text_child(&dom.borrow(), runner.root()).as_deref(),
-            Some("aX"),
+            field_text(&dom.borrow(), runner.root()),
+            "aX",
             "DOM text is the clean buffer after the replace"
         );
     }
