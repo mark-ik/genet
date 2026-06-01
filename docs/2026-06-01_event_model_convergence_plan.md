@@ -139,9 +139,41 @@ other is a visible inconsistency a reviewer (or a grep for the doc path) catches
    scenario table above, asserted in each crate (separate dep islands; see the
    mechanism section), with each test's doc comment naming its twin + this doc.
 4. **Record the deferred set** in this doc as it changes; revisit shadow
-   DOM / passive when a consumer needs them. **Still open** —
-   `stopImmediatePropagation` past the ≤1-listener limit, `composedPath`,
-   `eventPhase`, passive listeners, `currentTarget` on the native side.
+   DOM / passive when a consumer needs them.
+
+## dom/events conformance push (2026-06-01)
+
+With the contract converged, the JS side got the rest of the event surface the
+WPT `dom/events` suite exercises. The push found that **`document.createEvent`
+was a universal blocker** — absent, so every legacy test (which builds events via
+`createEvent(iface)` + `initEvent`) threw at construction and *every* subtest
+failed regardless of the feature it tested. Fixing it doubled the suite alone.
+
+Landed (all in `dom.rs` + `lib.rs`, both engines where applicable):
+
+- **`createEvent(iface)` + `initEvent(type, bubbles, cancelable)`** with the DOM
+  initialized/dispatch flags: an uninitialized or mid-dispatch event throws
+  `InvalidStateError`; a recognized-but-unmodeled interface yields a base `Event`
+  (no per-interface subclasses yet); an unknown interface is `NotSupportedError`.
+- **`addEventListener` options object** `{capture, once, passive}` (plus the
+  legacy bool `capture`); listeners stored as `{cb, once}` records, deduped by
+  `(type, callback, capture)`; a `once` listener is removed before it fires.
+  `passive` is parsed/accepted but has no scroll-default to gate yet.
+- **`composedPath()`** (the recorded target→root path; no shadow boundary yet)
+  and **`eventPhase`** (NONE/CAPTURING/AT_TARGET/BUBBLING, live during dispatch +
+  `Event.*` constants).
+- **Legacy aliases**: `event.returnValue` (↔ preventDefault), `event.cancelBubble`
+  (↔ stopPropagation), `event.srcElement` (↔ target).
+
+Result: **dom/events 66 → 142 subtests, 3 → 13 all-pass files** (Boa). The shared
+conformance scenario table grew `once` + a `createEvent`/`initEvent` round-trip,
+still asserted on Boa + Nova.
+
+Still open (named, not silently dropped): `window`/`document` as targets in the
+propagation path + table-internal trees (`Event-dispatch-bubble-canceled`);
+per-interface event subclasses (MouseEvent etc. — `createEvent` returns a base
+Event); shadow DOM / `composedPath` retargeting; passive scroll-blocking;
+`currentTarget` on the native side.
 
 Steps 1 and 3 are pure-mine (dom.rs + a test crate). Step 2 touches the runner —
 coordinate so it doesn't land on top of the agent's in-flight pointer work.

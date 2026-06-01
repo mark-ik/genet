@@ -1183,19 +1183,38 @@ const DOM_BOOTSTRAP: &str = r#"
   // Node-level EventTarget with real tree propagation (capture → target → bubble)
   // over the parentNode chain. Listeners live on the (cached) wrapper, keyed by
   // phase: 'c:'+type for capture, 'b:'+type for bubble/target.
-  Node.prototype.addEventListener = function(type, cb, capture) {
+  // The 3rd arg of add/removeEventListener is either a boolean `capture` or an
+  // options object `{ capture, once, passive }` (DOM §dom-eventtarget-addeventlistener).
+  // Normalize to `{ capture, once }` (passive is parsed + accepted but has no
+  // scroll-blocking effect to gate yet — serval has no default scroll action).
+  function eventOpts(arg) {
+    if (arg && typeof arg === 'object') {
+      return { capture: !!arg.capture, once: !!arg.once };
+    }
+    return { capture: !!arg, once: false };
+  }
+  // A listener is stored as `{ cb, once }` so a `once` listener can be removed
+  // after it first fires. Listeners are keyed by phase ('c:'/'b:' + type), so a
+  // capture and a bubble listener for the same callback are distinct entries
+  // (matching the DOM's (type, callback, capture) listener identity).
+  Node.prototype.addEventListener = function(type, cb, opts) {
     if (typeof cb !== 'function') return;
+    var o = eventOpts(opts);
     if (!this.__listeners) this.__listeners = {};
-    var key = (capture ? 'c:' : 'b:') + type;
-    if (!this.__listeners[key]) this.__listeners[key] = [];
-    this.__listeners[key].push(cb);
+    var key = (o.capture ? 'c:' : 'b:') + type;
+    var l = this.__listeners[key] || (this.__listeners[key] = []);
+    // Duplicate (type, callback, capture) listeners are ignored (DOM spec).
+    for (var i = 0; i < l.length; i++) { if (l[i].cb === cb) return; }
+    l.push({ cb: cb, once: o.once });
   };
-  Node.prototype.removeEventListener = function(type, cb, capture) {
+  Node.prototype.removeEventListener = function(type, cb, opts) {
     if (!this.__listeners) return;
-    var l = this.__listeners[(capture ? 'c:' : 'b:') + type];
+    var o = eventOpts(opts);
+    var l = this.__listeners[(o.capture ? 'c:' : 'b:') + type];
     if (!l) return;
-    var i = l.indexOf(cb);
-    if (i !== -1) l.splice(i, 1);
+    for (var i = 0; i < l.length; i++) {
+      if (l[i].cb === cb) { l.splice(i, 1); return; }
+    }
   };
   function fire(node, event, key) {
     if (!node.__listeners) return;
@@ -1207,29 +1226,54 @@ const DOM_BOOTSTRAP: &str = r#"
     // THIS node's listeners (not just later nodes — that's __stop).
     var copy = l.slice();
     for (var i = 0; i < copy.length && !event.__stopImmediate; i++) {
-      copy[i].call(node, event);
+      var rec = copy[i];
+      // `once`: remove from the live list before calling, so a handler that
+      // re-dispatches the same event does not re-enter this listener.
+      if (rec.once) {
+        var j = l.indexOf(rec);
+        if (j !== -1) l.splice(j, 1);
+      }
+      rec.cb.call(node, event);
     }
   }
   Node.prototype.dispatchEvent = function(event) {
+    // DOM §dispatch: an uninitialized event (createEvent without initEvent) or
+    // one already mid-dispatch is an InvalidStateError.
+    if (event.__initialized === false || event.__dispatch) {
+      throw new DOMException("The event is not initialized or is being dispatched.", "InvalidStateError");
+    }
+    event.__dispatch = true;
     var path = [];
     var n = this;
     while (n) { path.push(n); n = n.parentNode; }
     event.target = this;
+    event.srcElement = this; // legacy alias for target
+    event.__path = path;     // composedPath() (no shadow DOM: target → root)
     event.__stop = false;
     event.__stopImmediate = false;
+    // eventPhase constants: NONE 0, CAPTURING 1, AT_TARGET 2, BUBBLING 3.
     // Capture: root → just above the target.
+    event.eventPhase = 1;
     for (var i = path.length - 1; i >= 1 && !event.__stop; i--) {
       fire(path[i], event, 'c:' + event.type);
     }
     // Target: capture- then bubble-registered listeners on the target itself.
+    event.eventPhase = 2;
     if (!event.__stop) { fire(this, event, 'c:' + event.type); }
     if (!event.__stop) { fire(this, event, 'b:' + event.type); }
     // Bubble: just above the target → root, when the event bubbles.
+    event.eventPhase = 3;
     if (event.bubbles) {
       for (var j = 1; j < path.length && !event.__stop; j++) {
         fire(path[j], event, 'b:' + event.type);
       }
     }
+    // Clear the dispatch flag + transient fields (DOM: after dispatch
+    // currentTarget is null, eventPhase is NONE, and the event may be
+    // dispatched again).
+    event.__dispatch = false;
+    event.currentTarget = null;
+    event.eventPhase = 0;
     return !event.__canceled;
   };
   // stopPropagation halts further nodes (the current node's other listeners still
@@ -1241,6 +1285,37 @@ const DOM_BOOTSTRAP: &str = r#"
     globalThis.Event.prototype.stopImmediatePropagation = function() {
       this.__stop = true; this.__stopImmediate = true;
     };
+    // Legacy initEvent (DOM §dom-event-initevent): (re)initialize a createEvent'd
+    // event's type/bubbles/cancelable and set the initialized flag. No-op while
+    // mid-dispatch, per spec.
+    globalThis.Event.prototype.initEvent = function(type, bubbles, cancelable) {
+      if (this.__dispatch) { return; }
+      this.__initialized = true;
+      this.type = String(type);
+      this.bubbles = !!bubbles;
+      this.cancelable = !!cancelable;
+      this.defaultPrevented = false;
+      this.__canceled = false;
+    };
+    // Legacy cancelBubble: an alias for stopPropagation (set), reflecting the
+    // stop flag (get). (DOM keeps it for compat.)
+    Object.defineProperty(globalThis.Event.prototype, 'cancelBubble', {
+      configurable: true,
+      get: function() { return !!this.__stop; },
+      set: function(v) { if (v) { this.__stop = true; } },
+    });
+    // composedPath(): the propagation path recorded during dispatch (target →
+    // root). No shadow DOM, so no retargeting/composed boundary to honor yet;
+    // returns a fresh copy, or [] outside a dispatch (DOM spec).
+    globalThis.Event.prototype.composedPath = function() {
+      return this.__path ? this.__path.slice() : [];
+    };
+    // eventPhase constants (DOM). Instances carry a live `eventPhase` number set
+    // during dispatch; these are the named values, on the constructor + proto.
+    var E = globalThis.Event;
+    E.NONE = 0; E.CAPTURING_PHASE = 1; E.AT_TARGET = 2; E.BUBBLING_PHASE = 3;
+    E.prototype.NONE = 0; E.prototype.CAPTURING_PHASE = 1;
+    E.prototype.AT_TARGET = 2; E.prototype.BUBBLING_PHASE = 3;
   }
 
   // CharacterData : Node — the shared text-bearing base for Text and Comment.
@@ -1498,6 +1573,29 @@ const DOM_BOOTSTRAP: &str = r#"
   Document.prototype.createTextNode = function(data) { return wrapNode(__createTextNode(String(data))); };
   Document.prototype.createComment = function(data) { return wrapNode(__createComment(String(data))); };
   Document.prototype.createDocumentFragment = function() { return wrapNode(__createFragment()); };
+  // Legacy event construction (DOM §dom-document-createevent). Every accepted
+  // interface alias ("Event"/"Events"/"HTMLEvents"/"UIEvent"/"MouseEvent"/…)
+  // yields a base Event with the **initialized flag unset** — dispatchEvent
+  // throws InvalidStateError until initEvent() runs. An unrecognized interface
+  // is a NotSupportedError. (We don't model per-interface event subclasses yet;
+  // the base Event satisfies the harness's createEvent+initEvent pattern.)
+  Document.prototype.createEvent = function(iface) {
+    var name = String(iface).toLowerCase();
+    var known = {
+      'event': 1, 'events': 1, 'htmlevents': 1, 'svgevents': 1,
+      'uievent': 1, 'uievents': 1, 'mouseevent': 1, 'mouseevents': 1,
+      'keyboardevent': 1, 'customevent': 1, 'messageevent': 1, 'focusevent': 1,
+      'compositionevent': 1, 'textevent': 1, 'dragevent': 1, 'hashchangeevent': 1,
+      'storageevent': 1, 'beforeunloadevent': 1, 'devicemotionevent': 1,
+      'deviceorientationevent': 1,
+    };
+    if (!known[name]) {
+      throw new DOMException("createEvent: unsupported interface '" + iface + "'.", "NotSupportedError");
+    }
+    var e = new Event('');
+    e.__initialized = false; // must call initEvent() before dispatch
+    return e;
+  };
   Document.prototype.getElementById = function(id) { return wrapNode(__getElementById(this.__ref, String(id))); };
   Document.prototype.getElementsByTagName = getElementsByTagName;
   Document.prototype.getElementsByClassName = getElementsByClassName;
@@ -2211,6 +2309,37 @@ mod tests {
         assert_eq!(rt.host().borrow().console, vec!["BODY", "HTML", "DIV", "1"]);
     }
 
+    /// Regression probe for the dom/events corpus: a self-closing
+    /// `<input id=target type=hidden/>` in the loaded body must be queryable by
+    /// `getElementById` and usable as an EventTarget (the shape of
+    /// `Event-defaultPrevented-after-dispatch`, which failed with "cannot convert
+    /// null to object" when the input wasn't found).
+    fn load_dom_finds_self_closing_input<E: ScriptEngine>() {
+        use serval_static_dom::StaticDocument;
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        let src = StaticDocument::parse(
+            "<html><body><div id=log></div><input id=\"target\" type=\"hidden\" value=\"\"/></body></html>",
+        );
+        rt.load_dom(&src);
+        rt.eval(
+            "var t = document.getElementById('target');\
+             console.log(t ? t.tagName : 'NULL');\
+             if (t) {\
+               t.addEventListener('foo', function(e){ e.preventDefault(); });\
+               var ev = document.createEvent('Event');\
+               ev.initEvent('foo', true, true);\
+               t.dispatchEvent(ev);\
+               console.log('prevented:' + ev.defaultPrevented);\
+               console.log('src:' + (ev.srcElement === t));\
+             }",
+        )
+        .expect("input query script");
+        assert_eq!(
+            rt.host().borrow().console,
+            vec!["INPUT", "prevented:true", "src:true"]
+        );
+    }
+
     /// The Element surface, against any backend: prototype split (`instanceof
     /// Element`, `nodeType`), attribute methods (`hasAttribute` / `removeAttribute`
     /// / `toggleAttribute`), reflection (`id` / `className`), `classList`, and
@@ -2722,6 +2851,11 @@ mod tests {
         load_dom_works::<script_engine_boa::BoaEngine>();
     }
 
+    #[test]
+    fn load_dom_finds_self_closing_input_on_boa() {
+        load_dom_finds_self_closing_input::<script_engine_boa::BoaEngine>();
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn load_dom_on_nova() {
@@ -2759,16 +2893,32 @@ mod tests {
              child.addEventListener('imm', function(e){ e.stopImmediatePropagation(); console.log('imm-1'); });\
              child.addEventListener('imm', function(){ console.log('imm-2-SHOULD-NOT'); });\
              parent.addEventListener('imm', function(){ console.log('imm-parent-SHOULD-NOT'); });\
-             child.dispatchEvent(new Event('imm', { bubbles: true }));",
+             child.dispatchEvent(new Event('imm', { bubbles: true }));\
+             child.addEventListener('once', function(){ console.log('once-fired'); }, { once: true });\
+             child.dispatchEvent(new Event('once'));\
+             child.dispatchEvent(new Event('once'));\
+             var le = document.createEvent('Event');\
+             child.addEventListener('legacy', function(e){ console.log('legacy:' + e.type + ':' + e.bubbles); });\
+             le.initEvent('legacy', true, true);\
+             child.dispatchEvent(le);",
         )
         .expect("events script");
 
         // ping bubbles child→parent; solo does not reach parent (no bubble); stop is
         // halted at the child; stopImmediatePropagation halts the child's *second*
-        // listener (imm-2) AND the bubble to parent (imm-parent), firing only imm-1.
+        // listener (imm-2) AND the bubble to parent (imm-parent), firing only imm-1;
+        // a `once` listener fires on the first dispatch only (second is a no-op); a
+        // createEvent()+initEvent() event dispatches with the initialized type/bubbles.
         assert_eq!(
             rt.host().borrow().console,
-            vec!["child:SPAN", "parent:DIV", "child-stop", "imm-1"]
+            vec![
+                "child:SPAN",
+                "parent:DIV",
+                "child-stop",
+                "imm-1",
+                "once-fired",
+                "legacy:legacy:true",
+            ]
         );
     }
 

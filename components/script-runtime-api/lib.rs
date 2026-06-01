@@ -247,10 +247,24 @@ const EVENT_TARGET_BOOTSTRAP: &str = r#"
     this.cancelable = !!init.cancelable;
     this.defaultPrevented = false;
     this.__canceled = false;
+    this.eventPhase = 0; // NONE until dispatch sets the phase
+    this.target = null;
+    this.currentTarget = null;
+    // Initialized flag (DOM §dom-event-initevent). A constructed Event is
+    // initialized; an event from document.createEvent() is NOT until initEvent()
+    // runs — dispatchEvent throws InvalidStateError before then.
+    this.__initialized = true;
   }
   Event.prototype.preventDefault = function() {
     if (this.cancelable) { this.__canceled = true; this.defaultPrevented = true; }
   };
+  // Legacy alias: `event.returnValue = false` is preventDefault(); reading it
+  // reflects whether the default is still allowed (DOM, Window event handlers).
+  Object.defineProperty(Event.prototype, 'returnValue', {
+    configurable: true,
+    get: function() { return !this.__canceled; },
+    set: function(v) { if (!v) { this.preventDefault(); } },
+  });
   globalThis.Event = Event;
 
   var target = new EventTarget();
