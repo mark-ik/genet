@@ -118,6 +118,15 @@ impl TextInput {
         self.byte_of(self.caret) + self.preedit.len()
     }
 
+    /// The rendered text split at the caret into `(before, preedit, after)`, so
+    /// the field can render the IME preedit as a distinct (underlined) span. The
+    /// three concatenate to [`render_text`](Self::render_text); `preedit` is empty
+    /// when not composing.
+    pub fn render_parts(&self) -> (String, String, String) {
+        let at = self.byte_of(self.caret);
+        (self.text[..at].to_string(), self.preedit.clone(), self.text[at..].to_string())
+    }
+
     /// The caret (moving end): a character index in `0..=char_count`.
     pub fn caret(&self) -> usize {
         self.caret
@@ -414,22 +423,43 @@ fn edit_multiline(input: &mut TextInput, ev: KeyEvent) {
 
 /// The concrete view type the field produces.
 ///
-/// An [`on_key`](crate::on_key)-wrapped `<input>` whose text content is the
-/// field's rendered buffer ([`TextInput::display`]). [`text_field`] returns this
-/// *behind* an `impl View` (the reusable-component shape), while
-/// [`text_field_typed`] returns it *named* — for a host that must spell its
-/// concrete view type (e.g. a runner stored in a struct field, which needs a
-/// nameable `V`).
-pub type TextField = OnKey<El<String, TextInput, ()>, TextInput, (), fn(&mut TextInput, KeyEvent)>;
+/// An [`on_key`](crate::on_key)-wrapped element whose children are the rendered
+/// text split at the caret into `(before, preedit, after)` — the middle being
+/// the IME preedit as an underlined `<span>` (empty when not composing). The
+/// host paints the caret over it. [`text_field`] returns this *behind* an `impl
+/// View`; [`text_field_typed`] returns it *named*, for a host that must spell
+/// its concrete view type.
+pub type TextField = OnKey<
+    El<(String, El<String, TextInput, ()>, String), TextInput, ()>,
+    TextInput,
+    (),
+    fn(&mut TextInput, KeyEvent),
+>;
+
+/// Build the field's `<input>` / `<textarea>` body: the rendered text split at
+/// the caret into `(before, preedit, after)`, the preedit an underlined `<span>`
+/// (IME T2; empty when not composing). The three concatenate to the rendered
+/// text, so caret geometry over the whole still lines up.
+fn field_body(
+    tag: &str,
+    input: &TextInput,
+) -> El<(String, El<String, TextInput, ()>, String), TextInput, ()> {
+    let (before, preedit, after) = input.render_parts();
+    el::<_, TextInput, ()>(
+        tag,
+        (
+            before,
+            el::<_, TextInput, ()>("span", preedit).attr("style", "text-decoration: underline;"),
+            after,
+        ),
+    )
+}
 
 /// Build the concrete [`TextField`] for `input` (the shared implementation
 /// behind both [`text_field`] and [`text_field_typed`]).
 fn build_text_field(input: &TextInput) -> TextField {
     let handler: fn(&mut TextInput, KeyEvent) = edit;
-    // Render the buffer with any IME preedit spliced in at the caret (T2); the
-    // host paints the caret over it. `display()` (with the `|` marker) is the
-    // textual representation for tests, not what the field shows on screen.
-    on_key(el::<_, TextInput, ()>("input", input.render_text()), handler)
+    on_key(field_body("input", input), handler)
 }
 
 /// A reusable, editable text field whose state *is* a [`TextInput`].
@@ -476,7 +506,7 @@ pub fn text_field_typed(input: &TextInput) -> TextField {
 /// to parley, which honors `\n`).
 fn build_textarea(input: &TextInput) -> TextField {
     let handler: fn(&mut TextInput, KeyEvent) = edit_multiline;
-    on_key(el::<_, TextInput, ()>("textarea", input.render_text()), handler)
+    on_key(field_body("textarea", input), handler)
 }
 
 /// A reusable multi-line text field over a [`TextInput`] — [`text_field`]'s
