@@ -406,13 +406,22 @@ What the backend needs, in tiers:
   (cascade → layout → `caret_rect` for the focused field) feeds
   `set_ime_cursor_area` after focus / caret-moving input, so the candidate
   window tracks the caret. Reuses the caret geometry.
-- **T2 — preedit display. Next.** `TextInput` grows a `preedit: Option<Preedit>`
-  (composing text + its internal cursor) shown inline at the caret
-  (conventionally underlined) but not in the committed buffer; `Ime::Preedit`
-  updates it, `Ime::Commit` folds it into the buffer. Needs a way to style the
-  preedit run — likely the field rendering composite runs (buffer + a styled
-  preedit span), which depends on inline styled runs + `text-decoration`
-  support; verify those in serval before building.
+- **T2 — preedit display. Done (`944c070018f`).** `TextInput` grew a
+  `preedit: String` (the composing text), shown inline at the caret by
+  `render_text()` but kept out of the committed buffer; `caret_byte_in_render()`
+  places the caret after it. The field renders `render_text()`; `Ime::Preedit`
+  sets the preedit (live composing display), `Ime::Commit` clears it + inserts,
+  `Ime::Disabled` clears it. **Caveat:** the conventional *underline* styling of
+  the preedit run is deferred — serval has no `text-decoration` yet, so this is
+  the functional, unstyled preedit (the composing text shows and updates, just
+  not visually distinguished). Distinct styling needs `text-decoration` (cascade
+  → parley `StyleProperty::Underline` → paint) or composite styled runs in the
+  field — a follow-up.
+
+**IME is functionally complete** (all three tiers), closing the backend's half
+of the Mere-flip gate. The remaining IME refinement is preedit *styling*
+(text-decoration); the gate's other pieces are form-control breadth (done) and
+the Mere-side orrery decision.
 
 IME pays once for the whole engine: serval needs it for content text entry
 regardless, so the host chrome gets it for free once content has it (the
