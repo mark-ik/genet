@@ -46,8 +46,8 @@ use netrender::external_texture::ExternalTexturePlacement;
 use netrender::{ColorLoad, NetrenderOptions, Renderer, Scene};
 use serval_scripted_dom::{NodeId, ScriptedDom};
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalSize;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, NamedKey as WinitNamedKey};
 use winit::window::{Window, WindowId};
@@ -60,7 +60,8 @@ use xilem_serval::{
 
 use accesskit_winit::{Adapter, Event as AkEvent, WindowEvent as AkWindowEvent};
 use pelt_live::{
-    accesskit_tree, fragments_from_scripted_dom, hit_test_node, scene_from_scripted_dom, TextCursor,
+    accesskit_tree, caret_screen_rect, fragments_from_scripted_dom, hit_test_node,
+    scene_from_scripted_dom, TextCursor,
 };
 
 // ── App state + view ───────────────────────────────────────────────────────
@@ -559,6 +560,32 @@ impl App {
         Some(PointerEvent { phase, local: (x - rx, y - ry), size: (rw, rh) })
     }
 
+    /// Point the IME candidate window at the focused field's caret (IME T3): the
+    /// caret's screen rect from `caret_screen_rect`, reported via
+    /// `set_ime_cursor_area`. No-op without a focused field. Called after input
+    /// that moves focus or the caret (and on commit), so the candidate popup
+    /// tracks the cursor.
+    fn update_ime_cursor_area(&self) {
+        let (Some(window), Some(node)) = (self.window.as_ref(), self.runner.focus()) else {
+            return;
+        };
+        let field = &self.runner.state().field;
+        let caret_byte = field
+            .text()
+            .char_indices()
+            .nth(field.caret())
+            .map(|(b, _)| b)
+            .unwrap_or(field.text().len());
+        if let Some((x, y, w, h)) =
+            caret_screen_rect(&self.dom.borrow(), SHEET, self.width, self.height, node, caret_byte)
+        {
+            window.set_ime_cursor_area(
+                PhysicalPosition::new(x, y),
+                PhysicalSize::new(w.max(1.0), h.max(1.0)),
+            );
+        }
+    }
+
     /// Render the current DOM and present it to the surface backbuffer.
     ///
     /// 1. `scene_from_scripted_dom` runs the serval engine (cascade → layout →
@@ -705,6 +732,11 @@ impl ApplicationHandler<UserEvent> for App {
         let size = window.inner_size();
         self.width = size.width.max(1);
         self.height = size.height.max(1);
+
+        // Allow the platform IME so composed input (CJK, transliteration, dead-key
+        // accents) is delivered as `WindowEvent::Ime` — `Commit` text inserts into
+        // the focused field (IME T1). `set_ime_cursor_area` (T3) follows the caret.
+        window.set_ime_allowed(true);
 
         // 1b. AccessKit adapter, while the window is still invisible. The
         //     deferred-event model: a11y requests arrive as
@@ -958,6 +990,9 @@ impl ApplicationHandler<UserEvent> for App {
                         "click handled"
                     );
                     self.push_a11y();
+                    // Focus may have moved (click-to-focus); point the IME at the
+                    // newly-focused field's caret.
+                    self.update_ime_cursor_area();
                     if let Some(window) = self.window.as_ref() {
                         window.request_redraw();
                     }
@@ -999,9 +1034,30 @@ impl ApplicationHandler<UserEvent> for App {
                         tracing::debug!(?key_event, focus = ?self.runner.focus(), "key → dispatch");
                         self.runner.dispatch_key(key_event);
                         self.push_a11y();
+                        self.update_ime_cursor_area();
                         self.redraw();
                     }
                 }
+            },
+
+            WindowEvent::Ime(ime) => match ime {
+                // IME T1: committed composition inserts into the focused field,
+                // reusing the text path (a `Character` key event). Latin typing
+                // still arrives as `KeyboardInput`; CJK / transliteration /
+                // dead-key accents arrive here as the final committed text.
+                Ime::Commit(text) => {
+                    if !text.is_empty() {
+                        tracing::info!(text = %text, "ime commit");
+                        self.runner.dispatch_key(KeyEvent::new(Key::Character(text)));
+                        self.push_a11y();
+                        self.update_ime_cursor_area();
+                        self.redraw();
+                    }
+                },
+                // T2 (in-progress preedit display) is not wired yet; trace it.
+                Ime::Preedit(text, _cursor) => tracing::debug!(preedit = %text, "ime preedit"),
+                Ime::Enabled => tracing::debug!("ime enabled"),
+                Ime::Disabled => tracing::debug!("ime disabled"),
             },
 
             WindowEvent::RedrawRequested => {

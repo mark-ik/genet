@@ -139,6 +139,36 @@ pub fn scene_from_scripted_dom(
     paint::translate_paint_list(&plist)
 }
 
+/// The focused field's caret rect in scene coordinates `(x, y, w, h)`, or
+/// `None` if it has no layout. Runs cascade → layout → [`caret_rect`] for `node`
+/// at `caret_byte`. The host feeds this to `set_ime_cursor_area` so the IME
+/// candidate window appears at the caret (IME T3).
+pub fn caret_screen_rect(
+    dom: &ScriptedDom,
+    stylesheets: &[&str],
+    width: u32,
+    height: u32,
+    node: NodeId,
+    caret_byte: usize,
+) -> Option<(f32, f32, f32, f32)> {
+    let mut styles: StylePlane<NodeId> = StylePlane::new();
+    run_cascade(
+        dom,
+        &mut styles,
+        euclid::Size2D::new(width as f32, height as f32),
+        stylesheets,
+        None,
+    );
+    let images = ImagePlane::new();
+    let viewport = taffy::Size {
+        width: taffy::AvailableSpace::Definite(width as f32),
+        height: taffy::AvailableSpace::Definite(height as f32),
+    };
+    let (fragments, built, text_ctx) = layout(dom, &styles, &images, viewport);
+    let r = caret_rect(dom, node, caret_byte, &built, &text_ctx, &fragments, CARET_WIDTH)?;
+    Some((r.x, r.y, r.width, r.height))
+}
+
 /// Run only the cascade → layout half (no paint emission) over `dom`, returning
 /// the per-node [`FragmentPlane`].
 ///

@@ -25,7 +25,10 @@ pub mod a11y;
 pub mod render;
 
 pub use a11y::accesskit_tree;
-pub use render::{fragments_from_scripted_dom, hit_test_node, scene_from_scripted_dom, TextCursor};
+pub use render::{
+    caret_screen_rect, fragments_from_scripted_dom, hit_test_node, scene_from_scripted_dom,
+    TextCursor,
+};
 
 #[cfg(test)]
 mod tests {
