@@ -340,12 +340,16 @@ already exposes (`run_microtasks`, `run_event_loop`).
   - **Scroll-offset transform (`aa4fc14`).** A clipping container with an entry
     in a `ScrollOffsets<NodeId>` map translates its clipped content by `-offset`,
     so it scrolls under the fixed clip window.
-  - **Host wheel + scrollbar + hit-test (`d3606eb`, `1709ef6`).** `pelt-live`
-    wheel input → clamped offset (vs `content_size` from the fragment); a
-    scrollbar thumb on the right edge (height ∝ visible/content, pos ∝
-    offset/scrollable); and a hit-test offset so clicks inside a scrolled box map
-    through the offset to the content's layout position (verified: at max scroll,
-    line clicks log the bottom lines, not the top).
+  - **Host wheel + scrollbar (`d3606eb`, `1709ef6`).** `pelt-live` wheel input →
+    clamped offset (vs `content_size` from the fragment); a scrollbar thumb on
+    the right edge (height ∝ visible/content, pos ∝ offset/scrollable).
+  - **Known gap — clip-aware hit-testing (`52de93f`).** A naive scroll hit-test
+    offset (map a click through the scroll offset on the global, unclipped
+    layout) leaks: a point inside the scroller can fall past its clipped content
+    onto the element below it. The demo first shipped it, then reverted it
+    (scroller content is display-only) once that surfaced. Hit-testing
+    *interactive* scrolled content needs `ServalLaneView` to respect clips +
+    per-node scroll — a follow-up alongside Tier 2 stacking.
   - **Known gap — no `z-index`.** (Closed by Stage 7 Tier 1 below.) Stacking was
     document order, so an overlay (the `select` dropdown) was covered by a later
     sibling (the scroller); the demo worked around it by ordering the select
