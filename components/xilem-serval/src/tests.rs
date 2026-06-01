@@ -816,9 +816,9 @@ mod controls {
     use serval_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{
-        AnyView, DomHandle, Key, KeyEvent, Modifiers, NamedKey, PointerClick, SelectState,
-        ServalAppRunner, ServalCtx, ServalElement, TextInput, View, button, checkbox, el, lens,
-        overlay_at, select, text_field,
+        AnyView, DomHandle, Key, KeyEvent, Modifiers, NamedKey, PointerClick, RadioGroup,
+        SelectState, ServalAppRunner, ServalCtx, ServalElement, TextInput, View, button, checkbox,
+        el, lens, overlay_at, radio_group, select, text_field,
     };
 
     /// The text data of the single text child under `node`, if any.
@@ -1244,6 +1244,32 @@ mod controls {
             assert!(dom.dom_children(dom.document()).any(|c| c == root1), "new node attached");
             assert!(!dom.dom_children(dom.document()).any(|c| c == root0), "old node detached");
         }
+    }
+
+    /// `radio_group`: clicking an option selects it (and only it), reflected in
+    /// `selected` and `aria-checked`.
+    #[test]
+    fn radio_group_selects_one() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let opts = ["a", "b", "c"];
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            move |s: &RadioGroup| radio_group(s, &opts),
+            RadioGroup::new(0),
+        );
+        let root = runner.root();
+        assert_eq!(runner.state().selected, 0);
+
+        // Click the third option (index 2).
+        let opt2 = { dom.borrow().dom_children(root).nth(2).expect("third option") };
+        runner.dispatch_click(opt2, PointerClick { local: (0.0, 0.0) });
+        assert_eq!(runner.state().selected, 2, "clicking option 2 selects it");
+
+        // aria-checked reflects the selection: option 2 true, option 0 false.
+        let opt0 = dom.borrow().dom_children(root).next().expect("first option");
+        let opt2 = dom.borrow().dom_children(root).nth(2).expect("third option");
+        assert_eq!(attr(&dom.borrow(), opt2, "aria-checked").as_deref(), Some("true"));
+        assert_eq!(attr(&dom.borrow(), opt0, "aria-checked").as_deref(), Some("false"));
     }
 
     // --- selection (model + keyboard) -----------------------------------------
