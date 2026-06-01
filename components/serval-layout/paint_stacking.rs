@@ -222,4 +222,34 @@ mod tests {
             "A's z:100 child (idx {a1}) paints below B's z:5 child (idx {b1}) — z is context-scoped"
         );
     }
+
+    /// The slider shape — an `absolute` thumb inside a `relative` track — paints
+    /// the thumb exactly once. (Regression guard: the live demo showed a "split"
+    /// thumb on a fast drag; a DOM-node probe proved the tree holds one thumb, so
+    /// this rules out the paint walk emitting the single deferred layer twice and
+    /// pins the artefact to the GPU present path rather than emission.)
+    #[test]
+    fn absolute_thumb_in_relative_track_paints_once() {
+        let cmds = paint(
+            "<html><body><div class=\"track\"><div class=\"thumb\"></div></div></body></html>",
+            &[
+                "html, body, div { display: block; margin: 0; }",
+                "div { position: relative; }",
+                ".track { width: 200px; height: 28px; background-color: rgb(190, 194, 208); }",
+                ".thumb { position: absolute; left: 50px; width: 18px; height: 28px; \
+                    background-color: rgb(60, 100, 200); }",
+            ],
+        );
+        // rgb(60, 100, 200) ≈ (0.235, 0.392, 0.784).
+        let thumbs = cmds
+            .iter()
+            .filter(|c| {
+                matches!(c, PaintCmd::DrawRect(r)
+                    if (r.color.r - 0.235).abs() < 0.05
+                        && (r.color.g - 0.392).abs() < 0.05
+                        && (r.color.b - 0.784).abs() < 0.05)
+            })
+            .count();
+        assert_eq!(thumbs, 1, "the absolute thumb paints exactly once, not split");
+    }
 }
