@@ -411,17 +411,20 @@ What the backend needs, in tiers:
   `render_text()` but kept out of the committed buffer; `caret_byte_in_render()`
   places the caret after it. The field renders `render_text()`; `Ime::Preedit`
   sets the preedit (live composing display), `Ime::Commit` clears it + inserts,
-  `Ime::Disabled` clears it. **Caveat:** the conventional *underline* styling of
-  the preedit run is deferred — serval has no `text-decoration` yet, so this is
-  the functional, unstyled preedit (the composing text shows and updates, just
-  not visually distinguished). Distinct styling needs `text-decoration` (cascade
-  → parley `StyleProperty::Underline` → paint) or composite styled runs in the
-  field — a follow-up.
+  `Ime::Disabled` clears it.
+- **Preedit underline. Done (`666e548d149`, `1ea6ab4c153`).** Added a general
+  `text-decoration: underline` engine feature: the cascade's
+  `text-decoration-line` flows to `InlineRun.underline` → parley
+  `StyleProperty::Underline` → paint_emit draws the line (parley supplies the
+  geometry, doesn't draw it). The field then renders its content as `(before,
+  preedit-span, after)` and underlines the preedit span via inline style, so the
+  composing run shows distinctly. (Closes the earlier "no text-decoration"
+  caveat. `text-decoration-style` dotted/dashed/wavy is a later refinement; the
+  underline is solid.)
 
-**IME is functionally complete** (all three tiers), closing the backend's half
-of the Mere-flip gate. The remaining IME refinement is preedit *styling*
-(text-decoration); the gate's other pieces are form-control breadth (done) and
-the Mere-side orrery decision.
+**IME is complete** — all three tiers plus the underline-styled preedit —
+closing the backend's half of the Mere-flip gate. The gate's other pieces are
+form-control breadth (done) and the Mere-side orrery decision.
 
 IME pays once for the whole engine: serval needs it for content text entry
 regardless, so the host chrome gets it for free once content has it (the
