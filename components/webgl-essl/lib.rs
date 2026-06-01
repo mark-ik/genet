@@ -26,6 +26,7 @@ pub mod lex;
 pub mod parse;
 pub mod span;
 pub mod token;
+pub mod visit;
 
 pub use ast::TranslationUnit;
 pub use error::{Error, ErrorKind};
