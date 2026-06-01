@@ -332,7 +332,46 @@ where
         fonts: FontCollector::default(),
         images: ImageCollector::default(),
     };
-    walk(dom, styles, fragments, &mut emitter, dom.document(), &mut commands);
+    // In-flow pass: walk document order, deferring out-of-flow positioned
+    // elements (absolute/fixed) into `deferred`.
+    let mut deferred: Vec<Deferred<D::NodeId>> = Vec::new();
+    walk(
+        dom,
+        styles,
+        fragments,
+        &mut emitter,
+        dom.document(),
+        (0.0, 0.0),
+        &mut commands,
+        &mut deferred,
+        true,
+    );
+    // Positioned pass: out-of-flow elements paint on top, ordered by (z-index,
+    // document order). Each is placed at its parent's accumulated absolute origin
+    // (the point its parent-relative location is measured from), then walked with
+    // `defer = false` so its subtree emits inline. (Nested stacking contexts are
+    // Tier 2 / CSS-conformance work; Tier 1 is positioned-on-top.)
+    deferred.sort_by_key(|d| (d.z, d.seq));
+    let mut nested = Vec::new();
+    for d in deferred {
+        commands.push(PaintCmd::PushTransform(TransformSpec {
+            origin: LayoutPoint::new(d.origin.0, d.origin.1),
+            transform: LayoutTransform::identity(),
+            kind: TransformKind::Standard,
+        }));
+        walk(
+            dom,
+            styles,
+            fragments,
+            &mut emitter,
+            d.node,
+            d.origin,
+            &mut commands,
+            &mut nested,
+            false,
+        );
+        commands.push(PaintCmd::PopTransform);
+    }
     ServalPaintList {
         viewport,
         commands,
@@ -340,6 +379,46 @@ where
         fonts: emitter.fonts.fonts,
         images: emitter.images.images,
     }
+}
+
+/// An out-of-flow positioned element deferred from the in-flow pass to the
+/// positioned pass (painted on top, z-index ordered). `origin` is the parent's
+/// accumulated absolute origin; `seq` is document order (the z-index tiebreak).
+struct Deferred<NodeId> {
+    node: NodeId,
+    origin: (f32, f32),
+    z: i32,
+    seq: usize,
+}
+
+/// Whether `id` is out of normal flow (`position: absolute`/`fixed`), so it
+/// paints in the positioned pass rather than in document order. `relative` /
+/// `sticky` stay in flow (Tier 1: they are commonly containing-block anchors
+/// without stacking intent; full painting order is Tier 2).
+fn is_out_of_flow<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId) -> bool {
+    use style::values::computed::PositionProperty;
+    let Some(entry) = styles.get(id) else {
+        return false;
+    };
+    let Some(data) = entry.borrow_data() else {
+        return false;
+    };
+    matches!(
+        data.styles.primary().get_box().position,
+        PositionProperty::Absolute | PositionProperty::Fixed
+    )
+}
+
+/// The element's `z-index` as an integer (`auto` → 0), to order the positioned
+/// pass.
+fn z_index_of<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId) -> i32 {
+    let Some(entry) = styles.get(id) else {
+        return 0;
+    };
+    let Some(data) = entry.borrow_data() else {
+        return 0;
+    };
+    data.styles.primary().get_position().z_index.integer_or(0)
 }
 
 /// Recursive paint-order walk emitting compositor-model commands:
@@ -362,20 +441,35 @@ fn walk<D>(
     fragments: &FragmentPlane<D::NodeId>,
     em: &mut Emitter<'_, D::NodeId>,
     id: D::NodeId,
+    origin: (f32, f32),
     commands: &mut Vec<PaintCmd>,
+    deferred: &mut Vec<Deferred<D::NodeId>>,
+    defer: bool,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    // Out-of-flow positioned elements are deferred to the positioned pass
+    // (recorded with their parent's absolute origin + z-index, skipped here).
+    // `defer` is false during that pass, so the subtree then emits inline.
+    if defer && is_out_of_flow(styles, id) {
+        deferred.push(Deferred { node: id, origin, z: z_index_of(styles, id), seq: deferred.len() });
+        return;
+    }
+
     // An overflow container clips its descendants to its padding box; captured
     // here (while the layout is in scope) and applied around the children below.
     let mut clip_rect: Option<LayoutRect> = None;
+    // Absolute origin to pass to children (this node's origin + its location),
+    // so a deferred descendant records where to place itself.
+    let mut child_origin = origin;
     let pushed = if let Some(l) = fragments.rect_of(id) {
         commands.push(PaintCmd::PushTransform(TransformSpec {
             origin: LayoutPoint::new(l.location.x, l.location.y),
             transform: LayoutTransform::identity(),
             kind: TransformKind::Standard,
         }));
+        child_origin = (origin.0 + l.location.x, origin.1 + l.location.y);
         let local_bounds = LayoutRect::new(
             LayoutPoint::new(0.0, 0.0),
             LayoutPoint::new(l.size.width, l.size.height),
@@ -409,16 +503,45 @@ fn walk<D>(
                 }));
                 // CSS background-image paints over the background color,
                 // under content + border. Resolve background-size /
-                // -position / -repeat for the first layer; the defaults
-                // (auto / 0 0 / repeat) reproduce the prior intrinsic-size
-                // tiling exactly.
+                // -position / -repeat for the first layer against the
+                // background-origin box, then clip to the background-clip
+                // box. Defaults (auto / 0 0 / repeat / origin=padding-box
+                // / clip=border-box) match CSS; with zero borders +
+                // padding the origin/clip boxes collapse to the border box
+                // and this reduces to the prior behavior.
                 if let Some(decoded) = em.bg_images_plane.get(id) {
                     let int_w = decoded.width as f32;
                     let int_h = decoded.height as f32;
                     let key = em.images.add(decoded);
-                    let aw = local_bounds.width();
-                    let ah = local_bounds.height();
                     let bg_style = bg_tile_style_of(styles, id);
+                    // The three reference boxes in this node's local
+                    // (border-box) coords. `l.border` / `l.padding` are the
+                    // resolved insets; (x, y, w, h) per box.
+                    let bw = local_bounds.width();
+                    let bh = local_bounds.height();
+                    let box_for = |which: BgBox| -> (f32, f32, f32, f32) {
+                        match which {
+                            BgBox::BorderBox => (0.0, 0.0, bw, bh),
+                            BgBox::PaddingBox => (
+                                l.border.left,
+                                l.border.top,
+                                bw - l.border.left - l.border.right,
+                                bh - l.border.top - l.border.bottom,
+                            ),
+                            BgBox::ContentBox => (
+                                l.border.left + l.padding.left,
+                                l.border.top + l.padding.top,
+                                bw - l.border.left - l.border.right
+                                    - l.padding.left - l.padding.right,
+                                bh - l.border.top - l.border.bottom
+                                    - l.padding.top - l.padding.bottom,
+                            ),
+                        }
+                    };
+                    let origin_box = bg_style.as_ref().map(|s| s.origin).unwrap_or(BgBox::PaddingBox);
+                    let clip_box = bg_style.as_ref().map(|s| s.clip).unwrap_or(BgBox::BorderBox);
+                    let (orx, ory, aw, ah) = box_for(origin_box);
+                    // Tile geometry resolves against the positioning area (origin box).
                     let (tw, th, ox, oy) = match (&bg_style, int_w > 0.0 && int_h > 0.0) {
                         (Some(s), true) => resolve_bg_tile(s, aw, ah, int_w, int_h),
                         _ => (int_w, int_h, 0.0, 0.0),
@@ -427,11 +550,10 @@ fn walk<D>(
                         .as_ref()
                         .map(|s| (s.repeat_x, s.repeat_y))
                         .unwrap_or((BgRepeat::Repeat, BgRepeat::Repeat));
-                    // Per axis: `repeat` tiles from the area origin across
-                    // the full extent (phase 0, exact for position 0, the
-                    // common case); `no-repeat` paints one tile at the
-                    // resolved offset. The placement is clipped to the
-                    // border box (background-clip: border-box default).
+                    // Per axis, in origin-box-local coords: `repeat` tiles across
+                    // the full positioning area (phase 0, exact at position 0,
+                    // the common case); `no-repeat` paints one tile at the
+                    // resolved offset.
                     let (x0, sw) = match rx {
                         BgRepeat::NoRepeat => (ox, tw),
                         _ => (0.0, aw),
@@ -440,10 +562,14 @@ fn walk<D>(
                         BgRepeat::NoRepeat => (oy, th),
                         _ => (0.0, ah),
                     };
-                    let px0 = x0.max(0.0);
-                    let py0 = y0.max(0.0);
-                    let px1 = (x0 + sw).min(aw);
-                    let py1 = (y0 + sh).min(ah);
+                    // Translate to node-local (border-box) coords (add the origin
+                    // box offset), then intersect with the clip box — the region
+                    // the paint is allowed in.
+                    let (cx, cy, cw, ch) = box_for(clip_box);
+                    let px0 = (orx + x0).max(cx);
+                    let py0 = (ory + y0).max(cy);
+                    let px1 = (orx + x0 + sw).min(cx + cw);
+                    let py1 = (ory + y0 + sh).min(cy + ch);
                     if tw > 0.0 && th > 0.0 && px1 > px0 && py1 > py0 {
                         commands.push(PaintCmd::DrawRepeatingImage(RepeatingImageItem {
                             placement: CommonPlacement::new(LayoutRect::new(
@@ -555,7 +681,7 @@ fn walk<D>(
     }
 
     for child in dom.dom_children(id) {
-        walk(dom, styles, fragments, em, child, commands);
+        walk(dom, styles, fragments, em, child, child_origin, commands, deferred, defer);
     }
 
     // Unwind in reverse: scroll transform, then clip, then the origin transform.
@@ -682,15 +808,33 @@ enum BgRepeat {
     Round,
 }
 
-/// First-layer `background-size` / `-repeat` / `-position` read from the
-/// cascade. Pixel geometry is resolved at emit time against the
-/// positioning area (see [`resolve_bg_tile`]).
+/// Which box of an element a background layer references — for
+/// `background-origin` (the positioning area the size/position resolve
+/// against) and `background-clip` (the area the paint is clipped to).
+/// `text` clipping (background painted through glyph shapes) is not
+/// modeled; it falls back to `BorderBox`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BgBox {
+    BorderBox,
+    PaddingBox,
+    ContentBox,
+}
+
+/// First-layer `background-size` / `-repeat` / `-position` / `-origin` /
+/// `-clip` read from the cascade. Pixel geometry is resolved at emit
+/// time against the positioning area (see [`resolve_bg_tile`]).
 struct BgTileStyle {
     size: style::values::computed::background::BackgroundSize,
     repeat_x: BgRepeat,
     repeat_y: BgRepeat,
     pos_x: style::values::computed::LengthPercentage,
     pos_y: style::values::computed::LengthPercentage,
+    /// The box the size + position resolve against (CSS default:
+    /// padding-box).
+    origin: BgBox,
+    /// The box the painted background is clipped to (CSS default:
+    /// border-box).
+    clip: BgBox,
 }
 
 /// Read the first background layer's size / repeat / position from an
@@ -699,6 +843,8 @@ fn bg_tile_style_of<NodeId: Copy + Eq + std::hash::Hash>(
     styles: &StylePlane<NodeId>,
     id: NodeId,
 ) -> Option<BgTileStyle> {
+    use style::computed_values::background_clip::single_value::T as Clip;
+    use style::computed_values::background_origin::single_value::T as Origin;
     use style::values::specified::background::BackgroundRepeatKeyword as K;
     let entry = styles.get(id)?;
     let data = entry.borrow_data()?;
@@ -713,12 +859,25 @@ fn bg_tile_style_of<NodeId: Copy + Eq + std::hash::Hash>(
         K::Space => BgRepeat::Space,
         K::Round => BgRepeat::Round,
     };
+    let origin = match bg.background_origin.0.first() {
+        Some(Origin::ContentBox) => BgBox::ContentBox,
+        Some(Origin::BorderBox) => BgBox::BorderBox,
+        _ => BgBox::PaddingBox, // CSS default
+    };
+    let clip = match bg.background_clip.0.first() {
+        Some(Clip::ContentBox) => BgBox::ContentBox,
+        Some(Clip::PaddingBox) => BgBox::PaddingBox,
+        // BorderBox (default) and unmodeled `text` both clip to border box.
+        _ => BgBox::BorderBox,
+    };
     Some(BgTileStyle {
         size,
         repeat_x: map(repeat.0),
         repeat_y: map(repeat.1),
         pos_x,
         pos_y,
+        origin,
+        clip,
     })
 }
 
@@ -1322,6 +1481,101 @@ mod tests {
             },
             other => panic!("expected scroll PushTransform after PushClip, got {other:?}"),
         }
+    }
+
+    /// z-index Tier 1: an out-of-flow (`position: absolute`) box declared
+    /// *before* a later in-flow sibling paints *after* it — the positioned pass
+    /// puts it on top regardless of document order.
+    #[test]
+    fn out_of_flow_paints_after_in_flow() {
+        use crate::cascade::run_cascade;
+
+        let document = StaticDocument::parse(
+            "<html><body><div class=\"abs\"></div><div class=\"flow\"></div></body></html>",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[
+                "html, body, div { display: block; margin: 0; }",
+                ".abs { position: absolute; top: 0; left: 0; width: 50px; height: 50px; \
+                    background-color: rgb(255, 0, 0); }",
+                ".flow { width: 50px; height: 50px; background-color: rgb(0, 0, 255); }",
+            ],
+            None,
+        );
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let plist = emit_paint_list(&document, &styles, &fragments, DeviceIntSize::new(800, 600));
+        let cmds = plist.commands();
+
+        let red = cmds.iter().position(|c| {
+            matches!(c, PaintCmd::DrawRect(r) if r.color.r > 0.9 && r.color.g < 0.1 && r.color.b < 0.1)
+        });
+        let blue = cmds.iter().position(|c| {
+            matches!(c, PaintCmd::DrawRect(r) if r.color.b > 0.9 && r.color.r < 0.1 && r.color.g < 0.1)
+        });
+        let red = red.expect(".abs red background rect");
+        let blue = blue.expect(".flow blue background rect");
+        assert!(
+            red > blue,
+            "out-of-flow .abs (idx {red}) paints after in-flow .flow (idx {blue})"
+        );
+    }
+
+    /// `background-origin: content-box` + `background-clip: content-box`
+    /// inset the no-repeat tile to the content box. A 100×100 border box
+    /// with 10px border + 10px padding has a content box at local
+    /// (20, 20) sized 60×60; a `no-repeat` 20×20 image at `background-size:
+    /// 20px` must place its top-left at (20, 20), not (0, 0).
+    #[test]
+    fn background_origin_content_box_insets_tile() {
+        use base64::Engine as _;
+        use crate::image_decode::{BackgroundImagePlane, NoImageLoader};
+
+        let img = image::RgbaImage::from_pixel(20, 20, image::Rgba([0, 0, 255, 255]));
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .expect("encode test PNG");
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        let document = StaticDocument::parse("<html><body><div></div></body></html>");
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        let sheet = format!(
+            "div {{ display: block; width: 60px; height: 60px; \
+             border: 10px solid black; padding: 10px; margin: 0; \
+             background-image: url(data:image/png;base64,{b64}); \
+             background-size: 20px 20px; background-repeat: no-repeat; \
+             background-origin: content-box; background-clip: content-box; }}"
+        );
+        run_cascade(&document, &mut styles, euclid::Size2D::new(800.0, 600.0), &[sheet.as_str()], None);
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let bg = BackgroundImagePlane::decode_from_cascade(&document, &styles, &NoImageLoader);
+        let plist = emit_paint_list_with_layouts(
+            &document, &styles, &fragments, &built, &text_ctx,
+            &ImagePlane::new(), &bg, &FxHashMap::default(),
+            DeviceIntSize::new(800, 600),
+        );
+        let placement = plist.commands().iter().find_map(|c| match c {
+            PaintCmd::DrawRepeatingImage(item) => Some(item.placement.bounds),
+            _ => None,
+        });
+        let r = placement.expect("a DrawRepeatingImage for the content-box background");
+        // Border box is 100×100 (60 content + 2×10 padding + 2×10 border);
+        // content box origin is at (20, 20) in node-local coords.
+        assert!(
+            (r.min.x - 20.0).abs() < 0.5 && (r.min.y - 20.0).abs() < 0.5,
+            "content-box tile must start at (20,20), got ({}, {})",
+            r.min.x, r.min.y,
+        );
     }
 
     /// Probe DrawBorder emission: a CSS-declared border produces a
