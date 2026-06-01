@@ -1202,8 +1202,13 @@ const DOM_BOOTSTRAP: &str = r#"
     var l = node.__listeners[key];
     if (!l) return;
     event.currentTarget = node;
+    // Snapshot: addEventListener during dispatch must not affect this node's
+    // current firing (DOM spec). stopImmediatePropagation halts the rest of
+    // THIS node's listeners (not just later nodes — that's __stop).
     var copy = l.slice();
-    for (var i = 0; i < copy.length; i++) { copy[i].call(node, event); }
+    for (var i = 0; i < copy.length && !event.__stopImmediate; i++) {
+      copy[i].call(node, event);
+    }
   }
   Node.prototype.dispatchEvent = function(event) {
     var path = [];
@@ -1211,6 +1216,7 @@ const DOM_BOOTSTRAP: &str = r#"
     while (n) { path.push(n); n = n.parentNode; }
     event.target = this;
     event.__stop = false;
+    event.__stopImmediate = false;
     // Capture: root → just above the target.
     for (var i = path.length - 1; i >= 1 && !event.__stop; i--) {
       fire(path[i], event, 'c:' + event.type);
@@ -1227,9 +1233,14 @@ const DOM_BOOTSTRAP: &str = r#"
     return !event.__canceled;
   };
   // stopPropagation halts further nodes (the current node's other listeners still
-  // run). Extends the shell's Event, installed before this bootstrap.
+  // run). stopImmediatePropagation also halts the rest of the current node's
+  // listeners — and implies stopPropagation (sets both flags), per the DOM spec.
+  // Extends the shell's Event, installed before this bootstrap.
   if (globalThis.Event && globalThis.Event.prototype) {
     globalThis.Event.prototype.stopPropagation = function() { this.__stop = true; };
+    globalThis.Event.prototype.stopImmediatePropagation = function() {
+      this.__stop = true; this.__stopImmediate = true;
+    };
   }
 
   // CharacterData : Node — the shared text-bearing base for Text and Comment.
@@ -2720,7 +2731,15 @@ mod tests {
     /// Node-level EventTarget with tree propagation, against any backend: a
     /// bubbling event fires on the target then ancestors (with `target` /
     /// `currentTarget` set); a non-bubbling event does not reach ancestors;
-    /// `stopPropagation` halts the climb.
+    /// `stopPropagation` halts the climb; `stopImmediatePropagation` halts the
+    /// current node's remaining listeners and later nodes.
+    ///
+    /// This is the **JS column** of the event-dispatch conformance table shared
+    /// with the native dispatcher. Its twin — the same scenarios over
+    /// `ServalAppRunner::dispatch_click` — is `xilem-serval`'s
+    /// `stop_propagation_halts_the_bubble_walk` / `prevent_default_is_visible_to_the_caller`.
+    /// Both must satisfy one contract; see
+    /// `docs/2026-06-01_event_model_convergence_plan.md`. Change one, mirror the other.
     fn dom_node_events_work<E: ScriptEngine>() {
         let mut rt = Runtime::<E>::new().expect("runtime");
 
@@ -2736,13 +2755,21 @@ mod tests {
              child.dispatchEvent(new Event('solo'));\
              child.addEventListener('stop', function(e){ e.stopPropagation(); console.log('child-stop'); });\
              parent.addEventListener('stop', function(){ console.log('parent-stop-SHOULD-NOT'); });\
-             child.dispatchEvent(new Event('stop', { bubbles: true }));",
+             child.dispatchEvent(new Event('stop', { bubbles: true }));\
+             child.addEventListener('imm', function(e){ e.stopImmediatePropagation(); console.log('imm-1'); });\
+             child.addEventListener('imm', function(){ console.log('imm-2-SHOULD-NOT'); });\
+             parent.addEventListener('imm', function(){ console.log('imm-parent-SHOULD-NOT'); });\
+             child.dispatchEvent(new Event('imm', { bubbles: true }));",
         )
         .expect("events script");
 
         // ping bubbles child→parent; solo does not reach parent (no bubble); stop is
-        // halted at the child.
-        assert_eq!(rt.host().borrow().console, vec!["child:SPAN", "parent:DIV", "child-stop"]);
+        // halted at the child; stopImmediatePropagation halts the child's *second*
+        // listener (imm-2) AND the bubble to parent (imm-parent), firing only imm-1.
+        assert_eq!(
+            rt.host().borrow().console,
+            vec!["child:SPAN", "parent:DIV", "child-stop", "imm-1"]
+        );
     }
 
     #[test]
