@@ -35,6 +35,19 @@ const VIEWPORT_H: f32 = 600.0;
 const REFTEST_W: u32 = 800;
 const REFTEST_H: u32 = 600;
 
+// GPU anti-aliasing jitter floor. Vello rasterization is not bit-exact
+// run-to-run: two renders of identical input differ by up to ~1/255 on a
+// sub-1% sliver of (anti-aliased edge) pixels. Exact-match scoring (0,0)
+// therefore flips borderline tests between runs, making the pass count
+// non-deterministic. This floor — at most `FUZZ_FLOOR_DIFF` per-channel
+// delta on at most `FUZZ_FLOOR_PIXELS` pixels — absorbs exactly that
+// jitter and nothing near a real paint bug (those differ by 255 over a
+// localized region). Applied as a *lower bound* on every comparison: a
+// test's own `<meta name=fuzzy>` still wins where it is looser.
+const FUZZ_FLOOR_DIFF: u16 = 1;
+// 0.5% of the 800x600 render = 2400 px.
+const FUZZ_FLOOR_PIXELS: u64 = (REFTEST_W as u64 * REFTEST_H as u64) / 200;
+
 /// WPT test classification (convention-based; see the plan doc).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -680,7 +693,13 @@ fn reftest(tests: &[PathBuf], args: &Args) {
             continue;
         }
 
-        let fuzzy = parse_fuzzy(&test_html);
+        // Apply the GPU-jitter floor (see FUZZ_FLOOR_*): never compare
+        // tighter than it, so a deterministic-to-1/255 render scores stably.
+        // A test's explicit <meta fuzzy> widens it where looser.
+        let fuzzy = {
+            let (d, p) = parse_fuzzy(&test_html).unwrap_or((0, 0));
+            Some((d.max(FUZZ_FLOOR_DIFF), p.max(FUZZ_FLOOR_PIXELS)))
+        };
         let test_dir = path.parent().unwrap_or(tests_root);
         let ref_dir = ref_path.parent().unwrap_or(tests_root);
         let test_xml = is_xml_path(path);
