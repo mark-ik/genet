@@ -95,6 +95,10 @@ pub struct InlineRun {
     pub italic: bool,
     /// Cascaded `color`, straight RGBA in `[0, 1]`.
     pub color: [f32; 4],
+    /// `text-decoration-line: underline` on the run's element. Pushed to parley
+    /// as `StyleProperty::Underline`; the paint emit draws the line (parley
+    /// supplies the geometry but does not draw it).
+    pub underline: bool,
 }
 
 impl InlineRun {
@@ -108,6 +112,7 @@ impl InlineRun {
             weight: 400.0,
             italic: false,
             color: [0.0, 0.0, 0.0, 1.0],
+            underline: false,
         }
     }
 }
@@ -164,6 +169,7 @@ impl<NodeId> InlineContent<NodeId> {
                 weight: 400.0,
                 italic: false,
                 color: [0.0, 0.0, 0.0, 1.0],
+                underline: false,
             }],
             boxes: Vec::new(),
         }
@@ -327,6 +333,12 @@ pub fn measure_inline_content<NodeId>(
         // Per-run color rides the brush so it survives into the
         // Layout and is read back per GlyphRun at paint time.
         builder.push(StyleProperty::Brush(ColorBrush(run.color)), range.clone());
+        // `text-decoration: underline` — parley records it on the run's style
+        // (`GlyphRun::style().underline`); paint emission reads it back and draws
+        // the line, since parley supplies the geometry but does not draw it.
+        if run.underline {
+            builder.push(StyleProperty::Underline(true), range.clone());
+        }
     }
 
     // Replaced inline boxes (`<img>`) — parley reserves their space

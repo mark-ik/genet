@@ -11,24 +11,21 @@
 //! Reads per-node layout from `FragmentPlane`, reads per-node style
 //! from `StylePlane`, and produces a closed-set [`PaintCmd`] stream.
 //!
-//! ## Probe v1 scope (2026-05-18)
+//! ## Scope
 //!
-//! - `DrawRect` per element with non-default background. The probe
-//!   currently emits an opaque white rect per element since the
-//!   cascade runs against an empty stylist; once real stylesheets
-//!   apply, [`background_color_of`] becomes the place that reads
-//!   `ComputedValues::background.background_color`.
-//! - `DrawText` per text leaf with **empty glyph runs**. Real glyph
-//!   shaping requires either (a) re-shaping in the emit phase or (b)
-//!   caching the parley `Layout` from measure. Both are reasonable —
-//!   deferred to a follow-up that picks one based on profile-data;
-//!   for the trait-surface probe, empty glyphs is enough to validate
-//!   that emission produces the right command structure.
-//! - Coordinates are absolute (pre-order accumulated offsets), no
-//!   `PushTransform`/`PopTransform` yet. The compositor model fits
-//!   nicely with `taffy::Layout.location` being parent-relative, but
-//!   emitting it requires `<element>` ↔ `<transform>` bookkeeping
-//!   that's deferred until a renderer pulls on it.
+//! - `DrawRect` per element from the cascade's
+//!   `ComputedValues::background.background_color` (via
+//!   [`background_color_of`]); transparent when no cascade data.
+//! - `DrawText` per inline-context leaf carrying shaped glyph runs.
+//!   Path (b) is the live one: [`emit_paint_list_with_layouts`] reads
+//!   cached parley `Layout`s from the [`TextMeasureCtx`] populated by
+//!   `crate::layout::layout`. The cache-less [`emit_paint_list`] still
+//!   exists for probes / callers that haven't run layout; it emits
+//!   empty glyph runs so the command structure is still present.
+//! - `PushTransform`/`PopTransform` per fragment around the node's
+//!   primitives, composing the parent-relative `taffy::Layout.location`
+//!   onto the transform stack; absolute scene coordinates fall out
+//!   of the composition.
 //!
 //! Cf. `docs/2026-05-17_paintlist_polyglot_renderer.md` (PM-3).
 
@@ -759,6 +756,27 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                         glyphs,
                         options: TextOptions::default(),
                     }));
+                    // `text-decoration: underline` — parley records it on the
+                    // run's style but does not draw it, so emit a thin filled
+                    // rect under the run. The underline's top is `baseline +
+                    // underline_offset`, thickness `underline_size` (the run's
+                    // Decoration overrides the font metrics when set). Same
+                    // text color as the glyphs.
+                    if let Some(deco) = run.style().underline.as_ref() {
+                        let m = parley_run.metrics();
+                        let uo = deco.offset.unwrap_or(m.underline_offset);
+                        let us = deco.size.unwrap_or(m.underline_size).max(1.0);
+                        let y = bounds.min.y + run.baseline() + uo;
+                        let x0 = bounds.min.x + run.offset();
+                        let x1 = x0 + run.advance();
+                        commands.push(PaintCmd::DrawRect(RectItem {
+                            placement: CommonPlacement::new(LayoutRect::new(
+                                LayoutPoint::new(x0, y),
+                                LayoutPoint::new(x1, y + us),
+                            )),
+                            color,
+                        }));
+                    }
                     emitted = true;
                 },
                 PositionedLayoutItem::InlineBox(pbox) => {
@@ -1575,6 +1593,51 @@ mod tests {
             (r.min.x - 20.0).abs() < 0.5 && (r.min.y - 20.0).abs() < 0.5,
             "content-box tile must start at (20,20), got ({}, {})",
             r.min.x, r.min.y,
+        );
+    }
+
+    /// `text-decoration: underline` draws a line: the underlined run emits one
+    /// extra `DrawRect` (the underline) over the same content without it.
+    #[test]
+    fn underline_text_decoration_emits_a_line() {
+        use crate::cascade::run_cascade;
+        use crate::image_decode::BackgroundImagePlane;
+
+        let draw_rects = |decoration: &str| -> usize {
+            let document = StaticDocument::parse("<html><body><p>x</p></body></html>");
+            let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+            let p_rule = format!("p {{ font-size: 40px; {decoration} }}");
+            run_cascade(
+                &document,
+                &mut styles,
+                euclid::Size2D::new(800.0, 600.0),
+                &["html, body, p { display: block; margin: 0; }", p_rule.as_str()],
+                None,
+            );
+            let viewport = Size {
+                width: AvailableSpace::Definite(800.0),
+                height: AvailableSpace::Definite(600.0),
+            };
+            let (fragments, built, text_ctx) =
+                layout(&document, &styles, &ImagePlane::new(), viewport);
+            let plist = emit_paint_list_with_layouts(
+                &document,
+                &styles,
+                &fragments,
+                &built,
+                &text_ctx,
+                &ImagePlane::new(),
+                &BackgroundImagePlane::new(),
+                &FxHashMap::default(),
+                DeviceIntSize::new(800, 600),
+            );
+            plist.commands().iter().filter(|c| matches!(c, PaintCmd::DrawRect(_))).count()
+        };
+
+        assert_eq!(
+            draw_rects("text-decoration: underline;"),
+            draw_rects("") + 1,
+            "underlined text emits one extra DrawRect (the underline line)"
         );
     }
 
