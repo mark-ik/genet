@@ -66,7 +66,7 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
         D: LayoutDom<NodeId = Id>,
     {
         let mut styles = StylePlane::new();
-        run_cascade(dom, &mut styles, euclid::Size2D::new(width, height), stylesheets);
+        run_cascade(dom, &mut styles, euclid::Size2D::new(width, height), stylesheets, None);
         let fragments = lay_out(dom, &styles, width, height);
         Self { styles, fragments, width, height }
     }
@@ -324,7 +324,7 @@ mod tests {
 
         // Oracle: a fresh full cascade + layout of the mutated DOM.
         let mut oracle_styles = StylePlane::new();
-        run_cascade(&dom, &mut oracle_styles, euclid::Size2D::new(W, H), SHEET);
+        run_cascade(&dom, &mut oracle_styles, euclid::Size2D::new(W, H), SHEET, None);
         let oracle = lay_out(&dom, &oracle_styles, W, H);
 
         let inc = layout.fragments().rect_of(p).unwrap();
@@ -356,7 +356,7 @@ mod tests {
 
         // The new <p> matches a full cascade + layout of the mutated DOM.
         let mut oracle_styles = StylePlane::new();
-        run_cascade(&dom, &mut oracle_styles, euclid::Size2D::new(W, H), SHEET);
+        run_cascade(&dom, &mut oracle_styles, euclid::Size2D::new(W, H), SHEET, None);
         let oracle = lay_out(&dom, &oracle_styles, W, H);
         let spliced = layout.fragments().rect_of(p).expect("new <p> laid out");
         let full = oracle.rect_of(p).expect("oracle <p>");
@@ -422,7 +422,7 @@ mod tests {
 
         // Oracle: full cascade of the mutated DOM.
         let mut oracle = StylePlane::new();
-        run_cascade(&dom, &mut oracle, euclid::Size2D::new(W, H), SHEET);
+        run_cascade(&dom, &mut oracle, euclid::Size2D::new(W, H), SHEET, None);
         let oracle_color = |id| {
             *oracle.get(id).unwrap().borrow_data().unwrap()
                 .styles.primary().get_inherited_text().color.into_srgb_legacy().raw_components()
@@ -458,7 +458,7 @@ mod tests {
 
         // Oracle: full cascade + layout of the mutated DOM.
         let mut oracle_styles = StylePlane::new();
-        run_cascade(&dom, &mut oracle_styles, euclid::Size2D::new(W, H), SHEET);
+        run_cascade(&dom, &mut oracle_styles, euclid::Size2D::new(W, H), SHEET, None);
         let oracle = lay_out(&dom, &oracle_styles, W, H);
 
         let kids: Vec<_> = dom.dom_children(body).collect();

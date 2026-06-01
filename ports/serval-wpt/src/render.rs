@@ -153,8 +153,18 @@ fn html_to_envelope(
     sheets.extend(linked_stylesheets(&document, &resolver));
     let sheet_refs: Vec<&str> = sheets.iter().map(String::as_str).collect();
 
+    // The document's file:// base URL, so relative CSS url() refs
+    // (e.g. background-image: url(support/x.png)) resolve to real files.
+    let base_url = resolver.base_url();
+
     let mut styles: StylePlane<_> = StylePlane::new();
-    run_cascade(&document, &mut styles, euclid::Size2D::new(width as f32, height as f32), &sheet_refs);
+    run_cascade(
+        &document,
+        &mut styles,
+        euclid::Size2D::new(width as f32, height as f32),
+        &sheet_refs,
+        base_url.as_deref(),
+    );
 
     let loader = LocalFileImageLoader::new(resolver);
     let images = ImagePlane::decode_from_dom_with_loader(&document, &loader);
@@ -173,6 +183,9 @@ fn html_to_envelope(
         &text_ctx,
         &images,
         &bg_images,
+        // Static reftest render has no scrolling, so pass empty
+        // scroll offsets (mirrors emit_paint_list's no_scroll).
+        &Default::default(),
         DeviceIntSize::new(width as i32, height as i32),
     );
     PaintEnvelope::from_list(&plist)

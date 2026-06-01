@@ -97,6 +97,11 @@ where
         &mut styles,
         euclid::default::Size2D::new(viewport_width, viewport_height),
         stylesheets,
+        // No base URL: this convenience path lays out without decoding
+        // images, so relative url() resolution isn't needed. Callers that
+        // need it decode an ImagePlane and drive run_cascade + layout
+        // directly with the document URL.
+        None,
     );
     let images = ImagePlane::new();
     let viewport = taffy::Size {

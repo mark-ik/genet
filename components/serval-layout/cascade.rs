@@ -163,6 +163,12 @@ fn make_device(viewport: euclid::default::Size2D<f32>) -> Device {
 /// pass `&[]` for empty-stylist behavior (every element receives
 /// Stylo's default cascaded values).
 ///
+/// `base_url` is the document's URL, which relative `url()` references
+/// in the stylesheets resolve against (e.g. `Some("file:///…/page.html")`
+/// so `url(support/x.png)` resolves to a real file). Pass `None` when
+/// the document has no base (sheet-less or data-URI-only content); under
+/// `None`, relative `url()`s do not resolve.
+///
 /// `plane` must be pre-populated with empty `StyleEntry` slots for every
 /// element via `StylePlane::populate_for_elements(dom)` before this call —
 /// the cascade calls `ensure_data` on each element, which requires an
@@ -172,11 +178,12 @@ pub fn run_cascade<D>(
     plane: &mut StylePlane<D::NodeId>,
     viewport: euclid::default::Size2D<f32>,
     stylesheets: &[&str],
+    base_url: Option<&str>,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash + 'static,
 {
-    cascade_traverse(dom, plane, viewport, stylesheets, None);
+    cascade_traverse(dom, plane, viewport, stylesheets, base_url, None);
 }
 
 /// Incremental restyle: re-cascade only the elements a batch of
@@ -237,7 +244,9 @@ where
         }
     }
 
-    cascade_traverse(dom, plane, viewport, stylesheets, Some(&snapshots));
+    // base_url None: incremental restyle reuses the prior cascade's
+    // resolved url()s; re-resolving relative refs here is a follow-up.
+    cascade_traverse(dom, plane, viewport, stylesheets, None, Some(&snapshots));
 
     // Stylo stored each restyled element's RestyleDamage on its
     // ElementData during the traversal (via compute_style_difference).
@@ -313,7 +322,9 @@ pub fn restyle_structural<D>(
         }
     }
 
-    cascade_traverse(dom, plane, viewport, stylesheets, None);
+    // base_url None: structural restyle reuses prior resolved url()s
+    // (same follow-up as the snapshot path).
+    cascade_traverse(dom, plane, viewport, stylesheets, None, None);
 }
 
 /// Shared cascade traversal. `snapshots = None` is a full cascade (every
@@ -325,11 +336,13 @@ fn cascade_traverse<D>(
     plane: &mut StylePlane<D::NodeId>,
     viewport: euclid::default::Size2D<f32>,
     stylesheets: &[&str],
+    base_url: Option<&str>,
     snapshots: Option<&SnapshotMap>,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash + 'static,
 {
+    let url_data = make_url_data(base_url);
     // Pre-populate StylePlane entries for every element. The cascade's
     // ensure_data() requires entries to exist (cascade-orchestration
     // contract; see StyleNodeRef::ensure_data documentation).
@@ -351,7 +364,7 @@ fn cascade_traverse<D>(
     // Parse inline `style="…"` attributes into the plane now that the lock
     // exists (to wrap each block) and before the traversal reads them back via
     // the adapter's `style_attribute()`.
-    parse_inline_styles(dom, plane, &lock);
+    parse_inline_styles(dom, plane, &lock, &url_data);
 
     // 3. Stylist setup. Prepend the baseline UA stylesheet
     //    (`ua_defaults::UA_DEFAULTS`) — `<html>`/`<body>` default to
@@ -363,10 +376,10 @@ fn cascade_traverse<D>(
     //    flush, so all sheets must be present first.
     let device = make_device(viewport);
     let mut stylist = Stylist::new(device, QuirksMode::NoQuirks);
-    let ua_sheet = parse_stylesheet(crate::ua_defaults::UA_DEFAULTS, &lock);
+    let ua_sheet = parse_stylesheet(crate::ua_defaults::UA_DEFAULTS, &lock, &url_data);
     stylist.append_stylesheet(ua_sheet, &read);
     for css in stylesheets {
-        let sheet = parse_stylesheet(css, &lock);
+        let sheet = parse_stylesheet(css, &lock, &url_data);
         stylist.append_stylesheet(sheet, &read);
     }
     stylist.flush(&guards);
@@ -424,16 +437,18 @@ fn cascade_traverse<D>(
 /// rules), matching the browser. Elements with no / empty `style` attribute are
 /// left untouched. Walks the same DOM as `populate_for_elements`; kept a
 /// separate pass because parsing needs the lock, which is created after that.
-fn parse_inline_styles<D>(dom: &D, plane: &mut StylePlane<D::NodeId>, lock: &SharedRwLock)
-where
+fn parse_inline_styles<D>(
+    dom: &D,
+    plane: &mut StylePlane<D::NodeId>,
+    lock: &SharedRwLock,
+    url_data: &UrlExtraData,
+) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
     use html5ever::{ns, LocalName, Namespace};
     let no_ns: Namespace = ns!();
     let style_local = LocalName::from("style");
-    let url = url::Url::parse("about:internal-stylesheet").expect("about: URL parses");
-    let url_data = UrlExtraData::from(url);
 
     let mut queue = vec![dom.document()];
     while let Some(id) = queue.pop() {
@@ -442,7 +457,7 @@ where
                 if !css.trim().is_empty() {
                     let pdb = parse_style_attribute(
                         css,
-                        &url_data,
+                        url_data,
                         None, // no error reporter
                         QuirksMode::NoQuirks,
                         CssRuleType::Style,
@@ -455,17 +470,30 @@ where
     }
 }
 
+/// Build the stylesheet base [`UrlExtraData`] that relative `url()`
+/// references in CSS resolve against. `base_url` is the document's URL
+/// (e.g. a `file://` URL for a local page, so `url(support/x.png)`
+/// resolves to a real file); `None` falls back to an `about:`
+/// placeholder, under which relative `url()`s do not resolve (the
+/// pre-base-URL behavior — fine for data-URI-only / sheet-less tests).
+fn make_url_data(base_url: Option<&str>) -> UrlExtraData {
+    let url = base_url
+        .and_then(|b| url::Url::parse(b).ok())
+        .unwrap_or_else(|| {
+            url::Url::parse("about:internal-stylesheet").expect("about: URL parses")
+        });
+    UrlExtraData::from(url)
+}
+
 /// Parse a single CSS source string as a UA-origin `DocumentStyleSheet`.
-/// No loader or error reporter (synthetic stylesheets don't @import; if
-/// they did we'd plumb a real loader).
-fn parse_stylesheet(css: &str, lock: &SharedRwLock) -> DocumentStyleSheet {
-    let url = url::Url::parse("about:internal-stylesheet")
-        .expect("about: URL parses");
-    let url_data = UrlExtraData::from(url);
+/// `url_data` is the base URL relative `url()`s resolve against (see
+/// [`make_url_data`]). No loader or error reporter (synthetic
+/// stylesheets don't @import; if they did we'd plumb a real loader).
+fn parse_stylesheet(css: &str, lock: &SharedRwLock, url_data: &UrlExtraData) -> DocumentStyleSheet {
     let media = ServoArc::new(lock.wrap(MediaList::empty()));
     let sheet = Stylesheet::from_str(
         css,
-        url_data,
+        url_data.clone(),
         Origin::UserAgent,
         media,
         lock.clone(),
@@ -527,6 +555,7 @@ mod tests {
             &mut plane,
             euclid::Size2D::new(800.0, 600.0),
             &[],
+            None,
         );
 
         // Every element should now have ElementData populated.
@@ -555,6 +584,7 @@ mod tests {
             &mut plane,
             euclid::Size2D::new(800.0, 600.0),
             &["body { background-color: rgb(255, 0, 0); }"],
+            None,
         );
 
         let body_id = find_element(&document, local_name!("body")).expect("body exists");
@@ -598,6 +628,7 @@ mod tests {
                 ".highlight { background-color: rgb(0, 0, 255); } \
                  #title { color: rgb(0, 255, 0); }",
             ],
+            None,
         );
 
         let h1_id = find_element(&document, local_name!("h1")).expect("h1 exists");
@@ -650,6 +681,7 @@ mod tests {
                 "[data-state=\"on\"] { color: rgb(0, 255, 0); } \
                  [hidden] { color: rgb(0, 0, 255); }",
             ],
+            None,
         );
 
         let ps: Vec<_> = {
@@ -712,6 +744,7 @@ mod tests {
             &mut plane,
             euclid::Size2D::new(800.0, 600.0),
             &["p:hover { color: rgb(255, 0, 0); }"],
+            None,
         );
 
         let hovered = color_of::<StaticDocument>(&plane, ps[0]);
@@ -765,7 +798,7 @@ mod tests {
 
         // Prior full cascade. <p> is red, <span> green.
         let mut plane: StylePlane<_> = StylePlane::new();
-        run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET);
+        run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, None);
         assert_eq!(color_of::<ScriptedDom>(&plane, p)[0], 1.0, "p starts red");
 
         // Mutate class a → b, drain only that mutation, then restyle.
@@ -778,7 +811,7 @@ mod tests {
 
         // Oracle: a fresh full cascade of the mutated DOM.
         let mut oracle: StylePlane<_> = StylePlane::new();
-        run_cascade(&dom, &mut oracle, euclid::Size2D::new(800.0, 600.0), SHEET);
+        run_cascade(&dom, &mut oracle, euclid::Size2D::new(800.0, 600.0), SHEET, None);
 
         let p_inc = color_of::<ScriptedDom>(&plane, p);
         let p_full = color_of::<ScriptedDom>(&oracle, p);
@@ -821,7 +854,7 @@ mod tests {
         dom.append_child(div, p);
 
         let mut plane: StylePlane<_> = StylePlane::new();
-        run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET);
+        run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, None);
         assert!(color_of::<ScriptedDom>(&plane, p)[2] < 0.001, "p starts black (no .box ancestor)");
 
         // Add class="box" to the div; the descendant <p> must recolor.
@@ -833,7 +866,7 @@ mod tests {
         restyle_with_snapshots(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, &muts);
 
         let mut oracle: StylePlane<_> = StylePlane::new();
-        run_cascade(&dom, &mut oracle, euclid::Size2D::new(800.0, 600.0), SHEET);
+        run_cascade(&dom, &mut oracle, euclid::Size2D::new(800.0, 600.0), SHEET, None);
 
         let p_inc = color_of::<ScriptedDom>(&plane, p);
         assert_eq!(
@@ -869,7 +902,7 @@ mod tests {
         dom.append_child(body, p);
 
         let mut plane: StylePlane<_> = StylePlane::new();
-        run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET);
+        run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, None);
         assert!(color_of::<ScriptedDom>(&plane, p)[1] < 0.01, "p starts black (data-state=off)");
 
         // Toggle data-state off → on.
@@ -881,7 +914,7 @@ mod tests {
         restyle_with_snapshots(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, &muts);
 
         let mut oracle: StylePlane<_> = StylePlane::new();
-        run_cascade(&dom, &mut oracle, euclid::Size2D::new(800.0, 600.0), SHEET);
+        run_cascade(&dom, &mut oracle, euclid::Size2D::new(800.0, 600.0), SHEET, None);
 
         let inc = color_of::<ScriptedDom>(&plane, p);
         assert_eq!(inc, color_of::<ScriptedDom>(&oracle, p), "attr restyle must match full re-cascade");
@@ -922,7 +955,7 @@ mod tests {
             let (mut dom, p) = build();
             dom.set_attribute(p, attr("class"), "red");
             let mut plane: StylePlane<_> = StylePlane::new();
-            run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET);
+            run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, None);
             let mut sink = Vec::new();
             dom.drain_mutations(&mut sink);
             dom.set_attribute(p, attr("class"), "blue");
@@ -938,7 +971,7 @@ mod tests {
             let (mut dom, p) = build();
             dom.set_attribute(p, attr("class"), "narrow");
             let mut plane: StylePlane<_> = StylePlane::new();
-            run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET);
+            run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, None);
             let mut sink = Vec::new();
             dom.drain_mutations(&mut sink);
             dom.set_attribute(p, attr("class"), "wide");

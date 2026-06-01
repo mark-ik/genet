@@ -35,8 +35,27 @@ impl ResourceResolver {
         Self { base_dir: Some(base_dir.into()), tests_root: None }
     }
 
+    /// The document's base URL as a `file://` string, for the cascade's
+    /// relative-`url()` resolution (pass to [`run_cascade`](crate::run_cascade)'s
+    /// `base_url`). Built from `base_dir` as a directory (trailing slash,
+    /// so `url(support/x.png)` resolves against it). `None` when there is
+    /// no `base_dir` or the path is not absolute (file URLs require one).
+    pub fn base_url(&self) -> Option<String> {
+        let base = self.base_dir.as_ref()?;
+        // File URLs require an absolute path; the WPT runner roots tests
+        // at a relative dir, so canonicalize first (falling back to the
+        // path as-given if canonicalize fails, e.g. in tests).
+        let abs = std::fs::canonicalize(base).unwrap_or_else(|_| base.clone());
+        url::Url::from_directory_path(&abs).ok().map(|u| u.to_string())
+    }
+
     /// Resolve `url` to a path, or `None` if it is remote, a `data:`
     /// URI, empty, or unresolvable under this resolver's roots.
+    ///
+    /// A `file://` URL (which Stylo produces when it resolves a relative
+    /// CSS `url()` against the document's `file://` base) maps straight
+    /// to its local path. Relative URLs resolve against `base_dir`,
+    /// `/`-absolute against `tests_root`.
     pub fn resolve(&self, url: &str) -> Option<PathBuf> {
         let url = url.split(['#', '?']).next().unwrap_or(url).trim();
         if url.is_empty()
@@ -46,6 +65,12 @@ impl ResourceResolver {
             || url.starts_with("data:")
         {
             return None;
+        }
+        // `file://` URL: Stylo already resolved a relative CSS `url()`
+        // against the document base into an absolute file URL. Convert
+        // it back to a local path directly.
+        if url.starts_with("file:") {
+            return url::Url::parse(url).ok().and_then(|u| u.to_file_path().ok());
         }
         match url.strip_prefix('/') {
             Some(rest) => self.tests_root.as_ref().map(|root| root.join(rest)),

@@ -238,7 +238,7 @@ mod tests {
         let doc = StaticDocument::parse("<html><body><p>abc</p></body></html>");
         let sheet = &["html, body, p { display: block; margin: 0; padding: 0; border: 0; }"];
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet);
+        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
         let images = ImagePlane::new();
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
@@ -277,7 +277,7 @@ mod tests {
         let doc = StaticDocument::parse("<html><body><p>abc</p></body></html>");
         let sheet = &["html, body, p { display: block; margin: 0; padding: 0; border: 0; }"];
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet);
+        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
         let images = ImagePlane::new();
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),

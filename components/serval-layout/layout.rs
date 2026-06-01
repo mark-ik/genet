@@ -83,7 +83,7 @@ mod tests {
     fn cascade(html: &str, sheets: &[&str]) -> (StaticDocument, StylePlane<StaticNodeId>) {
         let document = StaticDocument::parse(html);
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&document, &mut styles, euclid::Size2D::new(800.0, 600.0), sheets);
+        run_cascade(&document, &mut styles, euclid::Size2D::new(800.0, 600.0), sheets, None);
         (document, styles)
     }
 

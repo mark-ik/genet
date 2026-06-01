@@ -61,6 +61,7 @@ pub fn build_scene(
         &mut styles,
         euclid::Size2D::new(width as f32, height as f32),
         &all_sheets,
+        None,
     );
 
     // `<img>`: data: URIs decode inline; relative paths load from disk against
@@ -82,6 +83,8 @@ pub fn build_scene(
         &text_ctx,
         &images,
         &bg_images,
+        // Static viewer render: no scrolling.
+        &Default::default(),
         DeviceIntSize::new(width as i32, height as i32),
     );
 

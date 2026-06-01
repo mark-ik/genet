@@ -42,6 +42,14 @@ html, body {
     height: 100%;
 }
 
+/* Document metadata never renders. Per the WHATWG rendering spec
+   (`head, link, meta, script, style, title { display: none }`), these
+   must not paint — otherwise the `<title>` and inline `<style>` source
+   show up as visible page text. */
+head, title, meta, link, style, script, base, noscript, template {
+    display: none;
+}
+
 address, article, aside, blockquote, div, dl, dt, dd,
 figure, figcaption, footer, h1, h2, h3, h4, h5, h6, header, hgroup,
 hr, main, nav, ol, p, pre, section, ul, li,

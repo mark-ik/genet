@@ -111,6 +111,7 @@ fn html_to_envelope_with_loader<L: serval_layout::ImageLoader>(
         &mut styles,
         euclid::Size2D::new(VIEWPORT as f32, VIEWPORT as f32),
         stylesheets,
+        None,
     );
 
     // 3. Decode <img> sources (data: inline, remote via loader). The box
@@ -141,6 +142,8 @@ fn html_to_envelope_with_loader<L: serval_layout::ImageLoader>(
         &text_ctx,
         &images,
         &bg_images,
+        // e2e render: no scrolling.
+        &Default::default(),
         DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32),
     );
 

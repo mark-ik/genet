@@ -256,6 +256,7 @@ fn main() {
         "list" => list(&tests, &args),
         "run" => run(&tests, &args),
         "reftest" => reftest(&tests, &args),
+        "dump" => dump(&tests, &args),
         "testharness" => testharness(&tests, &args),
         other => {
             eprintln!("unknown command: {other}\n{}", usage());
@@ -756,5 +757,43 @@ fn reftest(tests: &[PathBuf], args: &Args) {
     }
     if failed > 0 || errored > 0 {
         std::process::exit(1);
+    }
+}
+
+/// Render each reftest in the subset + its reference to side-by-side
+/// PNGs under `.cargo-check-logs/dump/`, for eyeball diagnosis of a
+/// `local`-bucket failure. Writes `<stem>.test.png` / `<stem>.ref.png`.
+fn dump(tests: &[PathBuf], args: &Args) {
+    let renderer = match render::Renderer::boot() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("cannot boot renderer (needs a GPU): {e}");
+            std::process::exit(1);
+        }
+    };
+    let tests_root = Path::new(&args.tests_root);
+    let out_dir = Path::new(".cargo-check-logs/dump");
+    let _ = fs::create_dir_all(out_dir);
+    for path in tests {
+        let Ok(bytes) = fs::read(path) else { continue };
+        let test_html = String::from_utf8_lossy(&bytes).into_owned();
+        if classify(path, &test_html) != Kind::Reftest {
+            continue;
+        }
+        let Some((kind, href)) = reftest_ref(&test_html) else { continue };
+        let Some(direct_ref) = resolve_ref(path, &href, tests_root) else { continue };
+        let Some((ref_path, ref_html)) = final_ref(direct_ref, kind, tests_root) else { continue };
+        let test_dir = path.parent().unwrap_or(tests_root);
+        let ref_dir = ref_path.parent().unwrap_or(tests_root);
+        let t = renderer.render_html(&test_html, test_dir, tests_root, REFTEST_W, REFTEST_H, is_xml_path(path));
+        let r = renderer.render_html(&ref_html, ref_dir, tests_root, REFTEST_W, REFTEST_H, is_xml_path(&ref_path));
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("dump");
+        let tp = out_dir.join(format!("{stem}.test.png"));
+        let rp = out_dir.join(format!("{stem}.ref.png"));
+        let _ = t.save(&tp);
+        let _ = r.save(&rp);
+        let s = diff_stats(&t, &r);
+        let pct = if s.total > 0 { s.differing * 100 / s.total } else { 0 };
+        println!("DUMP {} -> {} / {}  (diff={pct}% maxδ={})", rel(path, &args.tests_root), tp.display(), rp.display(), s.max_channel_diff);
     }
 }

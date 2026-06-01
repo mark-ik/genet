@@ -687,7 +687,7 @@ mod tests {
     fn lay(html: &str, sheets: &[&str]) -> (StaticDocument, FragmentPlane<StaticNodeId>) {
         let document = StaticDocument::parse(html);
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&document, &mut styles, euclid::Size2D::new(VIEWPORT, VIEWPORT), sheets);
+        run_cascade(&document, &mut styles, euclid::Size2D::new(VIEWPORT, VIEWPORT), sheets, None);
         let images = ImagePlane::decode_from_dom(&document);
         let viewport = Size {
             width: AvailableSpace::Definite(VIEWPORT),
