@@ -1,0 +1,16 @@
+[package]
+name = "servo-webgl-essl"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description.workspace = true
+
+[lib]
+name = "webgl_essl"
+path = "lib.rs"
+
+[dependencies]

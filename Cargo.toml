@@ -6,6 +6,7 @@ members = [
     "components/shared/paint-types",
     "components/xpath",
     "components/webgl-wgpu",
+    "components/webgl-essl",
     "components/serval-layout",
     "components/serval-static-dom",
     "components/serval-scripted-dom",

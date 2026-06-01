@@ -7674,6 +7674,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "servo-webgl-essl"
+version = "0.2.0"
+
+[[package]]
 name = "servo-webgl-wgpu"
 version = "0.2.0"
 dependencies = [
