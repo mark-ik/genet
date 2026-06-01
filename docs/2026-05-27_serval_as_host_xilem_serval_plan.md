@@ -397,20 +397,22 @@ Disabled})`, gated by `window.set_ime_allowed(true)` and steered by
 
 What the backend needs, in tiers:
 
-- **T1 — commit-only.** Route `Ime::Commit(text)` to the focused element as
-  an insertion (the existing `dispatch_key` path, or a sibling
-  `dispatch_ime`), and call `set_ime_allowed(true)` when a text field
-  focuses. This alone makes most Latin + accent input and basic CJK commit
-  work; it ignores the in-progress composition display.
-- **T2 — preedit display.** `TextInput` grows a `preedit: Option<Preedit>`
+- **T1 — commit-only. Done (`42d9d04c4e0`).** `set_ime_allowed(true)` on the
+  window; `Ime::Commit(text)` inserts into the focused field by reusing the text
+  path (a `Character` key event through `dispatch_key`). Latin typing still
+  arrives as `KeyboardInput`; composed input (CJK, transliteration, dead-key
+  accents) commits here.
+- **T3 — candidate placement. Done (`42d9d04c4e0`).** `caret_screen_rect`
+  (cascade → layout → `caret_rect` for the focused field) feeds
+  `set_ime_cursor_area` after focus / caret-moving input, so the candidate
+  window tracks the caret. Reuses the caret geometry.
+- **T2 — preedit display. Next.** `TextInput` grows a `preedit: Option<Preedit>`
   (composing text + its internal cursor) shown inline at the caret
-  (conventionally underlined) but not in the committed buffer;
-  `Ime::Preedit` updates it, `Ime::Commit` folds it into the buffer.
-  Needs a way to style the preedit run (an inline element, or a run
-  attribute).
-- **T3 — candidate placement.** Report the focused caret's screen rect via
-  `set_ime_cursor_area` so the candidate window appears at the cursor. This
-  needs the **caret rect** (see shared capability below).
+  (conventionally underlined) but not in the committed buffer; `Ime::Preedit`
+  updates it, `Ime::Commit` folds it into the buffer. Needs a way to style the
+  preedit run — likely the field rendering composite runs (buffer + a styled
+  preedit span), which depends on inline styled runs + `text-decoration`
+  support; verify those in serval before building.
 
 IME pays once for the whole engine: serval needs it for content text entry
 regardless, so the host chrome gets it for free once content has it (the
