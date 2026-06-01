@@ -30,7 +30,7 @@ use std::borrow::Cow;
 
 use parley::{
     Alignment, AlignmentOptions, FontContext, FontFamily, FontStyle, FontWeight, GenericFamily,
-    InlineBox, InlineBoxKind, Layout, LayoutContext, StyleProperty,
+    InlineBox, InlineBoxKind, Layout, LayoutContext, LineHeight, StyleProperty,
 };
 use rustc_hash::FxHashMap;
 use taffy::geometry::Size;
@@ -80,6 +80,20 @@ impl Default for ColorBrush {
     }
 }
 
+/// A run's cascaded `line-height`, mapped to a parley `LineHeight` at shaping
+/// time. `Normal` keeps parley's default (the font's natural metrics); the others
+/// come from a CSS `<number>` or `<length>`.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum LineHeightSpec {
+    /// `line-height: normal` — font metrics (parley `MetricsRelative(1.0)`).
+    #[default]
+    Normal,
+    /// `line-height: <number>` — a multiple of the font size.
+    Factor(f32),
+    /// `line-height: <length>` — an absolute height in CSS px.
+    Px(f32),
+}
+
 /// One styled run of text within an inline formatting context — a
 /// maximal span sharing one cascaded font + color (the text of a
 /// single inline element / text node). `construct` produces these by
@@ -99,6 +113,9 @@ pub struct InlineRun {
     /// as `StyleProperty::Underline`; the paint emit draws the line (parley
     /// supplies the geometry but does not draw it).
     pub underline: bool,
+    /// Cascaded `line-height`. Pushed to parley as `StyleProperty::LineHeight`
+    /// (skipped when `Normal`, which is parley's default).
+    pub line_height: LineHeightSpec,
 }
 
 impl InlineRun {
@@ -113,6 +130,7 @@ impl InlineRun {
             italic: false,
             color: [0.0, 0.0, 0.0, 1.0],
             underline: false,
+            line_height: LineHeightSpec::Normal,
         }
     }
 }
@@ -170,6 +188,7 @@ impl<NodeId> InlineContent<NodeId> {
                 italic: false,
                 color: [0.0, 0.0, 0.0, 1.0],
                 underline: false,
+                line_height: LineHeightSpec::Normal,
             }],
             boxes: Vec::new(),
         }
@@ -338,6 +357,17 @@ pub fn measure_inline_content<NodeId>(
         // the line, since parley supplies the geometry but does not draw it.
         if run.underline {
             builder.push(StyleProperty::Underline(true), range.clone());
+        }
+        // Cascaded `line-height`. `Normal` is parley's default (font metrics), so
+        // only a CSS `<number>` / `<length>` overrides it.
+        match run.line_height {
+            LineHeightSpec::Normal => {},
+            LineHeightSpec::Factor(f) => {
+                builder.push(StyleProperty::LineHeight(LineHeight::FontSizeRelative(f)), range.clone());
+            },
+            LineHeightSpec::Px(px) => {
+                builder.push(StyleProperty::LineHeight(LineHeight::Absolute(px)), range.clone());
+            },
         }
     }
 

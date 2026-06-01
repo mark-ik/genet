@@ -199,32 +199,27 @@ where
     Some(Cursor::from_point(layout, local_x, local_y).index())
 }
 
-/// The caret bar's *snug* vertical extent `(top, height)` in layout space: from
-/// the top of capitals (the run's `cap_height`) down to below descenders
-/// (`baseline + descent`), hugging the visible glyph band. The font's typographic
-/// `ascent` reserves empty room above the caps (for accents that low lowercase
-/// words don't use), so an em-box-tall caret towers over text like "says"; the
-/// cap-height top avoids that.
+/// The caret bar's vertical extent `(top, height)` in layout space: from the
+/// line's `ascent` down to its `baseline`. The top reaches the tops of ascenders
+/// and capitals (the visible top of the text), so the caret does not sit below
+/// ascender-heavy words like "shifted" and read as shifted-down — which a
+/// cap-height top did, since lowercase ascenders rise above the cap height. The
+/// bottom stops at the baseline rather than the descender, so it does not dangle
+/// below descender-less words like "next?".
 ///
-/// Mid-text the run comes from the cluster at `byte`; at end-of-text (no cluster
-/// contains the final index) it falls back to the last line and its last run.
-/// When the font reports no `cap_height`, falls back to the full `ascent`. `(0,0)`
-/// for an empty layout.
+/// Mid-text the line comes from the cluster at `byte`; at end-of-text (no cluster
+/// contains the final index) it falls back to the last line. `(0, 0)` for an
+/// empty layout.
 fn caret_band(layout: &Layout<ColorBrush>, byte: usize) -> (f32, f32) {
-    let cluster = Cluster::from_byte_index(layout, byte);
-    let (line, cap) = match &cluster {
-        Some(c) => (c.line(), c.run().metrics().cap_height),
-        None => {
-            let Some(line) = layout.get(layout.len().saturating_sub(1)) else {
-                return (0.0, 0.0);
-            };
-            let cap = line.runs().last().and_then(|r| r.metrics().cap_height);
-            (line, cap)
+    let line = match Cluster::from_byte_index(layout, byte) {
+        Some(c) => c.line(),
+        None => match layout.get(layout.len().saturating_sub(1)) {
+            Some(line) => line,
+            None => return (0.0, 0.0),
         },
     };
     let m = line.metrics();
-    let cap = cap.unwrap_or(m.ascent);
-    (m.baseline - cap, cap + m.descent)
+    (m.baseline - m.ascent, m.ascent)
 }
 
 /// Absolute border-box origin of `target`: walk from the document root,
@@ -286,6 +281,44 @@ mod tests {
             q.extend(doc.dom_children(id));
         }
         panic!("no <p>")
+    }
+
+
+    /// A cascaded `line-height` controls the line-box height: `line-height: 2`
+    /// on 40px text gives a ~80px line box (2 × font-size), vs the ~46px
+    /// font-metric default. Verifies the cascade → parley line-height plumbing
+    /// (`construct::line_height_of` → `StyleProperty::LineHeight`).
+    #[test]
+    fn css_line_height_controls_line_box() {
+        let line_box_height = |sheet: &[&str]| {
+            let doc = StaticDocument::parse("<html><body><p>yep</p></body></html>");
+            let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+            run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+            let viewport = taffy::Size {
+                width: taffy::AvailableSpace::Definite(800.0),
+                height: taffy::AvailableSpace::Definite(600.0),
+            };
+            let (_f, built, text_ctx) = layout(&doc, &styles, &ImagePlane::new(), viewport);
+            let p = find_p(&doc);
+            let taffy_id = built.node_map.get(&p).expect("taffy id");
+            text_ctx.layouts.get(taffy_id).expect("layout").height()
+        };
+
+        let normal =
+            line_box_height(&["html, body, p { display: block; margin: 0; font-size: 40px; }"]);
+        let factor = line_box_height(&[
+            "html, body, p { display: block; margin: 0; font-size: 40px; line-height: 2; }",
+        ]);
+        let absolute = line_box_height(&[
+            "html, body, p { display: block; margin: 0; font-size: 40px; line-height: 70px; }",
+        ]);
+
+        assert!((factor - 80.0).abs() < 1.0, "line-height:2 → ~80px line box, got {factor}");
+        assert!((absolute - 70.0).abs() < 1.0, "line-height:70px → ~70px line box, got {absolute}");
+        assert!(
+            factor > normal + 20.0,
+            "line-height:2 ({factor}) is taller than normal ({normal})"
+        );
     }
 
     /// The caret advances along the text: at offset 0 it sits at the content

@@ -229,9 +229,12 @@ const SHEET: &[&str] = &[
     "label { font-size: 28px; color: rgb(60, 60, 80); padding: 8px; }",
     // The text field is a <textarea>: a fixed width so a long typed line wraps
     // across visual rows (ArrowUp/ArrowDown navigate those wrapped rows, not just
-    // `\n` breaks). `input` keeps the same look should one reappear.
+    // `\n` breaks). `line-height: 1.4` gives each row symmetric breathing room
+    // (the leading splits above/below), so text sits centered rather than hard
+    // against the top of a tight line box. `input` keeps the same look.
     "input, textarea { font-size: 40px; color: rgb(20, 20, 20); \
-        background-color: rgb(235, 238, 245); padding: 12px; width: 360px; }",
+        background-color: rgb(235, 238, 245); padding: 12px; width: 360px; \
+        line-height: 1.4; }",
     // The popup overlay box: a small tinted card with padding, drawn on top.
     ".popup { font-size: 28px; color: rgb(40, 40, 40); \
         background-color: rgb(245, 230, 140); padding: 10px; }",

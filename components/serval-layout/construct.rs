@@ -23,7 +23,7 @@ use crate::adapter::NodeRef;
 use crate::image_decode::ImagePlane;
 use crate::style::StylePlane;
 use crate::text_measure::{
-    FontFamilySpec, GenericFamilyKind, InlineBoxItem, InlineContent, InlineRun,
+    FontFamilySpec, GenericFamilyKind, InlineBoxItem, InlineContent, InlineRun, LineHeightSpec,
 };
 
 /// Default font size used for runs whose element has no cascaded
@@ -230,7 +230,28 @@ pub(crate) fn run_for_element<NodeId: Copy + Eq + Hash>(
         // Per-run color from the styling element's cascaded `color`.
         color: text_color_of(styles, id).unwrap_or([0.0, 0.0, 0.0, 1.0]),
         underline: text_underline_of(styles, id).unwrap_or(false),
+        line_height: line_height_of(styles, id).unwrap_or_default(),
     }
+}
+
+/// An element's cascaded `line-height` mapped to a [`LineHeightSpec`]. `normal`
+/// (and the un-cascaded case) keeps parley's font-metric default; a `<number>`
+/// becomes a font-size multiple, a `<length>` an absolute px height.
+fn line_height_of<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> Option<LineHeightSpec> {
+    use style::values::computed::LineHeight;
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    Some(match &data.styles.primary().get_font().line_height {
+        LineHeight::Normal => LineHeightSpec::Normal,
+        LineHeight::Number(num) => LineHeightSpec::Factor(num.0),
+        LineHeight::Length(l) => LineHeightSpec::Px(l.px()),
+        // `-moz-block-height` is gecko-only (cfg'd out here); treat as normal.
+        #[allow(unreachable_patterns)]
+        _ => LineHeightSpec::Normal,
+    })
 }
 
 /// Whether an element's cascaded `text-decoration-line` includes `underline`.
