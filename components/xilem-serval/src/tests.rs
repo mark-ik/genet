@@ -1383,6 +1383,24 @@ mod controls {
         assert_eq!(runner.pointer_capture(), None, "release ends the drag");
     }
 
+    /// IME preedit (T2): the composing text renders spliced at the caret but
+    /// stays out of the committed buffer, and the caret sits after it.
+    #[test]
+    fn textinput_preedit_renders_inline() {
+        use crate::TextInput;
+        let mut t = TextInput::new("ab"); // caret at end (2)
+        t.move_left(false); // caret between 'a' and 'b' (1)
+        t.set_preedit("XY");
+        assert_eq!(t.render_text(), "aXYb", "preedit spliced at the caret");
+        assert_eq!(t.text(), "ab", "buffer stays clean (preedit not committed)");
+        // In "aXYb", the caret sits after "XY": byte_of(1)=1 + preedit "XY"=2 → 3.
+        assert_eq!(t.caret_byte_in_render(), 3);
+
+        t.clear_preedit();
+        assert_eq!(t.render_text(), "ab", "cleared preedit → plain buffer");
+        assert_eq!(t.caret_byte_in_render(), 1);
+    }
+
     // --- selection (model + keyboard) -----------------------------------------
 
     /// A `Shift`-held key event (extends the selection).
