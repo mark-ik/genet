@@ -61,6 +61,13 @@ pub struct TextInput {
     /// collapsed caret); otherwise the selection spans
     /// `[min(anchor, caret), max(anchor, caret))`.
     anchor: usize,
+    /// In-progress IME composition shown inline at the caret but **not** in the
+    /// committed `text` (IME T2). Empty when not composing. The host sets it from
+    /// `Ime::Preedit` and clears it on `Ime::Commit` (folding the committed text
+    /// into the buffer). [`render_text`](Self::render_text) splices it at the
+    /// caret; [`caret_with_preedit`](Self::caret_with_preedit) is where the caret
+    /// then sits.
+    preedit: String,
 }
 
 impl TextInput {
@@ -68,12 +75,47 @@ impl TextInput {
     pub fn new(text: impl Into<String>) -> Self {
         let text = text.into();
         let caret = text.chars().count();
-        Self { text, caret, anchor: caret }
+        Self { text, caret, anchor: caret, preedit: String::new() }
     }
 
     /// The buffer, without the caret marker.
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// The in-progress IME composition (empty when not composing).
+    pub fn preedit(&self) -> &str {
+        &self.preedit
+    }
+
+    /// Set the IME composing text (from `Ime::Preedit`). Shown inline at the
+    /// caret by [`render_text`](Self::render_text); not in the committed buffer.
+    pub fn set_preedit(&mut self, text: impl Into<String>) {
+        self.preedit = text.into();
+    }
+
+    /// Clear the IME composition (on `Ime::Commit` / `Ime::Disabled`).
+    pub fn clear_preedit(&mut self) {
+        self.preedit.clear();
+    }
+
+    /// The text to render: the buffer with any IME preedit spliced in at the
+    /// caret. Equals the buffer when not composing.
+    pub fn render_text(&self) -> String {
+        if self.preedit.is_empty() {
+            return self.text.clone();
+        }
+        let at = self.byte_of(self.caret);
+        let mut s = self.text.clone();
+        s.insert_str(at, &self.preedit);
+        s
+    }
+
+    /// The caret's byte offset within [`render_text`](Self::render_text) — after
+    /// the spliced preedit while composing, else the plain caret. This is where
+    /// the painted caret and the IME candidate area sit.
+    pub fn caret_byte_in_render(&self) -> usize {
+        self.byte_of(self.caret) + self.preedit.len()
     }
 
     /// The caret (moving end): a character index in `0..=char_count`.
@@ -384,10 +426,10 @@ pub type TextField = OnKey<El<String, TextInput, ()>, TextInput, (), fn(&mut Tex
 /// behind both [`text_field`] and [`text_field_typed`]).
 fn build_text_field(input: &TextInput) -> TextField {
     let handler: fn(&mut TextInput, KeyEvent) = edit;
-    // Render the clean buffer; the host paints the caret over it (see the module
-    // docs). `display()` (with the `|` marker) is the textual representation, not
-    // what the field shows on screen.
-    on_key(el::<_, TextInput, ()>("input", input.text().to_string()), handler)
+    // Render the buffer with any IME preedit spliced in at the caret (T2); the
+    // host paints the caret over it. `display()` (with the `|` marker) is the
+    // textual representation for tests, not what the field shows on screen.
+    on_key(el::<_, TextInput, ()>("input", input.render_text()), handler)
 }
 
 /// A reusable, editable text field whose state *is* a [`TextInput`].
@@ -434,7 +476,7 @@ pub fn text_field_typed(input: &TextInput) -> TextField {
 /// to parley, which honors `\n`).
 fn build_textarea(input: &TextInput) -> TextField {
     let handler: fn(&mut TextInput, KeyEvent) = edit_multiline;
-    on_key(el::<_, TextInput, ()>("textarea", input.text().to_string()), handler)
+    on_key(el::<_, TextInput, ()>("textarea", input.render_text()), handler)
 }
 
 /// A reusable multi-line text field over a [`TextInput`] — [`text_field`]'s

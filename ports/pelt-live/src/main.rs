@@ -569,13 +569,9 @@ impl App {
         let (Some(window), Some(node)) = (self.window.as_ref(), self.runner.focus()) else {
             return;
         };
-        let field = &self.runner.state().field;
-        let caret_byte = field
-            .text()
-            .char_indices()
-            .nth(field.caret())
-            .map(|(b, _)| b)
-            .unwrap_or(field.text().len());
+        // Caret byte within the field's *rendered* text (after any preedit), so
+        // the candidate window sits after the composing run.
+        let caret_byte = self.runner.state().field.caret_byte_in_render();
         if let Some((x, y, w, h)) =
             caret_screen_rect(&self.dom.borrow(), SHEET, self.width, self.height, node, caret_byte)
         {
@@ -616,7 +612,10 @@ impl App {
                     let (s, e) = field.selection();
                     (byte_of(s), byte_of(e))
                 });
-            TextCursor { node, caret: byte_of(field.caret()), selection }
+            // Caret byte within the field's rendered text — after any IME preedit
+            // spliced at the caret (so the painted caret sits after the composing
+            // run). With no preedit this equals `byte_of(field.caret())`.
+            TextCursor { node, caret: field.caret_byte_in_render(), selection }
         });
         // Key the scroller's node with its current offset so emit scrolls it.
         let mut scroll_offsets: ScrollOffsets<NodeId> = ScrollOffsets::default();
@@ -966,7 +965,7 @@ impl ApplicationHandler<UserEvent> for App {
                 } else if let Some(node) = hit {
                     let actions = self
                         .runner
-                        .dispatch_click(node, PointerClick { local: (x, y) });
+                        .dispatch_click(node, PointerClick::at((x, y)));
                     if !actions.is_empty() {
                         tracing::debug!(n = actions.len(), "click bubbled actions to root");
                     }
@@ -1041,23 +1040,35 @@ impl ApplicationHandler<UserEvent> for App {
             },
 
             WindowEvent::Ime(ime) => match ime {
-                // IME T1: committed composition inserts into the focused field,
-                // reusing the text path (a `Character` key event). Latin typing
-                // still arrives as `KeyboardInput`; CJK / transliteration /
-                // dead-key accents arrive here as the final committed text.
-                Ime::Commit(text) => {
-                    if !text.is_empty() {
-                        tracing::info!(text = %text, "ime commit");
-                        self.runner.dispatch_key(KeyEvent::new(Key::Character(text)));
-                        self.push_a11y();
-                        self.update_ime_cursor_area();
-                        self.redraw();
-                    }
+                // IME T2: show the in-progress composition inline at the caret
+                // (not yet committed). `set_preedit` makes the field render the
+                // composing text spliced at the caret.
+                Ime::Preedit(text, _cursor) => {
+                    tracing::debug!(preedit = %text, "ime preedit");
+                    self.runner.update(|d| d.field.set_preedit(text));
+                    self.update_ime_cursor_area();
+                    self.redraw();
                 },
-                // T2 (in-progress preedit display) is not wired yet; trace it.
-                Ime::Preedit(text, _cursor) => tracing::debug!(preedit = %text, "ime preedit"),
+                // IME T1: composition finished — clear the preedit, then insert
+                // the committed text via the focus-routed text path (a `Character`
+                // key event). Latin typing still arrives as `KeyboardInput`; CJK /
+                // transliteration / dead-key accents commit here.
+                Ime::Commit(text) => {
+                    tracing::info!(text = %text, "ime commit");
+                    self.runner.update(|d| d.field.clear_preedit());
+                    if !text.is_empty() {
+                        self.runner.dispatch_key(KeyEvent::new(Key::Character(text)));
+                    }
+                    self.push_a11y();
+                    self.update_ime_cursor_area();
+                    self.redraw();
+                },
                 Ime::Enabled => tracing::debug!("ime enabled"),
-                Ime::Disabled => tracing::debug!("ime disabled"),
+                Ime::Disabled => {
+                    tracing::debug!("ime disabled");
+                    self.runner.update(|d| d.field.clear_preedit());
+                    self.redraw();
+                },
             },
 
             WindowEvent::RedrawRequested => {
