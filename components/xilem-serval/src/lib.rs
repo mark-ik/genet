@@ -76,8 +76,8 @@ mod tests;
 
 pub use context::ServalCtx;
 pub use controls::{
-    button, checkbox, checkbox_typed, text_field, text_field_typed, toggle, Checkbox, TextField,
-    TextInput,
+    button, checkbox, checkbox_typed, text_field, text_field_typed, textarea, textarea_typed,
+    toggle, Checkbox, TextField, TextInput,
 };
 pub use element::{El, Element, ElementView, el};
 pub use event::{OnClick, OnClickState, PointerClick, on_click};
