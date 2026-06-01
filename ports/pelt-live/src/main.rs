@@ -655,6 +655,7 @@ impl App {
         );
         let Some(byte) = target else { return false };
         let extend = self.modifiers.shift;
+        tracing::info!(delta, from = caret_byte, to = byte, extend, "soft-wrap nav");
         self.runner.update(|d| d.field.set_caret_byte(byte, extend));
         self.push_a11y();
         self.update_ime_cursor_area();
@@ -672,9 +673,12 @@ impl App {
             return;
         }
         let extend = self.modifiers.shift;
-        if let Some(byte) =
-            caret_byte_at(&self.dom.borrow(), SHEET, self.width, self.height, node, x, y)
-        {
+        // Bind in a statement so the `self.dom.borrow()` temporary is dropped at
+        // the `;` — `runner.update` below borrows the DOM mutably, and a `borrow()`
+        // held through an `if let` condition's block would collide with it.
+        let target = caret_byte_at(&self.dom.borrow(), SHEET, self.width, self.height, node, x, y);
+        if let Some(byte) = target {
+            tracing::info!(x, y, byte, extend, "caret placed at click");
             self.runner.update(|d| d.field.set_caret_byte(byte, extend));
         }
     }
