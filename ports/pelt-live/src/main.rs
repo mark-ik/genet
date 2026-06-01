@@ -53,8 +53,9 @@ use winit::keyboard::{Key as WinitKey, NamedKey as WinitNamedKey};
 use winit::window::{Window, WindowId};
 use xilem_serval::{
     AnyView, El, Key, KeyEvent, Lens, Modifiers, NamedKey, OnClick, Placement, PointerClick,
-    SelectState, ServalCtx, ServalElement, ServalAppRunner, TextField, TextInput, anchor_point, el,
-    lens, on_click, overlay_at, select, text_field_typed,
+    PointerEvent, PointerPhase, SelectState, ServalCtx, ServalElement, ServalAppRunner, Slider,
+    TextField, TextInput, anchor_point, el, lens, on_click, overlay_at, select, slider,
+    text_field_typed,
 };
 
 use accesskit_winit::{Adapter, Event as AkEvent, WindowEvent as AkWindowEvent};
@@ -77,6 +78,8 @@ struct Demo {
     /// The `select` dropdown's state (which colour, open/closed). Composed onto
     /// the view via `lens`, like `field`.
     colour: SelectState,
+    /// The slider's value (0..1), drag-set via the pointer-drag foundation.
+    volume: Slider,
     /// Whether the `[ + ]` button's popup overlay is showing. Toggled on each
     /// click of the button (which also still bumps the count).
     popup_open: bool,
@@ -116,10 +119,10 @@ type DemoView = El<
         // z-index). `Option<V>` is a `ViewSequence`, so this is the conditional
         // child slot.
         Option<El<&'static str, Demo, ()>>,
-        // Two erased (`Box<dyn AnyView>`) children — concrete types unnameable
-        // (closures / `Vec`). In paint/stacking (document) order: the scrollable
-        // box (`overflow: scroll`, wheel-scrolled), then the `select` dropdown
-        // last so its option list paints over the scroller.
+        // Erased (`Box<dyn AnyView>`) children — concrete types unnameable
+        // (closures / `Vec`): the scrollable box (`overflow: scroll`,
+        // wheel-scrolled), the `select` dropdown, and the drag slider.
+        AnyDemoView,
         AnyDemoView,
         AnyDemoView,
     ),
@@ -170,26 +173,23 @@ fn demo_view(s: &Demo) -> DemoView {
                 el::<_, Demo, ()>(
                     "div",
                     (1..=8)
-                        .map(|i| {
-                            // Each line is clickable: clicking a *scrolled* line
-                            // logs its true index, which verifies the host's
-                            // hit-test offset maps the screen point through the
-                            // scroll offset into the content's layout space.
-                            on_click(
-                                el::<_, Demo, ()>("p", format!("Scrollable line {i}")),
-                                move |_: &mut Demo, _| tracing::info!(line = i, "line clicked"),
-                            )
-                        })
+                        .map(|i| el::<_, Demo, ()>("p", format!("Scrollable line {i}")))
                         .collect::<Vec<_>>(),
                 )
                 .attr("class", "scroller"),
             ) as AnyDemoView,
             // The colour dropdown, lensed onto `Demo::colour`, boxed as an erased
-            // view. Self-positions its option list (top: 100%). Last child, so
-            // the open list paints over the scroller above it.
+            // view. Self-positions its option list (top: 100%); z-index Tier 1
+            // paints that (absolute) list on top regardless of sibling order.
             Box::new(lens(
                 |c: &mut SelectState| select(c, COLOURS),
                 |d: &mut Demo| &mut d.colour,
+            )) as AnyDemoView,
+            // The drag slider, lensed onto `Demo::volume` — press/drag the track
+            // to set the value (via the pointer-drag foundation).
+            Box::new(lens(
+                |v: &mut Slider| slider(v),
+                |d: &mut Demo| &mut d.volume,
             )) as AnyDemoView,
         ),
     )
@@ -231,6 +231,11 @@ const SHEET: &[&str] = &[
     ".scroller { overflow: scroll; height: 140px; \
         background-color: rgb(250, 245, 235); padding: 8px; }",
     ".scroller p { font-size: 28px; color: rgb(60, 50, 40); padding: 4px; margin: 0; }",
+    // The drag slider: a grey track holding a blue thumb. The thumb's
+    // `position: absolute; left: <value>%` rides an inline style; its width/
+    // height/colour come from here.
+    ".slider-track { height: 28px; background-color: rgb(190, 194, 208); }",
+    ".slider-thumb { width: 18px; height: 28px; background-color: rgb(60, 100, 200); }",
 ];
 
 // ── winit user event ───────────────────────────────────────────────────────
@@ -391,6 +396,7 @@ impl App {
                 count: 0,
                 field: TextInput::default(),
                 colour: SelectState::new(0),
+                volume: Slider::new(0.5),
                 popup_open: false,
                 popup_anchor: (0.0, 0.0),
             },
@@ -531,6 +537,26 @@ impl App {
             h: r.size.height,
             scrollable_y: (r.content_size.height - inner_h).max(0.0),
         })
+    }
+
+    /// A node's laid-out box as `(x, y, w, h)` in root-relative coords (≈
+    /// absolute for the demo's top-level elements). Used to turn a window cursor
+    /// into an element-local `PointerEvent` for the drag slider. `None` if the
+    /// node has no fragment.
+    fn element_rect(&self, node: NodeId) -> Option<(f32, f32, f32, f32)> {
+        let dom = self.dom.borrow();
+        let frags = fragments_from_scripted_dom(&dom, SHEET, self.width, self.height);
+        let r = frags.rect_of(node)?;
+        Some((r.location.x, r.location.y, r.size.width, r.size.height))
+    }
+
+    /// Build a [`PointerEvent`] for `node` at the current cursor: local =
+    /// cursor minus the node's origin, size = the node's box. `None` if the node
+    /// has no fragment.
+    fn pointer_event_for(&self, node: NodeId, phase: PointerPhase) -> Option<PointerEvent> {
+        let (rx, ry, rw, rh) = self.element_rect(node)?;
+        let (x, y) = self.cursor;
+        Some(PointerEvent { phase, local: (x - rx, y - ry), size: (rw, rh) })
     }
 
     /// Render the current DOM and present it to the surface backbuffer.
@@ -809,6 +835,16 @@ impl ApplicationHandler<UserEvent> for App {
 
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x as f32, position.y as f32);
+                // Drive an in-progress pointer drag: route a Move to the captured
+                // element (local coords measured from its rect + the new cursor).
+                if let Some(node) = self.runner.pointer_capture() {
+                    if let Some(ev) = self.pointer_event_for(node, PointerPhase::Move) {
+                        self.runner.dispatch_pointer_move(ev);
+                        if let Some(window) = self.window.as_ref() {
+                            window.request_redraw();
+                        }
+                    }
+                }
             },
 
             WindowEvent::MouseWheel { delta, .. } => {
@@ -861,20 +897,15 @@ impl ApplicationHandler<UserEvent> for App {
                 // hit lands on (or under) the `[ + ]` button, its handler bumps
                 // the count and the runner rebuilds.
                 let (x, y) = self.cursor;
-                // Hit-test offset: inside a scrolled container the content is
-                // painted translated by -offset, so a screen point maps to the
-                // layout point +offset. Query there so the hit-test (which works
-                // in unscrolled layout space) finds the scrolled content under
-                // the cursor.
-                let (qx, qy) = match self.scroll_box() {
-                    Some(sb)
-                        if x >= sb.x && x <= sb.x + sb.w && y >= sb.y && y <= sb.y + sb.h =>
-                    {
-                        (x + self.scroll_offset.0, y + self.scroll_offset.1)
-                    },
-                    _ => (x, y),
-                };
-                let hit = hit_test_node(&self.dom.borrow(), SHEET, self.width, self.height, qx, qy);
+                // NB: no scroll hit-test offset. Mapping a click through the
+                // scroll offset on the *global* (unclipped) layout leaks: a point
+                // inside the scroller can map past its clipped content onto the
+                // element below (here the slider), so clicks at the scroller's
+                // level wrongly hit the slider. Correctly hit-testing scrolled
+                // content needs clip-aware hit-testing in the engine (the
+                // ServalLaneView query must respect clips + per-node scroll); the
+                // scroller's content is display-only here, so we skip it.
+                let hit = hit_test_node(&self.dom.borrow(), SHEET, self.width, self.height, x, y);
                 match hit {
                     Some(node) => {
                         let tag = self
@@ -886,7 +917,21 @@ impl ApplicationHandler<UserEvent> for App {
                     },
                     None => tracing::debug!(x, y, "left click → miss"),
                 }
-                if let Some(node) = hit {
+                // A press on a pointer-drag target (the slider track / thumb)
+                // starts a drag instead of a click. Measure the *captured*
+                // element (the track) for local coords, not the hit (maybe the
+                // thumb child).
+                let drag_target = hit.and_then(|h| self.runner.pointer_target(h));
+                if let Some(target) = drag_target {
+                    if let Some(ev) = self.pointer_event_for(target, PointerPhase::Down) {
+                        let vol = ev.local.0 / ev.size.0.max(1.0);
+                        self.runner.dispatch_pointer_down(target, ev);
+                        tracing::info!(volume = vol.clamp(0.0, 1.0), "pointer down (drag)");
+                        if let Some(window) = self.window.as_ref() {
+                            window.request_redraw();
+                        }
+                    }
+                } else if let Some(node) = hit {
                     let actions = self
                         .runner
                         .dispatch_click(node, PointerClick { local: (x, y) });
@@ -915,6 +960,22 @@ impl ApplicationHandler<UserEvent> for App {
                     self.push_a11y();
                     if let Some(window) = self.window.as_ref() {
                         window.request_redraw();
+                    }
+                }
+            },
+
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } => {
+                // End an in-progress pointer drag.
+                if let Some(node) = self.runner.pointer_capture() {
+                    if let Some(ev) = self.pointer_event_for(node, PointerPhase::Up) {
+                        self.runner.dispatch_pointer_up(ev);
+                        if let Some(window) = self.window.as_ref() {
+                            window.request_redraw();
+                        }
                     }
                 }
             },
