@@ -4446,7 +4446,7 @@ dependencies = [
  "oxc_span",
  "oxc_syntax",
  "rand 0.10.1",
- "regex",
+ "regress",
  "ryu-js",
  "small_string",
  "soavec",

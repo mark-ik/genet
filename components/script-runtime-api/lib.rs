@@ -127,7 +127,7 @@ impl<E: ScriptEngine> Runtime<E> {
         harness_src: &str,
         test_src: &str,
     ) -> Result<Vec<TestResult>, E::Error> {
-        self.engine.eval(&harness_regex_compat(harness_src))?;
+        self.engine.eval(harness_src)?;
         harness::install_bridge(&mut self.engine)?;
         self.engine.eval(test_src)?;
         self.engine.eval("window.dispatchEvent(new Event('load'));")?;
@@ -144,47 +144,6 @@ impl<E: ScriptEngine> Runtime<E> {
     pub fn engine_mut(&mut self) -> &mut E {
         &mut self.engine
     }
-}
-
-/// Rewrite the two testharness.js regex literals that strict, scalar-only regex
-/// engines (Nova's `regress`) reject but lenient ones (Boa) accept. Both are
-/// in harness *machinery* (surrogate scrub of result names; arrow-body
-/// extraction for assert-failure messages), not in the spec behavior under
-/// test, so the rewrites are equivalence-preserving and engine-neutral
-/// (no-ops on Boa). They let the harness *compile* on a stricter engine; the
-/// observable test results are unchanged. Each rewrite is scoped to its exact
-/// literal (verified unique), so an unrelated future testharness.js edit simply
-/// no-ops rather than mis-patching.
-///
-/// 1. **Surrogate scrub** (`sanitize_unpaired_surrogates`, L4013): a char class
-///    with lone-surrogate ranges (`[\ud800-\udbff]`) — "not a Unicode scalar
-///    value". It only scrubbed lone surrogates from test-*names* for UTF-8
-///    transports, which a headless in-process runner (reads `test.name`/`status`
-///    directly) never crosses. Swapped to a never-matching char class
-///    (`/[^\s\S]/g`; not `/(?!)/`, whose look-around Nova also rejects), making
-///    `String.prototype.replace` an identity pass.
-/// 2. **Arrow-body match** (`assert_throws_*` formatting, L581):
-///    `^\(\)\s*=>\s*(?:{(.*)}\s*|(.*))$` matches `func.toString()` to pretty-
-///    print `() => {...}` in failure messages. Nova's `regress` mis-reads the
-///    literal `{` after `(?:` as a `{n,m}` quantifier ("repetition operator
-///    missing expression"). Escaping the braces to `\{` / `\}` is exactly
-///    equivalent (a literal brace) and accepted by both engines. This one
-///    cascades widely (every `assert_throws_*` failure formats its function),
-///    so the escape clears the largest single Nova divergence at WPT scale.
-fn harness_regex_compat(harness_src: &str) -> std::borrow::Cow<'_, str> {
-    const SURROGATE_RE: &str =
-        r"/([\ud800-\udbff]+)(?![\udc00-\udfff])|(^|[^\ud800-\udbff])([\udc00-\udfff]+)/g";
-    const ARROW_RE: &str = r"/^\(\)\s*=>\s*(?:{(.*)}\s*|(.*))$/";
-    const ARROW_RE_FIXED: &str = r"/^\(\)\s*=>\s*(?:\{(.*)\}\s*|(.*))$/";
-
-    let mut s = std::borrow::Cow::Borrowed(harness_src);
-    if s.contains(SURROGATE_RE) {
-        s = std::borrow::Cow::Owned(s.replacen(SURROGATE_RE, r"/[^\s\S]/g", 1));
-    }
-    if s.contains(ARROW_RE) {
-        s = std::borrow::Cow::Owned(s.replacen(ARROW_RE, ARROW_RE_FIXED, 1));
-    }
-    s
 }
 
 /// Install the global host objects from VM primitives.
