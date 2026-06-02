@@ -136,35 +136,70 @@ void main() {
 
 // ---------- queued-as-error receipts --------------------------------
 
-/// Struct constructors (`Foo(args)`) are not yet lowered.
-/// Workaround: field-by-field assign.
+/// HAPPY (resolved). `Foo(args)` constructs a struct value by
+/// `OpCompositeConstruct` over the lowered arg ids. The
+/// typecheck verifies the args match the declared field types
+/// in order; the lowering emits the composite construct.
 #[test]
-fn struct_constructor_call_does_not_lower_today() {
+fn struct_constructor_call_lowers() {
     let src = r#"
 precision mediump float;
 struct Foo { float x; vec3 y; };
 void main() {
-    Foo s = Foo(1.0, vec3(0.0));
+    Foo s = Foo(1.0, vec3(0.25, 0.5, 0.75));
     gl_FragColor = vec4(s.y, s.x);
 }
 "#;
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("vec4"));
+}
+
+/// HAPPY. Struct constructor as an init for a local, then
+/// read via member access (the canonical use shape).
+#[test]
+fn struct_constructor_with_uniform_args_lowers() {
+    let src = r#"
+precision mediump float;
+struct Material { vec3 albedo; float roughness; };
+uniform vec3 u_color;
+uniform float u_r;
+void main() {
+    Material mat = Material(u_color, u_r);
+    gl_FragColor = vec4(mat.albedo, mat.roughness);
+}
+"#;
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("vec4"));
+}
+
+/// SPEC-CONFORMANCE. Wrong arg count or types on the struct
+/// constructor surface as `CallSignatureMismatch` (reusing the
+/// existing diagnostic shape with a synthetic single candidate).
+#[test]
+fn struct_constructor_with_wrong_args_is_a_typecheck_error() {
+    let src = r#"
+precision mediump float;
+struct Foo { float x; vec3 y; };
+void main() {
+    Foo s = Foo(1.0);
+    gl_FragColor = vec4(s.x);
+}
+"#;
     let err = compile(src, ShaderStage::Fragment).unwrap_err();
-    // Either parse rejects `Foo(...)` (treats it as a Call
-    // against an unknown function), or check / lower do.
+    let msg = format!("{err:?}");
     assert!(
-        matches!(
-            err,
-            CompileError::Check(_) | CompileError::Lower(_) | CompileError::Parse(_)
-        ),
-        "got: {err:?}"
+        matches!(err, CompileError::Check(_)) && msg.contains("CallSignatureMismatch"),
+        "expected CallSignatureMismatch: {msg}"
     );
 }
 
-/// Nested struct member access (`s.inner.x`) is not yet
-/// supported; the lowering only accepts an Ident as the
-/// member-access base.
+/// HAPPY (resolved). Nested struct member access `s.inner.x`
+/// now lowers: `build_struct_access_chain` walks the
+/// member-of-member chain inward to find the root Ident, then
+/// emits a single `OpAccessChain` with the collected member
+/// indices. Same path covers both read and write.
 #[test]
-fn nested_struct_member_access_does_not_lower_today() {
+fn nested_struct_member_access_lowers() {
     let src = r#"
 precision mediump float;
 struct Inner { float x; };
@@ -175,9 +210,26 @@ void main() {
     gl_FragColor = vec4(o.inner.x);
 }
 "#;
-    let err = compile(src, ShaderStage::Fragment).unwrap_err();
-    assert!(
-        matches!(err, CompileError::Lower(_)),
-        "nested member access should fail at lower: {err:?}"
-    );
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("vec4"));
+}
+
+/// HAPPY. Three-level nesting exercises the loop in
+/// `build_struct_access_chain` past the inner-base sanity
+/// check. `s.mid.inner.v` produces three indices.
+#[test]
+fn three_level_nested_struct_member_access_lowers() {
+    let src = r#"
+precision mediump float;
+struct Leaf { float v; };
+struct Mid { Leaf inner; };
+struct Outer { Mid mid; };
+void main() {
+    Outer o;
+    o.mid.inner.v = 0.42;
+    gl_FragColor = vec4(o.mid.inner.v);
+}
+"#;
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("vec4"));
 }

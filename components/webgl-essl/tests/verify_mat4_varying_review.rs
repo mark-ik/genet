@@ -237,20 +237,37 @@ fn compound_assign_on_matrix_output_with_uniform_rhs_lowers() {
     assert!(r.wgsl.contains("location(3)"));
 }
 
-/// SPEC-GAP. `mat4(1.0)` (the scalar-diagonal constructor) is
-/// not yet lowered. ESSL §5.4.2: a scalar arg to `mat_n` builds
-/// a matrix with the scalar on the diagonal and zeros elsewhere.
-/// The receipt pins the gap so a future widening flips it.
+/// HAPPY (resolved). `mat_n(scalar)` builds an identity-shape
+/// matrix: scalar on the diagonal, zero elsewhere (ESSL §5.4.2).
+/// `lower_diagonal_matrix` emits the matrix as N column
+/// `OpCompositeConstruct`s wrapped in one matrix
+/// `OpCompositeConstruct`.
 #[test]
-fn scalar_arg_matrix_constructor_does_not_lower_today() {
+fn scalar_arg_matrix_constructor_lowers() {
     let src = "attribute vec3 a;\n\
                varying mat4 v_xform;\n\
                void main() {\n\
                    v_xform = mat4(1.0);\n\
                    gl_Position = vec4(a, 1.0);\n\
                }\n";
-    let err = compile(src, ShaderStage::Vertex).unwrap_err();
-    assert!(matches!(err, CompileError::Lower(_)), "got: {err:?}");
+    let r = compile(src, ShaderStage::Vertex).expect("compile");
+    // The matrix is split across location(0)..(3).
+    assert!(r.wgsl.contains("location(0)"));
+    assert!(r.wgsl.contains("location(3)"));
+}
+
+/// HAPPY. `mat3(2.5)` exercises the same path with a non-1
+/// scalar and a smaller matrix.
+#[test]
+fn mat3_with_non_unit_scalar_constructor_lowers() {
+    let src = "precision mediump float;\n\
+               uniform vec3 v;\n\
+               void main() {\n\
+                   mat3 m = mat3(2.5);\n\
+                   gl_FragColor = vec4(m * v, 1.0);\n\
+               }\n";
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("vec4"));
 }
 
 // =====================================================================

@@ -322,6 +322,10 @@ struct Ctx<'a> {
     /// assignment). Each entry caches the `OpTypeStruct` id and
     /// a field map for `s.field` access lowering.
     struct_types: Vec<StructTypeInfo>,
+    /// Struct tag name → its registry index. Lets `Foo(args)`
+    /// constructor calls resolve in `lower_expr`'s `Call`
+    /// branch in O(1).
+    struct_name_to_idx: HashMap<String, u32>,
 }
 
 #[derive(Clone)]
@@ -578,6 +582,7 @@ fn build_spirv(
         types,
         glsl_std_450: None,
         struct_types: Vec::new(),
+        struct_name_to_idx: HashMap::new(),
     };
 
     // Allocate `OpTypeStruct` for each user struct, in source
@@ -610,6 +615,10 @@ fn build_spirv(
             });
         }
         let type_id = ctx.b.type_struct(field_types);
+        let idx = ctx.struct_types.len() as u32;
+        if let Some(n) = &s.name {
+            ctx.struct_name_to_idx.insert(n.clone(), idx);
+        }
         ctx.struct_types.push(StructTypeInfo { type_id, fields });
     }
 
@@ -1842,62 +1851,151 @@ fn should_splat_scalar_for_builtin(name: &str, arg_idx: usize) -> bool {
     }
 }
 
-/// Lower a struct field read: `s.x` where `s` is a struct-typed
-/// local. Emits `OpAccessChain` to the member's pointer then
-/// `OpLoad`. First-pass: only Ident bases are supported (nested
-/// member access like `s.inner.x` is queued).
+/// Build an N×N identity-shaped matrix with `scalar` on the
+/// diagonal and zeros elsewhere — the ESSL §5.4.2 single-scalar
+/// matrix constructor.
+fn lower_diagonal_matrix(
+    ctx: &mut Ctx,
+    scalar: Word,
+    n: usize,
+) -> Result<Word, LoweringError> {
+    let (col_ty, mat_ty) = match n {
+        2 => (ctx.type_vec2, ctx.type_mat2),
+        3 => (ctx.type_vec3, ctx.type_mat3),
+        4 => (ctx.type_vec4, ctx.type_mat4),
+        _ => {
+            return Err(LoweringError::UnsupportedShape {
+                what: format!("mat{n} constructor not lowered"),
+            });
+        },
+    };
+    let zero = ctx.b.constant_bit32(ctx.type_float, 0.0f32.to_bits());
+    let mut columns: Vec<Word> = Vec::with_capacity(n);
+    for col_idx in 0..n {
+        let mut components: Vec<Word> = Vec::with_capacity(n);
+        for row_idx in 0..n {
+            components.push(if row_idx == col_idx { scalar } else { zero });
+        }
+        let col = ctx
+            .b
+            .composite_construct(col_ty, None, components)
+            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+        columns.push(col);
+    }
+    ctx.b
+        .composite_construct(mat_ty, None, columns)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
+}
+
+/// Walk a (possibly nested) `Expr::Member` access into a
+/// struct-typed local, collecting member indices outermost-first
+/// so an `OpAccessChain` can dive straight to the leaf. Returns
+/// the access-chain `Word` and the leaf's ESSL kind.
+///
+/// `field` and `struct_idx` describe the *outermost* member
+/// access (the one currently being lowered); the function walks
+/// inward through any `Expr::Member` bases to find the root
+/// Ident.
+fn build_struct_access_chain(
+    ctx: &mut Ctx,
+    base: &Expr,
+    field: &str,
+    struct_idx: u32,
+) -> Result<(Word, TypeKind), LoweringError> {
+    // Collect (field_name, parent_struct_idx) starting from the
+    // outermost member. Walk the base inward; each Member node
+    // adds another entry until we hit an Ident.
+    let mut path: Vec<(String, u32)> = vec![(field.to_string(), struct_idx)];
+    let mut current = base;
+    let root_name = loop {
+        match current {
+            Expr::Member { base: inner_base, field: inner_field, .. } => {
+                let inner_kind = classify_arg_kind(ctx, inner_base).ok_or_else(|| {
+                    LoweringError::UnsupportedShape {
+                        what: "nested struct access base has unknown type".into(),
+                    }
+                })?;
+                let inner_idx = match inner_kind {
+                    TypeKind::Struct(i) => i,
+                    other => {
+                        return Err(LoweringError::UnsupportedShape {
+                            what: format!(
+                                "nested member access on non-struct base type {other:?}"
+                            ),
+                        });
+                    },
+                };
+                path.push((inner_field.clone(), inner_idx));
+                current = inner_base;
+            },
+            Expr::Ident { name, .. } => break name.as_str(),
+            _ => {
+                return Err(LoweringError::UnsupportedShape {
+                    what: "struct access root must be a plain identifier".into(),
+                });
+            },
+        }
+    };
+    let local = lookup_local(ctx, root_name).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("struct base `{root_name}` is not a function-scope local"),
+        }
+    })?;
+    // Path is inside-out; reverse to outermost-first for the
+    // access chain (`s.inner.x` → indices [inner_idx, x_idx]).
+    path.reverse();
+    let mut indices: Vec<Word> = Vec::with_capacity(path.len());
+    let mut leaf_kind: TypeKind = TypeKind::Void;
+    for (field_name, parent_struct_idx) in &path {
+        let info = ctx
+            .struct_types
+            .get(*parent_struct_idx as usize)
+            .cloned()
+            .ok_or_else(|| LoweringError::UnsupportedShape {
+                what: format!("struct index {parent_struct_idx} not in registry"),
+            })?;
+        let (member_idx, field_kind) =
+            info.fields.get(field_name).copied().ok_or_else(|| {
+                LoweringError::UnsupportedShape {
+                    what: format!("struct field `{field_name}` not found"),
+                }
+            })?;
+        indices.push(int_constant(ctx, member_idx as i32));
+        leaf_kind = field_kind;
+    }
+    let leaf_ty = spv_type_for_kind(ctx, leaf_kind).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("leaf field type {leaf_kind:?} not lowered"),
+        }
+    })?;
+    let ptr_to_leaf = ctx
+        .b
+        .type_pointer(None, StorageClass::Function, leaf_ty);
+    let chain = ctx
+        .b
+        .access_chain(ptr_to_leaf, None, local.var, indices)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    Ok((chain, leaf_kind))
+}
+
+/// Lower a struct field read: `s.x` (or nested `s.inner.x`).
+/// Emits `OpAccessChain` to the leaf member then `OpLoad`.
 fn lower_struct_field_read(
     ctx: &mut Ctx,
     base: &Expr,
     field: &str,
     struct_idx: u32,
 ) -> Result<Word, LoweringError> {
-    let name = match base {
-        Expr::Ident { name, .. } => name.as_str(),
-        _ => {
-            return Err(LoweringError::UnsupportedShape {
-                what: "struct member access base must be a plain identifier".into(),
-            });
-        },
-    };
-    let local = lookup_local(ctx, name).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
-            what: format!("struct base `{name}` is not a function-scope local"),
-        }
-    })?;
-    let info = ctx.struct_types.get(struct_idx as usize).cloned().ok_or_else(|| {
-        LoweringError::UnsupportedShape {
-            what: format!("struct index {struct_idx} not in registry"),
-        }
-    })?;
-    let (member_idx, field_kind) = info
-        .fields
-        .get(field)
-        .copied()
-        .ok_or_else(|| LoweringError::UnsupportedShape {
-            what: format!("struct field `{field}` not found"),
-        })?;
-    let field_ty = spv_type_for_kind(ctx, field_kind).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
-            what: format!("struct field `{field}` of type {field_kind:?} not lowered"),
-        }
-    })?;
-    let ptr_to_field = ctx
-        .b
-        .type_pointer(None, StorageClass::Function, field_ty);
-    let idx_const = int_constant(ctx, member_idx as i32);
-    let chain = ctx
-        .b
-        .access_chain(ptr_to_field, None, local.var, [idx_const])
-        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    let (chain, leaf_kind) = build_struct_access_chain(ctx, base, field, struct_idx)?;
+    let leaf_ty = spv_type_for_kind(ctx, leaf_kind).expect("checked in helper");
     ctx.b
-        .load(field_ty, None, chain, None, [])
+        .load(leaf_ty, None, chain, None, [])
         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
 }
 
-/// Lower a struct field write: `s.x = rhs` where `s` is a
-/// struct-typed local. `OpAccessChain` to the member's pointer
-/// then `OpStore`. Mirrors `lower_struct_field_read`.
+/// Lower a struct field write: `s.x = rhs` (or nested
+/// `s.inner.x = rhs`). `OpAccessChain` to the leaf member then
+/// `OpStore`.
 fn lower_struct_field_assignment(
     ctx: &mut Ctx,
     base: &Expr,
@@ -1905,45 +2003,8 @@ fn lower_struct_field_assignment(
     struct_idx: u32,
     rhs: &Expr,
 ) -> Result<(), LoweringError> {
-    let name = match base {
-        Expr::Ident { name, .. } => name.as_str(),
-        _ => {
-            return Err(LoweringError::UnsupportedShape {
-                what: "struct member assignment base must be a plain identifier".into(),
-            });
-        },
-    };
-    let local = lookup_local(ctx, name).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
-            what: format!("struct base `{name}` is not a function-scope local"),
-        }
-    })?;
-    let info = ctx.struct_types.get(struct_idx as usize).cloned().ok_or_else(|| {
-        LoweringError::UnsupportedShape {
-            what: format!("struct index {struct_idx} not in registry"),
-        }
-    })?;
-    let (member_idx, field_kind) = info
-        .fields
-        .get(field)
-        .copied()
-        .ok_or_else(|| LoweringError::UnsupportedShape {
-            what: format!("struct field `{field}` not found"),
-        })?;
-    let field_ty = spv_type_for_kind(ctx, field_kind).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
-            what: format!("struct field `{field}` of type {field_kind:?} not lowered"),
-        }
-    })?;
     let value = lower_expr(ctx, rhs)?;
-    let ptr_to_field = ctx
-        .b
-        .type_pointer(None, StorageClass::Function, field_ty);
-    let idx_const = int_constant(ctx, member_idx as i32);
-    let chain = ctx
-        .b
-        .access_chain(ptr_to_field, None, local.var, [idx_const])
-        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    let (chain, _leaf_kind) = build_struct_access_chain(ctx, base, field, struct_idx)?;
     ctx.b
         .store(chain, value, None, [])
         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
@@ -2668,6 +2729,41 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                     .b
                     .function_call(result_ty, None, overload.func_id, arg_ids)
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+            // Struct constructor `Foo(args)`. Each arg is
+            // lowered in order and `OpCompositeConstruct`
+            // packages them into the struct value. The
+            // typechecker has already verified the arg types
+            // against the declared field order.
+            if let Some(&struct_idx) = ctx.struct_name_to_idx.get(callee.as_str()) {
+                let type_id = ctx.struct_types[struct_idx as usize].type_id;
+                let mut constituents: Vec<Word> = Vec::with_capacity(args.len());
+                for a in args {
+                    constituents.push(lower_expr(ctx, a)?);
+                }
+                return ctx
+                    .b
+                    .composite_construct(type_id, None, constituents)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+            // ESSL §5.4.2 matrix constructors. The single-scalar
+            // form `mat_n(s)` builds a matrix with `s` on the
+            // diagonal and zeros elsewhere (the identity-like
+            // pattern). The full N×N form is queued.
+            if matches!(callee.as_str(), "mat2" | "mat3" | "mat4") && args.len() == 1 {
+                let n = match callee.as_str() {
+                    "mat2" => 2usize,
+                    "mat3" => 3,
+                    "mat4" => 4,
+                    _ => unreachable!(),
+                };
+                let scalar_kind = classify_arg_kind(ctx, &args[0]);
+                if scalar_kind == Some(TypeKind::Float)
+                    || matches!(&args[0], Expr::IntLit { .. })
+                {
+                    let scalar = lower_expr(ctx, &args[0])?;
+                    return lower_diagonal_matrix(ctx, scalar, n);
+                }
             }
             let (result_ty, component_count) = match callee.as_str() {
                 "vec2" => (ctx.type_vec2, 2usize),

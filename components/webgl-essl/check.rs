@@ -214,6 +214,9 @@ struct TypeChecker {
     /// list in source order. Built at translation-unit Pre time
     /// from `ExternalDecl::Struct` entries.
     structs: Vec<StructEntry>,
+    /// Struct tag name → its registry index. Populated alongside
+    /// `structs`. Anonymous structs are not registered here.
+    struct_name_to_idx: HashMap<String, u32>,
 }
 
 #[derive(Clone)]
@@ -233,6 +236,7 @@ impl TypeChecker {
             registry: Registry::with_builtins(),
             user_functions: HashMap::new(),
             structs: Vec::new(),
+            struct_name_to_idx: HashMap::new(),
         }
     }
 
@@ -283,6 +287,10 @@ impl TypeChecker {
                     .iter()
                     .map(|f| (f.name.clone(), f.ty.kind))
                     .collect();
+                let idx = self.structs.len() as u32;
+                if let Some(n) = &s.name {
+                    self.struct_name_to_idx.insert(n.clone(), idx);
+                }
                 self.structs.push(StructEntry { name: s.name.clone(), fields });
             }
         }
@@ -582,6 +590,36 @@ impl<'tree> Visitor<'tree> for TypeChecker {
                     // 1. Constructor.
                     if let Some(result) = constructor_result(callee, &arg_types) {
                         self.types.insert(*span, result);
+                        return Walk::Continue;
+                    }
+
+                    // 1b. Struct constructor. `Foo(args)` builds
+                    // a struct of type `Foo` when the arg types
+                    // match the declared field types in order.
+                    if let Some(&struct_idx) = self.struct_name_to_idx.get(callee) {
+                        let entry = &self.structs[struct_idx as usize];
+                        let field_kinds: Vec<TypeKind> =
+                            entry.fields.iter().map(|(_, t)| *t).collect();
+                        if arg_types == field_kinds {
+                            self.types.insert(*span, TypeKind::Struct(struct_idx));
+                            return Walk::Continue;
+                        }
+                        // Argument-list mismatch — reuse the
+                        // CallSignatureMismatch diagnostic with a
+                        // synthetic single candidate matching the
+                        // struct's field types.
+                        let synthetic = Signature {
+                            params: field_kinds,
+                            result: TypeKind::Struct(struct_idx),
+                        };
+                        self.diagnostics.push(TypeDiagnostic {
+                            kind: TypeDiagnosticKind::CallSignatureMismatch {
+                                name: callee.clone(),
+                                candidates: vec![synthetic],
+                                actual: arg_types,
+                            },
+                            span: *span,
+                        });
                         return Walk::Continue;
                     }
 
