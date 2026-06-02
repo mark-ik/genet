@@ -363,6 +363,17 @@ pub(crate) struct Deferred<NodeId> {
     pub(crate) origin: (f32, f32),
     pub(crate) z: i32,
     pub(crate) seq: usize,
+    /// The cumulative CSS `transform` of this layer's transform-bearing ancestors
+    /// *within its stacking context* (identity if none). A lifted layer is painted
+    /// on a clean stack at its absolute layout `origin`, which captures ancestor
+    /// *layout* offsets but not ancestor `transform` matrices — so without this an
+    /// abs-pos child of a `transform`ed element (e.g. the orrery's camera
+    /// container) would paint untransformed. `paint_context` re-establishes this
+    /// matrix around the layer. Built by [`walk`] as a product of each transformed
+    /// ancestor's matrix conjugated by its absolute origin
+    /// (`T(O)·M·T(-O)`), which telescopes exactly through the layout-absolute
+    /// origins, so it is correct for nested transforms too.
+    pub(crate) ancestor_transform: LayoutTransform,
 }
 
 /// Whether `id` is out of normal flow (`position: absolute`/`fixed`). Out-of-flow
@@ -410,6 +421,13 @@ pub(crate) fn walk<D>(
     commands: &mut Vec<PaintCmd>,
     deferred: &mut Vec<Deferred<D::NodeId>>,
     is_root: bool,
+    // Cumulative CSS transform of transform-bearing ancestors within this stacking
+    // context (identity at the context root). Read only when a descendant defers,
+    // to record on its `Deferred` so the stacking painter re-establishes ancestor
+    // transforms around it (see `Deferred::ancestor_transform`). In-flow content
+    // does not use it — the per-node `PushTransform` chain already carries the
+    // transform for content painted in place.
+    ancestor_transform: LayoutTransform,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -425,6 +443,7 @@ pub(crate) fn walk<D>(
             origin,
             z: crate::paint_stacking::bucket_z(styles, id),
             seq: deferred.len(),
+            ancestor_transform,
         });
         return;
     }
@@ -435,6 +454,10 @@ pub(crate) fn walk<D>(
     // Absolute origin to pass to children (this node's origin + its location),
     // so a deferred descendant records where to place itself.
     let mut child_origin = origin;
+    // Cumulative ancestor transform to pass to children: this node's transform
+    // (conjugated by its absolute origin) composed onto the inherited one, so a
+    // deferred descendant carries the transforms it would have inherited in flow.
+    let mut child_transform = ancestor_transform;
     let pushed = if let Some(l) = fragments.rect_of(id) {
         // Children push their own parent-relative location, composing with this
         // node's transform. The context root has no enclosing transform on the
@@ -446,16 +469,24 @@ pub(crate) fn walk<D>(
         } else {
             LayoutPoint::new(l.location.x, l.location.y)
         };
+        // Fold the element's computed CSS transform into its push, so a
+        // `transform: translate(x,y)` moves the painted node (the orrery's
+        // per-frame motion). `origin` is the box-model position; `transform` is
+        // the CSS transform layered on top.
+        let node_transform = compute_transform_matrix(styles, id);
         commands.push(PaintCmd::PushTransform(TransformSpec {
             origin: push_origin,
-            // Fold the element's computed CSS transform into its push, so a
-            // `transform: translate(x,y)` moves the painted node (the orrery's
-            // per-frame motion). `origin` is the box-model position; `transform`
-            // is the CSS transform layered on top.
-            transform: compute_transform_matrix(styles, id),
+            transform: node_transform,
             kind: TransformKind::Standard,
         }));
         child_origin = (origin.0 + l.location.x, origin.1 + l.location.y);
+        // Accumulate for deferred descendants: a CSS transform applies around the
+        // element's absolute box top-left (`child_origin`), so conjugate it there
+        // (`T(O)·M·T(-O)`) and compose onto the inherited transform. Skip the
+        // identity (the common no-transform case) to keep it clean + cheap.
+        if node_transform != LayoutTransform::identity() {
+            child_transform = conjugate_at(child_origin, node_transform).then(&ancestor_transform);
+        }
         let local_bounds = LayoutRect::new(
             LayoutPoint::new(0.0, 0.0),
             LayoutPoint::new(l.size.width, l.size.height),
@@ -689,7 +720,7 @@ pub(crate) fn walk<D>(
     }
 
     for child in dom.dom_children(id) {
-        walk(dom, styles, fragments, em, child, child_origin, commands, deferred, false);
+        walk(dom, styles, fragments, em, child, child_origin, commands, deferred, false, child_transform);
     }
 
     // Unwind in reverse: scroll transform, then clip, then the origin transform.
@@ -1188,6 +1219,19 @@ fn box_shadows_of<NodeId: Copy + Eq + std::hash::Hash>(
             inset: sh.inset,
         })
         .collect()
+}
+
+/// A transform `m` applied around the absolute point `origin`: `T(O)·M·T(-O)`.
+/// CSS transforms apply in the element's box-local frame, so an ancestor's
+/// transform that should affect a deferred descendant must be conjugated by the
+/// ancestor's absolute box origin. These conjugated factors telescope through
+/// layout-absolute origins, so composing them gives the exact cumulative ancestor
+/// transform for a lifted layer (see [`Deferred::ancestor_transform`]).
+fn conjugate_at(origin: (f32, f32), m: LayoutTransform) -> LayoutTransform {
+    let (ox, oy) = origin;
+    LayoutTransform::translation(-ox, -oy, 0.0)
+        .then(&m)
+        .then(&LayoutTransform::translation(ox, oy, 0.0))
 }
 
 /// Fold the element's computed CSS `transform` + `translate` into a
@@ -2113,5 +2157,23 @@ mod tests {
             without.iter().all(|t| t.m41.abs() < 0.5 && t.m42.abs() < 0.5),
             "no CSS transform → no translating push: {without:?}",
         );
+    }
+
+    /// `conjugate_at(O, M)` applies `M` around the absolute point `O`
+    /// (`T(O)·M·T(-O)`), the form used to carry an ancestor transform onto a
+    /// deferred descendant (see `Deferred::ancestor_transform`). A 2× scale around
+    /// x=10 maps x → 2x − 10, so m11 = 2 and m41 = −10. A pure translate conjugates
+    /// to itself, so this scale case is what pins the conjugation order.
+    #[test]
+    fn conjugate_at_applies_transform_around_origin() {
+        let scale2 = LayoutTransform::new(
+            2.0, 0.0, 0.0, 0.0, //
+            0.0, 2.0, 0.0, 0.0, //
+            0.0, 0.0, 1.0, 0.0, //
+            0.0, 0.0, 0.0, 1.0,
+        );
+        let c = conjugate_at((10.0, 0.0), scale2);
+        assert!((c.m11 - 2.0).abs() < 1e-4, "scale preserved: m11 {} != 2", c.m11);
+        assert!((c.m41 + 10.0).abs() < 1e-4, "scale around x=10 → m41 = −10, got {}", c.m41);
     }
 }

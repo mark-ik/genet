@@ -41,7 +41,8 @@
 use std::hash::Hash;
 
 use layout_dom_api::LayoutDom;
-use paint_list_api::PaintCmd;
+use paint_list_api::specs::TransformKind;
+use paint_list_api::{LayoutPoint, LayoutTransform, PaintCmd, TransformSpec};
 
 use crate::fragment::FragmentPlane;
 use crate::paint_emit::{is_out_of_flow, walk, Deferred, Emitter};
@@ -66,7 +67,10 @@ pub(crate) fn paint_context<D>(
     // its absolute origin + bucket z; `walk` does not descend into them).
     let mut body = Vec::new();
     let mut layers: Vec<Deferred<D::NodeId>> = Vec::new();
-    walk(dom, styles, fragments, em, node, origin, &mut body, &mut layers, true);
+    // Each context root starts a fresh ancestor-transform accumulation: any
+    // transform on an ancestor *of this context* is re-established by the
+    // `paint_layer` wrap that placed this context (so it composes, not doubles).
+    walk(dom, styles, fragments, em, node, origin, &mut body, &mut layers, true, LayoutTransform::identity());
     // Stable sort by (z, document order): same-z layers keep document order, the
     // Appendix E tiebreak.
     layers.sort_by_key(|d| (d.z, d.seq));
@@ -75,16 +79,47 @@ pub(crate) fn paint_context<D>(
     // sorted, so the split point is the first non-negative.
     let split = layers.iter().position(|d| d.z >= 0).unwrap_or(layers.len());
     for d in &layers[..split] {
-        paint_context(dom, styles, fragments, em, d.node, d.origin, out);
+        paint_layer(dom, styles, fragments, em, d, out);
     }
     // This context's own content. `walk` folded the absolute `origin` into the
     // root node's own transform (it entered with `is_root`), so `body` is already
-    // in scene coordinates and appends directly. Each layer above/below is
-    // likewise emitted on a clean stack at its own absolute origin, so no
-    // transform nesting compounds across layers.
+    // in scene coordinates and appends directly. Each layer above/below is emitted
+    // at its own absolute origin, wrapped (by `paint_layer`) in the cumulative CSS
+    // transform of its transform-bearing ancestors so an abs-pos child of a
+    // `transform`ed element (the orrery camera container) paints transformed.
     out.append(&mut body);
     for d in &layers[split..] {
-        paint_context(dom, styles, fragments, em, d.node, d.origin, out);
+        paint_layer(dom, styles, fragments, em, d, out);
+    }
+}
+
+/// Paint one lifted stacking layer, re-establishing its ancestors' cumulative CSS
+/// transform around it. Without the wrap a lifted abs-pos layer paints on a clean
+/// stack at its absolute layout origin, dropping any `transform` on an ancestor
+/// (e.g. the orrery's camera container) — see [`Deferred::ancestor_transform`].
+/// Identity ancestor transform (the common case) paints with no extra wrapper.
+fn paint_layer<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    em: &mut Emitter<'_, D::NodeId>,
+    d: &Deferred<D::NodeId>,
+    out: &mut Vec<PaintCmd>,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let wrap = d.ancestor_transform != LayoutTransform::identity();
+    if wrap {
+        out.push(PaintCmd::PushTransform(TransformSpec {
+            origin: LayoutPoint::new(0.0, 0.0),
+            transform: d.ancestor_transform,
+            kind: TransformKind::Standard,
+        }));
+    }
+    paint_context(dom, styles, fragments, em, d.node, d.origin, out);
+    if wrap {
+        out.push(PaintCmd::PopTransform);
     }
 }
 
@@ -251,5 +286,45 @@ mod tests {
             })
             .count();
         assert_eq!(thumbs, 1, "the absolute thumb paints exactly once, not split");
+    }
+
+    /// An abs-pos child of a `transform`ed ancestor inherits that transform (the
+    /// orrery camera-container model). The container is in-flow (`relative` +
+    /// `transform`, no `z-index`), so it paints in place with its own
+    /// `translate(40,40)` push; its abs-pos `.node` child is lifted into a stacking
+    /// layer. Before the fix the layer painted on a clean stack at its absolute
+    /// origin, dropping the ancestor transform — so `translate(40,40)` appeared
+    /// ONCE (the container). Now `paint_layer` re-establishes the ancestor
+    /// transform around the lifted child, so it appears TWICE: the container's own
+    /// push and the child's ancestor wrap. (A pure translate conjugates to itself,
+    /// so the wrap matrix equals the container's regardless of its position.)
+    #[test]
+    fn abs_pos_child_inherits_ancestor_transform() {
+        let cmds = paint(
+            "<html><body><div class=\"cam\"><div class=\"node\"></div></div></body></html>",
+            &[
+                "html, body { margin: 0; } div { display: block; }",
+                ".cam { position: relative; transform: translate(40px, 40px); \
+                    width: 100px; height: 100px; }",
+                ".node { position: absolute; left: 0; top: 0; width: 10px; height: 10px; \
+                    background-color: rgb(0, 200, 0); }",
+            ],
+        );
+        // The lifted abs-pos child is painted.
+        let _ = rect_index(&cmds, 0.0, 0.78, 0.0, ".node");
+        // translate(40,40) appears for the container's in-flow push AND the child's
+        // ancestor wrap → twice. (Without the fix: once.)
+        let n = cmds
+            .iter()
+            .filter(|c| {
+                matches!(c, PaintCmd::PushTransform(t)
+                    if (t.transform.m41 - 40.0).abs() < 0.5 && (t.transform.m42 - 40.0).abs() < 0.5)
+            })
+            .count();
+        assert_eq!(
+            n, 2,
+            "abs-pos child must inherit the container transform (wrap), so translate(40,40) \
+             appears twice (container push + child wrap); got {n}",
+        );
     }
 }
