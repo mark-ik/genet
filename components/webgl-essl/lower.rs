@@ -30,8 +30,8 @@ use rspirv::binary::Assemble;
 use rspirv::dr::{Builder, Module, Operand};
 use rspirv::spirv::{
     AddressingModel, BuiltIn, Capability, Decoration, Dim, ExecutionMode, ExecutionModel,
-    FunctionControl, ImageFormat, LoopControl, MemoryModel, SelectionControl, StorageClass,
-    Word,
+    FunctionControl, ImageFormat, ImageOperands, LoopControl, MemoryModel, SelectionControl,
+    StorageClass, Word,
 };
 
 use crate::ast::{
@@ -867,36 +867,41 @@ fn lower_stmt(
             Ok(())
         },
         Stmt::Expr(Expr::Assign { op, lhs, rhs, span }) => {
-            // LHS matrix indexing: `m[i] = vec_n` stores the
-            // RHS directly to the matching column variable of a
-            // column-split matrix output. Constant int index
-            // only (matches R12's first-pass acceptance set).
+            // LHS matrix indexing: `m[i] op= vec_n`. Plain
+            // assign stores directly to the column variable;
+            // compound assigns load the column, fold in via
+            // `compound_via_chain`, and store back.
             if let Expr::Index { base, index, .. } = lhs.as_ref() {
-                if *op != AssignOp::Assign {
-                    return Err(LoweringError::UnsupportedShape {
-                        what: format!(
-                            "compound assignment `{op:?}` on a matrix index is not lowered"
-                        ),
-                    });
+                if *op == AssignOp::Assign {
+                    return lower_lhs_matrix_index_assignment(ctx, base, index, rhs);
                 }
-                return lower_lhs_matrix_index_assignment(ctx, base, index, rhs);
+                let bin_op = compound_op_to_bin(op);
+                return lower_lhs_matrix_index_compound_assignment(
+                    ctx, base, index, bin_op, rhs,
+                );
             }
-            // LHS Member: struct base → field write via
-            // OpAccessChain + OpStore; vector base → swizzle
-            // write (single- or multi-component). Compound assign
-            // on a Member LHS is queued for both shapes.
+            // LHS Member: struct base → field access via
+            // OpAccessChain; vector base → swizzle. Compound
+            // assigns (`s.x += rhs`, `v.x *= rhs`) use the same
+            // chain through `compound_via_chain` to do
+            // load-modify-store.
             if let Expr::Member { base, field, .. } = lhs.as_ref() {
-                if *op != AssignOp::Assign {
-                    return Err(LoweringError::UnsupportedShape {
-                        what: format!(
-                            "compound assignment `{op:?}` on a Member LHS is not lowered"
-                        ),
-                    });
-                }
                 if let Some(TypeKind::Struct(idx)) = classify_arg_kind(ctx, base) {
-                    return lower_struct_field_assignment(ctx, base, field, idx, rhs);
+                    if *op == AssignOp::Assign {
+                        return lower_struct_field_assignment(ctx, base, field, idx, rhs);
+                    }
+                    let bin_op = compound_op_to_bin(op);
+                    return lower_struct_field_compound_assignment(
+                        ctx, base, field, idx, bin_op, rhs,
+                    );
                 }
-                return lower_lhs_swizzle_assignment(ctx, base, field, rhs, main_ctx);
+                if *op == AssignOp::Assign {
+                    return lower_lhs_swizzle_assignment(ctx, base, field, rhs, main_ctx);
+                }
+                let bin_op = compound_op_to_bin(op);
+                return lower_lhs_swizzle_compound_assignment(
+                    ctx, base, field, bin_op, rhs, main_ctx,
+                );
             }
             // Compound assigns on an Ident LHS desugar to the
             // matching binary op then store back. ESSL §5.8 forbids
@@ -1851,6 +1856,220 @@ fn should_splat_scalar_for_builtin(name: &str, arg_idx: usize) -> bool {
     }
 }
 
+fn compound_op_to_bin(op: &AssignOp) -> BinOp {
+    match op {
+        AssignOp::AddAssign => BinOp::Add,
+        AssignOp::SubAssign => BinOp::Sub,
+        AssignOp::MulAssign => BinOp::Mul,
+        AssignOp::DivAssign => BinOp::Div,
+        AssignOp::Assign => unreachable!("plain assign handled separately"),
+    }
+}
+
+/// Emit a binary op on two SSA values (no `Expr` plumbing).
+/// Handles the common scalar / vector / int cases that compound
+/// assigns need: same-kind arithmetic for float / vec / int, and
+/// vector-times-scalar for `vec_n * float` (a common
+/// `v.color *= 0.5` shape). Mixed combinations beyond these
+/// surface as `UnsupportedShape`.
+fn emit_binary_on_values(
+    ctx: &mut Ctx,
+    op: BinOp,
+    lhs_id: Word,
+    lhs_kind: TypeKind,
+    rhs_id: Word,
+    rhs_kind: TypeKind,
+    result_ty: Word,
+) -> Result<Word, LoweringError> {
+    let is_float = matches!(lhs_kind, TypeKind::Float);
+    let is_vec = matches!(lhs_kind, TypeKind::Vec2 | TypeKind::Vec3 | TypeKind::Vec4);
+    let is_int = matches!(lhs_kind, TypeKind::Int);
+    let r = match (op, is_float, is_vec, is_int, lhs_kind == rhs_kind) {
+        (BinOp::Add, true, _, _, true) | (BinOp::Add, _, true, _, true) => {
+            ctx.b.f_add(result_ty, None, lhs_id, rhs_id)
+        },
+        (BinOp::Sub, true, _, _, true) | (BinOp::Sub, _, true, _, true) => {
+            ctx.b.f_sub(result_ty, None, lhs_id, rhs_id)
+        },
+        (BinOp::Mul, true, _, _, true) | (BinOp::Mul, _, true, _, true) => {
+            ctx.b.f_mul(result_ty, None, lhs_id, rhs_id)
+        },
+        (BinOp::Div, true, _, _, true) | (BinOp::Div, _, true, _, true) => {
+            ctx.b.f_div(result_ty, None, lhs_id, rhs_id)
+        },
+        (BinOp::Mul, _, true, _, false) if rhs_kind == TypeKind::Float => {
+            ctx.b.vector_times_scalar(result_ty, None, lhs_id, rhs_id)
+        },
+        (BinOp::Add, _, _, true, true) => ctx.b.i_add(result_ty, None, lhs_id, rhs_id),
+        (BinOp::Sub, _, _, true, true) => ctx.b.i_sub(result_ty, None, lhs_id, rhs_id),
+        (BinOp::Mul, _, _, true, true) => ctx.b.i_mul(result_ty, None, lhs_id, rhs_id),
+        (BinOp::Div, _, _, true, true) => ctx.b.s_div(result_ty, None, lhs_id, rhs_id),
+        _ => {
+            return Err(LoweringError::UnsupportedShape {
+                what: format!(
+                    "compound binary `{op:?}` on {lhs_kind:?} and {rhs_kind:?} is not lowered"
+                ),
+            });
+        },
+    };
+    r.map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
+}
+
+/// Load via the given access-chain pointer, fold in `rhs` via
+/// the binary op, store the result back. Shared by struct-field,
+/// LHS-swizzle, and matrix-index compound assigns.
+fn compound_via_chain(
+    ctx: &mut Ctx,
+    chain: Word,
+    chain_pointee: Word,
+    leaf_kind: TypeKind,
+    bin_op: BinOp,
+    rhs: &Expr,
+) -> Result<(), LoweringError> {
+    let current = ctx
+        .b
+        .load(chain_pointee, None, chain, None, [])
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    let rhs_kind = classify_arg_kind(ctx, rhs).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: "could not classify rhs of compound assign".into(),
+        }
+    })?;
+    let rhs_val = lower_expr(ctx, rhs)?;
+    let result = emit_binary_on_values(
+        ctx, bin_op, current, leaf_kind, rhs_val, rhs_kind, chain_pointee,
+    )?;
+    ctx.b
+        .store(chain, result, None, [])
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    Ok(())
+}
+
+/// Compound assign on a struct field LHS (`s.x op= rhs` or
+/// nested). Same access-chain plumbing as `lower_struct_field_*`
+/// — only the load-modify-store pattern differs.
+fn lower_struct_field_compound_assignment(
+    ctx: &mut Ctx,
+    base: &Expr,
+    field: &str,
+    struct_idx: u32,
+    bin_op: BinOp,
+    rhs: &Expr,
+) -> Result<(), LoweringError> {
+    let (chain, leaf_kind) = build_struct_access_chain(ctx, base, field, struct_idx)?;
+    let leaf_ty = spv_type_for_kind(ctx, leaf_kind).expect("checked in helper");
+    compound_via_chain(ctx, chain, leaf_ty, leaf_kind, bin_op, rhs)
+}
+
+/// Compound assign on a single-component LHS swizzle
+/// (`v.x op= rhs`, `gl_FragColor.r += rhs`, etc.). Mirrors the
+/// plain-assign `lower_lhs_swizzle_assignment` path but does
+/// load-modify-store at the component pointer.
+fn lower_lhs_swizzle_compound_assignment(
+    ctx: &mut Ctx,
+    base: &Expr,
+    field: &str,
+    bin_op: BinOp,
+    rhs: &Expr,
+    main_ctx: Option<&MainCtx>,
+) -> Result<(), LoweringError> {
+    let base_name = match base {
+        Expr::Ident { name, .. } => name.as_str(),
+        _ => {
+            return Err(LoweringError::UnsupportedShape {
+                what: "compound LHS-swizzle base must be a plain identifier".into(),
+            });
+        },
+    };
+    let target = resolve_lhs_target(ctx, base_name, main_ctx).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("compound LHS-swizzle target `{base_name}` is not a writable variable"),
+        }
+    })?;
+    let base_size = vector_size_of(target.kind).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("compound LHS-swizzle target type {:?} is not a vector", target.kind),
+        }
+    })?;
+    let indices = parse_swizzle_indices(field, base_size).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("invalid compound LHS swizzle `.{field}` on {:?}", target.kind),
+        }
+    })?;
+    if indices.len() != 1 {
+        return Err(LoweringError::UnsupportedShape {
+            what: format!(
+                "multi-component compound LHS swizzle `.{field}` is not yet lowered"
+            ),
+        });
+    }
+    let component_idx = indices[0] as i32;
+    let ptr_to_float = ctx
+        .b
+        .type_pointer(None, target.storage, ctx.type_float);
+    let idx_const = int_constant(ctx, component_idx);
+    let chain = ctx
+        .b
+        .access_chain(ptr_to_float, None, target.var, [idx_const])
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    compound_via_chain(ctx, chain, ctx.type_float, TypeKind::Float, bin_op, rhs)
+}
+
+/// Compound assign on a matrix index LHS (`m[i] op= rhs`) where
+/// `m` is a column-split matrix output. Loads the column,
+/// folds in via the binary op, stores back.
+fn lower_lhs_matrix_index_compound_assignment(
+    ctx: &mut Ctx,
+    base: &Expr,
+    index: &Expr,
+    bin_op: BinOp,
+    rhs: &Expr,
+) -> Result<(), LoweringError> {
+    let name = match base {
+        Expr::Ident { name, .. } => name.as_str(),
+        _ => {
+            return Err(LoweringError::UnsupportedShape {
+                what: "compound matrix-index LHS base must be a plain identifier".into(),
+            });
+        },
+    };
+    let idx_value = match index {
+        Expr::IntLit { value, .. } => *value as usize,
+        _ => {
+            return Err(LoweringError::UnsupportedShape {
+                what: "compound matrix-index LHS index must be a literal integer".into(),
+            });
+        },
+    };
+    let out = ctx.outputs.get(name).cloned().ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!(
+                "compound matrix-index LHS target `{name}` is not a column-split output"
+            ),
+        }
+    })?;
+    if out.vars.len() <= 1 || idx_value >= out.vars.len() {
+        return Err(LoweringError::UnsupportedShape {
+            what: format!(
+                "compound matrix-index LHS `{name}[{idx_value}]` out of bounds or not a matrix"
+            ),
+        });
+    }
+    let column_kind = match out.kind {
+        TypeKind::Mat2 => TypeKind::Vec2,
+        TypeKind::Mat3 => TypeKind::Vec3,
+        TypeKind::Mat4 => TypeKind::Vec4,
+        other => {
+            return Err(LoweringError::UnsupportedShape {
+                what: format!("compound matrix-index on {other:?} not lowered"),
+            });
+        },
+    };
+    let column_ty = spv_type_for_kind(ctx, column_kind).expect("vec kind");
+    let col_var = out.vars[idx_value];
+    compound_via_chain(ctx, col_var, column_ty, column_kind, bin_op, rhs)
+}
+
 /// Build an N×N identity-shaped matrix with `scalar` on the
 /// diagonal and zeros elsewhere — the ESSL §5.4.2 single-scalar
 /// matrix constructor.
@@ -2606,21 +2825,46 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                 // width when the overload is `mod(vec_n, float)`.
                 return lower_mod_expansion(ctx, args, *span);
             }
-            // ESSL §8.7 texture lookup. The 2-arg form maps to
-            // `OpImageSampleImplicitLod`; the 3-arg form (with
-            // a bias) and the Lod variants are queued.
-            if (callee == "texture2D" || callee == "textureCube") && args.len() == 2 {
+            // ESSL §8.7 texture lookup. `texture2D` /
+            // `textureCube` 2-arg form is implicit Lod; 3-arg
+            // form is implicit Lod with a bias. `texture2DLod` /
+            // `textureCubeLod` use explicit Lod.
+            if matches!(callee.as_str(), "texture2D" | "textureCube") {
+                if args.len() == 2 || args.len() == 3 {
+                    let sampled_image = lower_expr(ctx, &args[0])?;
+                    let coord = lower_expr(ctx, &args[1])?;
+                    let (image_operands, operands) = if args.len() == 3 {
+                        let bias = lower_expr(ctx, &args[2])?;
+                        (Some(ImageOperands::BIAS), vec![Operand::IdRef(bias)])
+                    } else {
+                        (None, Vec::new())
+                    };
+                    return ctx
+                        .b
+                        .image_sample_implicit_lod(
+                            ctx.type_vec4,
+                            None,
+                            sampled_image,
+                            coord,
+                            image_operands,
+                            operands,
+                        )
+                        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+                }
+            }
+            if matches!(callee.as_str(), "texture2DLod" | "textureCubeLod") && args.len() == 3 {
                 let sampled_image = lower_expr(ctx, &args[0])?;
                 let coord = lower_expr(ctx, &args[1])?;
+                let lod = lower_expr(ctx, &args[2])?;
                 return ctx
                     .b
-                    .image_sample_implicit_lod(
+                    .image_sample_explicit_lod(
                         ctx.type_vec4,
                         None,
                         sampled_image,
                         coord,
-                        None,
-                        [],
+                        ImageOperands::LOD,
+                        [Operand::IdRef(lod)],
                     )
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
             }

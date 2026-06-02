@@ -112,9 +112,14 @@ void main() {
     assert!(r.wgsl.contains("location(0)"));
 }
 
-/// Compound assign on a swizzled LHS is queued — error today.
+/// HAPPY (resolved). Compound assign on a single-component
+/// swizzle LHS now lowers via `compound_via_chain`: build the
+/// component pointer with `OpAccessChain`, `OpLoad` the current
+/// scalar, fold in `rhs` with the matching binary op, `OpStore`
+/// back. Multi-component swizzle compound (`v.xy *= vec2(...)`)
+/// remains queued.
 #[test]
-fn compound_assign_on_swizzled_lhs_does_not_lower_today() {
+fn compound_add_assign_on_single_component_swizzle_lowers() {
     let src = r#"
 precision mediump float;
 uniform vec3 v;
@@ -124,6 +129,62 @@ void main() {
     gl_FragColor = vec4(acc, 1.0);
 }
 "#;
-    let err = compile(src, ShaderStage::Fragment).unwrap_err();
-    assert!(matches!(err, CompileError::Lower(_)), "got: {err:?}");
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("vec4"));
+}
+
+#[test]
+fn compound_mul_assign_on_single_component_swizzle_lowers() {
+    let src = r#"
+precision mediump float;
+uniform vec3 v;
+void main() {
+    vec3 acc = v;
+    acc.y *= 2.0;
+    gl_FragColor = vec4(acc, 1.0);
+}
+"#;
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("vec4"));
+}
+
+/// HAPPY. Compound assign on a struct field uses the same
+/// access chain as plain assign + read; the load-modify-store
+/// happens through `build_struct_access_chain` once.
+#[test]
+fn compound_add_assign_on_struct_field_lowers() {
+    let src = r#"
+precision mediump float;
+struct Acc { vec3 color; float weight; };
+uniform vec3 u_inc;
+void main() {
+    Acc a;
+    a.color = vec3(0.0);
+    a.weight = 0.0;
+    a.color += u_inc;
+    a.weight += 0.25;
+    gl_FragColor = vec4(a.color * a.weight, 1.0);
+}
+"#;
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("vec4"));
+}
+
+/// HAPPY. Compound matrix-index assign on a column-split
+/// output: load the column variable, fold in rhs, store back
+/// to the same column variable.
+#[test]
+fn compound_add_assign_on_matrix_index_column_lowers() {
+    let src = r#"
+attribute vec3 a;
+varying mat4 v_xform;
+uniform vec4 u_col;
+void main() {
+    v_xform = mat4(1.0);
+    v_xform[0] += u_col;
+    gl_Position = vec4(a, 1.0);
+}
+"#;
+    let r = compile(src, ShaderStage::Vertex).expect("compile");
+    assert!(r.wgsl.contains("location(0)"));
 }

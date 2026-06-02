@@ -98,6 +98,54 @@ void main() {
 }
 
 #[test]
+fn texture2d_with_bias_lowers() {
+    // `texture2D(s, uv, bias)` is the implicit-Lod form with a
+    // mip-bias. Maps to `OpImageSampleImplicitLod` with
+    // `ImageOperands::BIAS`.
+    let src = r#"
+precision mediump float;
+uniform sampler2D u_tex;
+varying vec2 v_uv;
+void main() {
+    gl_FragColor = texture2D(u_tex, v_uv, 1.5);
+}
+"#;
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("texture") || r.wgsl.contains("textureSample"));
+}
+
+#[test]
+fn texture2dLod_with_explicit_lod_lowers() {
+    // `texture2DLod(s, uv, lod)` is the explicit-Lod form.
+    // Maps to `OpImageSampleExplicitLod` with
+    // `ImageOperands::LOD`.
+    let src = r#"
+precision mediump float;
+uniform sampler2D u_tex;
+varying vec2 v_uv;
+void main() {
+    gl_FragColor = texture2DLod(u_tex, v_uv, 0.0);
+}
+"#;
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("texture") || r.wgsl.contains("textureSampleLevel"));
+}
+
+#[test]
+fn textureCubeLod_with_explicit_lod_lowers() {
+    let src = r#"
+precision mediump float;
+uniform samplerCube u_env;
+varying vec3 v_dir;
+void main() {
+    gl_FragColor = textureCubeLod(u_env, v_dir, 2.0);
+}
+"#;
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("texture") || r.wgsl.contains("textureSampleLevel"));
+}
+
+#[test]
 fn texture_swizzle_lowers() {
     // Sample then swizzle the rgba result — a common shader
     // idiom (use alpha as a mask, take just .rgb, etc.).
