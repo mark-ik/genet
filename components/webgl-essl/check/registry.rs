@@ -154,8 +154,17 @@ fn populate(r: &mut Registry) {
 
     // §8.6 Vector relational. Per-component compare/test on
     // vectors; the result has matching width but element type
-    // Bool (bvec_n).
-    let vec_to_bvec = [(Vec2, Bvec2), (Vec3, Bvec3), (Vec4, Bvec4)];
+    // Bool (bvec_n). Both float-vector and int-vector
+    // overloads of the comparison ops are registered; equal /
+    // notEqual additionally accept bvec_n inputs.
+    let vec_to_bvec = [
+        (Vec2, Bvec2),
+        (Vec3, Bvec3),
+        (Vec4, Bvec4),
+        (Ivec2, Bvec2),
+        (Ivec3, Bvec3),
+        (Ivec4, Bvec4),
+    ];
     for &(v, bv) in &vec_to_bvec {
         for name in [
             "lessThan",

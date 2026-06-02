@@ -234,6 +234,9 @@ struct Ctx<'a> {
     type_bvec2: Word,
     type_bvec3: Word,
     type_bvec4: Word,
+    type_ivec2: Word,
+    type_ivec3: Word,
+    type_ivec4: Word,
     type_vec2: Word,
     type_vec3: Word,
     type_vec4: Word,
@@ -374,6 +377,9 @@ fn build_spirv(
     let type_bvec2 = b.type_vector(type_bool, 2);
     let type_bvec3 = b.type_vector(type_bool, 3);
     let type_bvec4 = b.type_vector(type_bool, 4);
+    let type_ivec2 = b.type_vector(type_int, 2);
+    let type_ivec3 = b.type_vector(type_int, 3);
+    let type_ivec4 = b.type_vector(type_int, 4);
     let type_vec2 = b.type_vector(type_float, 2);
     let type_vec3 = b.type_vector(type_float, 3);
     let type_vec4 = b.type_vector(type_float, 4);
@@ -437,6 +443,9 @@ fn build_spirv(
         type_bvec2,
         type_bvec3,
         type_bvec4,
+        type_ivec2,
+        type_ivec3,
+        type_ivec4,
         type_vec2,
         type_vec3,
         type_vec4,
@@ -1631,19 +1640,44 @@ fn lower_vector_relational(
                     what: format!("§8.6 `{callee}` expects 2 args, got {}", args.len()),
                 });
             }
+            let arg_kind = classify_arg_kind(ctx, &args[0]).ok_or_else(|| {
+                LoweringError::UnsupportedShape {
+                    what: format!("§8.6 `{callee}` could not classify first arg"),
+                }
+            })?;
             let lhs = lower_expr(ctx, &args[0])?;
             let rhs = lower_expr(ctx, &args[1])?;
-            let r = match callee {
-                "lessThan" => ctx.b.f_ord_less_than(result_ty, None, lhs, rhs),
-                "lessThanEqual" => {
+            // ivec inputs use the signed-integer compare ops; vec
+            // inputs use the ordered-float ops.
+            let is_int_vec = matches!(
+                arg_kind,
+                TypeKind::Ivec2 | TypeKind::Ivec3 | TypeKind::Ivec4
+            );
+            let r = match (callee, is_int_vec) {
+                ("lessThan", false) => ctx.b.f_ord_less_than(result_ty, None, lhs, rhs),
+                ("lessThan", true) => ctx.b.s_less_than(result_ty, None, lhs, rhs),
+                ("lessThanEqual", false) => {
                     ctx.b.f_ord_less_than_equal(result_ty, None, lhs, rhs)
                 },
-                "greaterThan" => ctx.b.f_ord_greater_than(result_ty, None, lhs, rhs),
-                "greaterThanEqual" => {
+                ("lessThanEqual", true) => {
+                    ctx.b.s_less_than_equal(result_ty, None, lhs, rhs)
+                },
+                ("greaterThan", false) => {
+                    ctx.b.f_ord_greater_than(result_ty, None, lhs, rhs)
+                },
+                ("greaterThan", true) => {
+                    ctx.b.s_greater_than(result_ty, None, lhs, rhs)
+                },
+                ("greaterThanEqual", false) => {
                     ctx.b.f_ord_greater_than_equal(result_ty, None, lhs, rhs)
                 },
-                "equal" => ctx.b.f_ord_equal(result_ty, None, lhs, rhs),
-                "notEqual" => ctx.b.f_ord_not_equal(result_ty, None, lhs, rhs),
+                ("greaterThanEqual", true) => {
+                    ctx.b.s_greater_than_equal(result_ty, None, lhs, rhs)
+                },
+                ("equal", false) => ctx.b.f_ord_equal(result_ty, None, lhs, rhs),
+                ("equal", true) => ctx.b.i_equal(result_ty, None, lhs, rhs),
+                ("notEqual", false) => ctx.b.f_ord_not_equal(result_ty, None, lhs, rhs),
+                ("notEqual", true) => ctx.b.i_not_equal(result_ty, None, lhs, rhs),
                 _ => unreachable!(),
             };
             r.map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
@@ -1778,6 +1812,9 @@ fn spv_type_for_kind(ctx: &Ctx, kind: TypeKind) -> Option<Word> {
         TypeKind::Bvec2 => ctx.type_bvec2,
         TypeKind::Bvec3 => ctx.type_bvec3,
         TypeKind::Bvec4 => ctx.type_bvec4,
+        TypeKind::Ivec2 => ctx.type_ivec2,
+        TypeKind::Ivec3 => ctx.type_ivec3,
+        TypeKind::Ivec4 => ctx.type_ivec4,
         TypeKind::Mat2 => ctx.type_mat2,
         TypeKind::Mat3 => ctx.type_mat3,
         TypeKind::Mat4 => ctx.type_mat4,
@@ -2023,6 +2060,12 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                 "vec2" => (ctx.type_vec2, 2usize),
                 "vec3" => (ctx.type_vec3, 3usize),
                 "vec4" => (ctx.type_vec4, 4usize),
+                "ivec2" => (ctx.type_ivec2, 2usize),
+                "ivec3" => (ctx.type_ivec3, 3usize),
+                "ivec4" => (ctx.type_ivec4, 4usize),
+                "bvec2" => (ctx.type_bvec2, 2usize),
+                "bvec3" => (ctx.type_bvec3, 3usize),
+                "bvec4" => (ctx.type_bvec4, 4usize),
                 other => {
                     return Err(LoweringError::UnsupportedShape {
                         what: format!("call `{other}` is not a constructor or registered user function"),
@@ -2124,7 +2167,10 @@ fn lower_unary(ctx: &mut Ctx, op: UnaryOp, expr: &Expr) -> Result<Word, Lowering
                 }
             })?;
             match kind {
-                TypeKind::Int => ctx
+                TypeKind::Int
+                | TypeKind::Ivec2
+                | TypeKind::Ivec3
+                | TypeKind::Ivec4 => ctx
                     .b
                     .s_negate(ty, None, id)
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}"))),
@@ -2209,9 +2255,9 @@ fn lower_swizzle(
         LoweringError::UnsupportedShape { what: "swizzle base type unknown".into() }
     })?;
     let base_size = match base_kind {
-        TypeKind::Vec2 | TypeKind::Bvec2 => 2u32,
-        TypeKind::Vec3 | TypeKind::Bvec3 => 3,
-        TypeKind::Vec4 | TypeKind::Bvec4 => 4,
+        TypeKind::Vec2 | TypeKind::Bvec2 | TypeKind::Ivec2 => 2u32,
+        TypeKind::Vec3 | TypeKind::Bvec3 | TypeKind::Ivec3 => 3,
+        TypeKind::Vec4 | TypeKind::Bvec4 | TypeKind::Ivec4 => 4,
         _ => {
             return Err(LoweringError::UnsupportedShape {
                 what: format!("swizzle on non-vector base type {base_kind:?}"),
@@ -2489,7 +2535,62 @@ fn lower_binary(
         };
         return r.map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
     }
+    // Integer-vector arithmetic. ivec_n + / - / * / / ivec_n
+    // emits component-wise i_add / i_sub / i_mul / s_div on the
+    // vector operands. ivec_n * int splats the scalar.
+    let ivec_lhs = matches!(lhs_kind, TypeKind::Ivec2 | TypeKind::Ivec3 | TypeKind::Ivec4);
+    let ivec_rhs = matches!(rhs_kind, TypeKind::Ivec2 | TypeKind::Ivec3 | TypeKind::Ivec4);
+    if (ivec_lhs && ivec_rhs && lhs_kind == rhs_kind)
+        || (ivec_lhs && rhs_kind == TypeKind::Int)
+        || (ivec_rhs && lhs_kind == TypeKind::Int)
+    {
+        // Splat the scalar side when needed so both operands are
+        // the same ivec_n width.
+        let (lhs_id, rhs_id) = if ivec_lhs && rhs_kind == TypeKind::Int {
+            let splat = splat_int_to_ivec(ctx, rhs_id, lhs_kind)?;
+            (lhs_id, splat)
+        } else if ivec_rhs && lhs_kind == TypeKind::Int {
+            let splat = splat_int_to_ivec(ctx, lhs_id, rhs_kind)?;
+            (splat, rhs_id)
+        } else {
+            (lhs_id, rhs_id)
+        };
+        let r = match op {
+            BinOp::Add => ctx.b.i_add(result_ty, None, lhs_id, rhs_id),
+            BinOp::Sub => ctx.b.i_sub(result_ty, None, lhs_id, rhs_id),
+            BinOp::Mul => ctx.b.i_mul(result_ty, None, lhs_id, rhs_id),
+            BinOp::Div => ctx.b.s_div(result_ty, None, lhs_id, rhs_id),
+            _ => {
+                return Err(LoweringError::UnsupportedShape {
+                    what: format!("ivec binary `{op:?}` is not lowered"),
+                });
+            },
+        };
+        return r.map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+    }
     Err(LoweringError::UnsupportedShape {
         what: format!("binary `{op:?}` on {lhs_kind:?} and {rhs_kind:?} not lowered"),
     })
+}
+
+/// Splat a scalar int to an ivec of `target_kind` width.
+fn splat_int_to_ivec(
+    ctx: &mut Ctx,
+    scalar_id: Word,
+    target_kind: TypeKind,
+) -> Result<Word, LoweringError> {
+    let (target_ty, count) = match target_kind {
+        TypeKind::Ivec2 => (ctx.type_ivec2, 2usize),
+        TypeKind::Ivec3 => (ctx.type_ivec3, 3),
+        TypeKind::Ivec4 => (ctx.type_ivec4, 4),
+        _ => {
+            return Err(LoweringError::UnsupportedShape {
+                what: format!("int splat target {target_kind:?} is not lowered"),
+            });
+        },
+    };
+    let constituents: Vec<Word> = std::iter::repeat(scalar_id).take(count).collect();
+    ctx.b
+        .composite_construct(target_ty, None, constituents)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
 }

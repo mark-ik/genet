@@ -61,24 +61,41 @@ fn arithmetic_result(op: BinOp, lhs: TypeKind, rhs: TypeKind) -> Option<TypeKind
     // Same type: result is that type, modulo non-arithmetic kinds.
     if lhs == rhs {
         return match lhs {
-            Int | Float | Vec2 | Vec3 | Vec4 | Mat2 | Mat3 | Mat4 => Some(lhs),
+            Int | Float
+            | Vec2 | Vec3 | Vec4
+            | Ivec2 | Ivec3 | Ivec4
+            | Mat2 | Mat3 | Mat4 => Some(lhs),
             _ => None,
         };
     }
-    // Scalar broadcast: float-vec or float-mat works for +, -, *, /.
-    // ESSL 1.00 has no ivec / imat, so int broadcast does not apply.
-    let (scalar, vector_or_matrix) = if lhs == Float {
-        (lhs, rhs)
-    } else if rhs == Float {
-        (rhs, lhs)
+    // Scalar broadcast:
+    //   float-vec / float-mat: `+ - * /` produce the vec/mat type.
+    //   int-ivec: `+ - * /` produce the ivec type.
+    if lhs == Float {
+        if let Vec2 | Vec3 | Vec4 | Mat2 | Mat3 | Mat4 = rhs {
+            return Some(rhs);
+        }
+    }
+    if rhs == Float {
+        if let Vec2 | Vec3 | Vec4 | Mat2 | Mat3 | Mat4 = lhs {
+            return Some(lhs);
+        }
+    }
+    if lhs == Int {
+        if let Ivec2 | Ivec3 | Ivec4 = rhs {
+            return Some(rhs);
+        }
+    }
+    if rhs == Int {
+        if let Ivec2 | Ivec3 | Ivec4 = lhs {
+            return Some(lhs);
+        }
+    }
+    // No scalar match; check matrix-vector mul for `*` only.
+    if matches!(op, Mul) {
+        matrix_mul(lhs, rhs)
     } else {
-        // No scalar; check matrix-vector mul for `*` only.
-        return if matches!(op, Mul) { matrix_mul(lhs, rhs) } else { None };
-    };
-    let _ = scalar;
-    match vector_or_matrix {
-        Vec2 | Vec3 | Vec4 | Mat2 | Mat3 | Mat4 => Some(vector_or_matrix),
-        _ => None,
+        None
     }
 }
 
@@ -102,7 +119,10 @@ pub(super) fn unary_result(op: UnaryOp, operand: TypeKind) -> Option<TypeKind> {
     use UnaryOp::*;
     match op {
         Neg | Pos => match operand {
-            Int | Float | Vec2 | Vec3 | Vec4 | Mat2 | Mat3 | Mat4 => Some(operand),
+            Int | Float
+            | Vec2 | Vec3 | Vec4
+            | Ivec2 | Ivec3 | Ivec4
+            | Mat2 | Mat3 | Mat4 => Some(operand),
             _ => None,
         },
         Not => {
@@ -121,7 +141,10 @@ pub(super) fn unary_result(op: UnaryOp, operand: TypeKind) -> Option<TypeKind> {
             }
         },
         PreInc | PreDec | PostInc | PostDec => match operand {
-            Int | Float | Vec2 | Vec3 | Vec4 | Mat2 | Mat3 | Mat4 => Some(operand),
+            Int | Float
+            | Vec2 | Vec3 | Vec4
+            | Ivec2 | Ivec3 | Ivec4
+            | Mat2 | Mat3 | Mat4 => Some(operand),
             _ => None,
         },
     }
@@ -140,6 +163,12 @@ pub(super) fn constructor_result(name: &str, args: &[TypeKind]) -> Option<TypeKi
         "vec2" => CtorTarget::Vec(2, Vec2),
         "vec3" => CtorTarget::Vec(3, Vec3),
         "vec4" => CtorTarget::Vec(4, Vec4),
+        "ivec2" => CtorTarget::Vec(2, Ivec2),
+        "ivec3" => CtorTarget::Vec(3, Ivec3),
+        "ivec4" => CtorTarget::Vec(4, Ivec4),
+        "bvec2" => CtorTarget::Vec(2, Bvec2),
+        "bvec3" => CtorTarget::Vec(3, Bvec3),
+        "bvec4" => CtorTarget::Vec(4, Bvec4),
         "mat2" => CtorTarget::Mat(2, Mat2),
         "mat3" => CtorTarget::Mat(3, Mat3),
         "mat4" => CtorTarget::Mat(4, Mat4),
@@ -210,9 +239,9 @@ fn is_scalar(ty: TypeKind) -> bool {
 
 fn vec_size(ty: TypeKind) -> Option<u32> {
     match ty {
-        TypeKind::Vec2 | TypeKind::Bvec2 => Some(2),
-        TypeKind::Vec3 | TypeKind::Bvec3 => Some(3),
-        TypeKind::Vec4 | TypeKind::Bvec4 => Some(4),
+        TypeKind::Vec2 | TypeKind::Bvec2 | TypeKind::Ivec2 => Some(2),
+        TypeKind::Vec3 | TypeKind::Bvec3 | TypeKind::Ivec3 => Some(3),
+        TypeKind::Vec4 | TypeKind::Bvec4 | TypeKind::Ivec4 => Some(4),
         _ => None,
     }
 }
@@ -249,19 +278,29 @@ pub(super) fn swizzle_result(base: TypeKind, field: &str) -> Option<TypeKind> {
             return None;
         }
     }
-    let is_bool_vec = matches!(
-        base,
-        TypeKind::Bvec2 | TypeKind::Bvec3 | TypeKind::Bvec4
-    );
-    match (chars.len(), is_bool_vec) {
-        (1, true) => Some(TypeKind::Bool),
-        (1, false) => Some(TypeKind::Float),
-        (2, true) => Some(TypeKind::Bvec2),
-        (2, false) => Some(TypeKind::Vec2),
-        (3, true) => Some(TypeKind::Bvec3),
-        (3, false) => Some(TypeKind::Vec3),
-        (4, true) => Some(TypeKind::Bvec4),
-        (4, false) => Some(TypeKind::Vec4),
+    enum ElementKind {
+        Float,
+        Bool,
+        Int,
+    }
+    let element = match base {
+        TypeKind::Bvec2 | TypeKind::Bvec3 | TypeKind::Bvec4 => ElementKind::Bool,
+        TypeKind::Ivec2 | TypeKind::Ivec3 | TypeKind::Ivec4 => ElementKind::Int,
+        _ => ElementKind::Float,
+    };
+    match (chars.len(), element) {
+        (1, ElementKind::Float) => Some(TypeKind::Float),
+        (1, ElementKind::Bool) => Some(TypeKind::Bool),
+        (1, ElementKind::Int) => Some(TypeKind::Int),
+        (2, ElementKind::Float) => Some(TypeKind::Vec2),
+        (2, ElementKind::Bool) => Some(TypeKind::Bvec2),
+        (2, ElementKind::Int) => Some(TypeKind::Ivec2),
+        (3, ElementKind::Float) => Some(TypeKind::Vec3),
+        (3, ElementKind::Bool) => Some(TypeKind::Bvec3),
+        (3, ElementKind::Int) => Some(TypeKind::Ivec3),
+        (4, ElementKind::Float) => Some(TypeKind::Vec4),
+        (4, ElementKind::Bool) => Some(TypeKind::Bvec4),
+        (4, ElementKind::Int) => Some(TypeKind::Ivec4),
         _ => None,
     }
 }
