@@ -491,6 +491,13 @@ pub(crate) fn walk<D>(
             LayoutPoint::new(0.0, 0.0),
             LayoutPoint::new(l.size.width, l.size.height),
         );
+        // The content-box top-left in local (border-box) coords. Inline content
+        // (glyphs, underlines, inline boxes) lays out within the content box, so
+        // it is offset by border + padding — matching `caret_rect`'s `content_x`,
+        // so the painted text and the caret share one origin (a padded field's
+        // text was previously drawn at the border box while the caret used the
+        // content box, leaving the caret a padding-width to the right).
+        let content_offset = (l.border.left + l.padding.left, l.border.top + l.padding.top);
         match dom.kind(id) {
             NodeKind::Element => {
                 // Outset box-shadows paint behind the border-box, so
@@ -653,6 +660,7 @@ pub(crate) fn walk<D>(
                         g,
                         id,
                         local_bounds,
+                        content_offset,
                         em.images_plane,
                         &mut em.fonts,
                         &mut em.images,
@@ -666,6 +674,7 @@ pub(crate) fn walk<D>(
                         g,
                         id,
                         local_bounds,
+                        content_offset,
                         em.images_plane,
                         &mut em.fonts,
                         &mut em.images,
@@ -752,6 +761,7 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
     source: &GlyphSource<'_, NodeId>,
     dom_id: NodeId,
     bounds: LayoutRect,
+    content_offset: (f32, f32),
     images_plane: &ImagePlane<NodeId>,
     fonts: &mut FontCollector,
     images: &mut ImageCollector,
@@ -784,7 +794,7 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                         .positioned_glyphs()
                         .map(|g| GlyphInstance {
                             index: g.id,
-                            point: LayoutPoint::new(g.x, g.y),
+                            point: LayoutPoint::new(content_offset.0 + g.x, content_offset.1 + g.y),
                         })
                         .collect();
                     if glyphs.is_empty() {
@@ -808,8 +818,8 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                         let m = parley_run.metrics();
                         let uo = deco.offset.unwrap_or(m.underline_offset);
                         let us = deco.size.unwrap_or(m.underline_size).max(1.0);
-                        let y = bounds.min.y + run.baseline() + uo;
-                        let x0 = bounds.min.x + run.offset();
+                        let y = bounds.min.y + content_offset.1 + run.baseline() + uo;
+                        let x0 = bounds.min.x + content_offset.0 + run.offset();
                         let x1 = x0 + run.advance();
                         commands.push(PaintCmd::DrawRect(RectItem {
                             placement: CommonPlacement::new(LayoutRect::new(
@@ -836,10 +846,13 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                     // Box position is relative to the leaf origin (same
                     // space as glyph points); place in local coords.
                     let rect = LayoutRect::new(
-                        LayoutPoint::new(bounds.min.x + pbox.x, bounds.min.y + pbox.y),
                         LayoutPoint::new(
-                            bounds.min.x + pbox.x + pbox.width,
-                            bounds.min.y + pbox.y + pbox.height,
+                            bounds.min.x + content_offset.0 + pbox.x,
+                            bounds.min.y + content_offset.1 + pbox.y,
+                        ),
+                        LayoutPoint::new(
+                            bounds.min.x + content_offset.0 + pbox.x + pbox.width,
+                            bounds.min.y + content_offset.1 + pbox.y + pbox.height,
                         ),
                     );
                     commands.push(PaintCmd::DrawImage(ImageItem {

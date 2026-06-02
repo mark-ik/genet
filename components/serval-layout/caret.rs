@@ -283,6 +283,61 @@ mod tests {
         panic!("no <p>")
     }
 
+    /// Padded inline text and the caret share the content-box origin: the
+    /// emitted glyphs are inset by `border + padding` (so the text is actually
+    /// padded), and the byte-0 caret coincides with the first glyph. Guards the
+    /// fix for a padded field drawing its caret a padding-width right of the text
+    /// (emit had painted glyphs from the border box while `caret_rect` used the
+    /// content box).
+    #[test]
+    fn padded_text_and_caret_share_origin() {
+        use crate::image_decode::BackgroundImagePlane;
+        use crate::paint_emit::emit_paint_list_with_layouts;
+        use paint_list_api::{DeviceIntSize, PaintCmd, PaintList};
+        use rustc_hash::FxHashMap;
+
+        let doc = StaticDocument::parse("<html><body><p>abc</p></body></html>");
+        let sheet = &["html, body, p { display: block; margin: 0; border: 0; \
+            font-size: 40px; } p { padding-left: 30px; }"];
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&doc, &styles, &ImagePlane::new(), viewport);
+        let p = find_p(&doc);
+
+        let scroll = FxHashMap::default();
+        let plist = emit_paint_list_with_layouts(
+            &doc,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &scroll,
+            DeviceIntSize::new(800, 600),
+        );
+        // The first painted glyph's x (the `<p>` sits at absolute (0,0) with no
+        // margin, so its emit-local x is its absolute x).
+        let glyph_x = plist
+            .commands()
+            .iter()
+            .find_map(|c| match c {
+                PaintCmd::DrawText(t) if !t.glyphs.is_empty() => Some(t.glyphs[0].point.x),
+                _ => None,
+            })
+            .expect("a glyph run");
+        let caret0 = caret_rect(&doc, p, 0, &built, &text_ctx, &fragments, 2.0).unwrap().x;
+
+        assert!(glyph_x >= 25.0, "glyphs inset by ~padding (30 px), got {glyph_x}");
+        assert!(
+            (glyph_x - caret0).abs() < 1.0,
+            "first glyph x ({glyph_x}) coincides with the byte-0 caret x ({caret0})"
+        );
+    }
 
     /// A cascaded `line-height` controls the line-box height: `line-height: 2`
     /// on 40px text gives a ~80px line box (2 × font-size), vs the ~46px
