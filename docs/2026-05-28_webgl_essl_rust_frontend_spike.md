@@ -12,6 +12,42 @@ differential oracle.
 
 ---
 
+## 0. Status update (2026-06-02)
+
+Refresh of the per-step status lines below, kept compact so the rest
+of the doc can stay as the original spec. Suite: 235/235 green.
+
+| Step | Status |
+| --- | --- |
+| 1. Parser receipt | ✓ shipped |
+| 2. Parser breadth + done condition | ✓ closed (10/10 conformance corpus) |
+| 3. ESSL 3.00 delta | shift / bitwise / `~`, `#version` directive, `in` / `out` / `centroid` / `flat` / `smooth`, `switch` / `case` / `default` shipped; layout qualifiers, integer literal suffixes, sized arrays + `length()` postfix, uint / uvec / ivec / bvec types queued |
+| 4. Typecheck | ✓ ESSL 1.00 (symbol resolution, literal / ident / binary / unary / ternary / member / call / index types, ESSL constructor rules, swizzles, §8 built-in registry) |
+| 5. WebGL validator | R1 recursion, R2 stage-gated `discard`, R3 `main` signature, R4 Appendix A `for` loops, R5 reserved identifiers, R6 expression complexity, R7 call-stack depth, R8 fragment float-family precision shipped; packing, indirect-array clamping, switch-discriminant-int, case-value-constant queued |
+| 6. Lowering | Path A chosen (ESSL → SPIR-V via rspirv → naga `spv-in` → WGSL via `wgsl-out`); accepts literals, attributes, uniforms (including matrix uniforms with correct per-matrix `MatrixStride`), vec_n constructors, float/vec_n binary arithmetic, matrix multiplication (mat\*vec, vec\*mat, mat\*mat, mat\*scalar); varyings, function calls, swizzles, texture samples queued |
+| 7. WebGL CTS | not started |
+| 8. Production path swap | not started |
+| 9. mozangle removed | not started |
+
+Production-shaped entry: `pub fn compile(source, stage) -> Result<CompileResult, CompileError>` in
+`lib.rs` runs `parse → check → validate(source) → lower` in order and stops at the first failing
+stage. `CompileResult { wgsl, info_log }` returns the WGSL plus any
+warning-shaped info-log lines; `CompileError` names the failing stage
+(`Parse` / `Check` / `Validate` / `Lower`) and carries the native
+diagnostic shape from that stage.
+
+Items the audit at `3ecb09823a7` (then-current 182/235 tests) named
+that are now closed: production `compile()` seam, `validate()` source
+threading for real line numbers, lib.rs module doc lag, lowering of
+binary ops + uniforms + matrix uniforms + mat\*vec.
+
+Items the audit named that are still open: SPIR-V panic-catch + 8 MB
+stack thread on the lowering path, mozangle differential job, CTS
+harness, Nova / Boa canvas binding, lowering for function calls /
+swizzles / texture samples / varyings.
+
+---
+
 ## 1. Why pure-Rust, not mozangle in production
 
 The runtime constraint is pure Rust + wgpu. mozangle preserves runtime
