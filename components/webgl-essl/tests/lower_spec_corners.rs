@@ -58,21 +58,21 @@ fn two_varyings_of_different_widths_lower_with_two_locations() {
 
 // ---------- user-function widening corners ----------------------------
 
-/// SPEC-GAP. ESSL 1.00 §6.1 permits a function to be referenced
-/// before its definition appears at file scope, but
-/// `emit_user_functions` walks declarations top-down and only
-/// inserts a binding *after* the body has been emitted. A caller
-/// defined before its callee currently fails lowering.
+/// HAPPY (resolved). `emit_user_functions` now runs in two
+/// passes: phase 1 allocates each non-main function's id and
+/// records its signature in `ctx.user_fns`; phase 2 emits each
+/// body. A caller defined before its callee resolves via the
+/// pre-allocated id.
 #[test]
-fn forward_user_function_reference_does_not_lower_today() {
+fn forward_user_function_reference_lowers() {
     let src = "precision mediump float;\n\
                float caller(float x) { return callee(x); }\n\
                float callee(float x) { return x * 2.0; }\n\
                void main() {\n\
                    gl_FragColor = vec4(caller(0.5));\n\
                }\n";
-    let err = compile(src, ShaderStage::Fragment).unwrap_err();
-    assert!(matches!(err, CompileError::Lower(_)), "got: {err:?}");
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("vec4"));
 }
 
 /// SPEC-GAP / CORRECTNESS. ESSL 1.00 §6.1.1 allows overloading

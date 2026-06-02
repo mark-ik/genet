@@ -337,12 +337,12 @@ void main() {
     assert!(r.wgsl.contains("return"));
 }
 
-/// Audit #4: `break;` inside a for body. No `Stmt::Break` arm in
-/// `lower_stmt`, and `emit_loop_cfg` has no merge-label stack.
-/// Receipt pins the gap before someone wires break without the
-/// nesting stack.
+/// HAPPY (resolved). `break;` inside a loop body now lowers via
+/// the `loop_targets` stack: `emit_loop_cfg` pushes the
+/// `(merge, continue)` label pair before walking the body, and
+/// `Stmt::Break` branches to the innermost merge.
 #[test]
-fn break_inside_for_body_does_not_lower_today() {
+fn break_inside_for_body_lowers() {
     let src = r#"
 precision mediump float;
 uniform vec4 u_color;
@@ -355,8 +355,8 @@ void main() {
     gl_FragColor = acc;
 }
 "#;
-    let err = compile(src, ShaderStage::Fragment).unwrap_err();
-    assert!(matches!(err, webgl_essl::CompileError::Lower(_)), "got: {err:?}");
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("break") || r.wgsl.contains("loop"));
 }
 
 /// Audit #5: nested for-loops shadowing the same loop variable
@@ -414,11 +414,10 @@ void main() {
     );
 }
 
-/// Audit #7: `continue;` inside a for body. Symmetric to break.
-/// Distinct codegen need (branch to continue-target rather than
-/// merge), so worth its own pin.
+/// HAPPY (resolved). `continue;` inside a loop body branches to
+/// the loop's continue block via the same `loop_targets` stack.
 #[test]
-fn continue_inside_for_body_does_not_lower_today() {
+fn continue_inside_for_body_lowers() {
     let src = r#"
 precision mediump float;
 uniform vec4 u_color;
@@ -430,8 +429,30 @@ void main() {
     gl_FragColor = acc;
 }
 "#;
-    let err = compile(src, ShaderStage::Fragment).unwrap_err();
-    assert!(matches!(err, webgl_essl::CompileError::Lower(_)), "got: {err:?}");
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("continue") || r.wgsl.contains("loop"));
+}
+
+#[test]
+fn break_inside_nested_for_targets_inner_loop() {
+    // The inner break should exit the inner loop only; the
+    // outer loop should run twice (i=0, i=1).
+    let src = r#"
+precision mediump float;
+uniform vec4 u_color;
+void main() {
+    vec4 acc = vec4(0.0);
+    for (int i = 0; i < 2; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            acc = acc + u_color;
+            if (j > 0) break;
+        }
+    }
+    gl_FragColor = acc;
+}
+"#;
+    let wgsl = compile(src, ShaderStage::Fragment).expect("compile").wgsl;
+    assert!(wgsl.contains("break") || wgsl.contains("loop"));
 }
 
 /// Audit #8: local declared inside a for body. The pre-pass

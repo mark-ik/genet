@@ -270,6 +270,11 @@ struct Ctx<'a> {
     /// Avoids emitting duplicate pointer type decls each time a
     /// local variable is allocated.
     function_ptr_types: HashMap<TypeKind, Word>,
+    /// Stack of `(merge_label, continue_label)` for currently-
+    /// active loops. `Stmt::Break` branches to the innermost
+    /// merge; `Stmt::Continue` branches to the innermost continue.
+    /// Pushed in `emit_loop_cfg` Pre, popped on its exit.
+    loop_targets: Vec<(Word, Word)>,
     /// Per-span type annotations from the typecheck pass; used to
     /// dispatch on operand types in binary-op lowering.
     types: &'a HashMap<Span, TypeKind>,
@@ -423,6 +428,7 @@ fn build_spirv(
         fn_params: HashMap::new(),
         locals: HashMap::new(),
         function_ptr_types: HashMap::new(),
+        loop_targets: Vec::new(),
         types,
         glsl_std_450: None,
     };
@@ -708,6 +714,28 @@ fn lower_stmt(
                 .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
             Ok(())
         },
+        Stmt::Break { .. } => {
+            let (merge, _cont) = *ctx.loop_targets.last().ok_or_else(|| {
+                LoweringError::UnsupportedShape {
+                    what: "`break;` outside of a loop is not lowered".into(),
+                }
+            })?;
+            ctx.b
+                .branch(merge)
+                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+            Ok(())
+        },
+        Stmt::Continue { .. } => {
+            let (_merge, cont) = *ctx.loop_targets.last().ok_or_else(|| {
+                LoweringError::UnsupportedShape {
+                    what: "`continue;` outside of a loop is not lowered".into(),
+                }
+            })?;
+            ctx.b
+                .branch(cont)
+                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+            Ok(())
+        },
         Stmt::Block(b) => {
             // First-pass: locals declared inside a compound block
             // leak into the enclosing scope. Proper block scoping
@@ -845,13 +873,21 @@ fn emit_loop_cfg(
     }
 
     // Body: lower the body stmt, then jump to the continue block.
+    // Push the (merge, cont) pair so any `break;` / `continue;`
+    // inside the body resolves to these labels.
+    let body_terminates = stmt_definitely_terminates(body);
+    ctx.loop_targets.push((merge, cont));
     ctx.b
         .begin_block(Some(body_label))
         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
-    lower_stmt(ctx, body, main_ctx)?;
-    ctx.b
-        .branch(cont)
-        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    let body_result = lower_stmt(ctx, body, main_ctx);
+    ctx.loop_targets.pop();
+    body_result?;
+    if !body_terminates {
+        ctx.b
+            .branch(cont)
+            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    }
 
     // Continue: emit the for-loop step (if any), then jump back
     // to the header.
@@ -872,64 +908,106 @@ fn emit_loop_cfg(
     Ok(())
 }
 
+/// Two-pass emit: every non-main user function's id and signature
+/// is allocated and recorded in `ctx.user_fns` before any body is
+/// emitted, so a body can `OpFunctionCall` any other function
+/// regardless of source order. ESSL §6.1 permits forward
+/// references at file scope; this pre-pass makes that work.
 fn emit_user_functions(ctx: &mut Ctx, tu: &TranslationUnit) -> Result<(), LoweringError> {
+    let mut prototypes: Vec<(&FunctionDef, FnPrototype)> = Vec::new();
     for d in &tu.decls {
         let ExternalDecl::Function(f) = d else { continue };
         if f.name == "main" {
             continue;
         }
-        emit_user_function(ctx, f)?;
+        let proto = build_user_fn_prototype(ctx, f)?;
+        ctx.user_fns.insert(
+            f.name.clone(),
+            UserFnBinding {
+                func_id: proto.func_id,
+                param_types: proto.param_kinds.clone(),
+                result: proto.return_kind,
+            },
+        );
+        prototypes.push((f, proto));
+    }
+    for (f, proto) in prototypes {
+        emit_user_function_body(ctx, f, &proto)?;
     }
     Ok(())
 }
 
-fn emit_user_function(ctx: &mut Ctx, f: &FunctionDef) -> Result<(), LoweringError> {
+/// Pre-validated, pre-allocated state for a user function. Phase 1
+/// of [`emit_user_functions`] builds these; phase 2 emits the
+/// matching body using `func_id` so forward calls resolve.
+struct FnPrototype {
+    func_id: Word,
+    fn_type: Word,
+    return_ty: Word,
+    return_kind: TypeKind,
+    param_kinds: Vec<TypeKind>,
+    param_types_spv: Vec<Word>,
+}
+
+fn build_user_fn_prototype(
+    ctx: &mut Ctx,
+    f: &FunctionDef,
+) -> Result<FnPrototype, LoweringError> {
     let return_kind = f.return_ty.kind;
     let return_ty = if return_kind == TypeKind::Void {
         ctx.type_void
     } else {
-        match spv_type_for_kind(ctx, return_kind) {
-            Some(t) => t,
-            None => {
-                return Err(LoweringError::UnsupportedShape {
-                    what: format!(
-                        "function `{}` return type {return_kind:?} is not lowered",
-                        f.name
-                    ),
-                });
-            },
-        }
+        spv_type_for_kind(ctx, return_kind).ok_or_else(|| {
+            LoweringError::UnsupportedShape {
+                what: format!(
+                    "function `{}` return type {return_kind:?} is not lowered",
+                    f.name
+                ),
+            }
+        })?
     };
-    // Parameter types must be representable in SPIR-V (no samplers /
-    // structs / matrices yet — float, vec_n only for first widening).
     let mut param_types_spv: Vec<Word> = Vec::new();
     let mut param_kinds: Vec<TypeKind> = Vec::new();
     for p in &f.params {
-        let pt = match spv_type_for_kind(ctx, p.ty.kind) {
-            Some(t) => t,
-            None => {
-                return Err(LoweringError::UnsupportedShape {
-                    what: format!(
-                        "function `{}` parameter `{}` type {:?} is not lowered",
-                        f.name, p.name, p.ty.kind,
-                    ),
-                });
-            },
-        };
+        let pt = spv_type_for_kind(ctx, p.ty.kind).ok_or_else(|| {
+            LoweringError::UnsupportedShape {
+                what: format!(
+                    "function `{}` parameter `{}` type {:?} is not lowered",
+                    f.name, p.name, p.ty.kind,
+                ),
+            }
+        })?;
         param_types_spv.push(pt);
         param_kinds.push(p.ty.kind);
     }
-
     let fn_type = ctx.b.type_function(return_ty, param_types_spv.clone());
-    let func_id = ctx
-        .b
-        .begin_function(return_ty, None, FunctionControl::NONE, fn_type)
+    let func_id = ctx.b.id();
+    Ok(FnPrototype {
+        func_id,
+        fn_type,
+        return_ty,
+        return_kind,
+        param_kinds,
+        param_types_spv,
+    })
+}
+
+fn emit_user_function_body(
+    ctx: &mut Ctx,
+    f: &FunctionDef,
+    proto: &FnPrototype,
+) -> Result<(), LoweringError> {
+    ctx.b
+        .begin_function(
+            proto.return_ty,
+            Some(proto.func_id),
+            FunctionControl::NONE,
+            proto.fn_type,
+        )
         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
 
-    // OpFunctionParameter for each param, recording the SSA value id
-    // by name so the body can reference them.
     let mut fn_params: HashMap<String, FnParamBinding> = HashMap::new();
-    for (p, pt) in f.params.iter().zip(param_types_spv.iter()) {
+    for (p, pt) in f.params.iter().zip(proto.param_types_spv.iter()) {
         let pid = ctx
             .b
             .function_parameter(*pt)
@@ -941,12 +1019,10 @@ fn emit_user_function(ctx: &mut Ctx, f: &FunctionDef) -> Result<(), LoweringErro
         .begin_block(None)
         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
 
-    // Push the function parameters and a fresh locals scope into
-    // ctx for the body walk; restore the previous scopes after.
     let saved_params = std::mem::take(&mut ctx.fn_params);
     let saved_locals = std::mem::take(&mut ctx.locals);
     ctx.fn_params = fn_params;
-    let body_result = lower_user_body(ctx, f, return_kind);
+    let body_result = lower_user_body(ctx, f, proto.return_kind);
     ctx.fn_params = saved_params;
     ctx.locals = saved_locals;
     body_result?;
@@ -954,11 +1030,6 @@ fn emit_user_function(ctx: &mut Ctx, f: &FunctionDef) -> Result<(), LoweringErro
     ctx.b
         .end_function()
         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
-
-    ctx.user_fns.insert(
-        f.name.clone(),
-        UserFnBinding { func_id, param_types: param_kinds, result: return_kind },
-    );
     Ok(())
 }
 
@@ -1000,14 +1071,24 @@ fn last_stmt_is_return(stmts: &[Stmt]) -> bool {
 }
 
 /// True when `s` is guaranteed to leave its block via a SPIR-V
-/// terminator (`OpReturn` / `OpReturnValue` / `OpKill`). Used by
-/// the `If` arm to decide whether to emit a trailing
-/// `OpBranch merge` (which would otherwise double-terminate the
-/// then- or else-block).
+/// terminator. Used by the `If` arm and loop bodies to decide
+/// whether to emit a trailing branch (which would otherwise
+/// double-terminate the block).
+///
+/// Counts as terminating: `return`, `discard` (OpKill),
+/// `break` and `continue` (each emits an OpBranch), and a Block
+/// whose last stmt terminates, and an If whose then- and
+/// else-branches both terminate.
 fn stmt_definitely_terminates(s: &Stmt) -> bool {
     match s {
-        Stmt::Return { .. } | Stmt::Discard { .. } => true,
+        Stmt::Return { .. }
+        | Stmt::Discard { .. }
+        | Stmt::Break { .. }
+        | Stmt::Continue { .. } => true,
         Stmt::Block(b) => b.stmts.last().is_some_and(stmt_definitely_terminates),
+        Stmt::If { then, else_: Some(else_), .. } => {
+            stmt_definitely_terminates(then) && stmt_definitely_terminates(else_)
+        },
         _ => false,
     }
 }
