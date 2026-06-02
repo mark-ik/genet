@@ -97,12 +97,13 @@ fn overloaded_user_functions_do_not_lower_today() {
     assert!(matches!(err, CompileError::Check(_)), "got: {err:?}");
 }
 
-/// SPEC-GAP. `emit_user_function` only matches body shapes of
-/// `[Stmt::Return(Some(e))]` or `[]`. The most common real-world
-/// function body — local decl then return — falls into the
-/// `body shape not lowered` arm.
+/// HAPPY (resolved). `emit_user_function` now walks
+/// multi-statement bodies via `lower_stmt`. Local decl then
+/// return — the most common real-world function shape — lowers
+/// cleanly. This receipt was the inverse-direction pin while the
+/// gap existed; it is now a forward receipt.
 #[test]
-fn multi_statement_user_function_body_does_not_lower_today() {
+fn multi_statement_user_function_body_lowers() {
     let src = "precision mediump float;\n\
                float helper(float x) {\n\
                    float t = x * 2.0;\n\
@@ -111,8 +112,8 @@ fn multi_statement_user_function_body_does_not_lower_today() {
                void main() {\n\
                    gl_FragColor = vec4(helper(0.5));\n\
                }\n";
-    let err = compile(src, ShaderStage::Fragment).unwrap_err();
-    assert!(matches!(err, CompileError::Lower(_)), "got: {err:?}");
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("vec4"));
 }
 
 /// SPEC-GAP. ESSL 1.00 §6.1 allows `bool` user-function parameters.

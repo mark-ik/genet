@@ -56,12 +56,15 @@ fn lowering_with_no_main_returns_no_main_error() {
 
 #[test]
 fn lowering_an_unsupported_shape_returns_unsupported() {
-    // Two statements in main is outside today's accepted shape.
+    // A function-scope `bool` local is outside today's accepted
+    // shape — `spv_type_for_kind` returns None for Bool, so the
+    // `OpVariable` allocation in `function_ptr_for` fails with
+    // `UnsupportedShape`.
     let src = r#"
 precision mediump float;
 void main() {
-    float t = 0.5;
-    gl_FragColor = vec4(t, t, t, 1.0);
+    bool flag = true;
+    gl_FragColor = vec4(0.0);
 }
 "#;
     let tu = parse_source(src).expect("parse");

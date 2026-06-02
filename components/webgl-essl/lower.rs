@@ -257,9 +257,24 @@ struct Ctx<'a> {
     /// While lowering a user function's body, parameter names map to
     /// their OpFunctionParameter Words. Cleared on function exit.
     fn_params: HashMap<String, FnParamBinding>,
+    /// Function-scope local variables in the body currently being
+    /// lowered. Each entry is an `OpVariable` with Function storage
+    /// class allocated as the local was first seen. Cleared on
+    /// function exit so locals from one user function don't leak
+    /// into the next.
+    locals: HashMap<String, LocalBinding>,
+    /// Cached `OpTypePointer Function T` ids, one per value type.
+    /// Avoids emitting duplicate pointer type decls each time a
+    /// local variable is allocated.
+    function_ptr_types: HashMap<TypeKind, Word>,
     /// Per-span type annotations from the typecheck pass; used to
     /// dispatch on operand types in binary-op lowering.
     types: &'a HashMap<Span, TypeKind>,
+    /// SPIR-V Word for the `GLSL.std.450` extended instruction set
+    /// import. Lazily allocated on the first built-in call that
+    /// uses it, so trivial shaders that never call sin/cos/etc.
+    /// don't carry the import.
+    glsl_std_450: Option<Word>,
 }
 
 struct InputBinding {
@@ -302,6 +317,15 @@ struct FnParamBinding {
     value_id: Word,
     /// ESSL value type.
     kind: TypeKind,
+}
+
+struct LocalBinding {
+    /// SPIR-V Word for the `OpVariable` allocating Function-scope
+    /// storage for this local.
+    var: Word,
+    /// SPIR-V Word for the pointee (value) type. Used when emitting
+    /// `OpLoad` to read the local.
+    pointee_type: Word,
 }
 
 fn build_spirv(
@@ -387,7 +411,10 @@ fn build_spirv(
         int_constants: HashMap::new(),
         user_fns: HashMap::new(),
         fn_params: HashMap::new(),
+        locals: HashMap::new(),
+        function_ptr_types: HashMap::new(),
         types,
+        glsl_std_450: None,
     };
 
     // Emit user function definitions before main, so OpFunctionCall
@@ -466,60 +493,142 @@ fn register_varying_outputs(
     outputs
 }
 
+/// Context describing main's special output target. Threaded
+/// through `lower_stmt` so an assignment to `gl_Position` /
+/// `gl_FragColor` resolves to `primary_output` instead of an
+/// undefined identifier.
+struct MainCtx {
+    primary_name: &'static str,
+    primary_output: Word,
+    stage: ShaderStage,
+}
+
 fn lower_main_body(
     ctx: &mut Ctx,
     main: &FunctionDef,
     stage: ShaderStage,
     primary_output: Word,
 ) -> Result<(), LoweringError> {
-    let primary_name = match stage {
-        ShaderStage::Vertex => "gl_Position",
-        ShaderStage::Fragment => "gl_FragColor",
+    let main_ctx = MainCtx {
+        primary_name: match stage {
+            ShaderStage::Vertex => "gl_Position",
+            ShaderStage::Fragment => "gl_FragColor",
+        },
+        primary_output,
+        stage,
     };
     for stmt in &main.body.stmts {
-        match stmt {
-            Stmt::Expr(Expr::Assign { lhs, rhs, .. }) => {
-                let target_name = match lhs.as_ref() {
-                    Expr::Ident { name, .. } => name.as_str(),
-                    _ => {
-                        return Err(LoweringError::UnsupportedShape {
-                            what: "main body lhs is not an identifier".into(),
-                        });
-                    },
-                };
-                let value = lower_expr(ctx, rhs)?;
-                if target_name == primary_name {
+        lower_stmt(ctx, stmt, Some(&main_ctx))?;
+    }
+    Ok(())
+}
+
+/// Lower a single statement. `main_ctx` is `Some` when lowering the
+/// entry-point body, providing the special-case routing for
+/// `gl_Position` / `gl_FragColor` writes. `None` when lowering a
+/// user function body.
+fn lower_stmt(
+    ctx: &mut Ctx,
+    stmt: &Stmt,
+    main_ctx: Option<&MainCtx>,
+) -> Result<(), LoweringError> {
+    match stmt {
+        Stmt::Decl(d) => {
+            let ptr_ty = function_ptr_for(ctx, d.ty.kind)?;
+            let pointee_type = spv_type_for_kind(ctx, d.ty.kind).expect("checked above");
+            let var = ctx.b.variable(ptr_ty, None, StorageClass::Function, None);
+            if let Some(init) = &d.init {
+                let value = lower_expr(ctx, init)?;
+                ctx.b
+                    .store(var, value, None, [])
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+            }
+            ctx.locals.insert(d.name.clone(), LocalBinding { var, pointee_type });
+            Ok(())
+        },
+        Stmt::Expr(Expr::Assign { lhs, rhs, .. }) => {
+            let target_name = match lhs.as_ref() {
+                Expr::Ident { name, .. } => name.as_str(),
+                _ => {
+                    return Err(LoweringError::UnsupportedShape {
+                        what: "assignment lhs is not an identifier".into(),
+                    });
+                },
+            };
+            let value = lower_expr(ctx, rhs)?;
+            // Locals shadow outputs and primary. Outputs and primary
+            // only exist inside main.
+            if let Some(local) = ctx.locals.get(target_name) {
+                let var = local.var;
+                ctx.b
+                    .store(var, value, None, [])
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+                return Ok(());
+            }
+            if let Some(mc) = main_ctx {
+                if target_name == mc.primary_name {
                     ctx.b
-                        .store(primary_output, value, None, [])
+                        .store(mc.primary_output, value, None, [])
                         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
-                } else if let Some(out) = ctx.outputs.get(target_name) {
+                    return Ok(());
+                }
+                if let Some(out) = ctx.outputs.get(target_name) {
                     let var = out.var;
                     ctx.b
                         .store(var, value, None, [])
                         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
-                } else {
-                    return Err(LoweringError::UnsupportedShape {
-                        what: format!(
-                            "main body assigns to `{target_name}`, expected `{primary_name}` for {stage:?}"
-                        ),
-                    });
+                    return Ok(());
                 }
-            },
-            Stmt::Expr(Expr::Call { .. }) => {
-                // Discarded call result (`helper();`). Lower the
-                // call for its side effects.
-                if let Stmt::Expr(call_expr) = stmt {
-                    let _ = lower_expr(ctx, call_expr)?;
-                }
-            },
-            _ => {
                 return Err(LoweringError::UnsupportedShape {
-                    what: "main body statement is not yet lowered".into(),
+                    what: format!(
+                        "main body assigns to `{target_name}`, expected `{}` for {:?}",
+                        mc.primary_name, mc.stage
+                    ),
                 });
-            },
-        }
+            }
+            Err(LoweringError::UnsupportedShape {
+                what: format!("user function assigns to unknown `{target_name}`"),
+            })
+        },
+        Stmt::Expr(call_expr @ Expr::Call { .. }) => {
+            let _ = lower_expr(ctx, call_expr)?;
+            Ok(())
+        },
+        Stmt::Return { value: Some(e), .. } => {
+            if main_ctx.is_some() {
+                return Err(LoweringError::UnsupportedShape {
+                    what: "`return <expr>;` in main is not lowered".into(),
+                });
+            }
+            let v = lower_expr(ctx, e)?;
+            ctx.b
+                .ret_value(v)
+                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+            Ok(())
+        },
+        Stmt::Return { value: None, .. } => {
+            ctx.b
+                .ret()
+                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+            Ok(())
+        },
+        Stmt::Block(b) => {
+            // First-pass: locals declared inside a compound block
+            // leak into the enclosing scope. Proper block scoping
+            // is queued — for now this matches how SPIR-V's
+            // Function-storage variables outlive their lexical
+            // block (their lifetime is the whole function), so the
+            // observable behavior is correct for shaders that
+            // don't shadow names.
+            for s in &b.stmts {
+                lower_stmt(ctx, s, main_ctx)?;
+            }
+            Ok(())
+        },
+        _ => Err(LoweringError::UnsupportedShape {
+            what: "stmt shape not lowered".into(),
+        }),
     }
-    Ok(())
 }
 
 fn emit_user_functions(ctx: &mut Ctx, tu: &TranslationUnit) -> Result<(), LoweringError> {
@@ -584,41 +693,16 @@ fn emit_user_function(ctx: &mut Ctx, f: &FunctionDef) -> Result<(), LoweringErro
         .begin_block(None)
         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
 
-    // Restrict to function bodies of the shape `return <expr>;` so
-    // the lowering stays simple. Multi-statement function bodies
-    // (locals, control flow) are queued.
-    let return_value = match f.body.stmts.as_slice() {
-        [Stmt::Return { value: Some(e), .. }] => e,
-        [] if return_kind == TypeKind::Void => {
-            // void f() {} — no return needed.
-            ctx.b.ret().map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
-            ctx.b
-                .end_function()
-                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
-            ctx.user_fns.insert(
-                f.name.clone(),
-                UserFnBinding { func_id, param_types: param_kinds, result: return_kind },
-            );
-            return Ok(());
-        },
-        _ => {
-            return Err(LoweringError::UnsupportedShape {
-                what: format!(
-                    "function `{}` body shape not lowered (only `return <expr>;` is supported)",
-                    f.name
-                ),
-            });
-        },
-    };
-    // Push the function parameters into the Ctx scope, lower the
-    // return expression, emit OpReturnValue, then pop.
+    // Push the function parameters and a fresh locals scope into
+    // ctx for the body walk; restore the previous scopes after.
     let saved_params = std::mem::take(&mut ctx.fn_params);
+    let saved_locals = std::mem::take(&mut ctx.locals);
     ctx.fn_params = fn_params;
-    let value = lower_expr(ctx, return_value)?;
+    let body_result = lower_user_body(ctx, f, return_kind);
     ctx.fn_params = saved_params;
-    ctx.b
-        .ret_value(value)
-        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    ctx.locals = saved_locals;
+    body_result?;
+
     ctx.b
         .end_function()
         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
@@ -628,6 +712,42 @@ fn emit_user_function(ctx: &mut Ctx, f: &FunctionDef) -> Result<(), LoweringErro
         UserFnBinding { func_id, param_types: param_kinds, result: return_kind },
     );
     Ok(())
+}
+
+/// Walk a user function's body statements via `lower_stmt`. Adds
+/// the implicit `OpReturn` terminator for void functions whose
+/// body did not explicitly return.
+fn lower_user_body(
+    ctx: &mut Ctx,
+    f: &FunctionDef,
+    return_kind: TypeKind,
+) -> Result<(), LoweringError> {
+    for s in &f.body.stmts {
+        lower_stmt(ctx, s, None)?;
+    }
+    if !last_stmt_is_return(&f.body.stmts) {
+        if return_kind == TypeKind::Void {
+            ctx.b
+                .ret()
+                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+        } else {
+            return Err(LoweringError::UnsupportedShape {
+                what: format!(
+                    "function `{}` returns {return_kind:?} but body has no terminating return",
+                    f.name
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn last_stmt_is_return(stmts: &[Stmt]) -> bool {
+    match stmts.last() {
+        Some(Stmt::Return { .. }) => true,
+        Some(Stmt::Block(b)) => last_stmt_is_return(&b.stmts),
+        _ => false,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -785,6 +905,124 @@ fn classify_arg_kind(ctx: &Ctx, e: &Expr) -> Option<TypeKind> {
     }
 }
 
+/// GLSL.std.450 instruction-set numbers for ESSL §8 built-ins that
+/// the lowering supports today. Coverage skips textures (samplers
+/// not yet plumbed) and matrix built-ins (matrixCompMult etc.);
+/// `dot` is the one ESSL §8 built-in that maps to a core SPIR-V
+/// opcode (OpDot) rather than a GLSL.std.450 extended instruction,
+/// so it is dispatched separately in `lower_expr`.
+fn builtin_glsl450_opcode(name: &str) -> Option<u32> {
+    Some(match name {
+        // §8.1 Angle and trigonometry.
+        "radians" => 11,
+        "degrees" => 12,
+        "sin" => 13,
+        "cos" => 14,
+        "tan" => 15,
+        "asin" => 16,
+        "acos" => 17,
+        "atan" => 18,
+        // §8.2 Exponential.
+        "pow" => 26,
+        "exp" => 27,
+        "log" => 28,
+        "exp2" => 29,
+        "log2" => 30,
+        "sqrt" => 31,
+        "inversesqrt" => 32,
+        // §8.3 Common.
+        "abs" => 4,
+        "sign" => 6,
+        "floor" => 8,
+        "ceil" => 9,
+        "fract" => 10,
+        // `mod` deliberately omitted: naga's spv-in rejects
+        // GLSL.std.450 FMod (35) with `UnsupportedExtInst(35)`.
+        // Future widening: inline as `x - y * floor(x/y)`.
+        "min" => 37,
+        "max" => 40,
+        "clamp" => 43,
+        "mix" => 46,
+        "step" => 48,
+        "smoothstep" => 49,
+        // §8.4 Geometric (length / distance return scalar — that
+        // shape is handled by the call's typecheck result kind).
+        "length" => 66,
+        "distance" => 67,
+        "cross" => 68,
+        "normalize" => 69,
+        "faceforward" => 70,
+        "reflect" => 71,
+        "refract" => 72,
+        _ => return None,
+    })
+}
+
+/// For ESSL built-ins with mixed scalar / vector overloads
+/// (clamp / mix / step / smoothstep / min / max), returns true if
+/// the argument at `arg_idx` is one of the positions where ESSL
+/// permits a scalar arg that broadcasts to the result type. The
+/// lowering then splats a scalar arg into a vector before passing
+/// it to GLSL.std.450 FClamp / FMix / Step / etc., which require
+/// homogeneous operands.
+///
+/// Positions for the splat-eligible built-ins are taken from the
+/// ESSL 1.00 §8.3 registry:
+/// - clamp(T, T, T)      and clamp(T, float, float)
+/// - mix(T, T, T)        and mix(T, T, float)
+/// - step(T, T)          and step(float, T)
+/// - smoothstep(T,T,T)   and smoothstep(float, float, T)
+/// - min / max(T, T)     and min / max(T, float)
+///
+/// `refract(T, T, float)` is NOT splat-eligible at position 2; its
+/// trailing float (eta) is genuinely scalar.
+fn should_splat_scalar_for_builtin(name: &str, arg_idx: usize) -> bool {
+    match name {
+        "clamp" => arg_idx == 1 || arg_idx == 2,
+        "mix" => arg_idx == 2,
+        "step" => arg_idx == 0,
+        "smoothstep" => arg_idx == 0 || arg_idx == 1,
+        "min" | "max" => arg_idx == 1,
+        _ => false,
+    }
+}
+
+/// Emit an `OpCompositeConstruct` that broadcasts `scalar_id` to
+/// every component of `target_kind`. `target_kind` must be one of
+/// Vec2 / Vec3 / Vec4; other kinds error.
+fn splat_scalar_to_vector(
+    ctx: &mut Ctx,
+    scalar_id: Word,
+    target_kind: TypeKind,
+) -> Result<Word, LoweringError> {
+    let (target_ty, count) = match target_kind {
+        TypeKind::Vec2 => (ctx.type_vec2, 2usize),
+        TypeKind::Vec3 => (ctx.type_vec3, 3),
+        TypeKind::Vec4 => (ctx.type_vec4, 4),
+        _ => {
+            return Err(LoweringError::UnsupportedShape {
+                what: format!("scalar splat target {target_kind:?} is not lowered"),
+            });
+        },
+    };
+    let constituents: Vec<Word> = std::iter::repeat(scalar_id).take(count).collect();
+    ctx.b
+        .composite_construct(target_ty, None, constituents)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
+}
+
+/// Lazily allocate the `GLSL.std.450` `OpExtInstImport` and cache
+/// its id on `ctx`. The first built-in call that needs it pays the
+/// allocation; subsequent calls reuse the cached id.
+fn glsl_std_450_id(ctx: &mut Ctx) -> Word {
+    if let Some(id) = ctx.glsl_std_450 {
+        return id;
+    }
+    let id = ctx.b.ext_inst_import("GLSL.std.450");
+    ctx.glsl_std_450 = Some(id);
+    id
+}
+
 fn spv_type_for_kind(ctx: &Ctx, kind: TypeKind) -> Option<Word> {
     Some(match kind {
         TypeKind::Float => ctx.type_float,
@@ -797,6 +1035,23 @@ fn spv_type_for_kind(ctx: &Ctx, kind: TypeKind) -> Option<Word> {
         TypeKind::Mat4 => ctx.type_mat4,
         _ => return None,
     })
+}
+
+/// Get (or lazily allocate) the SPIR-V `OpTypePointer Function T`
+/// id for `kind`. Used when emitting `OpVariable` for a local. Each
+/// pointer type is allocated at most once per `Ctx`.
+fn function_ptr_for(ctx: &mut Ctx, kind: TypeKind) -> Result<Word, LoweringError> {
+    if let Some(&w) = ctx.function_ptr_types.get(&kind) {
+        return Ok(w);
+    }
+    let value_ty = spv_type_for_kind(ctx, kind).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("function-scope pointer to {kind:?} is not lowered"),
+        }
+    })?;
+    let ptr = ctx.b.type_pointer(None, StorageClass::Function, value_ty);
+    ctx.function_ptr_types.insert(kind, ptr);
+    Ok(ptr)
 }
 
 fn int_constant(ctx: &mut Ctx, value: i32) -> Word {
@@ -824,6 +1079,16 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
             // while lowering a user function body.
             if let Some(p) = ctx.fn_params.get(name) {
                 return Ok(p.value_id);
+            }
+            // Function-scope locals are next. `OpLoad` the value
+            // out of the local's variable.
+            if let Some(local) = ctx.locals.get(name) {
+                let pointee = local.pointee_type;
+                let var = local.var;
+                return ctx
+                    .b
+                    .load(pointee, None, var, None, [])
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
             }
             if let Some(binding) = ctx.inputs.get(name) {
                 let pointee = binding.pointee_type;
@@ -857,10 +1122,72 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
             })
         },
         Expr::Binary { op, lhs, rhs, span } => lower_binary(ctx, *op, lhs, rhs, *span),
-        Expr::Call { callee, args, .. } => {
-            // User-defined function calls dispatch to OpFunctionCall.
-            // Constructor calls (vec2 / vec3 / vec4) flow through the
-            // composite-construct path below.
+        Expr::Call { callee, args, span, .. } => {
+            // ESSL §8 built-ins (sin/cos/dot/...) dispatch first.
+            // Most map to GLSL.std.450 OpExtInst; `dot` is the one
+            // that uses a core SPIR-V opcode (OpDot). User-defined
+            // function calls go through OpFunctionCall next.
+            // Constructor calls (vec2 / vec3 / vec4) fall through
+            // to the composite-construct path below.
+            if callee == "dot" {
+                if args.len() != 2 {
+                    return Err(LoweringError::UnsupportedShape {
+                        what: format!("`dot` expects 2 args, got {}", args.len()),
+                    });
+                }
+                let a = lower_expr(ctx, &args[0])?;
+                let b = lower_expr(ctx, &args[1])?;
+                return ctx
+                    .b
+                    .dot(ctx.type_float, None, a, b)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+            if let Some(mut opcode) = builtin_glsl450_opcode(callee) {
+                // `atan(y, x)` (2-arg form) maps to GLSL.std.450
+                // Atan2 (25), not the 1-arg Atan (18) the table
+                // returns by name. Disambiguate by arity here.
+                if callee == "atan" && args.len() == 2 {
+                    opcode = 25;
+                }
+                let result_kind = ctx.types.get(span).copied().ok_or_else(|| {
+                    LoweringError::UnsupportedShape {
+                        what: format!("built-in `{callee}` has no typecheck result"),
+                    }
+                })?;
+                let result_ty = spv_type_for_kind(ctx, result_kind).ok_or_else(|| {
+                    LoweringError::UnsupportedShape {
+                        what: format!("built-in `{callee}` returns {result_kind:?} which is not lowered"),
+                    }
+                })?;
+                // Lower each arg, splatting scalars into the result
+                // type when the built-in's signature admits scalar
+                // broadcast at this position. GLSL.std.450
+                // FClamp / FMix / Step / etc. require homogeneous
+                // operands, so the ESSL `clamp(vec3, float, float)`
+                // overload has to splat the bounds to vec3 first.
+                let mut arg_ids = Vec::with_capacity(args.len());
+                let result_is_vector = matches!(
+                    result_kind,
+                    TypeKind::Vec2 | TypeKind::Vec3 | TypeKind::Vec4
+                );
+                for (idx, a) in args.iter().enumerate() {
+                    let mut id = lower_expr(ctx, a)?;
+                    if result_is_vector && should_splat_scalar_for_builtin(callee, idx) {
+                        let arg_kind = classify_arg_kind(ctx, a);
+                        if arg_kind == Some(TypeKind::Float) {
+                            id = splat_scalar_to_vector(ctx, id, result_kind)?;
+                        }
+                    }
+                    arg_ids.push(id);
+                }
+                let set_id = glsl_std_450_id(ctx);
+                let operands: Vec<Operand> =
+                    arg_ids.iter().map(|w| Operand::IdRef(*w)).collect();
+                return ctx
+                    .b
+                    .ext_inst(result_ty, None, set_id, opcode, operands)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
             if let Some(user_fn) = ctx.user_fns.get(callee) {
                 let func_id = user_fn.func_id;
                 let result_kind = user_fn.result;

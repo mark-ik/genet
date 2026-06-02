@@ -139,7 +139,7 @@ pub struct TypeSpec {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum TypeKind {
     Void,
     Bool,

@@ -103,14 +103,16 @@ void main() {
 
 #[test]
 fn lowering_failure_routed_through_CompileError_Lower() {
-    // A shape the lowering does not handle (local decl in main is
-    // not yet a supported body statement; only assign / call stmts
-    // are).
+    // A shape the lowering does not handle: a function-scope local
+    // of `bool` type. `spv_type_for_kind` does not map Bool, so
+    // allocating the OpVariable for the local fails. Pinned at the
+    // lower stage rather than check (the typechecker accepts the
+    // decl).
     let src = r#"
 precision mediump float;
 void main() {
-    float t = 0.5;
-    gl_FragColor = vec4(t);
+    bool flag = true;
+    gl_FragColor = vec4(0.0);
 }
 "#;
     let err = compile(src, ShaderStage::Fragment).unwrap_err();
