@@ -283,6 +283,8 @@ pub enum UnaryOp {
     Pos,
     /// `!x`
     Not,
+    /// `~x` — bitwise complement. ESSL 3.00 only on integer operands.
+    BitNot,
     /// `++x`
     PreInc,
     /// `--x`
@@ -308,6 +310,16 @@ pub enum BinOp {
     Ge,
     LogAnd,
     LogOr,
+    /// `<<` — left shift. ESSL 3.00 only.
+    Shl,
+    /// `>>` — right shift. ESSL 3.00 only.
+    Shr,
+    /// `&` — bitwise AND. ESSL 3.00 only.
+    BitAnd,
+    /// `|` — bitwise OR. ESSL 3.00 only.
+    BitOr,
+    /// `^` — bitwise XOR. ESSL 3.00 only.
+    BitXor,
 }
 
 impl Expr {

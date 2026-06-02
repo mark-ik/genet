@@ -40,6 +40,18 @@ pub(super) fn binary_result(op: BinOp, lhs: TypeKind, rhs: TypeKind) -> Option<T
                 None
             }
         },
+        // ESSL 3.00 only. Both operands must be integer; result type
+        // is the LHS's. ESSL 1.00 has no `uint` / `ivec_n`, so the
+        // strict rule here is "Int with Int produces Int". When ivec
+        // and uint types land in the AST, this widens to integer
+        // family element-wise.
+        Shl | Shr | BitAnd | BitOr | BitXor => {
+            if lhs == Int && rhs == Int {
+                Some(Int)
+            } else {
+                None
+            }
+        },
     }
 }
 
@@ -96,6 +108,14 @@ pub(super) fn unary_result(op: UnaryOp, operand: TypeKind) -> Option<TypeKind> {
         Not => {
             if operand == Bool {
                 Some(Bool)
+            } else {
+                None
+            }
+        },
+        // ESSL 3.00 only. Operand must be integer family.
+        BitNot => {
+            if operand == Int {
+                Some(Int)
             } else {
                 None
             }

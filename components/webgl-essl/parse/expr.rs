@@ -251,11 +251,13 @@ impl Parser {
 
 // ---------- binding-power tables --------------------------------------
 //
-// Numbers gapped by 2 so future operators (shift / bitwise) slot in
-// without renumbering.
+// Numbers gapped by 2. Renumbered for ESSL 3.00's full precedence
+// table: shift / relational / equality / bitwise AND / bitwise XOR /
+// bitwise OR all need slots between additive and the logical
+// operators.
 
 /// Binding power for the ternary `?:` operator. Sits between
-/// assignment (l_bp = 2) and logical OR (l_bp = 3), checked as a
+/// assignment (l_bp = 2) and logical OR (l_bp = 5), checked as a
 /// special case in the Pratt loop because ternary is mixfix.
 const TERNARY_BP: u8 = 3;
 
@@ -266,26 +268,35 @@ fn infix_bp(p: Punct) -> Option<(u8, u8)> {
         | Punct::MinusEq
         | Punct::StarEq
         | Punct::SlashEq => (2, 1),
-        Punct::OrOr => (3, 4),
-        Punct::AndAnd => (5, 6),
-        Punct::Eq | Punct::Ne => (7, 8),
-        Punct::Lt | Punct::Le | Punct::Gt | Punct::Ge => (9, 10),
-        Punct::Plus | Punct::Minus => (11, 12),
-        Punct::Star | Punct::Slash | Punct::Percent => (13, 14),
+        Punct::OrOr => (5, 6),
+        Punct::AndAnd => (7, 8),
+        Punct::Pipe => (9, 10),
+        Punct::Caret => (11, 12),
+        Punct::Amp => (13, 14),
+        Punct::Eq | Punct::Ne => (15, 16),
+        Punct::Lt | Punct::Le | Punct::Gt | Punct::Ge => (17, 18),
+        Punct::Shl | Punct::Shr => (19, 20),
+        Punct::Plus | Punct::Minus => (21, 22),
+        Punct::Star | Punct::Slash | Punct::Percent => (23, 24),
         _ => return None,
     })
 }
 
 fn prefix_bp(p: Punct) -> Option<u8> {
     Some(match p {
-        Punct::Plus | Punct::Minus | Punct::Bang | Punct::PlusPlus | Punct::MinusMinus => 17,
+        Punct::Plus
+        | Punct::Minus
+        | Punct::Bang
+        | Punct::Tilde
+        | Punct::PlusPlus
+        | Punct::MinusMinus => 25,
         _ => return None,
     })
 }
 
 fn postfix_bp(p: Punct) -> Option<u8> {
     Some(match p {
-        Punct::LParen | Punct::Dot | Punct::LBracket | Punct::PlusPlus | Punct::MinusMinus => 19,
+        Punct::LParen | Punct::Dot | Punct::LBracket | Punct::PlusPlus | Punct::MinusMinus => 27,
         _ => return None,
     })
 }
@@ -295,6 +306,7 @@ fn prefix_op_from_punct(p: Punct) -> UnaryOp {
         Punct::Plus => UnaryOp::Pos,
         Punct::Minus => UnaryOp::Neg,
         Punct::Bang => UnaryOp::Not,
+        Punct::Tilde => UnaryOp::BitNot,
         Punct::PlusPlus => UnaryOp::PreInc,
         Punct::MinusMinus => UnaryOp::PreDec,
         _ => unreachable!("prefix_bp returned Some for non-prefix `{p:?}`"),
@@ -309,12 +321,17 @@ fn make_infix(p: Punct, lhs: Expr, rhs: Expr) -> Expr {
     let op = match p {
         Punct::OrOr => BinOp::LogOr,
         Punct::AndAnd => BinOp::LogAnd,
+        Punct::Pipe => BinOp::BitOr,
+        Punct::Caret => BinOp::BitXor,
+        Punct::Amp => BinOp::BitAnd,
         Punct::Eq => BinOp::Eq,
         Punct::Ne => BinOp::Ne,
         Punct::Lt => BinOp::Lt,
         Punct::Le => BinOp::Le,
         Punct::Gt => BinOp::Gt,
         Punct::Ge => BinOp::Ge,
+        Punct::Shl => BinOp::Shl,
+        Punct::Shr => BinOp::Shr,
         Punct::Plus => BinOp::Add,
         Punct::Minus => BinOp::Sub,
         Punct::Star => BinOp::Mul,
