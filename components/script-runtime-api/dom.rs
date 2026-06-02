@@ -982,7 +982,7 @@ const DOM_BOOTSTRAP: &str = r#"
     if (ref === undefined || ref === null) return null;
     if (wrappers.has(ref)) return wrappers.get(ref);
     var nt = +__nodeType(ref);
-    var proto = nt === 1 ? Element.prototype
+    var proto = nt === 1 ? HTMLElement.prototype
               : nt === 9 ? Document.prototype
               : nt === 3 ? Text.prototype
               : nt === 8 ? Comment.prototype
@@ -1692,6 +1692,15 @@ const DOM_BOOTSTRAP: &str = r#"
   globalThis.Node = Node;
   globalThis.Element = Element;
   globalThis.Document = Document;
+  // HTMLElement sits between Element and element instances (HTMLElement.prototype
+  // -> Element.prototype -> Node.prototype). The static-DOM harness only has HTML
+  // elements, so `wrapNode` gives every element this prototype; that makes
+  // `instanceof HTMLElement` and `class X extends HTMLElement` work (the single
+  // biggest missing-global in the WPT sweep) while keeping `instanceof Element`.
+  function HTMLElement() {}
+  HTMLElement.prototype = Object.create(Element.prototype);
+  HTMLElement.prototype.constructor = HTMLElement;
+  globalThis.HTMLElement = HTMLElement;
   // (Text / Comment / CharacterData exposed above, with their prototype chain.)
 
   installReflectedAttributes();
@@ -2169,6 +2178,45 @@ const DOM_BOOTSTRAP: &str = r#"
   document.nodeType = 9;
   wrappers.set(docRef, document);
   globalThis.document = document;
+
+  // window.frames is the window itself when there are no child browsing
+  // contexts (the static-DOM harness has none).
+  globalThis.frames = globalThis.window || globalThis;
+
+  // Minimal CustomElementRegistry: define/get/getName/whenDefined/upgrade.
+  // Records definitions so the constructor-validity and "is defined" checks
+  // pass; it does not upgrade existing elements (no live tree to walk here).
+  (function() {
+    function CustomElementRegistry() {}
+    var defs = Object.create(null);
+    var byCtor = new Map();
+    var pending = Object.create(null);
+    CustomElementRegistry.prototype.define = function(name, ctor, options) {
+      if (typeof ctor !== 'function') {
+        throw new TypeError('constructor must be a function');
+      }
+      if (typeof name !== 'string' || name.indexOf('-') === -1) {
+        throw new (globalThis.DOMException || TypeError)('invalid custom element name', 'SyntaxError');
+      }
+      if (name in defs) {
+        throw new (globalThis.DOMException || TypeError)('name already defined', 'NotSupportedError');
+      }
+      defs[name] = ctor;
+      byCtor.set(ctor, name);
+      if (pending[name]) { pending[name].forEach(function(r) { r(ctor); }); delete pending[name]; }
+    };
+    CustomElementRegistry.prototype.get = function(name) { return defs[name]; };
+    CustomElementRegistry.prototype.getName = function(ctor) {
+      return byCtor.has(ctor) ? byCtor.get(ctor) : null;
+    };
+    CustomElementRegistry.prototype.whenDefined = function(name) {
+      if (name in defs) return Promise.resolve(defs[name]);
+      return new Promise(function(res) { (pending[name] = pending[name] || []).push(res); });
+    };
+    CustomElementRegistry.prototype.upgrade = function() {};
+    globalThis.CustomElementRegistry = CustomElementRegistry;
+    globalThis.customElements = new CustomElementRegistry();
+  })();
 })();
 "#;
 
