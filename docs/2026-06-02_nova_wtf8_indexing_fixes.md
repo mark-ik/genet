@@ -1,10 +1,11 @@
 # Nova WTF-8 / UTF-16 string-indexing fixes
 
 Status: **landed in the fork (`crates/nova`, branch `serval-embedder`),
-2026-06-02.** Five bugs, all upstream candidates (we are a thin fork; clean to
+2026-06-02.** Six bugs, all upstream candidates (we are a thin fork; clean to
 contribute). Verified by a serval-side end-to-end regression test
 (`components/script-engine-nova/tests/wtf8_indexing_regression.rs`), nova_vm and
-`small_string` unit tests, and the dom/nodes WPT sweep.
+`small_string` unit tests, the dom/nodes WPT sweep, and a test262
+String/RegExp pass (results below).
 
 ## Where this came from
 
@@ -12,8 +13,9 @@ The Boa<->Nova divergence sweep
 ([pluggable-engines plan](./2026-05-26_pluggable_engines_testharness_plan.md))
 left a residual of 6 dom/nodes tests that **panicked** on Nova where Boa
 completed. The shorthand at the time was "one lone-surrogate string panic." That
-was wrong on two counts: there were five distinct bugs, and only one is about
-surrogates. The common thread is that Nova stores strings as WTF-8 (bytes) but
+was wrong on two counts: there were six distinct bugs (five found via the WPT
+sweep, a sixth via the test262 pass below), and only one is about surrogates. The
+common thread is that Nova stores strings as WTF-8 (bytes) but
 JS addresses them in UTF-16 code units, and several places confused the two.
 
 The runner swallows per-test panics (`ERROR panic`), so the panic site was found
@@ -111,16 +113,51 @@ mid-character (before fix 1). Fix: one line, convert the start with
 `regex_match_index_is_utf16_not_byte_offset`, `regex_replace_on_non_ascii`,
 `regex_split_on_non_ascii`.
 
+### 6. `reg_exp_builtin_exec` bounded a UTF-16 `lastIndex` by the byte length
+
+`regexp/abstract_operations.rs`. Found by the test262 pass, not the WPT sweep:
+fixing bug 5 let `matchAll-v-u-flag` get past its early assertions and reach an
+empty-match case that exposed this. To map the regex's `lastIndex` (a UTF-16
+index) to a byte offset for the matcher, the guard was
+`if last_index > s.len_(agent)` — `len_` is the WTF-8 **byte** length. A
+fullUnicode empty-match `matchAll` advances `lastIndex` one past the end, so a
+UTF-16 index in `(utf16_len, byte_len]` slipped through and indexed the
+UTF-16->byte map out of bounds (panic in `String::utf8_index`). A non-BMP string
+is needed for the two lengths to differ. Fix: bound by `s.utf16_len_(agent)`, and
+when past the end push the value past the byte length so the existing length
+guard fails the match. Test: `regex_exec_lastindex_past_end_does_not_oob`.
+
+## test262 (built-ins/String + built-ins/RegExp)
+
+Ran the full `built-ins/String` and `built-ins/RegExp` trees with the release
+`nova_cli`, against the committed `expectations.json` (the pre-fix baseline; no
+`--update`). Result: **6 improvements, 0 regressions** — every delta is a test
+the baseline expected to Fail/Crash now Passing, and nothing the baseline passed
+regressed:
+
+- `RegExp/S15.10.2.7_A2_T1` (Fail->Pass) — `/\w{3}\d?/.exec("CE￿L￝box127")`
+  expects `.index === 5`; pre-fix it returned the byte offset 9. The cleanest
+  confirmation of bug 5.
+- `RegExp/prototype/exec/regexp-builtin-exec-v-u-flag`, plus String.prototype
+  `search/regexp-prototype-search-v-flag`, `search/regexp-prototype-search-v-u-flag`,
+  `matchAll/regexp-prototype-matchAll-v-u-flag` (all Fail->Pass), and
+  `replace/regexp-prototype-replace-v-u-flag` (Crash->Pass). The matchAll one is
+  the test that drove out bug 6 (Fail -> Crash under fix 5 alone -> Pass with 6).
+
+The String/prototype + RegExp/prototype subset alone: 1551 tests, 1436 pass,
+0 regressions.
+
 ## Upstreaming
 
-All five are upstream-Nova bugs (the binding layer in
+All six are upstream-Nova bugs (the binding layer in
 `components/script-engine-nova` is clean; `value_to_string` is
 `to_string_lossy`-safe). We are not gating on upstream: the fixes live in the
 fork now. Each is self-contained and carries a comment explaining the WTF-8 /
 UTF-16 confusion, so each can be lifted to a PR against upstream Nova
 independently. Files touched: `small_string/lib.rs`,
 `nova_vm/.../string/data.rs`, `nova_vm/.../string_prototype.rs`,
-`nova_vm/.../regexp_prototype.rs`, `nova_vm/.../regexp/abstract_operations.rs`.
+`nova_vm/.../regexp_prototype.rs`, `nova_vm/.../regexp/abstract_operations.rs`
+(bugs 5 and 6).
 
 ## Not done (deliberate)
 
@@ -128,6 +165,7 @@ independently. Files touched: `small_string/lib.rs`,
   binding-gap tail, unrelated to string indexing.
 - The regex `d` flag (`hasIndices`) capture start/end conversion is still
   unimplemented upstream (comments only in `RegExpBuiltinExec`); untouched.
-- test262 is an uninitialized submodule locally, so the authoritative
-  String/RegExp conformance suite was not run. Coverage rests on the regression
-  test, nova_vm/small_string units, and the dom/nodes sweep.
+- The test262 pass covered `built-ins/String` + `built-ins/RegExp`. The wider
+  `language/` and other trees that lean on these methods were not run; the
+  regression test, nova_vm/small_string units, and the dom/nodes sweep cover the
+  rest.

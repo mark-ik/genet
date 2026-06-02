@@ -1,7 +1,8 @@
-// Regression guard for five nova_vm WTF-8/UTF-16 indexing bugs surfaced by the
-// WPT testharness runner on Nova (a string with a non-ASCII or astral character
-// reaching String.prototype.{slice,substring,substr}, RegExp match/split/replace/
-// search, or charCodeAt/codePointAt). Each is diagnosed in
+// Regression guard for six nova_vm WTF-8/UTF-16 indexing bugs surfaced by the
+// WPT testharness runner on Nova and a test262 String/RegExp pass (a string with
+// a non-ASCII or astral character reaching String.prototype.{slice,substring,
+// substr}, RegExp match/split/replace/search/exec, or charCodeAt/codePointAt).
+// Each is diagnosed in
 // docs/2026-06-02_nova_wtf8_indexing_fixes.md. These assert behaviour through the
 // public engine surface, so they fail loudly if a fix regresses (e.g. on a Nova
 // rebase). Surrogate halves are compared via charCodeAt so the terminal never has
@@ -50,6 +51,25 @@ fn regex_split_on_non_ascii() {
     // index paired with a UTF-16 length — and panicked on a multi-byte tail.
     assert_eq!(eval(r#"JSON.stringify("ΔЙあ叶葉".split(/,/))"#), "[\"\u{394}\u{419}\u{3042}\u{53f6}\u{8449}\"]");
     assert_eq!(eval(r#"JSON.stringify("aΔbΔc".split(/Δ/))"#), r#"["a","b","c"]"#);
+}
+
+#[test]
+fn regex_exec_lastindex_past_end_does_not_oob() {
+    // reg_exp_builtin_exec bounded the UTF-16 lastIndex by the WTF-8 *byte*
+    // length before mapping it to a byte offset; a fullUnicode empty-match
+    // matchAll advances lastIndex one past the end, slipping a UTF-16 index in
+    // (utf16_len, byte_len] through and indexing the UTF-16->byte map out of
+    // bounds. A non-BMP string makes the two lengths differ. Each astral char
+    // (𠮷 = U+20BB7) is 2 UTF-16 units, so /(?:)/gu yields one empty match per
+    // code-point boundary.
+    assert_eq!(eval(r#"String(Array.from("𠮷a𠮷b𠮷".matchAll(/(?:)/gu)).length)"#), "6");
+    assert_eq!(eval(r#"String(Array.from("𠮷a𠮷b𠮷".matchAll(/(?:)/gv)).length)"#), "6");
+    assert_eq!(eval(r#""𠮷".replace(/(?:)/gu, "-")"#), "-\u{20BB7}-");
+    // The match indices themselves stay correct UTF-16 offsets.
+    assert_eq!(
+        eval(r#"Array.from("𠮷a𠮷b𠮷".matchAll(/𠮷/g)).map(m=>m.index).join(",")"#),
+        "0,3,6"
+    );
 }
 
 #[test]
