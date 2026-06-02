@@ -14,3 +14,7 @@ name = "webgl_essl"
 path = "lib.rs"
 
 [dependencies]
+# Step 6 lowering path A: ESSL -> SPIR-V (rspirv) -> naga IR (spv-in)
+# -> WGSL (wgsl-out). Pinned to the naga that ships with wgpu 29.
+naga = { version = "29", default-features = false, features = ["spv-in", "wgsl-out"] }
+rspirv = "0.13"

@@ -24,6 +24,7 @@ pub mod ast;
 pub mod check;
 pub mod error;
 pub mod lex;
+pub mod lower;
 pub mod parse;
 pub mod span;
 pub mod token;
