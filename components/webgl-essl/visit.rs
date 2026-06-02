@@ -180,6 +180,13 @@ pub fn walk_stmt<'tree, V: Visitor<'tree>>(v: &mut V, stmt: &'tree Stmt) {
             walk_stmt(v, body);
         },
         Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Discard { .. } => {},
+        Stmt::Switch { discriminant, body, .. } => {
+            walk_expr(v, discriminant);
+            v.visit_stmt(stmt, Visit::In);
+            walk_block(v, body);
+        },
+        Stmt::Case { value, .. } => walk_expr(v, value),
+        Stmt::Default { .. } => {},
     }
     v.visit_stmt(stmt, Visit::Post);
 }

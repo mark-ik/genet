@@ -70,6 +70,10 @@ pub enum Keyword {
     Continue,
     Discard,
     Struct,
+    // ESSL 3.00 control flow
+    Switch,
+    Case,
+    Default,
 }
 
 impl Keyword {
@@ -113,6 +117,9 @@ impl Keyword {
             "continue" => Continue,
             "discard" => Discard,
             "struct" => Struct,
+            "switch" => Switch,
+            "case" => Case,
+            "default" => Default,
             _ => return None,
         })
     }

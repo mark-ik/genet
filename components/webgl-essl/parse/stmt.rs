@@ -51,6 +51,9 @@ impl Parser {
             Some(TokenKind::Keyword(Keyword::Discard)) => {
                 return self.parse_simple_jump(JumpKind::Discard);
             },
+            Some(TokenKind::Keyword(Keyword::Switch)) => return self.parse_switch(),
+            Some(TokenKind::Keyword(Keyword::Case)) => return self.parse_case_label(),
+            Some(TokenKind::Keyword(Keyword::Default)) => return self.parse_default_label(),
             Some(TokenKind::Punct(Punct::LBrace)) => {
                 let b = self.block()?;
                 return Ok(Stmt::Block(b));
@@ -193,6 +196,32 @@ impl Parser {
             },
             _ => false,
         }
+    }
+
+    fn parse_switch(&mut self) -> Result<Stmt, Error> {
+        let start = self.peek_span();
+        self.bump();
+        self.expect_punct(Punct::LParen, "`(` after `switch`")?;
+        let discriminant = self.expr()?;
+        self.expect_punct(Punct::RParen, "`)`")?;
+        let body = self.block()?;
+        let span = start.merge(body.span);
+        Ok(Stmt::Switch { discriminant, body, span })
+    }
+
+    fn parse_case_label(&mut self) -> Result<Stmt, Error> {
+        let start = self.peek_span();
+        self.bump();
+        let value = self.expr()?;
+        let colon = self.expect_punct(Punct::Colon, "`:` after `case <value>`")?;
+        Ok(Stmt::Case { value, span: start.merge(colon) })
+    }
+
+    fn parse_default_label(&mut self) -> Result<Stmt, Error> {
+        let start = self.peek_span();
+        self.bump();
+        let colon = self.expect_punct(Punct::Colon, "`:` after `default`")?;
+        Ok(Stmt::Default { span: start.merge(colon) })
     }
 
     fn local_decl(&mut self) -> Result<Stmt, Error> {

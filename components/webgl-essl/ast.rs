@@ -211,6 +211,16 @@ pub enum Stmt {
     Continue { span: Span },
     /// `discard;` — fragment-shader only; parser accepts everywhere.
     Discard { span: Span },
+    /// `switch (<discriminant>) { <body> }`. ESSL 3.00. Case / default
+    /// labels appear inside `body.stmts` as their own `Stmt` variants.
+    Switch { discriminant: Expr, body: Block, span: Span },
+    /// `case <value>:` label inside a switch body. The value must be
+    /// a constant integer expression per spec; the parser is
+    /// permissive and accepts any expression, leaving the constant
+    /// check to a later pass.
+    Case { value: Expr, span: Span },
+    /// `default:` label inside a switch body.
+    Default { span: Span },
 }
 
 impl Stmt {
@@ -224,7 +234,10 @@ impl Stmt {
             | Stmt::Do { span, .. }
             | Stmt::Break { span }
             | Stmt::Continue { span }
-            | Stmt::Discard { span } => *span,
+            | Stmt::Discard { span }
+            | Stmt::Switch { span, .. }
+            | Stmt::Case { span, .. }
+            | Stmt::Default { span } => *span,
             Stmt::Decl(d) => d.span,
             Stmt::Block(b) => b.span,
         }
