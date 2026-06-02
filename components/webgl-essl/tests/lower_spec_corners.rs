@@ -18,21 +18,18 @@ use webgl_essl::{CompileError, compile};
 
 // ---------- varying widening corners ----------------------------------
 
-/// SPEC-CONFORMANT-BUT-NAGA-REJECTS. ESSL 1.00 §4.3.5 allows
-/// `mat4` varyings. The lowering now registers matrix Outputs
-/// in `register_varying_outputs` (one Location per column), so
-/// the SPIR-V it emits is valid — but naga's WGSL pipeline
-/// rejects matrices as standalone I/O variables with
-/// `NotIOShareableType`, because WGSL requires them inside an
-/// interface block. Closing the gap fully needs either column-
-/// splitting at the lowering layer or a Block-decorated struct
-/// output; queued separately. The receipt pins that:
-///   1. The lowering itself no longer surfaces the misleading
-///      "expected `gl_Position`" diagnostic, and
-///   2. The failure now happens at the naga-validate stage with
-///      a clear "not I/O shareable" error.
+/// HAPPY (resolved). ESSL 1.00 §4.3.5 allows `mat4` varyings.
+/// `register_varying_outputs` now column-splits a `mat_n`
+/// varying into `n` separate `vec_n` Output variables at
+/// sequential Locations; the assignment site composite-extracts
+/// each column from the produced matrix value and stores it to
+/// its column variable. `register_inputs` mirrors this on the
+/// fragment side, loading the N columns and
+/// composite-constructing the matrix. Naga's WGSL pipeline now
+/// accepts the SPIR-V because each I/O variable is a vec_n,
+/// not a mat_n.
 #[test]
-fn mat4_varying_in_vertex_emits_io_shareable_naga_error() {
+fn mat4_varying_in_vertex_column_splits_and_lowers() {
     let src = "attribute vec3 a_position;\n\
                varying mat4 v_xform;\n\
                uniform mat4 u_base;\n\
@@ -40,16 +37,28 @@ fn mat4_varying_in_vertex_emits_io_shareable_naga_error() {
                    v_xform = u_base;\n\
                    gl_Position = vec4(a_position, 1.0);\n\
                }\n";
-    let err = compile(src, ShaderStage::Vertex).unwrap_err();
-    let msg = format!("{err:?}");
-    assert!(
-        msg.contains("NotIOShareableType") || msg.contains("IoShareableType"),
-        "expected naga IO-shareable error, got: {msg}"
-    );
-    assert!(
-        !msg.contains("expected `gl_Position`"),
-        "old misleading diagnostic should be gone: {msg}"
-    );
+    let r = compile(src, ShaderStage::Vertex).expect("compile");
+    // The split emits four vec4 outputs at Location 0..3.
+    assert!(r.wgsl.contains("location(0)"));
+    assert!(r.wgsl.contains("location(3)"));
+}
+
+/// HAPPY. Matrix varying as a fragment-stage input: the four
+/// `vec4` input columns are loaded and reassembled into a
+/// `mat4` via `OpCompositeConstruct` at the Ident-lookup site,
+/// then participate in a `OpMatrixTimesVector` against a
+/// uniform vec4. Matrix indexing (`m[i]`) is queued separately.
+#[test]
+fn mat4_varying_in_fragment_assembles_from_column_inputs() {
+    let src = "precision mediump float;\n\
+               varying mat4 v_xform;\n\
+               uniform vec4 u_p;\n\
+               void main() {\n\
+                   gl_FragColor = v_xform * u_p;\n\
+               }\n";
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("location(0)"));
+    assert!(r.wgsl.contains("location(3)"));
 }
 
 /// HAPPY. Two varyings of different widths in one vertex shader

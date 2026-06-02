@@ -320,17 +320,28 @@ struct Ctx<'a> {
 }
 
 struct InputBinding {
-    /// SPIR-V Word for the OpVariable itself.
-    var: Word,
-    /// SPIR-V Word for the pointee type (the variable's value type).
+    /// SPIR-V `OpVariable` Words for this input. A non-matrix
+    /// input has one entry; a matrix input is column-split into
+    /// N entries (one per column), each a vec_n Input variable
+    /// at sequential Locations. The Ident-lookup site loads each
+    /// column and composite-constructs the matrix.
+    vars: Vec<Word>,
+    /// SPIR-V type Word the `OpLoad` returns. For non-matrix
+    /// inputs that's the value type; for matrix inputs it's the
+    /// per-column vec_n type.
     pointee_type: Word,
-    /// ESSL value type of this binding. Tracked so the emitter knows
-    /// the loaded type without re-querying SPIR-V.
+    /// ESSL value type of the assembled binding. For a matrix
+    /// input this is `Mat_n`, not the column type.
     kind: TypeKind,
 }
 
 struct OutputBinding {
-    var: Word,
+    /// SPIR-V `OpVariable` Words for this output. One entry for
+    /// a non-matrix output; N entries for a column-split matrix
+    /// output (one per column, sequential Locations).
+    vars: Vec<Word>,
+    /// ESSL value type of the assembled binding (matches the
+    /// declared `varying`/`out` type).
     kind: TypeKind,
 }
 
@@ -469,9 +480,6 @@ fn build_spirv(
         type_vec2,
         type_vec3,
         type_vec4,
-        type_mat2,
-        type_mat3,
-        type_mat4,
     );
 
     // Uniforms wrapped in a single Block-decorated struct.
@@ -582,8 +590,13 @@ fn build_spirv(
         ShaderStage::Vertex => ExecutionModel::Vertex,
         ShaderStage::Fragment => ExecutionModel::Fragment,
     };
-    let mut interface: Vec<Word> = ctx.inputs.values().map(|b| b.var).collect();
-    interface.extend(ctx.outputs.values().map(|b| b.var));
+    let mut interface: Vec<Word> = Vec::new();
+    for b in ctx.inputs.values() {
+        interface.extend(b.vars.iter().copied());
+    }
+    for b in ctx.outputs.values() {
+        interface.extend(b.vars.iter().copied());
+    }
     for s in ctx.samplers.values() {
         interface.push(s.image_var);
         interface.push(s.sampler_var);
@@ -597,7 +610,6 @@ fn build_spirv(
     Ok(ctx.b.module())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn register_varying_outputs(
     b: &mut Builder,
     tu: &TranslationUnit,
@@ -606,9 +618,6 @@ fn register_varying_outputs(
     type_vec2: Word,
     type_vec3: Word,
     type_vec4: Word,
-    type_mat2: Word,
-    type_mat3: Word,
-    type_mat4: Word,
 ) -> HashMap<String, OutputBinding> {
     let mut outputs = HashMap::new();
     if stage != ShaderStage::Vertex {
@@ -618,28 +627,35 @@ fn register_varying_outputs(
     }
     // SPIR-V Output Locations are an independent set from Input
     // Locations; we count from 0 for the varying outputs. A
-    // matrix consumes one Location per column.
+    // matrix is column-split into N separate vec_n outputs at
+    // sequential Locations — naga's WGSL pipeline rejects matrix
+    // I/O variables (`NotIOShareableType`) but accepts the split
+    // vec_n form.
     let mut location: u32 = 0;
     for d in &tu.decls {
         let ExternalDecl::Global(g) = d else { continue };
         if g.storage != StorageQualifier::Varying {
             continue;
         }
-        let (pointee_type, kind, slot_width) = match g.ty.kind {
-            TypeKind::Float => (type_float, TypeKind::Float, 1u32),
-            TypeKind::Vec2 => (type_vec2, TypeKind::Vec2, 1),
-            TypeKind::Vec3 => (type_vec3, TypeKind::Vec3, 1),
-            TypeKind::Vec4 => (type_vec4, TypeKind::Vec4, 1),
-            TypeKind::Mat2 => (type_mat2, TypeKind::Mat2, 2),
-            TypeKind::Mat3 => (type_mat3, TypeKind::Mat3, 3),
-            TypeKind::Mat4 => (type_mat4, TypeKind::Mat4, 4),
+        let (column_type, column_count, kind) = match g.ty.kind {
+            TypeKind::Float => (type_float, 1u32, TypeKind::Float),
+            TypeKind::Vec2 => (type_vec2, 1, TypeKind::Vec2),
+            TypeKind::Vec3 => (type_vec3, 1, TypeKind::Vec3),
+            TypeKind::Vec4 => (type_vec4, 1, TypeKind::Vec4),
+            TypeKind::Mat2 => (type_vec2, 2, TypeKind::Mat2),
+            TypeKind::Mat3 => (type_vec3, 3, TypeKind::Mat3),
+            TypeKind::Mat4 => (type_vec4, 4, TypeKind::Mat4),
             _ => continue,
         };
-        let ptr_ty = b.type_pointer(None, StorageClass::Output, pointee_type);
-        let var = b.variable(ptr_ty, None, StorageClass::Output, None);
-        b.decorate(var, Decoration::Location, [Operand::LiteralBit32(location)]);
-        location += slot_width;
-        outputs.insert(g.name.clone(), OutputBinding { var, kind });
+        let ptr_ty = b.type_pointer(None, StorageClass::Output, column_type);
+        let mut vars = Vec::with_capacity(column_count as usize);
+        for _ in 0..column_count {
+            let var = b.variable(ptr_ty, None, StorageClass::Output, None);
+            b.decorate(var, Decoration::Location, [Operand::LiteralBit32(location)]);
+            location += 1;
+            vars.push(var);
+        }
+        outputs.insert(g.name.clone(), OutputBinding { vars, kind });
     }
     outputs
 }
@@ -867,10 +883,45 @@ fn lower_stmt(
                     return Ok(());
                 }
                 if let Some(out) = ctx.outputs.get(target_name) {
-                    let var = out.var;
-                    ctx.b
-                        .store(var, value, None, [])
-                        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+                    if out.vars.len() == 1 {
+                        let var = out.vars[0];
+                        ctx.b
+                            .store(var, value, None, [])
+                            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+                        return Ok(());
+                    }
+                    // Matrix output: extract each column from
+                    // the produced value and store it to the
+                    // matching column variable.
+                    let column_kind = match out.kind {
+                        TypeKind::Mat2 => TypeKind::Vec2,
+                        TypeKind::Mat3 => TypeKind::Vec3,
+                        TypeKind::Mat4 => TypeKind::Vec4,
+                        other => {
+                            return Err(LoweringError::UnsupportedShape {
+                                what: format!(
+                                    "output `{target_name}` of type {other:?} has no column kind"
+                                ),
+                            });
+                        },
+                    };
+                    let column_ty = spv_type_for_kind(ctx, column_kind).ok_or_else(|| {
+                        LoweringError::UnsupportedShape {
+                            what: format!(
+                                "column type {column_kind:?} for output `{target_name}` is not lowered"
+                            ),
+                        }
+                    })?;
+                    let vars: Vec<Word> = out.vars.clone();
+                    for (idx, col_var) in vars.iter().enumerate() {
+                        let col_val = ctx
+                            .b
+                            .composite_extract(column_ty, None, value, [idx as u32])
+                            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+                        ctx.b
+                            .store(*col_var, col_val, None, [])
+                            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+                    }
                     return Ok(());
                 }
                 return Err(LoweringError::UnsupportedShape {
@@ -1618,21 +1669,35 @@ fn register_inputs(
         if !is_input {
             continue;
         }
-        let (pointee_type, kind) = match g.ty.kind {
-            TypeKind::Float => (type_float, TypeKind::Float),
-            TypeKind::Vec2 => (type_vec2, TypeKind::Vec2),
-            TypeKind::Vec3 => (type_vec3, TypeKind::Vec3),
-            TypeKind::Vec4 => (type_vec4, TypeKind::Vec4),
-            // Other input types (int / ivec / mat) are not exercised
-            // by today's spike corpus; emit nothing so the expression
-            // emitter will error if they are referenced.
+        // Matrix inputs are column-split: a `mat_n` is emitted as
+        // N separate vec_n Input variables at sequential
+        // Locations. The Ident-lookup site loads each column and
+        // composite-constructs the matrix.
+        let (column_type, column_count, kind) = match g.ty.kind {
+            TypeKind::Float => (type_float, 1u32, TypeKind::Float),
+            TypeKind::Vec2 => (type_vec2, 1, TypeKind::Vec2),
+            TypeKind::Vec3 => (type_vec3, 1, TypeKind::Vec3),
+            TypeKind::Vec4 => (type_vec4, 1, TypeKind::Vec4),
+            TypeKind::Mat2 => (type_vec2, 2, TypeKind::Mat2),
+            TypeKind::Mat3 => (type_vec3, 3, TypeKind::Mat3),
+            TypeKind::Mat4 => (type_vec4, 4, TypeKind::Mat4),
+            // Other input types (int / ivec etc.) aren't exercised
+            // by today's spike corpus; emit nothing so the
+            // expression emitter will error if they are referenced.
             _ => continue,
         };
-        let ptr_ty = b.type_pointer(None, StorageClass::Input, pointee_type);
-        let var = b.variable(ptr_ty, None, StorageClass::Input, None);
-        b.decorate(var, Decoration::Location, [Operand::LiteralBit32(location)]);
-        location += 1;
-        inputs.insert(g.name.clone(), InputBinding { var, pointee_type, kind });
+        let ptr_ty = b.type_pointer(None, StorageClass::Input, column_type);
+        let mut vars = Vec::with_capacity(column_count as usize);
+        for _ in 0..column_count {
+            let var = b.variable(ptr_ty, None, StorageClass::Input, None);
+            b.decorate(var, Decoration::Location, [Operand::LiteralBit32(location)]);
+            location += 1;
+            vars.push(var);
+        }
+        inputs.insert(
+            g.name.clone(),
+            InputBinding { vars, pointee_type: column_type, kind },
+        );
     }
     inputs
 }
@@ -1766,11 +1831,16 @@ fn resolve_lhs_target(
         });
     }
     if let Some(out) = ctx.outputs.get(name) {
-        return Some(LhsTarget {
-            var: out.var,
-            kind: out.kind,
-            storage: StorageClass::Output,
-        });
+        // LHS-swizzle on matrix outputs would need per-column
+        // OpAccessChain plumbing; not yet supported. Fall back to
+        // the single-var path only for non-matrix outputs.
+        if out.vars.len() == 1 {
+            return Some(LhsTarget {
+                var: out.vars[0],
+                kind: out.kind,
+                storage: StorageClass::Output,
+            });
+        }
     }
     if let Some(mc) = main_ctx {
         if name == mc.primary_name {
@@ -2170,10 +2240,35 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
             }
             if let Some(binding) = ctx.inputs.get(name) {
                 let pointee = binding.pointee_type;
-                let var = binding.var;
+                if binding.vars.len() == 1 {
+                    let var = binding.vars[0];
+                    return ctx
+                        .b
+                        .load(pointee, None, var, None, [])
+                        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+                }
+                // Matrix input: load each column, composite-
+                // construct the matrix.
+                let kind = binding.kind;
+                let vars: Vec<Word> = binding.vars.clone();
+                let mut columns: Vec<Word> = Vec::with_capacity(vars.len());
+                for v in vars {
+                    let col = ctx
+                        .b
+                        .load(pointee, None, v, None, [])
+                        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+                    columns.push(col);
+                }
+                let result_ty = spv_type_for_kind(ctx, kind).ok_or_else(|| {
+                    LoweringError::UnsupportedShape {
+                        what: format!(
+                            "input `{name}` of type {kind:?} has no SPIR-V matrix type"
+                        ),
+                    }
+                })?;
                 return ctx
                     .b
-                    .load(pointee, None, var, None, [])
+                    .composite_construct(result_ty, None, columns)
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
             }
             // Sampler uniforms: load both the image and the
