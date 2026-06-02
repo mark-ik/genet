@@ -359,14 +359,13 @@ void main() {
     assert!(r.wgsl.contains("break") || r.wgsl.contains("loop"));
 }
 
-/// Audit #5: nested for-loops shadowing the same loop variable
-/// name. `allocate_local` dedupes by name, so the inner `int i`
-/// reuses the outer `i`'s `OpVariable`. Lowering succeeds but
-/// the runtime semantics are wrong (outer loop's counter is
-/// clobbered by inner). Receipt pins the silent miscompile so a
-/// future block-scope refactor has a regression target.
+/// HAPPY (correctness regression target). Nested for-loops with
+/// the same loop-variable name `i`. Block-scoped locals now key
+/// `OpVariable`s by the declaration's source `Span`, so the
+/// inner `int i` gets its own variable distinct from the outer
+/// — no aliasing. The outer loop runs its full 2 iterations.
 #[test]
-fn nested_for_same_loop_var_name_lowers_with_known_aliasing() {
+fn nested_for_same_loop_var_name_lowers_without_aliasing() {
     let src = r#"
 precision mediump float;
 uniform vec4 u_color;
@@ -382,9 +381,6 @@ void main() {
 "#;
     let r = compile(src, ShaderStage::Fragment).expect("compile");
     assert!(r.wgsl.contains("for") || r.wgsl.contains("loop"));
-    // RUNTIME WARNING: inner and outer `i` alias the same variable.
-    // When block-scoped locals land, this assertion stays but the
-    // shader's runtime behavior changes.
 }
 
 /// Audit #6: same-named locals of different types in two if
@@ -431,6 +427,29 @@ void main() {
 "#;
     let r = compile(src, ShaderStage::Fragment).expect("compile");
     assert!(r.wgsl.contains("continue") || r.wgsl.contains("loop"));
+}
+
+#[test]
+fn same_named_locals_in_distinct_blocks_get_independent_variables() {
+    // Two block-scoped `float t`s: one inside the then-branch
+    // and one inside the else-branch. Both must lower to their
+    // own `OpVariable`, otherwise the second store would
+    // clobber the first's value (silent miscompile pre-Tier-3).
+    let src = r#"
+precision mediump float;
+uniform float a;
+void main() {
+    if (a > 0.5) {
+        float t = a * 2.0;
+        gl_FragColor = vec4(t);
+    } else {
+        float t = a + 0.25;
+        gl_FragColor = vec4(t);
+    }
+}
+"#;
+    let wgsl = compile(src, ShaderStage::Fragment).expect("compile").wgsl;
+    assert!(wgsl.contains("if"));
 }
 
 #[test]

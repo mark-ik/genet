@@ -261,11 +261,19 @@ struct Ctx<'a> {
     /// their OpFunctionParameter Words. Cleared on function exit.
     fn_params: HashMap<String, FnParamBinding>,
     /// Function-scope local variables in the body currently being
-    /// lowered. Each entry is an `OpVariable` with Function storage
-    /// class allocated as the local was first seen. Cleared on
-    /// function exit so locals from one user function don't leak
-    /// into the next.
-    locals: HashMap<String, LocalBinding>,
+    /// lowered. Keyed by the declaration's `Span` so two distinct
+    /// `int i` declarations in nested loops each get their own
+    /// `OpVariable` (and the runtime semantics stay correct under
+    /// shadowing). The pre-pass populates this map; the main pass
+    /// reads it via `lookup_local`. Cleared on function exit.
+    locals: HashMap<Span, LocalBinding>,
+    /// Stack of name resolution scopes. Each scope maps an
+    /// identifier name to the `Span` of the declaration it resolves
+    /// to in the current lexical context. Pushed at every Block /
+    /// for-init / function entry; popped on exit. `lookup_local`
+    /// walks inner-out so an inner shadow correctly hides an outer
+    /// binding without aliasing its `OpVariable`.
+    scope_stack: Vec<HashMap<String, Span>>,
     /// Cached `OpTypePointer Function T` ids, one per value type.
     /// Avoids emitting duplicate pointer type decls each time a
     /// local variable is allocated.
@@ -427,6 +435,7 @@ fn build_spirv(
         user_fns: HashMap::new(),
         fn_params: HashMap::new(),
         locals: HashMap::new(),
+        scope_stack: Vec::new(),
         function_ptr_types: HashMap::new(),
         loop_targets: Vec::new(),
         types,
@@ -538,10 +547,19 @@ fn lower_main_body(
     // Function-storage OpVariables to live in the function's
     // first block.
     pre_allocate_locals(ctx, &main.body.stmts)?;
+    // Push main's outermost lexical scope so top-level locals
+    // declared directly in the function body (not in a nested
+    // Block) have somewhere to register.
+    ctx.scope_stack.push(HashMap::new());
+    let mut walk_result = Ok(());
     for stmt in &main.body.stmts {
-        lower_stmt(ctx, stmt, Some(&main_ctx))?;
+        if let Err(e) = lower_stmt(ctx, stmt, Some(&main_ctx)) {
+            walk_result = Err(e);
+            break;
+        }
     }
-    Ok(())
+    ctx.scope_stack.pop();
+    walk_result
 }
 
 /// Pre-pass over a function body: walk every nested `Stmt::Decl`
@@ -558,7 +576,7 @@ fn pre_allocate_locals(ctx: &mut Ctx, stmts: &[Stmt]) -> Result<(), LoweringErro
 
 fn scan_stmt_for_decls(ctx: &mut Ctx, s: &Stmt) -> Result<(), LoweringError> {
     match s {
-        Stmt::Decl(d) => allocate_local(ctx, &d.name, d.ty.kind),
+        Stmt::Decl(d) => allocate_local(ctx, d),
         Stmt::Block(b) => pre_allocate_locals(ctx, &b.stmts),
         Stmt::If { then, else_, .. } => {
             scan_stmt_for_decls(ctx, then)?;
@@ -570,7 +588,7 @@ fn scan_stmt_for_decls(ctx: &mut Ctx, s: &Stmt) -> Result<(), LoweringError> {
         Stmt::While { body, .. } => scan_stmt_for_decls(ctx, body),
         Stmt::For { init, body, .. } => {
             if let ForInit::Decl(d) = init {
-                allocate_local(ctx, &d.name, d.ty.kind)?;
+                allocate_local(ctx, d)?;
             }
             scan_stmt_for_decls(ctx, body)
         },
@@ -578,20 +596,39 @@ fn scan_stmt_for_decls(ctx: &mut Ctx, s: &Stmt) -> Result<(), LoweringError> {
     }
 }
 
-fn allocate_local(ctx: &mut Ctx, name: &str, kind: TypeKind) -> Result<(), LoweringError> {
-    if ctx.locals.contains_key(name) {
+/// Allocate one `OpVariable` per source-level declaration. Keyed
+/// by `d.span` (every Decl has a unique span), so two `int i`
+/// declarations in nested scopes each get their own variable and
+/// never alias.
+fn allocate_local(ctx: &mut Ctx, d: &crate::ast::LocalDecl) -> Result<(), LoweringError> {
+    if ctx.locals.contains_key(&d.span) {
         return Ok(());
     }
-    let ptr_ty = function_ptr_for(ctx, kind)?;
-    let pointee_type = spv_type_for_kind(ctx, kind).ok_or_else(|| {
+    let ptr_ty = function_ptr_for(ctx, d.ty.kind)?;
+    let pointee_type = spv_type_for_kind(ctx, d.ty.kind).ok_or_else(|| {
         LoweringError::UnsupportedShape {
-            what: format!("local `{name}` type {kind:?} is not lowered"),
+            what: format!("local `{}` type {:?} is not lowered", d.name, d.ty.kind),
         }
     })?;
     let var = ctx.b.variable(ptr_ty, None, StorageClass::Function, None);
-    ctx.locals
-        .insert(name.to_string(), LocalBinding { var, pointee_type, kind });
+    ctx.locals.insert(
+        d.span,
+        LocalBinding { var, pointee_type, kind: d.ty.kind },
+    );
     Ok(())
+}
+
+/// Resolve `name` against the active lexical scope stack, walking
+/// inner-out so a shadowing inner declaration hides any outer one.
+fn lookup_local(ctx: &Ctx, name: &str) -> Option<LocalBinding> {
+    for scope in ctx.scope_stack.iter().rev() {
+        if let Some(span) = scope.get(name) {
+            if let Some(binding) = ctx.locals.get(span).copied() {
+                return Some(binding);
+            }
+        }
+    }
+    None
 }
 
 /// Lower a single statement. `main_ctx` is `Some` when lowering the
@@ -605,19 +642,28 @@ fn lower_stmt(
 ) -> Result<(), LoweringError> {
     match stmt {
         Stmt::Decl(d) => {
-            // Pre-pass allocated the OpVariable in the entry block.
-            // Here we only emit the OpStore for the initializer.
-            let var = ctx
-                .locals
-                .get(&d.name)
-                .ok_or_else(|| LoweringError::UnsupportedShape {
+            // Pre-pass allocated the OpVariable; register the
+            // name -> decl-span mapping in the current lexical
+            // scope so subsequent Ident lookups in this scope
+            // resolve here, then emit the initializer OpStore.
+            let binding = *ctx.locals.get(&d.span).ok_or_else(|| {
+                LoweringError::UnsupportedShape {
                     what: format!("local `{}` was not pre-allocated", d.name),
+                }
+            })?;
+            ctx.scope_stack
+                .last_mut()
+                .ok_or_else(|| LoweringError::UnsupportedShape {
+                    what: format!(
+                        "local `{}` declared outside any lexical scope",
+                        d.name
+                    ),
                 })?
-                .var;
+                .insert(d.name.clone(), d.span);
             if let Some(init) = &d.init {
                 let value = lower_expr(ctx, init)?;
                 ctx.b
-                    .store(var, value, None, [])
+                    .store(binding.var, value, None, [])
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
             }
             Ok(())
@@ -642,10 +688,9 @@ fn lower_stmt(
             let value = lower_expr(ctx, rhs)?;
             // Locals shadow outputs and primary. Outputs and primary
             // only exist inside main.
-            if let Some(local) = ctx.locals.get(target_name) {
-                let var = local.var;
+            if let Some(local) = lookup_local(ctx, target_name) {
                 ctx.b
-                    .store(var, value, None, [])
+                    .store(local.var, value, None, [])
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
                 return Ok(());
             }
@@ -737,17 +782,22 @@ fn lower_stmt(
             Ok(())
         },
         Stmt::Block(b) => {
-            // First-pass: locals declared inside a compound block
-            // leak into the enclosing scope. Proper block scoping
-            // is queued — for now this matches how SPIR-V's
-            // Function-storage variables outlive their lexical
-            // block (their lifetime is the whole function), so the
-            // observable behavior is correct for shaders that
-            // don't shadow names.
+            // Push a fresh lexical scope so locals declared inside
+            // the block don't leak. The Function-storage
+            // `OpVariable`s still live for the entire function (per
+            // SPIR-V rules), but their name resolution is now
+            // scoped — a shadowed inner `int i` resolves to its
+            // own variable, distinct from any outer `i`.
+            ctx.scope_stack.push(HashMap::new());
+            let mut walk_result = Ok(());
             for s in &b.stmts {
-                lower_stmt(ctx, s, main_ctx)?;
+                if let Err(e) = lower_stmt(ctx, s, main_ctx) {
+                    walk_result = Err(e);
+                    break;
+                }
             }
-            Ok(())
+            ctx.scope_stack.pop();
+            walk_result
         },
         Stmt::If { cond, then, else_, .. } => {
             let cond_id = lower_expr(ctx, cond)?;
@@ -796,30 +846,44 @@ fn lower_stmt(
             Ok(())
         },
         Stmt::For { init, cond, step, body, .. } => {
-            // Init is emitted in the current (predecessor) block.
-            match init {
-                ForInit::Decl(d) => {
-                    let var = ctx
-                        .locals
-                        .get(&d.name)
-                        .copied()
-                        .ok_or_else(|| LoweringError::UnsupportedShape {
-                            what: format!("for-init local `{}` not pre-allocated", d.name),
-                        })?
-                        .var;
-                    if let Some(init_expr) = &d.init {
-                        let value = lower_expr(ctx, init_expr)?;
-                        ctx.b
-                            .store(var, value, None, [])
-                            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
-                    }
-                },
-                ForInit::Expr(e) => {
-                    let _ = lower_expr(ctx, e)?;
-                },
-                ForInit::Empty => {},
-            }
-            emit_loop_cfg(ctx, cond.as_ref(), step.as_ref(), body, main_ctx)
+            // For-init introduces a new lexical scope: the loop
+            // variable is visible in cond / step / body but not
+            // outside the loop. Two nested loops can each declare
+            // `int i` without aliasing.
+            ctx.scope_stack.push(HashMap::new());
+            let result = (|| -> Result<(), LoweringError> {
+                match init {
+                    ForInit::Decl(d) => {
+                        let binding = *ctx.locals.get(&d.span).ok_or_else(|| {
+                            LoweringError::UnsupportedShape {
+                                what: format!(
+                                    "for-init local `{}` not pre-allocated",
+                                    d.name
+                                ),
+                            }
+                        })?;
+                        ctx.scope_stack
+                            .last_mut()
+                            .expect("for-init scope was just pushed")
+                            .insert(d.name.clone(), d.span);
+                        if let Some(init_expr) = &d.init {
+                            let value = lower_expr(ctx, init_expr)?;
+                            ctx.b
+                                .store(binding.var, value, None, [])
+                                .map_err(|e| {
+                                    LoweringError::SpirvBuild(format!("{e:?}"))
+                                })?;
+                        }
+                    },
+                    ForInit::Expr(e) => {
+                        let _ = lower_expr(ctx, e)?;
+                    },
+                    ForInit::Empty => {},
+                }
+                emit_loop_cfg(ctx, cond.as_ref(), step.as_ref(), body, main_ctx)
+            })();
+            ctx.scope_stack.pop();
+            result
         },
         Stmt::While { cond, body, .. } => {
             emit_loop_cfg(ctx, Some(cond), None, body, main_ctx)
@@ -1021,10 +1085,13 @@ fn emit_user_function_body(
 
     let saved_params = std::mem::take(&mut ctx.fn_params);
     let saved_locals = std::mem::take(&mut ctx.locals);
+    let saved_scopes = std::mem::take(&mut ctx.scope_stack);
     ctx.fn_params = fn_params;
+    ctx.scope_stack = vec![HashMap::new()];
     let body_result = lower_user_body(ctx, f, proto.return_kind);
     ctx.fn_params = saved_params;
     ctx.locals = saved_locals;
+    ctx.scope_stack = saved_scopes;
     body_result?;
 
     ctx.b
@@ -1345,7 +1412,7 @@ fn resolve_lhs_target(
     name: &str,
     main_ctx: Option<&MainCtx>,
 ) -> Option<LhsTarget> {
-    if let Some(local) = ctx.locals.get(name) {
+    if let Some(local) = lookup_local(ctx, name) {
         return Some(LhsTarget {
             var: local.var,
             kind: local.kind,
@@ -1606,12 +1673,10 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
             }
             // Function-scope locals are next. `OpLoad` the value
             // out of the local's variable.
-            if let Some(local) = ctx.locals.get(name) {
-                let pointee = local.pointee_type;
-                let var = local.var;
+            if let Some(local) = lookup_local(ctx, name) {
                 return ctx
                     .b
-                    .load(pointee, None, var, None, [])
+                    .load(local.pointee_type, None, local.var, None, [])
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
             }
             if let Some(binding) = ctx.inputs.get(name) {
@@ -1844,7 +1909,7 @@ fn lower_unary(ctx: &mut Ctx, op: UnaryOp, expr: &Expr) -> Result<Word, Lowering
                     });
                 },
             };
-            let local = *ctx.locals.get(name).ok_or_else(|| {
+            let local = lookup_local(ctx, name).ok_or_else(|| {
                 LoweringError::UnsupportedShape {
                     what: format!("++/-- on non-local `{name}` is not lowered"),
                 }
