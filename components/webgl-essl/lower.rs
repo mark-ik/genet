@@ -287,11 +287,15 @@ struct Ctx<'a> {
     /// Avoids emitting duplicate pointer type decls each time a
     /// local variable is allocated.
     function_ptr_types: HashMap<TypeKind, Word>,
-    /// Stack of `(merge_label, continue_label)` for currently-
-    /// active loops. `Stmt::Break` branches to the innermost
-    /// merge; `Stmt::Continue` branches to the innermost continue.
-    /// Pushed in `emit_loop_cfg` Pre, popped on its exit.
-    loop_targets: Vec<(Word, Word)>,
+    /// Stack of `break;` target labels. Each `emit_loop_cfg` pushes
+    /// the loop's merge; each `Stmt::Switch` pushes its merge.
+    /// `Stmt::Break` branches to the innermost entry.
+    break_targets: Vec<Word>,
+    /// Stack of `continue;` target labels. Pushed by `emit_loop_cfg`
+    /// only — a switch does not push a continue target, so
+    /// `continue;` inside a switch falls through to the enclosing
+    /// loop's continue block (or errors if no loop encloses).
+    continue_targets: Vec<Word>,
     /// Per-span type annotations from the typecheck pass; used to
     /// dispatch on operand types in binary-op lowering.
     types: &'a HashMap<Span, TypeKind>,
@@ -413,9 +417,13 @@ fn build_spirv(
         &mut b,
         tu,
         type_float,
+        type_int,
         type_vec2,
         type_vec3,
         type_vec4,
+        type_ivec2,
+        type_ivec3,
+        type_ivec4,
         type_mat2,
         type_mat3,
         type_mat4,
@@ -462,7 +470,8 @@ fn build_spirv(
         locals: HashMap::new(),
         scope_stack: Vec::new(),
         function_ptr_types: HashMap::new(),
-        loop_targets: Vec::new(),
+        break_targets: Vec::new(),
+        continue_targets: Vec::new(),
         types,
         glsl_std_450: None,
     };
@@ -830,24 +839,24 @@ fn lower_stmt(
             Ok(())
         },
         Stmt::Break { .. } => {
-            let (merge, _cont) = *ctx.loop_targets.last().ok_or_else(|| {
+            let target = *ctx.break_targets.last().ok_or_else(|| {
                 LoweringError::UnsupportedShape {
-                    what: "`break;` outside of a loop is not lowered".into(),
+                    what: "`break;` outside of a loop or switch is not lowered".into(),
                 }
             })?;
             ctx.b
-                .branch(merge)
+                .branch(target)
                 .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
             Ok(())
         },
         Stmt::Continue { .. } => {
-            let (_merge, cont) = *ctx.loop_targets.last().ok_or_else(|| {
+            let target = *ctx.continue_targets.last().ok_or_else(|| {
                 LoweringError::UnsupportedShape {
                     what: "`continue;` outside of a loop is not lowered".into(),
                 }
             })?;
             ctx.b
-                .branch(cont)
+                .branch(target)
                 .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
             Ok(())
         },
@@ -958,10 +967,125 @@ fn lower_stmt(
         Stmt::While { cond, body, .. } => {
             emit_loop_cfg(ctx, Some(cond), None, body, main_ctx)
         },
+        Stmt::Switch { discriminant, body, .. } => emit_switch_cfg(ctx, discriminant, body, main_ctx),
         _ => Err(LoweringError::UnsupportedShape {
             what: "stmt shape not lowered".into(),
         }),
     }
+}
+
+/// Emit the SPIR-V CFG for a `switch` statement. The body's
+/// stmts are scanned and split into per-case segments at each
+/// `Stmt::Case` / `Stmt::Default` label. Each segment becomes a
+/// block; segments that don't end in a terminator fall through
+/// to the next segment's block (matching ESSL semantics).
+///
+/// First-pass restriction: case values must be `IntLit`s (the
+/// validator's R10 already enforces this).
+fn emit_switch_cfg(
+    ctx: &mut Ctx,
+    discriminant: &Expr,
+    body: &crate::ast::Block,
+    main_ctx: Option<&MainCtx>,
+) -> Result<(), LoweringError> {
+    let disc_id = lower_expr(ctx, discriminant)?;
+
+    // Segment the body stmts into [(label_value, label, stmts)]
+    // groups at each Case / Default. `label_value == None` is the
+    // default segment.
+    struct Segment<'a> {
+        value: Option<i64>,
+        label: Word,
+        stmts: Vec<&'a Stmt>,
+    }
+    let mut segments: Vec<Segment> = Vec::new();
+    for stmt in &body.stmts {
+        match stmt {
+            Stmt::Case { value, .. } => {
+                let v = match value {
+                    Expr::IntLit { value, .. } => *value,
+                    _ => {
+                        return Err(LoweringError::UnsupportedShape {
+                            what: "switch case value must be a literal integer".into(),
+                        });
+                    },
+                };
+                segments.push(Segment { value: Some(v), label: ctx.b.id(), stmts: Vec::new() });
+            },
+            Stmt::Default { .. } => {
+                segments.push(Segment { value: None, label: ctx.b.id(), stmts: Vec::new() });
+            },
+            other => {
+                if let Some(seg) = segments.last_mut() {
+                    seg.stmts.push(other);
+                }
+            },
+        }
+    }
+
+    let merge_label = ctx.b.id();
+    let default_label = segments
+        .iter()
+        .find(|s| s.value.is_none())
+        .map(|s| s.label)
+        .unwrap_or(merge_label);
+    let case_pairs: Vec<(Operand, Word)> = segments
+        .iter()
+        .filter_map(|s| {
+            s.value
+                .map(|v| (Operand::LiteralBit32(v as u32), s.label))
+        })
+        .collect();
+
+    ctx.b
+        .selection_merge(merge_label, SelectionControl::NONE)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    ctx.b
+        .switch(disc_id, default_label, case_pairs)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+
+    // A switch only adds a break target — `continue;` falls
+    // through to whatever loop (if any) encloses the switch.
+    ctx.break_targets.push(merge_label);
+    let mut result = Ok(());
+    for (idx, seg) in segments.iter().enumerate() {
+        if let Err(e) = ctx.b.begin_block(Some(seg.label)) {
+            result = Err(LoweringError::SpirvBuild(format!("{e:?}")));
+            break;
+        }
+        let mut terminated = false;
+        for stmt in &seg.stmts {
+            if let Err(e) = lower_stmt(ctx, stmt, main_ctx) {
+                result = Err(e);
+                break;
+            }
+            if stmt_definitely_terminates(stmt) {
+                terminated = true;
+            }
+        }
+        if result.is_err() {
+            break;
+        }
+        if !terminated {
+            // Fall through to the next segment's block, or to
+            // the merge if this was the last segment.
+            let next = segments
+                .get(idx + 1)
+                .map(|s| s.label)
+                .unwrap_or(merge_label);
+            if let Err(e) = ctx.b.branch(next) {
+                result = Err(LoweringError::SpirvBuild(format!("{e:?}")));
+                break;
+            }
+        }
+    }
+    ctx.break_targets.pop();
+    result?;
+
+    ctx.b
+        .begin_block(Some(merge_label))
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    Ok(())
 }
 
 /// Emit the SPIR-V CFG for a `for` or `while` loop body. Init has
@@ -1007,15 +1131,17 @@ fn emit_loop_cfg(
     }
 
     // Body: lower the body stmt, then jump to the continue block.
-    // Push the (merge, cont) pair so any `break;` / `continue;`
-    // inside the body resolves to these labels.
+    // Push the (break -> merge, continue -> cont) labels so any
+    // `break;` / `continue;` inside the body resolves to these.
     let body_terminates = stmt_definitely_terminates(body);
-    ctx.loop_targets.push((merge, cont));
+    ctx.break_targets.push(merge);
+    ctx.continue_targets.push(cont);
     ctx.b
         .begin_block(Some(body_label))
         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
     let body_result = lower_stmt(ctx, body, main_ctx);
-    ctx.loop_targets.pop();
+    ctx.break_targets.pop();
+    ctx.continue_targets.pop();
     body_result?;
     if !body_terminates {
         ctx.b
@@ -1235,9 +1361,13 @@ fn register_uniforms(
     b: &mut Builder,
     tu: &TranslationUnit,
     type_float: Word,
+    type_int: Word,
     type_vec2: Word,
     type_vec3: Word,
     type_vec4: Word,
+    type_ivec2: Word,
+    type_ivec3: Word,
+    type_ivec4: Word,
     type_mat2: Word,
     type_mat3: Word,
     type_mat4: Word,
@@ -1256,13 +1386,19 @@ fn register_uniforms(
         // padding wider than that fails as UnsupportedMatrixStride.
         let (pointee_type, kind, size, matrix_stride) = match g.ty.kind {
             TypeKind::Float => (type_float, TypeKind::Float, 4u32, None),
+            TypeKind::Int => (type_int, TypeKind::Int, 4u32, None),
             TypeKind::Vec2 => (type_vec2, TypeKind::Vec2, 8u32, None),
             TypeKind::Vec3 => (type_vec3, TypeKind::Vec3, 16u32, None),
             TypeKind::Vec4 => (type_vec4, TypeKind::Vec4, 16u32, None),
+            TypeKind::Ivec2 => (type_ivec2, TypeKind::Ivec2, 8u32, None),
+            TypeKind::Ivec3 => (type_ivec3, TypeKind::Ivec3, 16u32, None),
+            TypeKind::Ivec4 => (type_ivec4, TypeKind::Ivec4, 16u32, None),
             TypeKind::Mat2 => (type_mat2, TypeKind::Mat2, 16u32, Some(8u32)),
             TypeKind::Mat3 => (type_mat3, TypeKind::Mat3, 48u32, Some(16u32)),
             TypeKind::Mat4 => (type_mat4, TypeKind::Mat4, 64u32, Some(16u32)),
-            // Sampler uniforms are queued (different storage class).
+            // Bool uniforms aren't allowed by SPIR-V (no defined
+            // memory layout). Sampler uniforms have a different
+            // storage class (UniformConstant). Skip both.
             _ => continue,
         };
         let align = match (kind, matrix_stride) {
