@@ -169,6 +169,15 @@ pub enum WebGlDiagnosticKind {
     /// index-expressions. ESSL 3.00 relaxes this; the rule is
     /// gated to ESSL 1.00 source.
     IndirectArrayIndex,
+    /// `const T x;` declared without an initializer.
+    /// ESSL §4.3 requires `const` to have an init.
+    ConstWithoutInit { name: String },
+    /// `const T x = <expr>;` where `<expr>` is not a constant
+    /// expression per the first-pass acceptance set (literal +
+    /// recursive unary/binary on constants).
+    ConstInitNotConstant { name: String },
+    /// Assignment whose LHS targets a `const`-qualified local.
+    ConstAssignment { name: String },
     /// A storage class exceeds its WebGL 1 minimum-guaranteed slot
     /// count. WebGL 1 spec §6.4 fixes:
     /// - attribute: 8 (MAX_VERTEX_ATTRIBS)
@@ -226,6 +235,15 @@ impl WebGlDiagnosticKind {
             },
             WebGlDiagnosticKind::IndirectArrayIndex => {
                 "array index must be a constant or a loop induction variable (ESSL 1.00 Appendix A)".to_string()
+            },
+            WebGlDiagnosticKind::ConstWithoutInit { name } => {
+                format!("`const {name}` declared without an initializer")
+            },
+            WebGlDiagnosticKind::ConstInitNotConstant { name } => {
+                format!("initializer for `const {name}` is not a constant expression")
+            },
+            WebGlDiagnosticKind::ConstAssignment { name } => {
+                format!("cannot assign to `const` variable `{name}`")
             },
             WebGlDiagnosticKind::PackingLimitExceeded { class, used, limit } => {
                 format!("too many {class} slots: {used} declared, WebGL minimum is {limit}")
@@ -333,6 +351,19 @@ struct ValidatorVisitor<'tree> {
     /// Appendix A constrains array indexing to constant-index-
     /// expressions; full WebGL conformance requires this.
     indirect_index_sites: Vec<Span>,
+    /// (name span, name) for `const T x;` declarations missing
+    /// an initializer. ESSL §4.3 requires `const` to be initialized.
+    const_without_init_named: Vec<(Span, String)>,
+    /// (name span, name) for `const T x = <expr>;` declarations
+    /// whose initializer is not a constant expression.
+    const_init_not_constant_named: Vec<(Span, String)>,
+    /// Names of currently-in-scope `const` locals. Used by R15 to
+    /// flag assignments that target a const binding.
+    const_locals: HashSet<String>,
+    /// (assignment-expression span, target name) for assignments
+    /// whose LHS is a `const`-qualified local. ESSL §4.3 forbids
+    /// modifying a `const` variable.
+    const_assignment_sites: Vec<(Span, String)>,
 }
 
 struct DiscardSite<'tree> {
@@ -392,6 +423,10 @@ impl<'tree> ValidatorVisitor<'tree> {
             version,
             loop_var_stack: Vec::new(),
             indirect_index_sites: Vec::new(),
+            const_without_init_named: Vec::new(),
+            const_init_not_constant_named: Vec::new(),
+            const_locals: HashSet::new(),
+            const_assignment_sites: Vec::new(),
         }
     }
 
@@ -570,6 +605,38 @@ impl<'tree> ValidatorVisitor<'tree> {
             });
         }
 
+        // R14: `const T x;` requires an initializer; the
+        // initializer must be a constant expression. First-pass
+        // acceptance set: literal IntLit / FloatLit / BoolLit and
+        // recursive unary / binary on constants.
+        // The names are looked up by reconstructing them from the
+        // span; for the diagnostic shape we pass back the bare
+        // span text would require source. Simpler: store the name
+        // alongside the span at note time. (Already done below.)
+        for (span, name) in &self.const_without_init_named {
+            result.errors.push(WebGlDiagnostic {
+                severity: Severity::Error,
+                kind: WebGlDiagnosticKind::ConstWithoutInit { name: name.clone() },
+                span: Some(*span),
+            });
+        }
+        for (span, name) in &self.const_init_not_constant_named {
+            result.errors.push(WebGlDiagnostic {
+                severity: Severity::Error,
+                kind: WebGlDiagnosticKind::ConstInitNotConstant { name: name.clone() },
+                span: Some(*span),
+            });
+        }
+
+        // R15: assignment to a `const`-qualified local.
+        for (span, name) in self.const_assignment_sites {
+            result.errors.push(WebGlDiagnostic {
+                severity: Severity::Error,
+                kind: WebGlDiagnosticKind::ConstAssignment { name },
+                span: Some(span),
+            });
+        }
+
         // R13: WebGL packing limits. Walk the global decls and sum
         // slot counts per storage class, comparing against the
         // stage's minimum-guaranteed limit. Conservative — uses one
@@ -720,6 +787,25 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
                 d.ty.kind,
                 d.precision.is_some(),
             );
+            // R14: `const T x = <expr>;` requires <expr> to be a
+            // constant expression. The first-pass acceptance set is
+            // literal IntLit / FloatLit / BoolLit and unary / binary
+            // expressions formed recursively from constants.
+            if d.is_const {
+                match &d.init {
+                    None => {
+                        self.const_without_init_named
+                            .push((d.name_span, d.name.clone()));
+                    },
+                    Some(e) => {
+                        if !is_constant_initializer(e) {
+                            self.const_init_not_constant_named
+                                .push((d.name_span, d.name.clone()));
+                        }
+                    },
+                }
+                self.const_locals.insert(d.name.clone());
+            }
         }
         Walk::Continue
     }
@@ -762,6 +848,17 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
                     if let Expr::Index { index, .. } = e {
                         if !self.is_constant_index_expr(index) {
                             self.indirect_index_sites.push(index.span());
+                        }
+                    }
+                }
+                // R15: assignment to a `const` local. The LHS must
+                // not name an identifier the validator has seen
+                // declared `const` (tracked in `const_locals`).
+                if let Expr::Assign { lhs, span, .. } = e {
+                    if let Expr::Ident { name, .. } = lhs.as_ref() {
+                        if self.const_locals.contains(name) {
+                            self.const_assignment_sites
+                                .push((*span, name.clone()));
                         }
                     }
                 }
@@ -999,6 +1096,23 @@ fn depth_of(
     let d = 1 + best_child;
     memo.insert(node.to_string(), d);
     d
+}
+
+// ---------- R14: constant-expression check for `const` inits ---------
+
+/// First-pass acceptance set for an ESSL constant expression: any
+/// literal, optionally combined recursively by unary or binary
+/// operators. Identifiers (even `const`-bound ones) and calls are
+/// not yet folded.
+fn is_constant_initializer(e: &Expr) -> bool {
+    match e {
+        Expr::IntLit { .. } | Expr::FloatLit { .. } | Expr::BoolLit { .. } => true,
+        Expr::Unary { expr, .. } => is_constant_initializer(expr),
+        Expr::Binary { lhs, rhs, .. } => {
+            is_constant_initializer(lhs) && is_constant_initializer(rhs)
+        },
+        _ => false,
+    }
 }
 
 // ---------- R8: Float-family type check ------------------------------

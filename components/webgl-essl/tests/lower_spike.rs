@@ -56,15 +56,15 @@ fn lowering_with_no_main_returns_no_main_error() {
 
 #[test]
 fn lowering_an_unsupported_shape_returns_unsupported() {
-    // A function-scope `bool` local is outside today's accepted
-    // shape — `spv_type_for_kind` returns None for Bool, so the
-    // `OpVariable` allocation in `function_ptr_for` fails with
-    // `UnsupportedShape`.
+    // Write-side (LHS) swizzle is outside today's accepted
+    // shape — `lower_stmt`'s assignment branch only accepts
+    // `Expr::Ident` as the LHS.
     let src = r#"
 precision mediump float;
+varying vec4 v_color;
 void main() {
-    bool flag = true;
-    gl_FragColor = vec4(0.0);
+    v_color.x = 1.0;
+    gl_FragColor = v_color;
 }
 "#;
     let tu = parse_source(src).expect("parse");

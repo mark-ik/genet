@@ -103,16 +103,15 @@ void main() {
 
 #[test]
 fn lowering_failure_routed_through_CompileError_Lower() {
-    // A shape the lowering does not handle: a function-scope local
-    // of `bool` type. `spv_type_for_kind` does not map Bool, so
-    // allocating the OpVariable for the local fails. Pinned at the
-    // lower stage rather than check (the typechecker accepts the
-    // decl).
+    // A shape the lowering does not handle: a write-side
+    // (LHS) swizzle. `lower_stmt` only accepts `Expr::Ident`
+    // as the assignment LHS today; `Expr::Member` is rejected.
     let src = r#"
 precision mediump float;
+varying vec4 v_color;
 void main() {
-    bool flag = true;
-    gl_FragColor = vec4(0.0);
+    v_color.x = 1.0;
+    gl_FragColor = v_color;
 }
 "#;
     let err = compile(src, ShaderStage::Fragment).unwrap_err();

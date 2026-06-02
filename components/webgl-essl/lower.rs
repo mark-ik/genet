@@ -30,11 +30,12 @@ use rspirv::binary::Assemble;
 use rspirv::dr::{Builder, Module, Operand};
 use rspirv::spirv::{
     AddressingModel, BuiltIn, Capability, Decoration, ExecutionMode, ExecutionModel,
-    FunctionControl, MemoryModel, StorageClass, Word,
+    FunctionControl, LoopControl, MemoryModel, SelectionControl, StorageClass, Word,
 };
 
 use crate::ast::{
-    BinOp, Expr, ExternalDecl, FunctionDef, StorageQualifier, Stmt, TranslationUnit, TypeKind,
+    AssignOp, BinOp, Expr, ExternalDecl, ForInit, FunctionDef, StorageQualifier, Stmt,
+    TranslationUnit, TypeKind, UnaryOp,
 };
 use crate::span::Span;
 use crate::validate::ShaderStage;
@@ -228,6 +229,7 @@ struct Ctx<'a> {
     b: Builder,
     type_float: Word,
     type_int: Word,
+    type_bool: Word,
     type_vec2: Word,
     type_vec3: Word,
     type_vec4: Word,
@@ -319,6 +321,7 @@ struct FnParamBinding {
     kind: TypeKind,
 }
 
+#[derive(Clone, Copy)]
 struct LocalBinding {
     /// SPIR-V Word for the `OpVariable` allocating Function-scope
     /// storage for this local.
@@ -343,6 +346,7 @@ fn build_spirv(
     let type_void = b.type_void();
     let type_float = b.type_float(32, None);
     let type_int = b.type_int(32, 1);
+    let type_bool = b.type_bool();
     let type_vec2 = b.type_vector(type_float, 2);
     let type_vec3 = b.type_vector(type_float, 3);
     let type_vec4 = b.type_vector(type_float, 4);
@@ -398,6 +402,7 @@ fn build_spirv(
         b,
         type_float,
         type_int,
+        type_bool,
         type_vec2,
         type_vec3,
         type_vec4,
@@ -517,9 +522,63 @@ fn lower_main_body(
         primary_output,
         stage,
     };
+    // Hoist all locals declared anywhere in the body (including
+    // nested If branches) into the entry block. SPIR-V requires
+    // Function-storage OpVariables to live in the function's
+    // first block.
+    pre_allocate_locals(ctx, &main.body.stmts)?;
     for stmt in &main.body.stmts {
         lower_stmt(ctx, stmt, Some(&main_ctx))?;
     }
+    Ok(())
+}
+
+/// Pre-pass over a function body: walk every nested `Stmt::Decl`
+/// (including those inside If branches, Block bodies, and For
+/// inits) and allocate the matching `OpVariable` with Function
+/// storage in the current (entry) block. Subsequent `lower_stmt`
+/// calls then only emit the initializer `OpStore`.
+fn pre_allocate_locals(ctx: &mut Ctx, stmts: &[Stmt]) -> Result<(), LoweringError> {
+    for s in stmts {
+        scan_stmt_for_decls(ctx, s)?;
+    }
+    Ok(())
+}
+
+fn scan_stmt_for_decls(ctx: &mut Ctx, s: &Stmt) -> Result<(), LoweringError> {
+    match s {
+        Stmt::Decl(d) => allocate_local(ctx, &d.name, d.ty.kind),
+        Stmt::Block(b) => pre_allocate_locals(ctx, &b.stmts),
+        Stmt::If { then, else_, .. } => {
+            scan_stmt_for_decls(ctx, then)?;
+            if let Some(e) = else_ {
+                scan_stmt_for_decls(ctx, e)?;
+            }
+            Ok(())
+        },
+        Stmt::While { body, .. } => scan_stmt_for_decls(ctx, body),
+        Stmt::For { init, body, .. } => {
+            if let ForInit::Decl(d) = init {
+                allocate_local(ctx, &d.name, d.ty.kind)?;
+            }
+            scan_stmt_for_decls(ctx, body)
+        },
+        _ => Ok(()),
+    }
+}
+
+fn allocate_local(ctx: &mut Ctx, name: &str, kind: TypeKind) -> Result<(), LoweringError> {
+    if ctx.locals.contains_key(name) {
+        return Ok(());
+    }
+    let ptr_ty = function_ptr_for(ctx, kind)?;
+    let pointee_type = spv_type_for_kind(ctx, kind).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("local `{name}` type {kind:?} is not lowered"),
+        }
+    })?;
+    let var = ctx.b.variable(ptr_ty, None, StorageClass::Function, None);
+    ctx.locals.insert(name.to_string(), LocalBinding { var, pointee_type });
     Ok(())
 }
 
@@ -534,16 +593,21 @@ fn lower_stmt(
 ) -> Result<(), LoweringError> {
     match stmt {
         Stmt::Decl(d) => {
-            let ptr_ty = function_ptr_for(ctx, d.ty.kind)?;
-            let pointee_type = spv_type_for_kind(ctx, d.ty.kind).expect("checked above");
-            let var = ctx.b.variable(ptr_ty, None, StorageClass::Function, None);
+            // Pre-pass allocated the OpVariable in the entry block.
+            // Here we only emit the OpStore for the initializer.
+            let var = ctx
+                .locals
+                .get(&d.name)
+                .ok_or_else(|| LoweringError::UnsupportedShape {
+                    what: format!("local `{}` was not pre-allocated", d.name),
+                })?
+                .var;
             if let Some(init) = &d.init {
                 let value = lower_expr(ctx, init)?;
                 ctx.b
                     .store(var, value, None, [])
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
             }
-            ctx.locals.insert(d.name.clone(), LocalBinding { var, pointee_type });
             Ok(())
         },
         Stmt::Expr(Expr::Assign { lhs, rhs, .. }) => {
@@ -594,6 +658,14 @@ fn lower_stmt(
             let _ = lower_expr(ctx, call_expr)?;
             Ok(())
         },
+        Stmt::Expr(expr) => {
+            // Side-effecting expressions as statements: increment /
+            // decrement on a local (`++i;`), or any other expression
+            // whose value is discarded. lower_expr emits the side
+            // effects; we drop the result.
+            let _ = lower_expr(ctx, expr)?;
+            Ok(())
+        },
         Stmt::Return { value: Some(e), .. } => {
             if main_ctx.is_some() {
                 return Err(LoweringError::UnsupportedShape {
@@ -612,6 +684,16 @@ fn lower_stmt(
                 .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
             Ok(())
         },
+        Stmt::Discard { .. } => {
+            // ESSL fragment-only. The validator's R2 already
+            // rejects discard in vertex stage, so we don't gate
+            // on `main_ctx.stage` here. OpKill is a block
+            // terminator.
+            ctx.b
+                .kill()
+                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+            Ok(())
+        },
         Stmt::Block(b) => {
             // First-pass: locals declared inside a compound block
             // leak into the enclosing scope. Proper block scoping
@@ -625,10 +707,155 @@ fn lower_stmt(
             }
             Ok(())
         },
+        Stmt::If { cond, then, else_, .. } => {
+            let cond_id = lower_expr(ctx, cond)?;
+            let merge_label = ctx.b.id();
+            let then_label = ctx.b.id();
+            let else_label = if else_.is_some() { ctx.b.id() } else { merge_label };
+            ctx.b
+                .selection_merge(merge_label, SelectionControl::NONE)
+                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+            ctx.b
+                .branch_conditional(cond_id, then_label, else_label, [])
+                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+
+            // SPIR-V allows exactly one terminator per block. If
+            // the then- or else-stmt already emitted its own
+            // (Return / Discard), skip the unconditional branch
+            // to `merge_label`; otherwise the block would carry
+            // two terminators and naga's spv-in rejects on parse.
+            let then_terminates = stmt_definitely_terminates(then);
+            ctx.b
+                .begin_block(Some(then_label))
+                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+            lower_stmt(ctx, then, main_ctx)?;
+            if !then_terminates {
+                ctx.b
+                    .branch(merge_label)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+            }
+
+            if let Some(else_stmt) = else_ {
+                let else_terminates = stmt_definitely_terminates(else_stmt);
+                ctx.b
+                    .begin_block(Some(else_label))
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+                lower_stmt(ctx, else_stmt, main_ctx)?;
+                if !else_terminates {
+                    ctx.b
+                        .branch(merge_label)
+                        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+                }
+            }
+
+            ctx.b
+                .begin_block(Some(merge_label))
+                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+            Ok(())
+        },
+        Stmt::For { init, cond, step, body, .. } => {
+            // Init is emitted in the current (predecessor) block.
+            match init {
+                ForInit::Decl(d) => {
+                    let var = ctx
+                        .locals
+                        .get(&d.name)
+                        .copied()
+                        .ok_or_else(|| LoweringError::UnsupportedShape {
+                            what: format!("for-init local `{}` not pre-allocated", d.name),
+                        })?
+                        .var;
+                    if let Some(init_expr) = &d.init {
+                        let value = lower_expr(ctx, init_expr)?;
+                        ctx.b
+                            .store(var, value, None, [])
+                            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+                    }
+                },
+                ForInit::Expr(e) => {
+                    let _ = lower_expr(ctx, e)?;
+                },
+                ForInit::Empty => {},
+            }
+            emit_loop_cfg(ctx, cond.as_ref(), step.as_ref(), body, main_ctx)
+        },
+        Stmt::While { cond, body, .. } => {
+            emit_loop_cfg(ctx, Some(cond), None, body, main_ctx)
+        },
         _ => Err(LoweringError::UnsupportedShape {
             what: "stmt shape not lowered".into(),
         }),
     }
+}
+
+/// Emit the SPIR-V CFG for a `for` or `while` loop body. Init has
+/// already been emitted in the predecessor block. The CFG shape is
+/// the SPIR-V canonical four-block loop: header → body → continue
+/// → header, with `merge` as the exit target.
+fn emit_loop_cfg(
+    ctx: &mut Ctx,
+    cond: Option<&Expr>,
+    step: Option<&Expr>,
+    body: &Stmt,
+    main_ctx: Option<&MainCtx>,
+) -> Result<(), LoweringError> {
+    let header = ctx.b.id();
+    let body_label = ctx.b.id();
+    let cont = ctx.b.id();
+    let merge = ctx.b.id();
+
+    // Predecessor (current block) → header.
+    ctx.b
+        .branch(header)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+
+    // Header: OpLoopMerge + conditional branch on the loop cond.
+    ctx.b
+        .begin_block(Some(header))
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    ctx.b
+        .loop_merge(merge, cont, LoopControl::NONE, [])
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    match cond {
+        Some(c) => {
+            let cond_id = lower_expr(ctx, c)?;
+            ctx.b
+                .branch_conditional(cond_id, body_label, merge, [])
+                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+        },
+        None => {
+            ctx.b
+                .branch(body_label)
+                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+        },
+    }
+
+    // Body: lower the body stmt, then jump to the continue block.
+    ctx.b
+        .begin_block(Some(body_label))
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    lower_stmt(ctx, body, main_ctx)?;
+    ctx.b
+        .branch(cont)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+
+    // Continue: emit the for-loop step (if any), then jump back
+    // to the header.
+    ctx.b
+        .begin_block(Some(cont))
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    if let Some(s) = step {
+        let _ = lower_expr(ctx, s)?;
+    }
+    ctx.b
+        .branch(header)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+
+    // Merge: lowering continues here after the loop exits.
+    ctx.b
+        .begin_block(Some(merge))
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    Ok(())
 }
 
 fn emit_user_functions(ctx: &mut Ctx, tu: &TranslationUnit) -> Result<(), LoweringError> {
@@ -722,6 +949,7 @@ fn lower_user_body(
     f: &FunctionDef,
     return_kind: TypeKind,
 ) -> Result<(), LoweringError> {
+    pre_allocate_locals(ctx, &f.body.stmts)?;
     for s in &f.body.stmts {
         lower_stmt(ctx, s, None)?;
     }
@@ -746,6 +974,19 @@ fn last_stmt_is_return(stmts: &[Stmt]) -> bool {
     match stmts.last() {
         Some(Stmt::Return { .. }) => true,
         Some(Stmt::Block(b)) => last_stmt_is_return(&b.stmts),
+        _ => false,
+    }
+}
+
+/// True when `s` is guaranteed to leave its block via a SPIR-V
+/// terminator (`OpReturn` / `OpReturnValue` / `OpKill`). Used by
+/// the `If` arm to decide whether to emit a trailing
+/// `OpBranch merge` (which would otherwise double-terminate the
+/// then- or else-block).
+fn stmt_definitely_terminates(s: &Stmt) -> bool {
+    match s {
+        Stmt::Return { .. } | Stmt::Discard { .. } => true,
+        Stmt::Block(b) => b.stmts.last().is_some_and(stmt_definitely_terminates),
         _ => false,
     }
 }
@@ -1027,6 +1268,7 @@ fn spv_type_for_kind(ctx: &Ctx, kind: TypeKind) -> Option<Word> {
     Some(match kind {
         TypeKind::Float => ctx.type_float,
         TypeKind::Int => ctx.type_int,
+        TypeKind::Bool => ctx.type_bool,
         TypeKind::Vec2 => ctx.type_vec2,
         TypeKind::Vec3 => ctx.type_vec3,
         TypeKind::Vec4 => ctx.type_vec4,
@@ -1068,11 +1310,30 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
         Expr::FloatLit { value, .. } => {
             Ok(ctx.b.constant_bit32(ctx.type_float, (*value as f32).to_bits()))
         },
-        Expr::IntLit { value, .. } => {
-            // Promote to float at the SPIR-V seam. ESSL's vec_n
-            // constructors accept int args and coerce; the lowering
-            // bakes the coercion in at the boundary.
-            Ok(ctx.b.constant_bit32(ctx.type_float, (*value as f32).to_bits()))
+        Expr::IntLit { value, span } => {
+            // Choose the constant's type from the typecheck. ESSL
+            // assigns Int to IntLit; the historical Float-promotion
+            // hack misfired for loop counters and is now gated to
+            // contexts that explicitly want Float (which we don't
+            // produce today, but the branch leaves the door open).
+            let kind = ctx.types.get(span).copied().unwrap_or(TypeKind::Int);
+            match kind {
+                TypeKind::Int => Ok(ctx.b.constant_bit32(ctx.type_int, *value as u32)),
+                TypeKind::Float => {
+                    Ok(ctx.b.constant_bit32(ctx.type_float, (*value as f32).to_bits()))
+                },
+                _ => Err(LoweringError::UnsupportedShape {
+                    what: format!("int literal in {kind:?} context is not lowered"),
+                }),
+            }
+        },
+        Expr::BoolLit { value, .. } => {
+            let bool_ty = ctx.type_bool;
+            Ok(if *value {
+                ctx.b.constant_true(bool_ty)
+            } else {
+                ctx.b.constant_false(bool_ty)
+            })
         },
         Expr::Ident { name, .. } => {
             // Function-parameter SSA values shadow everything else
@@ -1253,8 +1514,104 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                 .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
         },
         Expr::Member { base, field, span, .. } => lower_swizzle(ctx, base, field, *span),
+        Expr::Unary { op, expr, .. } => lower_unary(ctx, *op, expr),
         other => Err(LoweringError::UnsupportedShape {
             what: format!("expression shape not lowered: {other:?}"),
+        }),
+    }
+}
+
+/// Lower a unary expression. First-pass coverage: arithmetic
+/// negation on float/int (OpFNegate / OpSNegate), pre/post
+/// increment / decrement on a local variable of int or float
+/// type, and logical NOT on bool (OpLogicalNot). Other shapes
+/// (BitNot, vector negation on a non-local) are queued.
+fn lower_unary(ctx: &mut Ctx, op: UnaryOp, expr: &Expr) -> Result<Word, LoweringError> {
+    match op {
+        UnaryOp::Pos => lower_expr(ctx, expr),
+        UnaryOp::Neg => {
+            let kind = classify_arg_kind(ctx, expr).ok_or_else(|| {
+                LoweringError::UnsupportedShape {
+                    what: "could not classify unary `-` operand".into(),
+                }
+            })?;
+            let id = lower_expr(ctx, expr)?;
+            let ty = spv_type_for_kind(ctx, kind).ok_or_else(|| {
+                LoweringError::UnsupportedShape {
+                    what: format!("unary `-` result type {kind:?} is not lowered"),
+                }
+            })?;
+            match kind {
+                TypeKind::Int => ctx
+                    .b
+                    .s_negate(ty, None, id)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}"))),
+                TypeKind::Float | TypeKind::Vec2 | TypeKind::Vec3 | TypeKind::Vec4 => ctx
+                    .b
+                    .f_negate(ty, None, id)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}"))),
+                _ => Err(LoweringError::UnsupportedShape {
+                    what: format!("unary `-` on {kind:?} is not lowered"),
+                }),
+            }
+        },
+        UnaryOp::Not => {
+            let id = lower_expr(ctx, expr)?;
+            let bool_ty = ctx.type_bool;
+            ctx.b
+                .logical_not(bool_ty, None, id)
+                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
+        },
+        UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec => {
+            let name = match expr {
+                Expr::Ident { name, .. } => name.as_str(),
+                _ => {
+                    return Err(LoweringError::UnsupportedShape {
+                        what: "++/-- target must be a local identifier".into(),
+                    });
+                },
+            };
+            let local = *ctx.locals.get(name).ok_or_else(|| {
+                LoweringError::UnsupportedShape {
+                    what: format!("++/-- on non-local `{name}` is not lowered"),
+                }
+            })?;
+            let pointee = local.pointee_type;
+            let var = local.var;
+            let is_int = pointee == ctx.type_int;
+            let one_id = if is_int {
+                ctx.b.constant_bit32(ctx.type_int, 1)
+            } else {
+                ctx.b.constant_bit32(ctx.type_float, 1.0_f32.to_bits())
+            };
+            let old = ctx
+                .b
+                .load(pointee, None, var, None, [])
+                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+            let inc = matches!(op, UnaryOp::PreInc | UnaryOp::PostInc);
+            let new = if is_int {
+                if inc {
+                    ctx.b.i_add(pointee, None, old, one_id)
+                } else {
+                    ctx.b.i_sub(pointee, None, old, one_id)
+                }
+            } else if inc {
+                ctx.b.f_add(pointee, None, old, one_id)
+            } else {
+                ctx.b.f_sub(pointee, None, old, one_id)
+            }
+            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+            ctx.b
+                .store(var, new, None, [])
+                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+            // Pre-form returns the new value, post-form returns the old.
+            Ok(match op {
+                UnaryOp::PreInc | UnaryOp::PreDec => new,
+                _ => old,
+            })
+        },
+        UnaryOp::BitNot => Err(LoweringError::UnsupportedShape {
+            what: "bitwise `~` is not lowered".into(),
         }),
     }
 }
@@ -1505,7 +1862,50 @@ fn lower_binary(
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
             }
         },
+        // Scalar float comparisons return Bool. ESSL also has
+        // vector comparison builtins (lessThan, etc.); those go
+        // through the §8.6 registry, not the binary-op path.
+        BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::Eq | BinOp::Ne
+            if scalar_lhs && scalar_rhs =>
+        {
+            let bool_ty = ctx.type_bool;
+            let r = match op {
+                BinOp::Lt => ctx.b.f_ord_less_than(bool_ty, None, lhs_id, rhs_id),
+                BinOp::Le => ctx.b.f_ord_less_than_equal(bool_ty, None, lhs_id, rhs_id),
+                BinOp::Gt => ctx.b.f_ord_greater_than(bool_ty, None, lhs_id, rhs_id),
+                BinOp::Ge => ctx.b.f_ord_greater_than_equal(bool_ty, None, lhs_id, rhs_id),
+                BinOp::Eq => ctx.b.f_ord_equal(bool_ty, None, lhs_id, rhs_id),
+                BinOp::Ne => ctx.b.f_ord_not_equal(bool_ty, None, lhs_id, rhs_id),
+                _ => unreachable!(),
+            };
+            return r.map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+        },
         _ => {},
+    }
+    // Integer arithmetic and comparison. Driven by the typecheck
+    // (lhs and rhs both classified as Int); needed for loop
+    // counters and the for-loop `i < N` pattern.
+    let int_lhs = matches!(lhs_kind, TypeKind::Int);
+    let int_rhs = matches!(rhs_kind, TypeKind::Int);
+    if int_lhs && int_rhs {
+        let r = match op {
+            BinOp::Add => ctx.b.i_add(result_ty, None, lhs_id, rhs_id),
+            BinOp::Sub => ctx.b.i_sub(result_ty, None, lhs_id, rhs_id),
+            BinOp::Mul => ctx.b.i_mul(result_ty, None, lhs_id, rhs_id),
+            BinOp::Div => ctx.b.s_div(result_ty, None, lhs_id, rhs_id),
+            BinOp::Lt => ctx.b.s_less_than(ctx.type_bool, None, lhs_id, rhs_id),
+            BinOp::Le => ctx.b.s_less_than_equal(ctx.type_bool, None, lhs_id, rhs_id),
+            BinOp::Gt => ctx.b.s_greater_than(ctx.type_bool, None, lhs_id, rhs_id),
+            BinOp::Ge => ctx.b.s_greater_than_equal(ctx.type_bool, None, lhs_id, rhs_id),
+            BinOp::Eq => ctx.b.i_equal(ctx.type_bool, None, lhs_id, rhs_id),
+            BinOp::Ne => ctx.b.i_not_equal(ctx.type_bool, None, lhs_id, rhs_id),
+            _ => {
+                return Err(LoweringError::UnsupportedShape {
+                    what: format!("integer binary `{op:?}` is not lowered"),
+                });
+            },
+        };
+        return r.map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
     }
     Err(LoweringError::UnsupportedShape {
         what: format!("binary `{op:?}` on {lhs_kind:?} and {rhs_kind:?} not lowered"),

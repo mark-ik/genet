@@ -116,18 +116,19 @@ fn multi_statement_user_function_body_lowers() {
     assert!(r.wgsl.contains("vec4"));
 }
 
-/// SPEC-GAP. ESSL 1.00 §6.1 allows `bool` user-function parameters.
-/// `spv_type_for_kind` does not map `TypeKind::Bool`, so
-/// `emit_user_function` short-circuits the parameter-type lookup.
+/// HAPPY (resolved). `spv_type_for_kind` now maps
+/// `TypeKind::Bool` to `OpTypeBool`, so a user function taking
+/// a `bool` parameter lowers cleanly. This receipt was the
+/// inverse-direction pin while the gap existed.
 #[test]
-fn bool_typed_user_function_parameter_does_not_lower_today() {
+fn bool_typed_user_function_parameter_lowers() {
     let src = "precision mediump float;\n\
                float pick(bool b) { return 1.0; }\n\
                void main() {\n\
                    gl_FragColor = vec4(pick(true));\n\
                }\n";
-    let err = compile(src, ShaderStage::Fragment).unwrap_err();
-    assert!(matches!(err, CompileError::Lower(_)), "got: {err:?}");
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("vec4"));
 }
 
 /// INTERNAL-CONTRADICTION. `lower_main_body` has a dedicated
