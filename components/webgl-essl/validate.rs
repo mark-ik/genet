@@ -28,7 +28,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use crate::ast::{
-    Expr, ExternalDecl, ForInit, FunctionDef, Stmt, TranslationUnit, TypeKind,
+    BinOp, Expr, ExternalDecl, ForInit, FunctionDef, GlobalDecl, LocalDecl, Stmt, TranslationUnit,
+    TypeKind, UnaryOp,
 };
 use crate::span::{Span, line_column};
 use crate::visit::{Visit, Visitor, Walk, walk_translation_unit};
@@ -95,6 +96,15 @@ pub enum WebGlDiagnosticKind {
     /// `main` is defined but with the wrong signature; spec mandates
     /// `void main()` (or `void main(void)`).
     MainBadSignature { return_ty: TypeKind, param_count: usize },
+    /// `for` loop does not match the Appendix A restricted form
+    /// (ESSL 1.00 Appendix A §4): a counter-style loop with
+    /// integer / float init, comparison cond against a constant, and
+    /// loop-var increment / decrement step.
+    ForLoopAppendixA { what: &'static str },
+    /// User declaration of an identifier reserved for the
+    /// implementation. Names beginning with `gl_`, `webgl_`,
+    /// `_webgl_`, or containing `__` are reserved (ESSL 1.00 §3.7).
+    ReservedIdentifier { name: String, reason: &'static str },
 }
 
 impl WebGlDiagnosticKind {
@@ -111,6 +121,12 @@ impl WebGlDiagnosticKind {
                 format!(
                     "`main` must be `void main()`; got return type {return_ty:?} and {param_count} parameter(s)"
                 )
+            },
+            WebGlDiagnosticKind::ForLoopAppendixA { what } => {
+                format!("`for` loop does not match Appendix A restricted form: {what}")
+            },
+            WebGlDiagnosticKind::ReservedIdentifier { name, reason } => {
+                format!("identifier `{name}` is reserved ({reason})")
             },
         }
     }
@@ -153,6 +169,12 @@ struct ValidatorVisitor<'tree> {
     call_graph: HashMap<String, HashSet<String>>,
     discard_sites: Vec<DiscardSite<'tree>>,
     main_info: Option<MainInfo>,
+    /// (span, list of violation descriptions). Each `for` loop produces
+    /// at most one entry; the description is the first thing it failed
+    /// to match, to match ANGLE's halt-on-first-issue diagnostic style.
+    for_loop_violations: Vec<(Span, &'static str)>,
+    /// (span where declared, name, reason it is reserved).
+    reserved_identifiers: Vec<(Span, String, &'static str)>,
 }
 
 struct DiscardSite<'tree> {
@@ -173,6 +195,14 @@ impl<'tree> ValidatorVisitor<'tree> {
             call_graph: HashMap::new(),
             discard_sites: Vec::new(),
             main_info: None,
+            for_loop_violations: Vec::new(),
+            reserved_identifiers: Vec::new(),
+        }
+    }
+
+    fn note_reserved_if_any(&mut self, name: &str, span: Span) {
+        if let Some(reason) = reserved_reason(name) {
+            self.reserved_identifiers.push((span, name.to_string(), reason));
         }
     }
 
@@ -232,6 +262,24 @@ impl<'tree> ValidatorVisitor<'tree> {
             },
         }
 
+        // R4: Appendix A `for` loop restriction.
+        for (span, what) in self.for_loop_violations {
+            result.errors.push(WebGlDiagnostic {
+                severity: Severity::Error,
+                kind: WebGlDiagnosticKind::ForLoopAppendixA { what },
+                span: Some(span),
+            });
+        }
+
+        // R5: Reserved identifier prefixes.
+        for (span, name, reason) in self.reserved_identifiers {
+            result.errors.push(WebGlDiagnostic {
+                severity: Severity::Error,
+                kind: WebGlDiagnosticKind::ReservedIdentifier { name, reason },
+                span: Some(span),
+            });
+        }
+
         // Render info_log. ANGLE / Chrome shape: one line per
         // error / warning, errors first, then warnings.
         let source_text = "";
@@ -261,11 +309,29 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
                     });
                 }
                 self.call_graph.entry(fd.name.clone()).or_default();
+                self.note_reserved_if_any(&fd.name, fd.name_span);
+                for p in &fd.params {
+                    self.note_reserved_if_any(&p.name, p.span);
+                }
             },
             Visit::Post => {
                 self.current_function = None;
             },
             Visit::In => {},
+        }
+        Walk::Continue
+    }
+
+    fn visit_global_decl(&mut self, g: &'tree GlobalDecl, visit: Visit) -> Walk {
+        if visit == Visit::Pre {
+            self.note_reserved_if_any(&g.name, g.name_span);
+        }
+        Walk::Continue
+    }
+
+    fn visit_local_decl(&mut self, d: &'tree LocalDecl, visit: Visit) -> Walk {
+        if visit == Visit::Pre {
+            self.note_reserved_if_any(&d.name, d.name_span);
         }
         Walk::Continue
     }
@@ -286,17 +352,127 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
 
     fn visit_stmt(&mut self, s: &'tree Stmt, visit: Visit) -> Walk {
         if visit == Visit::Pre {
-            if let Stmt::Discard { span } = s {
-                if let Some(fname) = self.current_function {
-                    self.discard_sites.push(DiscardSite { span: *span, function: fname });
-                }
+            match s {
+                Stmt::Discard { span } => {
+                    if let Some(fname) = self.current_function {
+                        self.discard_sites.push(DiscardSite { span: *span, function: fname });
+                    }
+                },
+                Stmt::For { span, .. } => {
+                    if let Some(what) = check_for_appendix_a(s) {
+                        self.for_loop_violations.push((*span, what));
+                    }
+                },
+                _ => {},
             }
         }
-        // `for` init can be a local decl; the walker already routes
-        // walk_local_decl through visit_local_decl, so no extra work
-        // here. Leaving the match exhaustive-ish via fall-through.
-        let _ = ForInit::Empty;
         Walk::Continue
+    }
+}
+
+// ---------- R4: Appendix A `for` loop check ---------------------------
+//
+// ESSL 1.00 Appendix A §4 restricts `for` loops to a counter-style
+// form. The full rule covers init, cond, step, and forbids the body
+// from modifying the loop variable. The body-modification check is a
+// deeper analysis and is queued for a follow-up; today's check covers
+// init / cond / step shape, which catches the bulk of real-world
+// hostile-input patterns.
+
+fn check_for_appendix_a(stmt: &Stmt) -> Option<&'static str> {
+    let Stmt::For { init, cond, step, .. } = stmt else {
+        return None;
+    };
+
+    // Init: must declare a single integer or float loop variable with
+    // an initializer.
+    let loop_var: &str = match init {
+        ForInit::Decl(d) => {
+            if !matches!(d.ty.kind, TypeKind::Int | TypeKind::Float) {
+                return Some("loop variable must be `int` or `float`");
+            }
+            if d.init.is_none() {
+                return Some("loop variable must have an initializer");
+            }
+            d.name.as_str()
+        },
+        ForInit::Empty => return Some("missing loop variable declaration"),
+        ForInit::Expr(_) => {
+            return Some("loop variable must be declared inside the for-init");
+        },
+    };
+
+    // Cond: must be a comparison binary expression involving the loop
+    // var.
+    match cond {
+        None => return Some("missing loop condition"),
+        Some(Expr::Binary { op, lhs, rhs, .. }) => {
+            let is_comparison = matches!(
+                op,
+                BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::Eq | BinOp::Ne
+            );
+            if !is_comparison {
+                return Some(
+                    "loop condition operator must be `<`, `<=`, `>`, `>=`, `==`, or `!=`",
+                );
+            }
+            let lhs_is_var = matches!(
+                lhs.as_ref(),
+                Expr::Ident { name, .. } if name == loop_var
+            );
+            let rhs_is_var = matches!(
+                rhs.as_ref(),
+                Expr::Ident { name, .. } if name == loop_var
+            );
+            if !lhs_is_var && !rhs_is_var {
+                return Some("loop condition must reference the loop variable");
+            }
+        },
+        Some(_) => return Some("loop condition must be a comparison expression"),
+    }
+
+    // Step: must update the loop variable via ++ / -- / += / -= / *= / /=.
+    match step {
+        None => return Some("missing loop step expression"),
+        Some(e) => {
+            let updates_loop_var = match e {
+                Expr::Unary { op, expr, .. } => {
+                    matches!(
+                        op,
+                        UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec
+                    ) && matches!(
+                        expr.as_ref(),
+                        Expr::Ident { name, .. } if name == loop_var
+                    )
+                },
+                Expr::Assign { lhs, .. } => matches!(
+                    lhs.as_ref(),
+                    Expr::Ident { name, .. } if name == loop_var
+                ),
+                _ => false,
+            };
+            if !updates_loop_var {
+                return Some("loop step must update the loop variable");
+            }
+        },
+    }
+
+    None
+}
+
+// ---------- R5: Reserved identifier prefix check ----------------------
+
+fn reserved_reason(name: &str) -> Option<&'static str> {
+    if name.starts_with("gl_") {
+        Some("starts with `gl_`")
+    } else if name.starts_with("webgl_") {
+        Some("starts with `webgl_`")
+    } else if name.starts_with("_webgl_") {
+        Some("starts with `_webgl_`")
+    } else if name.contains("__") {
+        Some("contains `__`")
+    } else {
+        None
     }
 }
 
