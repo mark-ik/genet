@@ -28,6 +28,11 @@ pub struct Request {
     /// gating and response tainting. `None` = no initiator (a top-level fetch),
     /// treated as same-origin with the target — no cross-origin checks apply.
     pub origin: Option<Origin>,
+    /// What the response will be used for (WHATWG Fetch request *destination*).
+    /// Drives the mixed-content active/passive split: optionally-blockable
+    /// destinations (image/audio/video) are auto-upgraded http→https, the rest
+    /// are blocked in a secure context.
+    pub destination: Destination,
 }
 
 impl Request {
@@ -42,7 +47,14 @@ impl Request {
             credentials: Credentials::default(),
             redirect: RedirectMode::default(),
             origin: None,
+            destination: Destination::default(),
         }
+    }
+
+    /// Set the request destination (drives the mixed-content active/passive split).
+    pub fn with_destination(mut self, destination: Destination) -> Self {
+        self.destination = destination;
+        self
     }
 
     /// Set the initiator origin (cross-origin requests need this for CORS).
@@ -80,6 +92,35 @@ pub enum Credentials {
     SameOrigin,
     Omit,
     Include,
+}
+
+/// WHATWG Fetch request *destination* — what the fetched bytes become. Only the
+/// distinctions the mixed-content split needs are modeled; every other
+/// destination (script, style, font, worker, the empty fetch()/XHR destination,
+/// …) is "blockable" and collapses to [`Destination::Other`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Destination {
+    /// The empty destination (a plain `fetch()` / XHR) — blockable.
+    #[default]
+    None,
+    /// `image` — optionally-blockable (auto-upgraded).
+    Image,
+    /// `audio` — optionally-blockable.
+    Audio,
+    /// `video` — optionally-blockable.
+    Video,
+    /// `document` (a nested navigable) — blockable.
+    Document,
+    /// Any other destination (script, style, font, worker, …) — blockable.
+    Other,
+}
+
+impl Destination {
+    /// "optionally-blockable" per the Mixed Content spec: `image` / `audio` /
+    /// `video`. These are auto-upgraded http→https; everything else is blockable.
+    pub(crate) fn is_optionally_blockable(self) -> bool {
+        matches!(self, Destination::Image | Destination::Audio | Destination::Video)
+    }
 }
 
 /// Redirect handling (WHATWG Fetch §2.2.5).

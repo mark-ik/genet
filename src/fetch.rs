@@ -52,7 +52,9 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
         .origin
         .as_ref()
         .is_some_and(|o| o.ascii_serialization().starts_with("https://"));
-    upgrade_to_https(&mut current_url, secure_context, cx);
+    if resolve_mixed_content(&mut current_url, request.destination, secure_context, cx) {
+        return Response::network_error();
+    }
     let mut method = request.method;
     let mut body = request.body.clone();
     let base_headers = request.headers.clone();
@@ -127,9 +129,8 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
             }
         }
 
-        // Transport: prefer h3 when this https origin advertised it (bodyless only).
+        // Transport: prefer h3 when this https origin advertised it (Alt-Svc).
         let try_h3 = current_url.scheme() == "https"
-            && body.is_none()
             && current_url.host_str().and_then(|h| cx.alt_svc.h3_port(h)).is_some();
         let raw = match send_request(&current_url, method, &req_headers, body.as_ref(), try_h3).await
         {
@@ -193,7 +194,14 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
                         redirects_remaining -= 1;
                         method = redirect_method(status, method, &mut body);
                         current_url = next;
-                        upgrade_to_https(&mut current_url, secure_context, cx);
+                        if resolve_mixed_content(
+                            &mut current_url,
+                            request.destination,
+                            secure_context,
+                            cx,
+                        ) {
+                            return Response::network_error();
+                        }
                         url_list.push(current_url.clone());
                         continue;
                     }
@@ -293,7 +301,9 @@ async fn send_request(
 ) -> Option<RawResponse> {
     #[cfg(not(target_arch = "wasm32"))]
     if try_h3 {
-        if let Some(h3) = crate::h3_client::fetch_h3_default(url, http_method(method), headers).await
+        if let Some(h3) =
+            crate::h3_client::fetch_h3_default(url, http_method(method), headers, body.cloned())
+                .await
         {
             return Some(RawResponse {
                 status: h3.status,
@@ -342,25 +352,47 @@ fn strip_body_encoding_headers(headers: &mut Vec<(String, String)>) {
     });
 }
 
-/// Rewrite a `http` URL to `https` when the request runs in a secure (https-origin)
-/// context — mixed-content auto-upgrade — or the host is HSTS-known. The
-/// active/passive split (block scripts, only upgrade media) is a later refinement;
-/// it needs a request `destination` concept netfetcher doesn't model yet.
-fn upgrade_to_https(url: &mut Url, secure_context: bool, cx: &FetchContext) {
-    if url.scheme() == "http" && (secure_context || hsts::should_upgrade(url, cx.hsts.as_ref())) {
+/// Resolve HSTS + mixed content for `url`, returning `true` if the request must
+/// be **blocked** (a network error).
+///
+/// HSTS is host-keyed and independent of content type: a known host upgrades and
+/// proceeds. Otherwise, in a secure (https-origin) context the mixed-content
+/// active/passive split applies — optionally-blockable destinations (image /
+/// audio / video) are auto-upgraded http→https, and blockable ones (script /
+/// style / font / document / the empty fetch() destination) are blocked. Outside
+/// a secure context with no HSTS entry, plain http is left as-is.
+fn resolve_mixed_content(
+    url: &mut Url,
+    destination: crate::Destination,
+    secure_context: bool,
+    cx: &FetchContext,
+) -> bool {
+    if url.scheme() != "http" {
+        return false;
+    }
+    if hsts::should_upgrade(url, cx.hsts.as_ref()) {
         let _ = url.set_scheme("https");
+        return false;
+    }
+    if !secure_context {
+        return false;
+    }
+    if destination.is_optionally_blockable() {
+        let _ = url.set_scheme("https");
+        false
+    } else {
+        true
     }
 }
 
-/// Approximate same-site test for SameSite cookie gating: compare registrable
-/// domains (no public-suffix list — wrong at eTLD edges like `*.github.io`,
-/// accepted for v1). No initiator origin = a top-level request → same-site.
+/// Same-site test for SameSite cookie gating: equal registrable domains, via the
+/// Public Suffix List. No initiator origin = a top-level request → same-site.
 fn is_same_site(origin: Option<&url::Origin>, target: &Url) -> bool {
     let Some(origin) = origin else {
         return true;
     };
     match (origin_host(origin), target.host_str()) {
-        (Some(oh), Some(th)) => registrable_domain(&oh) == registrable_domain(th),
+        (Some(oh), Some(th)) => same_registrable_domain(&oh, th),
         _ => false,
     }
 }
@@ -372,11 +404,13 @@ fn origin_host(origin: &url::Origin) -> Option<String> {
     }
 }
 
-/// Registrable domain, approximated as the last two dot-labels (no PSL).
-fn registrable_domain(host: &str) -> &str {
-    match host.rmatch_indices('.').nth(1) {
-        Some((idx, _)) => &host[idx + 1..],
-        None => host,
+/// Whether two hosts share a registrable domain (eTLD+1) per the PSL. Hosts the
+/// PSL can't resolve to a registrable domain — IP literals, single labels,
+/// unlisted TLDs — fall back to an exact host match.
+fn same_registrable_domain(a: &str, b: &str) -> bool {
+    match (psl::domain_str(a), psl::domain_str(b)) {
+        (Some(da), Some(db)) => da.eq_ignore_ascii_case(db),
+        _ => a.eq_ignore_ascii_case(b),
     }
 }
 
@@ -736,24 +770,43 @@ mod tests {
     }
 
     #[test]
-    fn mixed_content_upgrades_in_secure_context() {
+    fn mixed_content_active_passive_split() {
+        use crate::Destination;
         let cx = FetchContext::permissive();
-        let mut url: Url = "http://example.org/x".parse().unwrap();
-        upgrade_to_https(&mut url, true, &cx);
-        assert_eq!(url.scheme(), "https", "https-origin context upgrades http target");
 
-        // No secure context and no HSTS entry → left as http.
-        let mut insecure: Url = "http://example.org/x".parse().unwrap();
-        upgrade_to_https(&mut insecure, false, &cx);
+        // Optionally-blockable (image) in a secure context → auto-upgraded, allowed.
+        let mut img: Url = "http://example.org/x.png".parse().unwrap();
+        assert!(!resolve_mixed_content(&mut img, Destination::Image, true, &cx));
+        assert_eq!(img.scheme(), "https", "passive mixed content is upgraded");
+
+        // Blockable (script, and the empty fetch() destination) in a secure
+        // context → blocked.
+        let mut script: Url = "http://example.org/a.js".parse().unwrap();
+        assert!(resolve_mixed_content(&mut script, Destination::Other, true, &cx));
+        let mut xhr: Url = "http://example.org/api".parse().unwrap();
+        assert!(resolve_mixed_content(&mut xhr, Destination::None, true, &cx));
+
+        // No secure context, no HSTS → plain http left as-is, not blocked.
+        let mut insecure: Url = "http://example.org/a.js".parse().unwrap();
+        assert!(!resolve_mixed_content(&mut insecure, Destination::Other, false, &cx));
         assert_eq!(insecure.scheme(), "http");
     }
 
     #[test]
-    fn same_site_by_registrable_domain() {
+    fn same_site_by_public_suffix_list() {
         let target: Url = "https://api.example.org/x".parse().unwrap();
         assert!(is_same_site(Some(&origin_of("https://www.example.org/")), &target));
         assert!(!is_same_site(Some(&origin_of("https://other.example/")), &target));
         assert!(is_same_site(None, &target), "no initiator is same-site");
+
+        // PSL edge the last-two-labels approximation got wrong: github.io is a
+        // public suffix, so two users' subdomains are *different* sites.
+        let pages: Url = "https://alice.github.io/x".parse().unwrap();
+        assert!(
+            !is_same_site(Some(&origin_of("https://bob.github.io/")), &pages),
+            "distinct github.io subdomains are cross-site"
+        );
+        assert!(is_same_site(Some(&origin_of("https://alice.github.io/y")), &pages));
     }
 
     #[tokio::test]

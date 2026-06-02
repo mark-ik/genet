@@ -36,6 +36,10 @@ cookie = "0.18"
 time = "0.3"
 httpdate = "1"
 
+# Public Suffix List (embedded) for accurate registrable-domain / SameSite tests
+# at eTLD edges (e.g. *.github.io), replacing the last-two-labels approximation.
+psl = "2"
+
 # HTTP/3 (increment 4): QUIC (quinn) + h3. Native-only (UDP sockets); a wasm build
 # excludes this module. h3 is pre-1.0 (0.0.x) — API churn expected.
 quinn = "0.11"

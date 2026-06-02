@@ -35,6 +35,7 @@ pub(crate) async fn fetch_h3(
     url: &Url,
     method: http::Method,
     headers: &[(String, String)],
+    body: Option<Bytes>,
 ) -> Option<H3Response> {
     let host = url.host_str()?;
     let port = url.port_or_known_default()?;
@@ -56,7 +57,12 @@ pub(crate) async fn fetch_h3(
 
     let request = async {
         let mut stream = send_request.send_request(req).await.ok()?;
-        stream.finish().await.ok()?; // no request body in this lane yet
+        if let Some(body) = body {
+            if !body.is_empty() {
+                stream.send_data(body).await.ok()?;
+            }
+        }
+        stream.finish().await.ok()?;
         let resp = stream.recv_response().await.ok()?;
         let status = resp.status().as_u16();
         let headers = resp
@@ -109,8 +115,9 @@ pub(crate) async fn fetch_h3_default(
     url: &Url,
     method: http::Method,
     headers: &[(String, String)],
+    body: Option<Bytes>,
 ) -> Option<H3Response> {
-    fetch_h3(webpki_quic_config()?, url, method, headers).await
+    fetch_h3(webpki_quic_config()?, url, method, headers, body).await
 }
 
 #[cfg(test)]
@@ -202,9 +209,20 @@ mod tests {
                     let Ok((_req, mut stream)) = resolver.resolve_request().await else {
                         break;
                     };
+                    // Drain any request body; echo it back when present, else the
+                    // fixed `body`. This lets a POST test verify the h3 body lane.
+                    let mut req_body = BytesMut::new();
+                    while let Ok(Some(mut chunk)) = stream.recv_data().await {
+                        req_body.extend_from_slice(&chunk.copy_to_bytes(chunk.remaining()));
+                    }
+                    let out = if req_body.is_empty() {
+                        Bytes::from_static(body)
+                    } else {
+                        req_body.freeze()
+                    };
                     let resp = http::Response::builder().status(200).body(()).unwrap();
                     let _ = stream.send_response(resp).await;
-                    let _ = stream.send_data(Bytes::from_static(body)).await;
+                    let _ = stream.send_data(out).await;
                     let _ = stream.finish().await;
                 }
             }
@@ -218,11 +236,31 @@ mod tests {
         let port = start_server(b"hello over h3").await;
         let url: Url = format!("https://127.0.0.1:{port}/").parse().unwrap();
 
-        let resp = fetch_h3(no_verify_client_config(), &url, http::Method::GET, &[])
+        let resp = fetch_h3(no_verify_client_config(), &url, http::Method::GET, &[], None)
             .await
             .expect("h3 round-trip succeeds");
 
         assert_eq!(resp.status, 200);
         assert_eq!(resp.body.as_ref(), b"hello over h3");
+    }
+
+    #[tokio::test]
+    async fn h3_round_trip_with_request_body() {
+        install_provider();
+        let port = start_server(b"unused").await;
+        let url: Url = format!("https://127.0.0.1:{port}/").parse().unwrap();
+
+        let resp = fetch_h3(
+            no_verify_client_config(),
+            &url,
+            http::Method::POST,
+            &[],
+            Some(Bytes::from_static(b"posted over h3")),
+        )
+        .await
+        .expect("h3 POST round-trip succeeds");
+
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body.as_ref(), b"posted over h3", "server echoed the request body");
     }
 }
