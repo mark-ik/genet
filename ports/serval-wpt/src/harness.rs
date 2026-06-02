@@ -9,9 +9,12 @@
 //! then runs them against `testharness.js` on a fresh [`Runtime`] and reads the
 //! results through the bridge ([`Runtime::run_testharness`]).
 //!
-//! Engine: **Boa** (pure Rust, the conformance oracle). Nova loads the harness but
-//! its regex engine rejects the surrogate ranges in the harness's completion
-//! sanitizer (see `docs/2026-05-26_pluggable_engines_testharness_plan.md`).
+//! Engine: selectable via `--engine boa|nova` (see [`Engine`]). Boa is the
+//! pure-Rust conformance oracle; Nova is the native primary. The harness's
+//! regex-incompatible source is shimmed host-side (`harness_regex_compat`), and
+//! the WTF-8/UTF-16 string-indexing bugs that once panicked Nova are fixed in the
+//! fork (`docs/2026-06-02_nova_wtf8_indexing_fixes.md`); both engines now produce
+//! real numbers on the same corpus.
 //!
 //! Limitation: the test starts with an empty DOM. Tests that build their own DOM
 //! (`createElement`) or are pure-JS run; tests that query elements declared in the
