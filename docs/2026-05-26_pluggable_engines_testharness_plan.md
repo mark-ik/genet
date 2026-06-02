@@ -234,7 +234,7 @@ lifetime.
    directly). `Runtime::run_testharness` now rewrites that single regex
    literal (unique in the file, verified) to a never-matching char-class
    pattern (`/[^\s\S]/g` — not `/(?!)/`, which uses look-around Nova also
-   rejects) before eval, via `neutralize_surrogate_regex`. Headless results
+   rejects) before eval, via `harness_regex_compat`. Headless results
    are byte-identical; the harness now *compiles* on a scalar-only regex
    engine. Engine-neutral (no-op on Boa). The Nova results test is
    un-`#[ignore]`d and **passes**.
@@ -247,21 +247,56 @@ lifetime.
    one binary, making the engine-axis delta observable per the two-axis
    framing.
 
-   **It immediately paid off.** First real divergences found:
-   - `dom/nodes/Element-classList`: **identical** 785/1420 on both — the
-     binding layer is engine-neutral as designed.
-   - `dom/lists`: Boa 115/189 (4 with-failures), Nova 114/187 with **2
-     ERRORED** — `DOMTokenList-stringifier` / `DOMTokenList-value` throw on
-     Nova only. Cause: the *test* code compiles
-     `^\(\)\s*=>\s*(?:{(.*)}\s*|(.*))$` and Nova's `regress` rejects the
-     literal `{` after `(?:` ("repetition operator missing expression") —
-     it mis-reads the brace as a `{n,m}` quantifier. A genuine Nova regex
-     conformance bug, in *test* source (not testharness.js, so not
-     shimmable), surfaced only because Nova can now reach these tests. This
-     is the concrete value of the pluggable runner: real engine bugs become
-     visible + locatable. (Upstream-Nova-fixable; tracked here, not patched.)
+   **It immediately paid off** — see the divergence map below.
 5. **QuickJS / SpiderMonkey** become incremental backend additions when
    wanted, not new harness work.
+
+## Boa↔Nova divergence map (sweep, 2026-06-02)
+
+A both-engines sweep over `dom/traversal` (18), `dom/collections` (9), and
+`dom/nodes` (263) with a normalized diff (compare per-file status + subtest
+count, ignoring the engine-specific *error-message text*, which is cosmetic
+not behavioral). Findings, in order of value:
+
+- **The binding layer is engine-neutral.** `dom/traversal` (0 behavioral
+  divergences — the 4 errored files error *identically* on both, a shared
+  binding gap), `dom/collections` (identical), `Element-classList` (785/1420
+  on both). Where both engines reach a test, they agree.
+
+- **One Nova regex bug cascaded across 82 `dom/nodes` files** — the largest
+  delta by far. testharness.js L581 (`assert_throws_*` failure formatting)
+  matches `func.toString()` against `^\(\)\s*=>\s*(?:{(.*)}\s*|(.*))$` to
+  pretty-print `() => {...}`; Nova's `regress` mis-reads the literal `{` after
+  `(?:` as a `{n,m}` quantifier ("repetition operator missing expression").
+  It is harness machinery (not the spec behavior under test), so
+  `harness_regex_compat` escapes the braces (`\{`/`\}` — exactly equivalent,
+  accepted by both). That single shim took Nova `dom/nodes` from ~90 errored
+  to **19**, and ~0 → **1590/4500 subtests** (Boa 1646/5325). The underlying
+  `regress` bug (literal `{` outside quantifier position should be a literal,
+  per Annex B) is still worth upstreaming to Nova.
+
+- **5 Nova-only panics** (`Document-createElement`, `createElementNS`,
+  `getElementsByClassName-N` / `-whitespace-class-names`,
+  `CharacterData-surrogates`) — Boa runs all five to completion; Nova
+  **panics** (a Rust crash, caught by the runner's `catch_unwind`, worse than
+  a JS throw). Shared root cause: these tests push **lone surrogates** through
+  DOM string methods (`substringData`/`replaceData` splitting `\uD83C`/`\uDF20`
+  pairs; invalid-QName `createElement`). The binding's `value_to_string` is
+  safe (`to_string_lossy`), so the panic is **inside `nova_vm`'s own string
+  machinery** when JS builds a lone-surrogate string — an upstream Nova bug,
+  distinct from the binding layer. The highest-severity residual; upstream-fix.
+
+- **Thin tail of binding gaps** (post-shim, ~5 files): missing globals
+  `customElements` / `HTMLElement` / `URL` / `frames`, and "Not a callable
+  object" for unimplemented APIs. These are *serval-surface* gaps, not engine
+  divergences — they'd fail on Boa too once it reaches them; the diff only
+  shows them because the engines throw at slightly different points.
+
+Net: divergence collapsed **91 → 10 files** with one equivalence-preserving
+harness shim; the genuine residual is **one upstream Nova regex bug** (now
+worked around) and **one upstream Nova lone-surrogate string panic** (5 files,
+unfixed). The two-axis runner did its job — it turned "Nova conformance is
+unmeasured" into a short, located, upstream-actionable list.
 
 ## Relationship to existing docs
 
