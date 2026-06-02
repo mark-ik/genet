@@ -172,9 +172,11 @@ void main() {
 }
 
 #[test]
-fn binary_op_inside_vec4_constructor_still_unsupported() {
-    // Binary ops are queued for a follow-up; today the lowering only
-    // handles ident loads and nested constructors.
+fn vec2_plus_scalar_add_still_unsupported() {
+    // Component-wise addition between a vec and a scalar requires the
+    // OpFAdd dispatch to handle the broadcast case; the Mul / Div
+    // path has the broadcast (via OpVectorTimesScalar), Add / Sub
+    // still want both sides to be same-shape.
     let src = r#"
 attribute vec2 a_position;
 void main() {
@@ -187,4 +189,122 @@ void main() {
         matches!(err, webgl_essl::lower::LoweringError::UnsupportedShape { .. }),
         "got: {err:?}"
     );
+}
+
+// ---------- widening: binary ops on float / vec_n ---------------------
+
+#[test]
+fn vec2_plus_vec2_componentwise_add_lowers() {
+    let src = r#"
+attribute vec2 a;
+attribute vec2 b;
+void main() {
+    gl_Position = vec4(a + b, 0.0, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (vec2 add) ---\n{wgsl}");
+    assert!(wgsl.contains("vec2<f32>"));
+}
+
+#[test]
+fn vec2_times_scalar_lowers_via_vector_times_scalar() {
+    let src = r#"
+attribute vec2 a_position;
+void main() {
+    gl_Position = vec4(a_position * 2.0, 0.0, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (vec2 * scalar) ---\n{wgsl}");
+    assert!(wgsl.contains("vec2<f32>"));
+}
+
+#[test]
+fn scalar_times_vec3_swaps_to_vector_times_scalar() {
+    // The lowering canonicalizes `scalar * vec` into the SPIR-V
+    // `OpVectorTimesScalar(vec, scalar)` opcode shape.
+    let src = r#"
+attribute vec3 a_color;
+void main() {
+    gl_Position = vec4(0.5 * a_color, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (scalar * vec3) ---\n{wgsl}");
+    assert!(wgsl.contains("vec3<f32>"));
+}
+
+#[test]
+fn float_division_lowers() {
+    let src = r#"
+attribute vec2 a_position;
+void main() {
+    gl_Position = vec4(a_position * (1.0 / 2.0), 0.0, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (float div) ---\n{wgsl}");
+    assert!(wgsl.contains("vec4<f32>"));
+}
+
+// ---------- widening: uniforms ---------------------------------------
+
+#[test]
+fn uniform_vec4_fragment_passthrough_lowers() {
+    let src = r#"
+uniform vec4 u_color;
+void main() {
+    gl_FragColor = u_color;
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Fragment)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (uniform vec4 passthrough) ---\n{wgsl}");
+    // naga should emit a uniform group binding at descriptor set 0,
+    // binding 0.
+    assert!(wgsl.contains("@group(0)") && wgsl.contains("@binding(0)"));
+}
+
+#[test]
+fn uniform_float_scaled_attribute_vertex_lowers() {
+    let src = r#"
+uniform float u_scale;
+attribute vec2 a_position;
+void main() {
+    gl_Position = vec4(a_position * u_scale, 0.0, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (uniform float + vec2 attribute) ---\n{wgsl}");
+    assert!(wgsl.contains("vec2<f32>"));
+}
+
+#[test]
+fn multiple_uniforms_in_one_block() {
+    let src = r#"
+uniform vec4 u_color;
+uniform vec4 u_tint;
+void main() {
+    gl_FragColor = u_color;
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Fragment)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (two uniforms in block) ---\n{wgsl}");
+    // u_tint is declared but unused; both should appear as members of
+    // the same uniform block.
+    assert!(wgsl.contains("@group(0)") && wgsl.contains("@binding(0)"));
 }

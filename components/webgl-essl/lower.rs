@@ -33,7 +33,10 @@ use rspirv::spirv::{
     FunctionControl, MemoryModel, StorageClass, Word,
 };
 
-use crate::ast::{Expr, ExternalDecl, FunctionDef, StorageQualifier, Stmt, TranslationUnit, TypeKind};
+use crate::ast::{
+    BinOp, Expr, ExternalDecl, FunctionDef, StorageQualifier, Stmt, TranslationUnit, TypeKind,
+};
+use crate::span::Span;
 use crate::validate::ShaderStage;
 
 #[derive(Debug)]
@@ -61,7 +64,13 @@ impl std::fmt::Display for LoweringError {
 
 /// Public entry: lower `tu` to WGSL.
 pub fn lower_to_wgsl(tu: &TranslationUnit, stage: ShaderStage) -> Result<String, LoweringError> {
-    let spirv = build_spirv(tu, stage)?;
+    // Run the typecheck pass so the lowering can consult the per-span
+    // type annotations when emitting SPIR-V opcodes that depend on
+    // operand types (e.g. OpFMul vs OpVectorTimesScalar). Typecheck
+    // diagnostics are not surfaced here; the caller is expected to
+    // have run [`crate::check::check`] separately if they care.
+    let types = crate::check::check(tu).types;
+    let spirv = build_spirv(tu, stage, &types)?;
     let words = spirv.assemble();
     let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
 
@@ -127,9 +136,10 @@ fn find_output_assign<'a>(
 
 // ---------- SPIR-V emission -------------------------------------------
 
-struct Ctx {
+struct Ctx<'a> {
     b: Builder,
     type_float: Word,
+    type_int: Word,
     type_vec2: Word,
     type_vec3: Word,
     type_vec4: Word,
@@ -137,6 +147,18 @@ struct Ctx {
     /// holds vertex attributes; fragment varyings would be added the
     /// same way under the Fragment stage.
     inputs: HashMap<String, InputBinding>,
+    /// ESSL uniform name -> the member index of that uniform inside
+    /// the per-shader uniform block. Empty when the shader declares
+    /// no uniforms.
+    uniforms: HashMap<String, UniformBinding>,
+    /// SPIR-V Word for the uniform-block OpVariable (the single struct
+    /// holding all uniforms). `None` when the shader has no uniforms.
+    uniform_block_var: Option<Word>,
+    /// Cached `OpConstant int <i>` words for OpAccessChain indices.
+    int_constants: HashMap<i32, Word>,
+    /// Per-span type annotations from the typecheck pass; used to
+    /// dispatch on operand types in binary-op lowering.
+    types: &'a HashMap<Span, TypeKind>,
 }
 
 struct InputBinding {
@@ -149,7 +171,21 @@ struct InputBinding {
     kind: TypeKind,
 }
 
-fn build_spirv(tu: &TranslationUnit, stage: ShaderStage) -> Result<Module, LoweringError> {
+struct UniformBinding {
+    /// Zero-based index of this uniform inside the block struct.
+    member_index: u32,
+    /// SPIR-V Word for the value type of this member (used in
+    /// OpAccessChain return type construction).
+    pointee_type: Word,
+    /// ESSL value type. Mirror of InputBinding::kind.
+    kind: TypeKind,
+}
+
+fn build_spirv(
+    tu: &TranslationUnit,
+    stage: ShaderStage,
+    types: &HashMap<Span, TypeKind>,
+) -> Result<Module, LoweringError> {
     let main = find_main(tu)?;
     let output_expr = find_output_assign(main, stage)?;
 
@@ -160,12 +196,18 @@ fn build_spirv(tu: &TranslationUnit, stage: ShaderStage) -> Result<Module, Lower
 
     let type_void = b.type_void();
     let type_float = b.type_float(32, None);
+    let type_int = b.type_int(32, 1);
     let type_vec2 = b.type_vector(type_float, 2);
     let type_vec3 = b.type_vector(type_float, 3);
     let type_vec4 = b.type_vector(type_float, 4);
 
     // Register input variables (attributes in vertex stage).
     let inputs = register_inputs(&mut b, tu, stage, type_float, type_vec2, type_vec3, type_vec4);
+
+    // Register uniforms wrapped in a single Block-decorated struct
+    // (the WebGL / Vulkan convention naga's spv-in understands).
+    let (uniforms, uniform_block_var) =
+        register_uniforms(&mut b, tu, type_float, type_vec2, type_vec3, type_vec4);
 
     // Register the output variable (always vec4 in the cases this
     // module handles).
@@ -187,7 +229,19 @@ fn build_spirv(tu: &TranslationUnit, stage: ShaderStage) -> Result<Module, Lower
         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
     b.begin_block(None).map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
 
-    let mut ctx = Ctx { b, type_float, type_vec2, type_vec3, type_vec4, inputs };
+    let mut ctx = Ctx {
+        b,
+        type_float,
+        type_int,
+        type_vec2,
+        type_vec3,
+        type_vec4,
+        inputs,
+        uniforms,
+        uniform_block_var,
+        int_constants: HashMap::new(),
+        types,
+    };
     let value_id = lower_expr(&mut ctx, output_expr)?;
     ctx.b
         .store(output_var, value_id, None, [])
@@ -196,7 +250,8 @@ fn build_spirv(tu: &TranslationUnit, stage: ShaderStage) -> Result<Module, Lower
     ctx.b.end_function().map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
 
     // Entry point: interface includes the output plus every input the
-    // shader actually exposes.
+    // shader actually exposes. Uniforms are not part of the SPIR-V
+    // entry-point interface (they are bound through DescriptorSet).
     let execution_model = match stage {
         ShaderStage::Vertex => ExecutionModel::Vertex,
         ShaderStage::Fragment => ExecutionModel::Fragment,
@@ -209,6 +264,66 @@ fn build_spirv(tu: &TranslationUnit, stage: ShaderStage) -> Result<Module, Lower
     }
 
     Ok(ctx.b.module())
+}
+
+fn register_uniforms(
+    b: &mut Builder,
+    tu: &TranslationUnit,
+    type_float: Word,
+    type_vec2: Word,
+    type_vec3: Word,
+    type_vec4: Word,
+) -> (HashMap<String, UniformBinding>, Option<Word>) {
+    let mut uniforms: Vec<(String, TypeKind, Word, u32)> = Vec::new();
+    let mut offset: u32 = 0;
+    for d in &tu.decls {
+        let ExternalDecl::Global(g) = d else { continue };
+        if g.storage != StorageQualifier::Uniform {
+            continue;
+        }
+        let (pointee_type, kind, size) = match g.ty.kind {
+            TypeKind::Float => (type_float, TypeKind::Float, 4u32),
+            TypeKind::Vec2 => (type_vec2, TypeKind::Vec2, 8u32),
+            TypeKind::Vec3 => (type_vec3, TypeKind::Vec3, 16u32),
+            TypeKind::Vec4 => (type_vec4, TypeKind::Vec4, 16u32),
+            // mat / sampler uniforms are queued.
+            _ => continue,
+        };
+        // std140-ish offset alignment: vec3 / vec4 align to 16 bytes,
+        // vec2 to 8, scalars to 4. Simplistic but enough for this
+        // chunk's corpus.
+        let align = match kind {
+            TypeKind::Vec3 | TypeKind::Vec4 => 16,
+            TypeKind::Vec2 => 8,
+            _ => 4,
+        };
+        offset = (offset + align - 1) / align * align;
+        uniforms.push((g.name.clone(), kind, pointee_type, offset));
+        offset += size;
+    }
+    if uniforms.is_empty() {
+        return (HashMap::new(), None);
+    }
+    let member_types: Vec<Word> = uniforms.iter().map(|(_, _, ty, _)| *ty).collect();
+    let struct_ty = b.type_struct(member_types);
+    b.decorate(struct_ty, Decoration::Block, []);
+    for (i, (_, _, _, off)) in uniforms.iter().enumerate() {
+        b.member_decorate(
+            struct_ty,
+            i as u32,
+            Decoration::Offset,
+            [Operand::LiteralBit32(*off)],
+        );
+    }
+    let ptr_uniform = b.type_pointer(None, StorageClass::Uniform, struct_ty);
+    let var = b.variable(ptr_uniform, None, StorageClass::Uniform, None);
+    b.decorate(var, Decoration::DescriptorSet, [Operand::LiteralBit32(0)]);
+    b.decorate(var, Decoration::Binding, [Operand::LiteralBit32(0)]);
+    let mut map = HashMap::new();
+    for (i, (name, kind, pointee, _)) in uniforms.into_iter().enumerate() {
+        map.insert(name, UniformBinding { member_index: i as u32, pointee_type: pointee, kind });
+    }
+    (map, Some(var))
 }
 
 fn register_inputs(
@@ -251,13 +366,19 @@ fn register_inputs(
 }
 
 /// Best-effort AST-side classification of an expression's lowered
-/// type. Used by the single-arg vector-constructor broadcast path to
-/// distinguish `vec3(0.0)` (broadcast scalar) from `vec3(vec4(...))`
-/// (truncation, not yet lowered).
+/// type, using the typecheck pass's span->type map when present and
+/// falling back to AST inspection.
 fn classify_arg_kind(ctx: &Ctx, e: &Expr) -> Option<TypeKind> {
+    if let Some(ty) = ctx.types.get(&e.span()).copied() {
+        return Some(ty);
+    }
     match e {
         Expr::FloatLit { .. } | Expr::IntLit { .. } => Some(TypeKind::Float),
-        Expr::Ident { name, .. } => ctx.inputs.get(name).map(|b| b.kind),
+        Expr::Ident { name, .. } => ctx
+            .inputs
+            .get(name)
+            .map(|b| b.kind)
+            .or_else(|| ctx.uniforms.get(name).map(|u| u.kind)),
         Expr::Call { callee, .. } => match callee.as_str() {
             "vec2" => Some(TypeKind::Vec2),
             "vec3" => Some(TypeKind::Vec3),
@@ -266,6 +387,26 @@ fn classify_arg_kind(ctx: &Ctx, e: &Expr) -> Option<TypeKind> {
         },
         _ => None,
     }
+}
+
+fn spv_type_for_kind(ctx: &Ctx, kind: TypeKind) -> Option<Word> {
+    Some(match kind {
+        TypeKind::Float => ctx.type_float,
+        TypeKind::Int => ctx.type_int,
+        TypeKind::Vec2 => ctx.type_vec2,
+        TypeKind::Vec3 => ctx.type_vec3,
+        TypeKind::Vec4 => ctx.type_vec4,
+        _ => return None,
+    })
+}
+
+fn int_constant(ctx: &mut Ctx, value: i32) -> Word {
+    if let Some(&w) = ctx.int_constants.get(&value) {
+        return w;
+    }
+    let w = ctx.b.constant_bit32(ctx.type_int, value as u32);
+    ctx.int_constants.insert(value, w);
+    w
 }
 
 fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
@@ -280,15 +421,38 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
             Ok(ctx.b.constant_bit32(ctx.type_float, (*value as f32).to_bits()))
         },
         Expr::Ident { name, .. } => {
-            let binding = ctx.inputs.get(name).ok_or_else(|| LoweringError::UnsupportedShape {
-                what: format!("identifier `{name}` is not a registered input"),
-            })?;
-            let pointee = binding.pointee_type;
-            let var = binding.var;
-            ctx.b
-                .load(pointee, None, var, None, [])
-                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
+            if let Some(binding) = ctx.inputs.get(name) {
+                let pointee = binding.pointee_type;
+                let var = binding.var;
+                return ctx
+                    .b
+                    .load(pointee, None, var, None, [])
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+            if let Some(binding) = ctx.uniforms.get(name) {
+                let pointee = binding.pointee_type;
+                let member_idx = binding.member_index as i32;
+                let block_var = ctx.uniform_block_var.ok_or_else(|| {
+                    LoweringError::SpirvBuild(
+                        "uniform binding present without block variable".into(),
+                    )
+                })?;
+                let idx_const = int_constant(ctx, member_idx);
+                let ptr_ty = ctx.b.type_pointer(None, StorageClass::Uniform, pointee);
+                let access = ctx
+                    .b
+                    .access_chain(ptr_ty, None, block_var, [idx_const])
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+                return ctx
+                    .b
+                    .load(pointee, None, access, None, [])
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+            Err(LoweringError::UnsupportedShape {
+                what: format!("identifier `{name}` is not a registered input or uniform"),
+            })
         },
+        Expr::Binary { op, lhs, rhs, span } => lower_binary(ctx, *op, lhs, rhs, *span),
         Expr::Call { callee, args, .. } => {
             let (result_ty, component_count) = match callee.as_str() {
                 "vec2" => (ctx.type_vec2, 2usize),
@@ -332,4 +496,111 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
             what: format!("expression shape not lowered: {other:?}"),
         }),
     }
+}
+
+fn lower_binary(
+    ctx: &mut Ctx,
+    op: BinOp,
+    lhs: &Expr,
+    rhs: &Expr,
+    span: Span,
+) -> Result<Word, LoweringError> {
+    let lhs_kind =
+        classify_arg_kind(ctx, lhs).ok_or_else(|| LoweringError::UnsupportedShape {
+            what: format!("could not classify lhs of binary `{op:?}`"),
+        })?;
+    let rhs_kind =
+        classify_arg_kind(ctx, rhs).ok_or_else(|| LoweringError::UnsupportedShape {
+            what: format!("could not classify rhs of binary `{op:?}`"),
+        })?;
+    let result_kind = ctx.types.get(&span).copied().or_else(|| {
+        // Fall back to a structural rule if typecheck did not annotate
+        // (e.g. when no diagnostics were emitted but the span did not
+        // make it into the types map). Conservative.
+        match (op, lhs_kind, rhs_kind) {
+            (BinOp::Mul | BinOp::Div, TypeKind::Float, k) | (BinOp::Mul | BinOp::Div, k, TypeKind::Float)
+                if matches!(k, TypeKind::Vec2 | TypeKind::Vec3 | TypeKind::Vec4) =>
+            {
+                Some(k)
+            },
+            _ if lhs_kind == rhs_kind => Some(lhs_kind),
+            _ => None,
+        }
+    });
+    let result_kind = result_kind.ok_or_else(|| LoweringError::UnsupportedShape {
+        what: format!("could not infer result type for `{lhs_kind:?} {op:?} {rhs_kind:?}`"),
+    })?;
+    let result_ty = spv_type_for_kind(ctx, result_kind).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("result type {result_kind:?} not representable in SPIR-V emitter"),
+        }
+    })?;
+
+    let lhs_id = lower_expr(ctx, lhs)?;
+    let rhs_id = lower_expr(ctx, rhs)?;
+
+    // Dispatch on the operand type pair. ESSL 3.00 integer ops are
+    // queued; today's matrix is float-family only.
+    let scalar_lhs = matches!(lhs_kind, TypeKind::Float);
+    let scalar_rhs = matches!(rhs_kind, TypeKind::Float);
+    let vec_lhs = matches!(lhs_kind, TypeKind::Vec2 | TypeKind::Vec3 | TypeKind::Vec4);
+    let vec_rhs = matches!(rhs_kind, TypeKind::Vec2 | TypeKind::Vec3 | TypeKind::Vec4);
+
+    match op {
+        BinOp::Add | BinOp::Sub => {
+            if (scalar_lhs && scalar_rhs) || (vec_lhs && vec_rhs && lhs_kind == rhs_kind) {
+                let r = if op == BinOp::Add {
+                    ctx.b.f_add(result_ty, None, lhs_id, rhs_id)
+                } else {
+                    ctx.b.f_sub(result_ty, None, lhs_id, rhs_id)
+                };
+                return r.map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+        },
+        BinOp::Mul => {
+            if scalar_lhs && scalar_rhs {
+                return ctx
+                    .b
+                    .f_mul(result_ty, None, lhs_id, rhs_id)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+            if vec_lhs && vec_rhs && lhs_kind == rhs_kind {
+                return ctx
+                    .b
+                    .f_mul(result_ty, None, lhs_id, rhs_id)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+            if vec_lhs && scalar_rhs {
+                return ctx
+                    .b
+                    .vector_times_scalar(result_ty, None, lhs_id, rhs_id)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+            if scalar_lhs && vec_rhs {
+                // OpVectorTimesScalar wants (vec, scalar) order; swap.
+                return ctx
+                    .b
+                    .vector_times_scalar(result_ty, None, rhs_id, lhs_id)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+        },
+        BinOp::Div => {
+            if scalar_lhs && scalar_rhs {
+                return ctx
+                    .b
+                    .f_div(result_ty, None, lhs_id, rhs_id)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+            if vec_lhs && vec_rhs && lhs_kind == rhs_kind {
+                return ctx
+                    .b
+                    .f_div(result_ty, None, lhs_id, rhs_id)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+        },
+        _ => {},
+    }
+    Err(LoweringError::UnsupportedShape {
+        what: format!("binary `{op:?}` on {lhs_kind:?} and {rhs_kind:?} not lowered"),
+    })
 }
