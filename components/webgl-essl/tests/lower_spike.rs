@@ -291,6 +291,74 @@ void main() {
     assert!(wgsl.contains("vec2<f32>"));
 }
 
+// ---------- widening: matrix uniforms + mat * vec --------------------
+
+#[test]
+fn canonical_mvp_transform_vertex_lowers() {
+    let src = r#"
+uniform mat4 u_mvp;
+attribute vec3 a_position;
+void main() {
+    gl_Position = u_mvp * vec4(a_position, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (MVP transform) ---\n{wgsl}");
+    assert!(wgsl.contains("mat4x4<f32>"));
+    assert!(wgsl.contains("@group(0)") && wgsl.contains("@binding(0)"));
+    assert!(wgsl.contains("@vertex"));
+}
+
+#[test]
+fn mat3_times_vec3_uniform_lowers() {
+    let src = r#"
+uniform mat3 u_normal_mat;
+attribute vec3 a_normal;
+void main() {
+    gl_Position = vec4(u_normal_mat * a_normal, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (mat3 * vec3) ---\n{wgsl}");
+    assert!(wgsl.contains("mat3x3<f32>"));
+}
+
+#[test]
+fn mat2_times_vec2_uniform_lowers() {
+    let src = r#"
+uniform mat2 u_rot;
+attribute vec2 a_position;
+void main() {
+    gl_Position = vec4(u_rot * a_position, 0.0, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (mat2 * vec2) ---\n{wgsl}");
+    assert!(wgsl.contains("mat2x2<f32>"));
+}
+
+#[test]
+fn mat4_times_scalar_lowers() {
+    let src = r#"
+uniform mat4 u_mvp;
+attribute vec3 a_position;
+void main() {
+    gl_Position = (u_mvp * 0.5) * vec4(a_position, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (mat4 * scalar) ---\n{wgsl}");
+    assert!(wgsl.contains("mat4x4<f32>"));
+}
+
 #[test]
 fn multiple_uniforms_in_one_block() {
     let src = r#"

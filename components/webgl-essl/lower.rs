@@ -143,6 +143,9 @@ struct Ctx<'a> {
     type_vec2: Word,
     type_vec3: Word,
     type_vec4: Word,
+    type_mat2: Word,
+    type_mat3: Word,
+    type_mat4: Word,
     /// ESSL identifier name -> Input variable binding. Today this
     /// holds vertex attributes; fragment varyings would be added the
     /// same way under the Fragment stage.
@@ -200,14 +203,28 @@ fn build_spirv(
     let type_vec2 = b.type_vector(type_float, 2);
     let type_vec3 = b.type_vector(type_float, 3);
     let type_vec4 = b.type_vector(type_float, 4);
+    // Column-major matrices: mat_n = matrix of n column vectors of
+    // size n. OpTypeMatrix takes (column-vector-type, column-count).
+    let type_mat2 = b.type_matrix(type_vec2, 2);
+    let type_mat3 = b.type_matrix(type_vec3, 3);
+    let type_mat4 = b.type_matrix(type_vec4, 4);
 
     // Register input variables (attributes in vertex stage).
     let inputs = register_inputs(&mut b, tu, stage, type_float, type_vec2, type_vec3, type_vec4);
 
     // Register uniforms wrapped in a single Block-decorated struct
     // (the WebGL / Vulkan convention naga's spv-in understands).
-    let (uniforms, uniform_block_var) =
-        register_uniforms(&mut b, tu, type_float, type_vec2, type_vec3, type_vec4);
+    let (uniforms, uniform_block_var) = register_uniforms(
+        &mut b,
+        tu,
+        type_float,
+        type_vec2,
+        type_vec3,
+        type_vec4,
+        type_mat2,
+        type_mat3,
+        type_mat4,
+    );
 
     // Register the output variable (always vec4 in the cases this
     // module handles).
@@ -236,6 +253,9 @@ fn build_spirv(
         type_vec2,
         type_vec3,
         type_vec4,
+        type_mat2,
+        type_mat3,
+        type_mat4,
         inputs,
         uniforms,
         uniform_block_var,
@@ -266,6 +286,7 @@ fn build_spirv(
     Ok(ctx.b.module())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn register_uniforms(
     b: &mut Builder,
     tu: &TranslationUnit,
@@ -273,54 +294,76 @@ fn register_uniforms(
     type_vec2: Word,
     type_vec3: Word,
     type_vec4: Word,
+    type_mat2: Word,
+    type_mat3: Word,
+    type_mat4: Word,
 ) -> (HashMap<String, UniformBinding>, Option<Word>) {
-    let mut uniforms: Vec<(String, TypeKind, Word, u32)> = Vec::new();
+    let mut uniforms: Vec<(String, TypeKind, Word, u32, Option<u32>)> = Vec::new();
     let mut offset: u32 = 0;
     for d in &tu.decls {
         let ExternalDecl::Global(g) = d else { continue };
         if g.storage != StorageQualifier::Uniform {
             continue;
         }
-        let (pointee_type, kind, size) = match g.ty.kind {
-            TypeKind::Float => (type_float, TypeKind::Float, 4u32),
-            TypeKind::Vec2 => (type_vec2, TypeKind::Vec2, 8u32),
-            TypeKind::Vec3 => (type_vec3, TypeKind::Vec3, 16u32),
-            TypeKind::Vec4 => (type_vec4, TypeKind::Vec4, 16u32),
-            // mat / sampler uniforms are queued.
+        // (pointee_type, kind, size, matrix_stride). matrix_stride
+        // is Some only for matrix types and matches the natural
+        // column-vector size (mat2 = 8, mat3 = 16, mat4 = 16). naga's
+        // spv-in validates the stride matches the column dimension;
+        // padding wider than that fails as UnsupportedMatrixStride.
+        let (pointee_type, kind, size, matrix_stride) = match g.ty.kind {
+            TypeKind::Float => (type_float, TypeKind::Float, 4u32, None),
+            TypeKind::Vec2 => (type_vec2, TypeKind::Vec2, 8u32, None),
+            TypeKind::Vec3 => (type_vec3, TypeKind::Vec3, 16u32, None),
+            TypeKind::Vec4 => (type_vec4, TypeKind::Vec4, 16u32, None),
+            TypeKind::Mat2 => (type_mat2, TypeKind::Mat2, 16u32, Some(8u32)),
+            TypeKind::Mat3 => (type_mat3, TypeKind::Mat3, 48u32, Some(16u32)),
+            TypeKind::Mat4 => (type_mat4, TypeKind::Mat4, 64u32, Some(16u32)),
+            // Sampler uniforms are queued (different storage class).
             _ => continue,
         };
-        // std140-ish offset alignment: vec3 / vec4 align to 16 bytes,
-        // vec2 to 8, scalars to 4. Simplistic but enough for this
-        // chunk's corpus.
-        let align = match kind {
-            TypeKind::Vec3 | TypeKind::Vec4 => 16,
-            TypeKind::Vec2 => 8,
+        let align = match (kind, matrix_stride) {
+            (_, Some(s)) => s,
+            (TypeKind::Vec3 | TypeKind::Vec4, _) => 16,
+            (TypeKind::Vec2, _) => 8,
             _ => 4,
         };
         offset = (offset + align - 1) / align * align;
-        uniforms.push((g.name.clone(), kind, pointee_type, offset));
+        uniforms.push((g.name.clone(), kind, pointee_type, offset, matrix_stride));
         offset += size;
     }
     if uniforms.is_empty() {
         return (HashMap::new(), None);
     }
-    let member_types: Vec<Word> = uniforms.iter().map(|(_, _, ty, _)| *ty).collect();
+    let member_types: Vec<Word> = uniforms.iter().map(|(_, _, ty, _, _)| *ty).collect();
     let struct_ty = b.type_struct(member_types);
     b.decorate(struct_ty, Decoration::Block, []);
-    for (i, (_, _, _, off)) in uniforms.iter().enumerate() {
+    for (i, (_, _, _, off, matrix_stride)) in uniforms.iter().enumerate() {
         b.member_decorate(
             struct_ty,
             i as u32,
             Decoration::Offset,
             [Operand::LiteralBit32(*off)],
         );
+        if let Some(stride) = *matrix_stride {
+            // Column-major storage with the natural column-vector
+            // stride per matrix size (8 for mat2, 16 for mat3 / mat4).
+            // naga's spv-in rejects strides that do not match the
+            // column dimension.
+            b.member_decorate(struct_ty, i as u32, Decoration::ColMajor, []);
+            b.member_decorate(
+                struct_ty,
+                i as u32,
+                Decoration::MatrixStride,
+                [Operand::LiteralBit32(stride)],
+            );
+        }
     }
     let ptr_uniform = b.type_pointer(None, StorageClass::Uniform, struct_ty);
     let var = b.variable(ptr_uniform, None, StorageClass::Uniform, None);
     b.decorate(var, Decoration::DescriptorSet, [Operand::LiteralBit32(0)]);
     b.decorate(var, Decoration::Binding, [Operand::LiteralBit32(0)]);
     let mut map = HashMap::new();
-    for (i, (name, kind, pointee, _)) in uniforms.into_iter().enumerate() {
+    for (i, (name, kind, pointee, _, _)) in uniforms.into_iter().enumerate() {
         map.insert(name, UniformBinding { member_index: i as u32, pointee_type: pointee, kind });
     }
     (map, Some(var))
@@ -396,6 +439,9 @@ fn spv_type_for_kind(ctx: &Ctx, kind: TypeKind) -> Option<Word> {
         TypeKind::Vec2 => ctx.type_vec2,
         TypeKind::Vec3 => ctx.type_vec3,
         TypeKind::Vec4 => ctx.type_vec4,
+        TypeKind::Mat2 => ctx.type_mat2,
+        TypeKind::Mat3 => ctx.type_mat3,
+        TypeKind::Mat4 => ctx.type_mat4,
         _ => return None,
     })
 }
@@ -498,6 +544,33 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
     }
 }
 
+fn matches_mat_vec(lhs: TypeKind, rhs: TypeKind) -> bool {
+    matches!(
+        (lhs, rhs),
+        (TypeKind::Mat4, TypeKind::Vec4)
+            | (TypeKind::Mat3, TypeKind::Vec3)
+            | (TypeKind::Mat2, TypeKind::Vec2)
+    )
+}
+
+fn matches_vec_mat(lhs: TypeKind, rhs: TypeKind) -> bool {
+    matches!(
+        (lhs, rhs),
+        (TypeKind::Vec4, TypeKind::Mat4)
+            | (TypeKind::Vec3, TypeKind::Mat3)
+            | (TypeKind::Vec2, TypeKind::Mat2)
+    )
+}
+
+fn matches_mat_mat(lhs: TypeKind, rhs: TypeKind) -> bool {
+    matches!(
+        (lhs, rhs),
+        (TypeKind::Mat2, TypeKind::Mat2)
+            | (TypeKind::Mat3, TypeKind::Mat3)
+            | (TypeKind::Mat4, TypeKind::Mat4)
+    )
+}
+
 fn lower_binary(
     ctx: &mut Ctx,
     op: BinOp,
@@ -518,11 +591,15 @@ fn lower_binary(
         // (e.g. when no diagnostics were emitted but the span did not
         // make it into the types map). Conservative.
         match (op, lhs_kind, rhs_kind) {
-            (BinOp::Mul | BinOp::Div, TypeKind::Float, k) | (BinOp::Mul | BinOp::Div, k, TypeKind::Float)
+            (BinOp::Mul | BinOp::Div, TypeKind::Float, k)
+            | (BinOp::Mul | BinOp::Div, k, TypeKind::Float)
                 if matches!(k, TypeKind::Vec2 | TypeKind::Vec3 | TypeKind::Vec4) =>
             {
                 Some(k)
             },
+            (BinOp::Mul, _, _) if matches_mat_vec(lhs_kind, rhs_kind) => Some(rhs_kind),
+            (BinOp::Mul, _, _) if matches_vec_mat(lhs_kind, rhs_kind) => Some(lhs_kind),
+            (BinOp::Mul, _, _) if matches_mat_mat(lhs_kind, rhs_kind) => Some(lhs_kind),
             _ if lhs_kind == rhs_kind => Some(lhs_kind),
             _ => None,
         }
@@ -581,6 +658,45 @@ fn lower_binary(
                 return ctx
                     .b
                     .vector_times_scalar(result_ty, None, rhs_id, lhs_id)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+            // mat_n * vec_n -> OpMatrixTimesVector when dimensions
+            // match (mat4 * vec4, mat3 * vec3, mat2 * vec2).
+            if matches_mat_vec(lhs_kind, rhs_kind) {
+                return ctx
+                    .b
+                    .matrix_times_vector(result_ty, None, lhs_id, rhs_id)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+            // vec_n * mat_n -> OpVectorTimesMatrix (row-vector mul).
+            if matches_vec_mat(lhs_kind, rhs_kind) {
+                return ctx
+                    .b
+                    .vector_times_matrix(result_ty, None, lhs_id, rhs_id)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+            // mat_n * mat_n (same n) -> OpMatrixTimesMatrix.
+            if matches_mat_mat(lhs_kind, rhs_kind) {
+                return ctx
+                    .b
+                    .matrix_times_matrix(result_ty, None, lhs_id, rhs_id)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+            // mat_n * float -> OpMatrixTimesScalar.
+            if matches!(lhs_kind, TypeKind::Mat2 | TypeKind::Mat3 | TypeKind::Mat4)
+                && scalar_rhs
+            {
+                return ctx
+                    .b
+                    .matrix_times_scalar(result_ty, None, lhs_id, rhs_id)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+            if scalar_lhs
+                && matches!(rhs_kind, TypeKind::Mat2 | TypeKind::Mat3 | TypeKind::Mat4)
+            {
+                return ctx
+                    .b
+                    .matrix_times_scalar(result_ty, None, rhs_id, lhs_id)
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
             }
         },
