@@ -31,6 +31,30 @@ use crate::ast::{
     BinOp, Expr, ExternalDecl, ForInit, FunctionDef, GlobalDecl, LocalDecl, PrecisionDecl, Stmt,
     TranslationUnit, TypeKind, UnaryOp,
 };
+
+/// WebGL 1 §6.4 minimum-guaranteed packing limits. Real
+/// implementations may support more; these are the floors a shader
+/// must respect to be portable.
+const MAX_VERTEX_ATTRIBS: u32 = 8;
+const MAX_VARYING_VECTORS: u32 = 8;
+const MAX_VERTEX_UNIFORM_VECTORS: u32 = 128;
+const MAX_FRAGMENT_UNIFORM_VECTORS: u32 = 16;
+
+/// Slot count for a single declaration of the given type, with no
+/// inter-decl packing. Conservative: scalars and vec_n cost one vec4
+/// slot each, matrices cost their column count, samplers and void
+/// don't count toward vector limits. R13 sums this over all decls in
+/// each storage class.
+fn slot_count_for(ty: TypeKind) -> u32 {
+    match ty {
+        TypeKind::Bool | TypeKind::Int | TypeKind::Float => 1,
+        TypeKind::Vec2 | TypeKind::Vec3 | TypeKind::Vec4 => 1,
+        TypeKind::Mat2 => 2,
+        TypeKind::Mat3 => 3,
+        TypeKind::Mat4 => 4,
+        TypeKind::Void | TypeKind::Sampler2D | TypeKind::SamplerCube => 0,
+    }
+}
 use crate::span::{Span, line_column};
 use crate::visit::{Visit, Visitor, Walk, walk_translation_unit};
 
@@ -58,7 +82,7 @@ pub enum ShaderStage {
 /// and case-value typing.
 pub fn validate(tu: &TranslationUnit, source: &str, stage: ShaderStage) -> ValidationResult {
     let check_result = crate::check::check(tu);
-    let mut v = ValidatorVisitor::new(stage, check_result.types);
+    let mut v = ValidatorVisitor::new(stage, check_result.types, tu.version);
     walk_translation_unit(&mut v, tu);
     v.finalize(tu, source)
 }
@@ -139,6 +163,24 @@ pub enum WebGlDiagnosticKind {
     /// Two `case` labels inside the same switch share the same
     /// integer value.
     DuplicateCaseValue { value: i64 },
+    /// `arr[<expr>]` where `<expr>` is neither a literal integer
+    /// constant nor an active loop induction variable. ESSL 1.00
+    /// Appendix A restricts WebGL 1 array indexing to constant-
+    /// index-expressions. ESSL 3.00 relaxes this; the rule is
+    /// gated to ESSL 1.00 source.
+    IndirectArrayIndex,
+    /// A storage class exceeds its WebGL 1 minimum-guaranteed slot
+    /// count. WebGL 1 spec §6.4 fixes:
+    /// - attribute: 8 (MAX_VERTEX_ATTRIBS)
+    /// - varying: 8 (MAX_VARYING_VECTORS)
+    /// - vertex uniform: 128 (MAX_VERTEX_UNIFORM_VECTORS)
+    /// - fragment uniform: 16 (MAX_FRAGMENT_UNIFORM_VECTORS)
+    /// The slot-count rule is one slot per declaration for
+    /// scalars/vec_n, n slots for mat_n; samplers do not count.
+    /// Conservative — does not yet implement Appendix A's
+    /// inter-declaration packing scheme, so it rejects some shaders
+    /// real implementations could pack.
+    PackingLimitExceeded { class: &'static str, used: u32, limit: u32 },
 }
 
 impl WebGlDiagnosticKind {
@@ -181,6 +223,12 @@ impl WebGlDiagnosticKind {
             },
             WebGlDiagnosticKind::DuplicateCaseValue { value } => {
                 format!("duplicate `case {value}:` label within the same switch")
+            },
+            WebGlDiagnosticKind::IndirectArrayIndex => {
+                "array index must be a constant or a loop induction variable (ESSL 1.00 Appendix A)".to_string()
+            },
+            WebGlDiagnosticKind::PackingLimitExceeded { class, used, limit } => {
+                format!("too many {class} slots: {used} declared, WebGL minimum is {limit}")
             },
         }
     }
@@ -270,6 +318,21 @@ struct ValidatorVisitor<'tree> {
     /// enclosing switch's body. Used to detect duplicates as the
     /// visitor descends into nested switches.
     switch_case_stack: Vec<HashSet<i64>>,
+    /// `#version` directive value, propagated from
+    /// [`TranslationUnit::version`]. Used by R12 to gate the
+    /// indirect-array-index rule to ESSL 1.00. `None` is treated
+    /// as ESSL 1.00 (the WebGL 1 default).
+    version: Option<u32>,
+    /// Stack of currently-active loop induction variable names.
+    /// Pushed on Stmt::For Pre, popped on Stmt::For Post. Used by
+    /// R12 to admit `arr[i]` when `i` is a loop iter var even
+    /// though it is not a literal integer constant.
+    loop_var_stack: Vec<String>,
+    /// (index-expression span) for `arr[expr]` sites where the
+    /// index is neither a constant nor a loop iter var. ESSL 1.00
+    /// Appendix A constrains array indexing to constant-index-
+    /// expressions; full WebGL conformance requires this.
+    indirect_index_sites: Vec<Span>,
 }
 
 struct DiscardSite<'tree> {
@@ -283,7 +346,32 @@ struct MainInfo {
 }
 
 impl<'tree> ValidatorVisitor<'tree> {
-    fn new(stage: ShaderStage, types: HashMap<Span, TypeKind>) -> Self {
+    /// True if the source was parsed under ESSL 1.00 (the WebGL 1
+    /// default). `None` is treated as 1.00 per the spec default;
+    /// `Some(100)` is the explicit form. Any other version (300, ...)
+    /// is ESSL 3.00+.
+    fn is_essl_100(&self) -> bool {
+        matches!(self.version, None | Some(100))
+    }
+
+    /// R12 first-pass acceptance set: literal int, an Ident that
+    /// resolves to a currently-active loop induction variable, or a
+    /// unary/binary expression formed recursively from those.
+    /// Conservative — does not yet handle `const int N = ...; arr[N]`
+    /// (constant folding queued).
+    fn is_constant_index_expr(&self, e: &Expr) -> bool {
+        match e {
+            Expr::IntLit { .. } => true,
+            Expr::Ident { name, .. } => self.loop_var_stack.iter().any(|v| v == name),
+            Expr::Unary { expr, .. } => self.is_constant_index_expr(expr),
+            Expr::Binary { lhs, rhs, .. } => {
+                self.is_constant_index_expr(lhs) && self.is_constant_index_expr(rhs)
+            },
+            _ => false,
+        }
+    }
+
+    fn new(stage: ShaderStage, types: HashMap<Span, TypeKind>, version: Option<u32>) -> Self {
         Self {
             stage,
             current_function: None,
@@ -301,6 +389,9 @@ impl<'tree> ValidatorVisitor<'tree> {
             case_value_not_constant: Vec::new(),
             case_duplicates: Vec::new(),
             switch_case_stack: Vec::new(),
+            version,
+            loop_var_stack: Vec::new(),
+            indirect_index_sites: Vec::new(),
         }
     }
 
@@ -470,6 +561,101 @@ impl<'tree> ValidatorVisitor<'tree> {
             });
         }
 
+        // R12: indirect array index (ESSL 1.00 only).
+        for span in self.indirect_index_sites {
+            result.errors.push(WebGlDiagnostic {
+                severity: Severity::Error,
+                kind: WebGlDiagnosticKind::IndirectArrayIndex,
+                span: Some(span),
+            });
+        }
+
+        // R13: WebGL packing limits. Walk the global decls and sum
+        // slot counts per storage class, comparing against the
+        // stage's minimum-guaranteed limit. Conservative — uses one
+        // slot per scalar/vec_n decl, n slots per mat_n decl, no
+        // inter-declaration packing.
+        let mut attr_slots: u32 = 0;
+        let mut varying_slots: u32 = 0;
+        let mut uniform_slots: u32 = 0;
+        let mut first_attr: Option<Span> = None;
+        let mut first_varying: Option<Span> = None;
+        let mut first_uniform: Option<Span> = None;
+        for d in &src.decls {
+            let ExternalDecl::Global(g) = d else { continue };
+            let slots = slot_count_for(g.ty.kind);
+            if slots == 0 {
+                continue;
+            }
+            match g.storage {
+                crate::ast::StorageQualifier::Attribute => {
+                    attr_slots += slots;
+                    first_attr.get_or_insert(g.span);
+                },
+                crate::ast::StorageQualifier::Varying => {
+                    varying_slots += slots;
+                    first_varying.get_or_insert(g.span);
+                },
+                crate::ast::StorageQualifier::In if self.stage == ShaderStage::Vertex => {
+                    attr_slots += slots;
+                    first_attr.get_or_insert(g.span);
+                },
+                crate::ast::StorageQualifier::In => {
+                    varying_slots += slots;
+                    first_varying.get_or_insert(g.span);
+                },
+                crate::ast::StorageQualifier::Out if self.stage == ShaderStage::Vertex => {
+                    varying_slots += slots;
+                    first_varying.get_or_insert(g.span);
+                },
+                crate::ast::StorageQualifier::Uniform => {
+                    uniform_slots += slots;
+                    first_uniform.get_or_insert(g.span);
+                },
+                _ => {},
+            }
+        }
+        if attr_slots > MAX_VERTEX_ATTRIBS && self.stage == ShaderStage::Vertex {
+            result.errors.push(WebGlDiagnostic {
+                severity: Severity::Error,
+                kind: WebGlDiagnosticKind::PackingLimitExceeded {
+                    class: "attribute",
+                    used: attr_slots,
+                    limit: MAX_VERTEX_ATTRIBS,
+                },
+                span: first_attr,
+            });
+        }
+        if varying_slots > MAX_VARYING_VECTORS {
+            result.errors.push(WebGlDiagnostic {
+                severity: Severity::Error,
+                kind: WebGlDiagnosticKind::PackingLimitExceeded {
+                    class: "varying",
+                    used: varying_slots,
+                    limit: MAX_VARYING_VECTORS,
+                },
+                span: first_varying,
+            });
+        }
+        let uniform_limit = match self.stage {
+            ShaderStage::Vertex => MAX_VERTEX_UNIFORM_VECTORS,
+            ShaderStage::Fragment => MAX_FRAGMENT_UNIFORM_VECTORS,
+        };
+        if uniform_slots > uniform_limit {
+            result.errors.push(WebGlDiagnostic {
+                severity: Severity::Error,
+                kind: WebGlDiagnosticKind::PackingLimitExceeded {
+                    class: match self.stage {
+                        ShaderStage::Vertex => "vertex uniform",
+                        ShaderStage::Fragment => "fragment uniform",
+                    },
+                    used: uniform_slots,
+                    limit: uniform_limit,
+                },
+                span: first_uniform,
+            });
+        }
+
         // Render info_log. ANGLE / Chrome shape: one line per
         // error / warning, errors first, then warnings. Source text
         // resolves spans to 1-based line numbers.
@@ -566,6 +752,19 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
                             .insert(callee.clone());
                     }
                 }
+                // R12: indirect array index. ESSL 1.00 Appendix A
+                // restricts array indices to "constant-index-
+                // expressions". The first-pass acceptance set is
+                // literal IntLit and currently-active loop
+                // induction variable references. Gated to ESSL 1.00
+                // (version == None or Some(100)).
+                if self.is_essl_100() {
+                    if let Expr::Index { index, .. } = e {
+                        if !self.is_constant_index_expr(index) {
+                            self.indirect_index_sites.push(index.span());
+                        }
+                    }
+                }
             },
             Visit::Post => {
                 self.expr_depth -= 1;
@@ -583,9 +782,21 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
                         self.discard_sites.push(DiscardSite { span: *span, function: fname });
                     }
                 },
-                Stmt::For { span, .. } => {
+                Stmt::For { span, init, .. } => {
                     if let Some(what) = check_for_appendix_a(s) {
                         self.for_loop_violations.push((*span, what));
+                    }
+                    // R12 prelude: push the loop induction variable
+                    // name (when it can be determined). For loops
+                    // that fail check_for_appendix_a still push so
+                    // their body's `arr[i]` patterns are not also
+                    // flagged as indirect.
+                    if let ForInit::Decl(d) = init {
+                        self.loop_var_stack.push(d.name.clone());
+                    } else {
+                        // Push a sentinel that no Ident will match;
+                        // keeps push/pop balanced for Post.
+                        self.loop_var_stack.push(String::new());
                     }
                 },
                 Stmt::Switch { discriminant, span, .. } => {
@@ -623,6 +834,9 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
             Visit::Post => {
                 if matches!(s, Stmt::Switch { .. }) {
                     self.switch_case_stack.pop();
+                }
+                if matches!(s, Stmt::For { .. }) {
+                    self.loop_var_stack.pop();
                 }
             },
             Visit::In => {},
