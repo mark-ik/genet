@@ -227,6 +227,7 @@ fn find_main(tu: &TranslationUnit) -> Result<&FunctionDef, LoweringError> {
 
 struct Ctx<'a> {
     b: Builder,
+    type_void: Word,
     type_float: Word,
     type_int: Word,
     type_bool: Word,
@@ -329,6 +330,9 @@ struct LocalBinding {
     /// SPIR-V Word for the pointee (value) type. Used when emitting
     /// `OpLoad` to read the local.
     pointee_type: Word,
+    /// ESSL value type. Mirror of `InputBinding::kind`. Used by
+    /// LHS-swizzle lowering to dispatch on component count.
+    kind: TypeKind,
 }
 
 fn build_spirv(
@@ -400,6 +404,7 @@ fn build_spirv(
 
     let mut ctx = Ctx {
         b,
+        type_void,
         type_float,
         type_int,
         type_bool,
@@ -578,7 +583,8 @@ fn allocate_local(ctx: &mut Ctx, name: &str, kind: TypeKind) -> Result<(), Lower
         }
     })?;
     let var = ctx.b.variable(ptr_ty, None, StorageClass::Function, None);
-    ctx.locals.insert(name.to_string(), LocalBinding { var, pointee_type });
+    ctx.locals
+        .insert(name.to_string(), LocalBinding { var, pointee_type, kind });
     Ok(())
 }
 
@@ -611,6 +617,14 @@ fn lower_stmt(
             Ok(())
         },
         Stmt::Expr(Expr::Assign { lhs, rhs, .. }) => {
+            // Write-side single-component swizzle: `v.x = expr`,
+            // `v.y = expr`, etc. The first-pass impl only supports
+            // single-component LHS swizzles where the base is an
+            // identifier (a local, an output, or the primary).
+            // Multi-component LHS (`v.xy = vec2(...)`) is queued.
+            if let Expr::Member { base, field, .. } = lhs.as_ref() {
+                return lower_lhs_swizzle_assignment(ctx, base, field, rhs, main_ctx);
+            }
             let target_name = match lhs.as_ref() {
                 Expr::Ident { name, .. } => name.as_str(),
                 _ => {
@@ -871,13 +885,20 @@ fn emit_user_functions(ctx: &mut Ctx, tu: &TranslationUnit) -> Result<(), Loweri
 
 fn emit_user_function(ctx: &mut Ctx, f: &FunctionDef) -> Result<(), LoweringError> {
     let return_kind = f.return_ty.kind;
-    let return_ty = match spv_type_for_kind(ctx, return_kind) {
-        Some(t) => t,
-        None => {
-            return Err(LoweringError::UnsupportedShape {
-                what: format!("function `{}` return type {return_kind:?} is not lowered", f.name),
-            });
-        },
+    let return_ty = if return_kind == TypeKind::Void {
+        ctx.type_void
+    } else {
+        match spv_type_for_kind(ctx, return_kind) {
+            Some(t) => t,
+            None => {
+                return Err(LoweringError::UnsupportedShape {
+                    what: format!(
+                        "function `{}` return type {return_kind:?} is not lowered",
+                        f.name
+                    ),
+                });
+            },
+        }
     };
     // Parameter types must be representable in SPIR-V (no samplers /
     // structs / matrices yet — float, vec_n only for first widening).
@@ -1228,6 +1249,167 @@ fn should_splat_scalar_for_builtin(name: &str, arg_idx: usize) -> bool {
     }
 }
 
+/// Resolve an assignment LHS to its `OpVariable`, ESSL value
+/// type, and SPIR-V storage class. Used by the write-side
+/// swizzle path to locate the variable so an `OpAccessChain` can
+/// be built into one of its components.
+struct LhsTarget {
+    var: Word,
+    kind: TypeKind,
+    storage: StorageClass,
+}
+
+fn resolve_lhs_target(
+    ctx: &Ctx,
+    name: &str,
+    main_ctx: Option<&MainCtx>,
+) -> Option<LhsTarget> {
+    if let Some(local) = ctx.locals.get(name) {
+        return Some(LhsTarget {
+            var: local.var,
+            kind: local.kind,
+            storage: StorageClass::Function,
+        });
+    }
+    if let Some(out) = ctx.outputs.get(name) {
+        return Some(LhsTarget {
+            var: out.var,
+            kind: out.kind,
+            storage: StorageClass::Output,
+        });
+    }
+    if let Some(mc) = main_ctx {
+        if name == mc.primary_name {
+            return Some(LhsTarget {
+                var: mc.primary_output,
+                kind: TypeKind::Vec4,
+                storage: StorageClass::Output,
+            });
+        }
+    }
+    None
+}
+
+fn vector_size_of(kind: TypeKind) -> Option<u32> {
+    Some(match kind {
+        TypeKind::Vec2 => 2,
+        TypeKind::Vec3 => 3,
+        TypeKind::Vec4 => 4,
+        _ => return None,
+    })
+}
+
+/// Lower `target.field = rhs;` where `target` is an identifier
+/// and `field` is a single-component swizzle. Emits
+/// `OpAccessChain` to the component followed by `OpStore`.
+/// Multi-component LHS swizzles (`.xy`, etc.) are queued.
+fn lower_lhs_swizzle_assignment(
+    ctx: &mut Ctx,
+    base: &Expr,
+    field: &str,
+    rhs: &Expr,
+    main_ctx: Option<&MainCtx>,
+) -> Result<(), LoweringError> {
+    let base_name = match base {
+        Expr::Ident { name, .. } => name.as_str(),
+        _ => {
+            return Err(LoweringError::UnsupportedShape {
+                what: "LHS-swizzle base must be a plain identifier".into(),
+            });
+        },
+    };
+    let target = resolve_lhs_target(ctx, base_name, main_ctx).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("LHS-swizzle target `{base_name}` is not a writable variable"),
+        }
+    })?;
+    let base_size = vector_size_of(target.kind).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("LHS-swizzle target type {:?} is not a vector", target.kind),
+        }
+    })?;
+    let indices = parse_swizzle_indices(field, base_size).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("invalid LHS swizzle `.{field}` on {:?}", target.kind),
+        }
+    })?;
+    if indices.len() != 1 {
+        return Err(LoweringError::UnsupportedShape {
+            what: format!(
+                "multi-component LHS swizzle `.{field}` is not yet lowered"
+            ),
+        });
+    }
+    let component_idx = indices[0] as i32;
+    let value = lower_expr(ctx, rhs)?;
+    let ptr_to_float = ctx
+        .b
+        .type_pointer(None, target.storage, ctx.type_float);
+    let idx_const = int_constant(ctx, component_idx);
+    let chain = ctx
+        .b
+        .access_chain(ptr_to_float, None, target.var, [idx_const])
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    ctx.b
+        .store(chain, value, None, [])
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    Ok(())
+}
+
+/// Inline ESSL `mod(x, y)` as `x - y * floor(x / y)`. The
+/// GLSL.std.450 `FMod` opcode would be cleaner, but naga's
+/// `spv-in` rejects it with `UnsupportedExtInst(35)`. The
+/// expansion runs over float and vec_n; the `mod(vec_n, float)`
+/// overload splats `y` to the vector width first.
+fn lower_mod_expansion(
+    ctx: &mut Ctx,
+    args: &[Expr],
+    call_span: Span,
+) -> Result<Word, LoweringError> {
+    if args.len() != 2 {
+        return Err(LoweringError::UnsupportedShape {
+            what: format!("`mod` expects 2 args, got {}", args.len()),
+        });
+    }
+    let result_kind = ctx.types.get(&call_span).copied().ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: "`mod` has no typecheck result kind".into(),
+        }
+    })?;
+    let result_ty = spv_type_for_kind(ctx, result_kind).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("`mod` returns {result_kind:?} which is not lowered"),
+        }
+    })?;
+    let x = lower_expr(ctx, &args[0])?;
+    let mut y = lower_expr(ctx, &args[1])?;
+    // Splat scalar y to vector result.
+    if matches!(
+        result_kind,
+        TypeKind::Vec2 | TypeKind::Vec3 | TypeKind::Vec4
+    ) {
+        if classify_arg_kind(ctx, &args[1]) == Some(TypeKind::Float) {
+            y = splat_scalar_to_vector(ctx, y, result_kind)?;
+        }
+    }
+    let div = ctx
+        .b
+        .f_div(result_ty, None, x, y)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    let set_id = glsl_std_450_id(ctx);
+    let floor = ctx
+        .b
+        .ext_inst(result_ty, None, set_id, 8, vec![Operand::IdRef(div)])
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    let prod = ctx
+        .b
+        .f_mul(result_ty, None, y, floor)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    ctx.b
+        .f_sub(result_ty, None, x, prod)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
+}
+
 /// Emit an `OpCompositeConstruct` that broadcasts `scalar_id` to
 /// every component of `target_kind`. `target_kind` must be one of
 /// Vec2 / Vec3 / Vec4; other kinds error.
@@ -1403,6 +1585,12 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                     .dot(ctx.type_float, None, a, b)
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
             }
+            if callee == "mod" {
+                // naga's spv-in rejects GLSL.std.450 FMod (35). Inline
+                // as `x - y * floor(x / y)`, splatting y to vector
+                // width when the overload is `mod(vec_n, float)`.
+                return lower_mod_expansion(ctx, args, *span);
+            }
             if let Some(mut opcode) = builtin_glsl450_opcode(callee) {
                 // `atan(y, x)` (2-arg form) maps to GLSL.std.450
                 // Atan2 (25), not the 1-arg Atan (18) the table
@@ -1465,11 +1653,15 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                 for a in args {
                     arg_ids.push(lower_expr(ctx, a)?);
                 }
-                let result_ty = spv_type_for_kind(ctx, result_kind).ok_or_else(|| {
-                    LoweringError::UnsupportedShape {
-                        what: format!("call `{callee}` returns {result_kind:?} which is not lowered"),
-                    }
-                })?;
+                let result_ty = if result_kind == TypeKind::Void {
+                    ctx.type_void
+                } else {
+                    spv_type_for_kind(ctx, result_kind).ok_or_else(|| {
+                        LoweringError::UnsupportedShape {
+                            what: format!("call `{callee}` returns {result_kind:?} which is not lowered"),
+                        }
+                    })?
+                };
                 return ctx
                     .b
                     .function_call(result_ty, None, func_id, arg_ids)

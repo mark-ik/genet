@@ -126,18 +126,27 @@ fn step_smoothstep_lower() {
     assert!(wgsl.contains("smoothstep"));
 }
 
-/// `mod` deliberately not yet lowered — naga's spv-in rejects
-/// GLSL.std.450 FMod (35) with `UnsupportedExtInst(35)`. Pin the
-/// gap so a future widening (inline as `x - y * floor(x/y)`) flips
-/// this receipt deliberately.
+/// HAPPY (resolved). `mod` now lowers via the inline expansion
+/// `x - y * floor(x / y)` instead of relying on GLSL.std.450
+/// FMod (which naga's spv-in rejects with
+/// `UnsupportedExtInst(35)`).
 #[test]
-fn mod_does_not_lower_today() {
+fn mod_lowers_via_inline_expansion() {
     let src = "precision mediump float;\nuniform float a;\nvoid main() {\n    gl_FragColor = vec4(mod(a, 2.0));\n}\n";
-    let err = compile(src, ShaderStage::Fragment).unwrap_err();
-    assert!(
-        matches!(err, webgl_essl::CompileError::Lower(_)),
-        "got: {err:?}"
-    );
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    // The expansion uses floor + sub + mul + div; receipt is the
+    // happy-path round-trip rather than the exact text.
+    assert!(r.wgsl.contains("floor"));
+}
+
+/// HAPPY. `mod(vec3, float)` exercises the scalar broadcast path
+/// inside the mod expansion (the scalar `y` is splatted to vec3
+/// before the division).
+#[test]
+fn mod_vec3_with_scalar_y_lowers() {
+    let src = "precision mediump float;\nuniform vec3 v;\nvoid main() {\n    gl_FragColor = vec4(mod(v, 2.0), 1.0);\n}\n";
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("floor"));
 }
 
 // ---------- §8.4 Geometric -----------------------------------------

@@ -131,22 +131,20 @@ fn bool_typed_user_function_parameter_lowers() {
     assert!(r.wgsl.contains("vec4"));
 }
 
-/// INTERNAL-CONTRADICTION. `lower_main_body` has a dedicated
-/// `Stmt::Expr(Call)` branch that suggests void-as-statement is
-/// supported. But `spv_type_for_kind` returns `None` for `Void`,
-/// so `emit_user_function` fails at parameter-type lookup time.
-/// The two paths contradict each other; the receipt locks in the
-/// current observable behavior.
+/// HAPPY (resolved). Void user functions used as statements
+/// now lower: `emit_user_function` special-cases `TypeKind::Void`
+/// to `ctx.type_void`, and the `Expr::Call` branch uses the
+/// same fallback when the user function's result is Void.
 #[test]
-fn void_user_function_called_as_statement_does_not_lower_today() {
+fn void_user_function_called_as_statement_lowers() {
     let src = "attribute vec2 a_position;\n\
                void noop() {}\n\
                void main() {\n\
                    noop();\n\
                    gl_Position = vec4(a_position, 0.0, 1.0);\n\
                }\n";
-    let err = compile(src, ShaderStage::Vertex).unwrap_err();
-    assert!(matches!(err, CompileError::Lower(_)), "got: {err:?}");
+    let r = compile(src, ShaderStage::Vertex).expect("compile");
+    assert!(r.wgsl.contains("location(0)"));
 }
 
 // ---------- swizzle widening corners ----------------------------------
@@ -197,20 +195,20 @@ fn repeat_component_swizzle_xxxx_lowers_as_broadcast() {
     assert!(r.wgsl.contains("vec4"));
 }
 
-/// SPEC-GAP. ESSL 1.00 §5.5 allows non-repeating swizzles as
-/// assignment LHS. `lower_main_body` only accepts `Expr::Ident`
-/// as the assignment LHS today; an `Expr::Member` (write-side
-/// swizzle) falls into "main body lhs is not an identifier".
+/// HAPPY (resolved). Single-component write-side swizzles
+/// (`v.x = ...`, `v.y = ...`, etc.) lower via `OpAccessChain`
+/// to the component pointer + `OpStore`. Multi-component LHS
+/// swizzles (`v.xy = vec2(...)`) remain queued.
 #[test]
-fn write_side_lhs_swizzle_does_not_lower_today() {
+fn write_side_single_component_lhs_swizzle_lowers() {
     let src = "attribute vec3 a_position;\n\
                varying vec3 v_color;\n\
                void main() {\n\
                    v_color.x = 1.0;\n\
                    gl_Position = vec4(a_position, 1.0);\n\
                }\n";
-    let err = compile(src, ShaderStage::Vertex).unwrap_err();
-    assert!(matches!(err, CompileError::Lower(_)), "got: {err:?}");
+    let r = compile(src, ShaderStage::Vertex).expect("compile");
+    assert!(r.wgsl.contains("location(0)"));
 }
 
 /// SPEC-CONFORMANCE. ESSL 1.00 §5.5: a `vec2` has components
