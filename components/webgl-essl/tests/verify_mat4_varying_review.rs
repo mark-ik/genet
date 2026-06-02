@@ -188,13 +188,14 @@ fn synthetic_column_identifier_is_not_in_essl_scope() {
 // SPIR-V emission with a wrong access pattern.
 // =====================================================================
 
-/// `v_xform.x = vec4(...)` on a matrix output is rejected at the
-/// lowering stage. `resolve_lhs_target` returns `None` when the
-/// output binding has more than one column var, and the swizzle
-/// helper fails fast with `UnsupportedShape`. The error is
-/// reachable in `CompileError::Lower`.
+/// SPEC-CONFORMANT. `.x` on a `mat4` is not a valid swizzle
+/// (matrices use `[i]`, not `.field`). The typechecker rejects
+/// with `InvalidSwizzle` before the lowering ever sees it. The
+/// receipt now pins that the `mat4.x` rejection happens at the
+/// check stage, not the lowering — so the diagnostic is a
+/// clear spec error rather than a "not implemented" message.
 #[test]
-fn lhs_swizzle_on_matrix_output_errors_explicitly() {
+fn dot_field_on_matrix_is_a_typecheck_invalid_swizzle() {
     let src = "attribute vec3 a;\n\
                varying mat4 v_xform;\n\
                void main() {\n\
@@ -202,47 +203,54 @@ fn lhs_swizzle_on_matrix_output_errors_explicitly() {
                    gl_Position = vec4(a, 1.0);\n\
                }\n";
     let err = compile(src, ShaderStage::Vertex).unwrap_err();
-    // Either the typechecker catches `.x` on a mat4 as an invalid
-    // swizzle (mat4 is not a vector base for swizzles), or the
-    // lowering rejects the column-split target. Both surfaces are
-    // fail-fast and distinct from a silent miscompile.
+    let msg = format!("{err:?}");
+    assert!(matches!(err, CompileError::Check(_)), "got: {err:?}");
     assert!(
-        matches!(err, CompileError::Check(_) | CompileError::Lower(_)),
-        "got: {err:?}"
+        msg.contains("InvalidSwizzle") && msg.contains("Mat4"),
+        "should be InvalidSwizzle on Mat4: {msg}"
     );
 }
 
-/// Compound assign (`v_xform += mat4(...)`) on a matrix output is
-/// rejected because the column-split layout has no single
-/// loadable view of the matrix output — the implicit "load
-/// current value" step a compound assign needs has no
-/// well-defined target. The current path errors at the read of
-/// `v_xform` since outputs are not registered as readable
-/// identifiers in vertex stage.
+/// HAPPY. Compound assign on a matrix output now lowers. The
+/// vertex-stage Ident-lookup reads the output by assembling
+/// its column variables into a matrix; `lower_binary` computes
+/// the new value; `store_to_output` splits it back into the
+/// column variables.
+///
+/// The receipt uses a `uniform mat4` as the rhs because the
+/// `mat4(scalar)` constructor is its own queued widening (the
+/// diagonal-fill ESSL semantics).
 #[test]
-fn compound_assign_on_matrix_output_errors_explicitly() {
+fn compound_assign_on_matrix_output_with_uniform_rhs_lowers() {
+    let src = "attribute vec3 a;\n\
+               uniform mat4 u_delta;\n\
+               varying mat4 v_xform;\n\
+               void main() {\n\
+                   v_xform = u_delta;\n\
+                   v_xform += u_delta;\n\
+                   gl_Position = vec4(a, 1.0);\n\
+               }\n";
+    let r = compile(src, ShaderStage::Vertex).expect("compile");
+    // Compound assign reads + writes the column-split outputs;
+    // each column maps to its own @location.
+    assert!(r.wgsl.contains("location(0)"));
+    assert!(r.wgsl.contains("location(3)"));
+}
+
+/// SPEC-GAP. `mat4(1.0)` (the scalar-diagonal constructor) is
+/// not yet lowered. ESSL §5.4.2: a scalar arg to `mat_n` builds
+/// a matrix with the scalar on the diagonal and zeros elsewhere.
+/// The receipt pins the gap so a future widening flips it.
+#[test]
+fn scalar_arg_matrix_constructor_does_not_lower_today() {
     let src = "attribute vec3 a;\n\
                varying mat4 v_xform;\n\
                void main() {\n\
-                   v_xform += mat4(1.0);\n\
+                   v_xform = mat4(1.0);\n\
                    gl_Position = vec4(a, 1.0);\n\
                }\n";
     let err = compile(src, ShaderStage::Vertex).unwrap_err();
-    let msg = format!("{err:?}");
-    // The error surface must be the lowering boundary (or the
-    // check stage), never `Ok` — that would be the silent
-    // miscompile case.
-    assert!(
-        matches!(err, CompileError::Lower(_) | CompileError::Check(_)),
-        "compound assign on matrix output must fail, got: {err:?}"
-    );
-    // The message should reference the read failure or the
-    // unsupported shape — not contain anything about successful
-    // SPIR-V emission.
-    assert!(
-        !msg.contains("Ok"),
-        "must not silently succeed: {msg}"
-    );
+    assert!(matches!(err, CompileError::Lower(_)), "got: {err:?}");
 }
 
 // =====================================================================
@@ -252,26 +260,35 @@ fn compound_assign_on_matrix_output_errors_explicitly() {
 // vector multiply instead.
 // =====================================================================
 
-/// `m[0]` on a mat4 input falls through to the lowering's
-/// catch-all "expression shape not lowered" — the receipt pins
-/// the gap so a future widening flips it deliberately.
+/// HAPPY (resolved). `m[i]` on a matrix returns the matching
+/// column. For a column-split varying the lookup skips the
+/// assemble step and loads the column variable directly.
 #[test]
-fn matrix_index_does_not_lower_today() {
+fn matrix_index_rhs_lowers() {
     let src = "precision mediump float;\n\
                varying mat4 v_xform;\n\
                void main() {\n\
                    gl_FragColor = v_xform[0];\n\
                }\n";
-    let err = compile(src, ShaderStage::Fragment).unwrap_err();
-    let msg = format!("{err:?}");
-    assert!(
-        matches!(err, CompileError::Lower(_)),
-        "matrix indexing must fail at lower today, got: {err:?}"
-    );
-    assert!(
-        msg.contains("Index"),
-        "diagnostic should name the Index expression: {msg}"
-    );
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("vec4"));
+}
+
+/// HAPPY. `m[i] = vec_n` writes directly to the matching
+/// column of a column-split matrix output. Constant int index
+/// only; non-constant and locals/uniforms are queued.
+#[test]
+fn matrix_index_lhs_writes_to_column_var() {
+    let src = "attribute vec3 a;\n\
+               varying mat4 v_xform;\n\
+               uniform vec4 u_col;\n\
+               void main() {\n\
+                   v_xform[2] = u_col;\n\
+                   gl_Position = vec4(a, 1.0);\n\
+               }\n";
+    let r = compile(src, ShaderStage::Vertex).expect("compile");
+    // Column 2 maps to @location(2) under the column-split.
+    assert!(r.wgsl.contains("location(2)"));
 }
 
 /// The receipts that DO need to probe an assembled matrix go

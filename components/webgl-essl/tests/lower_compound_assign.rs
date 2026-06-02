@@ -91,11 +91,14 @@ fn vec3_mul_assign_by_scalar_lowers() {
 
 // ---------- rejection: compound on non-local LHS -------------------
 
-/// Compound assign on a write-only output (varying) is invalid
-/// per ESSL §5.8 (write-only outputs can't be read). Whichever
-/// stage catches it (check or lower), the shader is rejected.
+/// HAPPY (corrected). Earlier assumption: vertex varyings are
+/// write-only and `v += rhs` must error. ESSL 1.00 / 3.00
+/// actually permit reading vertex outputs (reading returns the
+/// current value). With the lowering's matrix-output read path
+/// added (and the existing vec3 store path), the compound
+/// assign now lowers.
 #[test]
-fn compound_assign_to_varying_rejected() {
+fn compound_assign_to_varying_lowers() {
     let src = r#"
 attribute vec3 a_position;
 varying vec3 v_color;
@@ -105,11 +108,8 @@ void main() {
     gl_Position = vec4(a_position, 1.0);
 }
 "#;
-    let err = compile(src, ShaderStage::Vertex).unwrap_err();
-    assert!(
-        matches!(err, CompileError::Check(_) | CompileError::Lower(_)),
-        "got: {err:?}"
-    );
+    let r = compile(src, ShaderStage::Vertex).expect("compile");
+    assert!(r.wgsl.contains("location(0)"));
 }
 
 /// Compound assign on a swizzled LHS is queued — error today.

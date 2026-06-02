@@ -335,6 +335,7 @@ struct InputBinding {
     kind: TypeKind,
 }
 
+#[derive(Clone)]
 struct OutputBinding {
     /// SPIR-V `OpVariable` Words for this output. One entry for
     /// a non-matrix output; N entries for a column-split matrix
@@ -811,6 +812,20 @@ fn lower_stmt(
             Ok(())
         },
         Stmt::Expr(Expr::Assign { op, lhs, rhs, span }) => {
+            // LHS matrix indexing: `m[i] = vec_n` stores the
+            // RHS directly to the matching column variable of a
+            // column-split matrix output. Constant int index
+            // only (matches R12's first-pass acceptance set).
+            if let Expr::Index { base, index, .. } = lhs.as_ref() {
+                if *op != AssignOp::Assign {
+                    return Err(LoweringError::UnsupportedShape {
+                        what: format!(
+                            "compound assignment `{op:?}` on a matrix index is not lowered"
+                        ),
+                    });
+                }
+                return lower_lhs_matrix_index_assignment(ctx, base, index, rhs);
+            }
             // LHS-swizzle paths (single + multi component) only
             // support plain `=`. Compound assign on a swizzled
             // LHS is queued — it would need load-modify-store on
@@ -852,9 +867,18 @@ fn lower_stmt(
                         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
                     return Ok(());
                 }
+                // Compound assign on a varying output (vertex
+                // stage). The read step inside `lower_binary`
+                // already loaded the current value via the
+                // matrix-input assemble path; we now store the
+                // new value back, splitting it across the
+                // column variables for matrix outputs.
+                if let Some(out) = ctx.outputs.get(name).cloned() {
+                    return store_to_output(ctx, &out, name, new_value);
+                }
                 return Err(LoweringError::UnsupportedShape {
                     what: format!(
-                        "compound assignment target `{name}` is not a writable local"
+                        "compound assignment target `{name}` is not a writable local or varying"
                     ),
                 });
             }
@@ -882,47 +906,8 @@ fn lower_stmt(
                         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
                     return Ok(());
                 }
-                if let Some(out) = ctx.outputs.get(target_name) {
-                    if out.vars.len() == 1 {
-                        let var = out.vars[0];
-                        ctx.b
-                            .store(var, value, None, [])
-                            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
-                        return Ok(());
-                    }
-                    // Matrix output: extract each column from
-                    // the produced value and store it to the
-                    // matching column variable.
-                    let column_kind = match out.kind {
-                        TypeKind::Mat2 => TypeKind::Vec2,
-                        TypeKind::Mat3 => TypeKind::Vec3,
-                        TypeKind::Mat4 => TypeKind::Vec4,
-                        other => {
-                            return Err(LoweringError::UnsupportedShape {
-                                what: format!(
-                                    "output `{target_name}` of type {other:?} has no column kind"
-                                ),
-                            });
-                        },
-                    };
-                    let column_ty = spv_type_for_kind(ctx, column_kind).ok_or_else(|| {
-                        LoweringError::UnsupportedShape {
-                            what: format!(
-                                "column type {column_kind:?} for output `{target_name}` is not lowered"
-                            ),
-                        }
-                    })?;
-                    let vars: Vec<Word> = out.vars.clone();
-                    for (idx, col_var) in vars.iter().enumerate() {
-                        let col_val = ctx
-                            .b
-                            .composite_extract(column_ty, None, value, [idx as u32])
-                            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
-                        ctx.b
-                            .store(*col_var, col_val, None, [])
-                            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
-                    }
-                    return Ok(());
+                if let Some(out) = ctx.outputs.get(target_name).cloned() {
+                    return store_to_output(ctx, &out, target_name, value);
                 }
                 return Err(LoweringError::UnsupportedShape {
                     what: format!(
@@ -2271,6 +2256,60 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                     .composite_construct(result_ty, None, columns)
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
             }
+            // Reading from a varying output in the vertex stage
+            // is spec-legal (ESSL 1.00 / 3.00: vertex outputs
+            // are mutable, not write-only). The compound-assign
+            // path needs this to compose `v += rhs` as
+            // `load(v); add; store`. For column-split matrix
+            // outputs, the load assembles the matrix from its
+            // column variables.
+            if let Some(out) = ctx.outputs.get(name) {
+                if out.vars.len() == 1 {
+                    let kind = out.kind;
+                    let ty = spv_type_for_kind(ctx, kind).ok_or_else(|| {
+                        LoweringError::UnsupportedShape {
+                            what: format!("output `{name}` type {kind:?} not lowered"),
+                        }
+                    })?;
+                    let var = out.vars[0];
+                    return ctx
+                        .b
+                        .load(ty, None, var, None, [])
+                        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+                }
+                let kind = out.kind;
+                let column_kind = match kind {
+                    TypeKind::Mat2 => TypeKind::Vec2,
+                    TypeKind::Mat3 => TypeKind::Vec3,
+                    TypeKind::Mat4 => TypeKind::Vec4,
+                    _ => {
+                        return Err(LoweringError::UnsupportedShape {
+                            what: format!(
+                                "output `{name}` of kind {kind:?} cannot be read as a column-split"
+                            ),
+                        });
+                    },
+                };
+                let col_ty = spv_type_for_kind(ctx, column_kind).expect("vec kind");
+                let vars: Vec<Word> = out.vars.clone();
+                let mut columns: Vec<Word> = Vec::with_capacity(vars.len());
+                for v in vars {
+                    let col = ctx
+                        .b
+                        .load(col_ty, None, v, None, [])
+                        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+                    columns.push(col);
+                }
+                let result_ty = spv_type_for_kind(ctx, kind).ok_or_else(|| {
+                    LoweringError::UnsupportedShape {
+                        what: format!("output `{name}` of type {kind:?} has no SPIR-V matrix type"),
+                    }
+                })?;
+                return ctx
+                    .b
+                    .composite_construct(result_ty, None, columns)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
             // Sampler uniforms: load both the image and the
             // sampler variables, then `OpSampledImage` combines
             // them into a SampledImage SSA value the texture
@@ -2515,6 +2554,7 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                 .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
         },
         Expr::Member { base, field, span, .. } => lower_swizzle(ctx, base, field, *span),
+        Expr::Index { base, index, .. } => lower_index_rhs(ctx, base, index),
         Expr::Unary { op, expr, .. } => lower_unary(ctx, *op, expr),
         Expr::Assign { op, lhs, rhs, span } => {
             // Expression-context assignment (e.g., a for-step
@@ -2656,6 +2696,180 @@ fn lower_unary(ctx: &mut Ctx, op: UnaryOp, expr: &Expr) -> Result<Word, Lowering
             what: "bitwise `~` is not lowered".into(),
         }),
     }
+}
+
+/// Store `value` to an output binding. For a single-var
+/// output, this is a plain `OpStore`. For a column-split
+/// matrix output, this `OpCompositeExtract`s each column from
+/// `value` and `OpStore`s it to the matching column variable.
+fn store_to_output(
+    ctx: &mut Ctx,
+    out: &OutputBinding,
+    name: &str,
+    value: Word,
+) -> Result<(), LoweringError> {
+    if out.vars.len() == 1 {
+        ctx.b
+            .store(out.vars[0], value, None, [])
+            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+        return Ok(());
+    }
+    let column_kind = match out.kind {
+        TypeKind::Mat2 => TypeKind::Vec2,
+        TypeKind::Mat3 => TypeKind::Vec3,
+        TypeKind::Mat4 => TypeKind::Vec4,
+        other => {
+            return Err(LoweringError::UnsupportedShape {
+                what: format!("output `{name}` of type {other:?} has no column kind"),
+            });
+        },
+    };
+    let column_ty = spv_type_for_kind(ctx, column_kind).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("column type {column_kind:?} for output `{name}` is not lowered"),
+        }
+    })?;
+    for (idx, col_var) in out.vars.iter().enumerate() {
+        let col_val = ctx
+            .b
+            .composite_extract(column_ty, None, value, [idx as u32])
+            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+        ctx.b
+            .store(*col_var, col_val, None, [])
+            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    }
+    Ok(())
+}
+
+/// Lower `m[i] = rhs` where `m` is a column-split matrix
+/// output and `i` is a literal integer. Stores `rhs` directly
+/// to the matching column variable. Locals / uniforms (which
+/// keep the matrix as a single variable) and non-constant
+/// indices are queued.
+fn lower_lhs_matrix_index_assignment(
+    ctx: &mut Ctx,
+    base: &Expr,
+    index: &Expr,
+    rhs: &Expr,
+) -> Result<(), LoweringError> {
+    let name = match base {
+        Expr::Ident { name, .. } => name.as_str(),
+        _ => {
+            return Err(LoweringError::UnsupportedShape {
+                what: "matrix-index LHS base must be a plain identifier".into(),
+            });
+        },
+    };
+    let idx_value = match index {
+        Expr::IntLit { value, .. } => *value as usize,
+        _ => {
+            return Err(LoweringError::UnsupportedShape {
+                what: "matrix-index LHS index must be a literal integer".into(),
+            });
+        },
+    };
+    let out = ctx.outputs.get(name).cloned().ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!(
+                "matrix-index LHS target `{name}` is not a column-split output"
+            ),
+        }
+    })?;
+    if out.vars.len() <= 1 {
+        return Err(LoweringError::UnsupportedShape {
+            what: format!(
+                "matrix-index LHS target `{name}` is not a column-split matrix"
+            ),
+        });
+    }
+    if idx_value >= out.vars.len() {
+        return Err(LoweringError::UnsupportedShape {
+            what: format!(
+                "matrix-index LHS `{name}[{idx_value}]` out of bounds (matrix has {} columns)",
+                out.vars.len()
+            ),
+        });
+    }
+    let value = lower_expr(ctx, rhs)?;
+    let col_var = out.vars[idx_value];
+    ctx.b
+        .store(col_var, value, None, [])
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    Ok(())
+}
+
+/// Right-hand-side matrix indexing: `m[i]` where `m` is a
+/// `mat_n` returns a `vec_n` column. First-pass support is
+/// restricted to literal-integer indices (the validator's R12
+/// already enforces this for ESSL 1.00 array indexing). For an
+/// Ident base that refers to a column-split matrix
+/// input/output, the lookup skips the assemble step and loads
+/// the column variable directly. Otherwise the matrix value is
+/// produced first and `OpCompositeExtract` picks the column.
+fn lower_index_rhs(
+    ctx: &mut Ctx,
+    base: &Expr,
+    index: &Expr,
+) -> Result<Word, LoweringError> {
+    let base_kind = classify_arg_kind(ctx, base).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: "matrix index base type unknown".into(),
+        }
+    })?;
+    let column_kind = match base_kind {
+        TypeKind::Mat2 => TypeKind::Vec2,
+        TypeKind::Mat3 => TypeKind::Vec3,
+        TypeKind::Mat4 => TypeKind::Vec4,
+        _ => {
+            return Err(LoweringError::UnsupportedShape {
+                what: format!("indexing on non-matrix base type {base_kind:?}"),
+            });
+        },
+    };
+    let col_ty = spv_type_for_kind(ctx, column_kind).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("column type {column_kind:?} for matrix index is not lowered"),
+        }
+    })?;
+    let idx_value = match index {
+        Expr::IntLit { value, .. } => *value as u32,
+        _ => {
+            return Err(LoweringError::UnsupportedShape {
+                what: "matrix index must be a literal integer".into(),
+            });
+        },
+    };
+    // Fast path: Ident base referring to a column-split input
+    // or output. The columns are already separate variables, so
+    // we can OpLoad the right one directly without assembling
+    // the matrix first.
+    if let Expr::Ident { name, .. } = base {
+        if let Some(input) = ctx.inputs.get(name) {
+            if input.vars.len() > 1 {
+                let col_var = input.vars[idx_value as usize];
+                let pointee = input.pointee_type;
+                return ctx
+                    .b
+                    .load(pointee, None, col_var, None, [])
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+        }
+        if let Some(out) = ctx.outputs.get(name) {
+            if out.vars.len() > 1 {
+                let col_var = out.vars[idx_value as usize];
+                return ctx
+                    .b
+                    .load(col_ty, None, col_var, None, [])
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+        }
+    }
+    // Slow path: lower the base to a matrix SSA value, then
+    // composite-extract the column.
+    let base_value = lower_expr(ctx, base)?;
+    ctx.b
+        .composite_extract(col_ty, None, base_value, [idx_value])
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
 }
 
 fn lower_swizzle(
@@ -2812,10 +3026,15 @@ fn lower_binary(
     let scalar_rhs = matches!(rhs_kind, TypeKind::Float);
     let vec_lhs = matches!(lhs_kind, TypeKind::Vec2 | TypeKind::Vec3 | TypeKind::Vec4);
     let vec_rhs = matches!(rhs_kind, TypeKind::Vec2 | TypeKind::Vec3 | TypeKind::Vec4);
+    let mat_lhs = matches!(lhs_kind, TypeKind::Mat2 | TypeKind::Mat3 | TypeKind::Mat4);
+    let mat_rhs = matches!(rhs_kind, TypeKind::Mat2 | TypeKind::Mat3 | TypeKind::Mat4);
 
     match op {
         BinOp::Add | BinOp::Sub => {
-            if (scalar_lhs && scalar_rhs) || (vec_lhs && vec_rhs && lhs_kind == rhs_kind) {
+            if (scalar_lhs && scalar_rhs)
+                || (vec_lhs && vec_rhs && lhs_kind == rhs_kind)
+                || (mat_lhs && mat_rhs && lhs_kind == rhs_kind)
+            {
                 let r = if op == BinOp::Add {
                     ctx.b.f_add(result_ty, None, lhs_id, rhs_id)
                 } else {
