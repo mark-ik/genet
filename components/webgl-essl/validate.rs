@@ -52,8 +52,13 @@ pub enum ShaderStage {
 /// line numbers for the `ERROR: 0:<line>: ...` info-log shape. Passing
 /// an empty string is valid and produces lines with `0:0:` line markers
 /// (the previous behavior before this seam was widened).
+///
+/// Internally calls [`crate::check::check`] to get per-span type
+/// annotations; rules R9 / R10 use them to gate switch-discriminant
+/// and case-value typing.
 pub fn validate(tu: &TranslationUnit, source: &str, stage: ShaderStage) -> ValidationResult {
-    let mut v = ValidatorVisitor::new(stage);
+    let check_result = crate::check::check(tu);
+    let mut v = ValidatorVisitor::new(stage, check_result.types);
     walk_translation_unit(&mut v, tu);
     v.finalize(tu, source)
 }
@@ -123,6 +128,17 @@ pub enum WebGlDiagnosticKind {
     /// default. ESSL 1.00 §4.5.3: "The fragment language has no
     /// default precision qualifier for floating point types."
     PrecisionMissingForFloat { name: String, ty: TypeKind },
+    /// `switch` discriminant did not resolve to an integer type
+    /// (ESSL 3.00 §6.5: "The init-expression must be of type int").
+    SwitchDiscriminantNotInt { actual: TypeKind },
+    /// `case <value>:` label's value is not a literal integer
+    /// constant (ESSL 3.00 §6.5: case labels must be integer
+    /// constant expressions). The first-pass implementation only
+    /// accepts literal `IntLit`s; full constant-folding is queued.
+    CaseValueNotIntegerConstant,
+    /// Two `case` labels inside the same switch share the same
+    /// integer value.
+    DuplicateCaseValue { value: i64 },
 }
 
 impl WebGlDiagnosticKind {
@@ -156,6 +172,15 @@ impl WebGlDiagnosticKind {
                 format!(
                     "no precision specified for `{name}` ({ty:?}); fragment shaders require a precision qualifier or a default set via `precision <q> float;`"
                 )
+            },
+            WebGlDiagnosticKind::SwitchDiscriminantNotInt { actual } => {
+                format!("`switch` discriminant must be `int`, got {actual:?}")
+            },
+            WebGlDiagnosticKind::CaseValueNotIntegerConstant => {
+                "`case <value>:` value must be a literal integer constant".to_string()
+            },
+            WebGlDiagnosticKind::DuplicateCaseValue { value } => {
+                format!("duplicate `case {value}:` label within the same switch")
             },
         }
     }
@@ -227,6 +252,24 @@ struct ValidatorVisitor<'tree> {
     /// float-family types that have no inline precision and no
     /// preceding default. Only populated when stage == Fragment.
     precision_missing: Vec<(Span, String, TypeKind)>,
+    /// Per-span type annotations from [`crate::check`]. Consulted by
+    /// R9 to gate the switch discriminant type.
+    types: HashMap<Span, TypeKind>,
+    /// (switch-stmt span, discriminant type) for switches whose
+    /// discriminant did not resolve to `int`.
+    switch_discriminant_bad: Vec<(Span, TypeKind)>,
+    /// (case-stmt span) for case labels whose value is not a literal
+    /// integer constant. ESSL 1.00 §6.5 requires a constant integer
+    /// expression.
+    case_value_not_constant: Vec<Span>,
+    /// (case-stmt span, duplicate value) for duplicate case values
+    /// within the same switch. Stack-of-sets pattern: each switch
+    /// body pushes a fresh set on visit_stmt Pre.
+    case_duplicates: Vec<(Span, i64)>,
+    /// Stack of sets of case values seen so far within each
+    /// enclosing switch's body. Used to detect duplicates as the
+    /// visitor descends into nested switches.
+    switch_case_stack: Vec<HashSet<i64>>,
 }
 
 struct DiscardSite<'tree> {
@@ -240,7 +283,7 @@ struct MainInfo {
 }
 
 impl<'tree> ValidatorVisitor<'tree> {
-    fn new(stage: ShaderStage) -> Self {
+    fn new(stage: ShaderStage, types: HashMap<Span, TypeKind>) -> Self {
         Self {
             stage,
             current_function: None,
@@ -253,6 +296,11 @@ impl<'tree> ValidatorVisitor<'tree> {
             expr_too_complex: Vec::new(),
             float_default_set: false,
             precision_missing: Vec::new(),
+            types,
+            switch_discriminant_bad: Vec::new(),
+            case_value_not_constant: Vec::new(),
+            case_duplicates: Vec::new(),
+            switch_case_stack: Vec::new(),
         }
     }
 
@@ -395,6 +443,33 @@ impl<'tree> ValidatorVisitor<'tree> {
             });
         }
 
+        // R9: switch discriminant must be int.
+        for (span, actual) in self.switch_discriminant_bad {
+            result.errors.push(WebGlDiagnostic {
+                severity: Severity::Error,
+                kind: WebGlDiagnosticKind::SwitchDiscriminantNotInt { actual },
+                span: Some(span),
+            });
+        }
+
+        // R10: case value must be an integer constant.
+        for span in self.case_value_not_constant {
+            result.errors.push(WebGlDiagnostic {
+                severity: Severity::Error,
+                kind: WebGlDiagnosticKind::CaseValueNotIntegerConstant,
+                span: Some(span),
+            });
+        }
+
+        // R11: duplicate case values within the same switch.
+        for (span, value) in self.case_duplicates {
+            result.errors.push(WebGlDiagnostic {
+                severity: Severity::Error,
+                kind: WebGlDiagnosticKind::DuplicateCaseValue { value },
+                span: Some(span),
+            });
+        }
+
         // Render info_log. ANGLE / Chrome shape: one line per
         // error / warning, errors first, then warnings. Source text
         // resolves spans to 1-based line numbers.
@@ -501,8 +576,8 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
     }
 
     fn visit_stmt(&mut self, s: &'tree Stmt, visit: Visit) -> Walk {
-        if visit == Visit::Pre {
-            match s {
+        match visit {
+            Visit::Pre => match s {
                 Stmt::Discard { span } => {
                     if let Some(fname) = self.current_function {
                         self.discard_sites.push(DiscardSite { span: *span, function: fname });
@@ -513,8 +588,44 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
                         self.for_loop_violations.push((*span, what));
                     }
                 },
+                Stmt::Switch { discriminant, span, .. } => {
+                    // R9: discriminant must be Int.
+                    if let Some(ty) = self.types.get(&discriminant.span()).copied() {
+                        if ty != TypeKind::Int {
+                            self.switch_discriminant_bad.push((*span, ty));
+                        }
+                    }
+                    // Open a fresh case-value set for this switch.
+                    self.switch_case_stack.push(HashSet::new());
+                },
+                Stmt::Case { value, span } => {
+                    // R10: case value must be a literal IntLit.
+                    let int_value = match value {
+                        Expr::IntLit { value, .. } => Some(*value),
+                        _ => None,
+                    };
+                    match int_value {
+                        Some(v) => {
+                            // R11: duplicate within enclosing switch.
+                            if let Some(set) = self.switch_case_stack.last_mut() {
+                                if !set.insert(v) {
+                                    self.case_duplicates.push((*span, v));
+                                }
+                            }
+                        },
+                        None => {
+                            self.case_value_not_constant.push(*span);
+                        },
+                    }
+                },
                 _ => {},
-            }
+            },
+            Visit::Post => {
+                if matches!(s, Stmt::Switch { .. }) {
+                    self.switch_case_stack.pop();
+                }
+            },
+            Visit::In => {},
         }
         Walk::Continue
     }
