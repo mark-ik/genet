@@ -30,6 +30,11 @@ paint_list_api = { workspace = true }
 paint_types = { workspace = true }
 parley = { workspace = true }
 pixels = { workspace = true }
+# SVG background-image / <img> rasterization. resvg re-exports usvg + tiny_skia,
+# so the whole SVG decode path (parse → rasterize to RGBA) needs only this crate.
+# Pinned via the workspace at the upstream-current 0.47 (unified with masonry's
+# resvg; the older 0.45 servo-malloc-size-of pulled was bumped to match).
+resvg = { workspace = true }
 serde = { workspace = true }
 rustc-hash = { workspace = true }
 selectors = { workspace = true }

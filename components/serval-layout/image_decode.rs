@@ -239,16 +239,99 @@ fn decode_data_uri(src: &str) -> Option<DecodedImage> {
     decode_image_bytes(&bytes)
 }
 
-/// Decode raw image-file bytes (PNG / JPEG / etc.) into RGBA8 pixels.
-/// Returns `None` for formats the `image` crate can't decode with its
-/// enabled features.
+/// Decode raw image-file bytes into RGBA8 pixels. Tries the `image`
+/// crate first (PNG / JPEG / GIF / etc. per its enabled features); on
+/// failure, falls back to SVG (`image` is raster-only). Returns `None`
+/// when neither can decode the bytes.
 fn decode_image_bytes(bytes: &[u8]) -> Option<DecodedImage> {
-    let dynamic = image::load_from_memory(bytes).ok()?;
-    let rgba = dynamic.to_rgba8();
-    let (width, height) = rgba.dimensions();
-    Some(DecodedImage {
-        width,
-        height,
-        rgba: rgba.into_raw(),
-    })
+    if let Ok(dynamic) = image::load_from_memory(bytes) {
+        let rgba = dynamic.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        return Some(DecodedImage { width, height, rgba: rgba.into_raw() });
+    }
+    decode_svg_bytes(bytes)
+}
+
+/// Rasterize SVG bytes into RGBA8 at the document's intrinsic size via
+/// `resvg` (parse with `usvg`, render into a `tiny_skia` pixmap).
+/// `background-size` / replaced-box sizing scale the result downstream,
+/// so this rasterizes once at the SVG's own size. Returns `None` for a
+/// parse error or a zero/over-large intrinsic size.
+fn decode_svg_bytes(bytes: &[u8]) -> Option<DecodedImage> {
+    use resvg::{tiny_skia, usvg};
+
+    let tree = usvg::Tree::from_data(bytes, &usvg::Options::default()).ok()?;
+    let size = tree.size();
+    let width = size.width().ceil() as u32;
+    let height = size.height().ceil() as u32;
+    // Guard against degenerate / pathologically large intrinsic sizes
+    // (a 0-dim SVG, or one that would allocate gigabytes).
+    if width == 0 || height == 0 || width > 16_384 || height > 16_384 {
+        return None;
+    }
+    let mut pixmap = tiny_skia::Pixmap::new(width, height)?;
+    resvg::render(&tree, tiny_skia::Transform::identity(), &mut pixmap.as_mut());
+    // tiny_skia pixmaps are premultiplied RGBA8; the paint path wants
+    // straight (un-premultiplied) RGBA8, so un-premultiply per pixel.
+    let mut rgba = pixmap.take();
+    for px in rgba.chunks_exact_mut(4) {
+        let a = px[3];
+        if a != 0 && a != 255 {
+            let unmul = |c: u8| ((c as u32 * 255 + (a as u32 / 2)) / a as u32).min(255) as u8;
+            px[0] = unmul(px[0]);
+            px[1] = unmul(px[1]);
+            px[2] = unmul(px[2]);
+        }
+    }
+    Some(DecodedImage { width, height, rgba })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// SVG bytes rasterize at the document's intrinsic size, through the same
+    /// `decode_image_bytes` entry the raster path uses (the `image` crate fails
+    /// on SVG, so the SVG fallback runs). A 20x20 green-rect SVG must decode to
+    /// 20x20 with an opaque green center pixel.
+    #[test]
+    fn decodes_svg_to_rgba_at_intrinsic_size() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
+            <rect width="20" height="20" fill="#008000"/></svg>"##;
+        let decoded = decode_image_bytes(svg).expect("SVG decodes via the resvg fallback");
+        assert_eq!((decoded.width, decoded.height), (20, 20), "intrinsic 20x20");
+        // Center pixel (10, 10): straight RGBA8, opaque mid-green (#008000).
+        let i = ((10 * decoded.width + 10) * 4) as usize;
+        let (r, g, b, a) = (decoded.rgba[i], decoded.rgba[i + 1], decoded.rgba[i + 2], decoded.rgba[i + 3]);
+        assert_eq!(a, 255, "opaque");
+        assert!(r < 40 && g > 100 && b < 40, "green center, got ({r},{g},{b})");
+    }
+
+    #[test]
+    fn debug_real_vector_svg() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg"
+     width="8px" height="32px" viewBox="0 0 4 64" preserveAspectRatio="none">
+  <rect y="0" width="100%" height="50%" fill="lime"/>
+  <rect y="50%" width="100%" height="50%" fill="aqua"/></svg>"##;
+        let d = decode_image_bytes(svg).expect("decodes");
+        eprintln!("DBG dims={}x{}", d.width, d.height);
+        // sample: top band center, bottom band center, full-width at mid-top row
+        let px = |x: u32, y: u32| {
+            let i = ((y * d.width + x) * 4) as usize;
+            (d.rgba[i], d.rgba[i + 1], d.rgba[i + 2], d.rgba[i + 3])
+        };
+        eprintln!("DBG top-center(4,8)={:?}", px(4, 8));
+        eprintln!("DBG bot-center(4,24)={:?}", px(4, 24));
+        eprintln!("DBG top-left(0,8)={:?} top-right(7,8)={:?}", px(0, 8), px(7, 8));
+    }
+
+    /// A `data:image/svg+xml` URI decodes through `decode_data_uri` → the same
+    /// SVG fallback (the reftest + live paths both reach SVG this way).
+    #[test]
+    fn decodes_svg_data_uri() {
+        let uri = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' \
+                   width='8' height='8'><rect width='8' height='8' fill='blue'/></svg>";
+        let decoded = decode_data_uri(uri).expect("SVG data-URI decodes");
+        assert_eq!((decoded.width, decoded.height), (8, 8));
+    }
 }
