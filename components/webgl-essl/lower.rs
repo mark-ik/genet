@@ -47,6 +47,19 @@ pub enum LoweringError {
     NagaParse(String),
     NagaValidate(String),
     WgslEmit(String),
+    /// Failed to spawn the 8 MB-stack worker thread for naga work.
+    /// Effectively only possible under OS resource exhaustion.
+    ThreadSpawn(String),
+    /// The worker thread panicked before signaling completion. The
+    /// payload, if it was a string, is captured.
+    ThreadJoin(String),
+    /// naga's SPIR-V frontend or validator panicked. Caught via
+    /// `std::panic::catch_unwind`; mirrors ANGLE / mozangle's
+    /// `catch_unwind` posture on the GLSL→SPIR-V path. naga's
+    /// recursive validator and a few WGSL-emit paths can throw on
+    /// malformed intermediate IR; for adversarial input this boundary
+    /// is load-bearing rather than just defensive.
+    NagaPanic(String),
 }
 
 impl std::fmt::Display for LoweringError {
@@ -58,6 +71,9 @@ impl std::fmt::Display for LoweringError {
             LoweringError::NagaParse(m) => write!(f, "naga spv-in parse error: {m}"),
             LoweringError::NagaValidate(m) => write!(f, "naga validation error: {m}"),
             LoweringError::WgslEmit(m) => write!(f, "WGSL emit error: {m}"),
+            LoweringError::ThreadSpawn(m) => write!(f, "failed to spawn naga worker thread: {m}"),
+            LoweringError::ThreadJoin(m) => write!(f, "naga worker thread panicked at join: {m}"),
+            LoweringError::NagaPanic(m) => write!(f, "naga panicked: {m}"),
         }
     }
 }
@@ -74,18 +90,123 @@ pub fn lower_to_wgsl(tu: &TranslationUnit, stage: ShaderStage) -> Result<String,
     let words = spirv.assemble();
     let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
 
-    let module = naga::front::spv::parse_u8_slice(&bytes, &naga::front::spv::Options::default())
-        .map_err(|e| LoweringError::NagaParse(format!("{e:?}")))?;
+    naga_pipeline(bytes)
+}
 
+/// Run naga's `spv-in` parser, validator, and WGSL emitter inside an
+/// 8 MB-stack worker thread, capturing any panic via
+/// `std::panic::catch_unwind`. Mirrors ANGLE's hardening posture on
+/// the GLSL → SPIR-V path: naga's recursive validator can overflow
+/// Windows' default 1 MB stack on deeply nested IR, and a few WGSL
+/// emit paths can panic on malformed intermediate IR. For adversarial
+/// shader input the boundary is load-bearing, not just defensive.
+fn naga_pipeline(bytes: Vec<u8>) -> Result<String, LoweringError> {
+    let join_result = std::thread::Builder::new()
+        .name("webgl-essl-naga".into())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_naga(&bytes))))
+        .map_err(|e| LoweringError::ThreadSpawn(format!("{e}")))?
+        .join()
+        .map_err(|e| LoweringError::ThreadJoin(format!("{e:?}")))?;
+
+    match join_result {
+        Ok(r) => r,
+        Err(payload) => Err(LoweringError::NagaPanic(panic_payload_msg(payload))),
+    }
+}
+
+fn run_naga(bytes: &[u8]) -> Result<String, LoweringError> {
+    let module = naga::front::spv::parse_u8_slice(bytes, &naga::front::spv::Options::default())
+        .map_err(|e| LoweringError::NagaParse(format!("{e:?}")))?;
     let info = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
     )
     .validate(&module)
     .map_err(|e| LoweringError::NagaValidate(format!("{e:?}")))?;
-
     naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
         .map_err(|e| LoweringError::WgslEmit(format!("{e:?}")))
+}
+
+fn panic_payload_msg(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "naga panicked with non-string payload".to_string()
+    }
+}
+
+#[cfg(test)]
+mod safety_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn panic_payload_msg_extracts_str_slice() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new("oops");
+        assert_eq!(panic_payload_msg(payload), "oops");
+    }
+
+    #[test]
+    fn panic_payload_msg_extracts_string() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(String::from("longer message"));
+        assert_eq!(panic_payload_msg(payload), "longer message");
+    }
+
+    #[test]
+    fn panic_payload_msg_falls_back_on_non_string_payload() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(42i64);
+        let msg = panic_payload_msg(payload);
+        assert!(msg.contains("non-string"), "got: {msg}");
+    }
+
+    #[test]
+    fn worker_thread_returns_inner_ok_unchanged() {
+        // Verify the thread + catch_unwind wrapper is transparent for
+        // happy-path bytes. Build a tiny SPIR-V module by hand (the
+        // canonical const-color fragment skeleton) and feed it
+        // through `naga_pipeline`.
+        let mut b = Builder::new();
+        b.set_version(1, 0);
+        b.capability(Capability::Shader);
+        b.memory_model(AddressingModel::Logical, MemoryModel::GLSL450);
+        let type_void = b.type_void();
+        let type_float = b.type_float(32, None);
+        let type_vec4 = b.type_vector(type_float, 4);
+        let ptr_output = b.type_pointer(None, StorageClass::Output, type_vec4);
+        let output_var = b.variable(ptr_output, None, StorageClass::Output, None);
+        b.decorate(output_var, Decoration::Location, [Operand::LiteralBit32(0)]);
+        let c1 = b.constant_bit32(type_float, 1.0f32.to_bits());
+        let color = b.constant_composite(type_vec4, [c1, c1, c1, c1]);
+        let fn_type = b.type_function(type_void, []);
+        let main_fn = b
+            .begin_function(type_void, None, FunctionControl::NONE, fn_type)
+            .unwrap();
+        b.begin_block(None).unwrap();
+        b.store(output_var, color, None, []).unwrap();
+        b.ret().unwrap();
+        b.end_function().unwrap();
+        b.entry_point(ExecutionModel::Fragment, main_fn, "main", [output_var]);
+        b.execution_mode(main_fn, ExecutionMode::OriginUpperLeft, []);
+        let words = b.module().assemble();
+        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let wgsl = naga_pipeline(bytes).expect("naga_pipeline round-trip");
+        assert!(wgsl.contains("@fragment"));
+    }
+
+    #[test]
+    fn worker_thread_reports_naga_parse_error_for_garbage_bytes() {
+        // Bytes that are not valid SPIR-V should fail in `run_naga`
+        // at the parse step — not panic. The boundary still
+        // propagates the typed error rather than swallowing it.
+        let bytes = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01, 0x02, 0x03];
+        let result = naga_pipeline(bytes);
+        match result {
+            Err(LoweringError::NagaParse(_)) => {},
+            other => panic!("expected NagaParse, got {other:?}"),
+        }
+    }
 }
 
 // ---------- AST navigation --------------------------------------------
