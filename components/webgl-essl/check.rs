@@ -84,6 +84,9 @@ pub enum TypeDiagnosticKind {
     /// `name(args)` where overloads of `name` exist but none match the
     /// actual argument types.
     CallSignatureMismatch { name: String, candidates: Vec<Signature>, actual: Vec<TypeKind> },
+    /// `.field` access on a struct base where the struct has no
+    /// member named `field`.
+    UnknownStructField { struct_name: Option<String>, field: String },
 }
 
 impl TypeDiagnostic {
@@ -140,6 +143,10 @@ impl fmt::Display for DiagnosticDisplay<'_> {
                     n = candidates.len(),
                     s = if candidates.len() == 1 { "" } else { "s" },
                 )
+            },
+            TypeDiagnosticKind::UnknownStructField { struct_name, field } => {
+                let tag = struct_name.as_deref().unwrap_or("<anonymous>");
+                write!(f, "{line}:{col}: struct `{tag}` has no field `{field}`")
             },
         }
     }
@@ -202,6 +209,19 @@ struct TypeChecker {
     /// distinct parameter types overload rather than overwriting
     /// each other.
     user_functions: HashMap<String, Vec<crate::check::registry::Signature>>,
+    /// User-defined struct registry. Index matches
+    /// [`TypeKind::Struct`]'s index; each entry stores the field
+    /// list in source order. Built at translation-unit Pre time
+    /// from `ExternalDecl::Struct` entries.
+    structs: Vec<StructEntry>,
+}
+
+#[derive(Clone)]
+struct StructEntry {
+    /// Optional tag name; matches `StructDecl::name`.
+    name: Option<String>,
+    /// (field name, field type) pairs in source order.
+    fields: Vec<(String, TypeKind)>,
 }
 
 impl TypeChecker {
@@ -212,6 +232,7 @@ impl TypeChecker {
             diagnostics: Vec::new(),
             registry: Registry::with_builtins(),
             user_functions: HashMap::new(),
+            structs: Vec::new(),
         }
     }
 
@@ -249,6 +270,22 @@ impl TypeChecker {
         seed(self, "gl_FragCoord", TypeKind::Vec4);
         seed(self, "gl_PointCoord", TypeKind::Vec2);
         seed(self, "gl_FrontFacing", TypeKind::Bool);
+    }
+
+    /// Pre-pass: build the typechecker's struct registry from
+    /// `ExternalDecl::Struct` entries. The index assigned here
+    /// matches the parser's `TypeKind::Struct(i)`.
+    fn collect_structs(&mut self, tu: &TranslationUnit) {
+        for decl in &tu.decls {
+            if let ExternalDecl::Struct(s) = decl {
+                let fields = s
+                    .fields
+                    .iter()
+                    .map(|f| (f.name.clone(), f.ty.kind))
+                    .collect();
+                self.structs.push(StructEntry { name: s.name.clone(), fields });
+            }
+        }
     }
 
     /// Pre-pass run at translation-unit Pre to register every user
@@ -290,6 +327,11 @@ impl<'tree> Visitor<'tree> for TypeChecker {
             Visit::Pre => {
                 self.push_scope();
                 self.seed_global_builtins();
+                // Pre-pass: build the struct registry by walking
+                // `ExternalDecl::Struct` in source order — the
+                // index matches the parser's `TypeKind::Struct(i)`
+                // assignment.
+                self.collect_structs(tu);
                 // Forward-reference pre-pass: register every user
                 // function in the global scope so a Call to a function
                 // declared later in source order still resolves.
@@ -476,19 +518,45 @@ impl<'tree> Visitor<'tree> for TypeChecker {
                 },
                 Expr::Member { base, field, span, .. } => {
                     if let Some(bt) = self.types.get(&base.span()).copied() {
-                        match swizzle_result(bt, field) {
-                            Some(result) => {
-                                self.types.insert(*span, result);
-                            },
-                            None => {
-                                self.diagnostics.push(TypeDiagnostic {
-                                    kind: TypeDiagnosticKind::InvalidSwizzle {
-                                        base: bt,
-                                        field: field.clone(),
-                                    },
-                                    span: *span,
-                                });
-                            },
+                        // Dispatch on base kind: struct → field
+                        // lookup; vector → swizzle. Anything else
+                        // becomes InvalidSwizzle.
+                        if let TypeKind::Struct(idx) = bt {
+                            let entry = &self.structs[idx as usize];
+                            let resolved = entry
+                                .fields
+                                .iter()
+                                .find(|(n, _)| n == field)
+                                .map(|(_, ty)| *ty);
+                            match resolved {
+                                Some(field_ty) => {
+                                    self.types.insert(*span, field_ty);
+                                },
+                                None => {
+                                    self.diagnostics.push(TypeDiagnostic {
+                                        kind: TypeDiagnosticKind::UnknownStructField {
+                                            struct_name: entry.name.clone(),
+                                            field: field.clone(),
+                                        },
+                                        span: *span,
+                                    });
+                                },
+                            }
+                        } else {
+                            match swizzle_result(bt, field) {
+                                Some(result) => {
+                                    self.types.insert(*span, result);
+                                },
+                                None => {
+                                    self.diagnostics.push(TypeDiagnostic {
+                                        kind: TypeDiagnosticKind::InvalidSwizzle {
+                                            base: bt,
+                                            field: field.clone(),
+                                        },
+                                        span: *span,
+                                    });
+                                },
+                            }
                         }
                     }
                 },

@@ -40,6 +40,15 @@ impl Parser {
             },
             _ => (None, None),
         };
+        // Register the name in the parser's struct-index map so
+        // subsequent `type_spec` calls accept it as a user type.
+        // The index matches the order this StructDecl will appear
+        // in the translation unit's decls list (counting only
+        // Struct ExternalDecls).
+        if let Some(n) = &name {
+            let idx = self.struct_indices.len() as u32;
+            self.struct_indices.insert(n.clone(), idx);
+        }
         self.expect_punct(Punct::LBrace, "`{` (struct body)")?;
         let mut fields = Vec::new();
         loop {
@@ -295,6 +304,23 @@ impl Parser {
                 } else {
                     Err(Error::new(
                         ErrorKind::Expected { wanted: "type", got: self.peek_kind().unwrap().label() },
+                        self.peek_span(),
+                    ))
+                }
+            },
+            Some(TokenKind::Ident(name)) => {
+                // Accept identifiers that name a previously-declared
+                // struct as user types.
+                if let Some(&idx) = self.struct_indices.get(name) {
+                    let span = self.peek_span();
+                    self.bump();
+                    Ok(TypeSpec { kind: TypeKind::Struct(idx), span })
+                } else {
+                    Err(Error::new(
+                        ErrorKind::Expected {
+                            wanted: "type",
+                            got: self.peek_kind().unwrap().label(),
+                        },
                         self.peek_span(),
                     ))
                 }

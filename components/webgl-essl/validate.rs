@@ -55,6 +55,11 @@ fn slot_count_for(ty: TypeKind) -> u32 {
         TypeKind::Mat3 => 3,
         TypeKind::Mat4 => 4,
         TypeKind::Void | TypeKind::Sampler2D | TypeKind::SamplerCube => 0,
+        // Conservative: count a struct as 1 vec4 slot. Real
+        // packing follows the struct's field layout; first-pass
+        // tolerates over-counting if anything (rarely a packing
+        // hazard for small uniform structs).
+        TypeKind::Struct(_) => 1,
     }
 }
 use crate::span::{Span, line_column};

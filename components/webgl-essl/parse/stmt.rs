@@ -194,6 +194,13 @@ impl Parser {
                 }
                 false
             },
+            // User-defined struct types: an Ident that names a
+            // known struct followed by an Ident (the variable
+            // name) starts a local decl.
+            Some(TokenKind::Ident(name)) if self.struct_indices.contains_key(name) => {
+                let next = self.peek_at(1);
+                matches!(next, Some(TokenKind::Ident(_)))
+            },
             _ => false,
         }
     }

@@ -26,7 +26,12 @@ mod expr;
 mod stmt;
 
 pub fn parse(tokens: Vec<Token>, src_len: usize) -> Result<TranslationUnit, Error> {
-    let mut p = Parser { tokens, idx: 0, src_len };
+    let mut p = Parser {
+        tokens,
+        idx: 0,
+        src_len,
+        struct_indices: std::collections::HashMap::new(),
+    };
     let start = p.peek_span().start;
     let mut decls = Vec::new();
     while !p.at_end() {
@@ -46,6 +51,11 @@ struct Parser {
     tokens: Vec<Token>,
     idx: usize,
     src_len: usize,
+    /// User-defined struct names seen so far at file scope,
+    /// mapped to their index in the translation unit's struct
+    /// registry (assigned in source order). `type_spec` accepts
+    /// any identifier in this map as a user-named struct type.
+    struct_indices: std::collections::HashMap<String, u32>,
 }
 
 impl Parser {

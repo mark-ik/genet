@@ -317,6 +317,18 @@ struct Ctx<'a> {
     /// uses it, so trivial shaders that never call sin/cos/etc.
     /// don't carry the import.
     glsl_std_450: Option<Word>,
+    /// User-defined struct types. Index matches
+    /// [`TypeKind::Struct`] (and the parser's struct-index
+    /// assignment). Each entry caches the `OpTypeStruct` id and
+    /// a field map for `s.field` access lowering.
+    struct_types: Vec<StructTypeInfo>,
+}
+
+#[derive(Clone)]
+struct StructTypeInfo {
+    type_id: Word,
+    /// Field name → (zero-based member index, ESSL type).
+    fields: HashMap<String, (u32, TypeKind)>,
 }
 
 struct InputBinding {
@@ -565,7 +577,41 @@ fn build_spirv(
         continue_targets: Vec::new(),
         types,
         glsl_std_450: None,
+        struct_types: Vec::new(),
     };
+
+    // Allocate `OpTypeStruct` for each user struct, in source
+    // order so the registry index matches the parser's
+    // `TypeKind::Struct(i)` assignment. Fields fall back to
+    // their member types via `spv_type_for_kind`.
+    for d in &tu.decls {
+        let ExternalDecl::Struct(s) = d else { continue };
+        let mut field_types: Vec<Word> = Vec::with_capacity(s.fields.len());
+        let mut fields: HashMap<String, (u32, TypeKind)> = HashMap::new();
+        let mut ok = true;
+        for (i, f) in s.fields.iter().enumerate() {
+            match spv_type_for_kind(&ctx, f.ty.kind) {
+                Some(ty) => {
+                    field_types.push(ty);
+                    fields.insert(f.name.clone(), (i as u32, f.ty.kind));
+                },
+                None => {
+                    ok = false;
+                    break;
+                },
+            }
+        }
+        if !ok {
+            return Err(LoweringError::UnsupportedShape {
+                what: format!(
+                    "struct `{}` has an unlowered field type",
+                    s.name.as_deref().unwrap_or("<anonymous>")
+                ),
+            });
+        }
+        let type_id = ctx.b.type_struct(field_types);
+        ctx.struct_types.push(StructTypeInfo { type_id, fields });
+    }
 
     // Emit user function definitions before main, so OpFunctionCall
     // in main can reference them by id. ESSL allows forward
@@ -826,17 +872,20 @@ fn lower_stmt(
                 }
                 return lower_lhs_matrix_index_assignment(ctx, base, index, rhs);
             }
-            // LHS-swizzle paths (single + multi component) only
-            // support plain `=`. Compound assign on a swizzled
-            // LHS is queued — it would need load-modify-store on
-            // the access-chain.
+            // LHS Member: struct base → field write via
+            // OpAccessChain + OpStore; vector base → swizzle
+            // write (single- or multi-component). Compound assign
+            // on a Member LHS is queued for both shapes.
             if let Expr::Member { base, field, .. } = lhs.as_ref() {
                 if *op != AssignOp::Assign {
                     return Err(LoweringError::UnsupportedShape {
                         what: format!(
-                            "compound assignment `{op:?}` on a swizzled LHS is not lowered"
+                            "compound assignment `{op:?}` on a Member LHS is not lowered"
                         ),
                     });
+                }
+                if let Some(TypeKind::Struct(idx)) = classify_arg_kind(ctx, base) {
+                    return lower_struct_field_assignment(ctx, base, field, idx, rhs);
                 }
                 return lower_lhs_swizzle_assignment(ctx, base, field, rhs, main_ctx);
             }
@@ -1793,6 +1842,114 @@ fn should_splat_scalar_for_builtin(name: &str, arg_idx: usize) -> bool {
     }
 }
 
+/// Lower a struct field read: `s.x` where `s` is a struct-typed
+/// local. Emits `OpAccessChain` to the member's pointer then
+/// `OpLoad`. First-pass: only Ident bases are supported (nested
+/// member access like `s.inner.x` is queued).
+fn lower_struct_field_read(
+    ctx: &mut Ctx,
+    base: &Expr,
+    field: &str,
+    struct_idx: u32,
+) -> Result<Word, LoweringError> {
+    let name = match base {
+        Expr::Ident { name, .. } => name.as_str(),
+        _ => {
+            return Err(LoweringError::UnsupportedShape {
+                what: "struct member access base must be a plain identifier".into(),
+            });
+        },
+    };
+    let local = lookup_local(ctx, name).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("struct base `{name}` is not a function-scope local"),
+        }
+    })?;
+    let info = ctx.struct_types.get(struct_idx as usize).cloned().ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("struct index {struct_idx} not in registry"),
+        }
+    })?;
+    let (member_idx, field_kind) = info
+        .fields
+        .get(field)
+        .copied()
+        .ok_or_else(|| LoweringError::UnsupportedShape {
+            what: format!("struct field `{field}` not found"),
+        })?;
+    let field_ty = spv_type_for_kind(ctx, field_kind).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("struct field `{field}` of type {field_kind:?} not lowered"),
+        }
+    })?;
+    let ptr_to_field = ctx
+        .b
+        .type_pointer(None, StorageClass::Function, field_ty);
+    let idx_const = int_constant(ctx, member_idx as i32);
+    let chain = ctx
+        .b
+        .access_chain(ptr_to_field, None, local.var, [idx_const])
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    ctx.b
+        .load(field_ty, None, chain, None, [])
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
+}
+
+/// Lower a struct field write: `s.x = rhs` where `s` is a
+/// struct-typed local. `OpAccessChain` to the member's pointer
+/// then `OpStore`. Mirrors `lower_struct_field_read`.
+fn lower_struct_field_assignment(
+    ctx: &mut Ctx,
+    base: &Expr,
+    field: &str,
+    struct_idx: u32,
+    rhs: &Expr,
+) -> Result<(), LoweringError> {
+    let name = match base {
+        Expr::Ident { name, .. } => name.as_str(),
+        _ => {
+            return Err(LoweringError::UnsupportedShape {
+                what: "struct member assignment base must be a plain identifier".into(),
+            });
+        },
+    };
+    let local = lookup_local(ctx, name).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("struct base `{name}` is not a function-scope local"),
+        }
+    })?;
+    let info = ctx.struct_types.get(struct_idx as usize).cloned().ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("struct index {struct_idx} not in registry"),
+        }
+    })?;
+    let (member_idx, field_kind) = info
+        .fields
+        .get(field)
+        .copied()
+        .ok_or_else(|| LoweringError::UnsupportedShape {
+            what: format!("struct field `{field}` not found"),
+        })?;
+    let field_ty = spv_type_for_kind(ctx, field_kind).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("struct field `{field}` of type {field_kind:?} not lowered"),
+        }
+    })?;
+    let value = lower_expr(ctx, rhs)?;
+    let ptr_to_field = ctx
+        .b
+        .type_pointer(None, StorageClass::Function, field_ty);
+    let idx_const = int_constant(ctx, member_idx as i32);
+    let chain = ctx
+        .b
+        .access_chain(ptr_to_field, None, local.var, [idx_const])
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    ctx.b
+        .store(chain, value, None, [])
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    Ok(())
+}
+
 /// Resolve an assignment LHS to its `OpVariable`, ESSL value
 /// type, and SPIR-V storage class. Used by the write-side
 /// swizzle path to locate the variable so an `OpAccessChain` can
@@ -2149,6 +2306,9 @@ fn spv_type_for_kind(ctx: &Ctx, kind: TypeKind) -> Option<Word> {
         TypeKind::Mat2 => ctx.type_mat2,
         TypeKind::Mat3 => ctx.type_mat3,
         TypeKind::Mat4 => ctx.type_mat4,
+        TypeKind::Struct(idx) => {
+            return ctx.struct_types.get(idx as usize).map(|s| s.type_id);
+        },
         _ => return None,
     })
 }
@@ -2553,7 +2713,15 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                 .composite_construct(result_ty, None, constituents)
                 .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
         },
-        Expr::Member { base, field, span, .. } => lower_swizzle(ctx, base, field, *span),
+        Expr::Member { base, field, span, .. } => {
+            // Dispatch on the base kind: struct base → field
+            // lookup via OpAccessChain + OpLoad; vector base →
+            // swizzle (existing path).
+            if let Some(TypeKind::Struct(idx)) = classify_arg_kind(ctx, base) {
+                return lower_struct_field_read(ctx, base, field, idx);
+            }
+            lower_swizzle(ctx, base, field, *span)
+        },
         Expr::Index { base, index, .. } => lower_index_rhs(ctx, base, index),
         Expr::Unary { op, expr, .. } => lower_unary(ctx, *op, expr),
         Expr::Assign { op, lhs, rhs, span } => {

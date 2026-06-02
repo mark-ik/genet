@@ -159,6 +159,12 @@ pub enum TypeKind {
     Mat4,
     Sampler2D,
     SamplerCube,
+    /// A user-declared struct, identified by its index in the
+    /// translation unit's struct registry (the order in which
+    /// `struct Foo {...};` external decls appear in the source).
+    /// The field list is on the corresponding
+    /// [`StructDecl`] in `tu.decls`.
+    Struct(u32),
 }
 
 impl TypeKind {
