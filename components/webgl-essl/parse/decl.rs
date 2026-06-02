@@ -138,6 +138,21 @@ impl Parser {
             Some(TokenKind::Keyword(Keyword::Const)) => {
                 Some((StorageQualifier::Const, self.peek_span()))
             },
+            Some(TokenKind::Keyword(Keyword::In)) => {
+                Some((StorageQualifier::In, self.peek_span()))
+            },
+            Some(TokenKind::Keyword(Keyword::Out)) => {
+                Some((StorageQualifier::Out, self.peek_span()))
+            },
+            Some(TokenKind::Keyword(Keyword::Centroid)) => {
+                Some((StorageQualifier::Centroid, self.peek_span()))
+            },
+            Some(TokenKind::Keyword(Keyword::Flat)) => {
+                Some((StorageQualifier::Flat, self.peek_span()))
+            },
+            Some(TokenKind::Keyword(Keyword::Smooth)) => {
+                Some((StorageQualifier::Smooth, self.peek_span()))
+            },
             _ => None,
         }
     }

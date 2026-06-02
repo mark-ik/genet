@@ -35,6 +35,10 @@ pub fn parse(tokens: Vec<Token>, src_len: usize) -> Result<TranslationUnit, Erro
     Ok(TranslationUnit {
         decls,
         span: Span::new(start, src_len),
+        // Filled by the upper-layer [`crate::parse_source`] when the
+        // raw text carried a `#version` directive; the byte-level
+        // parser itself does not see that directive.
+        version: None,
     })
 }
 

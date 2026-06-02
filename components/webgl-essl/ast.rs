@@ -14,6 +14,12 @@ use crate::token::Keyword;
 pub struct TranslationUnit {
     pub decls: Vec<ExternalDecl>,
     pub span: Span,
+    /// Numeric version from a `#version <N> <profile>` directive, if
+    /// any. `Some(300)` for `#version 300 es` (ESSL 3.00), `Some(100)`
+    /// for `#version 100` (ESSL 1.00, the WebGL 1 default), `None`
+    /// when no directive is present (caller's stage / spec default
+    /// applies).
+    pub version: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -85,14 +91,28 @@ pub struct Param {
 pub enum StorageQualifier {
     /// No qualifier in source — local variable, or a function-scope decl.
     None,
-    /// `attribute` — vertex-shader input.
+    /// `attribute` — vertex-shader input. ESSL 1.00.
     Attribute,
     /// `uniform` — pipeline-constant input.
     Uniform,
-    /// `varying` — vertex-to-fragment interpolated value.
+    /// `varying` — vertex-to-fragment interpolated value. ESSL 1.00.
     Varying,
     /// `const` — compile-time constant.
     Const,
+    /// `in` — stage input. ESSL 3.00. Replaces `attribute` and the
+    /// in-direction of `varying`.
+    In,
+    /// `out` — stage output. ESSL 3.00. Replaces the out-direction of
+    /// `varying`.
+    Out,
+    /// `centroid` — interpolation modifier (centroid sampling).
+    /// ESSL 3.00.
+    Centroid,
+    /// `flat` — interpolation modifier (no interpolation). ESSL 3.00.
+    Flat,
+    /// `smooth` — interpolation modifier (default behavior, named for
+    /// clarity). ESSL 3.00.
+    Smooth,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
