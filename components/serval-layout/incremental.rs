@@ -23,8 +23,11 @@ use std::hash::Hash;
 
 use layout_dom_api::{DomMutation, LayoutDom};
 use style::selector_parser::RestyleDamage;
+use style::stylist::Stylist;
 
-use crate::cascade::{restyle_structural, restyle_with_snapshots, run_cascade};
+use crate::cascade::{
+    build_stylist, restyle_structural, restyle_with_snapshots, run_cascade_with_stylist,
+};
 use crate::fragment::FragmentPlane;
 use crate::image_decode::ImagePlane;
 use crate::invalidate::{classify, coalesce};
@@ -55,6 +58,22 @@ pub enum Applied {
 /// A persistent cascade + layout session over one `LayoutDom`.
 pub struct IncrementalLayout<Id: Copy + Eq + Hash> {
     styles: StylePlane<Id>,
+    /// The **persistent** Stylist (device + UA/author sheets + rule tree), built
+    /// once in [`new`](Self::new) and reused for every pass. It must outlive the
+    /// `styles` plane and never be rebuilt mid-session: `ElementData` in `styles`
+    /// holds `StrongRuleNode`s into this Stylist's rule tree, and the incremental
+    /// replacement path (`RESTYLE_STYLE_ATTRIBUTE`) reuses them — a rule node from
+    /// a dropped tree is a use-after-free. This is the half that makes the cheap
+    /// per-frame inline-style restyle sound (the other half, a stable
+    /// `SharedRwLock`, already lives on `StylePlane`).
+    stylist: Stylist,
+    /// The stylesheet set `stylist` was built from. The session's stylesheets are
+    /// FIXED at construction (the persistent rule tree can't be safely rebuilt
+    /// mid-session — old rule nodes would dangle); [`apply`](Self::apply)
+    /// debug-asserts the caller keeps passing the same set. Hot-reload (rebuild
+    /// the Stylist + force a full re-match that frame, dropping old nodes while
+    /// the old tree is still alive) is a documented follow-up.
+    sheets: Vec<String>,
     fragments: FragmentPlane<Id>,
     width: f32,
     height: f32,
@@ -66,15 +85,30 @@ pub struct IncrementalLayout<Id: Copy + Eq + Hash> {
 }
 
 impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
-    /// Initial full cascade + layout over `dom`.
+    /// Initial full cascade + layout over `dom`. Builds the persistent Stylist
+    /// (see [`stylist`](Self::stylist)) and runs the first cascade over it, so the
+    /// rule tree the incremental passes later reuse is the one this populates.
     pub fn new<D>(dom: &D, stylesheets: &[&str], width: f32, height: f32) -> Self
     where
         D: LayoutDom<NodeId = Id>,
     {
         let mut styles = StylePlane::new();
-        run_cascade(dom, &mut styles, euclid::Size2D::new(width, height), stylesheets, None);
+        // Build the persistent Stylist under the plane's stable lock, so the
+        // sheets here, the inline-style blocks parsed each pass, and the cascade
+        // guards all share one `SharedRwLock` (Stylo's `same_lock_as`).
+        let lock = styles.shared_lock().clone();
+        let stylist = build_stylist(euclid::Size2D::new(width, height), stylesheets, None, &lock);
+        run_cascade_with_stylist(dom, &mut styles, &stylist);
         let fragments = lay_out(dom, &styles, width, height);
-        Self { styles, fragments, width, height, last_damage: RestyleDamage::empty() }
+        Self {
+            styles,
+            stylist,
+            sheets: stylesheets.iter().map(|s| s.to_string()).collect(),
+            fragments,
+            width,
+            height,
+            last_damage: RestyleDamage::empty(),
+        }
     }
 
     /// The current per-node fragment plane.
@@ -87,6 +121,22 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
     /// structural batch, which takes the cascade-from-scratch path).
     pub fn last_damage(&self) -> RestyleDamage {
         self.last_damage
+    }
+
+    /// Enforce the fixed-stylesheet invariant in debug builds. The persistent
+    /// Stylist is built once from `new()`'s stylesheets and cannot be safely
+    /// rebuilt mid-session (the prior passes' rule nodes, held on `ElementData`,
+    /// would dangle into a dropped tree). A caller that changes the set between
+    /// `apply()` calls is silently restyling against the old sheets — catch it
+    /// loudly in debug. No-op in release (the cost is a `Vec<String>` compare).
+    fn debug_assert_fixed_sheets(&self, stylesheets: &[&str]) {
+        debug_assert!(
+            stylesheets.len() == self.sheets.len()
+                && stylesheets.iter().zip(&self.sheets).all(|(a, b)| a == b),
+            "IncrementalLayout stylesheets are fixed at new(); the persistent rule \
+             tree cannot be rebuilt mid-session (hot-reload is a follow-up). Got a \
+             different set in apply().",
+        );
     }
 
     /// Apply a drained mutation batch, updating styles (and fragments
@@ -110,23 +160,20 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
         if mutations.is_empty() {
             return Applied::Unchanged;
         }
+        self.debug_assert_fixed_sheets(stylesheets);
 
         let attribute_only = mutations
             .iter()
             .all(|m| matches!(m, DomMutation::AttributeChanged { .. }));
 
         if !attribute_only {
-            return self.apply_structural(dom, stylesheets, mutations);
+            return self.apply_structural(dom, mutations);
         }
 
-        // Attribute-only → incremental restyle over the persistent plane.
-        let outcome = restyle_with_snapshots(
-            dom,
-            &mut self.styles,
-            euclid::Size2D::new(self.width, self.height),
-            stylesheets,
-            mutations,
-        );
+        // Attribute-only → incremental restyle over the persistent plane,
+        // reusing the persistent Stylist (whose rule tree the prior pass's rule
+        // nodes live in — the precondition for the cheap replacement path).
+        let outcome = restyle_with_snapshots(dom, &mut self.styles, &self.stylist, mutations);
         self.last_damage = outcome.damage;
         if outcome.needs_relayout {
             self.fragments = lay_out(dom, &self.styles, self.width, self.height);
@@ -147,7 +194,6 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
     fn apply_structural<D>(
         &mut self,
         dom: &D,
-        stylesheets: &[&str],
         mutations: &[DomMutation<Id>],
     ) -> Applied
     where
@@ -162,13 +208,7 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
         // 1. Styles: partial cascade — re-cascade only the affected
         //    subtrees over the persistent plane (the inserted/replaced
         //    nodes + within-parent sibling/nth-child effects).
-        restyle_structural(
-            dom,
-            &mut self.styles,
-            euclid::Size2D::new(self.width, self.height),
-            stylesheets,
-            &root_ids,
-        );
+        restyle_structural(dom, &mut self.styles, &self.stylist, &root_ids);
 
         // 2. Fragments: incremental layout splice over the restyled plane.
 
@@ -697,6 +737,58 @@ mod tests {
         assert_eq!(
             layout.apply(&dom, SHEET, &muts), Applied::RepaintOnly,
             "subsequent transform changes skip layout",
+        );
+    }
+
+    /// Sustained orrery-style motion over a long session — the regression guard
+    /// for the **persistent Stylist**. Each inline-`style` transform change takes
+    /// the cheap `RESTYLE_STYLE_ATTRIBUTE` replacement path, which reuses the prior
+    /// frame's rule node held on `ElementData`; that is sound only because the
+    /// rule tree persists across frames. The replacement also drops the prior
+    /// style-attribute rule node onto the tree's free list (~1/frame); `maybe_gc`
+    /// reclaims them once past Stylo's `RULE_TREE_GC_INTERVAL` (300). Driving 400
+    /// frames crosses that threshold, so this exercises both the persistent-tree
+    /// reuse AND the GC. Each frame must stay `RepaintOnly` + `RECALCULATE_OVERFLOW`
+    /// with stable box geometry. A fresh-Stylist-per-pass would make the reused
+    /// node dangle (the use-after-free the persistent design fixed); a GC bug would
+    /// corrupt or crash here.
+    #[test]
+    fn sustained_inline_transform_motion_stays_repaint_only() {
+        const SHEET: &[&str] = &[".n{position:absolute;width:80px;height:40px}"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let node = dom.create_element(html("div"));
+        dom.set_attribute(node, attr("class"), "n");
+        // Materialized transform-bearing (so every frame is value→value, never the
+        // none→value relayout — the orrery materialization rule).
+        dom.set_attribute(node, attr("style"), "transform:translate(0px,0px)");
+        dom.append_child(body, node);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let size0 = layout.fragments().rect_of(node).unwrap().size;
+        let _ = drain(&mut dom);
+
+        for i in 1..=400u32 {
+            // Distinct from the prior frame each time (x advances by 1 mod 100).
+            let (x, y) = (i % 100, (i * 3) % 100);
+            dom.set_attribute(node, attr("style"), &format!("transform:translate({x}px,{y}px)"));
+            let muts = drain(&mut dom);
+            let applied = layout.apply(&dom, SHEET, &muts);
+            assert_eq!(applied, Applied::RepaintOnly, "frame {i}: sustained inline transform must stay paint-tier");
+            assert!(
+                layout.last_damage().contains(RestyleDamage::RECALCULATE_OVERFLOW)
+                    && !layout.last_damage().contains(RestyleDamage::RELAYOUT),
+                "frame {i}: transform-only damage, no relayout",
+            );
+        }
+        let now = layout.fragments().rect_of(node).unwrap().size;
+        assert!(
+            (now.width - size0.width).abs() < 0.5 && (now.height - size0.height).abs() < 0.5,
+            "sustained motion must never resize the box",
         );
     }
 }

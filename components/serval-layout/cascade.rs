@@ -183,7 +183,68 @@ pub fn run_cascade<D>(
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash + 'static,
 {
-    cascade_traverse(dom, plane, viewport, stylesheets, base_url, None);
+    // One-shot: a throwaway Stylist (its rule tree dies with this call). Sound
+    // because a full cascade builds fresh rule nodes and never reuses a prior
+    // pass's — only the incremental replacement path needs a persistent tree.
+    let lock = plane.shared_lock().clone();
+    let stylist = build_stylist(viewport, stylesheets, base_url, &lock);
+    cascade_traverse(dom, plane, &stylist, base_url, None);
+}
+
+/// Build + flush a [`Stylist`] for `viewport`, the baseline UA stylesheet
+/// (`ua_defaults::UA_DEFAULTS`), and the given author `stylesheets`, all wrapped
+/// under `lock`.
+///
+/// The returned `Stylist` owns its `Device` and `RuleTree`. Reuse it across
+/// cascade passes ([`IncrementalLayout`] keeps one for its whole life) — do NOT
+/// rebuild it per pass: `ElementData` holds `StrongRuleNode`s into its tree, and
+/// dropping the `Stylist` tears down the tree's free list, so any surviving rule
+/// node becomes a use-after-free.
+///
+/// `lock` must be the same `SharedRwLock` the plane wraps its inline-style blocks
+/// under (the plane's `shared_lock()`), so the cascade's guards can read both the
+/// sheets here and those inline blocks (`same_lock_as`).
+pub fn build_stylist(
+    viewport: euclid::default::Size2D<f32>,
+    stylesheets: &[&str],
+    base_url: Option<&str>,
+    lock: &SharedRwLock,
+) -> Stylist {
+    let url_data = make_url_data(base_url);
+    let device = make_device(viewport);
+    let mut stylist = Stylist::new(device, QuirksMode::NoQuirks);
+    let read = lock.read();
+    // Prepend the baseline UA stylesheet (`<html>`/`<body>` → block + fill the
+    // viewport; structural block elements default to `display:block`), then the
+    // author sheets (also UA-origin for now; engine-vs-author origin is a
+    // follow-up). The Stylist resolves rule indices during flush, so all sheets
+    // must be present first.
+    let ua_sheet = parse_stylesheet(crate::ua_defaults::UA_DEFAULTS, lock, &url_data);
+    stylist.append_stylesheet(ua_sheet, &read);
+    for css in stylesheets {
+        let sheet = parse_stylesheet(css, lock, &url_data);
+        stylist.append_stylesheet(sheet, &read);
+    }
+    let guards = StylesheetGuards { author: &read, ua_or_user: &read };
+    stylist.flush(&guards);
+    stylist
+}
+
+/// Initial full cascade over a caller-owned (persistent) [`Stylist`].
+///
+/// [`IncrementalLayout::new`] uses this for its first cascade so the rule tree
+/// the incremental passes later reuse is the one already referenced by the
+/// `ElementData` this populates. `base_url` is `None` (incremental sessions have
+/// no document base yet; same as the prior behaviour).
+pub fn run_cascade_with_stylist<D>(
+    dom: &D,
+    plane: &mut StylePlane<D::NodeId>,
+    stylist: &Stylist,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + 'static,
+{
+    cascade_traverse(dom, plane, stylist, None, None);
 }
 
 /// Incremental restyle: re-cascade only the elements a batch of
@@ -211,8 +272,7 @@ pub fn run_cascade<D>(
 pub fn restyle_with_snapshots<D>(
     dom: &D,
     plane: &mut StylePlane<D::NodeId>,
-    viewport: euclid::default::Size2D<f32>,
-    stylesheets: &[&str],
+    stylist: &Stylist,
     mutations: &[layout_dom_api::DomMutation<D::NodeId>],
 ) -> RestyleOutcome
 where
@@ -237,28 +297,28 @@ where
     //    skip this pass's snapshot → no invalidation → no restyle → the change is
     //    dropped. Clearing it each pass is what makes *repeated* incremental
     //    restyle work (prereq B).
-    // 2. **Force a full re-cascade of a `style`-attribute change's subtree**
-    //    (`RestyleHint::restyle_subtree`). Snapshot invalidation only covers
+    // 2. **Hint a `style`-attribute change with `RESTYLE_STYLE_ATTRIBUTE`**
+    //    (the cheap replacement path). Snapshot invalidation only covers
     //    selector-matching attrs (id/class/`[attr]`); an inline-`style` change is
     //    otherwise never re-applied on the incremental path (the full
     //    `run_cascade` re-parses inline styles, so this is purely an
-    //    incremental-path gap). Re-cascading self+descendants re-reads the
-    //    element's (re-parsed) inline declaration block (prereq A).
+    //    incremental-path gap). This hint drives Stylo's
+    //    `CascadeWithReplacements`: it reuses the element's prior primary rule
+    //    node (held on its persistent `ElementData`) and swaps only the
+    //    style-attribute cascade level — re-reading the re-parsed inline block via
+    //    `style_attribute()` — instead of re-matching selectors (prereq A).
     //
-    //    NB: we deliberately do NOT use the narrower `RESTYLE_STYLE_ATTRIBUTE`
-    //    replacement hint here, even though it would be cheaper. That hint drives
-    //    Stylo's `CascadeWithReplacements`, which *reuses the rule node stored on
-    //    the prior pass's `ElementData`* and replaces only its style-attribute
-    //    level — against `context.stylist.rule_tree()`. But `cascade_traverse`
-    //    builds a **fresh `Stylist` (and thus a fresh rule tree) every pass**, so
-    //    that reused node points into the *previous* pass's rule tree, which has
-    //    since been dropped — a dangling read/write. Benign single-threaded (the
-    //    freed memory is usually still intact), but heap corruption under parallel
-    //    test execution once another thread reuses the freed allocation. The
-    //    full re-cascade builds fresh rule nodes in the current tree, so it is
-    //    sound — the same path `restyle_structural` takes. (Restoring the cheaper
-    //    replacement path needs a *persistent* Stylist/rule tree across passes,
-    //    mirroring the persistent `SharedRwLock` — a follow-up optimization.)
+    //    This is sound ONLY because `stylist` is persistent across passes
+    //    ([`IncrementalLayout`] owns it): the reused node and
+    //    `stylist.rule_tree()` are the same tree, so `update_rule_at_level` walks
+    //    a live node. (An earlier cut built a fresh `Stylist` per pass and used
+    //    this hint — the reused node dangled into the dropped prior tree, a
+    //    use-after-free that surfaced as parallel-only heap corruption; the
+    //    persistent Stylist is exactly what makes the cheap path safe.)
+    //
+    //    The hint MUST be set alone — no `RESTYLE_SELF`/`RESTYLE_DESCENDANTS`, or
+    //    Stylo's `restyle_kind` routes to `MatchAndCascade` (re-incurring per-frame
+    //    selector matching) and a `debug_assert` in `replace_rules_internal` fires.
     // 3. **Mark the dirty path** on every ancestor so the traversal descends far
     //    enough for the element's parent to process its snapshot (Stylo processes
     //    a child's snapshot while traversing the parent — see `traversal.rs`).
@@ -273,7 +333,7 @@ where
                     // live borrow of this entry's `ElementData`) — same invariant
                     // as `restyle_structural`.
                     if let Some(mut data) = unsafe { entry.mutate_data() } {
-                        data.hint.insert(RestyleHint::restyle_subtree());
+                        data.hint.insert(RestyleHint::RESTYLE_STYLE_ATTRIBUTE);
                     }
                 }
             }
@@ -289,7 +349,7 @@ where
 
     // base_url None: incremental restyle reuses the prior cascade's
     // resolved url()s; re-resolving relative refs here is a follow-up.
-    cascade_traverse(dom, plane, viewport, stylesheets, None, Some(&snapshots));
+    cascade_traverse(dom, plane, stylist, None, Some(&snapshots));
 
     // Stylo stored each restyled element's RestyleDamage on its
     // ElementData during the traversal (via compute_style_difference).
@@ -339,8 +399,7 @@ pub struct RestyleOutcome {
 pub fn restyle_structural<D>(
     dom: &D,
     plane: &mut StylePlane<D::NodeId>,
-    viewport: euclid::default::Size2D<f32>,
-    stylesheets: &[&str],
+    stylist: &Stylist,
     roots: &[D::NodeId],
 ) where
     D: LayoutDom,
@@ -374,18 +433,27 @@ pub fn restyle_structural<D>(
 
     // base_url None: structural restyle reuses prior resolved url()s
     // (same follow-up as the snapshot path).
-    cascade_traverse(dom, plane, viewport, stylesheets, None, None);
+    cascade_traverse(dom, plane, stylist, None, None);
 }
 
-/// Shared cascade traversal. `snapshots = None` is a full cascade (every
-/// element styled because none has `ElementData` yet); `Some` is the
-/// incremental restyle path (existing data + snapshots drive Stylo's
-/// invalidator to recompute only the affected elements).
+/// Shared cascade traversal over a caller-owned [`Stylist`]. `snapshots =
+/// None` is a full cascade (every element styled because none has
+/// `ElementData` yet); `Some` is the incremental restyle path (existing
+/// data + snapshots drive Stylo's invalidator to recompute only the
+/// affected elements).
+///
+/// `stylist` is borrowed, not built: it carries the device + UA/author
+/// sheets + the rule tree. The rule tree must be the SAME instance across
+/// every pass over a given plane — `ElementData` holds `StrongRuleNode`s
+/// into it, and the incremental replacement path
+/// ([`RestyleHint::RESTYLE_STYLE_ATTRIBUTE`]) reuses them; a rule node from
+/// a dropped tree is a use-after-free. Callers therefore hand in a
+/// persistent `Stylist` ([`IncrementalLayout`] owns one) or a throwaway one
+/// for a one-shot full cascade ([`run_cascade`]).
 fn cascade_traverse<D>(
     dom: &D,
     plane: &mut StylePlane<D::NodeId>,
-    viewport: euclid::default::Size2D<f32>,
-    stylesheets: &[&str],
+    stylist: &Stylist,
     base_url: Option<&str>,
     snapshots: Option<&SnapshotMap>,
 ) where
@@ -420,28 +488,14 @@ fn cascade_traverse<D>(
 
     // Parse inline `style="…"` attributes into the plane now that the lock
     // exists (to wrap each block) and before the traversal reads them back via
-    // the adapter's `style_attribute()`.
+    // the adapter's `style_attribute()`. Re-run every pass: the replacement path
+    // reads `style_attribute()` fresh, so the (re-parsed) block must be current,
+    // and it is re-wrapped under the plane's stable lock so the guards' read
+    // matches (`same_lock_as`). The stylesheets, by contrast, live on the
+    // caller-owned `stylist` and are NOT re-parsed here.
     parse_inline_styles(dom, plane, &lock, &url_data);
 
-    // 3. Stylist setup. Prepend the baseline UA stylesheet
-    //    (`ua_defaults::UA_DEFAULTS`) — `<html>`/`<body>` default to
-    //    `display: block` and fill the viewport, structural block
-    //    elements (div, p, headings, lists, etc.) default to
-    //    `display: block`. Then append user-provided stylesheets
-    //    (also UA-origin for now; engine vs author origin handling
-    //    is a follow-up). The Stylist resolves rule indices during
-    //    flush, so all sheets must be present first.
-    let device = make_device(viewport);
-    let mut stylist = Stylist::new(device, QuirksMode::NoQuirks);
-    let ua_sheet = parse_stylesheet(crate::ua_defaults::UA_DEFAULTS, &lock, &url_data);
-    stylist.append_stylesheet(ua_sheet, &read);
-    for css in stylesheets {
-        let sheet = parse_stylesheet(css, &lock, &url_data);
-        stylist.append_stylesheet(sheet, &read);
-    }
-    stylist.flush(&guards);
-
-    // 4. SharedStyleContext bundles everything the cascade needs. For a
+    // 3. SharedStyleContext bundles everything the cascade needs. For a
     //    full cascade the snapshot map is empty; for incremental restyle
     //    it carries the pre-mutation snapshots Stylo's invalidator reads.
     let empty_snapshots = SnapshotMap::new();
@@ -451,7 +505,7 @@ fn cascade_traverse<D>(
 
     let context = SharedStyleContext {
         traversal_flags: TraversalFlags::empty(),
-        stylist: &stylist,
+        stylist,
         options: GLOBAL_STYLE_DATA.options.clone(),
         guards,
         visited_styles_enabled: false,
@@ -461,14 +515,14 @@ fn cascade_traverse<D>(
         registered_speculative_painters: &registered_painters,
     };
 
-    // 5. Enter cascade TLS context. StyleNodeRef methods that need
+    // 4. Enter cascade TLS context. StyleNodeRef methods that need
     //    `dom`/`plane`/`shared_lock`/snapshot access read from this slot;
     //    outside the guard they panic. `has_snapshot` consults the same
     //    map (None ⇒ always false ⇒ full-cascade behavior).
     let plane_ref: &StylePlane<D::NodeId> = &*plane;
     let _guard = CascadeGuard::<D>::enter(dom, plane_ref, &lock, snapshots);
 
-    // 6. Drive the traversal. RecalcStyle's process_preorder calls
+    // 5. Drive the traversal. RecalcStyle's process_preorder calls
     //    recalc_style_at on each element, populating its ElementData
     //    in the StylePlane (via UnsafeCell interior mutability per entry).
     if let Some(root_id) = first_element_descendant(dom, dom.document()) {
@@ -480,9 +534,17 @@ fn cascade_traverse<D>(
         }
     }
 
-    // 7. Drop guard (clears TLS), then exit thread state.
+    // 6. Drop guard (clears TLS), then exit thread state.
     drop(_guard);
     thread_state::exit(ThreadState::LAYOUT);
+
+    // 7. GC the rule tree's free list. A persistent Stylist accumulates
+    //    dropped rule nodes (e.g. each replaced style-attribute level) on a
+    //    free list rather than freeing them eagerly; `maybe_gc` reclaims them
+    //    once the count crosses Stylo's threshold. Safe here: the traversal is
+    //    done and we are single-threaded (no other accessor of the tree). A
+    //    no-op on a throwaway one-shot Stylist (nothing freed yet).
+    stylist.rule_tree().maybe_gc();
 }
 
 /// Parse each element's inline `style="…"` attribute into an Author-origin
@@ -822,6 +884,24 @@ mod tests {
         *color.into_srgb_legacy().raw_components()
     }
 
+    /// Build a persistent Stylist + run the initial full cascade over `plane`,
+    /// returning the Stylist to thread into later `restyle_with_snapshots`
+    /// calls. The incremental replacement path reuses the rule nodes this
+    /// populates, so the restyle must run against the SAME (persistent) rule
+    /// tree — mirroring how `IncrementalLayout` owns one Stylist for its life.
+    /// (A fresh Stylist per pass is the use-after-free the persistent design
+    /// fixes; these tests must therefore share one, exactly like production.)
+    fn cascade_persistent<D>(dom: &D, plane: &mut StylePlane<D::NodeId>, sheets: &[&str]) -> Stylist
+    where
+        D: LayoutDom,
+        D::NodeId: Copy + Eq + std::hash::Hash + 'static,
+    {
+        let lock = plane.shared_lock().clone();
+        let stylist = build_stylist(euclid::Size2D::new(800.0, 600.0), sheets, None, &lock);
+        run_cascade_with_stylist(dom, plane, &stylist);
+        stylist
+    }
+
     /// Incremental restyle must produce the **same** computed styles as a
     /// full re-cascade. Toggle a `<p>`'s class from `a` (red) to `b`
     /// (blue): `restyle_with_snapshots` recomputes the `<p>` through
@@ -855,7 +935,7 @@ mod tests {
 
         // Prior full cascade. <p> is red, <span> green.
         let mut plane: StylePlane<_> = StylePlane::new();
-        run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, None);
+        let stylist = cascade_persistent(&dom, &mut plane, SHEET);
         assert_eq!(color_of::<ScriptedDom>(&plane, p)[0], 1.0, "p starts red");
 
         // Mutate class a → b, drain only that mutation, then restyle.
@@ -864,7 +944,7 @@ mod tests {
         dom.set_attribute(p, attr("class"), "b");
         let mut muts = Vec::new();
         dom.drain_mutations(&mut muts);
-        restyle_with_snapshots(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, &muts);
+        restyle_with_snapshots(&dom, &mut plane, &stylist, &muts);
 
         // Oracle: a fresh full cascade of the mutated DOM.
         let mut oracle: StylePlane<_> = StylePlane::new();
@@ -911,7 +991,7 @@ mod tests {
         dom.append_child(div, p);
 
         let mut plane: StylePlane<_> = StylePlane::new();
-        run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, None);
+        let stylist = cascade_persistent(&dom, &mut plane, SHEET);
         assert!(color_of::<ScriptedDom>(&plane, p)[2] < 0.001, "p starts black (no .box ancestor)");
 
         // Add class="box" to the div; the descendant <p> must recolor.
@@ -920,7 +1000,7 @@ mod tests {
         dom.set_attribute(div, attr("class"), "box");
         let mut muts = Vec::new();
         dom.drain_mutations(&mut muts);
-        restyle_with_snapshots(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, &muts);
+        restyle_with_snapshots(&dom, &mut plane, &stylist, &muts);
 
         let mut oracle: StylePlane<_> = StylePlane::new();
         run_cascade(&dom, &mut oracle, euclid::Size2D::new(800.0, 600.0), SHEET, None);
@@ -959,7 +1039,7 @@ mod tests {
         dom.append_child(body, p);
 
         let mut plane: StylePlane<_> = StylePlane::new();
-        run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, None);
+        let stylist = cascade_persistent(&dom, &mut plane, SHEET);
         assert!(color_of::<ScriptedDom>(&plane, p)[1] < 0.01, "p starts black (data-state=off)");
 
         // Toggle data-state off → on.
@@ -968,7 +1048,7 @@ mod tests {
         dom.set_attribute(p, attr("data-state"), "on");
         let mut muts = Vec::new();
         dom.drain_mutations(&mut muts);
-        restyle_with_snapshots(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, &muts);
+        restyle_with_snapshots(&dom, &mut plane, &stylist, &muts);
 
         let mut oracle: StylePlane<_> = StylePlane::new();
         run_cascade(&dom, &mut oracle, euclid::Size2D::new(800.0, 600.0), SHEET, None);
@@ -1012,14 +1092,14 @@ mod tests {
             let (mut dom, p) = build();
             dom.set_attribute(p, attr("class"), "red");
             let mut plane: StylePlane<_> = StylePlane::new();
-            run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, None);
+            let stylist = cascade_persistent(&dom, &mut plane, SHEET);
             let mut sink = Vec::new();
             dom.drain_mutations(&mut sink);
             dom.set_attribute(p, attr("class"), "blue");
             let mut muts = Vec::new();
             dom.drain_mutations(&mut muts);
             let outcome =
-                restyle_with_snapshots(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, &muts);
+                restyle_with_snapshots(&dom, &mut plane, &stylist, &muts);
             assert!(!outcome.needs_relayout, "color swap should be repaint-only");
         }
 
@@ -1028,14 +1108,14 @@ mod tests {
             let (mut dom, p) = build();
             dom.set_attribute(p, attr("class"), "narrow");
             let mut plane: StylePlane<_> = StylePlane::new();
-            run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, None);
+            let stylist = cascade_persistent(&dom, &mut plane, SHEET);
             let mut sink = Vec::new();
             dom.drain_mutations(&mut sink);
             dom.set_attribute(p, attr("class"), "wide");
             let mut muts = Vec::new();
             dom.drain_mutations(&mut muts);
             let outcome =
-                restyle_with_snapshots(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, &muts);
+                restyle_with_snapshots(&dom, &mut plane, &stylist, &muts);
             assert!(outcome.needs_relayout, "width change should require relayout");
         }
     }

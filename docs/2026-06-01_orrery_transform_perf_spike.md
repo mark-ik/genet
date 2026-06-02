@@ -103,17 +103,51 @@ parallel full-suite runs clean. Damage classification is unaffected, because
 `RestyleDamage` is `compute_style_difference(old, new)` regardless of the
 match-vs-replace path, so every (A) assertion holds.
 
-The cheaper replacement path is recoverable later by giving `IncrementalLayout` a
-**persistent `Stylist`/rule tree** across passes (mirroring the persistent
-`SharedRwLock` already in `StylePlane`). Recorded as a follow-up optimization, not
-needed for the orrery flip. Until then: **serval-layout tests are correct under
-both modes**, but the rule-tree-lifetime invariant is the kind of footgun worth a
-`--test-threads=1` note if any future replacement-path work reintroduces it.
+### Persistent Stylist: the cheap replacement path, restored (done)
+
+The `restyle_subtree` workaround was correct but re-matched the element's subtree
+selectors every frame. The follow-up landed: `IncrementalLayout` now owns a
+**persistent `Stylist`** (device + UA/author sheets + rule tree), built once in
+`new()` and reused for every pass, mirroring the persistent `SharedRwLock` already
+on `StylePlane`. With the rule tree kept alive across passes, the reused rule node
+held on `ElementData` is valid, so the cheap `RESTYLE_STYLE_ATTRIBUTE` replacement
+hint is sound again — `restyle_with_snapshots` emits it for inline-`style` changes
+(set alone, so `restyle_kind` takes `CascadeWithReplacements` and skips selector
+re-matching). Confirmed against pinned stylo: `rule_tree: RuleTree` is an owned
+field of `Stylist` (so keeping the Stylist alive keeps every node valid), and
+`update_rule_at_level` walks the prior node against `context.stylist.rule_tree()` —
+the same tree, now that it persists.
+
+Shape of the change:
+
+- `build_stylist(viewport, sheets, base_url, lock)` builds + flushes a `Stylist`
+  under the plane's stable lock (so sheets, inline blocks, and guards share one
+  `SharedRwLock`). `cascade_traverse` takes `&Stylist` instead of building one;
+  `run_cascade` (one-shot, oracle tests) hands it a throwaway, `IncrementalLayout`
+  hands it the persistent one (`run_cascade_with_stylist` for the initial cascade,
+  `&self.stylist` for each incremental pass).
+- Each pass calls `stylist.rule_tree().maybe_gc()` (single-threaded, after the
+  traversal) so the per-frame replacement nodes that land on the free list are
+  reclaimed once past Stylo's GC interval (300).
+- The session's stylesheets are **fixed at `new()`** — the persistent rule tree
+  can't be safely rebuilt mid-session (old `ElementData` nodes would dangle, and
+  *dropping* them hits the dead free list), so `apply()` debug-asserts the set is
+  unchanged. Stylesheet hot-reload (rebuild + force a full re-match that frame,
+  dropping old nodes while the old tree is still alive) is the remaining follow-up.
+
+Verified: 86/86 single-threaded and parallel full-suite runs clean — the
+parallel-only heap corruption stays gone with the cheap path restored. New
+regression test `sustained_inline_transform_motion_stays_repaint_only` drives 400
+per-frame inline-transform applies (crossing the GC interval), each `RepaintOnly` +
+`RECALCULATE_OVERFLOW`, proving the replacement-path reuse + GC hold up over a long
+session. Damage is unchanged from the `restyle_subtree` cut (same
+`compute_style_difference`).
 
 ## Verdict
 
 Relayout-classification gate: **favorable** (transform is paint-tier; the §8 fear
 is retired). Orrery transform-driven motion: **A + B + C all resolved**, all
-serval-side, verified single-threaded and parallel. The Mere flip plan's orrery
-phase (P1) is unblocked. The tests are regression guards pinned to the current
-stylo rev (572ecba).
+serval-side, verified single-threaded and parallel — and the inline-transform path
+now runs on the **cheap replacement restyle** (no per-frame selector re-match) via
+the persistent `Stylist`. The Mere flip plan's orrery phase (P1) is unblocked. The
+tests are regression guards pinned to the current stylo rev (572ecba).
