@@ -111,3 +111,29 @@ fn char_code_at_and_code_point_at_on_leading_astral() {
     assert_eq!(eval(r#"String("\u{1F320}X".codePointAt(1))"#), "57120"); // lone low surrogate
     assert_eq!(eval(r#"String("\u{1F320}X".codePointAt(0))"#), "127776"); // 0x1F320 whole scalar
 }
+
+#[test]
+fn search_methods_with_position_args_on_non_ascii() {
+    // The position-taking search methods mapped a UTF-16 position to a WTF-8
+    // byte offset via utf8_index().unwrap() (or, for includes, used the UTF-16
+    // index as a raw byte index). Both panicked: includes/startsWith on any
+    // non-ASCII before the position, and all five when the position bisects a
+    // surrogate pair. utf8_index_ceil/floor clamp out-of-range and round a split
+    // to the adjacent code-point boundary. "\u{1F320}" (🌠) is 2 UTF-16 units;
+    // index 1 bisects it.
+    // indexOf / includes (search forward from pos):
+    assert_eq!(eval(r#"String("\u{1F320}x".indexOf("x", 1))"#), "2");
+    assert_eq!(eval(r#"String("a\u{1F320}b".indexOf("b", 2))"#), "3");
+    assert_eq!(eval(r#"String("\u{1F320}x".indexOf("x", 99))"#), "-1");
+    assert_eq!(eval(r#""\u{1F320}x".includes("x", 1)"#), "true");
+    assert_eq!(eval(r#""café".includes("é", 3)"#), "true"); // non-ASCII, non-surrogate
+    assert_eq!(eval(r#""café".includes("é", 4)"#), "false");
+    // lastIndexOf (backward, match start must stay <= pos -> rounds down):
+    assert_eq!(eval(r#"String("\u{1F320}x".lastIndexOf("x", 1))"#), "-1"); // x at 2 > 1
+    assert_eq!(eval(r#"String("a\u{1F320}a".lastIndexOf("a", 2))"#), "0");
+    assert_eq!(eval(r#"String("ΔΔ".lastIndexOf("x", 1))"#), "-1"); // slice_to mid-char
+    // startsWith / endsWith (non-ASCII clean positions must stay correct):
+    assert_eq!(eval(r#""café".startsWith("é", 3)"#), "true");
+    assert_eq!(eval(r#""café".endsWith("f", 3)"#), "true");
+    assert_eq!(eval(r#""\u{1F320}x".endsWith("\u{1F320}", 2)"#), "true");
+}

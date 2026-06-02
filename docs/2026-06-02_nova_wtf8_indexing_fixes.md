@@ -1,10 +1,11 @@
 # Nova WTF-8 / UTF-16 string-indexing fixes
 
 Status: **landed in the fork (`crates/nova`, branch `serval-embedder`),
-2026-06-02.** Six bugs, all upstream candidates (we are a thin fork; clean to
-contribute). Verified by a serval-side end-to-end regression test
-(`components/script-engine-nova/tests/wtf8_indexing_regression.rs`), nova_vm and
-`small_string` unit tests, the dom/nodes WPT sweep, and a test262
+2026-06-02.** Six numbered bugs plus an audit pass that closed the rest of the
+family (the position-taking search methods), all upstream candidates (we are a
+thin fork; clean to contribute). Verified by a serval-side end-to-end regression
+test (`components/script-engine-nova/tests/wtf8_indexing_regression.rs`), nova_vm
+and `small_string` unit tests, the dom/nodes WPT sweep, and a test262
 String/RegExp pass (results below).
 
 ## Where this came from
@@ -126,6 +127,42 @@ UTF-16->byte map out of bounds (panic in `String::utf8_index`). A non-BMP string
 is needed for the two lengths to differ. Fix: bound by `s.utf16_len_(agent)`, and
 when past the end push the value past the byte length so the existing length
 guard fails the match. Test: `regex_exec_lastindex_past_end_does_not_oob`.
+
+## Closing the family (position-taking search methods)
+
+The six bugs above were the sites the WPT and test262 corpora *reach*. An audit
+of every `utf8_index_` caller (and every UTF-16-index-used-as-byte-offset) across
+the text-processing builtins found a tail of the same defect class that the test
+corpora do not exercise, but ordinary JS does. `"\u{1F320}x".indexOf("x", 1)`
+(and `lastIndexOf` / `includes` / `startsWith` / `endsWith` with a position that
+bisects a surrogate pair) panicked live; `includes` and `startsWith` also indexed
+the lossy UTF-8 string with a raw UTF-16 position, panicking on any non-ASCII
+before the search position (e.g. `"caf\u{e9}".includes("x", 3)`).
+
+These five methods only need a UTF-16 position mapped to a byte offset to bound a
+search region, so they do not need the full `wtf8_substring`. Two helpers cover
+them: `utf8_index_ceil` (clamp to the string, round a surrogate split *up* to the
+boundary after the pair) for the forward-search start of `indexOf`/`includes`/
+`startsWith` and the prefix end of `endsWith`; `utf8_index_floor` (round *down*)
+for `lastIndexOf`, where a match start must stay `<= pos`. `lastIndexOf` also
+byte-slices its upper bound instead of `Wtf8::slice_to`, which panicked when
+`pos + searchLen` landed inside a multi-byte char (`"\u{394}\u{394}".lastIndexOf("x", 1)`).
+
+Rounding is exactly correct for every non-split position (including all
+non-ASCII, the common case) because a search at a clean boundary is unaffected,
+and for a pair-bisecting position because the lone surrogate at the split is not
+byte-addressable in the fused-pair storage, so no normal-text match can begin
+there anyway. The audit also confirmed the remaining `utf8_index_` call sites are
+safe: the regexp `@@replace`/`@@split` spans take positions from regex matches,
+which (after bug 5) are always code-point boundaries; `string_pad` already uses
+`unwrap_or`; `get_substitution` takes a match position.
+
+This pass is verified by direct probe (19 cases: split positions, non-ASCII
+positions, out-of-range, the `slice_to` mid-char case — all correct, none panic)
+and the regression test `search_methods_with_position_args_on_non_ascii`. The
+test262 numbers below are unchanged by it, because the String/RegExp corpus does
+not pass surrogate-bisecting or non-ASCII position arguments to these methods;
+the value here is a closed ordinary-JS panic surface, not a test delta.
 
 ## test262 (built-ins/String + built-ins/RegExp)
 
