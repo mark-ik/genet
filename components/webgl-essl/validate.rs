@@ -49,6 +49,7 @@ fn slot_count_for(ty: TypeKind) -> u32 {
     match ty {
         TypeKind::Bool | TypeKind::Int | TypeKind::Float => 1,
         TypeKind::Vec2 | TypeKind::Vec3 | TypeKind::Vec4 => 1,
+        TypeKind::Bvec2 | TypeKind::Bvec3 | TypeKind::Bvec4 => 1,
         TypeKind::Mat2 => 2,
         TypeKind::Mat3 => 3,
         TypeKind::Mat4 => 4,

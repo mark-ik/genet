@@ -210,9 +210,9 @@ fn is_scalar(ty: TypeKind) -> bool {
 
 fn vec_size(ty: TypeKind) -> Option<u32> {
     match ty {
-        TypeKind::Vec2 => Some(2),
-        TypeKind::Vec3 => Some(3),
-        TypeKind::Vec4 => Some(4),
+        TypeKind::Vec2 | TypeKind::Bvec2 => Some(2),
+        TypeKind::Vec3 | TypeKind::Bvec3 => Some(3),
+        TypeKind::Vec4 | TypeKind::Bvec4 => Some(4),
         _ => None,
     }
 }
@@ -249,11 +249,19 @@ pub(super) fn swizzle_result(base: TypeKind, field: &str) -> Option<TypeKind> {
             return None;
         }
     }
-    match chars.len() {
-        1 => Some(TypeKind::Float),
-        2 => Some(TypeKind::Vec2),
-        3 => Some(TypeKind::Vec3),
-        4 => Some(TypeKind::Vec4),
+    let is_bool_vec = matches!(
+        base,
+        TypeKind::Bvec2 | TypeKind::Bvec3 | TypeKind::Bvec4
+    );
+    match (chars.len(), is_bool_vec) {
+        (1, true) => Some(TypeKind::Bool),
+        (1, false) => Some(TypeKind::Float),
+        (2, true) => Some(TypeKind::Bvec2),
+        (2, false) => Some(TypeKind::Vec2),
+        (3, true) => Some(TypeKind::Bvec3),
+        (3, false) => Some(TypeKind::Vec3),
+        (4, true) => Some(TypeKind::Bvec4),
+        (4, false) => Some(TypeKind::Vec4),
         _ => None,
     }
 }

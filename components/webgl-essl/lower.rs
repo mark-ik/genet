@@ -231,6 +231,9 @@ struct Ctx<'a> {
     type_float: Word,
     type_int: Word,
     type_bool: Word,
+    type_bvec2: Word,
+    type_bvec3: Word,
+    type_bvec4: Word,
     type_vec2: Word,
     type_vec3: Word,
     type_vec4: Word,
@@ -368,6 +371,9 @@ fn build_spirv(
     let type_float = b.type_float(32, None);
     let type_int = b.type_int(32, 1);
     let type_bool = b.type_bool();
+    let type_bvec2 = b.type_vector(type_bool, 2);
+    let type_bvec3 = b.type_vector(type_bool, 3);
+    let type_bvec4 = b.type_vector(type_bool, 4);
     let type_vec2 = b.type_vector(type_float, 2);
     let type_vec3 = b.type_vector(type_float, 3);
     let type_vec4 = b.type_vector(type_float, 4);
@@ -428,6 +434,9 @@ fn build_spirv(
         type_float,
         type_int,
         type_bool,
+        type_bvec2,
+        type_bvec3,
+        type_bvec4,
         type_vec2,
         type_vec3,
         type_vec4,
@@ -1551,6 +1560,84 @@ fn lower_lhs_swizzle_assignment(
     Ok(())
 }
 
+/// Lower ESSL §8.6 vector relational built-ins. Two-arg
+/// comparison ops emit an ordered-float compare with a `bvec`
+/// result; `any` / `all` reduce a `bvec` to a `bool`; `not`
+/// negates a `bvec` component-wise.
+fn lower_vector_relational(
+    ctx: &mut Ctx,
+    callee: &str,
+    args: &[Expr],
+    call_span: Span,
+) -> Result<Word, LoweringError> {
+    let result_kind = ctx.types.get(&call_span).copied().ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("§8.6 `{callee}` has no typecheck result"),
+        }
+    })?;
+    let result_ty = spv_type_for_kind(ctx, result_kind).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("§8.6 `{callee}` returns {result_kind:?} which is not lowered"),
+        }
+    })?;
+    match callee {
+        "lessThan"
+        | "lessThanEqual"
+        | "greaterThan"
+        | "greaterThanEqual"
+        | "equal"
+        | "notEqual" => {
+            if args.len() != 2 {
+                return Err(LoweringError::UnsupportedShape {
+                    what: format!("§8.6 `{callee}` expects 2 args, got {}", args.len()),
+                });
+            }
+            let lhs = lower_expr(ctx, &args[0])?;
+            let rhs = lower_expr(ctx, &args[1])?;
+            let r = match callee {
+                "lessThan" => ctx.b.f_ord_less_than(result_ty, None, lhs, rhs),
+                "lessThanEqual" => {
+                    ctx.b.f_ord_less_than_equal(result_ty, None, lhs, rhs)
+                },
+                "greaterThan" => ctx.b.f_ord_greater_than(result_ty, None, lhs, rhs),
+                "greaterThanEqual" => {
+                    ctx.b.f_ord_greater_than_equal(result_ty, None, lhs, rhs)
+                },
+                "equal" => ctx.b.f_ord_equal(result_ty, None, lhs, rhs),
+                "notEqual" => ctx.b.f_ord_not_equal(result_ty, None, lhs, rhs),
+                _ => unreachable!(),
+            };
+            r.map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
+        },
+        "any" | "all" => {
+            if args.len() != 1 {
+                return Err(LoweringError::UnsupportedShape {
+                    what: format!("§8.6 `{callee}` expects 1 arg, got {}", args.len()),
+                });
+            }
+            let v = lower_expr(ctx, &args[0])?;
+            let r = if callee == "any" {
+                ctx.b.any(result_ty, None, v)
+            } else {
+                ctx.b.all(result_ty, None, v)
+            };
+            r.map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
+        },
+        "not" => {
+            if args.len() != 1 {
+                return Err(LoweringError::UnsupportedShape {
+                    what: format!("`not` expects 1 arg, got {}", args.len()),
+                });
+            }
+            let v = lower_expr(ctx, &args[0])?;
+            ctx.b
+                .logical_not(result_ty, None, v)
+                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
+        },
+        _ => unreachable!(),
+    }
+}
+
 /// Inline ESSL `mod(x, y)` as `x - y * floor(x / y)`. The
 /// GLSL.std.450 `FMod` opcode would be cleaner, but naga's
 /// `spv-in` rejects it with `UnsupportedExtInst(35)`. The
@@ -1649,6 +1736,9 @@ fn spv_type_for_kind(ctx: &Ctx, kind: TypeKind) -> Option<Word> {
         TypeKind::Vec2 => ctx.type_vec2,
         TypeKind::Vec3 => ctx.type_vec3,
         TypeKind::Vec4 => ctx.type_vec4,
+        TypeKind::Bvec2 => ctx.type_bvec2,
+        TypeKind::Bvec3 => ctx.type_bvec3,
+        TypeKind::Bvec4 => ctx.type_bvec4,
         TypeKind::Mat2 => ctx.type_mat2,
         TypeKind::Mat3 => ctx.type_mat3,
         TypeKind::Mat4 => ctx.type_mat4,
@@ -1783,6 +1873,24 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                 // as `x - y * floor(x / y)`, splatting y to vector
                 // width when the overload is `mod(vec_n, float)`.
                 return lower_mod_expansion(ctx, args, *span);
+            }
+            // ESSL §8.6 vector relational. lessThan / equal / etc.
+            // map to ordered-float compares with a bvec result;
+            // any / all reduce a bvec to a bool; not negates a bvec
+            // component-wise.
+            if matches!(
+                callee.as_str(),
+                "lessThan"
+                    | "lessThanEqual"
+                    | "greaterThan"
+                    | "greaterThanEqual"
+                    | "equal"
+                    | "notEqual"
+                    | "any"
+                    | "all"
+                    | "not"
+            ) {
+                return lower_vector_relational(ctx, callee, args, *span);
             }
             if let Some(mut opcode) = builtin_glsl450_opcode(callee) {
                 // `atan(y, x)` (2-arg form) maps to GLSL.std.450
@@ -2024,9 +2132,9 @@ fn lower_swizzle(
         LoweringError::UnsupportedShape { what: "swizzle base type unknown".into() }
     })?;
     let base_size = match base_kind {
-        TypeKind::Vec2 => 2u32,
-        TypeKind::Vec3 => 3,
-        TypeKind::Vec4 => 4,
+        TypeKind::Vec2 | TypeKind::Bvec2 => 2u32,
+        TypeKind::Vec3 | TypeKind::Bvec3 => 3,
+        TypeKind::Vec4 | TypeKind::Bvec4 => 4,
         _ => {
             return Err(LoweringError::UnsupportedShape {
                 what: format!("swizzle on non-vector base type {base_kind:?}"),

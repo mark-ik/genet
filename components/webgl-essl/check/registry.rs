@@ -152,6 +152,30 @@ fn populate(r: &mut Registry) {
         r.register("matrixCompMult", vec![t, t], t);
     }
 
+    // §8.6 Vector relational. Per-component compare/test on
+    // vectors; the result has matching width but element type
+    // Bool (bvec_n).
+    let vec_to_bvec = [(Vec2, Bvec2), (Vec3, Bvec3), (Vec4, Bvec4)];
+    for &(v, bv) in &vec_to_bvec {
+        for name in [
+            "lessThan",
+            "lessThanEqual",
+            "greaterThan",
+            "greaterThanEqual",
+            "equal",
+            "notEqual",
+        ] {
+            r.register(name, vec![v, v], bv);
+        }
+    }
+    // Reduction: any/all collapse a bvec to a scalar bool; not
+    // negates component-wise.
+    for &(_, bv) in &vec_to_bvec {
+        r.register("any", vec![bv], Bool);
+        r.register("all", vec![bv], Bool);
+        r.register("not", vec![bv], bv);
+    }
+
     // §8.7 Texture lookup.
     r.register("texture2D", vec![Sampler2D, Vec2], Vec4);
     r.register("texture2D", vec![Sampler2D, Vec2, Float], Vec4);

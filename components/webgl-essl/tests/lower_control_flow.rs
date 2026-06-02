@@ -288,12 +288,12 @@ void main() {
     assert!(r.wgsl.contains("discard") || r.wgsl.contains("if"));
 }
 
-/// Audit #2: ESSL §8.6 vector relational builtins (`lessThan`)
-/// are an entire untested lane — the lowering's builtin table
-/// covers §8.1-8.4 only. Falls through to the constructor branch
-/// and errors. Pins the missing-lane gap.
+/// HAPPY (resolved). ESSL §8.6 vector relational `lessThan` is
+/// now registered (bvec_n result) and lowered via the
+/// ordered-float compare path. The bvec.x component access then
+/// drives the if condition.
 #[test]
-fn vector_lessthan_as_if_condition_does_not_lower_today() {
+fn vector_lessthan_as_if_condition_lowers() {
     let src = r#"
 precision mediump float;
 uniform vec3 u_v;
@@ -305,11 +305,8 @@ void main() {
     }
 }
 "#;
-    let err = compile(src, ShaderStage::Fragment).unwrap_err();
-    assert!(
-        matches!(err, webgl_essl::CompileError::Lower(_) | webgl_essl::CompileError::Check(_)),
-        "got: {err:?}"
-    );
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("if"));
 }
 
 /// Audit #3: early `return;` from inside an if inside a for body.
