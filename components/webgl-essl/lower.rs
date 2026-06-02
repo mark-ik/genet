@@ -29,8 +29,9 @@ use std::collections::HashMap;
 use rspirv::binary::Assemble;
 use rspirv::dr::{Builder, Module, Operand};
 use rspirv::spirv::{
-    AddressingModel, BuiltIn, Capability, Decoration, ExecutionMode, ExecutionModel,
-    FunctionControl, LoopControl, MemoryModel, SelectionControl, StorageClass, Word,
+    AddressingModel, BuiltIn, Capability, Decoration, Dim, ExecutionMode, ExecutionModel,
+    FunctionControl, ImageFormat, LoopControl, MemoryModel, SelectionControl, StorageClass,
+    Word,
 };
 
 use crate::ast::{
@@ -88,6 +89,10 @@ pub fn lower_to_wgsl(tu: &TranslationUnit, stage: ShaderStage) -> Result<String,
     // have run [`crate::check::check`] separately if they care.
     let types = crate::check::check(tu).types;
     let spirv = build_spirv(tu, stage, &types)?;
+    if std::env::var("WEBGL_ESSL_DUMP_SPIRV").is_ok() {
+        use rspirv::binary::Disassemble;
+        eprintln!("--- SPIR-V ---\n{}\n", spirv.disassemble());
+    }
     let words = spirv.assemble();
     let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
 
@@ -237,6 +242,11 @@ struct Ctx<'a> {
     type_ivec2: Word,
     type_ivec3: Word,
     type_ivec4: Word,
+    type_image_2d: Word,
+    type_image_cube: Word,
+    type_sampler: Word,
+    type_sampled_image_2d: Word,
+    type_sampled_image_cube: Word,
     type_vec2: Word,
     type_vec3: Word,
     type_vec4: Word,
@@ -255,6 +265,9 @@ struct Ctx<'a> {
     /// the per-shader uniform block. Empty when the shader declares
     /// no uniforms.
     uniforms: HashMap<String, UniformBinding>,
+    /// ESSL sampler name -> its OpVariable in UniformConstant
+    /// storage and the matching SPIR-V SampledImage type id.
+    samplers: HashMap<String, SamplerBinding>,
     /// SPIR-V Word for the uniform-block OpVariable (the single struct
     /// holding all uniforms). `None` when the shader has no uniforms.
     uniform_block_var: Option<Word>,
@@ -331,6 +344,26 @@ struct UniformBinding {
     kind: TypeKind,
 }
 
+#[derive(Clone, Copy)]
+struct SamplerBinding {
+    /// `OpVariable` in `UniformConstant` storage for the texture
+    /// (an `OpTypeImage` pointee).
+    image_var: Word,
+    /// `OpVariable` in `UniformConstant` storage for the sampler
+    /// state (an `OpTypeSampler` pointee).
+    sampler_var: Word,
+    /// SPIR-V `OpTypeImage` id — the pointee type of `image_var`.
+    image_type: Word,
+    /// SPIR-V `OpTypeSampledImage` id wrapping `image_type`. The
+    /// `OpSampledImage` instruction at the call site produces a
+    /// value of this type.
+    sampled_image_type: Word,
+    /// ESSL value type (`Sampler2D` or `SamplerCube`). Tracked
+    /// so `texture2D` / `textureCube` dispatch can verify their
+    /// first arg matches.
+    kind: TypeKind,
+}
+
 #[derive(Clone)]
 struct UserFnBinding {
     /// SPIR-V Word for the OpFunction (the callable id).
@@ -391,6 +424,35 @@ fn build_spirv(
     let type_mat3 = b.type_matrix(type_vec3, 3);
     let type_mat4 = b.type_matrix(type_vec4, 4);
 
+    // Texture + sampler types. Naga's spv-in requires the
+    // SPIR-V to declare separate `OpTypeImage` + `OpTypeSampler`
+    // variables (Vulkan-style) and combine them at the call
+    // site via `OpSampledImage`, rather than a single combined
+    // `OpTypeSampledImage` variable.
+    let type_image_2d = b.type_image(
+        type_float,
+        Dim::Dim2D,
+        0,
+        0,
+        0,
+        1,
+        ImageFormat::Unknown,
+        None,
+    );
+    let type_image_cube = b.type_image(
+        type_float,
+        Dim::DimCube,
+        0,
+        0,
+        0,
+        1,
+        ImageFormat::Unknown,
+        None,
+    );
+    let type_sampler = b.type_sampler();
+    let type_sampled_image_2d = b.type_sampled_image(type_image_2d);
+    let type_sampled_image_cube = b.type_sampled_image(type_image_cube);
+
     // Inputs: vertex attributes always; fragment varyings under
     // ShaderStage::Fragment.
     let inputs = register_inputs(&mut b, tu, stage, type_float, type_vec2, type_vec3, type_vec4);
@@ -429,6 +491,20 @@ fn build_spirv(
         type_mat4,
     );
 
+    // Sampler uniforms live in their own `UniformConstant`
+    // storage class — they cannot go inside the Block-decorated
+    // struct. Each ESSL sampler becomes a pair of SPIR-V
+    // variables (image + sampler) decorated with consecutive
+    // bindings starting at 1 (Binding 0 is the uniform block
+    // when present).
+    let samplers = register_samplers(
+        &mut b,
+        tu,
+        type_image_2d,
+        type_image_cube,
+        type_sampler,
+    );
+
     // Primary output variable (gl_FragColor / gl_Position; always
     // vec4 in the cases this module handles).
     let ptr_output = b.type_pointer(None, StorageClass::Output, type_vec4);
@@ -454,6 +530,11 @@ fn build_spirv(
         type_ivec2,
         type_ivec3,
         type_ivec4,
+        type_image_2d,
+        type_image_cube,
+        type_sampler,
+        type_sampled_image_2d,
+        type_sampled_image_cube,
         type_vec2,
         type_vec3,
         type_vec4,
@@ -463,6 +544,7 @@ fn build_spirv(
         inputs,
         outputs,
         uniforms,
+        samplers,
         uniform_block_var,
         int_constants: HashMap::new(),
         user_fns: HashMap::new(),
@@ -502,6 +584,10 @@ fn build_spirv(
     };
     let mut interface: Vec<Word> = ctx.inputs.values().map(|b| b.var).collect();
     interface.extend(ctx.outputs.values().map(|b| b.var));
+    for s in ctx.samplers.values() {
+        interface.push(s.image_var);
+        interface.push(s.sampler_var);
+    }
     interface.push(primary_output);
     ctx.b.entry_point(execution_model, main_fn, "main", interface);
     if stage == ShaderStage::Fragment {
@@ -1356,6 +1442,60 @@ fn stmt_definitely_terminates(s: &Stmt) -> bool {
     }
 }
 
+fn register_samplers(
+    b: &mut Builder,
+    tu: &TranslationUnit,
+    type_image_2d: Word,
+    type_image_cube: Word,
+    type_sampler: Word,
+) -> HashMap<String, SamplerBinding> {
+    let mut samplers = HashMap::new();
+    // Binding 0 is reserved for the uniform Block. Each ESSL
+    // sampler becomes two SPIR-V variables (image + sampler)
+    // with consecutive bindings starting at 1.
+    let mut binding: u32 = 1;
+    let type_sampled_image_2d = b.type_sampled_image(type_image_2d);
+    let type_sampled_image_cube = b.type_sampled_image(type_image_cube);
+    for d in &tu.decls {
+        let ExternalDecl::Global(g) = d else { continue };
+        if g.storage != StorageQualifier::Uniform {
+            continue;
+        }
+        let (image_type, sampled_image_type, kind) = match g.ty.kind {
+            TypeKind::Sampler2D => {
+                (type_image_2d, type_sampled_image_2d, TypeKind::Sampler2D)
+            },
+            TypeKind::SamplerCube => {
+                (type_image_cube, type_sampled_image_cube, TypeKind::SamplerCube)
+            },
+            _ => continue,
+        };
+        let ptr_image = b.type_pointer(None, StorageClass::UniformConstant, image_type);
+        let image_var = b.variable(ptr_image, None, StorageClass::UniformConstant, None);
+        b.decorate(image_var, Decoration::DescriptorSet, [Operand::LiteralBit32(0)]);
+        b.decorate(image_var, Decoration::Binding, [Operand::LiteralBit32(binding)]);
+        binding += 1;
+        let ptr_sampler =
+            b.type_pointer(None, StorageClass::UniformConstant, type_sampler);
+        let sampler_var =
+            b.variable(ptr_sampler, None, StorageClass::UniformConstant, None);
+        b.decorate(sampler_var, Decoration::DescriptorSet, [Operand::LiteralBit32(0)]);
+        b.decorate(sampler_var, Decoration::Binding, [Operand::LiteralBit32(binding)]);
+        binding += 1;
+        samplers.insert(
+            g.name.clone(),
+            SamplerBinding {
+                image_var,
+                sampler_var,
+                image_type,
+                sampled_image_type,
+                kind,
+            },
+        );
+    }
+    samplers
+}
+
 #[allow(clippy::too_many_arguments)]
 fn register_uniforms(
     b: &mut Builder,
@@ -2036,6 +2176,31 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                     .load(pointee, None, var, None, [])
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
             }
+            // Sampler uniforms: load both the image and the
+            // sampler variables, then `OpSampledImage` combines
+            // them into a SampledImage SSA value the texture
+            // built-ins can sample from. Naga's spv-in requires
+            // the combine to happen at the call site rather than
+            // through a combined-image variable load.
+            if let Some(sampler) = ctx.samplers.get(name).copied() {
+                let image_val = ctx
+                    .b
+                    .load(sampler.image_type, None, sampler.image_var, None, [])
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+                let sampler_val = ctx
+                    .b
+                    .load(ctx.type_sampler, None, sampler.sampler_var, None, [])
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+                return ctx
+                    .b
+                    .sampled_image(
+                        sampler.sampled_image_type,
+                        None,
+                        image_val,
+                        sampler_val,
+                    )
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
             if let Some(binding) = ctx.uniforms.get(name) {
                 let pointee = binding.pointee_type;
                 let member_idx = binding.member_index as i32;
@@ -2085,6 +2250,24 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                 // as `x - y * floor(x / y)`, splatting y to vector
                 // width when the overload is `mod(vec_n, float)`.
                 return lower_mod_expansion(ctx, args, *span);
+            }
+            // ESSL §8.7 texture lookup. The 2-arg form maps to
+            // `OpImageSampleImplicitLod`; the 3-arg form (with
+            // a bias) and the Lod variants are queued.
+            if (callee == "texture2D" || callee == "textureCube") && args.len() == 2 {
+                let sampled_image = lower_expr(ctx, &args[0])?;
+                let coord = lower_expr(ctx, &args[1])?;
+                return ctx
+                    .b
+                    .image_sample_implicit_lod(
+                        ctx.type_vec4,
+                        None,
+                        sampled_image,
+                        coord,
+                        None,
+                        [],
+                    )
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
             }
             // ESSL §8.6 vector relational. lessThan / equal / etc.
             // map to ordered-float compares with a bvec result;
