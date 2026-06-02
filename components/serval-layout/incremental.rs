@@ -22,17 +22,21 @@
 use std::hash::Hash;
 
 use layout_dom_api::{DomMutation, LayoutDom};
+use paint_list_api::DeviceIntSize;
 use style::selector_parser::RestyleDamage;
 use style::stylist::Stylist;
 
+use crate::box_tree::BoxTree;
 use crate::cascade::{
     build_stylist, restyle_structural, restyle_with_snapshots, run_cascade_with_stylist,
 };
 use crate::fragment::FragmentPlane;
-use crate::image_decode::ImagePlane;
+use crate::image_decode::{BackgroundImagePlane, ImagePlane};
 use crate::invalidate::{classify, coalesce};
+use crate::paint_emit::{emit_paint_list_with_layouts, ScrollOffsets, ServalPaintList};
 use crate::style::StylePlane;
 use crate::subtree::SubtreeView;
+use crate::text_measure::TextMeasureCtx;
 
 /// What [`IncrementalLayout::apply`] did for a mutation batch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -75,6 +79,18 @@ pub struct IncrementalLayout<Id: Copy + Eq + Hash> {
     /// the old tree is still alive) is a documented follow-up.
     sheets: Vec<String>,
     fragments: FragmentPlane<Id>,
+    /// The box tree + text-measure context from the most recent **full** layout
+    /// (`new` / a relayout). Retained so a host can emit a glyph-bearing paint
+    /// list ([`emit_paint_list`](Self::emit_paint_list)) on the cheap
+    /// `RepaintOnly` path — a transform-only frame keeps box geometry, so these
+    /// stay valid without a relayout.
+    built: BoxTree<Id>,
+    text_ctx: TextMeasureCtx,
+    /// Whether `built` / `text_ctx` still match `fragments`. Set by every full
+    /// layout; cleared by a structural splice (which updates `fragments` but not
+    /// the box-tree side-table). [`emit_paint_list`](Self::emit_paint_list)
+    /// requires it.
+    paint_side_valid: bool,
     width: f32,
     height: f32,
     /// Aggregate `RestyleDamage` from the most recent attribute-only
@@ -99,12 +115,15 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
         let lock = styles.shared_lock().clone();
         let stylist = build_stylist(euclid::Size2D::new(width, height), stylesheets, None, &lock);
         run_cascade_with_stylist(dom, &mut styles, &stylist);
-        let fragments = lay_out(dom, &styles, width, height);
+        let (fragments, built, text_ctx) = full_layout(dom, &styles, width, height);
         Self {
             styles,
             stylist,
             sheets: stylesheets.iter().map(|s| s.to_string()).collect(),
             fragments,
+            built,
+            text_ctx,
+            paint_side_valid: true,
             width,
             height,
             last_damage: RestyleDamage::empty(),
@@ -176,12 +195,56 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
         let outcome = restyle_with_snapshots(dom, &mut self.styles, &self.stylist, mutations);
         self.last_damage = outcome.damage;
         if outcome.needs_relayout {
-            self.fragments = lay_out(dom, &self.styles, self.width, self.height);
+            let (fragments, built, text_ctx) =
+                full_layout(dom, &self.styles, self.width, self.height);
+            self.fragments = fragments;
+            self.built = built;
+            self.text_ctx = text_ctx;
+            self.paint_side_valid = true;
             Applied::Restyled
         } else {
-            // Paint-only: prior fragments are still valid; skip layout.
+            // Paint-only: prior fragments (and box-tree side-table) still valid.
             Applied::RepaintOnly
         }
+    }
+
+    /// Emit a glyph-bearing [`ServalPaintList`] from the current layout — the
+    /// engine-agnostic command stream a host composites or lowers to a scene.
+    /// Valid on the `RepaintOnly` path (a transform-only frame keeps box
+    /// geometry, so the retained box tree + text context still match the
+    /// fragments). Empty image planes, matching the scripted layout path.
+    ///
+    /// Requires the last [`apply`](Self::apply) to have been non-structural (a
+    /// structural splice updates fragments but not the box-tree side-table); the
+    /// pre-materialized-pool host that drives this only ever sends attribute-only
+    /// (transform) batches, so it never trips the assert.
+    pub fn emit_paint_list<D>(
+        &self,
+        dom: &D,
+        scroll_offsets: &ScrollOffsets<Id>,
+        viewport: DeviceIntSize,
+    ) -> ServalPaintList
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        debug_assert!(
+            self.paint_side_valid,
+            "emit_paint_list after a structural splice: the box-tree side-table is \
+             stale (relayout first). Attribute-only hosts never hit this.",
+        );
+        let images = ImagePlane::new();
+        let bg_images = BackgroundImagePlane::new();
+        emit_paint_list_with_layouts(
+            dom,
+            &self.styles,
+            &self.fragments,
+            &self.built,
+            &self.text_ctx,
+            &images,
+            &bg_images,
+            scroll_offsets,
+            viewport,
+        )
     }
 
     /// Structural batch: re-cascade styles (full — structural
@@ -244,6 +307,10 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
             }
         }
         self.fragments = result;
+        // The splice updates fragments but not the box-tree side-table, so a
+        // following emit_paint_list would mismatch — mark it stale (a relayout
+        // re-validates). Attribute-only hosts (the pool) never take this path.
+        self.paint_side_valid = false;
         Applied::Spliced
     }
 
@@ -253,7 +320,11 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
     where
         D: LayoutDom<NodeId = Id>,
     {
-        self.fragments = lay_out(dom, &self.styles, self.width, self.height);
+        let (fragments, built, text_ctx) = full_layout(dom, &self.styles, self.width, self.height);
+        self.fragments = fragments;
+        self.built = built;
+        self.text_ctx = text_ctx;
+        self.paint_side_valid = true;
         Applied::FullRecompute
     }
 }
@@ -273,13 +344,29 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    full_layout(dom, styles, width, height).0
+}
+
+/// Full layout returning all three products — fragments **and** the box tree +
+/// text-measure context the paint-emit pass needs. `lay_out` keeps just the
+/// fragments (the scoped-splice path's need); the session retains the triple so
+/// it can emit without re-laying-out.
+fn full_layout<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    width: f32,
+    height: f32,
+) -> (FragmentPlane<D::NodeId>, BoxTree<D::NodeId>, TextMeasureCtx)
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
     let images = ImagePlane::new();
     let viewport = taffy::Size {
         width: taffy::AvailableSpace::Definite(width),
         height: taffy::AvailableSpace::Definite(height),
     };
-    let (fragments, _tree, _ctx) = crate::layout::layout(dom, styles, &images, viewport);
-    fragments
+    crate::layout::layout(dom, styles, &images, viewport)
 }
 
 #[cfg(test)]
@@ -345,6 +432,52 @@ mod tests {
         assert!((color(&layout, p)[2] - 1.0).abs() < 0.001, "p should be blue after restyle");
         let rect_after = *layout.fragments().rect_of(p).expect("p rect");
         assert_eq!(rect_before, rect_after, "color change must not move the box");
+    }
+
+    /// `emit_paint_list` produces a glyph-bearing list, and keeps producing one
+    /// after a transform-only (`RepaintOnly`) move — the bridge a per-frame
+    /// orrery host rides: emit the moved scene without a relayout.
+    #[test]
+    fn emit_paint_list_survives_a_repaint_only_transform() {
+        use paint_list_api::{PaintCmd, PaintList};
+
+        const SHEET: &[&str] = &["p{width:40px;height:40px}"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.set_attribute(p, attr("style"), "transform: translate(10px, 0px)");
+        dom.append_child(body, p);
+        let text = dom.create_text("hi");
+        dom.append_child(p, text);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let scroll = ScrollOffsets::default();
+        let dev = DeviceIntSize::new(W as i32, H as i32);
+        let has_glyphs = |pl: &ServalPaintList| {
+            pl.commands()
+                .iter()
+                .any(|c| matches!(c, PaintCmd::DrawText(t) if !t.glyphs.is_empty()))
+        };
+
+        assert!(has_glyphs(&layout.emit_paint_list(&dom, &scroll, dev)), "emits text initially");
+
+        // Transform-only change → RepaintOnly; emit must still produce the scene.
+        let _ = drain(&mut dom);
+        dom.set_attribute(p, attr("style"), "transform: translate(90px, 0px)");
+        let muts = drain(&mut dom);
+        assert_eq!(
+            layout.apply(&dom, SHEET, &muts),
+            Applied::RepaintOnly,
+            "a transform-only change is paint-tier",
+        );
+        assert!(
+            has_glyphs(&layout.emit_paint_list(&dom, &scroll, dev)),
+            "emit still produces the glyph-bearing scene after the RepaintOnly move",
+        );
     }
 
     /// A width change: incremental restyle that re-lays-out
