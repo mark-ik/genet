@@ -178,6 +178,19 @@ pub enum WebGlDiagnosticKind {
     ConstInitNotConstant { name: String },
     /// Assignment whose LHS targets a `const`-qualified local.
     ConstAssignment { name: String },
+    /// A non-void user function's body does not end with a
+    /// `return <expr>;`. ESSL §6.4: every path through a non-void
+    /// function must return a value.
+    MissingReturnInNonVoidFunction { name: String },
+    /// `return <expr>;` whose expression type does not match the
+    /// declared return type. ESSL §6.1 forbids implicit conversions.
+    ReturnTypeMismatch { expected: TypeKind, actual: TypeKind },
+    /// Two user function definitions share the same name AND the
+    /// same parameter types. ESSL §6.1.1.
+    FunctionRedefinition { name: String },
+    /// `attribute T x;` declared in a fragment shader. ESSL §4.3.3
+    /// restricts `attribute` to the vertex stage.
+    AttributeInFragmentShader { name: String },
     /// A storage class exceeds its WebGL 1 minimum-guaranteed slot
     /// count. WebGL 1 spec §6.4 fixes:
     /// - attribute: 8 (MAX_VERTEX_ATTRIBS)
@@ -244,6 +257,18 @@ impl WebGlDiagnosticKind {
             },
             WebGlDiagnosticKind::ConstAssignment { name } => {
                 format!("cannot assign to `const` variable `{name}`")
+            },
+            WebGlDiagnosticKind::MissingReturnInNonVoidFunction { name } => {
+                format!("function `{name}` has a non-void return type but its body does not end with a `return`")
+            },
+            WebGlDiagnosticKind::ReturnTypeMismatch { expected, actual } => {
+                format!("`return` expression has type {actual:?}, expected {expected:?}")
+            },
+            WebGlDiagnosticKind::FunctionRedefinition { name } => {
+                format!("function `{name}` is redefined with the same parameter types")
+            },
+            WebGlDiagnosticKind::AttributeInFragmentShader { name } => {
+                format!("`attribute {name}` declared in a fragment shader (attribute is vertex-only per ESSL §4.3.3)")
             },
             WebGlDiagnosticKind::PackingLimitExceeded { class, used, limit } => {
                 format!("too many {class} slots: {used} declared, WebGL minimum is {limit}")
@@ -364,6 +389,28 @@ struct ValidatorVisitor<'tree> {
     /// whose LHS is a `const`-qualified local. ESSL §4.3 forbids
     /// modifying a `const` variable.
     const_assignment_sites: Vec<(Span, String)>,
+    /// (function-def span, name) for non-void user functions whose
+    /// body does not end with a `Stmt::Return`. ESSL §6.4 requires
+    /// every path through a non-void function to return.
+    missing_return_sites: Vec<(Span, String)>,
+    /// Currently-lowering function's return type. Set on
+    /// `visit_function_def` Pre, cleared on Post. R17 uses it to
+    /// gate `return <expr>;` typing inside the body.
+    current_return_ty: Option<TypeKind>,
+    /// (return-stmt span, expected, actual) for `return <expr>;`
+    /// whose expression type does not match the enclosing
+    /// function's declared return type.
+    return_type_mismatch_sites: Vec<(Span, TypeKind, TypeKind)>,
+    /// Map name -> first-seen (param types, span) for user
+    /// function definitions. R18 fires when a second definition
+    /// with the same name and same param types arrives.
+    function_signatures: HashMap<String, (Vec<TypeKind>, Span)>,
+    /// (function-def span, name) for redefined user functions.
+    function_redefinition_sites: Vec<(Span, String)>,
+    /// (global-decl span, name) for `attribute T x;` declared in a
+    /// fragment shader. ESSL §4.3.3 restricts `attribute` to
+    /// vertex shaders only.
+    attribute_in_fragment_sites: Vec<(Span, String)>,
 }
 
 struct DiscardSite<'tree> {
@@ -427,6 +474,12 @@ impl<'tree> ValidatorVisitor<'tree> {
             const_init_not_constant_named: Vec::new(),
             const_locals: HashSet::new(),
             const_assignment_sites: Vec::new(),
+            missing_return_sites: Vec::new(),
+            current_return_ty: None,
+            return_type_mismatch_sites: Vec::new(),
+            function_signatures: HashMap::new(),
+            function_redefinition_sites: Vec::new(),
+            attribute_in_fragment_sites: Vec::new(),
         }
     }
 
@@ -637,6 +690,45 @@ impl<'tree> ValidatorVisitor<'tree> {
             });
         }
 
+        // R16: non-void function whose body does not return on
+        // every path. First-pass: only structural ("last stmt is
+        // Return") — path-completeness is queued.
+        for (span, name) in self.missing_return_sites {
+            result.errors.push(WebGlDiagnostic {
+                severity: Severity::Error,
+                kind: WebGlDiagnosticKind::MissingReturnInNonVoidFunction { name },
+                span: Some(span),
+            });
+        }
+
+        // R17: return expression type must match the declared
+        // return type. ESSL has no implicit conversions.
+        for (span, expected, actual) in self.return_type_mismatch_sites {
+            result.errors.push(WebGlDiagnostic {
+                severity: Severity::Error,
+                kind: WebGlDiagnosticKind::ReturnTypeMismatch { expected, actual },
+                span: Some(span),
+            });
+        }
+
+        // R18: function redefinition with the same parameter types.
+        for (span, name) in self.function_redefinition_sites {
+            result.errors.push(WebGlDiagnostic {
+                severity: Severity::Error,
+                kind: WebGlDiagnosticKind::FunctionRedefinition { name },
+                span: Some(span),
+            });
+        }
+
+        // R19: `attribute` declared in a fragment shader.
+        for (span, name) in self.attribute_in_fragment_sites {
+            result.errors.push(WebGlDiagnostic {
+                severity: Severity::Error,
+                kind: WebGlDiagnosticKind::AttributeInFragmentShader { name },
+                span: Some(span),
+            });
+        }
+
         // R13: WebGL packing limits. Walk the global decls and sum
         // slot counts per storage class, comparing against the
         // stage's minimum-guaranteed limit. Conservative — uses one
@@ -756,9 +848,40 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
                 for p in &fd.params {
                     self.note_reserved_if_any(&p.name, p.span);
                 }
+                // R16: non-void function must end with a return on
+                // every path. First-pass check is purely structural:
+                // the last top-level body stmt must be a Return.
+                // True path-completeness analysis is queued.
+                if fd.return_ty.kind != TypeKind::Void
+                    && !body_definitely_returns(&fd.body.stmts)
+                {
+                    self.missing_return_sites
+                        .push((fd.span, fd.name.clone()));
+                }
+                // R17: track current return type so visit_stmt can
+                // gate `return <expr>;` against it.
+                self.current_return_ty = Some(fd.return_ty.kind);
+                // R18: redefinition. If this name + param types
+                // matches a previously-seen function, fire.
+                if fd.name != "main" {
+                    let param_kinds: Vec<TypeKind> =
+                        fd.params.iter().map(|p| p.ty.kind).collect();
+                    if let Some((existing_kinds, _)) =
+                        self.function_signatures.get(&fd.name)
+                    {
+                        if existing_kinds == &param_kinds {
+                            self.function_redefinition_sites
+                                .push((fd.span, fd.name.clone()));
+                        }
+                    } else {
+                        self.function_signatures
+                            .insert(fd.name.clone(), (param_kinds, fd.span));
+                    }
+                }
             },
             Visit::Post => {
                 self.current_function = None;
+                self.current_return_ty = None;
             },
             Visit::In => {},
         }
@@ -774,6 +897,13 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
                 g.ty.kind,
                 g.precision.is_some(),
             );
+            // R19: `attribute` is vertex-only.
+            if self.stage == ShaderStage::Fragment
+                && g.storage == crate::ast::StorageQualifier::Attribute
+            {
+                self.attribute_in_fragment_sites
+                    .push((g.span, g.name.clone()));
+            }
         }
         Walk::Continue
     }
@@ -877,6 +1007,24 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
                 Stmt::Discard { span } => {
                     if let Some(fname) = self.current_function {
                         self.discard_sites.push(DiscardSite { span: *span, function: fname });
+                    }
+                },
+                Stmt::Return { value: Some(e), span } => {
+                    // R17: return-expression type must match the
+                    // enclosing function's declared return type.
+                    // Skip when the typecheck did not annotate the
+                    // expression (covered elsewhere) or the
+                    // function's return type is Void (a stricter
+                    // rule rejects `return <expr>;` in void, but is
+                    // beyond R17's scope here).
+                    if let (Some(expected), Some(actual)) = (
+                        self.current_return_ty,
+                        self.types.get(&e.span()).copied(),
+                    ) {
+                        if expected != TypeKind::Void && expected != actual {
+                            self.return_type_mismatch_sites
+                                .push((*span, expected, actual));
+                        }
                     }
                 },
                 Stmt::For { span, init, .. } => {
@@ -1098,6 +1246,38 @@ fn depth_of(
     d
 }
 
+// ---------- R16: non-void function must return on every path --------
+
+/// First-pass structural check: the body's last top-level
+/// statement is a `Stmt::Return`, OR the last stmt is a Block
+/// whose last stmt is a Return (recursive), OR the last stmt is
+/// an If with else where BOTH then- and else-stmts definitely
+/// return.
+///
+/// Stops short of full path analysis (would handle e.g. `for { ...
+/// return; }` plus an unreachable fallback, or switch-default
+/// completeness). Conservative: false positives reject some legal
+/// shaders; the receipts pin the boundary so a future widening
+/// flips them.
+fn body_definitely_returns(stmts: &[Stmt]) -> bool {
+    match stmts.last() {
+        Some(s) => stmt_path_returns(s),
+        None => false,
+    }
+}
+
+fn stmt_path_returns(s: &Stmt) -> bool {
+    match s {
+        Stmt::Return { value: Some(_), .. } => true,
+        Stmt::Discard { .. } => true,
+        Stmt::Block(b) => body_definitely_returns(&b.stmts),
+        Stmt::If { then, else_: Some(else_), .. } => {
+            stmt_path_returns(then) && stmt_path_returns(else_)
+        },
+        _ => false,
+    }
+}
+
 // ---------- R14: constant-expression check for `const` inits ---------
 
 /// First-pass acceptance set for an ESSL constant expression: any
@@ -1134,17 +1314,39 @@ fn is_float_family(ty: TypeKind) -> bool {
 
 fn reserved_reason(name: &str) -> Option<&'static str> {
     if name.starts_with("gl_") {
-        Some("starts with `gl_`")
-    } else if name.starts_with("webgl_") {
-        Some("starts with `webgl_`")
-    } else if name.starts_with("_webgl_") {
-        Some("starts with `_webgl_`")
-    } else if name.contains("__") {
-        Some("contains `__`")
-    } else {
-        None
+        return Some("starts with `gl_`");
     }
+    if name.starts_with("webgl_") {
+        return Some("starts with `webgl_`");
+    }
+    if name.starts_with("_webgl_") {
+        return Some("starts with `_webgl_`");
+    }
+    if name.contains("__") {
+        return Some("contains `__`");
+    }
+    if FUTURE_RESERVED.binary_search(&name).is_ok() {
+        return Some("reserved for future use by ESSL §3.6");
+    }
+    None
 }
+
+/// ESSL 1.00 §3.6 future-reserved keyword set. Names a shader is
+/// forbidden from using as identifiers because a future ESSL
+/// version may take them as keywords. Sorted for binary search.
+/// Notes: `switch`, `default`, `case`, `inline`, `noinline` are
+/// reserved in 1.00 but used in 3.00 — the parser handles those
+/// version-gated cases; the validator only flags names that are
+/// reserved in BOTH versions.
+const FUTURE_RESERVED: &[&str] = &[
+    "active", "asm", "cast", "class", "common", "dvec2", "dvec3", "dvec4",
+    "enum", "extern", "external", "fixed", "fvec2", "fvec3", "fvec4", "goto",
+    "half", "hvec2", "hvec3", "hvec4", "input", "interface", "long",
+    "namespace", "output", "packed", "partition", "public", "sampler1D",
+    "sampler1DShadow", "sampler2DRect", "sampler2DRectShadow", "sampler2DShadow",
+    "sampler3D", "sampler3DRect", "short", "sizeof", "static", "superp",
+    "template", "this", "typedef", "union", "unsigned", "using", "volatile",
+];
 
 // ---------- cycle detection (CallDAG-shaped) --------------------------
 
