@@ -24,9 +24,9 @@
 use engine_observables_api::{FragmentQuery, Point};
 use paint_list_api::{ColorF, DeviceIntSize};
 use serval_layout::{
-    BackgroundImagePlane, FragmentPlane, ImagePlane, ScrollOffsets, ServalLaneView, StylePlane,
-    caret_byte_at_point, caret_byte_vertical, caret_rect, emit_paint_list_with_layouts, layout,
-    run_cascade, selection_rects,
+    BackgroundImagePlane, FragmentPlane, ImagePlane, ScrollOffsets, ServalLaneView, ServalPaintList,
+    StylePlane, caret_byte_at_point, caret_byte_vertical, caret_rect, emit_paint_list_with_layouts,
+    layout, run_cascade, selection_rects,
 };
 use serval_scripted_dom::{NodeId, ScriptedDom};
 
@@ -72,6 +72,24 @@ pub fn scene_from_scripted_dom(
     cursor: Option<TextCursor>,
     scroll_offsets: &ScrollOffsets<NodeId>,
 ) -> netrender::Scene {
+    let plist = paint_list_from_scripted_dom(dom, stylesheets, width, height, cursor, scroll_offsets);
+    paint::translate_paint_list(&plist)
+}
+
+/// The same cascade → layout → paint-emit pipeline as [`scene_from_scripted_dom`]
+/// but stopping at the [`ServalPaintList`] — the engine-agnostic command stream,
+/// before it is lowered to a `netrender::Scene`. A host that composites this
+/// document with another producer's paint stream (e.g. the orrery's scene-paint
+/// underlay) wants the list, not a finished scene, so it can merge the two
+/// command streams into one scene via `paint_list_render::composite_paint_layers`.
+pub fn paint_list_from_scripted_dom(
+    dom: &ScriptedDom,
+    stylesheets: &[&str],
+    width: u32,
+    height: u32,
+    cursor: Option<TextCursor>,
+    scroll_offsets: &ScrollOffsets<NodeId>,
+) -> ServalPaintList {
     let mut styles: StylePlane<NodeId> = StylePlane::new();
     run_cascade(
         dom,
@@ -137,7 +155,7 @@ pub fn scene_from_scripted_dom(
         plist.push_fill(thumb_x, thumb_y, SCROLLBAR_WIDTH, thumb_h, SCROLLBAR_COLOR);
     }
 
-    paint::translate_paint_list(&plist)
+    plist
 }
 
 /// The focused field's caret rect in scene coordinates `(x, y, w, h)`, or
