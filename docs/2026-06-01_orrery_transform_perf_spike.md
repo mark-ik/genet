@@ -44,39 +44,76 @@ Source-grounded (pinned stylo): both `transform` and `translate` declare
 (`cascade.rs`), so a transform change is paint-tier. **Transform motion does not
 force reflow.** The central §8 fear is unfounded.
 
-## But: three serval prerequisites for the orrery's *continuous* motion
+## Three serval prerequisites for the orrery's *continuous* motion (all resolved)
 
 The gate above is necessary, not sufficient. The spike surfaced three gaps that
-block the orrery's actual mechanism (mutate each node's transform every frame):
+blocked the orrery's actual mechanism (mutate each node's transform every frame).
+All three are now fixed; the tripwire tests were flipped to assert the corrected
+behaviour and pinned as regression guards.
 
-- **(A) Incremental restyle ignores inline-`style` changes.** Test
-  `inline_style_transform_is_ignored_by_incremental_restyle`: setting
-  `style="transform:…"` registers no paint-tier damage. `snapshot.rs` marks a
-  `style`-attribute change `other_attributes_changed`, which only drives
-  `[attr]`-**selector** invalidation; inline-style re-cascade needs a
-  `RESTYLE_STYLE_ATTRIBUTE` hint serval does not emit on the incremental path. The
-  full `run_cascade` *does* apply inline style (dfe8702), so this is an
-  incremental-path gap, not a parser gap. The orrery moves nodes via inline
-  transform, so this must be wired.
-- **(B) A second sequential `RepaintOnly` `apply()` drops the change.** Test
-  `sequential_repaint_only_applies_drop_the_second_change`: the first transform
-  change registers correctly, but a subsequent one produces no paint-tier damage.
-  Repeated per-frame applies do not re-register — the `RepaintOnly` layout-skip
-  appears to leave stylo's restyle state uncleared for the next pass. Continuous
-  motion via repeated `apply()` (the orrery's pattern) does not work today.
-- **(C) Paint does not apply the CSS transform to painted position.** `paint_emit`
-  uses the taffy `Layout.location` (box-model position) and emits an identity
-  transform; the computed `transform`/`translate` is not folded into a
-  `PushTransform`. So even a correctly-cascaded transform would not visibly move
-  the node. (Source-read; not exercised here — it lives in the paint path, not
-  serval-layout.)
+- **(A) Incremental restyle ignored inline-`style` changes.** Setting
+  `style="transform:…"` registered no paint-tier damage on the incremental path:
+  `snapshot.rs` marks a `style`-attribute change `other_attributes_changed`, which
+  only drives `[attr]`-selector invalidation, and serval emitted no hint to
+  re-apply the inline declaration block. **Fix** (`cascade.rs`,
+  `restyle_with_snapshots`): on a `style`-attribute mutation, force a full
+  re-cascade of the element's subtree (`RestyleHint::restyle_subtree`). The
+  inline-style pass re-parses the (mutated) `style` attribute every cascade, so the
+  re-cascade re-reads it and re-applies it. Tests
+  `inline_style_transform_restyles_repaint_only` (value to value, RepaintOnly +
+  `RECALCULATE_OVERFLOW`) and `inline_transform_first_application_relayouts_then_repaints`
+  (the materialization rule: none to value relayouts once, then value to value is
+  RepaintOnly).
+- **(B) A second sequential `RepaintOnly` `apply()` dropped the change.** The first
+  transform change registered correctly, but a subsequent one produced no
+  paint-tier damage: stylo's `handled_snapshot` bit (per-traversal state) is
+  persisted on the entry across `apply()` calls, so a stale `true` made the
+  invalidator skip the next pass's snapshot. **Fix**: reset `handled_snapshot` to
+  `false` for each attribute-changed element at the start of every incremental
+  pass. Test `sequential_repaint_only_applies_each_re_register` (t1 to t2 to t3,
+  each re-registers).
+- **(C) Paint did not apply the CSS transform to painted position.** `paint_emit`
+  used the taffy `Layout.location` (box-model position) and emitted an identity
+  transform; the computed `transform`/`translate` was never folded into the
+  `PushTransform`. **Fix**: `compute_transform_matrix(styles, id)` reads the
+  element's computed `box` style, builds the `translate` matrix and the `transform`
+  matrix (`to_transform_3d_matrix`), composes them, and the in-flow `PushTransform`
+  carries the result. Test `css_transform_folds_into_pushtransform` (a
+  `transform:translate(40,40)` yields a `PushTransform` whose `m41`/`m42` are ~40;
+  without it, identity).
 
-(A) and (B) are also tripwires: when serval fixes them, the assertions FLIP,
-signalling the orrery's mechanism is unblocked.
+### Memory-safety footgun found + fixed during (A)
+
+The first cut of (A) used stylo's narrower `RESTYLE_STYLE_ATTRIBUTE` replacement
+hint (cheaper: it replaces only the style-attribute level on the element's existing
+rule node rather than re-matching selectors). That **corrupted the heap under
+parallel test execution** (intermittent `STATUS_ACCESS_VIOLATION` /
+`STATUS_HEAP_CORRUPTION`, ~1/3 of full-suite runs; clean single-threaded and clean
+when the inline-style tests were skipped). Root cause: `RESTYLE_STYLE_ATTRIBUTE`
+drives stylo's `CascadeWithReplacements`, which reuses the rule node stored on the
+prior pass's `ElementData` and operates it against `context.stylist.rule_tree()`.
+But `cascade_traverse` builds a **fresh `Stylist` (hence a fresh rule tree) every
+pass**, so the reused node dangles into the previous pass's already-dropped rule
+tree. That is benign single-threaded (the freed allocation is usually still
+intact), but a use-after-free that another thread's allocator can reuse under
+parallel runs. **Resolution**: take the full re-cascade path instead
+(`restyle_subtree`), which builds fresh rule nodes in the current tree, identical to
+what `restyle_structural` already does. Verified: 85/85 single-threaded and 10/10
+parallel full-suite runs clean. Damage classification is unaffected, because
+`RestyleDamage` is `compute_style_difference(old, new)` regardless of the
+match-vs-replace path, so every (A) assertion holds.
+
+The cheaper replacement path is recoverable later by giving `IncrementalLayout` a
+**persistent `Stylist`/rule tree** across passes (mirroring the persistent
+`SharedRwLock` already in `StylePlane`). Recorded as a follow-up optimization, not
+needed for the orrery flip. Until then: **serval-layout tests are correct under
+both modes**, but the rule-tree-lifetime invariant is the kind of footgun worth a
+`--test-threads=1` note if any future replacement-path work reintroduces it.
 
 ## Verdict
 
 Relayout-classification gate: **favorable** (transform is paint-tier; the §8 fear
-is retired). Orrery transform-driven motion: **gated on A + B + C**, all serval-side.
-These are recorded as prerequisites in the Mere flip plan's orrery phase (P1). The
-tests are regression guards pinned to the current stylo rev.
+is retired). Orrery transform-driven motion: **A + B + C all resolved**, all
+serval-side, verified single-threaded and parallel. The Mere flip plan's orrery
+phase (P1) is unblocked. The tests are regression guards pinned to the current
+stylo rev (572ecba).

@@ -448,7 +448,11 @@ pub(crate) fn walk<D>(
         };
         commands.push(PaintCmd::PushTransform(TransformSpec {
             origin: push_origin,
-            transform: LayoutTransform::identity(),
+            // Fold the element's computed CSS transform into its push, so a
+            // `transform: translate(x,y)` moves the painted node (the orrery's
+            // per-frame motion). `origin` is the box-model position; `transform`
+            // is the CSS transform layered on top.
+            transform: compute_transform_matrix(styles, id),
             kind: TransformKind::Standard,
         }));
         child_origin = (origin.0 + l.location.x, origin.1 + l.location.y);
@@ -1184,6 +1188,53 @@ fn box_shadows_of<NodeId: Copy + Eq + std::hash::Hash>(
             inset: sh.inset,
         })
         .collect()
+}
+
+/// Fold the element's computed CSS `transform` + `translate` into a
+/// `LayoutTransform`. Identity when neither is set (the common case). The CSS
+/// used transform applies the `translate` longhand first, then the `transform`
+/// list. v1 resolves a percentage `translate` against a zero reference box —
+/// absolute px (the orrery's `transform:translate(px,px)`) is exact; a
+/// fragment-rect reference box for `%` is a follow-up. `rotate`/`scale` longhands
+/// and 3D (preserve-3d/perspective) are out of scope.
+fn compute_transform_matrix<NodeId: Copy + Eq + std::hash::Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> LayoutTransform {
+    use app_units::Au;
+    use style::values::generics::transform::GenericTranslate as Tr;
+
+    let Some(entry) = styles.get(id) else {
+        return LayoutTransform::identity();
+    };
+    let Some(data) = entry.borrow_data() else {
+        return LayoutTransform::identity();
+    };
+    let box_style = data.styles.primary().get_box();
+
+    // `translate` longhand (the separate `translate:` property).
+    let translate = match &box_style.translate {
+        Tr::None => LayoutTransform::identity(),
+        Tr::Translate(x, y, z) => LayoutTransform::translation(
+            x.to_used_value(Au(0)).to_f32_px(),
+            y.to_used_value(Au(0)).to_f32_px(),
+            z.px(),
+        ),
+    };
+
+    // `transform` list — e.g. `transform: translate(x, y)`, the orrery's path.
+    let transform = box_style
+        .transform
+        .to_transform_3d_matrix(None)
+        .map(|(m, _is_3d)| {
+            LayoutTransform::new(
+                m.m11, m.m12, m.m13, m.m14, m.m21, m.m22, m.m23, m.m24, m.m31, m.m32, m.m33, m.m34,
+                m.m41, m.m42, m.m43, m.m44,
+            )
+        })
+        .unwrap_or_else(|_| LayoutTransform::identity());
+
+    translate.then(&transform)
 }
 
 /// Map Stylo's specified BorderStyle to paint-types BorderStyle.
@@ -2007,5 +2058,60 @@ mod tests {
             })
             .count();
         assert_eq!(p_count, 2, "fixture has two <p> siblings");
+    }
+
+    /// Prereq C (fixed): an element's computed CSS `transform` is folded into its
+    /// `PushTransform`, so `transform: translate(x,y)` moves the painted node.
+    /// Before the fix the push stayed identity and the painted position never moved.
+    #[test]
+    fn css_transform_folds_into_pushtransform() {
+        fn push_transforms(sheet: &[&str]) -> Vec<LayoutTransform> {
+            let document = StaticDocument::parse("<html><body><div></div></body></html>");
+            let mut plane: StylePlane<StaticNodeId> = StylePlane::new();
+            run_cascade(&document, &mut plane, euclid::Size2D::new(800.0, 600.0), sheet, None);
+            let viewport = Size {
+                width: AvailableSpace::Definite(800.0),
+                height: AvailableSpace::Definite(600.0),
+            };
+            let (fragments, built, text_ctx) = layout(&document, &plane, &ImagePlane::new(), viewport);
+            let plist = emit_paint_list_with_layouts(
+                &document,
+                &plane,
+                &fragments,
+                &built,
+                &text_ctx,
+                &ImagePlane::new(),
+                &crate::image_decode::BackgroundImagePlane::new(),
+                &FxHashMap::default(),
+                DeviceIntSize::new(800, 600),
+            );
+            plist
+                .commands()
+                .iter()
+                .filter_map(|c| match c {
+                    PaintCmd::PushTransform(spec) => Some(spec.transform),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        // With `transform: translate(40px,40px)`, the div's push carries it.
+        let with = push_transforms(&[
+            "html,body,div{display:block;width:80px;height:40px}",
+            "div{transform:translate(40px,40px)}",
+        ]);
+        assert!(
+            with.iter().any(|t| (t.m41 - 40.0).abs() < 0.5 && (t.m42 - 40.0).abs() < 0.5),
+            "transform:translate(40,40) must fold into a PushTransform (m41/m42 ≈ 40): {with:?}",
+        );
+
+        // Without a transform, no push translates (box position lives in `origin`,
+        // not the CSS-transform matrix).
+        let without =
+            push_transforms(&["html,body,div{display:block;width:80px;height:40px}"]);
+        assert!(
+            without.iter().all(|t| t.m41.abs() < 0.5 && t.m42.abs() < 0.5),
+            "no CSS transform → no translating push: {without:?}",
+        );
     }
 }

@@ -27,7 +27,7 @@ use servo_arc::Arc;
 use style::data::{ElementDataMut, ElementDataRef, ElementDataWrapper};
 use style::properties::PropertyDeclarationBlock;
 use style::selector_parser::RestyleDamage;
-use style::shared_lock::Locked;
+use style::shared_lock::{Locked, SharedRwLock};
 use stylo_dom::ElementState;
 
 /// Per-node style entry.
@@ -190,12 +190,20 @@ impl std::fmt::Debug for StyleEntry {
 /// `D::NodeId` is dense (per `NodeIdSpace` in the planes doc).
 pub struct StylePlane<NodeId: Copy + Eq + Hash> {
     entries: FxHashMap<NodeId, StyleEntry>,
+    /// One `SharedRwLock` for the lifetime of this plane. Stylesheet contents and
+    /// inline-`style` blocks are wrapped under it, and the cascade reads them
+    /// under guards from it. It MUST be stable across cascade passes: incremental
+    /// restyle reuses persistent `ElementData` rule nodes whose declarations are
+    /// locked under it, so a fresh lock per pass fails Stylo's `same_lock_as` guard
+    /// on the `RESTYLE_STYLE_ATTRIBUTE` (CascadeWithReplacements) path.
+    lock: SharedRwLock,
 }
 
 impl<NodeId: Copy + Eq + Hash> Default for StylePlane<NodeId> {
     fn default() -> Self {
         Self {
             entries: FxHashMap::default(),
+            lock: SharedRwLock::new(),
         }
     }
 }
@@ -203,6 +211,12 @@ impl<NodeId: Copy + Eq + Hash> Default for StylePlane<NodeId> {
 impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The plane's stable `SharedRwLock` (see the field doc). The cascade clones
+    /// it each pass; the clone shares the same underlying lock.
+    pub fn shared_lock(&self) -> &SharedRwLock {
+        &self.lock
     }
 
     pub fn insert(&mut self, id: NodeId, entry: StyleEntry) {

@@ -219,7 +219,9 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash + 'static,
 {
+    use html5ever::local_name;
     use layout_dom_api::DomMutation;
+    use style::invalidation::element::restyle_hints::RestyleHint;
 
     // Clear stale damage so the post-restyle aggregate reflects only what
     // this pass restyled.
@@ -227,13 +229,54 @@ where
 
     let snapshots = crate::snapshot::build_snapshot_map(dom, mutations);
 
-    // Mark the dirty path: for each attribute-changed element, set the
-    // dirty-descendants bit on every ancestor up to the root, so the
-    // traversal descends far enough for the element's parent to process
-    // its snapshot (Stylo processes a child's snapshot while traversing
-    // the parent — see `traversal.rs`). Cell access through `&` entries.
+    // Per attribute-changed element, before the traversal:
+    //
+    // 1. **Reset `handled_snapshot`.** Stylo treats this bit as per-traversal
+    //    state (a snapshot is consumed once), but the entry persists it across
+    //    `apply()` calls. A stale `true` from a prior frame makes the invalidator
+    //    skip this pass's snapshot → no invalidation → no restyle → the change is
+    //    dropped. Clearing it each pass is what makes *repeated* incremental
+    //    restyle work (prereq B).
+    // 2. **Force a full re-cascade of a `style`-attribute change's subtree**
+    //    (`RestyleHint::restyle_subtree`). Snapshot invalidation only covers
+    //    selector-matching attrs (id/class/`[attr]`); an inline-`style` change is
+    //    otherwise never re-applied on the incremental path (the full
+    //    `run_cascade` re-parses inline styles, so this is purely an
+    //    incremental-path gap). Re-cascading self+descendants re-reads the
+    //    element's (re-parsed) inline declaration block (prereq A).
+    //
+    //    NB: we deliberately do NOT use the narrower `RESTYLE_STYLE_ATTRIBUTE`
+    //    replacement hint here, even though it would be cheaper. That hint drives
+    //    Stylo's `CascadeWithReplacements`, which *reuses the rule node stored on
+    //    the prior pass's `ElementData`* and replaces only its style-attribute
+    //    level — against `context.stylist.rule_tree()`. But `cascade_traverse`
+    //    builds a **fresh `Stylist` (and thus a fresh rule tree) every pass**, so
+    //    that reused node points into the *previous* pass's rule tree, which has
+    //    since been dropped — a dangling read/write. Benign single-threaded (the
+    //    freed memory is usually still intact), but heap corruption under parallel
+    //    test execution once another thread reuses the freed allocation. The
+    //    full re-cascade builds fresh rule nodes in the current tree, so it is
+    //    sound — the same path `restyle_structural` takes. (Restoring the cheaper
+    //    replacement path needs a *persistent* Stylist/rule tree across passes,
+    //    mirroring the persistent `SharedRwLock` — a follow-up optimization.)
+    // 3. **Mark the dirty path** on every ancestor so the traversal descends far
+    //    enough for the element's parent to process its snapshot (Stylo processes
+    //    a child's snapshot while traversing the parent — see `traversal.rs`).
+    //
+    // Cell access through `&` entries; the hint needs `mutate_data` (see SAFETY).
     for m in mutations {
-        if let DomMutation::AttributeChanged { node, .. } = m {
+        if let DomMutation::AttributeChanged { node, name, .. } = m {
+            if let Some(entry) = plane.get(*node) {
+                entry.handled_snapshot.set(false);
+                if name.local == local_name!("style") {
+                    // SAFETY: not inside a cascade traversal (single-threaded, no
+                    // live borrow of this entry's `ElementData`) — same invariant
+                    // as `restyle_structural`.
+                    if let Some(mut data) = unsafe { entry.mutate_data() } {
+                        data.hint.insert(RestyleHint::restyle_subtree());
+                    }
+                }
+            }
             let mut cur = dom.parent(*node);
             while let Some(ancestor) = cur {
                 if let Some(entry) = plane.get(ancestor) {
@@ -359,9 +402,16 @@ fn cascade_traverse<D>(
     //    checks scattered through the cascade.
     thread_state::enter(ThreadState::LAYOUT);
 
-    // 2. Lock + guard setup. SharedRwLock is the cross-thread lock for
-    //    stylesheet contents and ElementData.
-    let lock = SharedRwLock::new();
+    // 2. Lock + guard setup. The plane's STABLE SharedRwLock (cloned shares the
+    //    same lock) — not a fresh one per pass. `parse_inline_styles` (below)
+    //    wraps each element's inline declaration block under this lock and stashes
+    //    it on the plane, so the guards the cascade reads them back through must
+    //    come from the *same* lock (else Stylo's `same_lock_as` assertion fires).
+    //    The plane owning one lock for all the `Locked` data it holds keeps that
+    //    invariant trivially, and is the precondition for a future
+    //    persistent-Stylist optimization (rule-node reuse across passes; see the
+    //    `restyle_subtree` note in `restyle_with_snapshots`).
+    let lock = plane.shared_lock().clone();
     let read = lock.read();
     let guards = StylesheetGuards {
         author: &read,
