@@ -359,6 +359,211 @@ void main() {
     assert!(wgsl.contains("mat4x4<f32>"));
 }
 
+// ---------- widening: varyings ---------------------------------------
+
+#[test]
+fn vertex_writes_varying_then_gl_position() {
+    let src = r#"
+attribute vec3 a_position;
+attribute vec3 a_color;
+varying vec3 v_color;
+void main() {
+    v_color = a_color;
+    gl_Position = vec4(a_position, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (vertex varying out) ---\n{wgsl}");
+    // The varying output decoration shows up as @location(0) on a
+    // separate non-builtin output.
+    assert!(wgsl.contains("@vertex"));
+    assert!(wgsl.contains("vec3<f32>"));
+}
+
+#[test]
+fn fragment_reads_varying_input() {
+    let src = r#"
+precision mediump float;
+varying vec3 v_color;
+void main() {
+    gl_FragColor = vec4(v_color, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Fragment)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (fragment varying in) ---\n{wgsl}");
+    // The varying input should show up as @location(0).
+    assert!(wgsl.contains("location(0)"));
+    assert!(wgsl.contains("@fragment"));
+}
+
+// ---------- widening: function calls ---------------------------------
+
+#[test]
+fn user_function_with_single_float_param_lowers() {
+    let src = r#"
+precision mediump float;
+float double_it(float x) { return x * 2.0; }
+void main() {
+    gl_FragColor = vec4(double_it(0.5));
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Fragment)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (user fn double_it) ---\n{wgsl}");
+    assert!(wgsl.contains("double_it") || wgsl.contains("fn function"));
+}
+
+#[test]
+fn user_function_taking_vec_arg_lowers() {
+    let src = r#"
+precision mediump float;
+vec3 brighten(vec3 c) { return c * 1.5; }
+varying vec3 v_color;
+void main() {
+    gl_FragColor = vec4(brighten(v_color), 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Fragment)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (vec arg brighten) ---\n{wgsl}");
+    assert!(wgsl.contains("vec3<f32>"));
+}
+
+#[test]
+fn user_function_with_two_params_lowers() {
+    let src = r#"
+precision mediump float;
+float lerp_scalar(float a, float b) { return a + b; }
+void main() {
+    gl_FragColor = vec4(lerp_scalar(0.25, 0.5));
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Fragment)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (two params) ---\n{wgsl}");
+    assert!(wgsl.contains("@fragment"));
+}
+
+#[test]
+fn user_function_chain_calling_another_user_fn_lowers() {
+    let src = r#"
+precision mediump float;
+float square(float x) { return x * x; }
+float quad(float x) { return square(x) * square(x); }
+void main() {
+    gl_FragColor = vec4(quad(0.5));
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Fragment)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (user fn chain) ---\n{wgsl}");
+    assert!(wgsl.contains("@fragment"));
+}
+
+// ---------- widening: swizzles ----------------------------------------
+
+#[test]
+fn swizzle_single_component_x_lowers() {
+    let src = r#"
+precision mediump float;
+uniform vec4 u_color;
+void main() {
+    gl_FragColor = vec4(u_color.x);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Fragment)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (.x swizzle) ---\n{wgsl}");
+    assert!(wgsl.contains("@fragment"));
+}
+
+#[test]
+fn swizzle_rgb_of_vec4_lowers() {
+    let src = r#"
+precision mediump float;
+uniform vec4 u_tint;
+void main() {
+    gl_FragColor = vec4(u_tint.rgb, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Fragment)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (.rgb swizzle) ---\n{wgsl}");
+    // naga's wgsl-out may render the swizzle as `.xyz` field access
+    // inline rather than as an explicit `vec3<f32>` type construction.
+    // The compile itself succeeding through naga validation is the
+    // primary receipt.
+    assert!(wgsl.contains("@fragment"));
+    assert!(wgsl.contains(".xyz") || wgsl.contains("vec3<f32>"));
+}
+
+#[test]
+fn swizzle_bgra_reorder_lowers() {
+    let src = r#"
+precision mediump float;
+uniform vec4 u_color;
+void main() {
+    gl_FragColor = u_color.bgra;
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Fragment)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (.bgra reorder) ---\n{wgsl}");
+    assert!(wgsl.contains("vec4<f32>"));
+}
+
+#[test]
+fn swizzle_xy_of_vec3_lowers() {
+    let src = r#"
+precision mediump float;
+uniform vec3 u_pos;
+void main() {
+    gl_FragColor = vec4(u_pos.xy, 0.0, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Fragment)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (.xy from vec3) ---\n{wgsl}");
+    assert!(wgsl.contains("@fragment"));
+    assert!(wgsl.contains(".xy") || wgsl.contains("vec2<f32>"));
+}
+
+// ---------- integration: realistic vertex pipeline -------------------
+
+#[test]
+fn realistic_vertex_pipeline_lowers() {
+    // Combines attributes + uniforms + matrix * vec + varying out +
+    // gl_Position. The canonical "real" vertex shader shape.
+    let src = r#"
+uniform mat4 u_mvp;
+attribute vec3 a_position;
+attribute vec3 a_color;
+varying vec3 v_color;
+void main() {
+    v_color = a_color;
+    gl_Position = u_mvp * vec4(a_position, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (realistic vertex pipeline) ---\n{wgsl}");
+    assert!(wgsl.contains("mat4x4<f32>"));
+    assert!(wgsl.contains("@vertex"));
+}
+
 #[test]
 fn multiple_uniforms_in_one_block() {
     let src = r#"

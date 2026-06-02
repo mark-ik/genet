@@ -221,39 +221,6 @@ fn find_main(tu: &TranslationUnit) -> Result<&FunctionDef, LoweringError> {
         .ok_or(LoweringError::NoMain)
 }
 
-fn find_output_assign<'a>(
-    main: &'a FunctionDef,
-    stage: ShaderStage,
-) -> Result<&'a Expr, LoweringError> {
-    let expected = match stage {
-        ShaderStage::Fragment => "gl_FragColor",
-        ShaderStage::Vertex => "gl_Position",
-    };
-    let body_stmt = main.body.stmts.first().ok_or_else(|| LoweringError::UnsupportedShape {
-        what: "main has empty body".into(),
-    })?;
-    let (lhs_name, rhs): (&str, &Expr) = match body_stmt {
-        Stmt::Expr(Expr::Assign { lhs, rhs, .. }) => match lhs.as_ref() {
-            Expr::Ident { name, .. } => (name.as_str(), rhs.as_ref()),
-            _ => {
-                return Err(LoweringError::UnsupportedShape {
-                    what: "main body lhs is not an identifier".into(),
-                });
-            },
-        },
-        _ => {
-            return Err(LoweringError::UnsupportedShape {
-                what: "main body is not a single assignment".into(),
-            });
-        },
-    };
-    if lhs_name != expected {
-        return Err(LoweringError::UnsupportedShape {
-            what: format!("main body assigns to `{lhs_name}`, expected `{expected}` for {stage:?}"),
-        });
-    }
-    Ok(rhs)
-}
 
 // ---------- SPIR-V emission -------------------------------------------
 
@@ -267,10 +234,14 @@ struct Ctx<'a> {
     type_mat2: Word,
     type_mat3: Word,
     type_mat4: Word,
-    /// ESSL identifier name -> Input variable binding. Today this
-    /// holds vertex attributes; fragment varyings would be added the
-    /// same way under the Fragment stage.
+    /// ESSL identifier name -> Input variable binding. Vertex
+    /// attributes always live here; fragment varyings join when
+    /// stage == Fragment.
     inputs: HashMap<String, InputBinding>,
+    /// ESSL identifier name -> Output variable binding. Vertex
+    /// varyings live here when stage == Vertex; fragment shaders use
+    /// the single primary output (gl_FragColor) directly.
+    outputs: HashMap<String, OutputBinding>,
     /// ESSL uniform name -> the member index of that uniform inside
     /// the per-shader uniform block. Empty when the shader declares
     /// no uniforms.
@@ -280,6 +251,12 @@ struct Ctx<'a> {
     uniform_block_var: Option<Word>,
     /// Cached `OpConstant int <i>` words for OpAccessChain indices.
     int_constants: HashMap<i32, Word>,
+    /// User-defined function name -> SPIR-V function id + signature.
+    /// Populated by the pre-pass before main is lowered.
+    user_fns: HashMap<String, UserFnBinding>,
+    /// While lowering a user function's body, parameter names map to
+    /// their OpFunctionParameter Words. Cleared on function exit.
+    fn_params: HashMap<String, FnParamBinding>,
     /// Per-span type annotations from the typecheck pass; used to
     /// dispatch on operand types in binary-op lowering.
     types: &'a HashMap<Span, TypeKind>,
@@ -295,6 +272,11 @@ struct InputBinding {
     kind: TypeKind,
 }
 
+struct OutputBinding {
+    var: Word,
+    kind: TypeKind,
+}
+
 struct UniformBinding {
     /// Zero-based index of this uniform inside the block struct.
     member_index: u32,
@@ -305,13 +287,29 @@ struct UniformBinding {
     kind: TypeKind,
 }
 
+struct UserFnBinding {
+    /// SPIR-V Word for the OpFunction (the callable id).
+    func_id: Word,
+    /// Parameter types in source order.
+    param_types: Vec<TypeKind>,
+    /// Return type.
+    result: TypeKind,
+}
+
+struct FnParamBinding {
+    /// SPIR-V Word for the OpFunctionParameter (the SSA value, not a
+    /// pointer; function-parameter storage is Function class).
+    value_id: Word,
+    /// ESSL value type.
+    kind: TypeKind,
+}
+
 fn build_spirv(
     tu: &TranslationUnit,
     stage: ShaderStage,
     types: &HashMap<Span, TypeKind>,
 ) -> Result<Module, LoweringError> {
     let main = find_main(tu)?;
-    let output_expr = find_output_assign(main, stage)?;
 
     let mut b = Builder::new();
     b.set_version(1, 0);
@@ -324,17 +322,29 @@ fn build_spirv(
     let type_vec2 = b.type_vector(type_float, 2);
     let type_vec3 = b.type_vector(type_float, 3);
     let type_vec4 = b.type_vector(type_float, 4);
-    // Column-major matrices: mat_n = matrix of n column vectors of
-    // size n. OpTypeMatrix takes (column-vector-type, column-count).
     let type_mat2 = b.type_matrix(type_vec2, 2);
     let type_mat3 = b.type_matrix(type_vec3, 3);
     let type_mat4 = b.type_matrix(type_vec4, 4);
 
-    // Register input variables (attributes in vertex stage).
+    // Inputs: vertex attributes always; fragment varyings under
+    // ShaderStage::Fragment.
     let inputs = register_inputs(&mut b, tu, stage, type_float, type_vec2, type_vec3, type_vec4);
 
-    // Register uniforms wrapped in a single Block-decorated struct
-    // (the WebGL / Vulkan convention naga's spv-in understands).
+    // Outputs: under ShaderStage::Vertex, varyings become Output
+    // variables decorated with sequential Locations. Fragment shaders
+    // use the single gl_FragColor output and don't register varyings
+    // here.
+    let outputs = register_varying_outputs(
+        &mut b,
+        tu,
+        stage,
+        type_float,
+        type_vec2,
+        type_vec3,
+        type_vec4,
+    );
+
+    // Uniforms wrapped in a single Block-decorated struct.
     let (uniforms, uniform_block_var) = register_uniforms(
         &mut b,
         tu,
@@ -347,25 +357,18 @@ fn build_spirv(
         type_mat4,
     );
 
-    // Register the output variable (always vec4 in the cases this
-    // module handles).
+    // Primary output variable (gl_FragColor / gl_Position; always
+    // vec4 in the cases this module handles).
     let ptr_output = b.type_pointer(None, StorageClass::Output, type_vec4);
-    let output_var = b.variable(ptr_output, None, StorageClass::Output, None);
+    let primary_output = b.variable(ptr_output, None, StorageClass::Output, None);
     match stage {
         ShaderStage::Vertex => {
-            b.decorate(output_var, Decoration::BuiltIn, [Operand::BuiltIn(BuiltIn::Position)]);
+            b.decorate(primary_output, Decoration::BuiltIn, [Operand::BuiltIn(BuiltIn::Position)]);
         },
         ShaderStage::Fragment => {
-            b.decorate(output_var, Decoration::Location, [Operand::LiteralBit32(0)]);
+            b.decorate(primary_output, Decoration::Location, [Operand::LiteralBit32(0)]);
         },
     }
-
-    // void main() { ... }
-    let fn_type = b.type_function(type_void, []);
-    let main_fn = b
-        .begin_function(type_void, None, FunctionControl::NONE, fn_type)
-        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
-    b.begin_block(None).map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
 
     let mut ctx = Ctx {
         b,
@@ -378,33 +381,253 @@ fn build_spirv(
         type_mat3,
         type_mat4,
         inputs,
+        outputs,
         uniforms,
         uniform_block_var,
         int_constants: HashMap::new(),
+        user_fns: HashMap::new(),
+        fn_params: HashMap::new(),
         types,
     };
-    let value_id = lower_expr(&mut ctx, output_expr)?;
-    ctx.b
-        .store(output_var, value_id, None, [])
+
+    // Emit user function definitions before main, so OpFunctionCall
+    // in main can reference them by id. ESSL allows forward
+    // references; this matches that ordering.
+    emit_user_functions(&mut ctx, tu)?;
+
+    // void main() { ... }
+    let fn_type = ctx.b.type_function(type_void, []);
+    let main_fn = ctx
+        .b
+        .begin_function(type_void, None, FunctionControl::NONE, fn_type)
         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    ctx.b.begin_block(None).map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+
+    lower_main_body(&mut ctx, main, stage, primary_output)?;
     ctx.b.ret().map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
     ctx.b.end_function().map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
 
-    // Entry point: interface includes the output plus every input the
-    // shader actually exposes. Uniforms are not part of the SPIR-V
-    // entry-point interface (they are bound through DescriptorSet).
+    // Entry-point interface: every input and every output variable
+    // the shader exposes. Uniforms are bound via DescriptorSet and
+    // are not in the interface list.
     let execution_model = match stage {
         ShaderStage::Vertex => ExecutionModel::Vertex,
         ShaderStage::Fragment => ExecutionModel::Fragment,
     };
     let mut interface: Vec<Word> = ctx.inputs.values().map(|b| b.var).collect();
-    interface.push(output_var);
+    interface.extend(ctx.outputs.values().map(|b| b.var));
+    interface.push(primary_output);
     ctx.b.entry_point(execution_model, main_fn, "main", interface);
     if stage == ShaderStage::Fragment {
         ctx.b.execution_mode(main_fn, ExecutionMode::OriginUpperLeft, []);
     }
 
     Ok(ctx.b.module())
+}
+
+fn register_varying_outputs(
+    b: &mut Builder,
+    tu: &TranslationUnit,
+    stage: ShaderStage,
+    type_float: Word,
+    type_vec2: Word,
+    type_vec3: Word,
+    type_vec4: Word,
+) -> HashMap<String, OutputBinding> {
+    let mut outputs = HashMap::new();
+    if stage != ShaderStage::Vertex {
+        // Fragment varyings register as inputs; user-defined
+        // fragment outputs are queued (ESSL 3.00).
+        return outputs;
+    }
+    // Start Location at 1 — Location 0 is reserved for the primary
+    // gl_Position output decoration on the BuiltIn slot, but
+    // SPIR-V Output Locations are an independent set from
+    // Input Locations, so we count from 0 for the varying outputs.
+    let mut location: u32 = 0;
+    for d in &tu.decls {
+        let ExternalDecl::Global(g) = d else { continue };
+        if g.storage != StorageQualifier::Varying {
+            continue;
+        }
+        let (pointee_type, kind) = match g.ty.kind {
+            TypeKind::Float => (type_float, TypeKind::Float),
+            TypeKind::Vec2 => (type_vec2, TypeKind::Vec2),
+            TypeKind::Vec3 => (type_vec3, TypeKind::Vec3),
+            TypeKind::Vec4 => (type_vec4, TypeKind::Vec4),
+            _ => continue,
+        };
+        let ptr_ty = b.type_pointer(None, StorageClass::Output, pointee_type);
+        let var = b.variable(ptr_ty, None, StorageClass::Output, None);
+        b.decorate(var, Decoration::Location, [Operand::LiteralBit32(location)]);
+        location += 1;
+        outputs.insert(g.name.clone(), OutputBinding { var, kind });
+    }
+    outputs
+}
+
+fn lower_main_body(
+    ctx: &mut Ctx,
+    main: &FunctionDef,
+    stage: ShaderStage,
+    primary_output: Word,
+) -> Result<(), LoweringError> {
+    let primary_name = match stage {
+        ShaderStage::Vertex => "gl_Position",
+        ShaderStage::Fragment => "gl_FragColor",
+    };
+    for stmt in &main.body.stmts {
+        match stmt {
+            Stmt::Expr(Expr::Assign { lhs, rhs, .. }) => {
+                let target_name = match lhs.as_ref() {
+                    Expr::Ident { name, .. } => name.as_str(),
+                    _ => {
+                        return Err(LoweringError::UnsupportedShape {
+                            what: "main body lhs is not an identifier".into(),
+                        });
+                    },
+                };
+                let value = lower_expr(ctx, rhs)?;
+                if target_name == primary_name {
+                    ctx.b
+                        .store(primary_output, value, None, [])
+                        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+                } else if let Some(out) = ctx.outputs.get(target_name) {
+                    let var = out.var;
+                    ctx.b
+                        .store(var, value, None, [])
+                        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+                } else {
+                    return Err(LoweringError::UnsupportedShape {
+                        what: format!(
+                            "main body assigns to `{target_name}`, expected `{primary_name}` for {stage:?}"
+                        ),
+                    });
+                }
+            },
+            Stmt::Expr(Expr::Call { .. }) => {
+                // Discarded call result (`helper();`). Lower the
+                // call for its side effects.
+                if let Stmt::Expr(call_expr) = stmt {
+                    let _ = lower_expr(ctx, call_expr)?;
+                }
+            },
+            _ => {
+                return Err(LoweringError::UnsupportedShape {
+                    what: "main body statement is not yet lowered".into(),
+                });
+            },
+        }
+    }
+    Ok(())
+}
+
+fn emit_user_functions(ctx: &mut Ctx, tu: &TranslationUnit) -> Result<(), LoweringError> {
+    for d in &tu.decls {
+        let ExternalDecl::Function(f) = d else { continue };
+        if f.name == "main" {
+            continue;
+        }
+        emit_user_function(ctx, f)?;
+    }
+    Ok(())
+}
+
+fn emit_user_function(ctx: &mut Ctx, f: &FunctionDef) -> Result<(), LoweringError> {
+    let return_kind = f.return_ty.kind;
+    let return_ty = match spv_type_for_kind(ctx, return_kind) {
+        Some(t) => t,
+        None => {
+            return Err(LoweringError::UnsupportedShape {
+                what: format!("function `{}` return type {return_kind:?} is not lowered", f.name),
+            });
+        },
+    };
+    // Parameter types must be representable in SPIR-V (no samplers /
+    // structs / matrices yet — float, vec_n only for first widening).
+    let mut param_types_spv: Vec<Word> = Vec::new();
+    let mut param_kinds: Vec<TypeKind> = Vec::new();
+    for p in &f.params {
+        let pt = match spv_type_for_kind(ctx, p.ty.kind) {
+            Some(t) => t,
+            None => {
+                return Err(LoweringError::UnsupportedShape {
+                    what: format!(
+                        "function `{}` parameter `{}` type {:?} is not lowered",
+                        f.name, p.name, p.ty.kind,
+                    ),
+                });
+            },
+        };
+        param_types_spv.push(pt);
+        param_kinds.push(p.ty.kind);
+    }
+
+    let fn_type = ctx.b.type_function(return_ty, param_types_spv.clone());
+    let func_id = ctx
+        .b
+        .begin_function(return_ty, None, FunctionControl::NONE, fn_type)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+
+    // OpFunctionParameter for each param, recording the SSA value id
+    // by name so the body can reference them.
+    let mut fn_params: HashMap<String, FnParamBinding> = HashMap::new();
+    for (p, pt) in f.params.iter().zip(param_types_spv.iter()) {
+        let pid = ctx
+            .b
+            .function_parameter(*pt)
+            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+        fn_params.insert(p.name.clone(), FnParamBinding { value_id: pid, kind: p.ty.kind });
+    }
+
+    ctx.b
+        .begin_block(None)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+
+    // Restrict to function bodies of the shape `return <expr>;` so
+    // the lowering stays simple. Multi-statement function bodies
+    // (locals, control flow) are queued.
+    let return_value = match f.body.stmts.as_slice() {
+        [Stmt::Return { value: Some(e), .. }] => e,
+        [] if return_kind == TypeKind::Void => {
+            // void f() {} — no return needed.
+            ctx.b.ret().map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+            ctx.b
+                .end_function()
+                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+            ctx.user_fns.insert(
+                f.name.clone(),
+                UserFnBinding { func_id, param_types: param_kinds, result: return_kind },
+            );
+            return Ok(());
+        },
+        _ => {
+            return Err(LoweringError::UnsupportedShape {
+                what: format!(
+                    "function `{}` body shape not lowered (only `return <expr>;` is supported)",
+                    f.name
+                ),
+            });
+        },
+    };
+    // Push the function parameters into the Ctx scope, lower the
+    // return expression, emit OpReturnValue, then pop.
+    let saved_params = std::mem::take(&mut ctx.fn_params);
+    ctx.fn_params = fn_params;
+    let value = lower_expr(ctx, return_value)?;
+    ctx.fn_params = saved_params;
+    ctx.b
+        .ret_value(value)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    ctx.b
+        .end_function()
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+
+    ctx.user_fns.insert(
+        f.name.clone(),
+        UserFnBinding { func_id, param_types: param_kinds, result: return_kind },
+    );
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -500,14 +723,23 @@ fn register_inputs(
     type_vec4: Word,
 ) -> HashMap<String, InputBinding> {
     let mut inputs = HashMap::new();
-    if stage != ShaderStage::Vertex {
-        // Fragment varyings / uniforms are queued for a follow-up.
-        return inputs;
-    }
     let mut location: u32 = 0;
     for d in &tu.decls {
         let ExternalDecl::Global(g) = d else { continue };
-        if g.storage != StorageQualifier::Attribute {
+        // Per-stage input filter:
+        //   Vertex stage: `attribute` (ESSL 1.00) + `in` (ESSL 3.00)
+        //   Fragment stage: `varying` (ESSL 1.00) + `in` (ESSL 3.00)
+        let is_input = match stage {
+            ShaderStage::Vertex => matches!(
+                g.storage,
+                StorageQualifier::Attribute | StorageQualifier::In
+            ),
+            ShaderStage::Fragment => matches!(
+                g.storage,
+                StorageQualifier::Varying | StorageQualifier::In
+            ),
+        };
+        if !is_input {
             continue;
         }
         let (pointee_type, kind) = match g.ty.kind {
@@ -515,7 +747,7 @@ fn register_inputs(
             TypeKind::Vec2 => (type_vec2, TypeKind::Vec2),
             TypeKind::Vec3 => (type_vec3, TypeKind::Vec3),
             TypeKind::Vec4 => (type_vec4, TypeKind::Vec4),
-            // Other attribute types (int / ivec / mat) are not exercised
+            // Other input types (int / ivec / mat) are not exercised
             // by today's spike corpus; emit nothing so the expression
             // emitter will error if they are referenced.
             _ => continue,
@@ -588,6 +820,11 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
             Ok(ctx.b.constant_bit32(ctx.type_float, (*value as f32).to_bits()))
         },
         Expr::Ident { name, .. } => {
+            // Function-parameter SSA values shadow everything else
+            // while lowering a user function body.
+            if let Some(p) = ctx.fn_params.get(name) {
+                return Ok(p.value_id);
+            }
             if let Some(binding) = ctx.inputs.get(name) {
                 let pointee = binding.pointee_type;
                 let var = binding.var;
@@ -616,18 +853,47 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
             }
             Err(LoweringError::UnsupportedShape {
-                what: format!("identifier `{name}` is not a registered input or uniform"),
+                what: format!("identifier `{name}` is not a registered input, uniform, or function parameter"),
             })
         },
         Expr::Binary { op, lhs, rhs, span } => lower_binary(ctx, *op, lhs, rhs, *span),
         Expr::Call { callee, args, .. } => {
+            // User-defined function calls dispatch to OpFunctionCall.
+            // Constructor calls (vec2 / vec3 / vec4) flow through the
+            // composite-construct path below.
+            if let Some(user_fn) = ctx.user_fns.get(callee) {
+                let func_id = user_fn.func_id;
+                let result_kind = user_fn.result;
+                let expected_arity = user_fn.param_types.len();
+                if args.len() != expected_arity {
+                    return Err(LoweringError::UnsupportedShape {
+                        what: format!(
+                            "call `{callee}` has {} arg(s) but takes {expected_arity}",
+                            args.len()
+                        ),
+                    });
+                }
+                let mut arg_ids = Vec::with_capacity(args.len());
+                for a in args {
+                    arg_ids.push(lower_expr(ctx, a)?);
+                }
+                let result_ty = spv_type_for_kind(ctx, result_kind).ok_or_else(|| {
+                    LoweringError::UnsupportedShape {
+                        what: format!("call `{callee}` returns {result_kind:?} which is not lowered"),
+                    }
+                })?;
+                return ctx
+                    .b
+                    .function_call(result_ty, None, func_id, arg_ids)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
             let (result_ty, component_count) = match callee.as_str() {
                 "vec2" => (ctx.type_vec2, 2usize),
                 "vec3" => (ctx.type_vec3, 3usize),
                 "vec4" => (ctx.type_vec4, 4usize),
                 other => {
                     return Err(LoweringError::UnsupportedShape {
-                        what: format!("call `{other}` is not lowered yet"),
+                        what: format!("call `{other}` is not a constructor or registered user function"),
                     });
                 },
             };
@@ -659,10 +925,87 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                 .composite_construct(result_ty, None, constituents)
                 .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
         },
+        Expr::Member { base, field, span, .. } => lower_swizzle(ctx, base, field, *span),
         other => Err(LoweringError::UnsupportedShape {
             what: format!("expression shape not lowered: {other:?}"),
         }),
     }
+}
+
+fn lower_swizzle(
+    ctx: &mut Ctx,
+    base: &Expr,
+    field: &str,
+    span: Span,
+) -> Result<Word, LoweringError> {
+    let base_id = lower_expr(ctx, base)?;
+    let base_kind = classify_arg_kind(ctx, base).ok_or_else(|| {
+        LoweringError::UnsupportedShape { what: "swizzle base type unknown".into() }
+    })?;
+    let base_size = match base_kind {
+        TypeKind::Vec2 => 2u32,
+        TypeKind::Vec3 => 3,
+        TypeKind::Vec4 => 4,
+        _ => {
+            return Err(LoweringError::UnsupportedShape {
+                what: format!("swizzle on non-vector base type {base_kind:?}"),
+            });
+        },
+    };
+    let indices = parse_swizzle_indices(field, base_size).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("invalid swizzle `.{field}` on {base_kind:?}"),
+        }
+    })?;
+    let result_kind = ctx.types.get(&span).copied().unwrap_or_else(|| {
+        match indices.len() {
+            1 => TypeKind::Float,
+            2 => TypeKind::Vec2,
+            3 => TypeKind::Vec3,
+            4 => TypeKind::Vec4,
+            _ => TypeKind::Float, // unreachable from parse_swizzle_indices
+        }
+    });
+    let result_ty = spv_type_for_kind(ctx, result_kind).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("swizzle result type {result_kind:?} not lowered"),
+        }
+    })?;
+    if indices.len() == 1 {
+        // Single-component access: OpCompositeExtract result_ty base [idx].
+        ctx.b
+            .composite_extract(result_ty, None, base_id, [indices[0]])
+            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
+    } else {
+        // Multi-component shuffle: OpVectorShuffle result_ty base
+        // base [indices...]. We pass the same base as both operands
+        // since we are picking from one vector.
+        ctx.b
+            .vector_shuffle(result_ty, None, base_id, base_id, indices)
+            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
+    }
+}
+
+fn parse_swizzle_indices(field: &str, base_size: u32) -> Option<Vec<u32>> {
+    if field.is_empty() || field.len() > 4 {
+        return None;
+    }
+    const SETS: [&[char]; 3] = [
+        &['x', 'y', 'z', 'w'],
+        &['r', 'g', 'b', 'a'],
+        &['s', 't', 'p', 'q'],
+    ];
+    let chars: Vec<char> = field.chars().collect();
+    let set = SETS.iter().find(|s| chars.iter().all(|c| s.contains(c)))?;
+    let mut out = Vec::with_capacity(chars.len());
+    for c in &chars {
+        let idx = set.iter().position(|sc| sc == c)? as u32;
+        if idx >= base_size {
+            return None;
+        }
+        out.push(idx);
+    }
+    Some(out)
 }
 
 fn matches_mat_vec(lhs: TypeKind, rhs: TypeKind) -> bool {

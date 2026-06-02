@@ -103,13 +103,14 @@ void main() {
 
 #[test]
 fn lowering_failure_routed_through_CompileError_Lower() {
-    // A shape the lowering does not handle (call to a user function
-    // in main's RHS expression is not yet supported).
+    // A shape the lowering does not handle (local decl in main is
+    // not yet a supported body statement; only assign / call stmts
+    // are).
     let src = r#"
 precision mediump float;
-float helper(float x) { return x * 2.0; }
 void main() {
-    gl_FragColor = vec4(helper(0.5));
+    float t = 0.5;
+    gl_FragColor = vec4(t);
 }
 "#;
     let err = compile(src, ShaderStage::Fragment).unwrap_err();
