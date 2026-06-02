@@ -186,6 +186,7 @@ struct Args {
     subset: String,
     tests_root: String,
     verbose: bool,
+    engine: harness::Engine,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -193,11 +194,17 @@ fn parse_args() -> Result<Args, String> {
     let mut subset = None;
     let mut tests_root = DEFAULT_TESTS_ROOT.to_string();
     let mut verbose = false;
+    let mut engine = harness::Engine::default();
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--tests-root" => {
                 tests_root = it.next().ok_or("--tests-root needs a value")?;
+            }
+            "--engine" => {
+                let v = it.next().ok_or("--engine needs a value (boa | nova)")?;
+                engine = harness::Engine::parse(&v)
+                    .ok_or_else(|| format!("unknown engine: {v} (expected boa | nova)"))?;
             }
             "-v" | "--verbose" => verbose = true,
             "-h" | "--help" => return Err(usage()),
@@ -212,6 +219,7 @@ fn parse_args() -> Result<Args, String> {
         subset: subset.unwrap_or_default(),
         tests_root,
         verbose,
+        engine,
     })
 }
 
@@ -227,6 +235,7 @@ Usage:
 
 Options:
     --tests-root <dir>   tests root (default: tests/wpt)
+    --engine <name>      testharness JS engine: boa (default) | nova
     -v, --verbose        print every test, not just failures
     -h, --help
 
@@ -403,7 +412,7 @@ fn testharness(tests: &[PathBuf], args: &Args) {
 
         let base_dir = path.parent().unwrap_or(tests_root);
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            harness::run_test(&testharness_js, &html, base_dir, tests_root)
+            harness::run_test(&testharness_js, &html, base_dir, tests_root, args.engine)
         }));
         let name = rel(path, &args.tests_root);
 
@@ -448,9 +457,10 @@ fn testharness(tests: &[PathBuf], args: &Args) {
     panic::set_hook(prev);
 
     println!(
-        "\ntestharness: {all_pass} all-pass, {with_fail} with-failures, {errored} errored, \
+        "\ntestharness [{}]: {all_pass} all-pass, {with_fail} with-failures, {errored} errored, \
          {no_results} no-results, {skipped} skipped (of {} files); \
          subtests {sub_passed}/{sub_total} passed",
+        args.engine.label(),
         tests.len(),
     );
 }

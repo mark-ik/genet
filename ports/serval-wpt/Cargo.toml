@@ -36,7 +36,12 @@ image = { workspace = true }
 taffy = { version = "=0.11.0-experimental-cache-fix.3", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "detailed_layout_info"] }
 
 # Phase 3 (testharness): run testharness.js + the test's scripts on the host
-# surface and read results. Boa is the engine (pure Rust, the conformance oracle;
-# Nova's regex engine rejects the harness's surrogate ranges — see the plan doc).
+# surface and read results, with the JS engine selectable via `--engine`
+# (boa | nova). Boa is the pure-Rust conformance oracle; Nova is the native
+# primary. The harness path is generic over `ScriptEngine`; the runtime
+# neutralizes testharness's lone-surrogate scrub regex so Nova's scalar-only
+# regex engine can compile it (see script_runtime_api::neutralize_surrogate_regex).
+script-engine-api = { path = "../../components/script-engine-api" }
 script-runtime-api = { path = "../../components/script-runtime-api" }
 script-engine-boa = { path = "../../components/script-engine-boa" }
+script-engine-nova = { path = "../../components/script-engine-nova" }

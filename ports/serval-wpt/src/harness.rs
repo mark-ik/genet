@@ -22,9 +22,36 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
-use script_engine_boa::BoaEngine;
+use script_engine_api::ScriptEngine;
 use script_runtime_api::{Runtime, TestResult};
 use serval_static_dom::StaticDocument;
+
+/// Which JS engine the testharness runner drives. Boa is the pure-Rust
+/// conformance oracle; Nova is the native primary. Both implement
+/// `ScriptEngine`, so the harness path is generic — this only selects the
+/// monomorphization (`--engine`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Engine {
+    #[default]
+    Boa,
+    Nova,
+}
+
+impl Engine {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "boa" => Some(Engine::Boa),
+            "nova" => Some(Engine::Nova),
+            _ => None,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Engine::Boa => "boa",
+            Engine::Nova => "nova",
+        }
+    }
+}
 
 /// Outcome of running one testharness test.
 pub enum HarnessOutcome {
@@ -44,24 +71,40 @@ pub fn run_test(
     html: &str,
     base_dir: &Path,
     tests_root: &Path,
+    engine: Engine,
 ) -> HarnessOutcome {
     let doc = StaticDocument::parse(html);
     let mut scripts = Vec::new();
     collect_scripts(&doc, doc.document(), base_dir, tests_root, &mut scripts);
     let test_src = scripts.join("\n;\n");
 
-    let mut rt = match Runtime::<BoaEngine>::new() {
+    match engine {
+        Engine::Boa => run_with::<script_engine_boa::BoaEngine>(testharness_js, &test_src, &doc),
+        Engine::Nova => run_with::<script_engine_nova::NovaEngine>(testharness_js, &test_src, &doc),
+    }
+}
+
+/// Engine-generic core: build a `Runtime<E>`, load the test's body as the live
+/// DOM, run the harness, collect results. Each backend implements `ScriptEngine`
+/// (Nova native-primary, Boa pure-Rust oracle), so the only per-engine thing is
+/// the monomorphization chosen by [`run_test`].
+fn run_with<E: ScriptEngine>(
+    testharness_js: &str,
+    test_src: &str,
+    doc: &StaticDocument,
+) -> HarnessOutcome {
+    let mut rt = match Runtime::<E>::new() {
         Ok(rt) => rt,
-        Err(e) => return HarnessOutcome::Threw(format!("runtime init: {e}")),
+        Err(e) => return HarnessOutcome::Threw(format!("runtime init: {e:?}")),
     };
     // The test's body becomes the live DOM, so scripts querying body elements
     // (getElementById / querySelector / document.body) see them.
-    rt.load_dom(&doc);
-    match rt.run_testharness(testharness_js, &test_src) {
+    rt.load_dom(doc);
+    match rt.run_testharness(testharness_js, test_src) {
         Ok(results) => HarnessOutcome::Ran(results),
-        // Boa's `JsError` Display is concise (the Debug form carries a full
-        // backtrace); truncate defensively all the same.
-        Err(e) => HarnessOutcome::Threw(truncate(&format!("{e}"), 200)),
+        // `ScriptEngine::Error` is `Debug`-only; truncate the (sometimes
+        // backtrace-carrying) message defensively.
+        Err(e) => HarnessOutcome::Threw(truncate(&format!("{e:?}"), 200)),
     }
 }
 
@@ -146,6 +189,9 @@ fn truncate(s: &str, max: usize) -> String {
 /// reuse-pool is worth its isolation cost, and which eval dominates.
 pub fn bench(tests_root: &str) {
     use std::time::Instant;
+    // bench is a Boa-specific perf probe (Runtime::new / harness-eval / full run
+    // timings); it doesn't vary by engine, so it names Boa directly.
+    use script_engine_boa::BoaEngine;
     let root = Path::new(tests_root);
     let testharness_js = match fs::read_to_string(root.join("resources/testharness.js")) {
         Ok(s) => s,
@@ -176,7 +222,7 @@ pub fn bench(tests_root: &str) {
                 <script>test(function(){ assert_true(true); }, 'x');</script>";
     let t = Instant::now();
     for _ in 0..n {
-        let _ = run_test(&testharness_js, html, root, root);
+        let _ = run_test(&testharness_js, html, root, root, Engine::Boa);
     }
     let run_ms = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
 

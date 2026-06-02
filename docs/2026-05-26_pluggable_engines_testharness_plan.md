@@ -1,7 +1,9 @@
 # Pluggable engines to testharness-level testing
 
-Status: **plan (2026-05-26).** Scopes the work to run `testharness.js`
-against serval with the JS engine selectable (Nova default, Boa,
+Status: **landed for Boa + Nova (2026-06-02); QuickJS/SpiderMonkey deferred.**
+The WPT testharness runner takes `--engine boa|nova` and produces real WPT
+numbers on both in one binary (see Sequencing 4). Originally scoped to run
+`testharness.js` against serval with the JS engine selectable (Boa, Nova,
 QuickJS, optionally SpiderMonkey). Child of the
 [script engine plan](./2026-05-20_serval_script_engine_plan.md): that
 doc owns the `ScriptEngine` trait, the crate ladder, and the reflector
@@ -221,21 +223,43 @@ lifetime.
    passes on **Boa** (the conformance oracle). On **Nova** it loads and runs
    the DOM/event/microtask paths fine, but the harness's completion step
    (`sanitize_all_unpaired_surrogates`) compiles a regex with lone-surrogate
-   ranges (`[\ud800-\udbff]`) that Nova's regex engine rejects ("not a
-   Unicode scalar value"). JS regex is UTF-16; the engine wants scalar
-   values. This is an upstream Nova gap, not a binding-layer bug — exactly
-   the engine-axis delta the two-axis framing predicts. The Nova results
-   test is `#[ignore]`d with that reason until Nova handles surrogate
-   escapes.
+   ranges (`[\ud800-\udbff]`) that Nova's regex engine (`regress`) rejects
+   ("not a Unicode scalar value"). JS regex is UTF-16; the engine wants
+   scalar values. This is an upstream Nova gap, not a binding-layer bug.
 
-   **Remaining for real WPT numbers:** wire `run_testharness` into WPT
-   runner phase 3 ([wpt runner plan](./2026-05-26_wpt_runner_plan.md)) over
-   real test files, which will need more DOM breadth (attribute reflection
-   for `meta.name`/`content`, `querySelector`, the `Element`/`Text` split)
-   as the suite exercises it.
-4. **Run the same harness through Boa.** The `Backend` dispatch enum
-   (parent plan, Part 1) lets the runner A/B both in one process, making
-   the engine-axis delta observable (parent plan, Part 4, two axes).
+   **Surrogate scrub neutralized (done 2026-06-02).** That one regex is
+   purely cosmetic — `sanitize_unpaired_surrogates` scrubs lone surrogates
+   from test-*name* strings before results cross a UTF-8 transport, which a
+   headless in-process runner never does (it reads `test.name`/`status`
+   directly). `Runtime::run_testharness` now rewrites that single regex
+   literal (unique in the file, verified) to a never-matching char-class
+   pattern (`/[^\s\S]/g` — not `/(?!)/`, which uses look-around Nova also
+   rejects) before eval, via `neutralize_surrogate_regex`. Headless results
+   are byte-identical; the harness now *compiles* on a scalar-only regex
+   engine. Engine-neutral (no-op on Boa). The Nova results test is
+   un-`#[ignore]`d and **passes**.
+
+4. **Run the same harness through Boa *and* Nova (done 2026-06-02).** The
+   WPT runner takes `--engine boa|nova` (Boa default); `harness::run_test`
+   is generic over `ScriptEngine`, dispatching to a `run_with::<E>` core, so
+   the engine is just the monomorphization. The summary line is tagged
+   `testharness [engine]:`. Both backends now produce real WPT numbers in
+   one binary, making the engine-axis delta observable per the two-axis
+   framing.
+
+   **It immediately paid off.** First real divergences found:
+   - `dom/nodes/Element-classList`: **identical** 785/1420 on both — the
+     binding layer is engine-neutral as designed.
+   - `dom/lists`: Boa 115/189 (4 with-failures), Nova 114/187 with **2
+     ERRORED** — `DOMTokenList-stringifier` / `DOMTokenList-value` throw on
+     Nova only. Cause: the *test* code compiles
+     `^\(\)\s*=>\s*(?:{(.*)}\s*|(.*))$` and Nova's `regress` rejects the
+     literal `{` after `(?:` ("repetition operator missing expression") —
+     it mis-reads the brace as a `{n,m}` quantifier. A genuine Nova regex
+     conformance bug, in *test* source (not testharness.js, so not
+     shimmable), surfaced only because Nova can now reach these tests. This
+     is the concrete value of the pluggable runner: real engine bugs become
+     visible + locatable. (Upstream-Nova-fixable; tracked here, not patched.)
 5. **QuickJS / SpiderMonkey** become incremental backend additions when
    wanted, not new harness work.
 

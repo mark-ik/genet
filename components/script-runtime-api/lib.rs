@@ -127,7 +127,7 @@ impl<E: ScriptEngine> Runtime<E> {
         harness_src: &str,
         test_src: &str,
     ) -> Result<Vec<TestResult>, E::Error> {
-        self.engine.eval(harness_src)?;
+        self.engine.eval(&neutralize_surrogate_regex(harness_src))?;
         harness::install_bridge(&mut self.engine)?;
         self.engine.eval(test_src)?;
         self.engine.eval("window.dispatchEvent(new Event('load'));")?;
@@ -143,6 +143,39 @@ impl<E: ScriptEngine> Runtime<E> {
     /// The underlying engine, for callers needing reflectors or raw globals.
     pub fn engine_mut(&mut self) -> &mut E {
         &mut self.engine
+    }
+}
+
+/// testharness.js's `sanitize_unpaired_surrogates` compiles a regex with
+/// lone-surrogate char-class ranges (`[\ud800-\udbff]`) to scrub unpaired
+/// surrogates out of test-*name* strings before results cross a UTF-8
+/// transport. It is purely cosmetic for a headless, in-process runner that
+/// reads `test.name` / `test.status` directly — and it is the one construct
+/// that trips engines whose regex demands Unicode scalar values (Nova's
+/// `regress`: "hexadecimal literal is not a Unicode scalar value"). Boa accepts
+/// it, so this swap is a no-op there.
+///
+/// Replace exactly that one regex literal (unique in the file, verified) with
+/// `/[^\s\S]/g` — a never-matching pattern (no char is both non-whitespace and
+/// non-non-whitespace) — so `String.prototype.replace` becomes an identity
+/// pass. (`/(?!)/` would also never match but uses a negative look-ahead, which
+/// Nova's `regress` likewise rejects; the char-class form avoids both
+/// surrogate ranges and look-around.) Headless results are byte-identical (the
+/// scrub only ever changed lone-surrogate names, which our bridge does not
+/// serialize); the difference is that the harness now *compiles* on a
+/// scalar-value-only regex engine. Engine-neutral, so the eval path needs no
+/// per-backend branch.
+///
+/// Scoped to the literal to stay robust against unrelated harness changes; if a
+/// future testharness.js drops or rewrites it, the `.replace` simply finds no
+/// match and the source is evaluated unchanged.
+fn neutralize_surrogate_regex(harness_src: &str) -> std::borrow::Cow<'_, str> {
+    const SURROGATE_RE: &str =
+        r"/([\ud800-\udbff]+)(?![\udc00-\udfff])|(^|[^\ud800-\udbff])([\udc00-\udfff]+)/g";
+    if harness_src.contains(SURROGATE_RE) {
+        std::borrow::Cow::Owned(harness_src.replacen(SURROGATE_RE, r"/[^\s\S]/g", 1))
+    } else {
+        std::borrow::Cow::Borrowed(harness_src)
     }
 }
 
@@ -622,17 +655,15 @@ mod tests {
         testharness_results::<script_engine_boa::BoaEngine>();
     }
 
-    // Nova's regex engine rejects lone-surrogate ranges (`[\ud800-\udbff]`), which
-    // testharness compiles in `sanitize_all_unpaired_surrogates` during completion
-    // ("regex parse error: hexadecimal literal is not a Unicode scalar value"). This
-    // is an upstream Nova conformance gap (JS regex is UTF-16; the engine wants
-    // scalar values), not a binding-layer issue — the exact cross-backend
-    // engine-axis delta the plan expects, with Boa (the oracle) passing. Un-ignore
-    // when Nova handles surrogate escapes. Loading + DOM/event/microtask paths all
-    // pass on Nova (the other tests); only the harness's completion sanitizer trips.
+    // Nova's regex engine (`regress`) rejects testharness's lone-surrogate scrub
+    // regex (`[\ud800-\udbff]`, "not a Unicode scalar value"). `run_testharness`
+    // neutralizes that one cosmetic regex (see `neutralize_surrogate_regex`), so
+    // Nova now runs the harness to completion and returns results — the same
+    // cross-backend path as Boa. (The scrub only ever touched lone-surrogate test
+    // names, which the headless bridge does not serialize, so results are
+    // unaffected.)
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    #[ignore = "Nova regex engine rejects surrogate ranges in testharness sanitize step"]
     fn testharness_results_on_nova() {
         testharness_results::<script_engine_nova::NovaEngine>();
     }
