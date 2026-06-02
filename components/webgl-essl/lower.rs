@@ -690,14 +690,53 @@ fn lower_stmt(
             }
             Ok(())
         },
-        Stmt::Expr(Expr::Assign { lhs, rhs, .. }) => {
-            // Write-side single-component swizzle: `v.x = expr`,
-            // `v.y = expr`, etc. The first-pass impl only supports
-            // single-component LHS swizzles where the base is an
-            // identifier (a local, an output, or the primary).
-            // Multi-component LHS (`v.xy = vec2(...)`) is queued.
+        Stmt::Expr(Expr::Assign { op, lhs, rhs, span }) => {
+            // LHS-swizzle paths (single + multi component) only
+            // support plain `=`. Compound assign on a swizzled
+            // LHS is queued — it would need load-modify-store on
+            // the access-chain.
             if let Expr::Member { base, field, .. } = lhs.as_ref() {
+                if *op != AssignOp::Assign {
+                    return Err(LoweringError::UnsupportedShape {
+                        what: format!(
+                            "compound assignment `{op:?}` on a swizzled LHS is not lowered"
+                        ),
+                    });
+                }
                 return lower_lhs_swizzle_assignment(ctx, base, field, rhs, main_ctx);
+            }
+            // Compound assigns on an Ident LHS desugar to the
+            // matching binary op then store back. ESSL §5.8 forbids
+            // compound writes to write-only outputs / varyings, so
+            // the target must be a function-scope local.
+            if *op != AssignOp::Assign {
+                let bin_op = match op {
+                    AssignOp::AddAssign => BinOp::Add,
+                    AssignOp::SubAssign => BinOp::Sub,
+                    AssignOp::MulAssign => BinOp::Mul,
+                    AssignOp::DivAssign => BinOp::Div,
+                    AssignOp::Assign => unreachable!(),
+                };
+                let new_value = lower_binary(ctx, bin_op, lhs, rhs, *span)?;
+                let name = match lhs.as_ref() {
+                    Expr::Ident { name, .. } => name.as_str(),
+                    _ => {
+                        return Err(LoweringError::UnsupportedShape {
+                            what: "compound assignment lhs must be an identifier".into(),
+                        });
+                    },
+                };
+                if let Some(local) = lookup_local(ctx, name) {
+                    ctx.b
+                        .store(local.var, new_value, None, [])
+                        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+                    return Ok(());
+                }
+                return Err(LoweringError::UnsupportedShape {
+                    what: format!(
+                        "compound assignment target `{name}` is not a writable local"
+                    ),
+                });
             }
             let target_name = match lhs.as_ref() {
                 Expr::Ident { name, .. } => name.as_str(),
@@ -2020,6 +2059,44 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
         },
         Expr::Member { base, field, span, .. } => lower_swizzle(ctx, base, field, *span),
         Expr::Unary { op, expr, .. } => lower_unary(ctx, *op, expr),
+        Expr::Assign { op, lhs, rhs, span } => {
+            // Expression-context assignment (e.g., a for-step
+            // `i += 1`). The new value is both stored back to the
+            // local and returned as the expression's result. Only
+            // Ident-LHS is supported here; the Stmt::Expr(Assign)
+            // arm handles assignments to outputs and the primary.
+            let new_value = if *op == AssignOp::Assign {
+                lower_expr(ctx, rhs)?
+            } else {
+                let bin_op = match op {
+                    AssignOp::AddAssign => BinOp::Add,
+                    AssignOp::SubAssign => BinOp::Sub,
+                    AssignOp::MulAssign => BinOp::Mul,
+                    AssignOp::DivAssign => BinOp::Div,
+                    AssignOp::Assign => unreachable!(),
+                };
+                lower_binary(ctx, bin_op, lhs, rhs, *span)?
+            };
+            let name = match lhs.as_ref() {
+                Expr::Ident { name, .. } => name.as_str(),
+                _ => {
+                    return Err(LoweringError::UnsupportedShape {
+                        what: "expression-context assignment lhs must be an identifier".into(),
+                    });
+                },
+            };
+            let local = lookup_local(ctx, name).ok_or_else(|| {
+                LoweringError::UnsupportedShape {
+                    what: format!(
+                        "expression-context assignment target `{name}` is not a writable local"
+                    ),
+                }
+            })?;
+            ctx.b
+                .store(local.var, new_value, None, [])
+                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+            Ok(new_value)
+        },
         other => Err(LoweringError::UnsupportedShape {
             what: format!("expression shape not lowered: {other:?}"),
         }),

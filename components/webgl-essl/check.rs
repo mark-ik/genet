@@ -418,20 +418,35 @@ impl<'tree> Visitor<'tree> for TypeChecker {
                         }
                     }
                 },
-                Expr::Assign { lhs, rhs, span, .. } => {
-                    // Result of an assignment is the LHS's type; mismatch
-                    // is a diagnostic, but we still annotate so callers
-                    // get a type to carry on with.
+                Expr::Assign { op, lhs, rhs, span } => {
+                    // Result of an assignment is the LHS's type.
+                    // For compound assigns, the effective rhs is
+                    // `binary_result(lhs, <op>, rhs)` — so
+                    // `vec3 *= float` is legal because
+                    // `binary_result(Vec3, Mul, Float) == Vec3`.
                     let lt = self.types.get(&lhs.span()).copied();
                     let rt = self.types.get(&rhs.span()).copied();
                     if let Some(lt) = lt {
                         self.types.insert(*span, lt);
                         if let Some(rt) = rt {
-                            if lt != rt {
-                                self.diagnostics.push(TypeDiagnostic {
-                                    kind: TypeDiagnosticKind::AssignTypeMismatch { lhs: lt, rhs: rt },
-                                    span: *span,
-                                });
+                            let effective_rhs = match op {
+                                AssignOp::Assign => Some(rt),
+                                AssignOp::AddAssign => binary_result(BinOp::Add, lt, rt),
+                                AssignOp::SubAssign => binary_result(BinOp::Sub, lt, rt),
+                                AssignOp::MulAssign => binary_result(BinOp::Mul, lt, rt),
+                                AssignOp::DivAssign => binary_result(BinOp::Div, lt, rt),
+                            };
+                            match effective_rhs {
+                                Some(eff) if eff == lt => {},
+                                _ => {
+                                    self.diagnostics.push(TypeDiagnostic {
+                                        kind: TypeDiagnosticKind::AssignTypeMismatch {
+                                            lhs: lt,
+                                            rhs: rt,
+                                        },
+                                        span: *span,
+                                    });
+                                },
                             }
                         }
                     }
