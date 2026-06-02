@@ -14,7 +14,7 @@ use webgl_essl::validate::{ShaderStage, WebGlDiagnosticKind, validate};
 
 fn validate_src(src: &str, stage: ShaderStage) -> webgl_essl::validate::ValidationResult {
     let tu = parse_source(src).unwrap_or_else(|e| panic!("parse: {}", e.display(src)));
-    validate(&tu, stage)
+    validate(&tu, src, stage)
 }
 
 fn precision_missing(r: &webgl_essl::validate::ValidationResult) -> Vec<(String, TypeKind)> {

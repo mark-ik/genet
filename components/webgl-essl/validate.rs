@@ -46,10 +46,16 @@ pub enum ShaderStage {
 /// Run the validator over a parsed translation unit, producing the
 /// diagnostic shape WebGL implementations return through
 /// `getShaderInfoLog`.
-pub fn validate(tu: &TranslationUnit, stage: ShaderStage) -> ValidationResult {
+///
+/// `source` is the original ESSL text the translation unit was parsed
+/// from; it is consulted only to resolve diagnostic spans into 1-based
+/// line numbers for the `ERROR: 0:<line>: ...` info-log shape. Passing
+/// an empty string is valid and produces lines with `0:0:` line markers
+/// (the previous behavior before this seam was widened).
+pub fn validate(tu: &TranslationUnit, source: &str, stage: ShaderStage) -> ValidationResult {
     let mut v = ValidatorVisitor::new(stage);
     walk_translation_unit(&mut v, tu);
-    v.finalize(tu)
+    v.finalize(tu, source)
 }
 
 #[derive(Debug, Default)]
@@ -275,7 +281,7 @@ impl<'tree> ValidatorVisitor<'tree> {
         self.precision_missing.push((span, name.to_string(), ty));
     }
 
-    fn finalize(self, src: &TranslationUnit) -> ValidationResult {
+    fn finalize(self, src: &TranslationUnit, source_text: &str) -> ValidationResult {
         let mut result = ValidationResult::default();
 
         // R1: No recursion. Restrict the call graph to user-defined
@@ -390,8 +396,8 @@ impl<'tree> ValidatorVisitor<'tree> {
         }
 
         // Render info_log. ANGLE / Chrome shape: one line per
-        // error / warning, errors first, then warnings.
-        let source_text = "";
+        // error / warning, errors first, then warnings. Source text
+        // resolves spans to 1-based line numbers.
         let mut lines: Vec<String> = result
             .errors
             .iter()
