@@ -256,6 +256,7 @@ where
     let damage = plane.aggregate_damage();
     RestyleOutcome {
         needs_relayout: damage.contains(RestyleDamage::RELAYOUT),
+        damage,
     }
 }
 
@@ -267,6 +268,12 @@ pub struct RestyleOutcome {
     /// `false` for a paint-only change (the prior `FragmentPlane` is
     /// still valid — skip layout, just re-emit paint).
     pub needs_relayout: bool,
+    /// The aggregate `RestyleDamage` union across every element restyled this
+    /// batch. `needs_relayout` is `damage.contains(RELAYOUT)`; the full union
+    /// lets a caller confirm *which* paint-tier bits were seen — e.g. that a
+    /// `transform` change registered `RECALCULATE_OVERFLOW` rather than being a
+    /// silent no-op that would also produce a (misleading) repaint-only result.
+    pub damage: RestyleDamage,
 }
 
 /// Partial cascade for a **structural** change: re-cascade only the

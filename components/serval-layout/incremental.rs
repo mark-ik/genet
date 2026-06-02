@@ -22,6 +22,7 @@
 use std::hash::Hash;
 
 use layout_dom_api::{DomMutation, LayoutDom};
+use style::selector_parser::RestyleDamage;
 
 use crate::cascade::{restyle_structural, restyle_with_snapshots, run_cascade};
 use crate::fragment::FragmentPlane;
@@ -57,6 +58,11 @@ pub struct IncrementalLayout<Id: Copy + Eq + Hash> {
     fragments: FragmentPlane<Id>,
     width: f32,
     height: f32,
+    /// Aggregate `RestyleDamage` from the most recent attribute-only
+    /// [`apply`](Self::apply). Lets callers/tests confirm which paint-tier bits
+    /// a batch produced (e.g. a transform-only motion frame registers
+    /// `RECALCULATE_OVERFLOW` without `RELAYOUT`). `empty()` before any restyle.
+    last_damage: RestyleDamage,
 }
 
 impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
@@ -68,12 +74,19 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
         let mut styles = StylePlane::new();
         run_cascade(dom, &mut styles, euclid::Size2D::new(width, height), stylesheets, None);
         let fragments = lay_out(dom, &styles, width, height);
-        Self { styles, fragments, width, height }
+        Self { styles, fragments, width, height, last_damage: RestyleDamage::empty() }
     }
 
     /// The current per-node fragment plane.
     pub fn fragments(&self) -> &FragmentPlane<Id> {
         &self.fragments
+    }
+
+    /// The aggregate `RestyleDamage` from the most recent attribute-only
+    /// [`apply`](Self::apply) (`empty()` before any, and unchanged by a
+    /// structural batch, which takes the cascade-from-scratch path).
+    pub fn last_damage(&self) -> RestyleDamage {
+        self.last_damage
     }
 
     /// Apply a drained mutation batch, updating styles (and fragments
@@ -114,6 +127,7 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
             stylesheets,
             mutations,
         );
+        self.last_damage = outcome.damage;
         if outcome.needs_relayout {
             self.fragments = lay_out(dom, &self.styles, self.width, self.height);
             Applied::Restyled
@@ -473,4 +487,194 @@ mod tests {
             );
         }
     }
+
+    // ── Orrery transform-motion perf spike (mere flip plan P0 / serval-as-host §8) ──
+    //
+    // §8's gate: does moving a node by its CSS transform land on the RepaintOnly
+    // path (layout skipped), not full_relayout, at orrery scale?
+    //
+    // What these tests establish:
+    //  • The relayout WORRY is unfounded — a transform value change is paint-tier
+    //    (`RECALCULATE_OVERFLOW` < `RELAYOUT`) → `Applied::RepaintOnly`, no reflow,
+    //    box geometry untouched, at N up to 1000. Proven on the CLASS path, which
+    //    serval's incremental restyle handles today.
+    //  • FINDING (tripwire): the orrery's *intended* mechanism — mutate each node's
+    //    inline `style="transform:…"` every frame — is NOT yet picked up by the
+    //    incremental restyle. A `style`-attribute change registers no damage
+    //    (snapshot.rs marks it `other_attributes_changed`, which only drives
+    //    `[attr]`-SELECTOR invalidation; inline-style re-cascade needs a
+    //    `RESTYLE_STYLE_ATTRIBUTE` hint serval doesn't emit on the incremental
+    //    path — the full `run_cascade` does apply it, dfe8702). So the gate's core
+    //    fear is retired, but the orrery's continuous inline-transform motion has
+    //    two serval prerequisites recorded in the flip plan P0.
+
+    type NodeId = <ScriptedDom as LayoutDom>::NodeId;
+
+    /// N `div.<classes>` nodes under `<body>`.
+    fn build_nodes(n: usize, classes: &str) -> (ScriptedDom, Vec<NodeId>) {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let mut nodes = Vec::with_capacity(n);
+        for _ in 0..n {
+            let node = dom.create_element(html("div"));
+            dom.set_attribute(node, attr("class"), classes);
+            dom.append_child(body, node);
+            nodes.push(node);
+        }
+        (dom, nodes)
+    }
+
+    /// `.t0..t4` differ ONLY in the translate value, so each class swap diffs to a
+    /// transform-only change (`RECALCULATE_OVERFLOW`); `.n` fixes the box. The gate
+    /// test swaps *forward* through distinct values (never back to a prior one):
+    /// on the class path, returning to a previously-applied class value does not
+    /// re-register damage (stylo class-based style sharing). That is a class-path
+    /// artifact, not the §8 question — the orrery's motion path is inline-style
+    /// (see the tripwire test) — so the gate uses fresh values each frame.
+    const T_SHEET: &[&str] = &[
+        ".n{position:absolute;width:80px;height:40px}",
+        ".t0{transform:translate(10px,10px)}",
+        ".t1{transform:translate(40px,40px)}",
+        ".t2{transform:translate(70px,20px)}",
+        ".t3{transform:translate(25px,90px)}",
+        ".t4{transform:translate(55px,5px)}",
+    ];
+
+    /// THE GATE (relayout classification — the §8 core question). A transform
+    /// value change is paint-tier: `apply()` returns `RepaintOnly` (layout
+    /// skipped), the damage is `RECALCULATE_OVERFLOW` without `RELAYOUT`, and box
+    /// geometry is untouched — at orrery scale (N up to 1000). So transform motion
+    /// does NOT force reflow, retiring the central worry. (One change per node; a
+    /// *sequence* of changes hits a separate incremental-restyle limitation — see
+    /// `sequential_repaint_only_applies_drop_the_second_change`.)
+    #[test]
+    fn transform_change_is_repaint_only_not_relayout() {
+        for n in [200usize, 1000] {
+            let (mut dom, nodes) = build_nodes(n, "n t0");
+            let mut layout = IncrementalLayout::new(&dom, T_SHEET, W, H);
+            let sizes0: Vec<_> =
+                nodes.iter().map(|&node| layout.fragments().rect_of(node).unwrap().size).collect();
+            let _ = drain(&mut dom);
+
+            for &node in &nodes {
+                dom.set_attribute(node, attr("class"), "n t1"); // t0 → t1: a transform-only diff
+            }
+            let muts = drain(&mut dom);
+            let applied = layout.apply(&dom, T_SHEET, &muts);
+            assert_eq!(applied, Applied::RepaintOnly, "N={n}: transform change must skip layout");
+            assert!(
+                layout.last_damage().contains(RestyleDamage::RECALCULATE_OVERFLOW),
+                "N={n}: transform must register paint-tier damage",
+            );
+            assert!(
+                !layout.last_damage().contains(RestyleDamage::RELAYOUT),
+                "N={n}: transform must NOT force relayout",
+            );
+            for (&node, size0) in nodes.iter().zip(&sizes0) {
+                let now = layout.fragments().rect_of(node).unwrap().size;
+                assert!(
+                    (now.width - size0.width).abs() < 0.5 && (now.height - size0.height).abs() < 0.5,
+                    "N={n}: transform must not resize the box",
+                );
+            }
+        }
+    }
+
+    /// FINDING / TRIPWIRE: a SECOND `apply()` after a `RepaintOnly` does not
+    /// re-register the change — the first transform change is correctly
+    /// `RepaintOnly` + `RECALCULATE_OVERFLOW`, but a subsequent transform change
+    /// produces no paint-tier damage. So continuous per-frame motion via repeated
+    /// `apply()` (the orrery's pattern) does not work on the current incremental
+    /// path: the `RepaintOnly` layout-skip appears to leave stylo's restyle state
+    /// uncleared for the next pass. A serval incremental-restyle prerequisite for
+    /// the orrery, recorded in flip plan P0. When fixed, this assertion FLIPS.
+    #[test]
+    fn sequential_repaint_only_applies_drop_the_second_change() {
+        let (mut dom, nodes) = build_nodes(4, "n t0");
+        let mut layout = IncrementalLayout::new(&dom, T_SHEET, W, H);
+        let _ = drain(&mut dom);
+
+        // First transform change (t0 → t1): registers correctly.
+        for &node in &nodes {
+            dom.set_attribute(node, attr("class"), "n t1");
+        }
+        let muts = drain(&mut dom);
+        assert_eq!(layout.apply(&dom, T_SHEET, &muts), Applied::RepaintOnly);
+        assert!(
+            layout.last_damage().contains(RestyleDamage::RECALCULATE_OVERFLOW),
+            "first transform change registers paint-tier damage",
+        );
+
+        // Second transform change (t1 → t2): currently dropped (the finding).
+        for &node in &nodes {
+            dom.set_attribute(node, attr("class"), "n t2");
+        }
+        let muts = drain(&mut dom);
+        let applied = layout.apply(&dom, T_SHEET, &muts);
+        assert_eq!(applied, Applied::RepaintOnly, "second apply still takes the attribute-only path");
+        assert!(
+            !layout.last_damage().contains(RestyleDamage::RECALCULATE_OVERFLOW),
+            "KNOWN GAP: the second sequential apply drops the change. If this now fails, \
+             serval fixed repeated incremental restyle — a prerequisite for continuous motion",
+        );
+    }
+
+    /// CONTROL: a width change (also class-driven) IS layout-affecting → relayouts.
+    /// Proves the harness can see the bad case (false-negative guard for the gate).
+    #[test]
+    fn width_change_relayouts_control() {
+        const SHEET: &[&str] =
+            &[".n{position:absolute;height:40px}.w0{width:50px}.w1{width:200px}"];
+        let (mut dom, nodes) = build_nodes(8, "n w0");
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let _ = drain(&mut dom);
+
+        for &node in &nodes {
+            dom.set_attribute(node, attr("class"), "n w1");
+        }
+        let muts = drain(&mut dom);
+        let applied = layout.apply(&dom, SHEET, &muts);
+        assert_eq!(applied, Applied::Restyled, "width change must relayout (harness sees the bad case)");
+        assert!(layout.last_damage().contains(RestyleDamage::RELAYOUT), "width must register RELAYOUT");
+    }
+
+    /// FINDING / TRIPWIRE: the orrery's intended mechanism — mutate each node's
+    /// inline `style="transform:translate(x,y)"` — is currently IGNORED by the
+    /// incremental restyle. The `style`-attribute change registers no transform
+    /// damage, so `apply()` returns `RepaintOnly` for a no-op reason (the change
+    /// was never seen), not because a moved node cheaply repainted.
+    ///
+    /// When serval wires inline-style-attribute changes into the snapshot
+    /// invalidator (a `RESTYLE_STYLE_ATTRIBUTE` hint), this assertion FLIPS — the
+    /// signal that the orrery's continuous inline-transform motion is viable;
+    /// update this test + flip plan P0/P1 then. (The full `run_cascade` DOES apply
+    /// inline style — dfe8702 — so this is an incremental-path gap, not a parser gap.)
+    #[test]
+    fn inline_style_transform_is_ignored_by_incremental_restyle() {
+        const SHEET: &[&str] = &[".n{position:absolute;width:80px;height:40px}"];
+        let (mut dom, nodes) = build_nodes(1, "n");
+        let node = nodes[0];
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let _ = drain(&mut dom);
+
+        dom.set_attribute(node, attr("style"), "transform:translate(40px,40px)");
+        let muts = drain(&mut dom);
+        let applied = layout.apply(&dom, SHEET, &muts);
+
+        assert_eq!(applied, Applied::RepaintOnly, "style-attr change takes the attribute-only path");
+        assert!(
+            !layout.last_damage().contains(RestyleDamage::RECALCULATE_OVERFLOW),
+            "KNOWN GAP: inline-style transform is not picked up incrementally. If this \
+             now fails, serval wired style-attr invalidation — update the orrery + flip plan",
+        );
+    }
+
+    // (Per-frame timing at scale is deferred: it is premature until the
+    // continuous-motion prerequisites above are met — repeated incremental
+    // applies dropping subsequent changes, and inline-style not invalidating —
+    // since a timing loop today would measure no-op restyles after the first.)
 }
