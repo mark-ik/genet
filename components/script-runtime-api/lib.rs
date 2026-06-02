@@ -218,24 +218,74 @@ const EVENT_LOOP_BOOTSTRAP: &str = r#"
 /// per target keyed by type; `dispatchEvent` calls them synchronously over a copy.
 const EVENT_TARGET_BOOTSTRAP: &str = r#"
 (function() {
+  // Shared EventTarget. Listeners are stored as `{cb, once, passive}` records,
+  // keyed by phase ('c:'/'b:' + type) — the same model Node uses in dom.rs, so
+  // window and DOM nodes share one listener shape and one firing helper
+  // (`__fire`). window has no DOM children, so its own `dispatchEvent` is a
+  // target-only dispatch; Node (dom.rs) overrides dispatchEvent with the full
+  // capture → target → bubble walk and reuses `__fire` per node (including
+  // window at the top of the propagation path). See
+  // docs/2026-06-01_event_model_convergence_plan.md.
+  function eventOpts(arg) {
+    if (arg && typeof arg === 'object') {
+      return { capture: !!arg.capture, once: !!arg.once, passive: !!arg.passive };
+    }
+    return { capture: !!arg, once: false, passive: false };
+  }
   function EventTarget() { this.__listeners = {}; }
-  EventTarget.prototype.addEventListener = function(type, cb) {
+  EventTarget.prototype.addEventListener = function(type, cb, opts) {
     if (typeof cb !== 'function') return;
-    if (!this.__listeners[type]) this.__listeners[type] = [];
-    this.__listeners[type].push(cb);
+    if (!this.__listeners) this.__listeners = {};
+    var o = eventOpts(opts);
+    var key = (o.capture ? 'c:' : 'b:') + type;
+    var l = this.__listeners[key] || (this.__listeners[key] = []);
+    for (var i = 0; i < l.length; i++) { if (l[i].cb === cb) return; }
+    l.push({ cb: cb, once: o.once, passive: o.passive });
   };
-  EventTarget.prototype.removeEventListener = function(type, cb) {
-    var l = this.__listeners[type];
+  EventTarget.prototype.removeEventListener = function(type, cb, opts) {
+    if (!this.__listeners) return;
+    var o = eventOpts(opts);
+    var l = this.__listeners[(o.capture ? 'c:' : 'b:') + type];
     if (!l) return;
-    var i = l.indexOf(cb);
-    if (i !== -1) l.splice(i, 1);
+    for (var i = 0; i < l.length; i++) {
+      if (l[i].cb === cb) { l.splice(i, 1); return; }
+    }
+  };
+  // Fire one node's listeners for `key` ('c:'/'b:' + type). Honors once (remove
+  // before call), passive (preventDefault no-op via __inPassive), and
+  // stopImmediatePropagation (halts the rest of this node's listeners). Shared
+  // by window's dispatchEvent here and Node's propagation walk in dom.rs.
+  EventTarget.prototype.__fire = function(event, key) {
+    if (!this.__listeners) return;
+    var l = this.__listeners[key];
+    if (!l) return;
+    event.currentTarget = this;
+    var copy = l.slice();
+    for (var i = 0; i < copy.length && !event.__stopImmediate; i++) {
+      var rec = copy[i];
+      if (rec.once) { var j = l.indexOf(rec); if (j !== -1) l.splice(j, 1); }
+      event.__inPassive = rec.passive;
+      rec.cb.call(this, event);
+      event.__inPassive = false;
+    }
   };
   EventTarget.prototype.dispatchEvent = function(event) {
-    var l = this.__listeners[event.type];
-    if (l) {
-      var copy = l.slice();
-      for (var i = 0; i < copy.length; i++) { copy[i].call(this, event); }
+    if (event.__initialized === false || event.__dispatch) {
+      throw new DOMException("The event is not initialized or is being dispatched.", "InvalidStateError");
     }
+    // window is a leaf target (no DOM tree): target phase only — capture- then
+    // bubble-registered listeners on this target, with the dispatch flags set.
+    event.__dispatch = true;
+    event.target = this;
+    event.srcElement = this;
+    event.__stop = false;
+    event.__stopImmediate = false;
+    event.eventPhase = 2; // AT_TARGET
+    this.__fire(event, 'c:' + event.type);
+    if (!event.__stop) { this.__fire(event, 'b:' + event.type); }
+    event.__dispatch = false;
+    event.currentTarget = null;
+    event.eventPhase = 0;
     return !event.__canceled;
   };
   globalThis.EventTarget = EventTarget;

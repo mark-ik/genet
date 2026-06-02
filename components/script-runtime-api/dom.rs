@@ -1250,9 +1250,17 @@ const DOM_BOOTSTRAP: &str = r#"
     var path = [];
     var n = this;
     while (n) { path.push(n); n = n.parentNode; }
+    // window sits above the document in the propagation path (DOM: the event
+    // path's root is the Window for a node in a document). window shares the
+    // EventTarget listener-record shape, so `fire` handles it like any node.
+    // Appended only when the chain reaches the document (a connected node), so
+    // detached subtrees don't spuriously route to window.
+    if (path.length && path[path.length - 1].nodeType === 9 && globalThis.window) {
+      path.push(globalThis.window);
+    }
     event.target = this;
     event.srcElement = this; // legacy alias for target
-    event.__path = path;     // composedPath() (no shadow DOM: target → root)
+    event.__path = path;     // composedPath() (no shadow DOM: target → root + window)
     event.__stop = false;
     event.__stopImmediate = false;
     // eventPhase constants: NONE 0, CAPTURING 1, AT_TARGET 2, BUBBLING 3.
@@ -2342,6 +2350,99 @@ mod tests {
             rt.host().borrow().console,
             vec!["INPUT", "prevented:true", "src:true"]
         );
+    }
+
+    /// Probe for the Event-dispatch-bubble-canceled shape: the test builds
+    /// `[window, document, html, body, table, tbody, tr, td]` and calls
+    /// addEventListener on each — failing with "cannot convert null to object"
+    /// if any is null. Pins which of window / documentElement / body / a
+    /// table-descendant is missing.
+    fn event_target_chain_resolves<E: ScriptEngine>() {
+        use serval_static_dom::StaticDocument;
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.load_dom(&StaticDocument::parse(
+            "<html><body><table id=t style=\"display:none\"><tbody id=tb>\
+             <tr id=r><td id=td>x</td></tr></tbody></table></body></html>",
+        ));
+        rt.eval(
+            "function tag(n){ return n ? n.tagName : 'NULL'; }\
+             console.log('win:' + (window ? 'ok' : 'NULL'));\
+             console.log('doc:' + (document ? 'ok' : 'NULL'));\
+             console.log('html:' + tag(document.documentElement));\
+             console.log('body:' + tag(document.body));\
+             console.log('table:' + tag(document.getElementById('t')));\
+             console.log('tbody:' + tag(document.getElementById('tb')));\
+             console.log('tr:' + tag(document.getElementById('r')));\
+             console.log('td:' + tag(document.getElementById('td')));",
+        )
+        .expect("chain probe");
+        // Whatever resolves vs NULL tells us the gap; assert the ones we expect to
+        // work today and surface the rest.
+        let log = rt.host().borrow().console.clone();
+        assert_eq!(log[0], "win:ok", "window is an EventTarget");
+        assert_eq!(log[1], "doc:ok");
+        assert_eq!(log[2], "html:HTML", "documentElement resolves");
+        assert_eq!(log[3], "body:BODY", "body resolves");
+        assert_eq!(log[4], "table:TABLE", "table resolves (display:none kept)");
+        assert_eq!(log[5], "tbody:TBODY", "tbody resolves");
+        assert_eq!(log[6], "tr:TR", "tr resolves");
+        assert_eq!(log[7], "td:TD", "td resolves");
+    }
+
+    #[test]
+    fn event_target_chain_resolves_on_boa() {
+        event_target_chain_resolves::<script_engine_boa::BoaEngine>();
+    }
+
+    /// Minimal repro of Event-dispatch-bubble-canceled: register a listener on
+    /// window + a target via the bool-capture form, set cancelBubble before
+    /// dispatch, and confirm propagation is halted (window's listener does not
+    /// fire) without throwing.
+    fn cancel_bubble_before_dispatch<E: ScriptEngine>() {
+        use serval_static_dom::StaticDocument;
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.load_dom(&StaticDocument::parse("<html><body><div id=d>x</div></body></html>"));
+        rt.eval(
+            "var fired = [];\
+             var d = document.getElementById('d');\
+             function h(e){ fired.push(e.currentTarget === window ? 'window' : 'node'); }\
+             window.addEventListener('foo', h, true);\
+             window.addEventListener('foo', h, false);\
+             d.addEventListener('foo', h, true);\
+             d.addEventListener('foo', h, false);\
+             var evt = document.createEvent('Event');\
+             evt.initEvent('foo', true, true);\
+             evt.cancelBubble = true;\
+             d.dispatchEvent(evt);\
+             console.log('fired:' + fired.join(','));",
+        )
+        .expect("cancel-bubble repro");
+        // cancelBubble=true before dispatch stops propagation: the capture walk
+        // from window down is halted, so at most the target's own listeners run
+        // (the spec stops *after* the current target). Key point: no throw, and
+        // window (an ancestor) is not reached.
+        let log = rt.host().borrow().console.clone();
+        assert!(
+            !log[0].contains("window"),
+            "cancelBubble before dispatch must not reach window (got {})", log[0]
+        );
+    }
+
+    #[test]
+    fn cancel_bubble_before_dispatch_on_boa() {
+        cancel_bubble_before_dispatch::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn event_target_chain_resolves_on_nova() {
+        event_target_chain_resolves::<script_engine_nova::NovaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn cancel_bubble_before_dispatch_on_nova() {
+        cancel_bubble_before_dispatch::<script_engine_nova::NovaEngine>();
     }
 
     /// The Element surface, against any backend: prototype split (`instanceof
