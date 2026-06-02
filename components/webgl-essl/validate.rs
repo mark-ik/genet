@@ -105,6 +105,13 @@ pub enum WebGlDiagnosticKind {
     /// implementation. Names beginning with `gl_`, `webgl_`,
     /// `_webgl_`, or containing `__` are reserved (ESSL 1.00 §3.7).
     ReservedIdentifier { name: String, reason: &'static str },
+    /// Expression has more AST nodes than the per-expression complexity
+    /// cap allows. Mirrors ANGLE's `limitExpressionComplexity`
+    /// `CompileOptions` flag; the default cap is hardcoded today.
+    ExpressionTooComplex { count: usize, limit: usize },
+    /// Call chain reachable from a user function exceeds the call
+    /// stack depth cap. Mirrors ANGLE's `limitCallStackDepth` flag.
+    CallStackTooDeep { depth: usize, limit: usize },
 }
 
 impl WebGlDiagnosticKind {
@@ -128,9 +135,21 @@ impl WebGlDiagnosticKind {
             WebGlDiagnosticKind::ReservedIdentifier { name, reason } => {
                 format!("identifier `{name}` is reserved ({reason})")
             },
+            WebGlDiagnosticKind::ExpressionTooComplex { count, limit } => {
+                format!("expression too complex: {count} nodes (limit {limit})")
+            },
+            WebGlDiagnosticKind::CallStackTooDeep { depth, limit } => {
+                format!("call stack too deep: {depth} (limit {limit})")
+            },
         }
     }
 }
+
+/// Per-expression AST node count cap (matches ANGLE's default).
+const MAX_EXPR_COMPLEXITY: usize = 256;
+/// Maximum reachable call-chain depth from any user function
+/// (matches ANGLE's default).
+const MAX_CALL_STACK_DEPTH: usize = 16;
 
 impl WebGlDiagnostic {
     /// Render in the standard `ERROR: 0:<line>: <message>` shape WebGL
@@ -175,6 +194,15 @@ struct ValidatorVisitor<'tree> {
     for_loop_violations: Vec<(Span, &'static str)>,
     /// (span where declared, name, reason it is reserved).
     reserved_identifiers: Vec<(Span, String, &'static str)>,
+    /// Recursion depth inside `visit_expr`. When this is 0 on Pre, we
+    /// know we are looking at a top-level expression (statement-expr,
+    /// decl init, control-flow cond / step, function call arg from a
+    /// statement, ...) and can count its full node tree against the
+    /// per-expression cap.
+    expr_depth: usize,
+    /// (top-level expr span, total AST node count) for any expression
+    /// exceeding the per-expression complexity cap.
+    expr_too_complex: Vec<(Span, usize)>,
 }
 
 struct DiscardSite<'tree> {
@@ -197,6 +225,8 @@ impl<'tree> ValidatorVisitor<'tree> {
             main_info: None,
             for_loop_violations: Vec::new(),
             reserved_identifiers: Vec::new(),
+            expr_depth: 0,
+            expr_too_complex: Vec::new(),
         }
     }
 
@@ -280,6 +310,35 @@ impl<'tree> ValidatorVisitor<'tree> {
             });
         }
 
+        // R6: Per-expression complexity cap.
+        for (span, count) in self.expr_too_complex {
+            result.errors.push(WebGlDiagnostic {
+                severity: Severity::Error,
+                kind: WebGlDiagnosticKind::ExpressionTooComplex {
+                    count,
+                    limit: MAX_EXPR_COMPLEXITY,
+                },
+                span: Some(span),
+            });
+        }
+
+        // R7: Call stack depth cap. Computed on the user-function
+        // subgraph. Only meaningful when no R1 cycle was detected
+        // (cycles produce infinite depth, but R1 already flagged them).
+        if cycles_were_empty(&result) {
+            let depth = longest_user_call_depth(&self.call_graph, &user_fns);
+            if depth > MAX_CALL_STACK_DEPTH {
+                result.errors.push(WebGlDiagnostic {
+                    severity: Severity::Error,
+                    kind: WebGlDiagnosticKind::CallStackTooDeep {
+                        depth,
+                        limit: MAX_CALL_STACK_DEPTH,
+                    },
+                    span: None,
+                });
+            }
+        }
+
         // Render info_log. ANGLE / Chrome shape: one line per
         // error / warning, errors first, then warnings.
         let source_text = "";
@@ -337,15 +396,31 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
     }
 
     fn visit_expr(&mut self, e: &'tree Expr, visit: Visit) -> Walk {
-        if visit == Visit::Pre {
-            if let Expr::Call { callee, .. } = e {
-                if let Some(caller) = self.current_function {
-                    self.call_graph
-                        .entry(caller.to_string())
-                        .or_default()
-                        .insert(callee.clone());
+        match visit {
+            Visit::Pre => {
+                // Top-level expression: count its full AST node tree
+                // against the per-expression complexity cap before
+                // descending.
+                if self.expr_depth == 0 {
+                    let count = count_expr_nodes(e);
+                    if count > MAX_EXPR_COMPLEXITY {
+                        self.expr_too_complex.push((e.span(), count));
+                    }
                 }
-            }
+                self.expr_depth += 1;
+                if let Expr::Call { callee, .. } = e {
+                    if let Some(caller) = self.current_function {
+                        self.call_graph
+                            .entry(caller.to_string())
+                            .or_default()
+                            .insert(callee.clone());
+                    }
+                }
+            },
+            Visit::Post => {
+                self.expr_depth -= 1;
+            },
+            Visit::In => {},
         }
         Walk::Continue
     }
@@ -458,6 +533,72 @@ fn check_for_appendix_a(stmt: &Stmt) -> Option<&'static str> {
     }
 
     None
+}
+
+// ---------- R6: Per-expression AST node count -------------------------
+
+fn count_expr_nodes(e: &Expr) -> usize {
+    1 + match e {
+        Expr::IntLit { .. }
+        | Expr::FloatLit { .. }
+        | Expr::BoolLit { .. }
+        | Expr::Ident { .. } => 0,
+        Expr::Binary { lhs, rhs, .. } | Expr::Assign { lhs, rhs, .. } => {
+            count_expr_nodes(lhs) + count_expr_nodes(rhs)
+        },
+        Expr::Unary { expr, .. } => count_expr_nodes(expr),
+        Expr::Member { base, .. } => count_expr_nodes(base),
+        Expr::Index { base, index, .. } => count_expr_nodes(base) + count_expr_nodes(index),
+        Expr::Ternary { cond, then, else_, .. } => {
+            count_expr_nodes(cond) + count_expr_nodes(then) + count_expr_nodes(else_)
+        },
+        Expr::Call { args, .. } => args.iter().map(count_expr_nodes).sum::<usize>(),
+    }
+}
+
+// ---------- R7: Longest call chain over user functions -----------------
+
+fn cycles_were_empty(r: &ValidationResult) -> bool {
+    !r.errors
+        .iter()
+        .any(|d| matches!(d.kind, WebGlDiagnosticKind::Recursion { .. }))
+}
+
+fn longest_user_call_depth(
+    graph: &HashMap<String, HashSet<String>>,
+    user_fns: &HashSet<String>,
+) -> usize {
+    let mut memo: HashMap<String, usize> = HashMap::new();
+    let mut max_depth = 0;
+    for n in user_fns {
+        let d = depth_of(n, graph, user_fns, &mut memo);
+        max_depth = max_depth.max(d);
+    }
+    max_depth
+}
+
+fn depth_of(
+    node: &str,
+    graph: &HashMap<String, HashSet<String>>,
+    user_fns: &HashSet<String>,
+    memo: &mut HashMap<String, usize>,
+) -> usize {
+    if let Some(&d) = memo.get(node) {
+        return d;
+    }
+    let mut best_child = 0usize;
+    if let Some(callees) = graph.get(node) {
+        let snapshot: Vec<String> = callees.iter().cloned().collect();
+        for c in snapshot {
+            if user_fns.contains(&c) {
+                let d = depth_of(&c, graph, user_fns, memo);
+                best_child = best_child.max(d);
+            }
+        }
+    }
+    let d = 1 + best_child;
+    memo.insert(node.to_string(), d);
+    d
 }
 
 // ---------- R5: Reserved identifier prefix check ----------------------
