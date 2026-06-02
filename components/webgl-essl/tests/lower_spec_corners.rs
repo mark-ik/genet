@@ -18,13 +18,21 @@ use webgl_essl::{CompileError, compile};
 
 // ---------- varying widening corners ----------------------------------
 
-/// SPEC-GAP. ESSL 1.00 §4.3.5 allows `mat4` varyings, but
-/// `register_varying_outputs` only handles float / vec_n. The mat4
-/// silently doesn't register, so the assignment to `v_xform` then
-/// fails the lowering with the "expected gl_Position" diagnostic
-/// shape (the misleading-diagnostic pin from the audit).
+/// SPEC-CONFORMANT-BUT-NAGA-REJECTS. ESSL 1.00 §4.3.5 allows
+/// `mat4` varyings. The lowering now registers matrix Outputs
+/// in `register_varying_outputs` (one Location per column), so
+/// the SPIR-V it emits is valid — but naga's WGSL pipeline
+/// rejects matrices as standalone I/O variables with
+/// `NotIOShareableType`, because WGSL requires them inside an
+/// interface block. Closing the gap fully needs either column-
+/// splitting at the lowering layer or a Block-decorated struct
+/// output; queued separately. The receipt pins that:
+///   1. The lowering itself no longer surfaces the misleading
+///      "expected `gl_Position`" diagnostic, and
+///   2. The failure now happens at the naga-validate stage with
+///      a clear "not I/O shareable" error.
 #[test]
-fn mat4_varying_in_vertex_does_not_lower_today() {
+fn mat4_varying_in_vertex_emits_io_shareable_naga_error() {
     let src = "attribute vec3 a_position;\n\
                varying mat4 v_xform;\n\
                uniform mat4 u_base;\n\
@@ -33,7 +41,15 @@ fn mat4_varying_in_vertex_does_not_lower_today() {
                    gl_Position = vec4(a_position, 1.0);\n\
                }\n";
     let err = compile(src, ShaderStage::Vertex).unwrap_err();
-    assert!(matches!(err, CompileError::Lower(_)), "got: {err:?}");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("NotIOShareableType") || msg.contains("IoShareableType"),
+        "expected naga IO-shareable error, got: {msg}"
+    );
+    assert!(
+        !msg.contains("expected `gl_Position`"),
+        "old misleading diagnostic should be gone: {msg}"
+    );
 }
 
 /// HAPPY. Two varyings of different widths in one vertex shader
@@ -75,26 +91,35 @@ fn forward_user_function_reference_lowers() {
     assert!(r.wgsl.contains("vec4"));
 }
 
-/// SPEC-GAP / CORRECTNESS. ESSL 1.00 §6.1.1 allows overloading
-/// user functions by parameter type. The current binding store is
-/// `HashMap<String, _>`, so the second `helper` silently overwrites
-/// the first; the typechecker then sees only the `vec2`-taking
-/// candidate and rejects `helper(0.25)` with `CallSignatureMismatch`.
-/// (Pre-lowering rejection — the silent-overwrite is at the
-/// `user_fns` binding step, not at the call site.)
-///
-/// Pins the boundary: a future widening that admits overloads at
-/// the typechecker layer would flip this assertion deliberately.
+/// HAPPY (resolved). ESSL 1.00 §6.1.1 allows overloading user
+/// functions by parameter type. The typechecker now stores each
+/// user function name as a `Vec<Signature>`; the lowering's
+/// `user_fns` map is `HashMap<String, Vec<UserFnBinding>>` and
+/// the Call dispatch picks the overload whose `param_types`
+/// matches the actual arg kinds.
 #[test]
-fn overloaded_user_functions_do_not_lower_today() {
+fn overloaded_user_functions_dispatch_by_arg_types() {
     let src = "precision mediump float;\n\
                float helper(float x) { return x * 2.0; }\n\
                float helper(vec2 v) { return v.x + v.y; }\n\
                void main() {\n\
                    gl_FragColor = vec4(helper(0.25));\n\
                }\n";
-    let err = compile(src, ShaderStage::Fragment).unwrap_err();
-    assert!(matches!(err, CompileError::Check(_)), "got: {err:?}");
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("vec4"));
+}
+
+#[test]
+fn overloaded_user_functions_vec_arg_picks_the_vec_overload() {
+    let src = "precision mediump float;\n\
+               float helper(float x) { return x * 2.0; }\n\
+               float helper(vec2 v) { return v.x + v.y; }\n\
+               uniform vec2 u_v;\n\
+               void main() {\n\
+                   gl_FragColor = vec4(helper(u_v));\n\
+               }\n";
+    let r = compile(src, ShaderStage::Fragment).expect("compile");
+    assert!(r.wgsl.contains("vec4"));
 }
 
 /// HAPPY (resolved). `emit_user_function` now walks
@@ -197,8 +222,7 @@ fn repeat_component_swizzle_xxxx_lowers_as_broadcast() {
 
 /// HAPPY (resolved). Single-component write-side swizzles
 /// (`v.x = ...`, `v.y = ...`, etc.) lower via `OpAccessChain`
-/// to the component pointer + `OpStore`. Multi-component LHS
-/// swizzles (`v.xy = vec2(...)`) remain queued.
+/// to the component pointer + `OpStore`.
 #[test]
 fn write_side_single_component_lhs_swizzle_lowers() {
     let src = "attribute vec3 a_position;\n\
@@ -209,6 +233,57 @@ fn write_side_single_component_lhs_swizzle_lowers() {
                }\n";
     let r = compile(src, ShaderStage::Vertex).expect("compile");
     assert!(r.wgsl.contains("location(0)"));
+}
+
+/// HAPPY. Multi-component LHS swizzle. `v_color.xy = vec2(...)`
+/// lowers as `OpLoad` + `OpVectorShuffle` + `OpStore`, splicing
+/// the new components into the existing value.
+#[test]
+fn write_side_multi_component_contiguous_lhs_swizzle_lowers() {
+    let src = "attribute vec3 a_position;\n\
+               varying vec3 v_color;\n\
+               void main() {\n\
+                   v_color.xy = vec2(0.5, 0.25);\n\
+                   gl_Position = vec4(a_position, 1.0);\n\
+               }\n";
+    let r = compile(src, ShaderStage::Vertex).expect("compile");
+    assert!(r.wgsl.contains("location(0)"));
+}
+
+/// HAPPY. Non-contiguous / reordered LHS swizzle: `v.yx = e`
+/// assigns the first component of e to v.y and the second to
+/// v.x. The shuffle-index table handles arbitrary permutations.
+#[test]
+fn write_side_reordered_lhs_swizzle_lowers() {
+    let src = "attribute vec3 a_position;\n\
+               varying vec3 v_color;\n\
+               void main() {\n\
+                   v_color.yx = vec2(0.7, 0.3);\n\
+                   gl_Position = vec4(a_position, 1.0);\n\
+               }\n";
+    let r = compile(src, ShaderStage::Vertex).expect("compile");
+    assert!(r.wgsl.contains("location(0)"));
+}
+
+/// SPEC-CONFORMANCE. Repeated components on the LHS are
+/// forbidden by ESSL §5.5 (each target component can only be
+/// assigned once). The typechecker catches this with
+/// `InvalidSwizzle` because the parser produces the field and
+/// `parse_swizzle_indices`-side rejection in the lowering as a
+/// fallback. Either way the shader is rejected.
+#[test]
+fn write_side_repeated_component_lhs_swizzle_rejected() {
+    let src = "attribute vec3 a_position;\n\
+               varying vec3 v_color;\n\
+               void main() {\n\
+                   v_color.xx = vec2(0.5, 0.5);\n\
+                   gl_Position = vec4(a_position, 1.0);\n\
+               }\n";
+    let err = compile(src, ShaderStage::Vertex).unwrap_err();
+    assert!(
+        matches!(err, CompileError::Check(_) | CompileError::Lower(_)),
+        "got: {err:?}"
+    );
 }
 
 /// SPEC-CONFORMANCE. ESSL 1.00 §5.5: a `vec2` has components

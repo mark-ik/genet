@@ -196,6 +196,12 @@ struct TypeChecker {
     types: HashMap<Span, TypeKind>,
     diagnostics: Vec<TypeDiagnostic>,
     registry: Registry,
+    /// User-defined function signatures, accumulated by the
+    /// forward-reference pre-pass. Keyed by name with a `Vec` per
+    /// entry so two `float helper(...)` declarations with
+    /// distinct parameter types overload rather than overwriting
+    /// each other.
+    user_functions: HashMap<String, Vec<crate::check::registry::Signature>>,
 }
 
 impl TypeChecker {
@@ -205,6 +211,7 @@ impl TypeChecker {
             types: HashMap::new(),
             diagnostics: Vec::new(),
             registry: Registry::with_builtins(),
+            user_functions: HashMap::new(),
         }
     }
 
@@ -253,6 +260,16 @@ impl TypeChecker {
                     params: f.params.iter().map(|p| p.ty.kind).collect(),
                     result: f.return_ty.kind,
                 };
+                // Track every user function overload by name so
+                // Call resolution can pick the matching one. The
+                // scope-define is kept too so an Ident referring
+                // to a function name still resolves (the scope
+                // form holds only one signature; the
+                // `user_functions` map holds all overloads).
+                self.user_functions
+                    .entry(f.name.clone())
+                    .or_default()
+                    .push(signature.clone());
                 self.define_in_current(
                     &f.name,
                     ScopeEntry {
@@ -505,27 +522,24 @@ impl<'tree> Visitor<'tree> for TypeChecker {
                         LookupOutcome::Unknown => {},
                     }
 
-                    // 3. User-defined function via scope lookup.
-                    let user = self.lookup(callee).and_then(|e| {
-                        if e.kind == SymbolKind::Function {
-                            e.signature.clone()
-                        } else {
-                            None
-                        }
-                    });
-                    match user {
-                        Some(sig) => {
-                            if sig.matches(&arg_types) {
-                                self.types.insert(*span, sig.result);
-                            } else {
-                                self.diagnostics.push(TypeDiagnostic {
-                                    kind: TypeDiagnosticKind::CallSignatureMismatch {
-                                        name: callee.clone(),
-                                        candidates: vec![sig],
-                                        actual: arg_types,
-                                    },
-                                    span: *span,
-                                });
+                    // 3. User-defined function via the overload set.
+                    let overloads = self.user_functions.get(callee).cloned();
+                    match overloads {
+                        Some(sigs) => {
+                            match sigs.iter().find(|s| s.matches(&arg_types)) {
+                                Some(sig) => {
+                                    self.types.insert(*span, sig.result);
+                                },
+                                None => {
+                                    self.diagnostics.push(TypeDiagnostic {
+                                        kind: TypeDiagnosticKind::CallSignatureMismatch {
+                                            name: callee.clone(),
+                                            candidates: sigs,
+                                            actual: arg_types,
+                                        },
+                                        span: *span,
+                                    });
+                                },
                             }
                         },
                         None => {

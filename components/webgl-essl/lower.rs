@@ -254,9 +254,12 @@ struct Ctx<'a> {
     uniform_block_var: Option<Word>,
     /// Cached `OpConstant int <i>` words for OpAccessChain indices.
     int_constants: HashMap<i32, Word>,
-    /// User-defined function name -> SPIR-V function id + signature.
-    /// Populated by the pre-pass before main is lowered.
-    user_fns: HashMap<String, UserFnBinding>,
+    /// User-defined function name -> list of overload bindings.
+    /// Populated by the pre-pass before main is lowered. Each
+    /// `Vec` entry is a distinct (name, param-kinds) signature so
+    /// ESSL §6.1.1 overloads dispatch to the matching SPIR-V
+    /// function id at the call site.
+    user_fns: HashMap<String, Vec<UserFnBinding>>,
     /// While lowering a user function's body, parameter names map to
     /// their OpFunctionParameter Words. Cleared on function exit.
     fn_params: HashMap<String, FnParamBinding>,
@@ -318,6 +321,7 @@ struct UniformBinding {
     kind: TypeKind,
 }
 
+#[derive(Clone)]
 struct UserFnBinding {
     /// SPIR-V Word for the OpFunction (the callable id).
     func_id: Word,
@@ -387,6 +391,9 @@ fn build_spirv(
         type_vec2,
         type_vec3,
         type_vec4,
+        type_mat2,
+        type_mat3,
+        type_mat4,
     );
 
     // Uniforms wrapped in a single Block-decorated struct.
@@ -477,6 +484,7 @@ fn build_spirv(
     Ok(ctx.b.module())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn register_varying_outputs(
     b: &mut Builder,
     tu: &TranslationUnit,
@@ -485,6 +493,9 @@ fn register_varying_outputs(
     type_vec2: Word,
     type_vec3: Word,
     type_vec4: Word,
+    type_mat2: Word,
+    type_mat3: Word,
+    type_mat4: Word,
 ) -> HashMap<String, OutputBinding> {
     let mut outputs = HashMap::new();
     if stage != ShaderStage::Vertex {
@@ -492,27 +503,29 @@ fn register_varying_outputs(
         // fragment outputs are queued (ESSL 3.00).
         return outputs;
     }
-    // Start Location at 1 — Location 0 is reserved for the primary
-    // gl_Position output decoration on the BuiltIn slot, but
-    // SPIR-V Output Locations are an independent set from
-    // Input Locations, so we count from 0 for the varying outputs.
+    // SPIR-V Output Locations are an independent set from Input
+    // Locations; we count from 0 for the varying outputs. A
+    // matrix consumes one Location per column.
     let mut location: u32 = 0;
     for d in &tu.decls {
         let ExternalDecl::Global(g) = d else { continue };
         if g.storage != StorageQualifier::Varying {
             continue;
         }
-        let (pointee_type, kind) = match g.ty.kind {
-            TypeKind::Float => (type_float, TypeKind::Float),
-            TypeKind::Vec2 => (type_vec2, TypeKind::Vec2),
-            TypeKind::Vec3 => (type_vec3, TypeKind::Vec3),
-            TypeKind::Vec4 => (type_vec4, TypeKind::Vec4),
+        let (pointee_type, kind, slot_width) = match g.ty.kind {
+            TypeKind::Float => (type_float, TypeKind::Float, 1u32),
+            TypeKind::Vec2 => (type_vec2, TypeKind::Vec2, 1),
+            TypeKind::Vec3 => (type_vec3, TypeKind::Vec3, 1),
+            TypeKind::Vec4 => (type_vec4, TypeKind::Vec4, 1),
+            TypeKind::Mat2 => (type_mat2, TypeKind::Mat2, 2),
+            TypeKind::Mat3 => (type_mat3, TypeKind::Mat3, 3),
+            TypeKind::Mat4 => (type_mat4, TypeKind::Mat4, 4),
             _ => continue,
         };
         let ptr_ty = b.type_pointer(None, StorageClass::Output, pointee_type);
         let var = b.variable(ptr_ty, None, StorageClass::Output, None);
         b.decorate(var, Decoration::Location, [Operand::LiteralBit32(location)]);
-        location += 1;
+        location += slot_width;
         outputs.insert(g.name.clone(), OutputBinding { var, kind });
     }
     outputs
@@ -985,14 +998,14 @@ fn emit_user_functions(ctx: &mut Ctx, tu: &TranslationUnit) -> Result<(), Loweri
             continue;
         }
         let proto = build_user_fn_prototype(ctx, f)?;
-        ctx.user_fns.insert(
-            f.name.clone(),
-            UserFnBinding {
+        ctx.user_fns
+            .entry(f.name.clone())
+            .or_default()
+            .push(UserFnBinding {
                 func_id: proto.func_id,
                 param_types: proto.param_kinds.clone(),
                 result: proto.return_kind,
-            },
-        );
+            });
         prototypes.push((f, proto));
     }
     for (f, proto) in prototypes {
@@ -1481,25 +1494,59 @@ fn lower_lhs_swizzle_assignment(
             what: format!("invalid LHS swizzle `.{field}` on {:?}", target.kind),
         }
     })?;
-    if indices.len() != 1 {
-        return Err(LoweringError::UnsupportedShape {
-            what: format!(
-                "multi-component LHS swizzle `.{field}` is not yet lowered"
-            ),
-        });
+    // ESSL §5.5 forbids repeated components on the LHS — each
+    // target component can only be assigned once.
+    let mut seen = [false; 4];
+    for &i in &indices {
+        if i >= 4 || seen[i as usize] {
+            return Err(LoweringError::UnsupportedShape {
+                what: format!("LHS swizzle `.{field}` repeats a component"),
+            });
+        }
+        seen[i as usize] = true;
     }
-    let component_idx = indices[0] as i32;
     let value = lower_expr(ctx, rhs)?;
-    let ptr_to_float = ctx
+    if indices.len() == 1 {
+        // Single-component LHS: cheaper via OpAccessChain to the
+        // component pointer + OpStore.
+        let component_idx = indices[0] as i32;
+        let ptr_to_float = ctx
+            .b
+            .type_pointer(None, target.storage, ctx.type_float);
+        let idx_const = int_constant(ctx, component_idx);
+        let chain = ctx
+            .b
+            .access_chain(ptr_to_float, None, target.var, [idx_const])
+            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+        ctx.b
+            .store(chain, value, None, [])
+            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+        return Ok(());
+    }
+    // Multi-component LHS: load the existing value, splice in the
+    // new components via OpVectorShuffle, store back.
+    // OpVectorShuffle component indices in [0, base_size) refer
+    // to vector_1 (old); indices in [base_size, base_size + rhs)
+    // refer to vector_2 (the new values from rhs).
+    let base_value_ty = spv_type_for_kind(ctx, target.kind).ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: format!("LHS-swizzle target {:?} has no SPIR-V type", target.kind),
+        }
+    })?;
+    let old = ctx
         .b
-        .type_pointer(None, target.storage, ctx.type_float);
-    let idx_const = int_constant(ctx, component_idx);
-    let chain = ctx
+        .load(base_value_ty, None, target.var, None, [])
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    let mut shuffle: Vec<u32> = (0..base_size).collect();
+    for (rhs_component, &target_component) in indices.iter().enumerate() {
+        shuffle[target_component as usize] = base_size + rhs_component as u32;
+    }
+    let new_value = ctx
         .b
-        .access_chain(ptr_to_float, None, target.var, [idx_const])
+        .vector_shuffle(base_value_ty, None, old, value, shuffle)
         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
     ctx.b
-        .store(chain, value, None, [])
+        .store(target.var, new_value, None, [])
         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
     Ok(())
 }
@@ -1783,22 +1830,34 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                     .ext_inst(result_ty, None, set_id, opcode, operands)
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
             }
-            if let Some(user_fn) = ctx.user_fns.get(callee) {
-                let func_id = user_fn.func_id;
-                let result_kind = user_fn.result;
-                let expected_arity = user_fn.param_types.len();
-                if args.len() != expected_arity {
-                    return Err(LoweringError::UnsupportedShape {
+            if ctx.user_fns.contains_key(callee) {
+                // Classify args first so we can pick the matching
+                // overload. The typecheck already validated the
+                // call shape; classify_arg_kind reads its types
+                // map.
+                let arg_kinds: Vec<TypeKind> = args
+                    .iter()
+                    .map(|a| classify_arg_kind(ctx, a))
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(|| LoweringError::UnsupportedShape {
+                        what: format!("could not classify arguments to `{callee}`"),
+                    })?;
+                let overload = ctx
+                    .user_fns
+                    .get(callee)
+                    .and_then(|sigs| {
+                        sigs.iter().find(|s| s.param_types == arg_kinds).cloned()
+                    })
+                    .ok_or_else(|| LoweringError::UnsupportedShape {
                         what: format!(
-                            "call `{callee}` has {} arg(s) but takes {expected_arity}",
-                            args.len()
+                            "no overload of `{callee}` matches argument types {arg_kinds:?}"
                         ),
-                    });
-                }
+                    })?;
                 let mut arg_ids = Vec::with_capacity(args.len());
                 for a in args {
                     arg_ids.push(lower_expr(ctx, a)?);
                 }
+                let result_kind = overload.result;
                 let result_ty = if result_kind == TypeKind::Void {
                     ctx.type_void
                 } else {
@@ -1810,7 +1869,7 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                 };
                 return ctx
                     .b
-                    .function_call(result_ty, None, func_id, arg_ids)
+                    .function_call(result_ty, None, overload.func_id, arg_ids)
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
             }
             let (result_ty, component_count) = match callee.as_str() {
