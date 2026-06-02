@@ -84,3 +84,107 @@ fn fragment_target_with_vertex_lhs_is_rejected() {
         "got: {err:?}"
     );
 }
+
+// ---------- widening: attribute → vec4 constructor --------------------
+
+#[test]
+fn canonical_vertex_with_vec2_attribute_lowers_to_wgsl() {
+    let src = r#"
+attribute vec2 a_position;
+void main() {
+    gl_Position = vec4(a_position, 0.0, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (canonical vertex) ---\n{wgsl}");
+    // naga renders the input variable somewhere; the location-0
+    // decoration must come through.
+    assert!(wgsl.contains("location(0)"), "WGSL should expose @location(0) for the attribute: {wgsl}");
+    assert!(wgsl.contains("@vertex"));
+}
+
+#[test]
+fn vertex_with_vec3_attribute_lowers_to_wgsl() {
+    let src = r#"
+attribute vec3 a_position;
+void main() {
+    gl_Position = vec4(a_position, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (vec3 attribute) ---\n{wgsl}");
+    assert!(wgsl.contains("vec3<f32>"));
+}
+
+#[test]
+fn vertex_with_two_attributes_assigns_distinct_locations() {
+    // The shader uses only a_position; a_other is declared but not
+    // referenced in main. Both should be registered with their own
+    // @location decorations in the WGSL output.
+    let src = r#"
+attribute vec2 a_position;
+attribute vec3 a_other;
+void main() {
+    gl_Position = vec4(a_position, 0.0, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (two attributes) ---\n{wgsl}");
+    assert!(wgsl.contains("location(0)"));
+    assert!(wgsl.contains("location(1)"));
+}
+
+#[test]
+fn nested_vec3_inside_vec4_constructor_lowers() {
+    let src = r#"
+void main() {
+    gl_Position = vec4(vec3(0.0), 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
+        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    eprintln!("--- WGSL (nested vec3) ---\n{wgsl}");
+    assert!(wgsl.contains("vec4<f32>"));
+}
+
+#[test]
+fn referencing_unknown_ident_in_vec4_returns_unsupported() {
+    // a_position is not declared, so the lowering's input lookup
+    // misses and reports UnsupportedShape.
+    let src = r#"
+void main() {
+    gl_Position = vec4(a_position, 0.0, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let err = lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_err();
+    assert!(
+        matches!(err, webgl_essl::lower::LoweringError::UnsupportedShape { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn binary_op_inside_vec4_constructor_still_unsupported() {
+    // Binary ops are queued for a follow-up; today the lowering only
+    // handles ident loads and nested constructors.
+    let src = r#"
+attribute vec2 a_position;
+void main() {
+    gl_Position = vec4(a_position + 1.0, 0.0, 1.0);
+}
+"#;
+    let tu = parse_source(src).expect("parse");
+    let err = lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_err();
+    assert!(
+        matches!(err, webgl_essl::lower::LoweringError::UnsupportedShape { .. }),
+        "got: {err:?}"
+    );
+}
