@@ -28,8 +28,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use crate::ast::{
-    BinOp, Expr, ExternalDecl, ForInit, FunctionDef, GlobalDecl, LocalDecl, Stmt, TranslationUnit,
-    TypeKind, UnaryOp,
+    BinOp, Expr, ExternalDecl, ForInit, FunctionDef, GlobalDecl, LocalDecl, PrecisionDecl, Stmt,
+    TranslationUnit, TypeKind, UnaryOp,
 };
 use crate::span::{Span, line_column};
 use crate::visit::{Visit, Visitor, Walk, walk_translation_unit};
@@ -112,6 +112,11 @@ pub enum WebGlDiagnosticKind {
     /// Call chain reachable from a user function exceeds the call
     /// stack depth cap. Mirrors ANGLE's `limitCallStackDepth` flag.
     CallStackTooDeep { depth: usize, limit: usize },
+    /// Fragment-stage declaration of a float-family type with no
+    /// precision qualifier and no preceding `precision <q> float;`
+    /// default. ESSL 1.00 §4.5.3: "The fragment language has no
+    /// default precision qualifier for floating point types."
+    PrecisionMissingForFloat { name: String, ty: TypeKind },
 }
 
 impl WebGlDiagnosticKind {
@@ -140,6 +145,11 @@ impl WebGlDiagnosticKind {
             },
             WebGlDiagnosticKind::CallStackTooDeep { depth, limit } => {
                 format!("call stack too deep: {depth} (limit {limit})")
+            },
+            WebGlDiagnosticKind::PrecisionMissingForFloat { name, ty } => {
+                format!(
+                    "no precision specified for `{name}` ({ty:?}); fragment shaders require a precision qualifier or a default set via `precision <q> float;`"
+                )
             },
         }
     }
@@ -203,6 +213,14 @@ struct ValidatorVisitor<'tree> {
     /// (top-level expr span, total AST node count) for any expression
     /// exceeding the per-expression complexity cap.
     expr_too_complex: Vec<(Span, usize)>,
+    /// True once a `precision <q> float;` declaration has been seen
+    /// at file scope. Subsequent float-family declarations without
+    /// inline precision are treated as having the default.
+    float_default_set: bool,
+    /// (span where declared, name, type) for fragment-stage decls of
+    /// float-family types that have no inline precision and no
+    /// preceding default. Only populated when stage == Fragment.
+    precision_missing: Vec<(Span, String, TypeKind)>,
 }
 
 struct DiscardSite<'tree> {
@@ -227,6 +245,8 @@ impl<'tree> ValidatorVisitor<'tree> {
             reserved_identifiers: Vec::new(),
             expr_depth: 0,
             expr_too_complex: Vec::new(),
+            float_default_set: false,
+            precision_missing: Vec::new(),
         }
     }
 
@@ -234,6 +254,25 @@ impl<'tree> ValidatorVisitor<'tree> {
         if let Some(reason) = reserved_reason(name) {
             self.reserved_identifiers.push((span, name.to_string(), reason));
         }
+    }
+
+    fn note_precision_missing_if_any(
+        &mut self,
+        name: &str,
+        span: Span,
+        ty: TypeKind,
+        has_inline_precision: bool,
+    ) {
+        if self.stage != ShaderStage::Fragment {
+            return;
+        }
+        if !is_float_family(ty) {
+            return;
+        }
+        if has_inline_precision || self.float_default_set {
+            return;
+        }
+        self.precision_missing.push((span, name.to_string(), ty));
     }
 
     fn finalize(self, src: &TranslationUnit) -> ValidationResult {
@@ -339,6 +378,17 @@ impl<'tree> ValidatorVisitor<'tree> {
             }
         }
 
+        // R8: Missing precision on float-family declarations in
+        // fragment shaders. Only fires when the stage is Fragment;
+        // vertex defaults float precision to highp.
+        for (span, name, ty) in self.precision_missing {
+            result.errors.push(WebGlDiagnostic {
+                severity: Severity::Error,
+                kind: WebGlDiagnosticKind::PrecisionMissingForFloat { name, ty },
+                span: Some(span),
+            });
+        }
+
         // Render info_log. ANGLE / Chrome shape: one line per
         // error / warning, errors first, then warnings.
         let source_text = "";
@@ -384,6 +434,12 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
     fn visit_global_decl(&mut self, g: &'tree GlobalDecl, visit: Visit) -> Walk {
         if visit == Visit::Pre {
             self.note_reserved_if_any(&g.name, g.name_span);
+            self.note_precision_missing_if_any(
+                &g.name,
+                g.name_span,
+                g.ty.kind,
+                g.precision.is_some(),
+            );
         }
         Walk::Continue
     }
@@ -391,6 +447,19 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
     fn visit_local_decl(&mut self, d: &'tree LocalDecl, visit: Visit) -> Walk {
         if visit == Visit::Pre {
             self.note_reserved_if_any(&d.name, d.name_span);
+            self.note_precision_missing_if_any(
+                &d.name,
+                d.name_span,
+                d.ty.kind,
+                d.precision.is_some(),
+            );
+        }
+        Walk::Continue
+    }
+
+    fn visit_precision_decl(&mut self, p: &'tree PrecisionDecl, visit: Visit) -> Walk {
+        if visit == Visit::Pre && p.ty.kind == TypeKind::Float {
+            self.float_default_set = true;
         }
         Walk::Continue
     }
@@ -599,6 +668,21 @@ fn depth_of(
     let d = 1 + best_child;
     memo.insert(node.to_string(), d);
     d
+}
+
+// ---------- R8: Float-family type check ------------------------------
+
+fn is_float_family(ty: TypeKind) -> bool {
+    matches!(
+        ty,
+        TypeKind::Float
+            | TypeKind::Vec2
+            | TypeKind::Vec3
+            | TypeKind::Vec4
+            | TypeKind::Mat2
+            | TypeKind::Mat3
+            | TypeKind::Mat4
+    )
 }
 
 // ---------- R5: Reserved identifier prefix check ----------------------
