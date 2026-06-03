@@ -283,3 +283,149 @@ void main() {
     let result = validate_canonical_fragment_source(bad);
     assert!(matches!(result, Err(ShaderTranslationError::Validate(_))));
 }
+
+// =====================================================================
+// receipts for shapes the pre-switch canonical parsers rejected but
+// webgl-essl handles correctly. each test below is something
+// `Canonical{Vertex,Fragment}Info::parse` would have refused.
+// =====================================================================
+
+#[test]
+fn broadened_fragment_accepts_scalar_broadcast_gl_fragcolor() {
+    // The old fragment parser required `vec4(c0, c1, c2, c3)`
+    // exactly — `vec4(0.5)` broadcast was rejected. ESSL allows
+    // it; webgl-essl now lets it through.
+    let fragment = r#"
+precision mediump float;
+void main() {
+    gl_FragColor = vec4(0.5);
+}
+"#;
+    let translated =
+        translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, fragment)
+            .expect("scalar-broadcast fragment translates");
+    assert!(translated.fragment_wgsl.contains("@location(0)"));
+}
+
+#[test]
+fn broadened_fragment_accepts_user_defined_function() {
+    // The old fragment parser only accepted a single `void main`
+    // body matching one of three exact templates. Helper
+    // functions like the one below were unparseable.
+    let fragment = r#"
+precision mediump float;
+uniform vec4 u_color;
+vec4 tinted(vec4 base) {
+    return base * u_color;
+}
+void main() {
+    gl_FragColor = tinted(vec4(1.0));
+}
+"#;
+    let translated =
+        translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, fragment)
+            .expect("user-function fragment translates");
+    assert!(translated.fragment_wgsl.contains("@binding(0)"));
+}
+
+#[test]
+fn broadened_essl300_vertex_with_in_decls_lowers() {
+    // The old vertex parser only matched ESSL 1.00 shape
+    // (`attribute` keyword, no `#version` directive). ESSL 3.00
+    // uses `in` / `out` and a `#version 300 es` header.
+    let vertex = r#"#version 300 es
+in vec2 a_position;
+in vec4 a_color;
+out vec4 v_color;
+void main() {
+    v_color = a_color;
+    gl_Position = vec4(a_position, 0.0, 1.0);
+}
+"#;
+    let fragment = r#"#version 300 es
+precision mediump float;
+in vec4 v_color;
+out vec4 out_color;
+void main() {
+    out_color = v_color;
+}
+"#;
+    let translated =
+        translate_canonical_essl_pair(vertex, fragment).expect("essl300 pair translates");
+    assert!(translated.vertex_wgsl.contains("@location(0)"));
+    assert!(translated.vertex_wgsl.contains("@location(1)"));
+    assert!(translated.fragment_wgsl.contains("@location(0)"));
+    assert_eq!(
+        translated.reflection.color_attribute,
+        Some(VertexAttributeReflection {
+            name: "a_color".to_string(),
+            location: 1,
+            kind: VertexAttributeKind::Float32x4,
+        })
+    );
+}
+
+#[test]
+fn broadened_fragment_accepts_swizzle_and_constructor_mix() {
+    // The old fragment parser had a tight literal-color grammar
+    // (`vec4(c0, c1, c2, c3)`); `vec4(u.rgb, 1.0)` was outside
+    // the accepted shape.
+    let fragment = r#"
+precision mediump float;
+uniform vec4 u_color;
+void main() {
+    gl_FragColor = vec4(u_color.rgb, 1.0);
+}
+"#;
+    let translated =
+        translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, fragment)
+            .expect("swizzle+constructor fragment translates");
+    assert!(translated.fragment_wgsl.contains("@location(0)"));
+}
+
+#[test]
+fn broadened_fragment_accepts_multiple_uniforms_narrow_picks_first_vec4() {
+    // The old parser allowed at most one uniform of one shape;
+    // a `vec4 + float` pair would have been rejected. The narrow
+    // [`ProgramReflection`] picks the first vec4 (since only one
+    // `fragment_color_uniform` slot is exposed); webgl-essl's
+    // wider reflection still carries every uniform.
+    let fragment = r#"
+precision mediump float;
+uniform vec4 u_color;
+uniform float u_brightness;
+void main() {
+    gl_FragColor = u_color * u_brightness;
+}
+"#;
+    let translated =
+        translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, fragment)
+            .expect("multi-uniform fragment translates");
+    assert_eq!(
+        translated.reflection.fragment_color_uniform,
+        Some(UniformReflection {
+            name: "u_color".to_string(),
+            binding: 0,
+            kind: UniformKind::Float32x4,
+        })
+    );
+}
+
+#[test]
+fn broadened_fragment_accepts_built_in_function_in_body() {
+    // `mix` / `smoothstep` / `clamp` etc. were all outside the
+    // narrow parser's grammar. webgl-essl wires the §8 ESSL
+    // built-in registry into typecheck + lower.
+    let fragment = r#"
+precision mediump float;
+uniform vec4 u_a;
+uniform vec4 u_b;
+void main() {
+    gl_FragColor = mix(u_a, u_b, 0.5);
+}
+"#;
+    let translated =
+        translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, fragment)
+            .expect("built-in function fragment translates");
+    assert!(translated.fragment_wgsl.contains("@location(0)"));
+}
