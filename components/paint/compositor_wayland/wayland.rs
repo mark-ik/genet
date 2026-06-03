@@ -156,7 +156,7 @@ impl WaylandState {
             .event_queue
             .roundtrip(&mut state.dispatch_state)
             .map_err(|e| BackendError::Wayland(format!("roundtrip(initial): {e}")))?;
-        state.advertised = state.dispatch_state.advertised.lock().unwrap().clone();
+        state.advertised = state.dispatch_state.advertised.lock().expect("advertised mutex poisoned").clone();
 
         Ok(state)
     }
@@ -275,7 +275,7 @@ impl Dispatch<ZwpLinuxDmabufV1, ()> for DispatchState {
                 state
                     .advertised
                     .lock()
-                    .unwrap()
+                    .expect("advertised mutex poisoned")
                     .push((format, modifier));
             },
             _ => {},
@@ -294,7 +294,7 @@ impl Dispatch<WlBuffer, BufferSlotUserData> for DispatchState {
     ) {
         use wayland_client::protocol::wl_buffer::Event;
         if matches!(event, Event::Release) {
-            let mut g = user_data.in_flight.lock().unwrap();
+            let mut g = user_data.in_flight.lock().expect("in_flight mutex poisoned");
             *g = false;
         }
     }

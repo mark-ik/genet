@@ -35,8 +35,19 @@
 //!
 //! ## Status
 //!
-//! **Skeleton.** Does not compile any wayland-client code. Returns
-//! [`BackendError::Unwired`] from every meaningful operation.
+//! Substantive infrastructure landed; backend skeleton remains. Phase 4
+//! (dmabuf): `ExportableImage` allocates VkImages with the dmabuf+modifier
+//! chain, exports the fd, and wraps the VkImage back into a `wgpu::Texture`;
+//! `ModifierTable` picks `(ABGR8888, LINEAR)` from the Vulkan/Wayland
+//! intersection; `SurfaceBufferPool` is the N=2 mailbox pool keyed by
+//! `BufferSlotUserData`. Phase 5 (wayland): `WaylandState` adopts the
+//! embedder's `wl_display`/`wl_surface`, binds globals, dispatches release
+//! events.
+//!
+//! The `WaylandSubsurfaceBackend` struct itself still has the skeleton
+//! `present_master` / `declare` / `present` / `destroy` paths returning
+//! `BackendError::Unwired` (or trait defaults). Phase 6 replaces those with
+//! the per-frame body that uses the infrastructure above.
 
 #![allow(unsafe_code)]
 #![allow(dead_code)]
