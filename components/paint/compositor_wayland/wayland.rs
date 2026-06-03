@@ -65,13 +65,22 @@ pub struct WaylandGlobals {
 /// Lives in `WaylandSubsurfaceBackend`. Holds the connection + event
 /// queue + bound globals + the modifier negotiation result.
 pub struct WaylandState {
-    pub connection: Connection,
-    pub event_queue: EventQueue<DispatchState>,
-    pub queue_handle: QueueHandle<DispatchState>,
+    /// Bound globals proxy drop order is not critical (they're internal
+    /// to the compositor protocol), but they logically depend on the
+    /// connection being open.
     pub globals: WaylandGlobals,
+    /// Parent surface (adopted from embedder) should drop BEFORE
+    /// connection closes to send destroy through live connection.
     pub parent_surface: WlSurface,
+
+    /// Metadata that doesn't hold proxies.
     pub advertised: WaylandAdvertised,
     pub dispatch_state: DispatchState,
+    pub queue_handle: QueueHandle<DispatchState>,
+
+    /// Event queue and connection drop LAST, in order.
+    pub event_queue: EventQueue<DispatchState>,
+    pub connection: Connection,
 }
 
 /// Dispatch user-data state held by the event queue. Keeps the
@@ -146,13 +155,13 @@ impl WaylandState {
             .map_err(|e| BackendError::Wayland(format!("adopt parent wl_surface: {e}")))?;
 
         let mut state = Self {
-            connection,
-            event_queue,
-            queue_handle,
             globals: bound_globals,
             parent_surface,
             advertised: WaylandAdvertised::new(),
             dispatch_state,
+            queue_handle,
+            event_queue,
+            connection,
         };
 
         // Drive a roundtrip so the dmabuf format / modifier events arrive

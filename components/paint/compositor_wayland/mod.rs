@@ -85,13 +85,8 @@ use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
 
 /// Linux Wayland subsurface compositor backend.
 pub struct WaylandSubsurfaceBackend {
-    host: HostWgpuContext,
-    wayland: WaylandState,
-    modifier_table: ModifierTable,
-    chosen: ChosenModifier,
-    bake_pipeline: BakePipeline,
-    vk_timeline_sync: VulkanTimelineSemaphoreSynchronizer,
-
+    /// Proxies held by surfaces and master_side must drop BEFORE wayland
+    /// (WaylandState) to send destroy requests through the live connection.
     surfaces: FxHashMap<SurfaceKey, WaylandSurface>,
 
     /// Side-buffer the master texture is blitted into per frame before
@@ -99,26 +94,42 @@ pub struct WaylandSubsurfaceBackend {
     /// reallocated on master-size change.
     master_side: Option<SurfaceBufferPool>,
 
+    /// Metadata and pipelines (no wayland proxies).
+    bake_pipeline: BakePipeline,
+    vk_timeline_sync: VulkanTimelineSemaphoreSynchronizer,
+    modifier_table: ModifierTable,
+    chosen: ChosenModifier,
+
     /// Monotonic generation for `BufferSlotUserData.surface_id`.
     /// The master uses id=0; per-`SurfaceKey` surfaces increment.
     next_surface_id: u64,
+
+    /// wgpu context (device) and wayland connection drop LAST to ensure
+    /// all proxies are destroyed before the connection closes.
+    host: HostWgpuContext,
+    wayland: WaylandState,
 }
 
 struct WaylandSurface {
-    wl_surface: WlSurface,
-    wl_subsurface: WlSubsurface,
-    viewport: WpViewport,
-    alpha_modifier: Option<WpAlphaModifierSurfaceV1>,
-    surface_id: u64,
-    /// Stable wgpu-side destination texture. ServoCompositor blits
-    /// master[rect] → this every dirty frame.
-    dest_texture: wgpu::Texture,
-    /// Two-slot dmabuf pool. `present` copies dest_texture → acquired
-    /// slot, then attaches the slot's wl_buffer.
+    /// Per-surface buffer pools must drop FIRST: their wl_buffers need
+    /// the parent surface alive to send destroy requests.
     swap_pool: SurfaceBufferPool,
     /// Lazily allocated bake target (rotation / alpha-bake).
     bake: Option<SurfaceBufferPool>,
+
+    /// Per-key wayland protocol proxies.
+    viewport: WpViewport,
+    alpha_modifier: Option<WpAlphaModifierSurfaceV1>,
+    surface_id: u64,
     size: (u32, u32),
+
+    /// Stable wgpu-side destination texture. ServoCompositor blits
+    /// master[rect] → this every dirty frame.
+    dest_texture: wgpu::Texture,
+
+    /// Per-key subsurface and parent surface drop LAST.
+    wl_subsurface: WlSubsurface,
+    wl_surface: WlSurface,
 }
 
 unsafe impl Send for WaylandSubsurfaceBackend {}
@@ -156,15 +167,15 @@ impl WaylandSubsurfaceBackend {
             .map_err(|e| BackendError::SyncInit(format!("{e}")))?;
 
         Ok(Self {
-            host: host.clone(),
-            wayland,
-            modifier_table,
-            chosen,
-            bake_pipeline,
-            vk_timeline_sync,
             surfaces: FxHashMap::default(),
             master_side: None,
+            bake_pipeline,
+            vk_timeline_sync,
+            modifier_table,
+            chosen,
             next_surface_id: 0,
+            host: host.clone(),
+            wayland,
         })
     }
 }
@@ -380,15 +391,15 @@ impl WaylandSubsurfaceBackend {
         self.surfaces.insert(
             key,
             WaylandSurface {
-                wl_surface,
-                wl_subsurface,
+                swap_pool,
+                bake: None,
                 viewport,
                 alpha_modifier,
                 surface_id,
-                dest_texture: dest_texture.clone(),
-                swap_pool,
-                bake: None,
                 size: (width, height),
+                dest_texture: dest_texture.clone(),
+                wl_subsurface,
+                wl_surface,
             },
         );
 
