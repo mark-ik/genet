@@ -38,12 +38,15 @@ use wayland_client::protocol::wl_buffer::WlBuffer;
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_subcompositor::WlSubcompositor;
+use wayland_client::protocol::wl_subsurface::WlSubsurface;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
 
+use wayland_protocols::wp::alpha_modifier::v1::client::wp_alpha_modifier_surface_v1::WpAlphaModifierSurfaceV1;
 use wayland_protocols::wp::alpha_modifier::v1::client::wp_alpha_modifier_v1::WpAlphaModifierV1;
 use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1;
 use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1;
+use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
 
 use crate::compositor_wayland::dmabuf::{BufferSlotUserData, WaylandAdvertised};
@@ -236,8 +239,11 @@ macro_rules! noop_dispatch {
 
 noop_dispatch!(WlCompositor);
 noop_dispatch!(WlSubcompositor);
+noop_dispatch!(WlSubsurface);
 noop_dispatch!(WpViewporter);
+noop_dispatch!(WpViewport);
 noop_dispatch!(WpAlphaModifierV1);
+noop_dispatch!(WpAlphaModifierSurfaceV1);
 noop_dispatch!(WlSurface);
 // ZwpLinuxBufferParamsV1 events (created/failed) are irrelevant when
 // using create_immed; provide a no-op impl to satisfy the queue_handle

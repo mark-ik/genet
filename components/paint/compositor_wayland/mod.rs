@@ -111,7 +111,13 @@ struct WaylandSurface {
     viewport: WpViewport,
     alpha_modifier: Option<WpAlphaModifierSurfaceV1>,
     surface_id: u64,
-    source_dest: SurfaceBufferPool,
+    /// Stable wgpu-side destination texture. ServoCompositor blits
+    /// master[rect] → this every dirty frame.
+    dest_texture: wgpu::Texture,
+    /// Two-slot dmabuf pool. `present` copies dest_texture → acquired
+    /// slot, then attaches the slot's wl_buffer.
+    swap_pool: SurfaceBufferPool,
+    /// Lazily allocated bake target (rotation / alpha-bake).
     bake: Option<SurfaceBufferPool>,
     size: (u32, u32),
 }
@@ -308,6 +314,87 @@ impl WaylandSubsurfaceBackend {
 
         Ok(())
     }
+
+    fn declare_inherent(
+        &mut self,
+        key: SurfaceKey,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Result<wgpu::Texture, BackendError> {
+        if format != wgpu::TextureFormat::Rgba8Unorm {
+            return Err(BackendError::Dmabuf(format!(
+                "declare: unsupported format {format:?} (only Rgba8Unorm)"
+            )));
+        }
+
+        self.next_surface_id += 1;
+        let surface_id = self.next_surface_id;
+
+        // Stable wgpu dest (not dmabuf-exportable — ServoCompositor's
+        // blit target, copied into the swap_pool slots in present()).
+        let dest_texture = self.host.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("WaylandSubsurfaceBackend dest"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+
+        let swap_pool = self.allocate_pool(surface_id, width, height)?;
+
+        let wl_surface = self
+            .wayland
+            .globals
+            .compositor
+            .create_surface(&self.wayland.queue_handle, ());
+        let wl_subsurface = self.wayland.globals.subcompositor.get_subsurface(
+            &wl_surface,
+            &self.wayland.parent_surface,
+            &self.wayland.queue_handle,
+            (),
+        );
+        wl_subsurface.set_desync();
+        wl_subsurface.set_position(0, 0);
+
+        let viewport = self
+            .wayland
+            .globals
+            .viewporter
+            .get_viewport(&wl_surface, &self.wayland.queue_handle, ());
+        let alpha_modifier = self
+            .wayland
+            .globals
+            .alpha_modifier
+            .as_ref()
+            .map(|am| am.get_surface(&wl_surface, &self.wayland.queue_handle, ()));
+
+        self.surfaces.insert(
+            key,
+            WaylandSurface {
+                wl_surface,
+                wl_subsurface,
+                viewport,
+                alpha_modifier,
+                surface_id,
+                dest_texture: dest_texture.clone(),
+                swap_pool,
+                bake: None,
+                size: (width, height),
+            },
+        );
+
+        Ok(dest_texture)
+    }
 }
 
 impl OsCompositorBackend for WaylandSubsurfaceBackend {
@@ -328,6 +415,19 @@ impl OsCompositorBackend for WaylandSubsurfaceBackend {
         }
     }
 
-    // declare / destroy / present inherit the trait defaults (no-ops
-    // for now) until Tasks 6.3-6.5 wire them.
+    fn declare(
+        &mut self,
+        key: SurfaceKey,
+        host: &HostWgpuContext,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Result<wgpu::Texture, crate::compositor::BoxedBackendError> {
+        let _ = host; // declare uses self.host (set at construction)
+        WaylandSubsurfaceBackend::declare_inherent(self, key, width, height, format)
+            .map_err(|e| Box::new(e) as crate::compositor::BoxedBackendError)
+    }
+
+    // destroy / present inherit the trait defaults (no-ops
+    // for now) until Tasks 6.4-6.5 wire them.
 }
