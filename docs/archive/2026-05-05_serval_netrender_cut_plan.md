@@ -62,8 +62,9 @@ resolve the holes."
   keyed destination into that swapchain, applies transform/clip/opacity,
   presents it, and commits. The matching Pelt smoke is
   `--windows-present-surfaces-smoke`. Linux
-  `WaylandSubsurfaceBackend` remains externally gated on a live Wayland
-  session. The prior 20 `Paint`-method gaps in
+  `WaylandSubsurfaceBackend` landed 2026-06-03; C4 universally green.
+  See [2026-05-09_c4_landed_notes.md](../2026-05-09_c4_landed_notes.md)
+  gap (4) for the full receipt. The prior 20 `Paint`-method gaps in
   `components/servo/webview.rs` and the missing
   `paint_api::rendering_context*` imports in `components/servo/lib.rs`
   are closed in the C4 tail.
@@ -89,8 +90,8 @@ viewer --windows-present-surfaces-smoke about:blank`, outcome:
 visually confirmed with a red master surface plus a green top-left
 declared DCOMP child visual. The Windows smoke requests an 800x600
 physical client area so the DCOMP master and declared child visual cover
-the intended surface on DPI-scaled displays. Linux still needs a live
-Wayland smoke.
+the intended surface on DPI-scaled displays. Linux landed 2026-06-03;
+C4 is universally green.
 
 ---
 
@@ -161,9 +162,9 @@ See
 for the detailed slice plan, package graph, gates, and pitfalls.
 
 **Deferred / externally gated:** macOS GPU-side per-surface sync can
-wait for upstream `wgpu-hal` queue access if it becomes necessary;
-Linux Wayland presentation needs hardware/session coverage that is not
-available on the current X11-only Linux box.
+wait for upstream `wgpu-hal` queue access if it becomes necessary.
+Linux Wayland presentation landed 2026-06-03 (Fedora 44 / GNOME-Mutter
+/ RADV — no longer gated).
 
 ---
 
@@ -654,11 +655,11 @@ struct StubCompositor { /* fullscreen single-surface fallback */ }
 **Cuts:** none — C4 is net new code in `components/paint/` (or a
 new sibling crate `components/compositor/` for clarity).
 
-**Status (2026-05-12):** shared C4 plumbing is landed; macOS has
+**Status (updated 2026-06-03):** shared C4 plumbing is landed; macOS has
 master + per-`SurfaceKey` smoke coverage; Windows has the master DCOMP
 path plus per-`SurfaceKey` child-visual code and matching
-`--windows-present-surfaces-smoke`; Linux still needs an on-device
-Wayland smoke receipt. See
+`--windows-present-surfaces-smoke`; Linux landed 2026-06-03 — C4
+universally green (Fedora 44 / GNOME-Mutter / RADV). See
 [2026-05-09_c4_landed_notes.md](./2026-05-09_c4_landed_notes.md).
 The direction-neutral interop primitives the per-platform backends
 build on top of are documented in
@@ -691,8 +692,9 @@ passes on Windows. macOS is green for declared surfaces via
 `--macos-present-surfaces-smoke`; Windows has the equivalent
 per-surface DCOMP body plus a clean headed
 `--windows-present-surfaces-smoke` run and visual confirmation of the
-green child visual above the red master; Linux still needs a live
-Wayland session.
+green child visual above the red master; Linux landed 2026-06-03
+(`--wayland-present-smoke` + `--wayland-present-surfaces-smoke` on
+Fedora 44 / GNOME-Mutter / RADV — C4 universally green).
 
 **Scope:**
 
