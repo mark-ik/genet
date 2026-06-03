@@ -32,7 +32,9 @@ const SHADER_WGSL: &str = r#"
 struct Bake {
     linear: vec4<f32>,
     opacity: f32,
-    _pad: vec3<f32>,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 };
 
 @group(0) @binding(0) var src: texture_2d<f32>;
@@ -63,8 +65,8 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
     );
     let p = positions[vid];
     let m = mat2x2<f32>(
-        vec2<f32>(bake.linear.x, bake.linear.y),
-        vec2<f32>(bake.linear.z, bake.linear.w),
+        vec2<f32>(bake.linear.x, bake.linear.z),
+        vec2<f32>(bake.linear.y, bake.linear.w),
     );
     let rotated = m * p;
     var out: VsOut;
