@@ -26,6 +26,7 @@ euclid = { workspace = true }
 html5ever = { workspace = true }
 malloc_size_of = { workspace = true }
 malloc_size_of_derive = { workspace = true }
+pollster = "0.4"
 serde = { workspace = true, features = ["derive"] }
 serval-layout = { path = "../serval-layout" }
 serval-static-dom = { path = "../serval-static-dom" }
