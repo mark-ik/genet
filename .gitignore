@@ -1,7 +1,11 @@
 /.servo
 /.cargo/*
 !/.cargo/config.*
-/.cargo-check-logs/*.log
+# cargo-check / reftest log artifacts (root + per-crate, any depth): test
+# outputs, reftest dumps, pass/fail lists. The committed cargo-check-env.ps1
+# (mozjs build-env script) is the one thing kept.
+**/.cargo-check-logs/**
+!**/.cargo-check-logs/cargo-check-env.ps1
 /.rustup
 /.servobuild
 /.wpt
