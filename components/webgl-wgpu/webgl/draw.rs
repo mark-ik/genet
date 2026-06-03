@@ -3,12 +3,59 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use super::pipeline::{
-    build_render_pipeline, build_texture_bind_group, build_uniform_bind_group,
-    effective_vertex_stride, vertex_component_count, vertex_stride,
+    build_group_zero_bind_group, build_render_pipeline, effective_vertex_stride,
+    vertex_component_count, vertex_stride,
 };
 use super::*;
 
+/// Per-attribute resolution. Holds the buffer ID rather than
+/// the buffer reference so the borrow checker lets the call
+/// site interleave it with `programs` mutation.
+#[derive(Clone, Copy)]
+struct AttributeResolution {
+    buffer_id: WebGlBufferId,
+}
+
 impl WebGlContext {
+    fn resolve_attribute_pipeline_inputs(
+        &self,
+        reflection: &ProgramReflection,
+        max_vertex_index: u64,
+    ) -> Result<(Vec<AttributeBufferLayout>, Vec<AttributeResolution>), WebGlError> {
+        let mut layouts = Vec::with_capacity(reflection.attributes.len());
+        let mut resolutions = Vec::with_capacity(reflection.attributes.len());
+        for attribute in &reflection.attributes {
+            let attrib = *self
+                .attribs
+                .get(attribute.location as usize)
+                .ok_or(WebGlError::InvalidOperation)?;
+            let kind = attribute.kind;
+            if !attrib.enabled || attrib.size != vertex_component_count(kind) {
+                return Err(WebGlError::InvalidOperation);
+            }
+            let kind_bytes = vertex_stride(kind);
+            let stride = effective_vertex_stride(attrib, kind);
+            if stride < kind_bytes {
+                return Err(WebGlError::InvalidOperation);
+            }
+            let buffer_id = attrib.buffer.ok_or(WebGlError::InvalidOperation)?;
+            let buffer = self
+                .buffers
+                .get(&buffer_id)
+                .ok_or(WebGlError::InvalidOperation)?;
+            let required_bytes = attrib.offset + max_vertex_index * stride + kind_bytes;
+            if required_bytes > buffer.byte_len {
+                return Err(WebGlError::InvalidOperation);
+            }
+            layouts.push(AttributeBufferLayout {
+                stride,
+                offset: attrib.offset,
+            });
+            resolutions.push(AttributeResolution { buffer_id });
+        }
+        Ok((layouts, resolutions))
+    }
+
     pub fn draw_arrays(&mut self, mode: PrimitiveMode, first: u32, count: u32) {
         if self.lost {
             self.record_error(WebGlError::ContextLostWebgl);
@@ -33,122 +80,22 @@ impl WebGlContext {
             self.record_error(WebGlError::InvalidOperation);
             return;
         };
-        let uniform_value = program.fragment_color_uniform;
-        let texture_unit = program.fragment_texture_unit;
-        let Some(attrib) = self
-            .attribs
-            .get(reflection.position_attribute.location as usize)
-            .copied()
-        else {
-            self.record_error(WebGlError::InvalidOperation);
-            return;
+        let uniform_block_bytes = program.uniform_block_bytes.clone();
+        let sampler_texture_units = program.sampler_texture_units.clone();
+
+        let max_vertex_index = (first as u64 + count as u64).saturating_sub(1);
+        let (attribute_layouts, resolutions) = match self
+            .resolve_attribute_pipeline_inputs(&reflection, max_vertex_index)
+        {
+            Ok(v) => v,
+            Err(error) => {
+                self.record_error(error);
+                return;
+            },
         };
-        let position_kind = reflection.position_attribute.kind;
-        if !attrib.enabled || attrib.size != vertex_component_count(position_kind) {
-            self.record_error(WebGlError::InvalidOperation);
-            return;
-        }
-        let position_bytes = vertex_stride(position_kind);
-        let position_stride = effective_vertex_stride(attrib, position_kind);
-        if position_stride < position_bytes {
-            self.record_error(WebGlError::InvalidOperation);
-            return;
-        }
-        let Some(position_buffer_id) = attrib.buffer else {
-            self.record_error(WebGlError::InvalidOperation);
-            return;
+        let pipeline_key = VertexPipelineKey {
+            attribute_layouts: attribute_layouts.clone(),
         };
-        let Some(position_buffer) = self.buffers.get(&position_buffer_id) else {
-            self.record_error(WebGlError::InvalidOperation);
-            return;
-        };
-        let position_required_bytes =
-            attrib.offset + (first as u64 + count as u64 - 1) * position_stride + position_bytes;
-        if position_required_bytes > position_buffer.byte_len {
-            self.record_error(WebGlError::InvalidOperation);
-            return;
-        }
-        let color_attribute = if let Some(color_reflection) = reflection.color_attribute.as_ref() {
-            let Some(color_attrib) = self
-                .attribs
-                .get(color_reflection.location as usize)
-                .copied()
-            else {
-                self.record_error(WebGlError::InvalidOperation);
-                return;
-            };
-            let color_kind = color_reflection.kind;
-            if !color_attrib.enabled || color_attrib.size != vertex_component_count(color_kind) {
-                self.record_error(WebGlError::InvalidOperation);
-                return;
-            }
-            let color_bytes = vertex_stride(color_kind);
-            let color_stride = effective_vertex_stride(color_attrib, color_kind);
-            if color_stride < color_bytes {
-                self.record_error(WebGlError::InvalidOperation);
-                return;
-            }
-            let Some(color_buffer_id) = color_attrib.buffer else {
-                self.record_error(WebGlError::InvalidOperation);
-                return;
-            };
-            let Some(color_buffer) = self.buffers.get(&color_buffer_id) else {
-                self.record_error(WebGlError::InvalidOperation);
-                return;
-            };
-            let color_required_bytes = color_attrib.offset
-                + (first as u64 + count as u64 - 1) * color_stride
-                + color_bytes;
-            if color_required_bytes > color_buffer.byte_len {
-                self.record_error(WebGlError::InvalidOperation);
-                return;
-            }
-            Some((color_attrib, color_stride, color_buffer))
-        } else {
-            None
-        };
-        let texcoord_attribute =
-            if let Some(texcoord_reflection) = reflection.texcoord_attribute.as_ref() {
-                let Some(texcoord_attrib) = self
-                    .attribs
-                    .get(texcoord_reflection.location as usize)
-                    .copied()
-                else {
-                    self.record_error(WebGlError::InvalidOperation);
-                    return;
-                };
-                let texcoord_kind = texcoord_reflection.kind;
-                if !texcoord_attrib.enabled
-                    || texcoord_attrib.size != vertex_component_count(texcoord_kind)
-                {
-                    self.record_error(WebGlError::InvalidOperation);
-                    return;
-                }
-                let texcoord_bytes = vertex_stride(texcoord_kind);
-                let texcoord_stride = effective_vertex_stride(texcoord_attrib, texcoord_kind);
-                if texcoord_stride < texcoord_bytes {
-                    self.record_error(WebGlError::InvalidOperation);
-                    return;
-                }
-                let Some(texcoord_buffer_id) = texcoord_attrib.buffer else {
-                    self.record_error(WebGlError::InvalidOperation);
-                    return;
-                };
-                let Some(texcoord_buffer) = self.buffers.get(&texcoord_buffer_id) else {
-                    self.record_error(WebGlError::InvalidOperation);
-                    return;
-                };
-                let texcoord_required_bytes = texcoord_attrib.offset
-                    + (first as u64 + count as u64 - 1) * texcoord_stride
-                    + texcoord_bytes;
-                if texcoord_required_bytes > texcoord_buffer.byte_len {
-                    self.record_error(WebGlError::InvalidOperation);
-                    return;
-                }
-                Some((texcoord_attrib, texcoord_stride, texcoord_buffer))
-            } else {
-                None
-            };
 
         let topology = match mode {
             PrimitiveMode::Triangles => wgpu::PrimitiveTopology::TriangleList,
@@ -157,18 +104,6 @@ impl WebGlContext {
             self.record_error(WebGlError::InvalidEnum);
             return;
         }
-        let pipeline_key = VertexPipelineKey {
-            position_stride,
-            position_offset: attrib.offset,
-            color_stride: color_attribute.as_ref().map(|(_, stride, _)| *stride),
-            color_offset: color_attribute
-                .as_ref()
-                .map(|(color_attrib, _, _)| color_attrib.offset),
-            texcoord_stride: texcoord_attribute.as_ref().map(|(_, stride, _)| *stride),
-            texcoord_offset: texcoord_attribute
-                .as_ref()
-                .map(|(texcoord_attrib, _, _)| texcoord_attrib.offset),
-        };
         if self.current_framebuffer_status() != WebGlFramebufferStatus::Complete {
             self.record_error(WebGlError::InvalidFramebufferOperation);
             return;
@@ -177,6 +112,21 @@ impl WebGlContext {
             self.record_error(WebGlError::InvalidFramebufferOperation);
             return;
         };
+
+        // Resolve sampler texture views before borrowing the
+        // pipeline-cache slot mutably. Each sampler that has a
+        // bound texture-unit + texture contributes one
+        // (image_binding, sampler_binding, &view) row.
+        let sampler_texture_ids = match self
+            .resolve_sampler_texture_ids(&reflection, &sampler_texture_units)
+        {
+            Ok(v) => v,
+            Err(error) => {
+                self.record_error(error);
+                return;
+            },
+        };
+
         let needs_pipeline = self.programs.get(&program_id).map_or(true, |program| {
             !program.pipelines.contains_key(&pipeline_key)
         });
@@ -186,13 +136,13 @@ impl WebGlContext {
                 target_format,
                 &translated,
                 &reflection,
-                pipeline_key,
+                &pipeline_key,
             );
             let Some(program) = self.programs.get_mut(&program_id) else {
                 self.record_error(WebGlError::InvalidOperation);
                 return;
             };
-            program.pipelines.insert(pipeline_key, pipeline);
+            program.pipelines.insert(pipeline_key.clone(), pipeline);
         }
         let Some(program) = self.programs.get(&program_id) else {
             self.record_error(WebGlError::InvalidOperation);
@@ -202,49 +152,27 @@ impl WebGlContext {
             self.record_error(WebGlError::InvalidOperation);
             return;
         };
-        let uniform_bind_group = match (uniform_value, pipeline.uniform_bind_group_layout.as_ref())
-        {
-            (Some(value), Some(layout)) => {
-                Some(build_uniform_bind_group(&self.canvas.device, layout, value))
-            },
-            (None, None) => None,
-            _ => {
-                self.record_error(WebGlError::InvalidOperation);
-                return;
-            },
-        };
-        let texture_image_binding = reflection
-            .fragment_texture_uniform
-            .as_ref()
-            .map(|uniform| uniform.binding);
-        let texture_bind_group = match (
-            texture_unit,
-            pipeline.texture_bind_group_layout.as_ref(),
-            self.bound_texture_for_unit(texture_unit),
-            texture_image_binding,
-        ) {
-            (Some(0), Some(layout), Some(texture), Some(image_binding)) => {
-                Some(build_texture_bind_group(
-                    &self.canvas.device,
-                    layout,
-                    &texture.view,
-                    image_binding,
-                ))
-            },
-            (Some(_), Some(layout), Some(texture), Some(image_binding)) => {
-                Some(build_texture_bind_group(
-                    &self.canvas.device,
-                    layout,
-                    &texture.view,
-                    image_binding,
-                ))
-            },
-            (None, None, _, _) => None,
-            _ => {
-                self.record_error(WebGlError::InvalidOperation);
-                return;
-            },
-        };
+
+        let sampler_views: Vec<(u32, u32, &wgpu::TextureView)> = sampler_texture_ids
+            .iter()
+            .filter_map(|(image, sampler, id)| {
+                self.textures
+                    .get(id)
+                    .map(|texture| (*image, *sampler, &texture.view))
+            })
+            .collect();
+        let group_zero = pipeline.group_zero_layout.as_ref().map(|layout| {
+            build_group_zero_bind_group(
+                &self.canvas.device,
+                layout,
+                if uniform_block_bytes.is_empty() {
+                    None
+                } else {
+                    Some(uniform_block_bytes.as_slice())
+                },
+                &sampler_views,
+            )
+        });
 
         let mut encoder =
             self.canvas
@@ -270,19 +198,15 @@ impl WebGlContext {
                 multiview_mask: None,
             });
             pass.set_pipeline(&pipeline.pipeline);
-            if let Some((_, bind_group)) = uniform_bind_group.as_ref() {
-                pass.set_bind_group(0, bind_group, &[]);
-            }
-            if let Some((_, bind_group)) = texture_bind_group.as_ref() {
-                pass.set_bind_group(0, bind_group, &[]);
+            if let Some(group) = group_zero.as_ref() {
+                pass.set_bind_group(0, &group.bind_group, &[]);
             }
             self.apply_draw_state(&mut pass);
-            pass.set_vertex_buffer(0, position_buffer.buffer.slice(..));
-            if let Some((_, _, color_buffer)) = color_attribute {
-                pass.set_vertex_buffer(1, color_buffer.buffer.slice(..));
-            }
-            if let Some((_, _, texcoord_buffer)) = texcoord_attribute {
-                pass.set_vertex_buffer(1, texcoord_buffer.buffer.slice(..));
+            for (slot, resolution) in resolutions.iter().enumerate() {
+                let Some(buffer) = self.buffers.get(&resolution.buffer_id) else {
+                    continue;
+                };
+                pass.set_vertex_buffer(slot as u32, buffer.buffer.slice(..));
             }
             pass.draw(first..first + count, 0..1);
         }
@@ -327,8 +251,8 @@ impl WebGlContext {
             self.record_error(WebGlError::InvalidOperation);
             return;
         };
-        let uniform_value = program.fragment_color_uniform;
-        let texture_unit = program.fragment_texture_unit;
+        let uniform_block_bytes = program.uniform_block_bytes.clone();
+        let sampler_texture_units = program.sampler_texture_units.clone();
         let Some(index_buffer_id) = self.bound_element_array_buffer else {
             self.record_error(WebGlError::InvalidOperation);
             return;
@@ -354,118 +278,18 @@ impl WebGlContext {
         };
         let max_vertex_index = index_slice.iter().copied().max().unwrap_or(0) as u64;
 
-        let Some(attrib) = self
-            .attribs
-            .get(reflection.position_attribute.location as usize)
-            .copied()
-        else {
-            self.record_error(WebGlError::InvalidOperation);
-            return;
+        let (attribute_layouts, resolutions) = match self
+            .resolve_attribute_pipeline_inputs(&reflection, max_vertex_index)
+        {
+            Ok(v) => v,
+            Err(error) => {
+                self.record_error(error);
+                return;
+            },
         };
-        let position_kind = reflection.position_attribute.kind;
-        if !attrib.enabled || attrib.size != vertex_component_count(position_kind) {
-            self.record_error(WebGlError::InvalidOperation);
-            return;
-        }
-        let position_bytes = vertex_stride(position_kind);
-        let position_stride = effective_vertex_stride(attrib, position_kind);
-        if position_stride < position_bytes {
-            self.record_error(WebGlError::InvalidOperation);
-            return;
-        }
-        let Some(position_buffer_id) = attrib.buffer else {
-            self.record_error(WebGlError::InvalidOperation);
-            return;
+        let pipeline_key = VertexPipelineKey {
+            attribute_layouts: attribute_layouts.clone(),
         };
-        let Some(position_buffer) = self.buffers.get(&position_buffer_id) else {
-            self.record_error(WebGlError::InvalidOperation);
-            return;
-        };
-        let position_required_bytes =
-            attrib.offset + max_vertex_index * position_stride + position_bytes;
-        if position_required_bytes > position_buffer.byte_len {
-            self.record_error(WebGlError::InvalidOperation);
-            return;
-        }
-        let color_attribute = if let Some(color_reflection) = reflection.color_attribute.as_ref() {
-            let Some(color_attrib) = self
-                .attribs
-                .get(color_reflection.location as usize)
-                .copied()
-            else {
-                self.record_error(WebGlError::InvalidOperation);
-                return;
-            };
-            let color_kind = color_reflection.kind;
-            if !color_attrib.enabled || color_attrib.size != vertex_component_count(color_kind) {
-                self.record_error(WebGlError::InvalidOperation);
-                return;
-            }
-            let color_bytes = vertex_stride(color_kind);
-            let color_stride = effective_vertex_stride(color_attrib, color_kind);
-            if color_stride < color_bytes {
-                self.record_error(WebGlError::InvalidOperation);
-                return;
-            }
-            let Some(color_buffer_id) = color_attrib.buffer else {
-                self.record_error(WebGlError::InvalidOperation);
-                return;
-            };
-            let Some(color_buffer) = self.buffers.get(&color_buffer_id) else {
-                self.record_error(WebGlError::InvalidOperation);
-                return;
-            };
-            let color_required_bytes =
-                color_attrib.offset + max_vertex_index * color_stride + color_bytes;
-            if color_required_bytes > color_buffer.byte_len {
-                self.record_error(WebGlError::InvalidOperation);
-                return;
-            }
-            Some((color_attrib, color_stride, color_buffer))
-        } else {
-            None
-        };
-        let texcoord_attribute =
-            if let Some(texcoord_reflection) = reflection.texcoord_attribute.as_ref() {
-                let Some(texcoord_attrib) = self
-                    .attribs
-                    .get(texcoord_reflection.location as usize)
-                    .copied()
-                else {
-                    self.record_error(WebGlError::InvalidOperation);
-                    return;
-                };
-                let texcoord_kind = texcoord_reflection.kind;
-                if !texcoord_attrib.enabled
-                    || texcoord_attrib.size != vertex_component_count(texcoord_kind)
-                {
-                    self.record_error(WebGlError::InvalidOperation);
-                    return;
-                }
-                let texcoord_bytes = vertex_stride(texcoord_kind);
-                let texcoord_stride = effective_vertex_stride(texcoord_attrib, texcoord_kind);
-                if texcoord_stride < texcoord_bytes {
-                    self.record_error(WebGlError::InvalidOperation);
-                    return;
-                }
-                let Some(texcoord_buffer_id) = texcoord_attrib.buffer else {
-                    self.record_error(WebGlError::InvalidOperation);
-                    return;
-                };
-                let Some(texcoord_buffer) = self.buffers.get(&texcoord_buffer_id) else {
-                    self.record_error(WebGlError::InvalidOperation);
-                    return;
-                };
-                let texcoord_required_bytes =
-                    texcoord_attrib.offset + max_vertex_index * texcoord_stride + texcoord_bytes;
-                if texcoord_required_bytes > texcoord_buffer.byte_len {
-                    self.record_error(WebGlError::InvalidOperation);
-                    return;
-                }
-                Some((texcoord_attrib, texcoord_stride, texcoord_buffer))
-            } else {
-                None
-            };
 
         let topology = match mode {
             PrimitiveMode::Triangles => wgpu::PrimitiveTopology::TriangleList,
@@ -474,18 +298,6 @@ impl WebGlContext {
             self.record_error(WebGlError::InvalidEnum);
             return;
         }
-        let pipeline_key = VertexPipelineKey {
-            position_stride,
-            position_offset: attrib.offset,
-            color_stride: color_attribute.as_ref().map(|(_, stride, _)| *stride),
-            color_offset: color_attribute
-                .as_ref()
-                .map(|(color_attrib, _, _)| color_attrib.offset),
-            texcoord_stride: texcoord_attribute.as_ref().map(|(_, stride, _)| *stride),
-            texcoord_offset: texcoord_attribute
-                .as_ref()
-                .map(|(texcoord_attrib, _, _)| texcoord_attrib.offset),
-        };
         if self.current_framebuffer_status() != WebGlFramebufferStatus::Complete {
             self.record_error(WebGlError::InvalidFramebufferOperation);
             return;
@@ -494,6 +306,17 @@ impl WebGlContext {
             self.record_error(WebGlError::InvalidFramebufferOperation);
             return;
         };
+
+        let sampler_texture_ids = match self
+            .resolve_sampler_texture_ids(&reflection, &sampler_texture_units)
+        {
+            Ok(v) => v,
+            Err(error) => {
+                self.record_error(error);
+                return;
+            },
+        };
+
         let needs_pipeline = self.programs.get(&program_id).map_or(true, |program| {
             !program.pipelines.contains_key(&pipeline_key)
         });
@@ -503,13 +326,13 @@ impl WebGlContext {
                 target_format,
                 &translated,
                 &reflection,
-                pipeline_key,
+                &pipeline_key,
             );
             let Some(program) = self.programs.get_mut(&program_id) else {
                 self.record_error(WebGlError::InvalidOperation);
                 return;
             };
-            program.pipelines.insert(pipeline_key, pipeline);
+            program.pipelines.insert(pipeline_key.clone(), pipeline);
         }
         let Some(program) = self.programs.get(&program_id) else {
             self.record_error(WebGlError::InvalidOperation);
@@ -519,49 +342,27 @@ impl WebGlContext {
             self.record_error(WebGlError::InvalidOperation);
             return;
         };
-        let uniform_bind_group = match (uniform_value, pipeline.uniform_bind_group_layout.as_ref())
-        {
-            (Some(value), Some(layout)) => {
-                Some(build_uniform_bind_group(&self.canvas.device, layout, value))
-            },
-            (None, None) => None,
-            _ => {
-                self.record_error(WebGlError::InvalidOperation);
-                return;
-            },
-        };
-        let texture_image_binding = reflection
-            .fragment_texture_uniform
-            .as_ref()
-            .map(|uniform| uniform.binding);
-        let texture_bind_group = match (
-            texture_unit,
-            pipeline.texture_bind_group_layout.as_ref(),
-            self.bound_texture_for_unit(texture_unit),
-            texture_image_binding,
-        ) {
-            (Some(0), Some(layout), Some(texture), Some(image_binding)) => {
-                Some(build_texture_bind_group(
-                    &self.canvas.device,
-                    layout,
-                    &texture.view,
-                    image_binding,
-                ))
-            },
-            (Some(_), Some(layout), Some(texture), Some(image_binding)) => {
-                Some(build_texture_bind_group(
-                    &self.canvas.device,
-                    layout,
-                    &texture.view,
-                    image_binding,
-                ))
-            },
-            (None, None, _, _) => None,
-            _ => {
-                self.record_error(WebGlError::InvalidOperation);
-                return;
-            },
-        };
+
+        let sampler_views: Vec<(u32, u32, &wgpu::TextureView)> = sampler_texture_ids
+            .iter()
+            .filter_map(|(image, sampler, id)| {
+                self.textures
+                    .get(id)
+                    .map(|texture| (*image, *sampler, &texture.view))
+            })
+            .collect();
+        let group_zero = pipeline.group_zero_layout.as_ref().map(|layout| {
+            build_group_zero_bind_group(
+                &self.canvas.device,
+                layout,
+                if uniform_block_bytes.is_empty() {
+                    None
+                } else {
+                    Some(uniform_block_bytes.as_slice())
+                },
+                &sampler_views,
+            )
+        });
 
         let mut encoder =
             self.canvas
@@ -587,19 +388,15 @@ impl WebGlContext {
                 multiview_mask: None,
             });
             pass.set_pipeline(&pipeline.pipeline);
-            if let Some((_, bind_group)) = uniform_bind_group.as_ref() {
-                pass.set_bind_group(0, bind_group, &[]);
-            }
-            if let Some((_, bind_group)) = texture_bind_group.as_ref() {
-                pass.set_bind_group(0, bind_group, &[]);
+            if let Some(group) = group_zero.as_ref() {
+                pass.set_bind_group(0, &group.bind_group, &[]);
             }
             self.apply_draw_state(&mut pass);
-            pass.set_vertex_buffer(0, position_buffer.buffer.slice(..));
-            if let Some((_, _, color_buffer)) = color_attribute {
-                pass.set_vertex_buffer(1, color_buffer.buffer.slice(..));
-            }
-            if let Some((_, _, texcoord_buffer)) = texcoord_attribute {
-                pass.set_vertex_buffer(1, texcoord_buffer.buffer.slice(..));
+            for (slot, resolution) in resolutions.iter().enumerate() {
+                let Some(buffer) = self.buffers.get(&resolution.buffer_id) else {
+                    continue;
+                };
+                pass.set_vertex_buffer(slot as u32, buffer.buffer.slice(..));
             }
             pass.set_index_buffer(index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint16);
             pass.draw_indexed(first_index as u32..first_index as u32 + count, 0, 0..1);
@@ -609,5 +406,32 @@ impl WebGlContext {
             self.canvas.output.damage =
                 Some([0, 0, self.canvas.output.size.0, self.canvas.output.size.1]);
         }
+    }
+
+    /// Resolve each sampler's bound texture by *unit*, not by
+    /// view reference. Holding raw `WebGlTextureId`s here lets
+    /// the caller continue mutating `self.programs` (e.g. to
+    /// insert a new pipeline-cache entry) before turning them
+    /// into `&wgpu::TextureView`s at bind-group-build time.
+    fn resolve_sampler_texture_ids(
+        &self,
+        reflection: &ProgramReflection,
+        sampler_texture_units: &[Option<u32>],
+    ) -> Result<Vec<(u32, u32, WebGlTextureId)>, WebGlError> {
+        let mut ids = Vec::with_capacity(reflection.samplers.len());
+        for (index, sampler) in reflection.samplers.iter().enumerate() {
+            let unit = sampler_texture_units
+                .get(index)
+                .copied()
+                .flatten()
+                .ok_or(WebGlError::InvalidOperation)?;
+            let unit_slot = self
+                .bound_texture_2d_units
+                .get(unit as usize)
+                .ok_or(WebGlError::InvalidOperation)?;
+            let texture_id = unit_slot.ok_or(WebGlError::InvalidOperation)?;
+            ids.push((sampler.image_binding, sampler.sampler_binding, texture_id));
+        }
+        Ok(ids)
     }
 }

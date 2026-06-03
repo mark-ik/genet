@@ -168,6 +168,9 @@ void main() {
             name: "u_color".to_string(),
             binding: 0,
             kind: UniformKind::Float32x4,
+            member_index: 0,
+            block_offset: 0,
+            block_size: 16,
         })
     );
 }
@@ -215,6 +218,9 @@ void main() {
             name: "u_texture".to_string(),
             binding: 1,
             kind: UniformKind::Sampler2D,
+            member_index: 0,
+            block_offset: 0,
+            block_size: 0,
         })
     );
 }
@@ -407,6 +413,9 @@ void main() {
             name: "u_color".to_string(),
             binding: 0,
             kind: UniformKind::Float32x4,
+            member_index: 0,
+            block_offset: 0,
+            block_size: 16,
         })
     );
 }

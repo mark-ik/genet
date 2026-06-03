@@ -34,7 +34,20 @@ pub struct WebGlProgramId(u64);
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct WebGlUniformLocation {
     program: WebGlProgramId,
-    binding: u32,
+    slot: UniformSlot,
+}
+
+/// What the WebGL `getUniformLocation` call resolved to: an
+/// index into either the program's Block-uniform list (for
+/// `vec_n` / `mat_n` / scalars) or its sampler list (for
+/// `sampler2D` / `samplerCube`). Setters dispatch on this tag
+/// to write into the right CPU mirror.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+enum UniformSlot {
+    /// `program.reflection.uniforms[index]`.
+    BlockMember { index: u32 },
+    /// `program.reflection.samplers[index]`.
+    Sampler { index: u32 },
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -157,18 +170,27 @@ struct ShaderObject {
 
 struct PipelineObject {
     pipeline: wgpu::RenderPipeline,
-    uniform_bind_group_layout: Option<wgpu::BindGroupLayout>,
-    texture_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    /// Single bind-group layout for `@group(0)` — covers the
+    /// uniform Block buffer (if any) plus every sampler. `None`
+    /// when the shader pair declares no uniforms and no
+    /// samplers.
+    group_zero_layout: Option<wgpu::BindGroupLayout>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
+struct AttributeBufferLayout {
+    stride: u64,
+    offset: u64,
+}
+
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
 struct VertexPipelineKey {
-    position_stride: u64,
-    position_offset: u64,
-    color_stride: Option<u64>,
-    color_offset: Option<u64>,
-    texcoord_stride: Option<u64>,
-    texcoord_offset: Option<u64>,
+    /// One entry per declared vertex attribute, in declaration
+    /// order. Each carries the stride / offset the WebGL caller
+    /// configured via `vertexAttribPointer` — the pipeline is
+    /// cached keyed on this tuple so stride changes (e.g.
+    /// interleaved vs. tightly-packed) re-bake the pipeline.
+    attribute_layouts: Vec<AttributeBufferLayout>,
 }
 
 struct ProgramObject {
@@ -177,8 +199,15 @@ struct ProgramObject {
     translated: Option<TranslatedProgram>,
     reflection: Option<ProgramReflection>,
     pipelines: HashMap<VertexPipelineKey, PipelineObject>,
-    fragment_color_uniform: Option<[f32; 4]>,
-    fragment_texture_unit: Option<u32>,
+    /// CPU mirror of the uniform Block buffer. Sized to the
+    /// program's `uniform_block_size`. Mutated by `uniformXXX`
+    /// setters at the offsets the reflection records; uploaded
+    /// to the GPU on each draw.
+    uniform_block_bytes: Vec<u8>,
+    /// Per-sampler texture-unit assignments set via
+    /// `uniform1i` on the sampler's location. Indexed by
+    /// sampler member index.
+    sampler_texture_units: Vec<Option<u32>>,
     link_status: bool,
     info_log: String,
 }
@@ -231,6 +260,8 @@ mod tests_framebuffer;
 mod tests_index_texture;
 #[cfg(test)]
 mod tests_variants;
+#[cfg(test)]
+mod tests_widened;
 
 impl WebGlContext {
     pub fn from_canvas(canvas: WebGlCanvas) -> Self {

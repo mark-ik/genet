@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+use super::pipeline::f32_slice_to_bytes;
 use super::*;
 
 impl WebGlContext {
@@ -94,8 +95,8 @@ impl WebGlContext {
                 translated: None,
                 reflection: None,
                 pipelines: HashMap::new(),
-                fragment_color_uniform: None,
-                fragment_texture_unit: None,
+                uniform_block_bytes: Vec::new(),
+                sampler_texture_units: Vec::new(),
                 link_status: false,
                 info_log: String::new(),
             },
@@ -124,6 +125,8 @@ impl WebGlContext {
         program.translated = None;
         program.reflection = None;
         program.pipelines.clear();
+        program.uniform_block_bytes.clear();
+        program.sampler_texture_units.clear();
         program.info_log.clear();
     }
 
@@ -187,12 +190,9 @@ impl WebGlContext {
             return;
         };
         program_object.translated = Some(translated);
-        program_object.fragment_color_uniform = reflection
-            .fragment_color_uniform
-            .as_ref()
-            .map(|_| [0.0, 0.0, 0.0, 1.0]);
-        program_object.fragment_texture_unit =
-            reflection.fragment_texture_uniform.as_ref().map(|_| 0);
+        program_object.uniform_block_bytes =
+            vec![0u8; reflection.uniform_block_size as usize];
+        program_object.sampler_texture_units = vec![None; reflection.samplers.len()];
         program_object.reflection = Some(reflection);
         program_object.pipelines.clear();
         program_object.link_status = true;
@@ -289,25 +289,11 @@ impl WebGlContext {
             self.record_error(WebGlError::InvalidOperation);
             return -1;
         };
-        if reflection.position_attribute.name == name {
-            reflection.position_attribute.location as i32
-        } else if let Some(color_attribute) = reflection.color_attribute.as_ref() {
-            if color_attribute.name == name {
-                color_attribute.location as i32
-            } else {
-                reflection
-                    .texcoord_attribute
-                    .as_ref()
-                    .filter(|attribute| attribute.name == name)
-                    .map_or(-1, |attribute| attribute.location as i32)
-            }
-        } else {
-            reflection
-                .texcoord_attribute
-                .as_ref()
-                .filter(|attribute| attribute.name == name)
-                .map_or(-1, |attribute| attribute.location as i32)
-        }
+        reflection
+            .attributes
+            .iter()
+            .find(|attribute| attribute.name == name)
+            .map_or(-1, |attribute| attribute.location as i32)
     }
 
     pub fn get_uniform_location(
@@ -327,21 +313,108 @@ impl WebGlContext {
             self.record_error(WebGlError::InvalidOperation);
             return None;
         };
-        let uniform = reflection
-            .fragment_color_uniform
-            .as_ref()
-            .or(reflection.fragment_texture_uniform.as_ref());
-        if let Some(uniform) = uniform.filter(|uniform| uniform.name == name) {
-            Some(WebGlUniformLocation {
+        if let Some((index, _)) = reflection
+            .uniforms
+            .iter()
+            .enumerate()
+            .find(|(_, u)| u.name == name)
+        {
+            return Some(WebGlUniformLocation {
                 program,
-                binding: uniform.binding,
-            })
-        } else {
-            None
+                slot: UniformSlot::BlockMember { index: index as u32 },
+            });
         }
+        if let Some((index, _)) = reflection
+            .samplers
+            .iter()
+            .enumerate()
+            .find(|(_, s)| s.name == name)
+        {
+            return Some(WebGlUniformLocation {
+                program,
+                slot: UniformSlot::Sampler { index: index as u32 },
+            });
+        }
+        None
+    }
+
+    pub fn uniform1f(&mut self, location: WebGlUniformLocation, x: f32) {
+        self.write_block_member(location, UniformKind::Float32, &x.to_ne_bytes());
+    }
+
+    pub fn uniform2f(&mut self, location: WebGlUniformLocation, x: f32, y: f32) {
+        let bytes = [x.to_ne_bytes(), y.to_ne_bytes()].concat();
+        self.write_block_member(location, UniformKind::Float32x2, &bytes);
+    }
+
+    pub fn uniform3f(&mut self, location: WebGlUniformLocation, x: f32, y: f32, z: f32) {
+        let bytes = [x.to_ne_bytes(), y.to_ne_bytes(), z.to_ne_bytes()].concat();
+        self.write_block_member(location, UniformKind::Float32x3, &bytes);
     }
 
     pub fn uniform4f(&mut self, location: WebGlUniformLocation, x: f32, y: f32, z: f32, w: f32) {
+        let bytes = [
+            x.to_ne_bytes(),
+            y.to_ne_bytes(),
+            z.to_ne_bytes(),
+            w.to_ne_bytes(),
+        ]
+        .concat();
+        self.write_block_member(location, UniformKind::Float32x4, &bytes);
+    }
+
+    pub fn uniform2fv(&mut self, location: WebGlUniformLocation, value: &[f32; 2]) {
+        self.write_block_member(
+            location,
+            UniformKind::Float32x2,
+            &f32_slice_to_bytes(value),
+        );
+    }
+
+    pub fn uniform3fv(&mut self, location: WebGlUniformLocation, value: &[f32; 3]) {
+        self.write_block_member(
+            location,
+            UniformKind::Float32x3,
+            &f32_slice_to_bytes(value),
+        );
+    }
+
+    pub fn uniform4fv(&mut self, location: WebGlUniformLocation, value: &[f32; 4]) {
+        self.write_block_member(
+            location,
+            UniformKind::Float32x4,
+            &f32_slice_to_bytes(value),
+        );
+    }
+
+    /// Column-major mat3 — WGSL pads each column to 16 bytes
+    /// (vec3 occupies 12, pad up to 16). Caller passes 9 floats
+    /// in column-major order; this writes 48 bytes with the
+    /// padding inserted.
+    pub fn uniform_matrix3fv(&mut self, location: WebGlUniformLocation, value: &[f32; 9]) {
+        let mut padded = [0u8; 48];
+        for column in 0..3 {
+            for row in 0..3 {
+                let src = value[column * 3 + row];
+                let dst = column * 16 + row * 4;
+                padded[dst..dst + 4].copy_from_slice(&src.to_ne_bytes());
+            }
+        }
+        self.write_block_member(location, UniformKind::Matrix3, &padded);
+    }
+
+    /// Column-major mat4 — 4 columns × vec4 each, 64 bytes, no
+    /// padding gymnastics. Caller passes 16 floats column-major.
+    pub fn uniform_matrix4fv(&mut self, location: WebGlUniformLocation, value: &[f32; 16]) {
+        self.write_block_member(location, UniformKind::Matrix4, &f32_slice_to_bytes(value));
+    }
+
+    fn write_block_member(
+        &mut self,
+        location: WebGlUniformLocation,
+        expected_kind: UniformKind,
+        bytes: &[u8],
+    ) {
         if self.lost {
             self.record_error(WebGlError::ContextLostWebgl);
             return;
@@ -350,23 +423,33 @@ impl WebGlContext {
             self.record_error(WebGlError::InvalidOperation);
             return;
         }
+        let UniformSlot::BlockMember { index } = location.slot else {
+            self.record_error(WebGlError::InvalidOperation);
+            return;
+        };
         let Some(program) = self.programs.get_mut(&location.program) else {
             self.record_error(WebGlError::InvalidOperation);
             return;
         };
-        let Some(uniform) = program
-            .reflection
-            .as_ref()
-            .and_then(|reflection| reflection.fragment_color_uniform.as_ref())
-        else {
+        let Some(reflection) = program.reflection.as_ref() else {
             self.record_error(WebGlError::InvalidOperation);
             return;
         };
-        if uniform.binding != location.binding || uniform.kind != UniformKind::Float32x4 {
+        let Some(uniform) = reflection.uniforms.get(index as usize) else {
+            self.record_error(WebGlError::InvalidOperation);
+            return;
+        };
+        if uniform.kind != expected_kind {
             self.record_error(WebGlError::InvalidOperation);
             return;
         }
-        program.fragment_color_uniform = Some([x, y, z, w]);
+        let offset = uniform.block_offset as usize;
+        let end = offset + bytes.len();
+        if end > program.uniform_block_bytes.len() {
+            self.record_error(WebGlError::InvalidOperation);
+            return;
+        }
+        program.uniform_block_bytes[offset..end].copy_from_slice(bytes);
     }
 
     pub fn uniform1i(&mut self, location: WebGlUniformLocation, value: i32) {
@@ -382,23 +465,31 @@ impl WebGlContext {
             self.record_error(WebGlError::InvalidValue);
             return;
         }
+        let UniformSlot::Sampler { index } = location.slot else {
+            self.record_error(WebGlError::InvalidOperation);
+            return;
+        };
         let Some(program) = self.programs.get_mut(&location.program) else {
             self.record_error(WebGlError::InvalidOperation);
             return;
         };
-        let Some(uniform) = program
-            .reflection
-            .as_ref()
-            .and_then(|reflection| reflection.fragment_texture_uniform.as_ref())
-        else {
+        let Some(reflection) = program.reflection.as_ref() else {
             self.record_error(WebGlError::InvalidOperation);
             return;
         };
-        if uniform.binding != location.binding || uniform.kind != UniformKind::Sampler2D {
+        let Some(sampler) = reflection.samplers.get(index as usize) else {
+            self.record_error(WebGlError::InvalidOperation);
+            return;
+        };
+        if sampler.kind != UniformKind::Sampler2D && sampler.kind != UniformKind::SamplerCube {
             self.record_error(WebGlError::InvalidOperation);
             return;
         }
-        program.fragment_texture_unit = Some(value as u32);
+        let Some(slot) = program.sampler_texture_units.get_mut(index as usize) else {
+            self.record_error(WebGlError::InvalidOperation);
+            return;
+        };
+        *slot = Some(value as u32);
     }
 
     pub fn enable_vertex_attrib_array(&mut self, index: u32) {
@@ -421,7 +512,7 @@ impl WebGlContext {
             self.record_error(WebGlError::ContextLostWebgl);
             return;
         }
-        if normalized || !matches!(size, 2 | 4) || stride % 4 != 0 || offset % 4 != 0 {
+        if normalized || !matches!(size, 1 | 2 | 3 | 4) || stride % 4 != 0 || offset % 4 != 0 {
             self.record_error(WebGlError::InvalidValue);
             return;
         }

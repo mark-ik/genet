@@ -158,8 +158,8 @@ impl WebGlContext {
         program.translated = None;
         program.reflection = None;
         program.pipelines.clear();
-        program.fragment_color_uniform = None;
-        program.fragment_texture_unit = None;
+        program.uniform_block_bytes.clear();
+        program.sampler_texture_units.clear();
         program.link_status = false;
         program.info_log = message.to_string();
     }
