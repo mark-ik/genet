@@ -21,12 +21,15 @@
 //! separable, and the test driver asserts on the produced `Scene`/layout
 //! without a window.
 
+use std::hash::Hash;
+
 use engine_observables_api::{FragmentQuery, Point};
+use layout_dom_api::LayoutDom;
 use paint_list_api::{ColorF, DeviceIntSize};
 use serval_layout::{
-    BackgroundImagePlane, FragmentPlane, ImagePlane, ScrollOffsets, ServalLaneView, ServalPaintList,
-    StylePlane, caret_byte_at_point, caret_byte_vertical, caret_rect, emit_paint_list_with_layouts,
-    layout, run_cascade, selection_rects,
+    BackgroundImagePlane, FragmentPlane, ImageLoader, ImagePlane, ScrollOffsets, ServalLaneView,
+    ServalPaintList, StylePlane, caret_byte_at_point, caret_byte_vertical, caret_rect,
+    emit_paint_list_with_layouts, layout, paint_list_from_layout_dom, run_cascade, selection_rects,
 };
 use serval_scripted_dom::{NodeId, ScriptedDom};
 
@@ -73,6 +76,33 @@ pub fn scene_from_scripted_dom(
     scroll_offsets: &ScrollOffsets<NodeId>,
 ) -> netrender::Scene {
     let plist = paint_list_from_scripted_dom(dom, stylesheets, width, height, cursor, scroll_offsets);
+    paint::translate_paint_list(&plist)
+}
+
+/// Render any `LayoutDom` document to a `netrender::Scene` through the shared
+/// content pipeline ([`serval_layout::paint_list_from_layout_dom`]): cascade →
+/// image decode → layout → emit → translate. `loader` supplies `<img>` /
+/// `background-image` bytes (`data:` URIs decode inline regardless, so
+/// [`serval_layout::NoImageLoader`] still yields inline images).
+///
+/// This is the content lane (fetched pages, the static viewer's documents),
+/// shared with `pelt-viewer`'s `build_scene`. Unlike [`scene_from_scripted_dom`]
+/// it adds no caret/selection/scrollbar overlays — a display surface, not a
+/// focused editable field.
+pub fn scene_from_layout_dom<D, L>(
+    dom: &D,
+    stylesheets: &[&str],
+    loader: &L,
+    width: u32,
+    height: u32,
+    scroll_offsets: &ScrollOffsets<D::NodeId>,
+) -> netrender::Scene
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + 'static,
+    L: ImageLoader,
+{
+    let plist = paint_list_from_layout_dom(dom, stylesheets, loader, width, height, scroll_offsets);
     paint::translate_paint_list(&plist)
 }
 

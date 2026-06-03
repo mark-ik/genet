@@ -114,3 +114,58 @@ where
     let (fragments, _tree, _ctx) = layout(dom, &styles, &images, viewport);
     fragments
 }
+
+/// Run the full HTML-content pipeline (cascade → image decode → box-tree
+/// layout → paint emit) over any `LayoutDom`, returning a [`ServalPaintList`].
+///
+/// This is the shared core behind every content lane: the static viewer
+/// (`pelt-viewer`), the scripted live path, and meerkat's content card differ
+/// only in how they assemble `stylesheets` and which [`ImageLoader`] resolves
+/// resources, not in the pipeline. `loader` supplies `<img>` /
+/// `background-image` bytes (`data:` URIs decode inline regardless, so a
+/// [`NoImageLoader`] still yields inline images); `scroll_offsets` positions
+/// scrolled containers at emit time. Callers layer their own overlays (a
+/// focused field's caret/selection, scrollbar thumbs) onto the returned list.
+///
+/// Unlike [`render`], this decodes images and emits, so it is the path for any
+/// caller that wants a paintable document rather than just a fragment plane.
+pub fn paint_list_from_layout_dom<D, L>(
+    dom: &D,
+    stylesheets: &[&str],
+    loader: &L,
+    width: u32,
+    height: u32,
+    scroll_offsets: &ScrollOffsets<D::NodeId>,
+) -> ServalPaintList
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + 'static,
+    L: ImageLoader,
+{
+    let mut styles = StylePlane::new();
+    run_cascade(
+        dom,
+        &mut styles,
+        euclid::default::Size2D::new(width as f32, height as f32),
+        stylesheets,
+        None,
+    );
+    let images = ImagePlane::decode_from_dom_with_loader(dom, loader);
+    let bg_images = BackgroundImagePlane::decode_from_cascade(dom, &styles, loader);
+    let viewport = taffy::Size {
+        width: taffy::AvailableSpace::Definite(width as f32),
+        height: taffy::AvailableSpace::Definite(height as f32),
+    };
+    let (fragments, built, text_ctx) = layout(dom, &styles, &images, viewport);
+    emit_paint_list_with_layouts(
+        dom,
+        &styles,
+        &fragments,
+        &built,
+        &text_ctx,
+        &images,
+        &bg_images,
+        scroll_offsets,
+        paint_list_api::DeviceIntSize::new(width as i32, height as i32),
+    )
+}

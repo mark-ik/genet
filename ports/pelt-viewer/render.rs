@@ -13,12 +13,10 @@
 
 use std::path::Path;
 
-use paint_list_api::DeviceIntSize;
 use pelt_core::ResourceFetcher;
 use serval_layout::{
-    BackgroundImagePlane, ImageLoader, ImagePlane, LocalFileImageLoader, ResourceResolver,
-    StylePlane, emit_paint_list_with_layouts, inline_stylesheets, layout,
-    linked_stylesheets_with_loader, run_cascade,
+    ImageLoader, LocalFileImageLoader, ResourceResolver, inline_stylesheets,
+    linked_stylesheets_with_loader, paint_list_from_layout_dom,
 };
 use serval_static_dom::StaticDocument;
 
@@ -55,39 +53,18 @@ pub fn build_scene(
     all_sheets.extend(inline_css.iter().map(String::as_str));
     all_sheets.extend(linked_css.iter().map(String::as_str));
 
-    let mut styles: StylePlane<_> = StylePlane::new();
-    run_cascade(
+    // The cascade → image-decode → layout → emit pipeline is the shared content
+    // core (`<img>`/`background-image` resolve through `loader`: data: inline,
+    // relative paths from disk, remote `src`s via the fetcher). Static viewer
+    // render: no scrolling.
+    let plist = paint_list_from_layout_dom(
         &document,
-        &mut styles,
-        euclid::Size2D::new(width as f32, height as f32),
         &all_sheets,
-        None,
-    );
-
-    // `<img>`: data: URIs decode inline; relative paths load from disk against
-    // the document's directory, remote `src`s through the fetcher. The box tree
-    // sizes each replaced leaf from this plane at layout time.
-    let images = ImagePlane::decode_from_dom_with_loader(&document, &loader);
-    let bg_images = BackgroundImagePlane::decode_from_cascade(&document, &styles, &loader);
-
-    let viewport = taffy::Size {
-        width: taffy::AvailableSpace::Definite(width as f32),
-        height: taffy::AvailableSpace::Definite(height as f32),
-    };
-    let (fragments, built, text_ctx) = layout(&document, &styles, &images, viewport);
-    let plist = emit_paint_list_with_layouts(
-        &document,
-        &styles,
-        &fragments,
-        &built,
-        &text_ctx,
-        &images,
-        &bg_images,
-        // Static viewer render: no scrolling.
+        &loader,
+        width,
+        height,
         &Default::default(),
-        DeviceIntSize::new(width as i32, height as i32),
     );
-
     paint::translate_paint_list(&plist)
 }
 
