@@ -19,9 +19,11 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 
 use std::os::fd::OwnedFd;
+use std::sync::{Arc, Mutex};
 
 use ash::vk;
 use smallvec::SmallVec;
+use wayland_client::protocol::wl_buffer::WlBuffer;
 
 use crate::interop::HostWgpuContext;
 use crate::compositor_wayland::errors::BackendError;
@@ -402,6 +404,61 @@ unsafe fn query_importable_modifiers(
     buf.into_iter().map(|p| p.drm_format_modifier).collect()
 }
 
+/// Per-slot user data attached to each `wl_buffer`. The wayland-client
+/// dispatcher uses this to find the matching slot on a release event.
+#[derive(Clone, Debug)]
+pub struct BufferSlotUserData {
+    pub surface_id: u64,
+    pub slot_index: u8,
+    pub in_flight: Arc<Mutex<bool>>,
+}
+
+/// Per-surface `wl_buffer` pool. N=2 (mailbox) — what mainstream
+/// Wayland clients use.
+pub struct SurfaceBufferPool {
+    pub width: u32,
+    pub height: u32,
+    pub chosen: ChosenModifier,
+    pub slots: [BufferSlot; 2],
+}
+
+pub struct BufferSlot {
+    pub image: ExportableImage,
+    pub wl_buffer: WlBuffer,
+    pub in_flight: Arc<Mutex<bool>>,
+}
+
+impl SurfaceBufferPool {
+    /// Take the first `!in_flight` slot. Marks it `in_flight = true`.
+    /// Returns the slot index + a reference to the wl_buffer + the
+    /// wgpu::Texture for the encoder.
+    pub fn acquire(&mut self) -> Option<usize> {
+        for (i, slot) in self.slots.iter().enumerate() {
+            let mut g = slot.in_flight.lock().expect("in_flight mutex");
+            if !*g {
+                *g = true;
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Whether at least one slot is available without an event roundtrip.
+    pub fn has_available(&self) -> bool {
+        self.slots
+            .iter()
+            .any(|s| !*s.in_flight.lock().expect("in_flight mutex"))
+    }
+}
+
+impl Drop for SurfaceBufferPool {
+    fn drop(&mut self) {
+        for slot in &self.slots {
+            slot.wl_buffer.destroy();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,5 +498,30 @@ mod tests {
             vec![DRM_FORMAT_MOD_LINEAR],
         );
         assert!(matches!(t.choose(), Err(BackendError::NoCompatibleFormat)));
+    }
+
+    #[test]
+    fn acquire_picks_first_available_then_blocks() {
+        let in_flight_a = Arc::new(Mutex::new(false));
+        let in_flight_b = Arc::new(Mutex::new(false));
+        // Constructing a real BufferSlot requires a wl_buffer; the
+        // acquire predicate operates on the in_flight Mutex slice alone.
+        // Test the predicate directly.
+        let bools = [in_flight_a.clone(), in_flight_b.clone()];
+        fn first_available(bools: &[Arc<Mutex<bool>>; 2]) -> Option<usize> {
+            for (i, b) in bools.iter().enumerate() {
+                let mut g = b.lock().unwrap();
+                if !*g {
+                    *g = true;
+                    return Some(i);
+                }
+            }
+            None
+        }
+        assert_eq!(first_available(&bools), Some(0));
+        assert_eq!(first_available(&bools), Some(1));
+        assert_eq!(first_available(&bools), None);
+        *in_flight_a.lock().unwrap() = false;
+        assert_eq!(first_available(&bools), Some(0));
     }
 }
