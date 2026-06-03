@@ -23,24 +23,25 @@ pub trait FetchHandler { fn fetch(&self, request: FetchRequest) -> FetchOutcome;
 `HostState` carries `fetch: Option<Box<dyn FetchHandler>>`, set via
 `Runtime::set_fetch_handler`. The native `__fetch` sink reads four string args
 (method, url, newline-delimited headers, body), calls the handler, and encodes the
-outcome as hand-rolled JSON (no JSON dep). No handler installed → network error,
-which is the spec-correct default.
+outcome as hand-rolled JSON (no JSON dep). With no handler installed it returns a
+network error, which is the spec-correct default.
 
 ### 2. The JS Fetch API surface (`FETCH_BOOTSTRAP`)
 
 Bootstrapped in JS over the single `__fetch` sink:
 
-- **Headers** — RFC 7230 name validation (token regex), OWS-trimmed values,
+- **Headers**: RFC 7230 name validation (token regex), OWS-trimmed values,
   `append`/`set`/`get`/`has`/`delete`/`getSetCookie`, sorted iteration
   (`entries`/`keys`/`values`/`Symbol.iterator`/`forEach`).
-- **Request** — full object, `GET`/`HEAD`+body throws, `clone`.
-- **Response** — `new Response(body, init)`, status-range check, `error`/
+- **Request**: full object, `GET`/`HEAD`+body throws, `clone`.
+- **Response**: `new Response(body, init)`, status-range check, `error`/
   `redirect`/`json` statics, `clone`.
-- **Body mixin** — `text`/`json`/`arrayBuffer`, single-use via a consumed flag.
-- **`fetch()`** — takes a Request, adds a default `Accept`, joins headers with
+- **Body mixin**: `text`/`json`/`arrayBuffer`, single-use via a consumed flag.
+- **`fetch()`**: takes a Request, adds a default `Accept`, joins headers with
   `"\n"`, builds a Response from the outcome.
 
-Separator is a literal newline on both sides (JS `join("\n")`, Rust `split('\n')`).
+The separator is a literal newline on both sides (JS `join("\n")`, Rust
+`split('\n')`).
 
 ### 3. netfetcher-backed handler (`ports/serval-wpt`, `netfetch` feature)
 
@@ -65,10 +66,10 @@ is what makes the `fetch/api/` `.any.js` corpus runnable at all.
 | fetch/api/request | 168/469 | 168/429 |
 | fetch/api/response | 46/199 | 46/199 |
 
-All three were **0** before this work (the files would not even parse/run). These
-are the headers/request/response object-semantics tests that need no live server.
-Boa↔nova agree on headers and response; request differs only in a subtest-**count**
-tail (469 vs 429 enumerated), same pass count.
+All three were **0** before this work (the files would not even parse and run).
+These are the headers/request/response object-semantics tests that need no live
+server. Boa and nova agree on headers and response; request differs only in a
+subtest-**count** tail (469 vs 429 enumerated), with the same pass count.
 
 ## The `wpt serve` lift: blocked, two gates
 
@@ -77,19 +78,19 @@ The full WPT server tooling is vendored (`tests/wpt/tests/` has the `wpt` CLI,
 3.14.2 is present; `wpt serve --exit-after-start` bootstraps its venv and deps
 cleanly. It then fails:
 
-```
+```text
 CRITICAL - start_http_server: getaddrinfo failed
 Please ensure all the necessary WPT subdomains are mapped to a loopback device.
 ```
 
-**Gate A — hosts file.** `wpt serve` resolves `web-platform.test` and its
+**Gate A, hosts file.** `wpt serve` resolves `web-platform.test` and its
 subdomains for its own readiness probe. A localhost-only `--config` override does
-not sidestep this (`subdomains` is not even a valid config-override key —
-`KeyError`). The fix is the documented one-time admin step: append
+not sidestep this (`subdomains` is not even a valid config-override key, which
+raises `KeyError`). The fix is the documented one-time admin step: append
 `wpt make-hosts-file` output to `C:\Windows\System32\drivers\etc\hosts`. This needs
-the user's elevation; it is not something the harness can do unattended.
+elevation, so it is not something the harness can do unattended.
 
-**Gate B — server mode in `serval-wpt`.** Past the hosts file, running the
+**Gate B, server mode in `serval-wpt`.** Past the hosts file, running the
 network-dependent `fetch/` tests needs the runner to load server-served and
 template-substituted pages and set the running server as the document base URL, so
 relative `fetch()` calls resolve to it. That is a substantial harness rework beyond
@@ -97,10 +98,10 @@ the netfetcher handler already built.
 
 ## Not done (deliberately deferred)
 
-- **`wpt serve` stand-up** — gated on Gate A (user admin step) then Gate B
+- **`wpt serve` stand-up**: gated on Gate A (user admin step) then Gate B
   (server-mode harness). The netfetcher handler is ready to drive it once both are
   cleared.
-- **The failing object-semantics tail** — request/response sit well under half.
+- **The failing object-semantics tail**: request/response sit well under half.
   Many failures are missing pieces (`FormData`, `Blob`, `URLSearchParams` bodies,
   `ReadableStream`), not seam bugs. Each is its own slice.
 
