@@ -303,3 +303,53 @@ fn web_globals_present() {
     rt.run_microtasks();
     assert_eq!(read(&mut rt, "RB.text"), "body!");
 }
+
+/// Echoes the raw request body bytes back as the response body (and reports the
+/// received byte length), so a test can prove bytes survive the round trip.
+struct BinaryEcho;
+
+impl FetchHandler for BinaryEcho {
+    fn fetch(&self, req: FetchRequest) -> FetchOutcome {
+        let body = req.body.unwrap_or_default();
+        FetchOutcome {
+            network_error: false,
+            status: 200,
+            status_text: "OK".to_owned(),
+            response_type: "basic".to_owned(),
+            url: req.url.clone(),
+            headers: vec![("x-echo-len".to_owned(), body.len().to_string())],
+            body,
+        }
+    }
+}
+
+#[test]
+fn binary_body_round_trips_losslessly() {
+    let mut rt = Runtime::<BoaEngine>::new().unwrap();
+    rt.set_fetch_handler(Box::new(BinaryEcho));
+
+    // A request body of every byte 0..256 (including NUL, 0x80, 0xFF) is echoed
+    // back; the bytes must be identical end to end (JS -> binary string -> Rust
+    // bytes -> handler -> binary string -> JS bytes).
+    rt.eval(
+        r#"
+        var B = {};
+        var src = new Uint8Array(256);
+        for (var i = 0; i < 256; i++) src[i] = i;
+        fetch("http://x/", { method: "POST", body: src })
+          .then(function(res) { B.len = res.headers.get("x-echo-len"); return res.arrayBuffer(); })
+          .then(function(buf) {
+            var out = new Uint8Array(buf);
+            B.outLen = out.length;
+            var ok = (out.length === 256);
+            for (var j = 0; j < 256 && ok; j++) if (out[j] !== j) ok = false;
+            B.identical = ok;
+          });
+        "#,
+    )
+    .unwrap();
+    rt.run_microtasks();
+    assert_eq!(read(&mut rt, "B.len"), "256", "handler received all 256 bytes");
+    assert_eq!(read(&mut rt, "String(B.outLen)"), "256");
+    assert_eq!(read(&mut rt, "String(B.identical)"), "true", "every byte survived the round trip");
+}

@@ -84,7 +84,9 @@ impl<E: ScriptEngine> NativeFn<E> for Fetch {
         let body_str = cx.value_to_string(&a3)?;
 
         let headers = parse_flat_headers(&headers_flat);
-        let body = (!body_str.is_empty()).then(|| body_str.into_bytes());
+        // The body crosses as a lossless "binary string": each JS char code (0-255)
+        // is one byte. `char as u8` recovers the byte (every char is <= 0xFF).
+        let body = (!body_str.is_empty()).then(|| body_str.chars().map(|c| c as u8).collect::<Vec<u8>>());
         let request = FetchRequest { method, url, headers, body };
 
         let outcome = match cx.host_data() {
@@ -254,8 +256,9 @@ fn parse_flat_headers(flat: &str) -> Vec<(String, String)> {
 }
 
 /// Encode the outcome as a JSON object the bootstrap parses. Hand-rolled (no JSON
-/// dep): the body is UTF-8-lossy (binary bodies degrade to replacement chars — a
-/// known v1 limit; a bytes channel is a later lift).
+/// dep). The body crosses losslessly as a "binary string": each byte becomes a
+/// char (code point 0-255), which `push_json_str` escapes safely and the bootstrap
+/// maps back to bytes — so binary bodies survive intact.
 fn encode_outcome(o: &FetchOutcome) -> String {
     let mut s = String::new();
     s.push('{');
@@ -279,7 +282,8 @@ fn encode_outcome(o: &FetchOutcome) -> String {
         s.push(']');
     }
     s.push_str("],\"body\":");
-    push_json_str(&mut s, &String::from_utf8_lossy(&o.body));
+    let body_bin: String = o.body.iter().map(|&b| b as char).collect();
+    push_json_str(&mut s, &body_bin);
     s.push('}');
     s
 }
@@ -318,10 +322,10 @@ pub(crate) fn install_fetch_surface<E: ScriptEngine>(engine: &mut E) -> Result<(
 /// `Response` (+ `error`/`redirect`/`json` statics, `body` as a stream), a shared
 /// body mixin (`text`/`json`/`arrayBuffer`/`blob`/`formData`) with WHATWG body
 /// extraction (string / URLSearchParams / Blob / FormData / buffers / stream set
-/// the right Content-Type), and `fetch()` over the `__fetch` sink. Still missing
-/// byte (BYOB) readers, `pipeTo` / `pipeThrough`, true async streaming,
-/// multipart `formData()` parsing, and `AbortSignal`; binary bodies degrade
-/// through the UTF-8 string sink.
+/// the right Content-Type), and `fetch()` over the `__fetch` sink. Bodies cross
+/// that sink as a lossless binary string, so binary request / response bodies are
+/// exact. Still missing byte (BYOB) readers, `pipeTo` / `pipeThrough`, true async
+/// streaming, and multipart `formData()` parsing.
 const FETCH_BOOTSTRAP: &str = r#"
 (function() {
   var hasSym = (typeof Symbol !== 'undefined' && Symbol.iterator);
@@ -411,23 +415,31 @@ const FETCH_BOOTSTRAP: &str = r#"
   if (hasSym) Headers.prototype[Symbol.iterator] = Headers.prototype.entries;
   globalThis.Headers = Headers;
 
-  // ---- Body mixin: text / json / arrayBuffer, single-use. ----
-  function consume(self) {
+  // ---- Body mixin: bytes-backed, single-use. ----
+  // The internal body is raw bytes (`__bytes`, a Uint8Array or null). Every
+  // accessor derives from it, so binary bodies are exact: text/json UTF-8-decode,
+  // arrayBuffer/bytes/blob hand back the bytes. takeBytes is *synchronous* (the
+  // disturb/lock check + the bytes); accessors then resolve a promise with the
+  // already-computed result. That matters: resolving with a primitive (text) is
+  // immune to a poisoned `Object.prototype.then`, which a userland Promise.resolve
+  // of the raw byte array would adopt (the broken-then WPT tests).
+  function takeBytes(self) {
     if (self.__stream && self.__stream.locked)
-      return Promise.reject(new TypeError("Body is locked"));
+      throw new TypeError("Body is locked");
     if (self.bodyUsed || (self.__stream && self.__stream._disturbed))
-      return Promise.reject(new TypeError("Body has already been consumed."));
+      throw new TypeError("Body has already been consumed.");
     self.bodyUsed = true;
     if (self.__stream) self.__stream._disturbed = true;
-    return Promise.resolve(self.__body != null ? String(self.__body) : "");
+    return self.__bytes != null ? self.__bytes : new Uint8Array(0);
   }
+  function settled(fn) { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } }
   // Lazily expose the body as a ReadableStream (the same one each access, so its
   // identity and lock state persist). Getting it does not disturb; reading does.
   function bodyStream(self) {
-    if (self.__body == null) return null;
+    if (self.__bytes == null) return null;
     if (!self.__stream) {
-      var bytes = utf8Encode(self.__body);
-      self.__stream = new ReadableStream({ start: function(c) { if (bytes.length) c.enqueue(bytes); c.close(); } });
+      var bytes = self.__bytes;
+      self.__stream = new ReadableStream({ start: function(c) { if (bytes.length) c.enqueue(bytes.slice(0)); c.close(); } });
       self.__stream._owner = self;
       if (self.bodyUsed) self.__stream._disturbed = true;
     }
@@ -459,6 +471,21 @@ const FETCH_BOOTSTRAP: &str = r#"
       }
     }
     return out;
+  }
+
+  // Body bytes cross the native __fetch sink as a lossless "binary string": each
+  // char code (0-255) is one byte. These convert a Uint8Array to/from that form.
+  function bytesToBinaryString(bytes) {
+    var s = '', CH = 0x8000;
+    for (var i = 0; i < bytes.length; i += CH) {
+      s += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+    }
+    return s;
+  }
+  function binaryStringToBytes(s) {
+    var b = new Uint8Array(s.length);
+    for (var i = 0; i < s.length; i++) b[i] = s.charCodeAt(i) & 0xFF;
+    return b;
   }
 
   // ---- TextEncoder / TextDecoder (UTF-8) ----
@@ -749,9 +776,9 @@ const FETCH_BOOTSTRAP: &str = r#"
   if (hasSym) FormData.prototype[Symbol.iterator] = FormData.prototype.entries;
   globalThis.FormData = FormData;
 
-  // Serialize a FormData to a multipart/form-data body + content-type. Binary
-  // field values degrade through the UTF-8 string sink (the known body-channel
-  // limit); text fields and filenames round-trip.
+  // Serialize a FormData to a multipart/form-data body + content-type. File field
+  // content is spliced as text here (the one remaining lossy spot for binary file
+  // parts); text fields and filenames round-trip exactly.
   function serializeFormData(fd) {
     var boundary = '----serval' + Math.floor(Math.random() * 0x100000000).toString(16) + Math.floor(Math.random() * 0x100000000).toString(16);
     var s = '';
@@ -772,15 +799,16 @@ const FETCH_BOOTSTRAP: &str = r#"
     return { body: s, type: 'multipart/form-data; boundary=' + boundary };
   }
 
-  // WHATWG "extract a body": returns { body: string|null, type: string|null }.
-  // Binary Blob / buffer bodies degrade through the UTF-8 string sink (a known
-  // v1 limit; a bytes channel is a later lift).
+  // WHATWG "extract a body": returns { bytes: Uint8Array|null, type: string|null }.
+  // Blob / ArrayBuffer / typed-array bodies carry their bytes directly, so binary
+  // is exact end-to-end (the body crosses __fetch as a lossless binary string).
   function extractBody(v) {
-    if (v == null) return { body: null, type: null };
-    if (typeof v === 'string') return { body: v, type: 'text/plain;charset=UTF-8' };
-    if (v instanceof URLSearchParams) return { body: v.toString(), type: 'application/x-www-form-urlencoded;charset=UTF-8' };
-    if (v instanceof Blob) return { body: utf8Decode(v._b), type: v.type ? v.type : null };
-    if (v instanceof FormData) return serializeFormData(v);
+    if (v == null) return { bytes: null, type: null };
+    if (typeof v === 'string') return { bytes: utf8Encode(v), type: 'text/plain;charset=UTF-8' };
+    if (v instanceof URLSearchParams) return { bytes: utf8Encode(v.toString()), type: 'application/x-www-form-urlencoded;charset=UTF-8' };
+    // Blob / buffers carry their bytes directly: no text round-trip, so binary is exact.
+    if (v instanceof Blob) return { bytes: v._b.slice(0), type: v.type ? v.type : null };
+    if (v instanceof FormData) { var r = serializeFormData(v); return { bytes: utf8Encode(r.body), type: r.type }; }
     if (v instanceof ReadableStream) {
       // Drain the (fully-buffered) stream: chunks the source enqueued in start().
       // Async-pull streams degrade to what is already queued (a known limit).
@@ -789,11 +817,11 @@ const FETCH_BOOTSTRAP: &str = r#"
       for (i = 0; i < parts.length; i++) total += parts[i].length;
       var all = new Uint8Array(total), off = 0;
       for (i = 0; i < parts.length; i++) { all.set(parts[i], off); off += parts[i].length; }
-      return { body: utf8Decode(all), type: null };
+      return { bytes: all, type: null };
     }
-    if (v instanceof ArrayBuffer) return { body: utf8Decode(new Uint8Array(v)), type: null };
-    if (ArrayBuffer.isView(v)) return { body: utf8Decode(new Uint8Array(v.buffer, v.byteOffset, v.byteLength)), type: null };
-    return { body: String(v), type: 'text/plain;charset=UTF-8' };
+    if (v instanceof ArrayBuffer) return { bytes: new Uint8Array(v.slice(0)), type: null };
+    if (ArrayBuffer.isView(v)) return { bytes: new Uint8Array(v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength)), type: null };
+    return { bytes: utf8Encode(String(v)), type: 'text/plain;charset=UTF-8' };
   }
 
   // Parse a consumed body back to a FormData for `.formData()`. Handles
@@ -811,19 +839,19 @@ const FETCH_BOOTSTRAP: &str = r#"
   }
 
   var bodyMixin = {
-    text: function() { return consume(this); },
-    json: function() { return consume(this).then(function(t) { return JSON.parse(t); }); },
-    arrayBuffer: function() { return consume(this).then(function(t) { return utf8Encode(t).buffer; }); },
-    bytes: function() { return consume(this).then(function(t) { return utf8Encode(t); }); },
+    text: function() { var s = this; return settled(function() { return utf8Decode(takeBytes(s)); }); },
+    json: function() { var s = this; return settled(function() { return JSON.parse(utf8Decode(takeBytes(s))); }); },
+    arrayBuffer: function() { var s = this; return settled(function() { return takeBytes(s).slice(0).buffer; }); },
+    bytes: function() { var s = this; return settled(function() { return takeBytes(s).slice(0); }); },
     blob: function() {
-      var self = this;
-      var ct = (self.headers && self.headers.get) ? self.headers.get('content-type') : null;
-      return consume(self).then(function(t) { return new Blob([t], { type: ct || '' }); });
+      var s = this;
+      var ct = (s.headers && s.headers.get) ? s.headers.get('content-type') : null;
+      return settled(function() { return new Blob([takeBytes(s)], { type: ct || '' }); });
     },
     formData: function() {
-      var self = this;
-      var ct = (self.headers && self.headers.get) ? self.headers.get('content-type') : '';
-      return consume(self).then(function(t) { return parseFormData(t, ct); });
+      var s = this;
+      var ct = (s.headers && s.headers.get) ? s.headers.get('content-type') : '';
+      return settled(function() { return parseFormData(utf8Decode(takeBytes(s)), ct); });
     }
   };
 
@@ -877,11 +905,11 @@ const FETCH_BOOTSTRAP: &str = r#"
     init = init || {};
     if (input instanceof Request) {
       this.url = input.url; this.method = input.method; this.headers = new Headers(input.headers);
-      this.__body = input.__body; this.mode = input.mode; this.credentials = input.credentials;
+      this.__bytes = input.__bytes; this.mode = input.mode; this.credentials = input.credentials;
       this.redirect = input.redirect; this.cache = input.cache; this.destination = input.destination;
       this.signal = input.signal;
     } else {
-      this.url = __resolve_url(String(input)); this.method = 'GET'; this.headers = new Headers(); this.__body = null;
+      this.url = __resolve_url(String(input)); this.method = 'GET'; this.headers = new Headers(); this.__bytes = null;
       this.mode = 'cors'; this.credentials = 'same-origin'; this.redirect = 'follow'; this.cache = 'default'; this.destination = '';
       this.signal = makeSignal();
     }
@@ -890,7 +918,7 @@ const FETCH_BOOTSTRAP: &str = r#"
     if (init.headers !== undefined) this.headers = new Headers(init.headers);
     if (init.body !== undefined && init.body !== null) {
       var eb = extractBody(init.body);
-      this.__body = eb.body;
+      this.__bytes = eb.bytes;
       if (eb.type && !this.headers.has('content-type')) this.headers.set('content-type', eb.type);
     }
     if (init.mode !== undefined) this.mode = String(init.mode);
@@ -898,12 +926,12 @@ const FETCH_BOOTSTRAP: &str = r#"
     if (init.redirect !== undefined) this.redirect = String(init.redirect);
     if (init.cache !== undefined) this.cache = String(init.cache);
     this.bodyUsed = false;
-    if ((this.method === 'GET' || this.method === 'HEAD') && this.__body != null)
+    if ((this.method === 'GET' || this.method === 'HEAD') && this.__bytes != null)
       throw new TypeError("Request with GET/HEAD method cannot have body.");
   }
   Request.prototype.clone = function() {
     if (this.bodyUsed || (this.__stream && this.__stream.locked)) throw new TypeError("Body is disturbed or locked.");
-    var r = new Request(this); r.__body = this.__body; r.bodyUsed = false; return r;
+    var r = new Request(this); r.__bytes = this.__bytes; r.bodyUsed = false; return r;
   };
   Request.prototype.text = bodyMixin.text;
   Request.prototype.json = bodyMixin.json;
@@ -926,9 +954,9 @@ const FETCH_BOOTSTRAP: &str = r#"
     this.headers = new Headers(init.headers);
     if (body != null) {
       var eb = extractBody(body);
-      this.__body = eb.body;
+      this.__bytes = eb.bytes;
       if (eb.type && !this.headers.has('content-type')) this.headers.set('content-type', eb.type);
-    } else this.__body = null;
+    } else this.__bytes = null;
     this.bodyUsed = false;
   }
   Response.prototype.text = bodyMixin.text;
@@ -943,7 +971,7 @@ const FETCH_BOOTSTRAP: &str = r#"
     var r = Object.create(Response.prototype);
     r.status = this.status; r.statusText = this.statusText; r.ok = this.ok;
     r.type = this.type; r.url = this.url; r.redirected = this.redirected;
-    r.headers = new Headers(this.headers); r.__body = this.__body; r.bodyUsed = false;
+    r.headers = new Headers(this.headers); r.__bytes = this.__bytes; r.bodyUsed = false;
     return r;
   };
   Response.error = function() {
@@ -967,9 +995,12 @@ const FETCH_BOOTSTRAP: &str = r#"
   };
   globalThis.Response = Response;
 
-  // Build a Response from the native __fetch outcome (network fields set).
+  // Build a Response from the native __fetch outcome. The body crossed as a binary
+  // string; decode it straight to bytes (bypassing extractBody, which would treat
+  // it as text) so binary responses are exact.
   function responseFromOutcome(o) {
-    var r = new Response(o.body != null ? o.body : "", { status: o.status || 200, statusText: o.statusText || "", headers: o.headers });
+    var r = new Response(null, { status: o.status || 200, statusText: o.statusText || "", headers: o.headers });
+    r.__bytes = binaryStringToBytes(o.body != null ? o.body : "");
     r.type = o.type || "default"; r.url = o.url || ""; return r;
   }
   function headersFlat(h) {
@@ -988,7 +1019,7 @@ const FETCH_BOOTSTRAP: &str = r#"
       // matters for the harness).
       if (req.signal && req.signal.aborted) { reject(abortReason(req.signal.reason)); return; }
       var o;
-      try { o = JSON.parse(__fetch(req.method, req.url, headersFlat(req.headers), req.__body != null ? req.__body : "")); }
+      try { o = JSON.parse(__fetch(req.method, req.url, headersFlat(req.headers), req.__bytes != null ? bytesToBinaryString(req.__bytes) : "")); }
       catch (e) { reject(new TypeError("Failed to fetch")); return; }
       if (o.networkError) { reject(new TypeError("Failed to fetch")); return; }
       resolve(responseFromOutcome(o));

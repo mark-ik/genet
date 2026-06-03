@@ -65,7 +65,7 @@ is what makes the `fetch/api/` `.any.js` corpus runnable at all.
 | subset | boa subtests | nova subtests |
 |---|---|---|
 | fetch/api/headers | 86/197 | 86/197 |
-| fetch/api/request | 246/545 | 246/505 |
+| fetch/api/request | 253/545 | 253/505 |
 | fetch/api/response | 160/290 | 160/290 |
 
 All three were **0** before this work (the files would not even parse and run).
@@ -98,6 +98,14 @@ Two passes drove the request / response jumps (request 168 -> 246, response
   within `fetch/` its remaining consumers (`*/url-parsing.html`, abort) are gated
   on iframes and mid-flight abort, so the network-free subtest delta is small, but
   it removes a class of `new URL` failures and is exercised by the binding tests.
+- **Binary body channel.** The internal body is now raw bytes (`__bytes`), and it
+  crosses the `__fetch` sink as a lossless "binary string" (each char code 0-255 =
+  one byte; the Rust side maps chars <-> bytes). So `Blob` / `ArrayBuffer` /
+  typed-array request bodies and binary responses are byte-exact end to end
+  (proven by a 0..256 round-trip binding test), where before they degraded through
+  a UTF-8 round-trip. Request +7 (request-consume binary subtests). Body accessors
+  compute synchronously and resolve with the final value, so `text()` stays immune
+  to a poisoned `Object.prototype.then` (the broken-then tests).
 
 ## The `wpt serve` lift: blocked, two gates
 
@@ -220,9 +228,10 @@ cargo run -p serval-wpt --features netfetch -- \
   readers, `pipeTo` / `pipeThrough` (need `WritableStream` / `TransformStream`),
   and genuinely async producers are deferred: `response-stream-disturbed-5/6`,
   `response-from-stream`, and `*-by-pipe` need them.
-- **Binary body channel + multipart `formData()` parse.** Bodies cross `__fetch`
-  as a UTF-8 string, so binary Blob / buffer bodies degrade; and `formData()`
-  parses urlencoded but not multipart. Both want a bytes channel through the seam.
+- **Multipart bodies.** `formData()` parses urlencoded but not multipart, and a
+  binary `File` part in a multipart request body is still spliced as text (the one
+  remaining lossy body spot). A multipart parser/serializer over the byte body is
+  the fix. (The general binary body channel is now done; see above.)
 - **Live mid-flight abort.** `fetch()` runs synchronously through `block_on`, so
   an `AbortController.abort()` *after* the call cannot interrupt it. Only the
   pre-flight abort check works. The bulk of `fetch/api/abort/general` asserts
@@ -231,8 +240,8 @@ cargo run -p serval-wpt --features netfetch -- \
 - **`iframe` / `contentWindow`.** `*/url-parsing.html` and the multi-global tests
   reach into iframe globals, which the single-realm runner has no model for.
 - **The failing object-semantics tail**: request / response still sit around half,
-  now mostly byte/async streams + binary-body + mid-flight abort + iframes, not
-  missing constructors.
+  now mostly byte/async streams + mid-flight abort + iframes + multipart, not
+  missing constructors or a lossy body channel.
 - **Per-test runtime reuse.** A fresh `Runtime` per test re-evals testharness.js
   each time (the dominant cost; see `harness::bench`). A snapshot-clone pool is the
   amortization, unchanged by this work.
