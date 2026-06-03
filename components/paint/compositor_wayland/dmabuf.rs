@@ -309,3 +309,137 @@ fn wrap_vk_image_as_wgpu(
 
     Ok(wgpu_texture)
 }
+
+/// `(format, modifier)` set the Wayland compositor advertised via
+/// `zwp_linux_dmabuf_v1` events.
+pub type WaylandAdvertised = Vec<(u32, u64)>;
+
+/// Resolved choice picked by [`ModifierTable::choose`]. v1 always
+/// chooses `(DRM_FORMAT_ABGR8888, DRM_FORMAT_MOD_LINEAR)`; the
+/// negotiation infrastructure stays in place so promoting to a
+/// tile-preferred chooser later is a one-line change inside `choose`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChosenModifier {
+    pub drm_format: u32,
+    pub drm_modifier: u64,
+}
+
+pub struct ModifierTable {
+    /// Compositor advertisement.
+    advertised: WaylandAdvertised,
+    /// Per-modifier Vulkan importability for ABGR8888.
+    vulkan_importable: Vec<u64>,
+}
+
+impl ModifierTable {
+    /// Query Vulkan's importable modifier set for `ABGR8888` and intersect
+    /// with the compositor's advertised set. Stores both so the choice
+    /// can be re-derived if the picker policy changes.
+    pub fn new(
+        host: &HostWgpuContext,
+        advertised: WaylandAdvertised,
+    ) -> Result<Self, BackendError> {
+        let vulkan_importable = unsafe {
+            let hal_device = host
+                .device
+                .as_hal::<wgpu::wgc::api::Vulkan>()
+                .ok_or_else(|| BackendError::Dmabuf("wgpu-hal Vulkan device unavailable".into()))?;
+            let vk_instance = hal_device.shared_instance().raw_instance().clone();
+            let vk_phys = hal_device.raw_physical_device();
+            drop(hal_device);
+
+            query_importable_modifiers(&vk_instance, vk_phys)
+        };
+
+        Ok(Self {
+            advertised,
+            vulkan_importable,
+        })
+    }
+
+    /// Pick the `(format, modifier)` to allocate against. v1: hard-codes
+    /// LINEAR after verifying both Vulkan and the compositor agree on it.
+    /// Errors with `NoCompatibleFormat` otherwise.
+    pub fn choose(&self) -> Result<ChosenModifier, BackendError> {
+        let advertised_linear = self
+            .advertised
+            .iter()
+            .any(|(f, m)| *f == DRM_FORMAT_ABGR8888 && *m == DRM_FORMAT_MOD_LINEAR);
+        let vk_linear = self.vulkan_importable.contains(&DRM_FORMAT_MOD_LINEAR);
+        if !advertised_linear || !vk_linear {
+            return Err(BackendError::NoCompatibleFormat);
+        }
+        Ok(ChosenModifier {
+            drm_format: DRM_FORMAT_ABGR8888,
+            drm_modifier: DRM_FORMAT_MOD_LINEAR,
+        })
+    }
+}
+
+unsafe fn query_importable_modifiers(
+    instance: &ash::Instance,
+    phys: vk::PhysicalDevice,
+) -> Vec<u64> {
+    // VkDrmFormatModifierPropertiesListEXT chained on
+    // VkFormatProperties2 returns the device's known modifiers for
+    // R8G8B8A8_UNORM. The two-call query (first count, then alloc + fill)
+    // is the standard ash idiom.
+    let mut count_props = vk::DrmFormatModifierPropertiesListEXT::default();
+    let mut fmt_props2 = vk::FormatProperties2::default().push_next(&mut count_props);
+    instance.get_physical_device_format_properties2(phys, vk::Format::R8G8B8A8_UNORM, &mut fmt_props2);
+
+    let n = count_props.drm_format_modifier_count as usize;
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut buf: Vec<vk::DrmFormatModifierPropertiesEXT> =
+        vec![vk::DrmFormatModifierPropertiesEXT::default(); n];
+    let mut filled_props = vk::DrmFormatModifierPropertiesListEXT::default()
+        .drm_format_modifier_properties(&mut buf);
+    let mut fmt_props2 = vk::FormatProperties2::default().push_next(&mut filled_props);
+    instance.get_physical_device_format_properties2(phys, vk::Format::R8G8B8A8_UNORM, &mut fmt_props2);
+
+    buf.into_iter().map(|p| p.drm_format_modifier).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fake_table(advertised: WaylandAdvertised, vulkan_importable: Vec<u64>) -> ModifierTable {
+        ModifierTable { advertised, vulkan_importable }
+    }
+
+    #[test]
+    fn choose_picks_linear_when_both_advertise_it() {
+        let t = fake_table(
+            vec![(DRM_FORMAT_ABGR8888, DRM_FORMAT_MOD_LINEAR)],
+            vec![DRM_FORMAT_MOD_LINEAR],
+        );
+        assert_eq!(
+            t.choose().unwrap(),
+            ChosenModifier {
+                drm_format: DRM_FORMAT_ABGR8888,
+                drm_modifier: DRM_FORMAT_MOD_LINEAR,
+            }
+        );
+    }
+
+    #[test]
+    fn choose_errors_when_vulkan_lacks_linear() {
+        let t = fake_table(
+            vec![(DRM_FORMAT_ABGR8888, DRM_FORMAT_MOD_LINEAR)],
+            vec![0xFFFF_FFFF_FFFF_0001], // some tile modifier, no LINEAR
+        );
+        assert!(matches!(t.choose(), Err(BackendError::NoCompatibleFormat)));
+    }
+
+    #[test]
+    fn choose_errors_when_wayland_lacks_abgr_linear() {
+        let t = fake_table(
+            vec![(DRM_FORMAT_ABGR8888, 0xFFFF_FFFF_FFFF_0001)], // only tile, no LINEAR
+            vec![DRM_FORMAT_MOD_LINEAR],
+        );
+        assert!(matches!(t.choose(), Err(BackendError::NoCompatibleFormat)));
+    }
+}
