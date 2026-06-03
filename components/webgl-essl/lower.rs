@@ -784,6 +784,7 @@ fn scan_stmt_for_decls(ctx: &mut Ctx, s: &Stmt) -> Result<(), LoweringError> {
             Ok(())
         },
         Stmt::While { body, .. } => scan_stmt_for_decls(ctx, body),
+        Stmt::Do { body, .. } => scan_stmt_for_decls(ctx, body),
         Stmt::For { init, body, .. } => {
             if let ForInit::Decl(d) = init {
                 allocate_local(ctx, d)?;
@@ -1152,6 +1153,7 @@ fn lower_stmt(
         Stmt::While { cond, body, .. } => {
             emit_loop_cfg(ctx, Some(cond), None, body, main_ctx)
         },
+        Stmt::Do { body, cond, .. } => emit_do_while_cfg(ctx, body, cond, main_ctx),
         Stmt::Switch { discriminant, body, .. } => emit_switch_cfg(ctx, discriminant, body, main_ctx),
         _ => Err(LoweringError::UnsupportedShape {
             what: "stmt shape not lowered".into(),
@@ -1269,6 +1271,68 @@ fn emit_switch_cfg(
 
     ctx.b
         .begin_block(Some(merge_label))
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    Ok(())
+}
+
+/// Emit the SPIR-V CFG for a `do { body } while (cond);` loop.
+/// Differs from `for`/`while` in that the body always runs at
+/// least once and the condition is evaluated at the continue
+/// block (after each iteration of the body) rather than the
+/// header. The loop header is a structural-only block that
+/// unconditionally branches into the body so naga's structured-
+/// flow recognition keeps working.
+fn emit_do_while_cfg(
+    ctx: &mut Ctx,
+    body: &Stmt,
+    cond: &Expr,
+    main_ctx: Option<&MainCtx>,
+) -> Result<(), LoweringError> {
+    let header = ctx.b.id();
+    let body_label = ctx.b.id();
+    let cont = ctx.b.id();
+    let merge = ctx.b.id();
+
+    ctx.b
+        .branch(header)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+
+    ctx.b
+        .begin_block(Some(header))
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    ctx.b
+        .loop_merge(merge, cont, LoopControl::NONE, [])
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    ctx.b
+        .branch(body_label)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+
+    let body_terminates = stmt_definitely_terminates(body);
+    ctx.break_targets.push(merge);
+    ctx.continue_targets.push(cont);
+    ctx.b
+        .begin_block(Some(body_label))
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    let body_result = lower_stmt(ctx, body, main_ctx);
+    ctx.break_targets.pop();
+    ctx.continue_targets.pop();
+    body_result?;
+    if !body_terminates {
+        ctx.b
+            .branch(cont)
+            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    }
+
+    ctx.b
+        .begin_block(Some(cont))
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    let cond_id = lower_expr(ctx, cond)?;
+    ctx.b
+        .branch_conditional(cond_id, header, merge, [])
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+
+    ctx.b
+        .begin_block(Some(merge))
         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
     Ok(())
 }
@@ -2479,6 +2543,101 @@ fn lower_vector_relational(
     }
 }
 
+/// Lower `outerProduct(c, r)` by hand: column j of the result
+/// is `c * r[j]`, computed via `OpVectorTimesScalar`. Avoids
+/// `OpOuterProduct` because naga's WGSL backend rejects it.
+fn lower_outer_product_expansion(
+    ctx: &mut Ctx,
+    args: &[Expr],
+    call_span: Span,
+) -> Result<Word, LoweringError> {
+    let c = lower_expr(ctx, &args[0])?;
+    let r = lower_expr(ctx, &args[1])?;
+    let result_kind = ctx.types.get(&call_span).copied().ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: "outerProduct has no typecheck result".into(),
+        }
+    })?;
+    let (column_kind, n) = match result_kind {
+        TypeKind::Mat2 => (TypeKind::Vec2, 2usize),
+        TypeKind::Mat3 => (TypeKind::Vec3, 3),
+        TypeKind::Mat4 => (TypeKind::Vec4, 4),
+        other => {
+            return Err(LoweringError::UnsupportedShape {
+                what: format!("outerProduct result {other:?} is not a matrix"),
+            });
+        },
+    };
+    let col_ty = spv_type_for_kind(ctx, column_kind).expect("matrix column");
+    let mat_ty = spv_type_for_kind(ctx, result_kind).expect("matrix");
+    let mut columns: Vec<Word> = Vec::with_capacity(n);
+    for j in 0..n {
+        let r_j = ctx
+            .b
+            .composite_extract(ctx.type_float, None, r, [j as u32])
+            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+        let col = ctx
+            .b
+            .vector_times_scalar(col_ty, None, c, r_j)
+            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+        columns.push(col);
+    }
+    ctx.b
+        .composite_construct(mat_ty, None, columns)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
+}
+
+/// Lower `matrixCompMult(a, b)` as a column-by-column
+/// element-wise multiply: extract each column from both
+/// matrices, `OpFMul` them, then `OpCompositeConstruct` the
+/// result matrix. SPIR-V does not have a single opcode for
+/// matrix component-wise multiplication; GLSL.std.450 has no
+/// equivalent either.
+fn lower_matrix_comp_mult(
+    ctx: &mut Ctx,
+    args: &[Expr],
+    call_span: Span,
+) -> Result<Word, LoweringError> {
+    let a = lower_expr(ctx, &args[0])?;
+    let b = lower_expr(ctx, &args[1])?;
+    let result_kind = ctx.types.get(&call_span).copied().ok_or_else(|| {
+        LoweringError::UnsupportedShape {
+            what: "matrixCompMult has no typecheck result".into(),
+        }
+    })?;
+    let (column_kind, n) = match result_kind {
+        TypeKind::Mat2 => (TypeKind::Vec2, 2usize),
+        TypeKind::Mat3 => (TypeKind::Vec3, 3),
+        TypeKind::Mat4 => (TypeKind::Vec4, 4),
+        other => {
+            return Err(LoweringError::UnsupportedShape {
+                what: format!("matrixCompMult result {other:?} is not a matrix"),
+            });
+        },
+    };
+    let col_ty = spv_type_for_kind(ctx, column_kind).expect("matrix column");
+    let mat_ty = spv_type_for_kind(ctx, result_kind).expect("matrix");
+    let mut columns: Vec<Word> = Vec::with_capacity(n);
+    for i in 0..n {
+        let a_col = ctx
+            .b
+            .composite_extract(col_ty, None, a, [i as u32])
+            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+        let b_col = ctx
+            .b
+            .composite_extract(col_ty, None, b, [i as u32])
+            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+        let prod = ctx
+            .b
+            .f_mul(col_ty, None, a_col, b_col)
+            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+        columns.push(prod);
+    }
+    ctx.b
+        .composite_construct(mat_ty, None, columns)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
+}
+
 /// Inline ESSL `mod(x, y)` as `x - y * floor(x / y)`. The
 /// GLSL.std.450 `FMod` opcode would be cleaner, but naga's
 /// `spv-in` rejects it with `UnsupportedExtInst(35)`. The
@@ -2824,6 +2983,56 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                 // as `x - y * floor(x / y)`, splatting y to vector
                 // width when the overload is `mod(vec_n, float)`.
                 return lower_mod_expansion(ctx, args, *span);
+            }
+            // ESSL §8.5 matrix built-ins.
+            if callee == "transpose" && args.len() == 1 {
+                let m = lower_expr(ctx, &args[0])?;
+                let result_kind = ctx.types.get(span).copied().ok_or_else(|| {
+                    LoweringError::UnsupportedShape {
+                        what: "transpose has no typecheck result".into(),
+                    }
+                })?;
+                let result_ty = spv_type_for_kind(ctx, result_kind).ok_or_else(|| {
+                    LoweringError::UnsupportedShape {
+                        what: format!("transpose returns {result_kind:?} which is not lowered"),
+                    }
+                })?;
+                return ctx
+                    .b
+                    .transpose(result_ty, None, m)
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+            if callee == "outerProduct" && args.len() == 2 {
+                // naga rejects OpOuterProduct's WGSL emit. Inline
+                // as N columns where column j = c * r[j] (i.e.
+                // OpVectorTimesScalar of the first vector by each
+                // component of the second).
+                return lower_outer_product_expansion(ctx, args, *span);
+            }
+            if callee == "inverse" && args.len() == 1 {
+                // GLSL.std.450 MatrixInverse (34).
+                let m = lower_expr(ctx, &args[0])?;
+                let result_kind = ctx.types.get(span).copied().ok_or_else(|| {
+                    LoweringError::UnsupportedShape {
+                        what: "inverse has no typecheck result".into(),
+                    }
+                })?;
+                let result_ty = spv_type_for_kind(ctx, result_kind).ok_or_else(|| {
+                    LoweringError::UnsupportedShape {
+                        what: format!("inverse returns {result_kind:?} which is not lowered"),
+                    }
+                })?;
+                let set_id = glsl_std_450_id(ctx);
+                return ctx
+                    .b
+                    .ext_inst(result_ty, None, set_id, 34, [Operand::IdRef(m)])
+                    .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
+            }
+            if callee == "matrixCompMult" && args.len() == 2 {
+                // No single SPIR-V opcode — component-wise mul
+                // means OpFMul on each column, then
+                // OpCompositeConstruct the result matrix.
+                return lower_matrix_comp_mult(ctx, args, *span);
             }
             // ESSL §8.7 texture lookup. `texture2D` /
             // `textureCube` 2-arg form is implicit Lod; 3-arg

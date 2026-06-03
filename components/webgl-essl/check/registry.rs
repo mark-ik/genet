@@ -150,7 +150,14 @@ fn populate(r: &mut Registry) {
     // §8.5 Matrix.
     for t in [Mat2, Mat3, Mat4] {
         r.register("matrixCompMult", vec![t, t], t);
+        r.register("transpose", vec![t], t);
+        r.register("inverse", vec![t], t);
     }
+    // outerProduct: square overloads only — TypeKind has no
+    // non-square matrix variants.
+    r.register("outerProduct", vec![Vec2, Vec2], Mat2);
+    r.register("outerProduct", vec![Vec3, Vec3], Mat3);
+    r.register("outerProduct", vec![Vec4, Vec4], Mat4);
 
     // §8.6 Vector relational. Per-component compare/test on
     // vectors; the result has matching width but element type
