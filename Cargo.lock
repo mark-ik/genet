@@ -4359,6 +4359,7 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
+ "psl",
  "quinn",
  "rustls",
  "time",
@@ -5857,6 +5858,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "psl"
+version = "2.1.212"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9f6415ab1b08394487005d41ae7ee69e69903efa1ace538f3b274db605bf8ec"
+dependencies = [
+ "psl-types",
+]
+
+[[package]]
+name = "psl-types"
+version = "2.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33cb294fe86a74cbcf50d4445b37da762029549ebeea341421c7c70370f86cac"
+
+[[package]]
 name = "ptr_meta"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6864,10 +6880,13 @@ dependencies = [
 name = "serval-wpt"
 version = "0.2.0"
 dependencies = [
+ "bytes",
  "dpi",
  "euclid",
  "image",
  "layout-dom-api",
+ "mockito",
+ "netfetcher",
  "netrender",
  "paint_list_api",
  "script-engine-api",
@@ -6882,6 +6901,8 @@ dependencies = [
  "servo-paint-api",
  "servo-paint-types",
  "taffy 0.11.0-experimental-cache-fix.3",
+ "tokio",
+ "url",
  "wgpu",
 ]
 

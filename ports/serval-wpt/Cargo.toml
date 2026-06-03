@@ -38,10 +38,26 @@ taffy = { version = "=0.11.0-experimental-cache-fix.3", default-features = false
 # Phase 3 (testharness): run testharness.js + the test's scripts on the host
 # surface and read results, with the JS engine selectable via `--engine`
 # (boa | nova). Boa is the pure-Rust conformance oracle; Nova is the native
-# primary. The harness path is generic over `ScriptEngine`; the runtime
-# neutralizes testharness's lone-surrogate scrub regex so Nova's scalar-only
-# regex engine can compile it (see script_runtime_api::neutralize_surrogate_regex).
+# primary. The harness path is generic over `ScriptEngine`. Nova's RegExp now
+# uses regress (ECMAScript engine), so the host runs testharness.js as-is (the
+# old regex shim is retired).
 script-engine-api = { path = "../../components/script-engine-api" }
 script-runtime-api = { path = "../../components/script-runtime-api" }
 script-engine-boa = { path = "../../components/script-engine-boa" }
 script-engine-nova = { path = "../../components/script-engine-nova" }
+
+# Optional `fetch()` over netfetcher (the `netfetch` feature): wires the runtime's
+# FetchHandler seam to the netfetcher engine (sibling repo). Off by default so the
+# normal runner stays free of the async network stack. fetch/ WPT tests
+# additionally need the WPT server + Fetch API JS objects (a larger lift).
+netfetcher = { path = "../../../netfetcher", optional = true }
+tokio = { version = "1", features = ["rt"], optional = true }
+bytes = { version = "1", optional = true }
+url = { workspace = true, optional = true }
+
+[features]
+netfetch = ["dep:netfetcher", "dep:tokio", "dep:bytes", "dep:url"]
+
+[dev-dependencies]
+# Offline mock server for the fetch()->netfetcher integration test.
+mockito = "1"

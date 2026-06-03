@@ -40,9 +40,11 @@ use script_engine_api::{CallCx, NativeFn, ScriptEngine};
 use serval_scripted_dom::ScriptedDom;
 
 mod dom;
+mod fetch;
 mod harness;
 mod selector;
 
+pub use fetch::{FetchHandler, FetchOutcome, FetchRequest};
 pub use harness::TestResult;
 
 /// State the runtime's native callbacks share, stored as the engine's single
@@ -59,6 +61,10 @@ pub struct HostState {
     /// Per-subtest results collected from `testharness.js` via the completion
     /// callback (the results bridge). Populated by [`Runtime::run_testharness`].
     pub results: Vec<TestResult>,
+    /// The host's network seam for `fetch()`. `None` = no network (every fetch is
+    /// a network error). Installed by [`Runtime::set_fetch_handler`]; kept as a
+    /// trait object so this crate links no network stack.
+    pub fetch: Option<Box<dyn FetchHandler>>,
 }
 
 /// Shared handle to the runtime's [`HostState`]. The host reads it after running
@@ -135,6 +141,12 @@ impl<E: ScriptEngine> Runtime<E> {
         Ok(self.host.borrow().results.clone())
     }
 
+    /// Install the host's `fetch()` network seam (e.g. a netfetcher-backed
+    /// handler). Until set, `fetch()` yields a network error.
+    pub fn set_fetch_handler(&mut self, handler: Box<dyn FetchHandler>) {
+        self.host.borrow_mut().fetch = Some(handler);
+    }
+
     /// The shared host state (e.g. to read `console` output after a run).
     pub fn host(&self) -> &SharedHost {
         &self.host
@@ -174,6 +186,8 @@ fn install_host_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error>
     // in host state. Native sinks mutate the arena; a JS bootstrap wraps reflectors
     // into ergonomic node objects.
     dom::install_dom_surface(engine)?;
+    // The `fetch()` / `Response` / `Headers` surface over the host fetch seam.
+    fetch::install_fetch_surface(engine)?;
 
     // The `__reportResult` sink for the testharness results bridge. The completion
     // callback that calls it is registered later (after testharness loads).
