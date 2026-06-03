@@ -4,7 +4,11 @@
 
 use std::fmt;
 
-/// Canonical ESSL 1.00 vertex shader accepted by the W3 smoke.
+/// Canonical ESSL 1.00 vertex shader used by the W3 smoke. The
+/// switch-over to `webgl-essl` lifted the per-character canonical
+/// restriction the old narrow parser enforced, but the smoke
+/// surface keeps these two shaders as the documented starting
+/// point.
 pub const CANONICAL_TRIANGLE_VERTEX_SHADER: &str = r#"
 attribute vec2 a_position;
 void main() {
@@ -12,44 +16,13 @@ void main() {
 }
 "#;
 
-/// Canonical ESSL 1.00 fragment shader accepted by the W3 smoke.
+/// Canonical ESSL 1.00 fragment shader used by the W3 smoke.
 pub const CANONICAL_TRIANGLE_FRAGMENT_SHADER: &str = r#"
 precision mediump float;
 void main() {
     gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);
 }
 "#;
-
-const CANONICAL_VERTEX_PREFIX: &str = "attribute vec2 ";
-const CANONICAL_VERTEX_MIDDLE: &str = ";void main(){gl_Position=vec4(";
-const CANONICAL_VERTEX_SUFFIX: &str = ",0.0,1.0);}";
-const CANONICAL_VARYING_VERTEX_PREFIX: &str = "attribute vec2 ";
-const CANONICAL_VARYING_VERTEX_COLOR_DECL: &str = ";attribute vec4 ";
-const CANONICAL_VARYING_VERTEX_VARYING_DECL: &str = ";varying vec4 ";
-const CANONICAL_VARYING_VERTEX_MAIN_PREFIX: &str = ";void main(){";
-const CANONICAL_VARYING_VERTEX_ASSIGN_MIDDLE: &str = "=";
-const CANONICAL_VARYING_VERTEX_POSITION_PREFIX: &str = ";gl_Position=vec4(";
-const CANONICAL_VARYING_VERTEX_SUFFIX: &str = ",0.0,1.0);}";
-const CANONICAL_FRAGMENT_COLOR_PREFIX: &str = "void main(){gl_FragColor=vec4(";
-const CANONICAL_FRAGMENT_COLOR_SUFFIX: &str = ");}";
-const CANONICAL_FRAGMENT_UNIFORM_PREFIX: &str = "uniform vec4 ";
-const CANONICAL_FRAGMENT_UNIFORM_MIDDLE: &str = ";void main(){gl_FragColor=";
-const CANONICAL_FRAGMENT_UNIFORM_SUFFIX: &str = ";}";
-const CANONICAL_FRAGMENT_VARYING_PREFIX: &str = "varying vec4 ";
-const CANONICAL_FRAGMENT_VARYING_MIDDLE: &str = ";void main(){gl_FragColor=";
-const CANONICAL_FRAGMENT_VARYING_SUFFIX: &str = ";}";
-const CANONICAL_TEXTURE_VERTEX_PREFIX: &str = "attribute vec2 ";
-const CANONICAL_TEXTURE_VERTEX_UV_DECL: &str = ";attribute vec2 ";
-const CANONICAL_TEXTURE_VERTEX_VARYING_DECL: &str = ";varying vec2 ";
-const CANONICAL_TEXTURE_VERTEX_MAIN_PREFIX: &str = ";void main(){";
-const CANONICAL_TEXTURE_VERTEX_ASSIGN_MIDDLE: &str = "=";
-const CANONICAL_TEXTURE_VERTEX_POSITION_PREFIX: &str = ";gl_Position=vec4(";
-const CANONICAL_TEXTURE_VERTEX_SUFFIX: &str = ",0.0,1.0);}";
-const CANONICAL_FRAGMENT_TEXTURE_PREFIX: &str = "varying vec2 ";
-const CANONICAL_FRAGMENT_TEXTURE_SAMPLER_DECL: &str = ";uniform sampler2D ";
-const CANONICAL_FRAGMENT_TEXTURE_MAIN_PREFIX: &str = ";void main(){gl_FragColor=texture2D(";
-const CANONICAL_FRAGMENT_TEXTURE_COORD_SEPARATOR: &str = ",";
-const CANONICAL_FRAGMENT_TEXTURE_SUFFIX: &str = ");}";
 
 #[derive(Clone)]
 pub(crate) struct TranslatedProgram {
@@ -103,9 +76,6 @@ pub(crate) enum UniformKind {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum ShaderTranslationError {
     UnsupportedCanonicalPair,
-    ThreadSpawn(String),
-    ThreadJoin(String),
-    NagaPanic(String),
     Parse(String),
     Validate(String),
     Emit(String),
@@ -115,24 +85,11 @@ impl fmt::Display for ShaderTranslationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnsupportedCanonicalPair => formatter.write_str("unsupported ESSL shader pair"),
-            Self::ThreadSpawn(message) => {
-                write!(formatter, "failed to spawn naga thread: {message}")
-            },
-            Self::ThreadJoin(message) => {
-                write!(formatter, "naga thread panicked at join: {message}")
-            },
-            Self::NagaPanic(message) => write!(formatter, "naga panicked: {message}"),
-            Self::Parse(message) => write!(formatter, "GLSL->naga parse failed: {message}"),
-            Self::Validate(message) => write!(formatter, "naga validation failed: {message}"),
+            Self::Parse(message) => write!(formatter, "parse error: {message}"),
+            Self::Validate(message) => write!(formatter, "validation failed: {message}"),
             Self::Emit(message) => write!(formatter, "WGSL emit failed: {message}"),
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum WebGlShaderStage {
-    Vertex,
-    Fragment,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -151,20 +108,9 @@ impl WebGlPrecision {
             _ => None,
         }
     }
-
-    fn essl_token(self) -> &'static str {
-        match self {
-            Self::Low => "lowp",
-            Self::Medium => "mediump",
-            Self::High => "highp",
-        }
-    }
 }
 
-mod fragment;
 mod lowering;
-mod normalize;
-mod vertex;
 
 #[cfg(test)]
 mod tests;

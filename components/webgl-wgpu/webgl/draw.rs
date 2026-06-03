@@ -213,22 +213,33 @@ impl WebGlContext {
                 return;
             },
         };
+        let texture_image_binding = reflection
+            .fragment_texture_uniform
+            .as_ref()
+            .map(|uniform| uniform.binding);
         let texture_bind_group = match (
             texture_unit,
             pipeline.texture_bind_group_layout.as_ref(),
             self.bound_texture_for_unit(texture_unit),
+            texture_image_binding,
         ) {
-            (Some(0), Some(layout), Some(texture)) => Some(build_texture_bind_group(
-                &self.canvas.device,
-                layout,
-                &texture.view,
-            )),
-            (Some(_), Some(layout), Some(texture)) => Some(build_texture_bind_group(
-                &self.canvas.device,
-                layout,
-                &texture.view,
-            )),
-            (None, None, _) => None,
+            (Some(0), Some(layout), Some(texture), Some(image_binding)) => {
+                Some(build_texture_bind_group(
+                    &self.canvas.device,
+                    layout,
+                    &texture.view,
+                    image_binding,
+                ))
+            },
+            (Some(_), Some(layout), Some(texture), Some(image_binding)) => {
+                Some(build_texture_bind_group(
+                    &self.canvas.device,
+                    layout,
+                    &texture.view,
+                    image_binding,
+                ))
+            },
+            (None, None, _, _) => None,
             _ => {
                 self.record_error(WebGlError::InvalidOperation);
                 return;
@@ -519,22 +530,33 @@ impl WebGlContext {
                 return;
             },
         };
+        let texture_image_binding = reflection
+            .fragment_texture_uniform
+            .as_ref()
+            .map(|uniform| uniform.binding);
         let texture_bind_group = match (
             texture_unit,
             pipeline.texture_bind_group_layout.as_ref(),
             self.bound_texture_for_unit(texture_unit),
+            texture_image_binding,
         ) {
-            (Some(0), Some(layout), Some(texture)) => Some(build_texture_bind_group(
-                &self.canvas.device,
-                layout,
-                &texture.view,
-            )),
-            (Some(_), Some(layout), Some(texture)) => Some(build_texture_bind_group(
-                &self.canvas.device,
-                layout,
-                &texture.view,
-            )),
-            (None, None, _) => None,
+            (Some(0), Some(layout), Some(texture), Some(image_binding)) => {
+                Some(build_texture_bind_group(
+                    &self.canvas.device,
+                    layout,
+                    &texture.view,
+                    image_binding,
+                ))
+            },
+            (Some(_), Some(layout), Some(texture), Some(image_binding)) => {
+                Some(build_texture_bind_group(
+                    &self.canvas.device,
+                    layout,
+                    &texture.view,
+                    image_binding,
+                ))
+            },
+            (None, None, _, _) => None,
             _ => {
                 self.record_error(WebGlError::InvalidOperation);
                 return;

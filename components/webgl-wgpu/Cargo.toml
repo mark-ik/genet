@@ -14,10 +14,9 @@ name = "webgl_wgpu"
 path = "lib.rs"
 
 [dependencies]
-naga = { version = "29", default-features = false, features = ["glsl-in", "wgsl-out"] }
 paint_api = { workspace = true, features = ["wgpu_backend"] }
+servo-webgl-essl = { path = "../webgl-essl" }
 wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"] }
 
 [dev-dependencies]
 pollster = "0.4"
-servo-webgl-essl = { path = "../webgl-essl" }

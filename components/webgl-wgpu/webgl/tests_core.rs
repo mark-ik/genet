@@ -54,10 +54,13 @@ fn webgl_context_clear_triangle_read_pixels_and_get_error() {
 }
 
 #[test]
-fn webgl_context_rejects_noncanonical_shader_pair() {
+fn webgl_context_rejects_invalid_shader_pair() {
     let mut context = make_context(4, 4);
+    // Reserved `gl_*` identifier — webgl-essl validator R5
+    // rejects this at compile time.
     let program = context.create_program_from_essl(
-        "attribute vec2 a_position; void main() { gl_Position = vec4(0.0); }",
+        "attribute vec2 a_position; uniform vec4 gl_userColor; \
+         void main() { gl_Position = vec4(a_position, 0.0, 1.0) * gl_userColor; }",
         CANONICAL_TRIANGLE_FRAGMENT_SHADER,
     );
     assert!(program.is_none());
@@ -76,15 +79,15 @@ fn webgl_context_get_attrib_location_reports_invalid_program() {
 }
 
 #[test]
-fn webgl_context_caches_canonical_shader_translation() {
+fn webgl_context_caches_translation_across_identical_source_pairs() {
+    // Cache key is now source-derived. Two programs built from
+    // the *same* source pair share the same translated entry;
+    // differently-formatted sources (whitespace-only deltas
+    // included) are treated as distinct keys. A future
+    // canonicalization layer could merge them, but it's not a
+    // correctness requirement — webgl-essl re-parses each
+    // unique key cheaply.
     let mut context = make_context(4, 4);
-    let reformatted_fragment = r#"
-            precision mediump float;
-            void main() {
-                gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);
-            }
-        "#;
-
     let first = context
         .create_program_from_essl(
             CANONICAL_TRIANGLE_VERTEX_SHADER,
@@ -92,7 +95,10 @@ fn webgl_context_caches_canonical_shader_translation() {
         )
         .expect("first canonical program");
     let second = context
-        .create_program_from_essl(CANONICAL_TRIANGLE_VERTEX_SHADER, reformatted_fragment)
+        .create_program_from_essl(
+            CANONICAL_TRIANGLE_VERTEX_SHADER,
+            CANONICAL_TRIANGLE_FRAGMENT_SHADER,
+        )
         .expect("second canonical program");
 
     assert_ne!(first, second);
@@ -145,9 +151,12 @@ fn webgl_context_explicit_compile_link_pipeline_renders() {
 fn webgl_context_compile_failure_reports_shader_info_log() {
     let mut context = make_context(4, 4);
     let fragment = context.create_shader(ShaderStage::Fragment);
+    // Reserved `gl_*` identifier — R5 — surfaces at compile
+    // time with a non-empty info log.
     context.shader_source(
         fragment,
-        "void main() { gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0); }",
+        "precision mediump float; uniform vec4 gl_userColor; \
+         void main() { gl_FragColor = gl_userColor; }",
     );
     context.compile_shader(fragment);
     assert!(!context.get_shader_compile_status(fragment));

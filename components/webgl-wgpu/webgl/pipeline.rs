@@ -222,6 +222,7 @@ pub(super) fn build_texture_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     view: &wgpu::TextureView,
+    image_binding: u32,
 ) -> (wgpu::Sampler, wgpu::BindGroup) {
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("webgl-wgpu fragment texture sampler"),
@@ -238,11 +239,11 @@ pub(super) fn build_texture_bind_group(
         layout,
         entries: &[
             wgpu::BindGroupEntry {
-                binding: 0,
+                binding: image_binding,
                 resource: wgpu::BindingResource::TextureView(view),
             },
             wgpu::BindGroupEntry {
-                binding: 1,
+                binding: image_binding + 1,
                 resource: wgpu::BindingResource::Sampler(&sampler),
             },
         ],
