@@ -190,3 +190,116 @@ fn body_is_single_use() {
     rt.run_microtasks();
     assert_eq!(read(&mut rt, "String(J.k)"), "42");
 }
+
+#[test]
+fn url_object_semantics() {
+    let mut rt = Runtime::<BoaEngine>::new().unwrap();
+    // Components.
+    rt.eval(r#"var u = new URL("http://example.com:8080/a/b?x=1#h");"#).unwrap();
+    assert_eq!(read(&mut rt, "u.protocol"), "http:");
+    assert_eq!(read(&mut rt, "u.hostname"), "example.com");
+    assert_eq!(read(&mut rt, "u.port"), "8080");
+    assert_eq!(read(&mut rt, "u.pathname"), "/a/b");
+    assert_eq!(read(&mut rt, "u.search"), "?x=1");
+    assert_eq!(read(&mut rt, "u.hash"), "#h");
+    assert_eq!(read(&mut rt, "u.origin"), "http://example.com:8080");
+    // Relative resolution against a base.
+    assert_eq!(read(&mut rt, r#"new URL("c", "http://h/a/b").href"#), "http://h/a/c");
+    // An invalid URL throws; canParse reports it.
+    assert_eq!(read(&mut rt, r#"(function(){try{new URL("not a url");return "no";}catch(e){return e instanceof TypeError?"TypeError":"other";}})()"#), "TypeError");
+    assert_eq!(read(&mut rt, r#"String(URL.canParse("http://h/"))"#), "true");
+    assert_eq!(read(&mut rt, r#"String(URL.canParse("nope"))"#), "false");
+    // A setter re-serializes through the url crate, and searchParams stays in sync.
+    rt.eval(r#"var u2 = new URL("http://h/?a=1&b=2");"#).unwrap();
+    assert_eq!(read(&mut rt, r#"u2.searchParams.get("a")"#), "1");
+    rt.eval(r#"u2.searchParams.set("a","9");"#).unwrap();
+    assert_eq!(read(&mut rt, r#"String(u2.href.indexOf("a=9") >= 0)"#), "true");
+    rt.eval(r#"u2.hostname = "other";"#).unwrap();
+    assert_eq!(read(&mut rt, "u2.host"), "other");
+}
+
+#[test]
+fn abort_controller_and_pre_aborted_fetch() {
+    let mut rt = Runtime::<BoaEngine>::new().unwrap();
+    // No fetch handler installed: a pre-aborted signal must reject with the abort
+    // reason *before* any network attempt (which would otherwise be a TypeError).
+    rt.eval(
+        r#"
+        var A = {};
+        var c = new AbortController();
+        A.before = c.signal.aborted;
+        c.abort();
+        A.after = c.signal.aborted;
+        fetch("http://x/", { signal: c.signal }).then(
+          function(){ A.r = "resolved"; },
+          function(e){ A.r = (e && e.name === "AbortError") ? "abort" : "other:" + (e && e.name); }
+        );
+        "#,
+    )
+    .unwrap();
+    rt.run_microtasks();
+    assert_eq!(read(&mut rt, "String(A.before)"), "false");
+    assert_eq!(read(&mut rt, "String(A.after)"), "true");
+    assert_eq!(read(&mut rt, "A.r"), "abort");
+    // The custom abort reason propagates.
+    rt.eval(
+        r#"
+        var R = {};
+        var c2 = new AbortController();
+        var reason = new Error("boom");
+        c2.abort(reason);
+        R.same = (c2.signal.reason === reason);
+        fetch("http://x/", { signal: c2.signal }).then(function(){}, function(e){ R.rejected = (e === reason); });
+        "#,
+    )
+    .unwrap();
+    rt.run_microtasks();
+    assert_eq!(read(&mut rt, "String(R.same)"), "true");
+    assert_eq!(read(&mut rt, "String(R.rejected)"), "true");
+    // No public constructor.
+    assert_eq!(read(&mut rt, r#"(function(){try{new AbortSignal();return "no";}catch(e){return "threw";}})()"#), "threw");
+}
+
+#[test]
+fn web_globals_present() {
+    let mut rt = Runtime::<BoaEngine>::new().unwrap();
+    // URLSearchParams.
+    assert_eq!(read(&mut rt, r#"new URLSearchParams("a=1&b=2").get("b")"#), "2");
+    assert_eq!(read(&mut rt, r#"new URLSearchParams([["a","1"],["a","2"]]).getAll("a").join(",")"#), "1,2");
+    assert_eq!(read(&mut rt, r#"new URLSearchParams({x:"y"}).toString()"#), "x=y");
+    // TextEncoder / TextDecoder round-trip.
+    assert_eq!(read(&mut rt, r#"String(new TextEncoder().encode("A")[0])"#), "65");
+    assert_eq!(read(&mut rt, r#"new TextDecoder().decode(new TextEncoder().encode("héllo"))"#), "héllo");
+    // Blob.
+    assert_eq!(read(&mut rt, r#"String(new Blob(["hi","!"]).size)"#), "3");
+    rt.eval(r#"var BL={}; new Blob(["hi"]).text().then(function(t){BL.t=t;});"#).unwrap();
+    rt.run_microtasks();
+    assert_eq!(read(&mut rt, "BL.t"), "hi");
+    // FormData.
+    assert_eq!(read(&mut rt, r#"(function(){var f=new FormData();f.append("k","v");return f.get("k");})()"#), "v");
+    // ReadableStream: read the single enqueued chunk, then done.
+    rt.eval(
+        r#"
+        var S = {};
+        var rs = new ReadableStream({ start: function(c){ c.enqueue(new TextEncoder().encode("yo")); c.close(); } });
+        var rd = rs.getReader();
+        rd.read().then(function(r){ S.first = new TextDecoder().decode(r.value); return rd.read(); }).then(function(r){ S.done = r.done; });
+        "#,
+    )
+    .unwrap();
+    rt.run_microtasks();
+    assert_eq!(read(&mut rt, "S.first"), "yo");
+    assert_eq!(read(&mut rt, "String(S.done)"), "true");
+    // Response body as a stream.
+    rt.eval(
+        r#"
+        var RB = {};
+        var resp = new Response("body!");
+        var reader = resp.body.getReader();
+        reader.read().then(function(r){ RB.text = new TextDecoder().decode(r.value); });
+        "#,
+    )
+    .unwrap();
+    rt.run_microtasks();
+    assert_eq!(read(&mut rt, "RB.text"), "body!");
+}

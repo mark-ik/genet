@@ -181,6 +181,7 @@ impl<E: ScriptEngine> Runtime<E> {
             js_str(&u.origin().ascii_serialization()),
         );
         self.engine.eval(&js)?;
+        self.engine.eval("globalThis.location.toString = function() { return this.href; };")?;
         Ok(())
     }
 
@@ -444,7 +445,8 @@ const SHELL_GLOBALS_BOOTSTRAP: &str = r#"
   globalThis.opener = null;
   globalThis.location = {
     href: 'about:blank', protocol: 'about:', host: '', hostname: '',
-    port: '', pathname: '', search: '', hash: '', origin: 'null'
+    port: '', pathname: '', search: '', hash: '', origin: 'null',
+    toString: function() { return this.href; }
   };
   globalThis.navigator = { userAgent: 'serval', platform: '', language: 'en-US' };
 

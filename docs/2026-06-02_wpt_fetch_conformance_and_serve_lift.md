@@ -91,8 +91,13 @@ Two passes drove the request / response jumps (request 168 -> 246, response
   event + `onabort`), with `throwIfAborted` and the `abort` / `timeout` / `any`
   statics; `fetch(url, {signal})` rejects a pre-aborted signal with its reason.
   Took `fetch/api/abort` from erroring (no `AbortController`) to 37/88 (general
-  25/53, request 12/18); the rest there need `URL` and live-network mid-flight
-  abort.
+  25/53, request 12/18); the rest there need live-network mid-flight abort.
+- **`URL`.** The WHATWG `URL` object + `searchParams`, backed by the Rust `url`
+  crate via two natives (`__url_parse`, `__url_with`) rather than a JS reimpl, so
+  parsing and component setters are spec-correct. Foundational and used widely;
+  within `fetch/` its remaining consumers (`*/url-parsing.html`, abort) are gated
+  on iframes and mid-flight abort, so the network-free subtest delta is small, but
+  it removes a class of `new URL` failures and is exercised by the binding tests.
 
 ## The `wpt serve` lift: blocked, two gates
 
@@ -218,12 +223,16 @@ cargo run -p serval-wpt --features netfetch -- \
 - **Binary body channel + multipart `formData()` parse.** Bodies cross `__fetch`
   as a UTF-8 string, so binary Blob / buffer bodies degrade; and `formData()`
   parses urlencoded but not multipart. Both want a bytes channel through the seam.
-- **`URL`.** The WHATWG `URL` object (with `searchParams`). `fetch/api/abort`
-  (`new URL(..., location)`) and the `*/url-parsing.html` tests need it. Best
-  backed by the Rust `url` crate (parse + component setters) rather than a JS
-  reimplementation.
+- **Live mid-flight abort.** `fetch()` runs synchronously through `block_on`, so
+  an `AbortController.abort()` *after* the call cannot interrupt it. Only the
+  pre-flight abort check works. The bulk of `fetch/api/abort/general` asserts
+  mid-flight interruption, so it stays around 25/53 even with a server (and is
+  slow there: it is `timeout=long` and does ~50 sequential fetches).
+- **`iframe` / `contentWindow`.** `*/url-parsing.html` and the multi-global tests
+  reach into iframe globals, which the single-realm runner has no model for.
 - **The failing object-semantics tail**: request / response still sit around half,
-  now mostly byte/async streams + binary-body + `URL`, not missing constructors.
+  now mostly byte/async streams + binary-body + mid-flight abort + iframes, not
+  missing constructors.
 - **Per-test runtime reuse.** A fresh `Runtime` per test re-evals testharness.js
   each time (the dominant cost; see `harness::bench`). A snapshot-clone pool is the
   amortization, unchanged by this work.

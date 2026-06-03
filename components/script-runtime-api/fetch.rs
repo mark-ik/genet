@@ -117,6 +117,112 @@ impl<E: ScriptEngine> NativeFn<E> for ResolveUrl {
     }
 }
 
+/// `__url_parse(input, base)` — parse `input` (optionally against a non-empty
+/// `base`) and return its WHATWG components as JSON, or `""` on failure. Backs the
+/// JS `URL` constructor.
+pub(crate) struct UrlParse;
+
+impl<E: ScriptEngine> NativeFn<E> for UrlParse {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let a0 = cx.arg(0);
+        let input = cx.value_to_string(&a0)?;
+        let a1 = cx.arg(1);
+        let base = cx.value_to_string(&a1)?;
+        let parsed = if base.is_empty() {
+            url::Url::parse(&input)
+        } else {
+            url::Url::parse(&base).and_then(|b| b.join(&input))
+        };
+        cx.make_string(&parsed.map(|u| url_components_json(&u)).unwrap_or_default())
+    }
+}
+
+/// `__url_with(href, part, value)` — parse `href`, apply the WHATWG setter for
+/// `part`, and return the new components as JSON (or `""` on failure). Backs the JS
+/// `URL` component setters via the `url` crate.
+pub(crate) struct UrlWith;
+
+impl<E: ScriptEngine> NativeFn<E> for UrlWith {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let a0 = cx.arg(0);
+        let href = cx.value_to_string(&a0)?;
+        let a1 = cx.arg(1);
+        let part = cx.value_to_string(&a1)?;
+        let a2 = cx.arg(2);
+        let value = cx.value_to_string(&a2)?;
+
+        let result = url::Url::parse(&href).ok().and_then(|mut u| {
+            match part.as_str() {
+                "href" => return url::Url::parse(&value).ok().map(|u| url_components_json(&u)),
+                "protocol" => {
+                    let _ = u.set_scheme(value.trim_end_matches(':'));
+                }
+                "username" => {
+                    let _ = u.set_username(&value);
+                }
+                "password" => {
+                    let _ = u.set_password((!value.is_empty()).then_some(value.as_str()));
+                }
+                "hostname" => {
+                    let _ = u.set_host((!value.is_empty()).then_some(value.as_str()));
+                }
+                "host" => {
+                    let (h, p) = value.split_once(':').unwrap_or((value.as_str(), ""));
+                    let _ = u.set_host((!h.is_empty()).then_some(h));
+                    let _ = u.set_port(p.parse().ok());
+                }
+                "port" => {
+                    let _ = u.set_port(value.parse().ok());
+                }
+                "pathname" => u.set_path(&value),
+                "search" => u.set_query((!value.is_empty()).then_some(value.trim_start_matches('?'))),
+                "hash" => u.set_fragment((!value.is_empty()).then_some(value.trim_start_matches('#'))),
+                _ => return None,
+            }
+            Some(url_components_json(&u))
+        });
+        cx.make_string(&result.unwrap_or_default())
+    }
+}
+
+/// The WHATWG URL components of `u` as a JSON object (the shape the JS `URL`
+/// reads): `href`, `protocol` (scheme + `:`), `username`, `password`, `host`
+/// (host + `:port`), `hostname`, `port`, `origin`, `pathname`, `search` (with a
+/// leading `?`), `hash` (with a leading `#`).
+fn url_components_json(u: &url::Url) -> String {
+    let host = match (u.host_str(), u.port()) {
+        (Some(h), Some(p)) => format!("{h}:{p}"),
+        (Some(h), None) => h.to_owned(),
+        _ => String::new(),
+    };
+    let mut s = String::new();
+    s.push('{');
+    s.push_str("\"href\":");
+    push_json_str(&mut s, u.as_str());
+    s.push_str(",\"protocol\":");
+    push_json_str(&mut s, &format!("{}:", u.scheme()));
+    s.push_str(",\"username\":");
+    push_json_str(&mut s, u.username());
+    s.push_str(",\"password\":");
+    push_json_str(&mut s, u.password().unwrap_or(""));
+    s.push_str(",\"host\":");
+    push_json_str(&mut s, &host);
+    s.push_str(",\"hostname\":");
+    push_json_str(&mut s, u.host_str().unwrap_or(""));
+    s.push_str(",\"port\":");
+    push_json_str(&mut s, &u.port().map(|p| p.to_string()).unwrap_or_default());
+    s.push_str(",\"origin\":");
+    push_json_str(&mut s, &u.origin().ascii_serialization());
+    s.push_str(",\"pathname\":");
+    push_json_str(&mut s, u.path());
+    s.push_str(",\"search\":");
+    push_json_str(&mut s, &u.query().map(|q| format!("?{q}")).unwrap_or_default());
+    s.push_str(",\"hash\":");
+    push_json_str(&mut s, &u.fragment().map(|f| format!("#{f}")).unwrap_or_default());
+    s.push('}');
+    s
+}
+
 /// Read the document base URL out of host state, if any.
 fn host_base_url<E: ScriptEngine>(cx: &mut E::CallCx<'_>) -> Option<String> {
     let data = cx.host_data()?;
@@ -200,6 +306,8 @@ fn push_json_str(out: &mut String, s: &str) {
 pub(crate) fn install_fetch_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error> {
     engine.set_function::<Fetch>("__fetch", 4)?;
     engine.set_function::<ResolveUrl>("__resolve_url", 1)?;
+    engine.set_function::<UrlParse>("__url_parse", 2)?;
+    engine.set_function::<UrlWith>("__url_with", 3)?;
     engine.eval(FETCH_BOOTSTRAP)?;
     Ok(())
 }
@@ -514,7 +622,64 @@ const FETCH_BOOTSTRAP: &str = r#"
   URLSearchParams.prototype.toString = function() { var o = []; for (var i = 0; i < this._l.length; i++) o.push(uspEnc(this._l[i][0]) + '=' + uspEnc(this._l[i][1])); return o.join('&'); };
   Object.defineProperty(URLSearchParams.prototype, 'size', { configurable: true, get: function() { return this._l.length; } });
   if (hasSym) URLSearchParams.prototype[Symbol.iterator] = URLSearchParams.prototype.entries;
+  // Replace the pair list from a query string (URL.search setter feeding back in).
+  URLSearchParams.prototype._reload = function(search) { this._l = new URLSearchParams(search)._l; };
+  // Mutators notify an owning URL (if any) so url.href reflects the change.
+  ['append', 'set', 'delete', 'sort'].forEach(function(m) {
+    var orig = URLSearchParams.prototype[m];
+    URLSearchParams.prototype[m] = function() {
+      var r = orig.apply(this, arguments);
+      if (this._onchange) this._onchange(this.toString());
+      return r;
+    };
+  });
   globalThis.URLSearchParams = URLSearchParams;
+
+  // ---- URL (WHATWG, backed by the Rust url crate via __url_parse / __url_with) ----
+  function URL(url, base) {
+    var j = __url_parse(String(url), (base === undefined || base === null) ? "" : String(base));
+    if (!j) throw new TypeError("Failed to construct 'URL': Invalid URL");
+    this._c = JSON.parse(j);
+    this._sp = null;
+  }
+  function urlComponent(name) {
+    Object.defineProperty(URL.prototype, name, {
+      configurable: true,
+      get: function() { return this._c[name]; },
+      set: function(v) {
+        var j = __url_with(this._c.href, name, String(v));
+        if (j) { this._c = JSON.parse(j); if (this._sp) this._sp._reload(this._c.search); }
+      }
+    });
+  }
+  ['protocol', 'username', 'password', 'host', 'hostname', 'port', 'pathname', 'search', 'hash'].forEach(urlComponent);
+  Object.defineProperty(URL.prototype, 'href', {
+    configurable: true,
+    get: function() { return this._c.href; },
+    set: function(v) {
+      var j = __url_parse(String(v), "");
+      if (!j) throw new TypeError("Invalid URL");
+      this._c = JSON.parse(j);
+      if (this._sp) this._sp._reload(this._c.search);
+    }
+  });
+  Object.defineProperty(URL.prototype, 'origin', { configurable: true, get: function() { return this._c.origin; } });
+  Object.defineProperty(URL.prototype, 'searchParams', {
+    configurable: true,
+    get: function() {
+      if (!this._sp) {
+        var self = this;
+        this._sp = new URLSearchParams(this._c.search);
+        this._sp._onchange = function(q) { var j = __url_with(self._c.href, 'search', q ? '?' + q : ''); if (j) self._c = JSON.parse(j); };
+      }
+      return this._sp;
+    }
+  });
+  URL.prototype.toString = function() { return this._c.href; };
+  URL.prototype.toJSON = function() { return this._c.href; };
+  URL.parse = function(url, base) { try { return new URL(url, base); } catch (e) { return null; } };
+  URL.canParse = function(url, base) { return !!__url_parse(String(url), (base === undefined || base === null) ? "" : String(base)); };
+  globalThis.URL = URL;
 
   // ---- Blob / File ----
   function toBytes(part) {
@@ -649,6 +814,7 @@ const FETCH_BOOTSTRAP: &str = r#"
     text: function() { return consume(this); },
     json: function() { return consume(this).then(function(t) { return JSON.parse(t); }); },
     arrayBuffer: function() { return consume(this).then(function(t) { return utf8Encode(t).buffer; }); },
+    bytes: function() { return consume(this).then(function(t) { return utf8Encode(t); }); },
     blob: function() {
       var self = this;
       var ct = (self.headers && self.headers.get) ? self.headers.get('content-type') : null;
@@ -742,6 +908,7 @@ const FETCH_BOOTSTRAP: &str = r#"
   Request.prototype.text = bodyMixin.text;
   Request.prototype.json = bodyMixin.json;
   Request.prototype.arrayBuffer = bodyMixin.arrayBuffer;
+  Request.prototype.bytes = bodyMixin.bytes;
   Request.prototype.blob = bodyMixin.blob;
   Request.prototype.formData = bodyMixin.formData;
   Object.defineProperty(Request.prototype, 'body', { configurable: true, get: function() { return bodyStream(this); } });
@@ -767,6 +934,7 @@ const FETCH_BOOTSTRAP: &str = r#"
   Response.prototype.text = bodyMixin.text;
   Response.prototype.json = bodyMixin.json;
   Response.prototype.arrayBuffer = bodyMixin.arrayBuffer;
+  Response.prototype.bytes = bodyMixin.bytes;
   Response.prototype.blob = bodyMixin.blob;
   Response.prototype.formData = bodyMixin.formData;
   Object.defineProperty(Response.prototype, 'body', { configurable: true, get: function() { return bodyStream(this); } });
