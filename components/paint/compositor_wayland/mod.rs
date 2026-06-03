@@ -52,120 +52,115 @@
 #![allow(unsafe_code)]
 #![allow(dead_code)]
 
-mod errors;
+mod bake;
 mod dmabuf;
+mod errors;
 mod wayland;
 
 pub use errors::BackendError;
+
+use std::ffi::c_void;
+use std::os::fd::IntoRawFd;
+use std::sync::{Arc, Mutex};
 
 use rustc_hash::FxHashMap;
 use wgpu::Texture;
 
 use crate::compositor::OsCompositorBackend;
-use crate::interop::{HostWgpuContext, InteropBackend, SyncMechanism};
+use crate::interop::{
+    HostWgpuContext, InteropBackend, SyncMechanism, VulkanTimelineSemaphoreSynchronizer,
+};
 use netrender_device::compositor::SurfaceKey;
 
+use bake::BakePipeline;
+use dmabuf::{ChosenModifier, ExportableImage, ModifierTable, SurfaceBufferPool};
+use wayland::WaylandState;
+
+use wayland_client::protocol::wl_subsurface::WlSubsurface;
+use wayland_client::protocol::wl_surface::WlSurface;
+use wayland_client::Proxy;
+
+use wayland_protocols::wp::alpha_modifier::v1::client::wp_alpha_modifier_surface_v1::WpAlphaModifierSurfaceV1;
+use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1;
+use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
+
 /// Linux Wayland subsurface compositor backend.
-///
-/// Holds raw pointers to the embedder's wl_display + wl_surface; the
-/// caller is responsible for keeping the underlying Wayland objects
-/// alive for the backend's lifetime.
 pub struct WaylandSubsurfaceBackend {
-    /// `*mut wl_display`. Pulled from
-    /// raw-window-handle::WaylandDisplayHandle.
-    display: *mut std::ffi::c_void,
-    /// `*mut wl_surface` (the embedder's window surface). Pulled
-    /// from raw-window-handle::WaylandWindowHandle.
-    parent_surface: *mut std::ffi::c_void,
-    /// FIXME(C4 follow-up): once wayland-client is wired, hold:
-    /// - `wl_compositor`, `wl_subcompositor`, `wl_subsurface`
-    /// - `zwp_linux_dmabuf_v1` global
-    /// - per-`SurfaceKey` `wl_subsurface` + `wl_buffer` map
+    host: HostWgpuContext,
+    wayland: WaylandState,
+    modifier_table: ModifierTable,
+    chosen: ChosenModifier,
+    bake_pipeline: BakePipeline,
+    vk_timeline_sync: VulkanTimelineSemaphoreSynchronizer,
+
     surfaces: FxHashMap<SurfaceKey, WaylandSurface>,
-    /// Vulkan export-fence value the producer signals at after
-    /// netrender's submit completes. Reserved for the multi-queue
-    /// path; same-queue submits are FIFO-ordered without explicit
-    /// waits.
-    next_export_value: std::cell::Cell<u64>,
+
+    /// Side-buffer the master texture is blitted into per frame before
+    /// dmabuf-attaching to the parent surface. Allocated lazily and
+    /// reallocated on master-size change.
+    master_side: Option<SurfaceBufferPool>,
+
+    /// Monotonic generation for `BufferSlotUserData.surface_id`.
+    /// The master uses id=0; per-`SurfaceKey` surfaces increment.
+    next_surface_id: u64,
 }
 
 struct WaylandSurface {
-    /// `*mut wl_subsurface`.
-    subsurface: *mut std::ffi::c_void,
-    /// Last `wl_buffer` attached to the subsurface; replaced on
-    /// each `present`.
-    last_buffer: Option<*mut std::ffi::c_void>,
+    wl_surface: WlSurface,
+    wl_subsurface: WlSubsurface,
+    viewport: WpViewport,
+    alpha_modifier: Option<WpAlphaModifierSurfaceV1>,
+    surface_id: u64,
+    source_dest: SurfaceBufferPool,
+    bake: Option<SurfaceBufferPool>,
+    size: (u32, u32),
 }
 
 unsafe impl Send for WaylandSubsurfaceBackend {}
 
 impl WaylandSubsurfaceBackend {
-    /// Construct a backend over the embedder's wayland display +
-    /// surface. Both must be non-null and outlive the backend.
+    /// Construct the backend over the embedder's wayland display +
+    /// surface. Both pointers must be non-null and outlive the backend.
     ///
     /// # Safety
     ///
     /// `display` must point to a valid `wl_display`; `parent_surface`
-    /// to a valid `wl_surface`. Both ownerships stay with the
-    /// caller; the backend only borrows.
+    /// to a valid `wl_surface`. Both ownerships stay with the caller;
+    /// the backend only borrows.
     pub unsafe fn new(
         host: &HostWgpuContext,
-        display: *mut std::ffi::c_void,
-        parent_surface: *mut std::ffi::c_void,
+        display: *mut c_void,
+        parent_surface: *mut c_void,
     ) -> Result<Self, BackendError> {
         if host.backend != InteropBackend::Vulkan {
             return Err(BackendError::WrongBackend(host.backend));
         }
-        if display.is_null() {
-            return Err(BackendError::NullDisplay);
-        }
-        if parent_surface.is_null() {
-            return Err(BackendError::NullSurface);
-        }
 
-        // FIXME(C4 follow-up): with wayland-client added:
-        //   1. `Connection::from_ptr(display)`
-        //   2. `globals::registry_queue_init` to get
-        //      `wl_compositor`, `wl_subcompositor`,
-        //      `zwp_linux_dmabuf_v1`
-        //   3. capability-check that the compositor advertises the
-        //      DRM format `ARGB8888` (or `XRGB8888`) on a renderable
-        //      modifier
-        //
-        // For now: just stash the pointers.
-        let _ = host; // FIXME wire wgpu-hal Vulkan device for DMABUF export
+        let wayland = unsafe { WaylandState::new(display, parent_surface)? };
+        let modifier_table =
+            ModifierTable::new(host, wayland.advertised.clone())?;
+        let chosen = modifier_table.choose()?;
+        log::info!(
+            "[WaylandSubsurfaceBackend] dmabuf modifier: format=0x{:08X} modifier=0x{:016X}",
+            chosen.drm_format,
+            chosen.drm_modifier,
+        );
+
+        let bake_pipeline = BakePipeline::new(&host.device);
+        let vk_timeline_sync = VulkanTimelineSemaphoreSynchronizer::new(host)
+            .map_err(|e| BackendError::SyncInit(format!("{e}")))?;
 
         Ok(Self {
-            display,
-            parent_surface,
+            host: host.clone(),
+            wayland,
+            modifier_table,
+            chosen,
+            bake_pipeline,
+            vk_timeline_sync,
             surfaces: FxHashMap::default(),
-            next_export_value: std::cell::Cell::new(0),
+            master_side: None,
+            next_surface_id: 0,
         })
-    }
-
-    /// Present the netrender master texture as a wayland subsurface
-    /// on the parent.
-    ///
-    /// FIXME(C4 follow-up): the per-frame body needs:
-    /// 1. Pull master's underlying VkImage via
-    ///    `master.as_hal::<Vulkan>().raw_handle()`.
-    /// 2. Export the VkImage as a DMABUF via
-    ///    `vkGetMemoryFdKHR(VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT)`.
-    ///    Need an `ash::Device` extension reference.
-    /// 3. `zwp_linux_buffer_params_v1.create` from the dmabuf fd,
-    ///    awaiting the `created` event for the resulting `wl_buffer`.
-    /// 4. `wl_subsurface.set_position(0, 0)`,
-    ///    `wl_surface.attach(buffer, 0, 0)`,
-    ///    `wl_surface.damage_buffer(0, 0, w, h)`,
-    ///    `wl_surface.commit()`.
-    /// 5. `wl_display.flush()` to push the protocol writes.
-    ///
-    /// Today: returns `Unwired`. The signature locks in the trait
-    /// surface for the per-platform impl.
-    pub fn present_master(&mut self, _master: &Texture) -> Result<(), BackendError> {
-        let v = self.next_export_value.get();
-        self.next_export_value.set(v + 1);
-        Err(BackendError::Unwired("present_master per-frame body"))
     }
 }
 
@@ -176,34 +171,16 @@ impl OsCompositorBackend for WaylandSubsurfaceBackend {
 
     fn sync_mechanism(&self) -> SyncMechanism {
         // Same-queue submits are FIFO-ordered on Vulkan; the
-        // explicit external-semaphore path is reserved for the
-        // multi-queue future.
+        // VulkanTimelineSemaphoreSynchronizer wrapper exists for the
+        // multi-queue path but is dormant on the smoke path.
         SyncMechanism::None
     }
 
-    fn present_master(&mut self, master: &Texture) {
-        if let Err(err) = WaylandSubsurfaceBackend::present_master(self, master) {
-            log::warn!("[WaylandSubsurfaceBackend] present_master: {err}");
-        }
+    fn present_master(&mut self, _master: &Texture) {
+        // Real impl lands in Task 6.2.
+        log::warn!("[WaylandSubsurfaceBackend] present_master: unwired (Task 6.2)");
     }
 
-    // `declare` and `present` inherit the trait defaults until the
-    // per-`SurfaceKey` Wayland path is wired (create a
-    // `wl_subsurface` for `key` with sync-mode Desync; on present
-    // apply transform via viewporter `wp_viewport.set_destination`,
-    // clip via the surface's input region, opacity via the
-    // alpha-modifier protocol if available). The default `declare`
-    // does plain wgpu allocation, which is the right starting
-    // point for any backend that hasn't yet wired its per-surface
-    // OS handoff.
-
-    fn destroy(&mut self, key: SurfaceKey) {
-        // Mirrors the per-subsurface cleanup that lands when
-        // `declare` is wired (destroy `wl_subsurface`, release any
-        // attached `wl_buffer`). Today `surfaces` is never
-        // populated (declare uses the default plain-alloc path), so
-        // this is a no-op in practice — kept so future per-surface
-        // impl doesn't need to redefine cleanup.
-        self.surfaces.remove(&key);
-    }
+    // declare / destroy / present inherit the trait defaults (no-ops
+    // for now) until Tasks 6.3-6.5 wire them.
 }
