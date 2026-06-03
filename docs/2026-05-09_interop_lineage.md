@@ -131,30 +131,44 @@ crate.
   GL `ProducerCapabilities`). serval's renderer is wgpu-only
   post-C1 (the GL/surfman corpus cut).
 
-## Pending: Mac and Linux synchronizer wrappers
+## Pending: Mac synchronizer wrapper
 
-Currently only [`Dx12FenceSynchronizer`](../components/paint/interop/windows_dx12.rs)
-ships in `crate::interop`. The other two are inferred slots:
+Currently [`Dx12FenceSynchronizer`](../components/paint/interop/windows_dx12.rs) and
+[`VulkanTimelineSemaphoreSynchronizer`](../components/paint/interop/vulkan_timeline.rs)
+ship in `crate::interop`. The macOS slot is the only inferred one remaining:
 
-- **macOS — `MTLSharedEventSynchronizer` (or similar).** Land
-  alongside the GPU-side wait path on Mac. Today
-  [`MacosCALayerBackend`](../components/paint/compositor_calayer.rs)
-  holds a raw `Retained<ProtocolObject<dyn MTLSharedEvent>>`
-  field and CPU-stalls via `wgpu::Device::poll(Wait)`; lifting
-  that into a typed synchronizer wrapper is the natural follow-
-  up once `wgpu-hal::metal::Queue` exposes its underlying
-  `MTLCommandQueue` (so the producer can `encodeSignalEvent` on
-  the same queue netrender submits to). scrying's
+- **macOS — `MTLSharedEventSynchronizer` (or similar).** Land alongside the
+  GPU-side wait path on Mac. Today
+  [`MacosCALayerBackend`](../components/paint/compositor_calayer/mod.rs)
+  holds a raw `Retained<ProtocolObject<dyn MTLSharedEvent>>` field and
+  CPU-stalls via `wgpu::Device::poll(Wait)`; lifting that into a typed
+  synchronizer wrapper is the natural follow-up once `wgpu-hal::metal::Queue`
+  exposes its underlying `MTLCommandQueue` (so the producer can
+  `encodeSignalEvent` on the same queue netrender submits to). scrying's
   `sync_metal.rs` is the structural reference.
-- **Linux Wayland — `VulkanTimelineSemaphoreSynchronizer` (or
-  similar).** Land alongside the dmabuf import + subsurface
-  commit path. Vulkan timeline semaphores are the canonical
-  cross-API fence on Linux; graft's
-  `sync_vulkan.rs` is the structural reference.
 
-Both wrappers stay direction-neutral (inherent methods, no
-trait); the per-platform `OsCompositorBackend` impl drives them
-the same way `WindowsDxgiBackend` drives the Dx12 one today.
+The Linux slot is filled as of 2026-06-03:
+
+- **Linux Wayland — `VulkanTimelineSemaphoreSynchronizer`** (landed 2026-06-03,
+  [`components/paint/interop/vulkan_timeline.rs`](../components/paint/interop/vulkan_timeline.rs)).
+  Idiomatic Vulkan-timeline shape: the semaphore handle is the API
+  (`semaphore()` returns `vk::Semaphore`); producers wire it into
+  their own `VkSubmitInfo.pSignalSemaphores`/`pSignalSemaphoreValues`,
+  consumers into `pWaitSemaphores`. `next_value()` reserves the next
+  monotonic value; `signaled_value()` reads the GPU-side counter via
+  `vkGetSemaphoreCounterValue`; `wait_host(value, timeout_ns)` blocks
+  the calling thread via `vkWaitSemaphores`; `export_fd()` exports an
+  OPAQUE_FD via `vkGetSemaphoreFdKHR` for cross-process / external-
+  driver consumers. No empty-buffer signal/wait submits — those are
+  not how timeline semaphores get used in real Vulkan code. The slot
+  is dormant on the C4 smoke path (`WaylandSubsurfaceBackend` returns
+  `SyncMechanism::None`; same-queue FIFO covers the per-frame model),
+  but the wrapper is constructed and verifiable via `signaled_value()
+  → Ok(0)` at backend construction time.
+
+Both wrappers stay direction-neutral (inherent methods, no trait); the
+per-platform `OsCompositorBackend` impl drives them the same way
+`WindowsDxgiBackend` drives the Dx12 one today.
 
 ## Recipe for a new platform backend
 
@@ -168,10 +182,10 @@ reach for `crate::interop` for:
    backend.interop_backend()` checked at `ServoCompositor::new`
    time.
 2. **The shared-fence wrapper for your platform** if one exists.
-   Currently DX12 only; Mac and Linux are pending (above). For now,
-   the Mac path holds an `MTLSharedEvent` directly in the backend
-   struct; promote to a `crate::interop` wrapper when GPU-side wait
-   lands.
+   DX12 and Linux Vulkan-timeline are both in `crate::interop`; Mac is
+   pending (above). For now, the Mac path holds an `MTLSharedEvent`
+   directly in the backend struct; promote to a `crate::interop` wrapper
+   when GPU-side wait lands.
 3. **The `SyncMechanism` discriminator** — return the right variant
    from `OsCompositorBackend::sync_mechanism()` so consumers of the
    trait can branch on it.
@@ -184,8 +198,8 @@ and the trait shape is wrong for the export direction anyway.
 
 When `crate::interop` grows beyond what carried over from
 graft/scrying — e.g., the GPU-side `MTLSharedEvent` synchronizer
-wrapper lands on Mac, the Vulkan timeline-semaphore wrapper
-lands on Linux, an IOSurface allocation helper joins the
-module. At that point, this brief becomes the history;
+wrapper lands on Mac (the Vulkan timeline-semaphore wrapper already
+landed on Linux in 2026-06-03), an IOSurface allocation helper joins
+the module. At that point, this brief becomes the history;
 document the new shape in this file's "What's here" section
 and let this lineage section stand as provenance.

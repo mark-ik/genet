@@ -51,3 +51,20 @@ there.
 
 Fedora 44 workstation (Wayland) is the validation box. The Mint Acer
 is X11, so it does not exercise this path.
+
+---
+
+## Done — 2026-06-03
+
+Landed on the Fedora 44 (GNOME / Mutter, RADV / Mesa 26.0.6) validation
+box. Headless `--wayland-present-smoke` exits 0; visual receipt via
+`--wayland-present-surfaces-smoke` shows the red master + per-surface
+green-quarter (composed at opacity 1.0 rather than the spec'd 0.5
+because `wp_alpha_modifier_v1` multiplier didn't take effect on this
+Mutter — follow-up investigation, not a C4 gate).
+
+See [`docs/2026-06-03_wayland_per_surface_presentation_design.md`](./2026-06-03_wayland_per_surface_presentation_design.md)
+for the implementation design; [`docs/2026-06-03_wayland_per_surface_presentation_plan.md`](./2026-06-03_wayland_per_surface_presentation_plan.md)
+for the executed plan; [`docs/2026-05-09_c4_landed_notes.md`](./2026-05-09_c4_landed_notes.md)
+gap (4) entry for the landed-state summary; [`docs/2026-05-09_interop_lineage.md`](./2026-05-09_interop_lineage.md)
+for the `VulkanTimelineSemaphoreSynchronizer` slot fill.

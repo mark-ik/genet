@@ -39,6 +39,19 @@ macos-present = [
     "dep:raw-window-handle",
     "dep:pollster",
 ]
+# Headed presentation through serval's `WaylandSubsurfaceBackend`. Drives
+# the netrender renderer through a winit Wayland window with per-`SurfaceKey`
+# subsurfaces. Linux-only at runtime; the feature gate is platform-agnostic so
+# `cargo check --features linux-present` works on non-Linux hosts (the inner
+# code is `cfg(target_os = "linux")` gated). The wl_display + wl_surface
+# extraction lives in `paint::compositor_factory`; pelt-desktop calls
+# `default_compositor_for_window` and doesn't need its own wayland-client deps.
+linux-present = [
+    "netrender",
+    "dep:paint",
+    "dep:raw-window-handle",
+    "dep:pollster",
+]
 
 [dependencies]
 netrender = { workspace = true, optional = true }
@@ -56,6 +69,14 @@ winit = { workspace = true }
 # to paint's WindowsDxgiBackend constructor. Same workspace `windows`
 # version paint depends on.
 windows = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Linux-only ash extension NAME constants used by the `linux-present`
+# feature's `smoke_wayland::build_vulkan_handles` to enable the dmabuf
+# export extensions on the wgpu-hal Vulkan device before handing it to
+# wgpu via `Adapter::create_device_from_hal`. Version matches paint's
+# (which in turn matches wgpu-hal 29's lockfile pin 0.38.0+1.3.281).
+ash = "0.38"
 
 
 [lints.rust]

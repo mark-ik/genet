@@ -26,6 +26,7 @@ euclid = { workspace = true }
 html5ever = { workspace = true }
 malloc_size_of = { workspace = true }
 malloc_size_of_derive = { workspace = true }
+pollster = "0.4"
 serde = { workspace = true, features = ["derive"] }
 serval-layout = { path = "../serval-layout" }
 serval-static-dom = { path = "../serval-static-dom" }
@@ -84,3 +85,17 @@ objc2-metal = { workspace = true, features = ["MTLDevice", "MTLTexture", "MTLAll
 # `cfg(target_vendor = "apple")` block above because AppKit is a
 # Mac-only framework; iOS / iPadOS go through UIKit instead.
 objc2-app-kit = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# C4 Wayland compositor backend (compositor_wayland/). ash version matches
+# wgpu-hal 29's lockfile-pinned 0.38.0+1.3.281 so the types line up.
+ash = "0.38"
+# Bake pipeline uniform upload (compositor_wayland/bake.rs).
+bytemuck = { workspace = true }
+smallvec = { workspace = true }
+# `system` feature enables `wayland-backend/client_system`, which is what
+# exposes `Backend::from_foreign_display(*mut wl_display)` + `ObjectId::from_ptr`.
+# We need both to adopt the embedder-owned wl_display/wl_surface from
+# raw-window-handle rather than opening a fresh connection.
+wayland-client = { version = "0.31", features = ["system"] }
+wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }

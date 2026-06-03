@@ -94,3 +94,6 @@ justfile
 
 # sem (Ataraxy-Labs) semantic-diff index cache — local, never committed.
 .sem/
+
+# Claude Code session state: worktrees, hooks, agent transcripts.
+.claude/
