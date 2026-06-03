@@ -7491,6 +7491,7 @@ dependencies = [
  "servo-webgpu",
  "servo-webxr",
  "servo-webxr-api",
+ "smallvec",
  "stylo_traits",
  "taffy 0.11.0-experimental-cache-fix.3",
  "wayland-client",
