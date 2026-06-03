@@ -104,16 +104,62 @@ binds every protocol (http/https/ws/wss/h2) and exits 0. Revert by restoring the
 `.bak-<date>` copy (elevated).
 
 **Gate B, server mode in `serval-wpt`.** Past the hosts file, running the
-network-dependent `fetch/` tests needs the runner to load server-served and
-template-substituted pages and set the running server as the document base URL, so
-relative `fetch()` calls resolve to it. That is a substantial harness rework beyond
-the netfetcher handler already built.
+network-dependent `fetch/` tests needs harness changes. This is the remaining work;
+it is all serval-side, no further external setup.
+
+### Server side proven (2026-06-02)
+
+`python wpt serve` (plain-http on the stable port 8000) was stood up and probed
+directly. All three behaviours that Gate B depends on work:
+
+- **static serving**: `GET /common/blank.html` returns 200.
+- **dynamic Python handlers**: `PUT /fetch/api/resources/method.py?show_request_method`
+  echoes `x-request-method: PUT`; `inspect-headers.py?headers=x-test` with
+  `x-test: hello` echoes `x-request-x-test: hello`.
+- **template substitution** (the linchpin, and the thing disk-loading can never
+  do): `GET /common/get-host-info.sub.js` comes back with real ports filled in
+  (`HTTP_PORT = '8000'`, `HTTP_PORT2 = '62275'`), so `get_host_info()` /
+  `make_absolute_url` will resolve correctly once the harness loads it over HTTP.
+
+So the WPT server is solid. The rest is harness wiring.
+
+### Harness changes (grounded in `harness.rs` + `main.rs`)
+
+Today `harness::run_test` reads the test HTML from disk, `collect_scripts` reads
+inline + local `<script src>` from disk (remote/`data:` skipped), no `fetch`
+handler is installed on the `Runtime`, and there is no document URL / `location`.
+Add a **server mode** behind a new flag (`--server-base http://web-platform.test:8000`),
+default off so disk mode is unchanged:
+
+1. **Install the fetch handler.** In `run_with`, when in server mode,
+   `rt.set_fetch_handler(Box::new(NetFetchHandler::new()))` — promote the handler
+   from `tests/fetch_netfetcher.rs` into the binary behind the `netfetch` feature.
+   Test `fetch()` calls then hit the live server.
+2. **Base URL / `location`.** Set the document URL to `<server-base>/<test-rel-path>`
+   so relative `fetch()` and `make_absolute_url` resolve. Two parts: a host
+   `location` global (`href`/`origin`/`protocol`/`host`/`pathname`), and relative
+   URL resolution in `fetch()` (best as a native fn over the Rust `url` crate's
+   `Url::join`, not a JS reimplementation).
+3. **Server-loaded resources (the bulk).** In server mode, `collect_scripts` loads
+   `<script src>` (and the test HTML itself when `.sub.html`) by HTTP GET from the
+   server instead of `fs::read_to_string`, so `.sub.js`/`.sub.html` substitution
+   happens. `get-host-info.sub.js` then carries real ports (proven above).
+4. **Server lifecycle.** Two options: (a) **connect mode** — user runs
+   `wpt serve`, passes `--server-base`; simplest, recommended first. (b)
+   **auto-spawn** — runner spawns `wpt serve`, parses the http port from its
+   `Starting http server on http://web-platform.test:PORT` line (8000 is the stable
+   plain-http port), waits for ready, tears down. More convenient, more moving
+   parts; later.
+
+Dependencies: (1) and (3) need a running server (4); (2) is independent; (3) is
+most of the work. First slice: one network `fetch/` test end-to-end in connect
+mode (handler + base URL + server-loaded `get-host-info`), confirm its subtests
+pass against the live server, then widen.
 
 ## Not done (deliberately deferred)
 
-- **`wpt serve` stand-up**: gated on Gate A (user admin step) then Gate B
-  (server-mode harness). The netfetcher handler is ready to drive it once both are
-  cleared.
+- **Gate B server mode**: the four-step harness rework above. Server side proven;
+  harness wiring pending a go-ahead on connect-vs-spawn.
 - **The failing object-semantics tail**: request/response sit well under half.
   Many failures are missing pieces (`FormData`, `Blob`, `URLSearchParams` bodies,
   `ReadableStream`), not seam bugs. Each is its own slice.
