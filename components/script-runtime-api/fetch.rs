@@ -661,6 +661,51 @@ const FETCH_BOOTSTRAP: &str = r#"
     }
   };
 
+  // ---- AbortController / AbortSignal ----
+  // AbortSignal is an EventTarget (the global EventTarget bootstrap supplies
+  // addEventListener / dispatchEvent). It has no public constructor; controllers
+  // and the statics mint one via makeSignal.
+  function AbortSignal() { throw new TypeError("Illegal constructor"); }
+  AbortSignal.prototype = Object.create(EventTarget.prototype);
+  AbortSignal.prototype.constructor = AbortSignal;
+  AbortSignal.prototype.throwIfAborted = function() { if (this.aborted) throw this.reason; };
+  function makeSignal() {
+    var s = Object.create(AbortSignal.prototype);
+    EventTarget.call(s);
+    s.aborted = false; s.reason = undefined; s.onabort = null;
+    return s;
+  }
+  function abortReason(reason) {
+    return reason !== undefined ? reason : new DOMException("signal is aborted without reason", "AbortError");
+  }
+  function signalAbort(signal, reason) {
+    if (signal.aborted) return;
+    signal.aborted = true;
+    signal.reason = abortReason(reason);
+    var ev = new Event('abort');
+    if (typeof signal.onabort === 'function') { try { signal.onabort.call(signal, ev); } catch (e) {} }
+    signal.dispatchEvent(ev);
+  }
+  AbortSignal.abort = function(reason) { var s = makeSignal(); s.aborted = true; s.reason = abortReason(reason); return s; };
+  AbortSignal.timeout = function(ms) {
+    var s = makeSignal();
+    setTimeout(function() { signalAbort(s, new DOMException("signal timed out", "TimeoutError")); }, ms);
+    return s;
+  };
+  AbortSignal.any = function(signals) {
+    var s = makeSignal();
+    for (var i = 0; i < signals.length; i++) { if (signals[i].aborted) { s.aborted = true; s.reason = signals[i].reason; return s; } }
+    for (var j = 0; j < signals.length; j++) {
+      (function(src) { src.addEventListener('abort', function() { signalAbort(s, src.reason); }); })(signals[j]);
+    }
+    return s;
+  };
+  globalThis.AbortSignal = AbortSignal;
+
+  function AbortController() { this.signal = makeSignal(); }
+  AbortController.prototype.abort = function(reason) { signalAbort(this.signal, reason); };
+  globalThis.AbortController = AbortController;
+
   // ---- Request ----
   function Request(input, init) {
     init = init || {};
@@ -668,10 +713,13 @@ const FETCH_BOOTSTRAP: &str = r#"
       this.url = input.url; this.method = input.method; this.headers = new Headers(input.headers);
       this.__body = input.__body; this.mode = input.mode; this.credentials = input.credentials;
       this.redirect = input.redirect; this.cache = input.cache; this.destination = input.destination;
+      this.signal = input.signal;
     } else {
       this.url = __resolve_url(String(input)); this.method = 'GET'; this.headers = new Headers(); this.__body = null;
       this.mode = 'cors'; this.credentials = 'same-origin'; this.redirect = 'follow'; this.cache = 'default'; this.destination = '';
+      this.signal = makeSignal();
     }
+    if (init.signal !== undefined) this.signal = init.signal;
     if (init.method !== undefined) this.method = String(init.method).toUpperCase();
     if (init.headers !== undefined) this.headers = new Headers(init.headers);
     if (init.body !== undefined && init.body !== null) {
@@ -767,6 +815,10 @@ const FETCH_BOOTSTRAP: &str = r#"
     try { req = new Request(input, init); } catch (e) { return Promise.reject(e); }
     if (!req.headers.has("accept")) req.headers.append("accept", "*/*");
     return new Promise(function(resolve, reject) {
+      // A pre-aborted signal rejects with its reason (the fetch is synchronous, so
+      // there is no mid-flight window; the pre-flight abort check is the one that
+      // matters for the harness).
+      if (req.signal && req.signal.aborted) { reject(abortReason(req.signal.reason)); return; }
       var o;
       try { o = JSON.parse(__fetch(req.method, req.url, headersFlat(req.headers), req.__body != null ? req.__body : "")); }
       catch (e) { reject(new TypeError("Failed to fetch")); return; }

@@ -87,6 +87,12 @@ Two passes drove the request / response jumps (request 168 -> 246, response
   the `response-stream-disturbed-*` family 8/12). Byte (BYOB) readers,
   `pipeTo` / `pipeThrough`, and true async streaming are deferred; binary bodies
   still degrade through the UTF-8 string sink.
+- **AbortController / AbortSignal.** `AbortSignal` is an `EventTarget` (abort
+  event + `onabort`), with `throwIfAborted` and the `abort` / `timeout` / `any`
+  statics; `fetch(url, {signal})` rejects a pre-aborted signal with its reason.
+  Took `fetch/api/abort` from erroring (no `AbortController`) to 37/88 (general
+  25/53, request 12/18); the rest there need `URL` and live-network mid-flight
+  abort.
 
 ## The `wpt serve` lift: blocked, two gates
 
@@ -212,9 +218,12 @@ cargo run -p serval-wpt --features netfetch -- \
 - **Binary body channel + multipart `formData()` parse.** Bodies cross `__fetch`
   as a UTF-8 string, so binary Blob / buffer bodies degrade; and `formData()`
   parses urlencoded but not multipart. Both want a bytes channel through the seam.
+- **`URL`.** The WHATWG `URL` object (with `searchParams`). `fetch/api/abort`
+  (`new URL(..., location)`) and the `*/url-parsing.html` tests need it. Best
+  backed by the Rust `url` crate (parse + component setters) rather than a JS
+  reimplementation.
 - **The failing object-semantics tail**: request / response still sit around half,
-  now mostly byte/async streams + binary-body + AbortSignal, not missing
-  constructors.
+  now mostly byte/async streams + binary-body + `URL`, not missing constructors.
 - **Per-test runtime reuse.** A fresh `Runtime` per test re-evals testharness.js
   each time (the dominant cost; see `harness::bench`). A snapshot-clone pool is the
   amortization, unchanged by this work.
