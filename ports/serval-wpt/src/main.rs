@@ -525,13 +525,29 @@ fn testharness(tests: &[PathBuf], args: &Args) {
                 }
             }
         } else {
-            let raw = match fs::read(path) {
-                Ok(b) => String::from_utf8_lossy(&b).into_owned(),
-                Err(_) => {
+            // Server mode loads the page over HTTP (so `.sub.html` template
+            // substitution happens); disk mode reads the file. `server_page` is
+            // `None` in disk mode, `Some(None)` if a server fetch failed.
+            #[cfg(feature = "netfetch")]
+            let server_page =
+                server.as_ref().map(|s| net::http_get(&s.doc_url(&rel(path, &args.tests_root))));
+            #[cfg(not(feature = "netfetch"))]
+            let server_page: Option<Option<String>> = None;
+            let raw = match server_page {
+                Some(Some(t)) => t,
+                Some(None) => {
                     errored += 1;
-                    println!("ERROR read    {}", rel(path, &args.tests_root));
+                    println!("ERROR fetch   {}", rel(path, &args.tests_root));
                     continue;
                 }
+                None => match fs::read(path) {
+                    Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+                    Err(_) => {
+                        errored += 1;
+                        println!("ERROR read    {}", rel(path, &args.tests_root));
+                        continue;
+                    }
+                },
             };
             if classify(path, &raw) != Kind::Testharness {
                 skipped += 1;

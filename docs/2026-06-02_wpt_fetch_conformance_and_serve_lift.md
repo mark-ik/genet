@@ -156,10 +156,12 @@ What it wires (all on the `netfetch` feature):
    components. A new `__resolve_url` native (over the `url` crate's `Url::join`)
    resolves relative `Request` / `fetch()` URLs against it; with no base set it is a
    no-op, so disk mode and the binding tests are unaffected.
-3. **Server-loaded `<script src>`.** `collect_scripts` now takes a
-   `ScriptSrcLoader`; the `net::ServerLoader` HTTP-GETs each `src` (joined against
-   the document URL), so `get-host-info.sub.js` and other `.sub.js` arrive
-   substituted. Disk mode uses `DiskLoader` (the prior `fs::read` path).
+3. **Server-loaded resources.** `collect_scripts` now takes a `ScriptSrcLoader`;
+   the `net::ServerLoader` HTTP-GETs each `src` (joined against the document URL),
+   so `get-host-info.sub.js` and other `.sub.js` arrive substituted. The test
+   *page* itself is also GET from the server in server mode, so `.sub.html`
+   substitution happens (`.any.js` wrappers are still synthesized locally). Disk
+   mode uses `DiskLoader` (the prior `fs::read` path).
 4. **Lifecycle.** `net::ServerCtx` (connect or spawn) owns the origin and a
    `ServerHandle` whose `Drop` kills the spawned tree (`taskkill /T /F` on Windows).
 
@@ -196,9 +198,6 @@ cargo run -p serval-wpt --features netfetch -- \
 
 ## Not done (deliberately deferred)
 
-- **`.sub.html` page substitution.** Server mode loads `<script src>` over HTTP
-  (so `.sub.js` substitutes) but still reads the test *page* from disk. `.sub.html`
-  fetch tests need the page GET'd too, a small follow-up.
 - **`ReadableStream`** (and stream request/response bodies). The single biggest
   remaining global: the `response-stream-*` family and `request-init-stream` are
   all blocked on it. A real lift (controller, reader, tee, backpressure).
