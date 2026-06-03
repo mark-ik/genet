@@ -324,8 +324,9 @@ pub(crate) fn install_fetch_surface<E: ScriptEngine>(engine: &mut E) -> Result<(
 /// extraction (string / URLSearchParams / Blob / FormData / buffers / stream set
 /// the right Content-Type), and `fetch()` over the `__fetch` sink. Bodies cross
 /// that sink as a lossless binary string, so binary request / response bodies are
-/// exact. Still missing byte (BYOB) readers, `pipeTo` / `pipeThrough`, true async
-/// streaming, and multipart `formData()` parsing.
+/// exact. Streams are a buffered model (`ReadableStream` / `WritableStream` /
+/// `TransformStream` + `pipeTo` / `pipeThrough`); still missing byte (BYOB)
+/// readers, genuinely async producers, and multipart `formData()` parsing.
 const FETCH_BOOTSTRAP: &str = r#"
 (function() {
   var hasSym = (typeof Symbol !== 'undefined' && Symbol.iterator);
@@ -641,6 +642,106 @@ const FETCH_BOOTSTRAP: &str = r#"
     return Promise.resolve(undefined);
   };
   globalThis.ReadableStreamDefaultReader = ReadableStreamDefaultReader;
+
+  // ---- WritableStream (buffered model) ----
+  function WritableStream(sink, strategy) {
+    sink = sink || {};
+    this._sink = sink;
+    this._writer = null;
+    this._state = 'writable';
+    this._stored = undefined;
+    var self = this;
+    this._controller = { error: function(e) { if (self._state === 'writable') { self._state = 'errored'; self._stored = e; } }, signal: undefined };
+    if (typeof sink.start === 'function') {
+      try { sink.start(this._controller); } catch (e) { this._state = 'errored'; this._stored = e; }
+    }
+  }
+  Object.defineProperty(WritableStream.prototype, 'locked', { configurable: true, get: function() { return this._writer !== null; } });
+  WritableStream.prototype.getWriter = function() {
+    if (this._writer) throw new TypeError("WritableStream is already locked to a writer");
+    var w = new WritableStreamDefaultWriter(this);
+    this._writer = w;
+    return w;
+  };
+  WritableStream.prototype.abort = function(reason) {
+    if (this._state === 'writable') { this._state = 'errored'; this._stored = reason; if (typeof this._sink.abort === 'function') { try { this._sink.abort(reason); } catch (e) {} } }
+    return Promise.resolve(undefined);
+  };
+  WritableStream.prototype.close = function() {
+    if (this._state === 'writable') { this._state = 'closed'; if (typeof this._sink.close === 'function') { try { this._sink.close(); } catch (e) {} } }
+    return Promise.resolve(undefined);
+  };
+  globalThis.WritableStream = WritableStream;
+
+  function WritableStreamDefaultWriter(stream) {
+    this._stream = stream;
+    this.closed = Promise.resolve(undefined);
+    this.ready = Promise.resolve(undefined);
+    this.desiredSize = 1;
+  }
+  WritableStreamDefaultWriter.prototype.write = function(chunk) {
+    var s = this._stream;
+    if (!s) return Promise.reject(new TypeError("Writer has been released"));
+    if (s._state === 'errored') return Promise.reject(s._stored);
+    if (typeof s._sink.write === 'function') {
+      try { return Promise.resolve(s._sink.write(chunk, s._controller)); } catch (e) { return Promise.reject(e); }
+    }
+    return Promise.resolve(undefined);
+  };
+  WritableStreamDefaultWriter.prototype.close = function() { return this._stream ? this._stream.close() : Promise.resolve(undefined); };
+  WritableStreamDefaultWriter.prototype.abort = function(reason) { return this._stream ? this._stream.abort(reason) : Promise.resolve(undefined); };
+  WritableStreamDefaultWriter.prototype.releaseLock = function() { if (this._stream) { if (this._stream._writer === this) this._stream._writer = null; this._stream = null; } };
+  globalThis.WritableStreamDefaultWriter = WritableStreamDefaultWriter;
+
+  // pipeTo: lock + disturb the source synchronously (the by-pipe tests check
+  // bodyUsed right after the call), then pump chunks to the writable. The pump is
+  // best-effort over the buffered model.
+  ReadableStream.prototype.pipeTo = function(dest, options) {
+    if (this.locked) return Promise.reject(new TypeError("ReadableStream is locked"));
+    if (!dest || dest.locked) return Promise.reject(new TypeError("WritableStream is locked"));
+    var reader = this.getReader();
+    this._disturbed = true;
+    if (this._owner) this._owner.bodyUsed = true;
+    var writer = dest.getWriter();
+    return new Promise(function(resolve, reject) {
+      function pump() {
+        reader.read().then(function(r) {
+          if (r.done) { writer.close().then(function() { resolve(undefined); }, function() { resolve(undefined); }); return; }
+          Promise.resolve(writer.write(r.value)).then(pump, reject);
+        }, reject);
+      }
+      pump();
+    });
+  };
+  ReadableStream.prototype.pipeThrough = function(pair, options) {
+    if (this.locked) throw new TypeError("ReadableStream is locked");
+    if (!pair || !pair.writable || !pair.readable) throw new TypeError("pipeThrough needs a {writable, readable} pair");
+    if (pair.writable.locked) throw new TypeError("WritableStream is locked");
+    this.pipeTo(pair.writable, options);
+    return pair.readable;
+  };
+
+  // ---- TransformStream (identity / transformer.transform) ----
+  function TransformStream(transformer) {
+    transformer = transformer || {};
+    var self = this;
+    this.readable = new ReadableStream({ start: function(c) { self.__rc = c; } });
+    var controller = {
+      enqueue: function(chunk) { if (self.__rc) self.__rc.enqueue(chunk); },
+      terminate: function() { if (self.__rc) self.__rc.close(); },
+      error: function(e) { self.__rc && self.__rc.error(e); }
+    };
+    this.writable = new WritableStream({
+      write: function(chunk) {
+        if (typeof transformer.transform === 'function') return transformer.transform(chunk, controller);
+        controller.enqueue(chunk);
+      },
+      close: function() { if (typeof transformer.flush === 'function') transformer.flush(controller); if (self.__rc) self.__rc.close(); },
+      abort: function() {}
+    });
+    if (typeof transformer.start === 'function') { try { transformer.start(controller); } catch (e) {} }
+  }
+  globalThis.TransformStream = TransformStream;
 
   // ---- URLSearchParams ----
   function uspEnc(s) {

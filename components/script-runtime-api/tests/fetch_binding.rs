@@ -407,3 +407,43 @@ fn stream_backed_body_semantics() {
     assert_eq!(read(&mut rt, "String(U.afterGetReader)"), "false");
     assert_eq!(read(&mut rt, "String(U.afterRead)"), "true");
 }
+
+#[test]
+fn writable_stream_and_pipe() {
+    let mut rt = Runtime::<BoaEngine>::new().unwrap();
+    // pipeTo disturbs the source synchronously (the by-pipe tests).
+    rt.eval(
+        r#"
+        var P = {};
+        var r = new Response(new ReadableStream());
+        r.body.pipeTo(new WritableStream({}));
+        P.disturbed = r.bodyUsed;
+        var ws = new WritableStream({}); ws.getWriter(); P.wlocked = ws.locked;
+        var r2 = new Response(new ReadableStream());
+        var out = r2.body.pipeThrough({ writable: new WritableStream({}), readable: new ReadableStream() });
+        P.ptDisturbed = r2.bodyUsed;
+        P.ptIsReadable = (out instanceof ReadableStream);
+        "#,
+    ).unwrap();
+    rt.run_microtasks();
+    assert_eq!(read(&mut rt, "String(P.disturbed)"), "true", "pipeTo disturbs synchronously");
+    assert_eq!(read(&mut rt, "String(P.wlocked)"), "true");
+    assert_eq!(read(&mut rt, "String(P.ptDisturbed)"), "true", "pipeThrough disturbs synchronously");
+    assert_eq!(read(&mut rt, "String(P.ptIsReadable)"), "true", "pipeThrough returns the readable");
+    // A WritableStream sink receives writes; a TransformStream relays chunks.
+    rt.eval(
+        r#"
+        var W = {};
+        var sink = new WritableStream({ write: function(chunk){ W.got = chunk; } });
+        var w = sink.getWriter(); w.write("hello").then(function(){ W.done = true; });
+        var T = {};
+        var ts = new TransformStream();
+        var tw = ts.writable.getWriter(); tw.write(new TextEncoder().encode("xfer")); tw.close();
+        ts.readable.getReader().read().then(function(res){ T.first = new TextDecoder().decode(res.value); });
+        "#,
+    ).unwrap();
+    rt.run_microtasks();
+    assert_eq!(read(&mut rt, "W.got"), "hello");
+    assert_eq!(read(&mut rt, "String(W.done)"), "true");
+    assert_eq!(read(&mut rt, "T.first"), "xfer", "TransformStream relays the chunk");
+}
