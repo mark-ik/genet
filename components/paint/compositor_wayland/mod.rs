@@ -535,10 +535,155 @@ impl WaylandSubsurfaceBackend {
         clip: Option<[f32; 4]>,
         opacity: f32,
     ) -> Result<(), BackendError> {
-        let _ = (key, transform, clip, opacity);
-        // Real impl lands in Phase 7. Stubbed to return Ok for now so the
-        // fast path can be exercised without the bake module in flight.
-        Err(BackendError::Unwired("present_baked_path — Phase 7"))
+        // --- Check surface exists and grab stable metadata. ---
+        let (surface_id, need_realloc, bbox_w, bbox_h, min_x, min_y) = {
+            let surface = self.surfaces.get(&key).ok_or_else(|| {
+                BackendError::Wayland(format!("present({key:?}): surface not declared"))
+            })?;
+            let (src_w, src_h) = surface.size;
+
+            // Compute rotated bbox in pixel-space from the source-rect.
+            let corners = [
+                (0.0_f32, 0.0_f32),
+                (src_w as f32, 0.0),
+                (0.0, src_h as f32),
+                (src_w as f32, src_h as f32),
+            ];
+            let mapped: Vec<(f32, f32)> = corners
+                .iter()
+                .map(|(x, y)| {
+                    (
+                        transform[0] * x + transform[2] * y,
+                        transform[1] * x + transform[3] * y,
+                    )
+                })
+                .collect();
+            let min_x = mapped.iter().map(|p| p.0).fold(f32::INFINITY, f32::min);
+            let max_x = mapped.iter().map(|p| p.0).fold(f32::NEG_INFINITY, f32::max);
+            let min_y = mapped.iter().map(|p| p.1).fold(f32::INFINITY, f32::min);
+            let max_y = mapped.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max);
+            let bbox_w = (max_x - min_x).ceil().max(1.0) as u32;
+            let bbox_h = (max_y - min_y).ceil().max(1.0) as u32;
+
+            let need_realloc = match &surface.bake {
+                Some(p) => p.width != bbox_w || p.height != bbox_h,
+                None => true,
+            };
+            (surface.surface_id, need_realloc, bbox_w, bbox_h, min_x, min_y)
+        };
+
+        // (Re)allocate bake pool on size change.
+        if need_realloc {
+            let id = surface_id * 10 + 1; // bake-pool subordinate id
+            let new_pool = self.allocate_pool(id, bbox_w, bbox_h)?;
+            // Re-borrow surface after the &mut self call inside allocate_pool.
+            let surface = self.surfaces.get_mut(&key).expect("re-borrowed");
+            surface.bake = Some(new_pool);
+        }
+
+        // Acquire a bake slot; roundtrip if starved.
+        let slot_index = loop {
+            if let Some(i) = self
+                .surfaces
+                .get_mut(&key)
+                .expect("re-borrowed")
+                .bake
+                .as_mut()
+                .expect("just allocated")
+                .acquire()
+            {
+                break i;
+            }
+            self.wayland.roundtrip()?;
+        };
+
+        // Run bake: dest_texture -> slot.image with the linear affine
+        // + opacity multiplier (1.0 when alpha_modifier handles opacity).
+        let opacity_multiplier = if self.wayland.globals.alpha_modifier.is_some() {
+            1.0
+        } else {
+            opacity
+        };
+        {
+            // Borrow surface shared for the bake call. dest_texture and
+            // bake.slots[i].image are distinct fields; both are read-only
+            // for the duration of this block.
+            let surface = self.surfaces.get(&key).expect("re-borrowed");
+            let dst = &surface
+                .bake
+                .as_ref()
+                .expect("just allocated")
+                .slots[slot_index]
+                .image
+                .wgpu_texture;
+            self.bake_pipeline.bake(
+                &self.host.device,
+                &self.host.queue,
+                &surface.dest_texture,
+                dst,
+                [transform[0], transform[1], transform[2], transform[3]],
+                opacity_multiplier,
+            );
+        }
+
+        // Viewport identity-scales the bbox.
+        // Clip / opacity-via-alpha_modifier mirror the fast path.
+        // Attach + damage + commit + flush.
+        //
+        // All surface field accesses are on distinct subfields; Rust NLL
+        // splits borrows across struct fields.
+        let surface = self.surfaces.get_mut(&key).expect("re-borrowed");
+
+        surface
+            .viewport
+            .set_source(0.0, 0.0, bbox_w as f64, bbox_h as f64);
+        surface.viewport.set_destination(bbox_w as i32, bbox_h as i32);
+
+        // Subsurface position = transform translation + bbox offset.
+        let tx = (transform[4] + min_x).round() as i32;
+        let ty = (transform[5] + min_y).round() as i32;
+        surface.wl_subsurface.set_position(tx, ty);
+
+        match clip {
+            Some([x0, y0, x1, y1]) => {
+                let region = self
+                    .wayland
+                    .globals
+                    .compositor
+                    .create_region(&self.wayland.queue_handle, ());
+                region.add(
+                    x0.round() as i32,
+                    y0.round() as i32,
+                    (x1 - x0).round().max(0.0) as i32,
+                    (y1 - y0).round().max(0.0) as i32,
+                );
+                surface.wl_surface.set_input_region(Some(&region));
+                region.destroy();
+            },
+            None => {
+                surface.wl_surface.set_input_region(None);
+            },
+        }
+        if let Some(am) = &surface.alpha_modifier {
+            let multiplier =
+                (opacity.clamp(0.0, 1.0) * (u32::MAX as f32)).round() as u32;
+            am.set_multiplier(multiplier);
+        }
+
+        let slot_wl_buffer = &surface
+            .bake
+            .as_ref()
+            .expect("just allocated")
+            .slots[slot_index]
+            .wl_buffer;
+        surface.wl_surface.attach(Some(slot_wl_buffer), 0, 0);
+        surface
+            .wl_surface
+            .damage_buffer(0, 0, bbox_w as i32, bbox_h as i32);
+        surface.wl_surface.commit();
+        self.wayland.flush()?;
+
+        Ok(())
     }
 }
 
