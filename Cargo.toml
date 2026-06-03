@@ -322,7 +322,6 @@ paint_types = { package = "servo-paint-types", version = "=0.2.0", path = "compo
 pixels = { package = "servo-pixels", version = "=0.2.0", path = "components/pixels" }
 profile = { package = "servo-profile", version = "=0.2.0", path = "components/profile" }
 profile_traits = { package = "servo-profile-traits", version = "=0.2.0", path = "components/shared/profile" }
-script_traits = { package = "servo-script-traits", version = "=0.2.0", path = "components/shared/script" }
 # `servo = "..."` workspace.dep removed 2026-05-15 per Mark's audit:
 # serval used to be servo-the-fork, but the umbrella servo crate is no
 # longer load-bearing. The two examples that depended on it
@@ -332,9 +331,7 @@ script_traits = { package = "servo-script-traits", version = "=0.2.0", path = "c
 # paths for components that may be referenced — separate cleanup pass if
 # they turn out to be vestigial.
 servo-allocator = { version = "=0.2.0", path = "components/allocator" }
-servo-background-hang-monitor-api = { version = "=0.2.0", path = "components/shared/background_hang_monitor" }
 servo-base = { version = "=0.2.0", path = "components/shared/base" }
-servo-bluetooth-traits = { version = "=0.2.0", path = "components/shared/bluetooth" }
 servo-canvas-traits = { version = "=0.2.0", path = "components/shared/canvas" }
 servo-config = { version = "=0.2.0", path = "components/config" }
 servo-config-macro = { version = "=0.2.0", path = "components/config/macro" }
