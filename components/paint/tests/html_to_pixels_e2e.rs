@@ -24,12 +24,16 @@
 //! 7. Ship via `PaintMessage::SendPaintList` through `Paint`.
 //! 8. `Paint::render(webview_id)`.
 //! 9. Read back the master and assert the cascaded background color
-//!    landed where the layout said `<body>` was.
+//!    landed where the layout said `<body>` was, plus the per-test
+//!    assertions on text glyph pixels, borders, shadows, images, and
+//!    positioned/floated boxes.
 //!
-//! The probe doesn't validate text rendering — `DrawText` is still
-//! a `warn!`-and-skip in the translator (gap documented in the
-//! polyglot-renderer doc). It validates the seam: HTML in, pixels
-//! out, with cascaded color applied.
+//! Text rendering is part of the seam: the producer emits shaped
+//! glyph runs via `emit_paint_list_with_layouts` (cached parley
+//! `Layout`s), the translator at `paint_list_render` lowers
+//! `PaintCmd::DrawText` to `Scene::push_glyph_run_full`, and the
+//! `html_to_pixels_text_rasterizes_glyphs` / `*_inline_span_keeps_its_own_color`
+//! tests below assert glyph pixels in the master.
 
 use dpi::PhysicalSize;
 use embedder_traits::ViewportDetails;
