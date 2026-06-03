@@ -161,10 +161,17 @@ fn smoke_test(path: &Path) -> (Kind, Outcome) {
     (kind, if result.is_ok() { Outcome::Passed } else { Outcome::Failed })
 }
 
-/// Collect HTML test files under `root` (a dir or a single file).
+/// True for a WPT `.any.js` / `.window.js` / `.worker.js` test (a JS file the
+/// harness wraps into a generated HTML page rather than a standalone document).
+fn is_any_js(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    name.ends_with(".any.js") || name.ends_with(".window.js") || name.ends_with(".worker.js")
+}
+
+/// Collect HTML + `.any.js`-style test files under `root` (a dir or a single file).
 fn collect(root: &Path, out: &mut Vec<PathBuf>) {
     if root.is_file() {
-        if is_html(root) {
+        if is_html(root) || is_any_js(root) {
             out.push(root.to_path_buf());
         }
         return;
@@ -175,10 +182,77 @@ fn collect(root: &Path, out: &mut Vec<PathBuf>) {
     for path in entries {
         if path.is_dir() {
             collect(&path, out);
-        } else if is_html(&path) {
+        } else if is_html(&path) || is_any_js(&path) {
             out.push(path);
         }
     }
+}
+
+/// Synthesize the testharness HTML wrapper for a `.any.js` / `.window.js` test:
+/// load testharness.js + the test's `// META: script=...` helpers + the test
+/// file itself, exactly as WPT's build step generates the `.any.html` variant.
+/// `run_test` then resolves those `<script src>` the usual way. Returns `None`
+/// for worker-only tests (`.worker.js`, or `.any.js` whose `global=` excludes
+/// window), which this window-shaped runner can't host.
+fn synthesize_any_js(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    if name.ends_with(".worker.js") {
+        return None;
+    }
+    let src = fs::read_to_string(path).ok()?;
+    let mut scripts: Vec<String> = Vec::new();
+    let mut window_ok = true;
+    let mut in_block = false;
+    // The `// META:` directives form the leading comment header; scan until the
+    // first real statement (tracking /* */ so a license block doesn't end it).
+    for line in src.lines() {
+        let t = line.trim();
+        if in_block {
+            if t.contains("*/") {
+                in_block = false;
+            }
+            continue;
+        }
+        if t.starts_with("/*") {
+            if !t.contains("*/") {
+                in_block = true;
+            }
+            continue;
+        }
+        if let Some(meta) = t.strip_prefix("// META:") {
+            let meta = meta.trim();
+            if let Some(s) = meta.strip_prefix("script=") {
+                scripts.push(s.trim().to_owned());
+            } else if let Some(g) = meta.strip_prefix("global=") {
+                // window-shaped run: only `.any.js` whose globals include window
+                // (or the dedicated-window aliases) is hostable here.
+                window_ok = g.split(',').any(|tok| {
+                    let tok = tok.trim();
+                    tok == "window" || tok == "default" || tok.starts_with("window")
+                });
+            }
+            continue;
+        }
+        if t.is_empty() || t.starts_with("//") {
+            continue;
+        }
+        break; // first real statement: META header is over
+    }
+    // `.window.js` is inherently window-scoped; the global directive only gates
+    // `.any.js`.
+    if name.ends_with(".any.js") && !window_ok {
+        return None;
+    }
+    let mut html = String::from(
+        "<!doctype html><meta charset=utf-8>\n\
+         <script src=\"/resources/testharness.js\"></script>\n\
+         <script src=\"/resources/testharnessreport.js\"></script>\n",
+    );
+    for s in scripts {
+        html.push_str(&format!("<script src=\"{s}\"></script>\n"));
+    }
+    html.push_str(&format!("<script src=\"{name}\"></script>\n"));
+    Some(html)
 }
 
 struct Args {
@@ -384,31 +458,47 @@ fn testharness(tests: &[PathBuf], args: &Args) {
     let (mut sub_passed, mut sub_total) = (0usize, 0usize);
 
     for path in tests {
-        let html = match fs::read(path) {
-            Ok(b) => String::from_utf8_lossy(&b).into_owned(),
-            Err(_) => {
-                errored += 1;
-                println!("ERROR read    {}", rel(path, &args.tests_root));
+        // Build the testharness HTML: a real .html document's contents, or a
+        // synthesized wrapper for a `.any.js` / `.window.js` test.
+        let html = if is_any_js(path) {
+            match synthesize_any_js(path) {
+                Some(h) => h,
+                None => {
+                    skipped += 1;
+                    if args.verbose {
+                        println!("SKIP  worker-only    {}", rel(path, &args.tests_root));
+                    }
+                    continue;
+                }
+            }
+        } else {
+            let raw = match fs::read(path) {
+                Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+                Err(_) => {
+                    errored += 1;
+                    println!("ERROR read    {}", rel(path, &args.tests_root));
+                    continue;
+                }
+            };
+            if classify(path, &raw) != Kind::Testharness {
+                skipped += 1;
+                if args.verbose {
+                    println!("SKIP  non-testharness {}", rel(path, &args.tests_root));
+                }
                 continue;
             }
+            // XHTML is a distinct (XML) parse mode serval's HTML parser doesn't
+            // handle; skip rather than report spurious syntax errors.
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if ext.eq_ignore_ascii_case("xhtml") || ext.eq_ignore_ascii_case("xht") {
+                skipped += 1;
+                if args.verbose {
+                    println!("SKIP  xhtml          {}", rel(path, &args.tests_root));
+                }
+                continue;
+            }
+            raw
         };
-        if classify(path, &html) != Kind::Testharness {
-            skipped += 1;
-            if args.verbose {
-                println!("SKIP  non-testharness {}", rel(path, &args.tests_root));
-            }
-            continue;
-        }
-        // XHTML is a distinct (XML) parse mode serval's HTML parser doesn't handle;
-        // skip rather than report spurious syntax errors.
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if ext.eq_ignore_ascii_case("xhtml") || ext.eq_ignore_ascii_case("xht") {
-            skipped += 1;
-            if args.verbose {
-                println!("SKIP  xhtml          {}", rel(path, &args.tests_root));
-            }
-            continue;
-        }
 
         let base_dir = path.parent().unwrap_or(tests_root);
         let result = panic::catch_unwind(AssertUnwindSafe(|| {

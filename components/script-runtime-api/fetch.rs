@@ -8,9 +8,9 @@
 //! (the layering: serval/the runtime never link a network stack). So the runtime
 //! exposes a *sync* [`FetchHandler`] trait — a host (e.g. the WPT runner, or
 //! Mere) implements it over an async engine like netfetcher, doing the async work
-//! inside (`block_on`) — and the JS `fetch()` / `Response` / `Headers` surface is
-//! a bootstrap over a single native sink (`__fetch`). No network dependency
-//! enters this crate; only the trait does.
+//! inside (`block_on`) — and the JS `fetch()` / `Request` / `Response` / `Headers`
+//! surface is a bootstrap over a single native sink (`__fetch`). No network
+//! dependency enters this crate; only the trait does.
 //!
 //! Async shape: `fetch()` returns a real `Promise`, but the handler runs to
 //! completion synchronously and the Promise resolves at the next microtask
@@ -162,98 +162,227 @@ fn push_json_str(out: &mut String, s: &str) {
     out.push('"');
 }
 
-/// Install the `__fetch` sink and the `fetch()` / `Response` / `Headers` bootstrap.
+/// Install the `__fetch` sink and the `fetch()` / `Request` / `Response` /
+/// `Headers` bootstrap.
 pub(crate) fn install_fetch_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error> {
     engine.set_function::<Fetch>("__fetch", 4)?;
     engine.eval(FETCH_BOOTSTRAP)?;
     Ok(())
 }
 
-/// Minimal Fetch API: `Headers`, `Response` (status/ok/type/url/headers +
-/// text/json/clone), and `fetch()` over the `__fetch` sink. Enough for the
-/// testharness fetch tests' object surface; not the full spec (no `Request`
-/// object, streaming bodies, or `arrayBuffer`/`blob` yet).
+/// The Fetch API JS surface: `Headers` (with validation + sorted iteration +
+/// getSetCookie), `Request`, `Response` (+ `error`/`redirect`/`json` statics), a
+/// shared body mixin (`text`/`json`/`arrayBuffer`), and `fetch()` over the
+/// `__fetch` sink. Covers the object-semantics surface the WPT fetch/ tests
+/// exercise; still missing streaming bodies, `FormData`/`Blob`, and `AbortSignal`.
 const FETCH_BOOTSTRAP: &str = r#"
 (function() {
+  var hasSym = (typeof Symbol !== 'undefined' && Symbol.iterator);
+
+  // RFC 7230 token for header names; values reject CR/LF/NUL and trim OWS.
+  var TOKEN_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+  function checkName(n) {
+    n = String(n);
+    if (!TOKEN_RE.test(n)) throw new TypeError("Invalid header name: '" + n + "'");
+    return n.toLowerCase();
+  }
+  function checkValue(v) {
+    v = String(v).replace(/^[ \t]+|[ \t]+$/g, "");
+    if (/[\r\n\0]/.test(v)) throw new TypeError("Invalid header value");
+    return v;
+  }
+
+  function makeIterator(arr) {
+    var i = 0;
+    var it = { next: function() { return i < arr.length ? { value: arr[i++], done: false } : { value: undefined, done: true }; } };
+    if (hasSym) it[Symbol.iterator] = function() { return this; };
+    return it;
+  }
+
   function Headers(init) {
     this._h = [];
     if (init) {
-      if (init instanceof Headers) { var self = this; init.forEach(function(v, k) { self.append(k, v); }); }
-      else if (Array.isArray(init)) { for (var i = 0; i < init.length; i++) this.append(init[i][0], init[i][1]); }
-      else { for (var k in init) this.append(k, init[k]); }
+      if (init instanceof Headers) { for (var i = 0; i < init._h.length; i++) this._h.push([init._h[i][0], init._h[i][1]]); }
+      else if (Array.isArray(init)) {
+        for (var j = 0; j < init.length; j++) {
+          if (!init[j] || init[j].length !== 2) throw new TypeError("Invalid header entry");
+          this.append(init[j][0], init[j][1]);
+        }
+      } else { for (var k in init) this.append(k, init[k]); }
     }
   }
-  Headers.prototype.append = function(n, v) { this._h.push([String(n).toLowerCase(), String(v)]); };
+  Headers.prototype.append = function(n, v) { this._h.push([checkName(n), checkValue(v)]); };
   Headers.prototype.set = function(n, v) {
-    n = String(n).toLowerCase();
+    n = checkName(n); v = checkValue(v);
     this._h = this._h.filter(function(p) { return p[0] !== n; });
-    this._h.push([n, String(v)]);
+    this._h.push([n, v]);
   };
   Headers.prototype.get = function(n) {
-    n = String(n).toLowerCase();
+    n = checkName(n);
     var out = [];
     for (var i = 0; i < this._h.length; i++) if (this._h[i][0] === n) out.push(this._h[i][1]);
     return out.length ? out.join(", ") : null;
   };
-  Headers.prototype.has = function(n) { return this.get(n) !== null; };
+  Headers.prototype.has = function(n) {
+    n = checkName(n);
+    for (var i = 0; i < this._h.length; i++) if (this._h[i][0] === n) return true;
+    return false;
+  };
   Headers.prototype['delete'] = function(n) {
-    n = String(n).toLowerCase();
+    n = checkName(n);
     this._h = this._h.filter(function(p) { return p[0] !== n; });
   };
-  Headers.prototype.forEach = function(cb, thisArg) {
-    for (var i = 0; i < this._h.length; i++) cb.call(thisArg, this._h[i][1], this._h[i][0], this);
+  Headers.prototype.getSetCookie = function() {
+    var out = [];
+    for (var i = 0; i < this._h.length; i++) if (this._h[i][0] === 'set-cookie') out.push(this._h[i][1]);
+    return out;
   };
+  // Sorted, combined view for iteration (set-cookie kept un-combined).
+  Headers.prototype._sorted = function() {
+    var names = {}, order = [];
+    for (var i = 0; i < this._h.length; i++) {
+      var k = this._h[i][0];
+      if (!(k in names)) { names[k] = []; order.push(k); }
+      names[k].push(this._h[i][1]);
+    }
+    order.sort();
+    var out = [];
+    for (var j = 0; j < order.length; j++) {
+      var n = order[j];
+      if (n === 'set-cookie') { for (var c = 0; c < names[n].length; c++) out.push([n, names[n][c]]); }
+      else out.push([n, names[n].join(", ")]);
+    }
+    return out;
+  };
+  Headers.prototype.forEach = function(cb, thisArg) {
+    var s = this._sorted();
+    for (var i = 0; i < s.length; i++) cb.call(thisArg, s[i][1], s[i][0], this);
+  };
+  Headers.prototype.entries = function() { return makeIterator(this._sorted()); };
+  Headers.prototype.keys = function() { return makeIterator(this._sorted().map(function(p) { return p[0]; })); };
+  Headers.prototype.values = function() { return makeIterator(this._sorted().map(function(p) { return p[1]; })); };
+  if (hasSym) Headers.prototype[Symbol.iterator] = Headers.prototype.entries;
   globalThis.Headers = Headers;
 
-  function Response(o) {
-    o = o || {};
-    this.status = o.status || 0;
-    this.statusText = o.statusText || "";
+  // ---- Body mixin: text / json / arrayBuffer, single-use. ----
+  function consume(self) {
+    if (self.bodyUsed) return Promise.reject(new TypeError("Body has already been consumed."));
+    self.bodyUsed = true;
+    return Promise.resolve(self.__body != null ? String(self.__body) : "");
+  }
+  function utf8Encode(s) {
+    var b = [];
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      if (c < 0x80) b.push(c);
+      else if (c < 0x800) b.push(0xC0 | (c >> 6), 0x80 | (c & 0x3F));
+      else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length) {
+        var cp = 0x10000 + ((c & 0x3FF) << 10) + (s.charCodeAt(++i) & 0x3FF);
+        b.push(0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F));
+      } else b.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F));
+    }
+    return new Uint8Array(b);
+  }
+  var bodyMixin = {
+    text: function() { return consume(this); },
+    json: function() { return consume(this).then(function(t) { return JSON.parse(t); }); },
+    arrayBuffer: function() { return consume(this).then(function(t) { return utf8Encode(t).buffer; }); }
+  };
+
+  // ---- Request ----
+  function Request(input, init) {
+    init = init || {};
+    if (input instanceof Request) {
+      this.url = input.url; this.method = input.method; this.headers = new Headers(input.headers);
+      this.__body = input.__body; this.mode = input.mode; this.credentials = input.credentials;
+      this.redirect = input.redirect; this.cache = input.cache; this.destination = input.destination;
+    } else {
+      this.url = String(input); this.method = 'GET'; this.headers = new Headers(); this.__body = null;
+      this.mode = 'cors'; this.credentials = 'same-origin'; this.redirect = 'follow'; this.cache = 'default'; this.destination = '';
+    }
+    if (init.method !== undefined) this.method = String(init.method).toUpperCase();
+    if (init.headers !== undefined) this.headers = new Headers(init.headers);
+    if (init.body !== undefined && init.body !== null) this.__body = String(init.body);
+    if (init.mode !== undefined) this.mode = String(init.mode);
+    if (init.credentials !== undefined) this.credentials = String(init.credentials);
+    if (init.redirect !== undefined) this.redirect = String(init.redirect);
+    if (init.cache !== undefined) this.cache = String(init.cache);
+    this.bodyUsed = false;
+    if ((this.method === 'GET' || this.method === 'HEAD') && this.__body != null)
+      throw new TypeError("Request with GET/HEAD method cannot have body.");
+  }
+  Request.prototype.clone = function() {
+    if (this.bodyUsed) throw new TypeError("Body has already been consumed.");
+    var r = new Request(this); r.__body = this.__body; r.bodyUsed = false; return r;
+  };
+  Request.prototype.text = bodyMixin.text;
+  Request.prototype.json = bodyMixin.json;
+  Request.prototype.arrayBuffer = bodyMixin.arrayBuffer;
+  globalThis.Request = Request;
+
+  // ---- Response ----
+  function Response(body, init) {
+    init = init || {};
+    var status = (init.status !== undefined) ? (init.status | 0) : 200;
+    if (status < 200 || status > 599) throw new RangeError("Response status " + status + " out of range");
+    this.status = status;
+    this.statusText = (init.statusText !== undefined) ? String(init.statusText) : "";
     this.ok = this.status >= 200 && this.status < 300;
-    this.type = o.type || "default";
-    this.url = o.url || "";
-    this.redirected = false;
-    this.headers = new Headers(o.headers);
-    this.__body = (o.body != null) ? o.body : "";
+    this.type = "default"; this.url = ""; this.redirected = false;
+    this.headers = new Headers(init.headers);
+    this.__body = (body != null) ? String(body) : null;
     this.bodyUsed = false;
   }
-  Response.prototype.text = function() {
-    if (this.bodyUsed) return Promise.reject(new TypeError("body already used"));
-    this.bodyUsed = true;
-    return Promise.resolve(this.__body);
-  };
-  Response.prototype.json = function() { return this.text().then(function(t) { return JSON.parse(t); }); };
+  Response.prototype.text = bodyMixin.text;
+  Response.prototype.json = bodyMixin.json;
+  Response.prototype.arrayBuffer = bodyMixin.arrayBuffer;
   Response.prototype.clone = function() {
+    if (this.bodyUsed) throw new TypeError("Body has already been consumed.");
     var r = Object.create(Response.prototype);
     r.status = this.status; r.statusText = this.statusText; r.ok = this.ok;
     r.type = this.type; r.url = this.url; r.redirected = this.redirected;
-    r.headers = this.headers; r.__body = this.__body; r.bodyUsed = false;
+    r.headers = new Headers(this.headers); r.__body = this.__body; r.bodyUsed = false;
+    return r;
+  };
+  Response.error = function() {
+    var r = new Response(null, { status: 200 });
+    r.status = 0; r.ok = false; r.type = "error"; return r;
+  };
+  Response.redirect = function(url, status) {
+    status = (status === undefined) ? 302 : (status | 0);
+    if ([301, 302, 303, 307, 308].indexOf(status) === -1) throw new RangeError("Invalid redirect status " + status);
+    var r = new Response(null, { status: status });
+    r.headers.set("location", String(url));
+    return r;
+  };
+  Response.json = function(data, init) {
+    var r = new Response(JSON.stringify(data), init);
+    if (!r.headers.has("content-type")) r.headers.set("content-type", "application/json");
     return r;
   };
   globalThis.Response = Response;
 
-  function normalizeHeaders(h) {
-    var out = [];
-    if (!h) return out;
-    if (h instanceof Headers) { h.forEach(function(v, k) { out.push([k, v]); }); }
-    else if (Array.isArray(h)) { for (var i = 0; i < h.length; i++) out.push([String(h[i][0]), String(h[i][1])]); }
-    else { for (var k in h) out.push([k, String(h[k])]); }
-    return out;
+  // Build a Response from the native __fetch outcome (network fields set).
+  function responseFromOutcome(o) {
+    var r = new Response(o.body != null ? o.body : "", { status: o.status || 200, statusText: o.statusText || "", headers: o.headers });
+    r.type = o.type || "default"; r.url = o.url || ""; return r;
   }
-  globalThis.fetch = function(input, init) {
-    init = init || {};
-    var url = (input && typeof input === 'object') ? input.url : String(input);
-    var method = String(init.method || 'GET').toUpperCase();
-    var headers = normalizeHeaders(init.headers);
+  function headersFlat(h) {
     var flat = [];
-    for (var i = 0; i < headers.length; i++) { flat.push(headers[i][0]); flat.push(headers[i][1]); }
-    var body = (init.body != null) ? String(init.body) : "";
+    for (var i = 0; i < h._h.length; i++) { flat.push(h._h[i][0]); flat.push(h._h[i][1]); }
+    return flat.join("\n");
+  }
+
+  globalThis.fetch = function(input, init) {
+    var req;
+    try { req = new Request(input, init); } catch (e) { return Promise.reject(e); }
+    if (!req.headers.has("accept")) req.headers.append("accept", "*/*");
     return new Promise(function(resolve, reject) {
       var o;
-      try { o = JSON.parse(__fetch(method, url, flat.join("\n"), body)); }
+      try { o = JSON.parse(__fetch(req.method, req.url, headersFlat(req.headers), req.__body != null ? req.__body : "")); }
       catch (e) { reject(new TypeError("Failed to fetch")); return; }
       if (o.networkError) { reject(new TypeError("Failed to fetch")); return; }
-      resolve(new Response(o));
+      resolve(responseFromOutcome(o));
     });
   };
 })();
