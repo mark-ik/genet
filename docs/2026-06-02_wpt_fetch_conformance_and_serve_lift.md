@@ -65,13 +65,22 @@ is what makes the `fetch/api/` `.any.js` corpus runnable at all.
 | subset | boa subtests | nova subtests |
 |---|---|---|
 | fetch/api/headers | 86/197 | 86/197 |
-| fetch/api/request | 168/469 | 168/429 |
-| fetch/api/response | 46/199 | 46/199 |
+| fetch/api/request | 239/545 | 239/505 |
+| fetch/api/response | 96/276 | 96/276 |
 
 All three were **0** before this work (the files would not even parse and run).
 These are the headers/request/response object-semantics tests that need no live
-server. Boa and nova agree on headers and response; request differs only in a
-subtest-**count** tail (469 vs 429 enumerated), with the same pass count.
+server. Boa and nova agree on pass counts everywhere; request differs only in a
+subtest-**count** tail (545 vs 505 enumerated).
+
+The request / response jumps (request 168 -> 239, response 46 -> 96, and more
+files executing instead of erroring) are the **Fetch globals** pass below:
+`URLSearchParams`, `Blob` / `File`, and `FormData` were missing, so a top-level
+reference to any of them aborted the whole `.any.js` file. They now exist, with
+WHATWG body extraction wiring them as request / response bodies (correct
+`Content-Type` per type), plus `blob()` / `formData()` body accessors. Binary
+bodies still degrade through the UTF-8 string sink; `ReadableStream` and multipart
+`formData()` parsing remain deferred.
 
 ## The `wpt serve` lift: blocked, two gates
 
@@ -189,13 +198,15 @@ cargo run -p serval-wpt --features netfetch -- \
 
 - **`.sub.html` page substitution.** Server mode loads `<script src>` over HTTP
   (so `.sub.js` substitutes) but still reads the test *page* from disk. `.sub.html`
-  fetch tests need the page GET'd too — a small follow-up.
-- **Missing Fetch globals.** `Blob`, `FormData`, `URLSearchParams` bodies,
-  `ReadableStream` — top-level references to these abort whole `.any.js` files
-  (e.g. `request-headers.any.js`). Each is its own slice and gates a chunk of
-  `fetch/api/basic`.
-- **The failing object-semantics tail**: request/response sit well under half,
-  same missing pieces as above. Not seam bugs.
+  fetch tests need the page GET'd too, a small follow-up.
+- **`ReadableStream`** (and stream request/response bodies). The single biggest
+  remaining global: the `response-stream-*` family and `request-init-stream` are
+  all blocked on it. A real lift (controller, reader, tee, backpressure).
+- **Binary body channel + multipart `formData()` parse.** Bodies cross `__fetch`
+  as a UTF-8 string, so binary Blob / buffer bodies degrade; and `formData()`
+  parses urlencoded but not multipart. Both want a bytes channel through the seam.
+- **The failing object-semantics tail**: request / response still sit around half,
+  now mostly streams + binary-body + AbortSignal, not missing constructors.
 - **Per-test runtime reuse.** A fresh `Runtime` per test re-evals testharness.js
   each time (the dominant cost; see `harness::bench`). A snapshot-clone pool is the
   amortization, unchanged by this work.

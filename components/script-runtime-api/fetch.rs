@@ -205,10 +205,13 @@ pub(crate) fn install_fetch_surface<E: ScriptEngine>(engine: &mut E) -> Result<(
 }
 
 /// The Fetch API JS surface: `Headers` (with validation + sorted iteration +
-/// getSetCookie), `Request`, `Response` (+ `error`/`redirect`/`json` statics), a
-/// shared body mixin (`text`/`json`/`arrayBuffer`), and `fetch()` over the
-/// `__fetch` sink. Covers the object-semantics surface the WPT fetch/ tests
-/// exercise; still missing streaming bodies, `FormData`/`Blob`, and `AbortSignal`.
+/// getSetCookie), `URLSearchParams`, `Blob` / `File`, `FormData`, `Request`,
+/// `Response` (+ `error`/`redirect`/`json` statics), a shared body mixin
+/// (`text`/`json`/`arrayBuffer`/`blob`/`formData`) with WHATWG body extraction
+/// (string / URLSearchParams / Blob / FormData / buffers set the right
+/// Content-Type), and `fetch()` over the `__fetch` sink. Still missing streaming
+/// bodies (`ReadableStream`), multipart `formData()` parsing, and `AbortSignal`;
+/// binary bodies degrade through the UTF-8 string sink.
 const FETCH_BOOTSTRAP: &str = r#"
 (function() {
   var hasSym = (typeof Symbol !== 'undefined' && Symbol.iterator);
@@ -317,10 +320,208 @@ const FETCH_BOOTSTRAP: &str = r#"
     }
     return new Uint8Array(b);
   }
+  function utf8Decode(bytes) {
+    var out = '', i = 0, n = bytes.length;
+    while (i < n) {
+      var c = bytes[i++];
+      if (c < 0x80) out += String.fromCharCode(c);
+      else if (c >= 0xC0 && c < 0xE0) out += String.fromCharCode(((c & 0x1F) << 6) | (bytes[i++] & 0x3F));
+      else if (c >= 0xE0 && c < 0xF0) out += String.fromCharCode(((c & 0x0F) << 12) | ((bytes[i++] & 0x3F) << 6) | (bytes[i++] & 0x3F));
+      else {
+        var cp = (((c & 0x07) << 18) | ((bytes[i++] & 0x3F) << 12) | ((bytes[i++] & 0x3F) << 6) | (bytes[i++] & 0x3F)) - 0x10000;
+        out += String.fromCharCode(0xD800 + (cp >> 10), 0xDC00 + (cp & 0x3FF));
+      }
+    }
+    return out;
+  }
+
+  // ---- URLSearchParams ----
+  function uspEnc(s) {
+    return encodeURIComponent(String(s)).replace(/%20/g, '+')
+      .replace(/[!'()~]/g, function(c) { return '%' + c.charCodeAt(0).toString(16).toUpperCase(); });
+  }
+  function uspDec(s) { return decodeURIComponent(String(s).replace(/\+/g, ' ')); }
+  function URLSearchParams(init) {
+    this._l = [];
+    if (init == null || init === '') return;
+    if (init instanceof URLSearchParams) {
+      for (var i = 0; i < init._l.length; i++) this._l.push([init._l[i][0], init._l[i][1]]);
+    } else if (typeof init === 'string') {
+      var q = init.charAt(0) === '?' ? init.slice(1) : init;
+      if (q) {
+        var pairs = q.split('&');
+        for (var k = 0; k < pairs.length; k++) {
+          if (!pairs[k]) continue;
+          var eq = pairs[k].indexOf('=');
+          var nm = eq < 0 ? pairs[k] : pairs[k].slice(0, eq);
+          var vl = eq < 0 ? '' : pairs[k].slice(eq + 1);
+          this._l.push([uspDec(nm), uspDec(vl)]);
+        }
+      }
+    } else if (Array.isArray(init)) {
+      for (var a = 0; a < init.length; a++) {
+        if (init[a].length !== 2) throw new TypeError("Invalid URLSearchParams pair");
+        this.append(init[a][0], init[a][1]);
+      }
+    } else { for (var key in init) this.append(key, init[key]); }
+  }
+  URLSearchParams.prototype.append = function(n, v) { this._l.push([String(n), String(v)]); };
+  URLSearchParams.prototype['delete'] = function(n) { n = String(n); this._l = this._l.filter(function(p) { return p[0] !== n; }); };
+  URLSearchParams.prototype.get = function(n) { n = String(n); for (var i = 0; i < this._l.length; i++) if (this._l[i][0] === n) return this._l[i][1]; return null; };
+  URLSearchParams.prototype.getAll = function(n) { n = String(n); var o = []; for (var i = 0; i < this._l.length; i++) if (this._l[i][0] === n) o.push(this._l[i][1]); return o; };
+  URLSearchParams.prototype.has = function(n) { n = String(n); for (var i = 0; i < this._l.length; i++) if (this._l[i][0] === n) return true; return false; };
+  URLSearchParams.prototype.set = function(n, v) {
+    n = String(n); v = String(v); var done = false; var out = [];
+    for (var i = 0; i < this._l.length; i++) {
+      if (this._l[i][0] === n) { if (!done) { out.push([n, v]); done = true; } }
+      else out.push(this._l[i]);
+    }
+    if (!done) out.push([n, v]);
+    this._l = out;
+  };
+  URLSearchParams.prototype.sort = function() { this._l.sort(function(a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; }); };
+  URLSearchParams.prototype.forEach = function(cb, thisArg) { for (var i = 0; i < this._l.length; i++) cb.call(thisArg, this._l[i][1], this._l[i][0], this); };
+  URLSearchParams.prototype.entries = function() { return makeIterator(this._l.map(function(p) { return [p[0], p[1]]; })); };
+  URLSearchParams.prototype.keys = function() { return makeIterator(this._l.map(function(p) { return p[0]; })); };
+  URLSearchParams.prototype.values = function() { return makeIterator(this._l.map(function(p) { return p[1]; })); };
+  URLSearchParams.prototype.toString = function() { var o = []; for (var i = 0; i < this._l.length; i++) o.push(uspEnc(this._l[i][0]) + '=' + uspEnc(this._l[i][1])); return o.join('&'); };
+  Object.defineProperty(URLSearchParams.prototype, 'size', { configurable: true, get: function() { return this._l.length; } });
+  if (hasSym) URLSearchParams.prototype[Symbol.iterator] = URLSearchParams.prototype.entries;
+  globalThis.URLSearchParams = URLSearchParams;
+
+  // ---- Blob / File ----
+  function toBytes(part) {
+    if (part instanceof Blob) return part._b;
+    if (part instanceof ArrayBuffer) return new Uint8Array(part.slice(0));
+    if (ArrayBuffer.isView(part)) return new Uint8Array(part.buffer.slice(part.byteOffset, part.byteOffset + part.byteLength));
+    return utf8Encode(String(part));
+  }
+  function Blob(parts, opts) {
+    opts = opts || {};
+    var chunks = [], total = 0;
+    if (parts != null) {
+      if (typeof parts !== 'object' || typeof parts.length !== 'number')
+        throw new TypeError("Blob parts must be a sequence");
+      for (var i = 0; i < parts.length; i++) { var b = toBytes(parts[i]); chunks.push(b); total += b.length; }
+    }
+    var all = new Uint8Array(total), off = 0;
+    for (var j = 0; j < chunks.length; j++) { all.set(chunks[j], off); off += chunks[j].length; }
+    this._b = all;
+    this.size = total;
+    var t = opts.type === undefined ? '' : String(opts.type);
+    this.type = /[^ -~]/.test(t) ? '' : t.toLowerCase();
+  }
+  Blob.prototype.text = function() { var self = this; return Promise.resolve(utf8Decode(self._b)); };
+  Blob.prototype.arrayBuffer = function() { return Promise.resolve(this._b.slice(0).buffer); };
+  Blob.prototype.slice = function(start, end, type) {
+    var s = this._b.slice(start || 0, end === undefined ? this._b.length : end);
+    var b = new Blob([], { type: type || '' }); b._b = s; b.size = s.length; return b;
+  };
+  globalThis.Blob = Blob;
+
+  function File(parts, name, opts) {
+    if (name === undefined) throw new TypeError("File requires a name");
+    Blob.call(this, parts, opts);
+    this.name = String(name);
+    this.lastModified = (opts && opts.lastModified != null) ? (opts.lastModified | 0) : 0;
+  }
+  File.prototype = Object.create(Blob.prototype);
+  File.prototype.constructor = File;
+  globalThis.File = File;
+
+  // ---- FormData ----
+  function FormData() { this._l = []; }
+  FormData.prototype.append = function(name, value, filename) {
+    name = String(name);
+    if (value instanceof Blob) {
+      var fv = value;
+      if (filename !== undefined && !(value instanceof File)) {
+        fv = new File([value], filename, { type: value.type });
+      } else if (filename !== undefined) {
+        fv = new File([value], filename, { type: value.type });
+      }
+      this._l.push([name, fv]);
+    } else this._l.push([name, String(value)]);
+  };
+  FormData.prototype.set = function(name, value, filename) {
+    name = String(name); this['delete'](name); this.append(name, value, filename);
+  };
+  FormData.prototype['delete'] = function(name) { name = String(name); this._l = this._l.filter(function(p) { return p[0] !== name; }); };
+  FormData.prototype.get = function(name) { name = String(name); for (var i = 0; i < this._l.length; i++) if (this._l[i][0] === name) return this._l[i][1]; return null; };
+  FormData.prototype.getAll = function(name) { name = String(name); var o = []; for (var i = 0; i < this._l.length; i++) if (this._l[i][0] === name) o.push(this._l[i][1]); return o; };
+  FormData.prototype.has = function(name) { name = String(name); for (var i = 0; i < this._l.length; i++) if (this._l[i][0] === name) return true; return false; };
+  FormData.prototype.forEach = function(cb, thisArg) { for (var i = 0; i < this._l.length; i++) cb.call(thisArg, this._l[i][1], this._l[i][0], this); };
+  FormData.prototype.entries = function() { return makeIterator(this._l.map(function(p) { return [p[0], p[1]]; })); };
+  FormData.prototype.keys = function() { return makeIterator(this._l.map(function(p) { return p[0]; })); };
+  FormData.prototype.values = function() { return makeIterator(this._l.map(function(p) { return p[1]; })); };
+  if (hasSym) FormData.prototype[Symbol.iterator] = FormData.prototype.entries;
+  globalThis.FormData = FormData;
+
+  // Serialize a FormData to a multipart/form-data body + content-type. Binary
+  // field values degrade through the UTF-8 string sink (the known body-channel
+  // limit); text fields and filenames round-trip.
+  function serializeFormData(fd) {
+    var boundary = '----serval' + Math.floor(Math.random() * 0x100000000).toString(16) + Math.floor(Math.random() * 0x100000000).toString(16);
+    var s = '';
+    for (var i = 0; i < fd._l.length; i++) {
+      var name = fd._l[i][0], value = fd._l[i][1];
+      s += '--' + boundary + '\r\n';
+      if (value instanceof Blob) {
+        var fn = (value instanceof File) ? value.name : 'blob';
+        s += 'Content-Disposition: form-data; name="' + name + '"; filename="' + fn + '"\r\n';
+        s += 'Content-Type: ' + (value.type || 'application/octet-stream') + '\r\n\r\n';
+        s += utf8Decode(value._b) + '\r\n';
+      } else {
+        s += 'Content-Disposition: form-data; name="' + name + '"\r\n\r\n';
+        s += value + '\r\n';
+      }
+    }
+    s += '--' + boundary + '--\r\n';
+    return { body: s, type: 'multipart/form-data; boundary=' + boundary };
+  }
+
+  // WHATWG "extract a body": returns { body: string|null, type: string|null }.
+  // Binary Blob / buffer bodies degrade through the UTF-8 string sink (a known
+  // v1 limit; a bytes channel is a later lift).
+  function extractBody(v) {
+    if (v == null) return { body: null, type: null };
+    if (typeof v === 'string') return { body: v, type: 'text/plain;charset=UTF-8' };
+    if (v instanceof URLSearchParams) return { body: v.toString(), type: 'application/x-www-form-urlencoded;charset=UTF-8' };
+    if (v instanceof Blob) return { body: utf8Decode(v._b), type: v.type ? v.type : null };
+    if (v instanceof FormData) return serializeFormData(v);
+    if (v instanceof ArrayBuffer) return { body: utf8Decode(new Uint8Array(v)), type: null };
+    if (ArrayBuffer.isView(v)) return { body: utf8Decode(new Uint8Array(v.buffer, v.byteOffset, v.byteLength)), type: null };
+    return { body: String(v), type: 'text/plain;charset=UTF-8' };
+  }
+
+  // Parse a consumed body back to a FormData for `.formData()`. Handles
+  // application/x-www-form-urlencoded fully; multipart parsing is a later slice.
+  function parseFormData(text, contentType) {
+    var fd = new FormData();
+    var ct = String(contentType || '').toLowerCase();
+    if (ct.indexOf('application/x-www-form-urlencoded') === 0 || ct === '') {
+      var usp = new URLSearchParams(text);
+      usp.forEach(function(val, key) { fd.append(key, val); });
+    } else {
+      throw new TypeError("multipart formData() parsing is not implemented");
+    }
+    return fd;
+  }
+
   var bodyMixin = {
     text: function() { return consume(this); },
     json: function() { return consume(this).then(function(t) { return JSON.parse(t); }); },
-    arrayBuffer: function() { return consume(this).then(function(t) { return utf8Encode(t).buffer; }); }
+    arrayBuffer: function() { return consume(this).then(function(t) { return utf8Encode(t).buffer; }); },
+    blob: function() {
+      var self = this;
+      var ct = (self.headers && self.headers.get) ? self.headers.get('content-type') : null;
+      return consume(self).then(function(t) { return new Blob([t], { type: ct || '' }); });
+    },
+    formData: function() {
+      var self = this;
+      var ct = (self.headers && self.headers.get) ? self.headers.get('content-type') : '';
+      return consume(self).then(function(t) { return parseFormData(t, ct); });
+    }
   };
 
   // ---- Request ----
@@ -336,7 +537,11 @@ const FETCH_BOOTSTRAP: &str = r#"
     }
     if (init.method !== undefined) this.method = String(init.method).toUpperCase();
     if (init.headers !== undefined) this.headers = new Headers(init.headers);
-    if (init.body !== undefined && init.body !== null) this.__body = String(init.body);
+    if (init.body !== undefined && init.body !== null) {
+      var eb = extractBody(init.body);
+      this.__body = eb.body;
+      if (eb.type && !this.headers.has('content-type')) this.headers.set('content-type', eb.type);
+    }
     if (init.mode !== undefined) this.mode = String(init.mode);
     if (init.credentials !== undefined) this.credentials = String(init.credentials);
     if (init.redirect !== undefined) this.redirect = String(init.redirect);
@@ -352,6 +557,8 @@ const FETCH_BOOTSTRAP: &str = r#"
   Request.prototype.text = bodyMixin.text;
   Request.prototype.json = bodyMixin.json;
   Request.prototype.arrayBuffer = bodyMixin.arrayBuffer;
+  Request.prototype.blob = bodyMixin.blob;
+  Request.prototype.formData = bodyMixin.formData;
   globalThis.Request = Request;
 
   // ---- Response ----
@@ -364,12 +571,18 @@ const FETCH_BOOTSTRAP: &str = r#"
     this.ok = this.status >= 200 && this.status < 300;
     this.type = "default"; this.url = ""; this.redirected = false;
     this.headers = new Headers(init.headers);
-    this.__body = (body != null) ? String(body) : null;
+    if (body != null) {
+      var eb = extractBody(body);
+      this.__body = eb.body;
+      if (eb.type && !this.headers.has('content-type')) this.headers.set('content-type', eb.type);
+    } else this.__body = null;
     this.bodyUsed = false;
   }
   Response.prototype.text = bodyMixin.text;
   Response.prototype.json = bodyMixin.json;
   Response.prototype.arrayBuffer = bodyMixin.arrayBuffer;
+  Response.prototype.blob = bodyMixin.blob;
+  Response.prototype.formData = bodyMixin.formData;
   Response.prototype.clone = function() {
     if (this.bodyUsed) throw new TypeError("Body has already been consumed.");
     var r = Object.create(Response.prototype);
@@ -390,8 +603,11 @@ const FETCH_BOOTSTRAP: &str = r#"
     return r;
   };
   Response.json = function(data, init) {
+    init = init || {};
     var r = new Response(JSON.stringify(data), init);
-    if (!r.headers.has("content-type")) r.headers.set("content-type", "application/json");
+    // application/json wins unless the caller's init explicitly set a type (the
+    // string-body extraction defaults to text/plain, which must not stick here).
+    if (!new Headers(init.headers).has("content-type")) r.headers.set("content-type", "application/json");
     return r;
   };
   globalThis.Response = Response;
