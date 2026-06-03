@@ -1842,4 +1842,52 @@ mod capture {
             "the handler's prevent_default is visible through the shared cell after dispatch"
         );
     }
+
+    /// A click handler that fires but does NOT prevent the default.
+    fn click_plain_view(_s: &Log) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+        on_click(el::<_, Log, ()>("button", "+"), |s: &mut Log, _ev: PointerClick| {
+            s.events.push("fired".to_string());
+        })
+    }
+
+    /// The host-friendly half of the contract: after dispatch, the *runner*
+    /// reports `default_prevented()` directly, so a host gates its default action
+    /// without having to clone the Propagation handle before dispatch.
+    #[test]
+    fn runner_reports_default_prevented_after_dispatch() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            click_prevent_view,
+            Log { events: Vec::new() },
+        );
+        let button = runner.root();
+        assert!(!runner.default_prevented(), "false before any dispatch");
+
+        runner.dispatch_click(button, PointerClick::at((0.0, 0.0)));
+        assert_eq!(runner.state().events, vec!["fired".to_string()]);
+        assert!(
+            runner.default_prevented(),
+            "the handler's prevent_default is visible via the runner accessor"
+        );
+    }
+
+    /// A handler that does not prevent leaves `default_prevented()` false, so the
+    /// host proceeds with its default action; a fresh dispatch resets the flag.
+    #[test]
+    fn runner_default_prevented_is_false_without_prevent() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            click_plain_view,
+            Log { events: Vec::new() },
+        );
+        let button = runner.root();
+        runner.dispatch_click(button, PointerClick::at((0.0, 0.0)));
+        assert_eq!(runner.state().events, vec!["fired".to_string()], "handler ran");
+        assert!(
+            !runner.default_prevented(),
+            "no prevent_default → the host's default action proceeds"
+        );
+    }
 }
