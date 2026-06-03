@@ -360,17 +360,28 @@ impl ModifierTable {
     }
 
     /// Pick the `(format, modifier)` to allocate against. v1: hard-codes
-    /// LINEAR after verifying both Vulkan and the compositor agree on it.
-    /// Errors with `NoCompatibleFormat` otherwise.
+    /// LINEAR after verifying Vulkan can import it. Trusts that the
+    /// compositor accepts LINEAR (dmabuf-protocol baseline).
     pub fn choose(&self) -> Result<ChosenModifier, BackendError> {
-        let advertised_linear = self
-            .advertised
-            .iter()
-            .any(|(f, m)| *f == DRM_FORMAT_ABGR8888 && *m == DRM_FORMAT_MOD_LINEAR);
         let vk_linear = self.vulkan_importable.contains(&DRM_FORMAT_MOD_LINEAR);
-        if !advertised_linear || !vk_linear {
+        if !vk_linear {
             return Err(BackendError::NoCompatibleFormat);
         }
+        // v1 LINEAR-only picker: trust that the compositor accepts LINEAR
+        // (the dmabuf-protocol baseline). The Wayland-side advertisement
+        // check is intentionally soft because Mutter uses v4 feedback
+        // (format_table + tranche_formats) and our Dispatch impl only
+        // collects v3 Modifier events — leaving `advertised` empty even
+        // when the compositor accepts every modifier. Real v4 feedback
+        // parsing is a Phase-7-style follow-up; for now we rely on the
+        // create_immed call failing visibly if Mutter ever rejects
+        // LINEAR (extremely unlikely on Mesa).
+        log::info!(
+            "[ModifierTable] vk_importable={} wayland_advertised={} entries; \
+             v1 picker hard-codes LINEAR",
+            self.vulkan_importable.len(),
+            self.advertised.len(),
+        );
         Ok(ChosenModifier {
             drm_format: DRM_FORMAT_ABGR8888,
             drm_modifier: DRM_FORMAT_MOD_LINEAR,
@@ -492,12 +503,17 @@ mod tests {
     }
 
     #[test]
-    fn choose_errors_when_wayland_lacks_abgr_linear() {
-        let t = fake_table(
-            vec![(DRM_FORMAT_ABGR8888, 0xFFFF_FFFF_FFFF_0001)], // only tile, no LINEAR
-            vec![DRM_FORMAT_MOD_LINEAR],
+    fn choose_succeeds_with_only_vulkan_linear_even_if_wayland_has_nothing() {
+        // v1 picker hard-codes LINEAR after verifying Vulkan; trusts
+        // the compositor accepts it (dmabuf-protocol baseline).
+        let t = fake_table(vec![], vec![DRM_FORMAT_MOD_LINEAR]);
+        assert_eq!(
+            t.choose().unwrap(),
+            ChosenModifier {
+                drm_format: DRM_FORMAT_ABGR8888,
+                drm_modifier: DRM_FORMAT_MOD_LINEAR,
+            }
         );
-        assert!(matches!(t.choose(), Err(BackendError::NoCompatibleFormat)));
     }
 
     #[test]
