@@ -4,10 +4,10 @@ Status: design approved 2026-06-03; implementation pending.
 
 Companion to:
 
-- [`docs/2026-05-28_wayland_per_surface_presentation_gap.md`](../../2026-05-28_wayland_per_surface_presentation_gap.md) — the handoff brief this design implements against.
-- [`docs/2026-05-09_c4_landed_notes.md`](../../2026-05-09_c4_landed_notes.md) — gap (4) is the work scoped here.
-- [`docs/2026-05-09_interop_lineage.md`](../../2026-05-09_interop_lineage.md) — the Linux synchronizer slot this design fills.
-- [`docs/archive/2026-05-05_compositor_handoff_path_b_prime.md`](../../archive/2026-05-05_compositor_handoff_path_b_prime.md) — path-(b′) design context.
+- [`docs/2026-05-28_wayland_per_surface_presentation_gap.md`](./2026-05-28_wayland_per_surface_presentation_gap.md) — the handoff brief this design implements against.
+- [`docs/2026-05-09_c4_landed_notes.md`](./2026-05-09_c4_landed_notes.md) — gap (4) is the work scoped here.
+- [`docs/2026-05-09_interop_lineage.md`](./2026-05-09_interop_lineage.md) — the Linux synchronizer slot this design fills.
+- [`docs/archive/2026-05-05_compositor_handoff_path_b_prime.md`](./archive/2026-05-05_compositor_handoff_path_b_prime.md) — path-(b′) design context.
 
 ## 1. Goal
 

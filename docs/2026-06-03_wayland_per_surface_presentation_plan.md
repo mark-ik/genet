@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 2024 edition, `wgpu = "29"` (vulkan feature), `wgpu-hal::vulkan` (`raw_device`, `raw_instance`, `as_raw`, `texture_from_raw`, `create_texture_from_hal::<Vulkan>`), `ash = "0.38"`, `wayland-client = "0.31"`, `wayland-protocols = "0.32"` (linux-dmabuf-v1 v3/v4, viewporter, alpha-modifier-v1), `winit = "0.30"` (driving the smoke window), Fedora 44 + RADV (Mesa 26.0.6) + GNOME/Mutter.
 
-**Companion spec:** [`docs/superpowers/specs/2026-06-03-wayland-per-surface-presentation-design.md`](./superpowers/specs/2026-06-03-wayland-per-surface-presentation-design.md). Each task below cites the spec section it implements.
+**Companion spec:** [`docs/2026-06-03_wayland_per_surface_presentation_design.md`](./2026-06-03_wayland_per_surface_presentation_design.md). Each task below cites the spec section it implements.
 
 **Note on TDD scaling:** Pure-logic and FFI-error-path code (synchronizer construction validation, atomic counters, modifier negotiation predicate) gets first-class unit tests. Vulkan/Wayland integration code (`ExportableImage` allocation, `present_master` per-frame body) is integration-tested through the smoke runner — the smoke is the test. Where a task has no isolated test target, the verification step is `cargo check -p servo-paint` (compile gate) followed by the next phase's integration check.
 
