@@ -1,5 +1,12 @@
 # serval holistic audit (2026-05-29)
 
+> **Superseded by [2026-06-02_serval_holistic_audit.md](./2026-06-02_serval_holistic_audit.md).**
+> Retained for the dated series. Several claims below went stale (some already
+> stale on this date): text-to-pixels, flexbox/grid/positioned, the exotic-object
+> gate, the Boa icu pin, `storage` as dead-on-disk, and the event-model as
+> unbuilt are all overturned in the refresh. Read the refresh's "Corrections"
+> section before trusting any specific here.
+
 A cross-subsystem snapshot: where serval is, where it is going, and the
 synergies, contradictions, pitfalls, and sidequests that the per-subsystem
 docs each see only a slice of. Grounded against the code and the WPT runner
