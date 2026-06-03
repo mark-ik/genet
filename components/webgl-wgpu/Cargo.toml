@@ -20,3 +20,4 @@ wgpu = { version = "29", default-features = false, features = ["std", "parking_l
 
 [dev-dependencies]
 pollster = "0.4"
+servo-webgl-essl = { path = "../webgl-essl" }
