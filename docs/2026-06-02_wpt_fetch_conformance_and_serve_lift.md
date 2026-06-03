@@ -83,12 +83,25 @@ CRITICAL - start_http_server: getaddrinfo failed
 Please ensure all the necessary WPT subdomains are mapped to a loopback device.
 ```
 
-**Gate A, hosts file.** `wpt serve` resolves `web-platform.test` and its
-subdomains for its own readiness probe. A localhost-only `--config` override does
-not sidestep this (`subdomains` is not even a valid config-override key, which
-raises `KeyError`). The fix is the documented one-time admin step: append
-`wpt make-hosts-file` output to `C:\Windows\System32\drivers\etc\hosts`. This needs
-elevation, so it is not something the harness can do unattended.
+**Gate A, hosts file. CLEARED 2026-06-02.** `wpt serve` resolves
+`web-platform.test` and its subdomains for its own readiness probe. A
+localhost-only `--config` override does not sidestep this (`subdomains` is not even
+a valid config-override key, which raises `KeyError`). The fix is the documented
+one-time admin step, run once on this machine:
+
+```powershell
+# elevated PowerShell
+$hosts = "$env:windir\System32\drivers\etc\hosts"
+Copy-Item $hosts "$hosts.bak-$(Get-Date -Format yyyyMMdd)"
+cd C:\Users\mark_\Code\repos\serval\tests\wpt\tests
+python wpt make-hosts-file | Add-Content -Encoding ascii $hosts
+```
+
+This appends ~64 loopback entries (`web-platform.test`, `not-web-platform.test`,
+and their subdomains all to `127.0.0.1`); existing hosts entries are untouched, and
+the backup is a clean revert. After this, `python wpt serve --exit-after-start`
+binds every protocol (http/https/ws/wss/h2) and exits 0. Revert by restoring the
+`.bak-<date>` copy (elevated).
 
 **Gate B, server mode in `serval-wpt`.** Past the hosts file, running the
 network-dependent `fetch/` tests needs the runner to load server-served and
