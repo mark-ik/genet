@@ -53,8 +53,48 @@ impl VulkanTimelineSemaphoreSynchronizer {
                 actual: "non-Vulkan",
             });
         }
-        // Real impl lands in Task 2.2.
-        unimplemented!("VulkanTimelineSemaphoreSynchronizer::new — real impl in Task 2.2")
+
+        let (vk_device, external_semaphore_fd, timeline_semaphore) = unsafe {
+            let hal_device = host.device.as_hal::<wgpu::wgc::api::Vulkan>().ok_or(
+                InteropError::BackendMismatch {
+                    expected: "Vulkan",
+                    actual: "non-Vulkan",
+                },
+            )?;
+            let vk_device = hal_device.raw_device().clone();
+            let vk_instance = hal_device.shared_instance().raw_instance().clone();
+            drop(hal_device);
+
+            // The export-fd hint must be baked in at creation per the
+            // Vulkan spec — semaphores not created exportable cannot be
+            // exported via vkGetSemaphoreFdKHR later.
+            let mut type_info = vk::SemaphoreTypeCreateInfo::default()
+                .semaphore_type(vk::SemaphoreType::TIMELINE)
+                .initial_value(0);
+            let mut export_info = vk::ExportSemaphoreCreateInfo::default()
+                .handle_types(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD);
+            let create_info = vk::SemaphoreCreateInfo::default()
+                .push_next(&mut type_info)
+                .push_next(&mut export_info);
+
+            let timeline_semaphore = vk_device
+                .create_semaphore(&create_info, None)
+                .map_err(|err| {
+                    InteropError::Vulkan(format!("create_semaphore(timeline): {err}"))
+                })?;
+
+            let external_semaphore_fd =
+                ash::khr::external_semaphore_fd::Device::new(&vk_instance, &vk_device);
+
+            (vk_device, external_semaphore_fd, timeline_semaphore)
+        };
+
+        Ok(Self {
+            vk_device,
+            timeline_semaphore,
+            external_semaphore_fd,
+            next_value: AtomicU64::new(0),
+        })
     }
 }
 
