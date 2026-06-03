@@ -43,6 +43,7 @@
 
 mod errors;
 mod dmabuf;
+mod wayland;
 
 pub use errors::BackendError;
 

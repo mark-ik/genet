@@ -91,5 +91,9 @@ objc2-app-kit = { workspace = true }
 # wgpu-hal 29's lockfile-pinned 0.38.0+1.3.281 so the types line up.
 ash = "0.38"
 smallvec = { workspace = true }
-wayland-client = "0.31"
+# `system` feature enables `wayland-backend/client_system`, which is what
+# exposes `Backend::from_foreign_display(*mut wl_display)` + `ObjectId::from_ptr`.
+# We need both to adopt the embedder-owned wl_display/wl_surface from
+# raw-window-handle rather than opening a fresh connection.
+wayland-client = { version = "0.31", features = ["system"] }
 wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }
