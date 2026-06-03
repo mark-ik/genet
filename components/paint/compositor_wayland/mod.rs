@@ -60,7 +60,7 @@ mod wayland;
 pub use errors::BackendError;
 
 use std::ffi::c_void;
-use std::os::fd::IntoRawFd;
+use std::os::fd::{AsFd, IntoRawFd};
 use std::sync::{Arc, Mutex};
 
 use rustc_hash::FxHashMap;
@@ -164,6 +164,152 @@ impl WaylandSubsurfaceBackend {
     }
 }
 
+impl WaylandSubsurfaceBackend {
+    fn allocate_pool(
+        &mut self,
+        surface_id: u64,
+        width: u32,
+        height: u32,
+    ) -> Result<SurfaceBufferPool, BackendError> {
+        let chosen = self.chosen;
+        let slot0 = self.build_slot(surface_id, 0, width, height, chosen)?;
+        let slot1 = self.build_slot(surface_id, 1, width, height, chosen)?;
+        Ok(SurfaceBufferPool {
+            width,
+            height,
+            chosen,
+            slots: [slot0, slot1],
+        })
+    }
+
+    fn build_slot(
+        &self,
+        surface_id: u64,
+        slot_index: u8,
+        width: u32,
+        height: u32,
+        chosen: ChosenModifier,
+    ) -> Result<dmabuf::BufferSlot, BackendError> {
+        let image = ExportableImage::new(&self.host, width, height, chosen.drm_modifier)?;
+        let in_flight = Arc::new(Mutex::new(false));
+        let user_data = dmabuf::BufferSlotUserData {
+            surface_id,
+            slot_index,
+            in_flight: in_flight.clone(),
+        };
+
+        // Build wl_buffer via zwp_linux_dmabuf_v1.create_params() +
+        // params.add() + params.create_immed().
+        let params: ZwpLinuxBufferParamsV1 = self
+            .wayland
+            .globals
+            .dmabuf
+            .create_params(&self.wayland.queue_handle, ());
+        let plane = image.planes[0];
+        // Dup the fd so the wayland-side close doesn't disturb the
+        // Vulkan-side memory. Pass a BorrowedFd view; wayland-client
+        // will dup it again when serialising the message.
+        let dup_fd = image
+            .dmabuf_fd
+            .try_clone()
+            .map_err(|e| BackendError::Dmabuf(format!("dup fd: {e}")))?;
+        params.add(
+            dup_fd.as_fd(),
+            0,                               // plane_idx
+            plane.offset as u32,
+            plane.pitch as u32,
+            (chosen.drm_modifier >> 32) as u32,
+            chosen.drm_modifier as u32,
+        );
+        let wl_buffer = params.create_immed(
+            width as i32,
+            height as i32,
+            chosen.drm_format,
+            wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_buffer_params_v1::Flags::empty(),
+            &self.wayland.queue_handle,
+            user_data,
+        );
+
+        Ok(dmabuf::BufferSlot {
+            image,
+            wl_buffer,
+            in_flight,
+        })
+    }
+
+    pub fn present_master(&mut self, master: &Texture) -> Result<(), BackendError> {
+        self.wayland.dispatch_pending()?;
+
+        let size = master.size();
+        if size.width == 0 || size.height == 0 {
+            return Ok(());
+        }
+
+        // Ensure side-buffer pool sized to current master.
+        let need_realloc = match &self.master_side {
+            Some(p) => p.width != size.width || p.height != size.height,
+            None => true,
+        };
+        if need_realloc {
+            self.master_side = Some(self.allocate_pool(0, size.width, size.height)?);
+        }
+        let pool = self.master_side.as_mut().expect("just allocated");
+
+        // Acquire a slot; if both in flight, roundtrip until one
+        // releases.
+        let slot_index = loop {
+            if let Some(i) = pool.acquire() {
+                break i;
+            }
+            self.wayland.roundtrip()?;
+        };
+        let slot = &pool.slots[slot_index];
+
+        // Encode master -> side-buffer blit on wgpu's queue.
+        let mut encoder =
+            self.host
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("WaylandSubsurfaceBackend::present_master master→side"),
+                });
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: master,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &slot.image.wgpu_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: size.width,
+                height: size.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.host.queue.submit([encoder.finish()]);
+
+        // Attach to parent surface; damage; commit; flush.
+        self.wayland
+            .parent_surface
+            .attach(Some(&slot.wl_buffer), 0, 0);
+        self.wayland.parent_surface.damage_buffer(
+            0,
+            0,
+            size.width as i32,
+            size.height as i32,
+        );
+        self.wayland.parent_surface.commit();
+        self.wayland.flush()?;
+
+        Ok(())
+    }
+}
+
 impl OsCompositorBackend for WaylandSubsurfaceBackend {
     fn interop_backend(&self) -> InteropBackend {
         InteropBackend::Vulkan
@@ -176,9 +322,10 @@ impl OsCompositorBackend for WaylandSubsurfaceBackend {
         SyncMechanism::None
     }
 
-    fn present_master(&mut self, _master: &Texture) {
-        // Real impl lands in Task 6.2.
-        log::warn!("[WaylandSubsurfaceBackend] present_master: unwired (Task 6.2)");
+    fn present_master(&mut self, master: &Texture) {
+        if let Err(err) = WaylandSubsurfaceBackend::present_master(self, master) {
+            log::warn!("[WaylandSubsurfaceBackend] present_master: {err}");
+        }
     }
 
     // declare / destroy / present inherit the trait defaults (no-ops

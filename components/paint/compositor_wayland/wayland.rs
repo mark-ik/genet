@@ -42,6 +42,7 @@ use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
 
 use wayland_protocols::wp::alpha_modifier::v1::client::wp_alpha_modifier_v1::WpAlphaModifierV1;
+use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1;
 use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1;
 use wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
 
@@ -238,6 +239,10 @@ noop_dispatch!(WlSubcompositor);
 noop_dispatch!(WpViewporter);
 noop_dispatch!(WpAlphaModifierV1);
 noop_dispatch!(WlSurface);
+// ZwpLinuxBufferParamsV1 events (created/failed) are irrelevant when
+// using create_immed; provide a no-op impl to satisfy the queue_handle
+// trait bound on create_params.
+noop_dispatch!(ZwpLinuxBufferParamsV1);
 
 impl Dispatch<WlRegistry, GlobalListContents> for DispatchState {
     fn event(
