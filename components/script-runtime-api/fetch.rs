@@ -101,6 +101,39 @@ impl<E: ScriptEngine> NativeFn<E> for Fetch {
     }
 }
 
+/// `__resolve_url(url)` — resolve `url` against the document base URL (WHATWG URL
+/// resolution via the `url` crate). An already-absolute `url` is returned
+/// unchanged; a relative one with no base set is returned as-is (so a network
+/// fetch of it fails, the disk-mode default). Backs relative `Request` / `fetch()`
+/// URLs in server-mode WPT runs.
+pub(crate) struct ResolveUrl;
+
+impl<E: ScriptEngine> NativeFn<E> for ResolveUrl {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let a0 = cx.arg(0);
+        let input = cx.value_to_string(&a0)?;
+        let base = host_base_url::<E>(cx);
+        cx.make_string(&resolve_against(base.as_deref(), &input))
+    }
+}
+
+/// Read the document base URL out of host state, if any.
+fn host_base_url<E: ScriptEngine>(cx: &mut E::CallCx<'_>) -> Option<String> {
+    let data = cx.host_data()?;
+    let cell = data.downcast_ref::<RefCell<HostState>>()?;
+    let base = cell.borrow().base_url.clone();
+    base
+}
+
+/// WHATWG-resolve `input` against `base`. Absolute `input` wins; with no base, a
+/// relative `input` is returned unchanged.
+fn resolve_against(base: Option<&str>, input: &str) -> String {
+    match base.and_then(|b| url::Url::parse(b).ok()) {
+        Some(b) => b.join(input).map(|u| u.to_string()).unwrap_or_else(|_| input.to_owned()),
+        None => input.to_owned(),
+    }
+}
+
 /// Split a newline-delimited `k,v,k,v` header list into pairs (a trailing odd
 /// element, if any, is dropped). A header name/value never contains a raw newline.
 fn parse_flat_headers(flat: &str) -> Vec<(String, String)> {
@@ -166,6 +199,7 @@ fn push_json_str(out: &mut String, s: &str) {
 /// `Headers` bootstrap.
 pub(crate) fn install_fetch_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error> {
     engine.set_function::<Fetch>("__fetch", 4)?;
+    engine.set_function::<ResolveUrl>("__resolve_url", 1)?;
     engine.eval(FETCH_BOOTSTRAP)?;
     Ok(())
 }
@@ -297,7 +331,7 @@ const FETCH_BOOTSTRAP: &str = r#"
       this.__body = input.__body; this.mode = input.mode; this.credentials = input.credentials;
       this.redirect = input.redirect; this.cache = input.cache; this.destination = input.destination;
     } else {
-      this.url = String(input); this.method = 'GET'; this.headers = new Headers(); this.__body = null;
+      this.url = __resolve_url(String(input)); this.method = 'GET'; this.headers = new Headers(); this.__body = null;
       this.mode = 'cors'; this.credentials = 'same-origin'; this.redirect = 'follow'; this.cache = 'default'; this.destination = '';
     }
     if (init.method !== undefined) this.method = String(init.method).toUpperCase();

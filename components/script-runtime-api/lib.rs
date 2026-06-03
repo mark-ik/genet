@@ -65,6 +65,11 @@ pub struct HostState {
     /// a network error). Installed by [`Runtime::set_fetch_handler`]; kept as a
     /// trait object so this crate links no network stack.
     pub fetch: Option<Box<dyn FetchHandler>>,
+    /// The document base URL, against which relative `fetch()` / `Request` URLs
+    /// resolve (the `__resolve_url` sink reads it). `None` = no base (relative URLs
+    /// stay relative, so a network fetch of one is an error). Set by
+    /// [`Runtime::set_base_url`] for server-mode WPT runs.
+    pub base_url: Option<String>,
 }
 
 /// Shared handle to the runtime's [`HostState`]. The host reads it after running
@@ -145,6 +150,38 @@ impl<E: ScriptEngine> Runtime<E> {
     /// handler). Until set, `fetch()` yields a network error.
     pub fn set_fetch_handler(&mut self, handler: Box<dyn FetchHandler>) {
         self.host.borrow_mut().fetch = Some(handler);
+    }
+
+    /// Set the document base URL: relative `fetch()` / `Request` URLs resolve
+    /// against it (via the `__resolve_url` sink), and `window.location` is
+    /// populated from its components so `get-host-info` / `make_absolute_url` read
+    /// the real origin. For server-mode WPT runs; disk mode leaves the default
+    /// `about:blank` location. A non-absolute `url` is ignored.
+    pub fn set_base_url(&mut self, url: &str) -> Result<(), E::Error> {
+        let Ok(u) = url::Url::parse(url) else { return Ok(()) };
+        self.host.borrow_mut().base_url = Some(u.to_string());
+        let host = match (u.host_str(), u.port()) {
+            (Some(h), Some(p)) => format!("{h}:{p}"),
+            (Some(h), None) => h.to_owned(),
+            _ => String::new(),
+        };
+        let search = u.query().map(|q| format!("?{q}")).unwrap_or_default();
+        let hash = u.fragment().map(|f| format!("#{f}")).unwrap_or_default();
+        let js = format!(
+            "globalThis.location = {{ href:{}, protocol:{}, host:{}, hostname:{}, \
+             port:{}, pathname:{}, search:{}, hash:{}, origin:{} }};",
+            js_str(u.as_str()),
+            js_str(&format!("{}:", u.scheme())),
+            js_str(&host),
+            js_str(u.host_str().unwrap_or("")),
+            js_str(&u.port().map(|p| p.to_string()).unwrap_or_default()),
+            js_str(u.path()),
+            js_str(&search),
+            js_str(&hash),
+            js_str(&u.origin().ascii_serialization()),
+        );
+        self.engine.eval(&js)?;
+        Ok(())
     }
 
     /// The shared host state (e.g. to read `console` output after a run).
@@ -343,6 +380,26 @@ const EVENT_TARGET_BOOTSTRAP: &str = r#"
   globalThis.dispatchEvent = function(event) { return target.dispatchEvent(event); };
 })();
 "#;
+
+/// A JS string literal (quotes + minimal escaping) for embedding a Rust string in
+/// evaluated source. Used to build the `location` object from URL components.
+fn js_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
 
 /// Push the stringified first argument into `HostState::console`.
 fn record_console<E: ScriptEngine>(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {

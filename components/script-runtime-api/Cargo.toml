@@ -25,6 +25,9 @@ serval-scripted-dom = { path = "../serval-scripted-dom" }
 layout-dom-api = { path = "../shared/layout-dom" }
 # Prefix (not re-exported by layout-dom-api) for createElementNS qualified names.
 markup5ever = { workspace = true }
+# WHATWG URL resolution for the document base URL + relative `fetch()` / `Request`
+# URLs (server-mode WPT runs). No network stack enters this crate; only the parser.
+url = { workspace = true }
 
 [dev-dependencies]
 # Validate the host surface against a real backend. Boa is pure Rust (all targets);

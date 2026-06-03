@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
 use script_engine_api::ScriptEngine;
-use script_runtime_api::{Runtime, TestResult};
+use script_runtime_api::{FetchHandler, Runtime, TestResult};
 use serval_static_dom::StaticDocument;
 
 /// Which JS engine the testharness runner drives. Boa is the pure-Rust
@@ -66,35 +66,66 @@ pub enum HarnessOutcome {
     Threw(String),
 }
 
-/// Run one testharness test HTML and collect its results. `base_dir` is the test's
-/// own directory (for resolving local `<script src>`), `tests_root` the corpus root
-/// (for `/`-absolute srcs).
+/// Where a test's `<script src>` resources come from. Disk mode reads files;
+/// server mode HTTP-GETs them so `.sub.js` template substitution happens. The
+/// harness / report-hook srcs are filtered out by the caller, not the loader.
+pub trait ScriptSrcLoader {
+    /// The contents of a non-harness `<script src>`, or `None` to skip it
+    /// (unresolvable, remote-in-disk-mode, or fetch failed).
+    fn load_script(&self, src: &str) -> Option<String>;
+}
+
+/// Disk loader: resolve `<script src>` against the test dir / tests root, read the
+/// file. The default (no server). Remote and `data:` srcs are skipped.
+pub struct DiskLoader<'a> {
+    pub base_dir: &'a Path,
+    pub tests_root: &'a Path,
+}
+
+impl ScriptSrcLoader for DiskLoader<'_> {
+    fn load_script(&self, src: &str) -> Option<String> {
+        let path = resolve(src, self.base_dir, self.tests_root)?;
+        fs::read_to_string(path).ok()
+    }
+}
+
+/// Run one testharness test HTML and collect its results, using `loader` to fetch
+/// `<script src>` resources. `base_url` (when set) becomes the document base for
+/// relative `fetch()` / `Request` URLs and populates `location`; `handler` (when
+/// set) is the `fetch()` network seam. Disk mode passes `None`/`None`.
 pub fn run_test(
     testharness_js: &str,
     html: &str,
-    base_dir: &Path,
-    tests_root: &Path,
+    loader: &dyn ScriptSrcLoader,
+    base_url: Option<&str>,
+    handler: Option<Box<dyn FetchHandler>>,
     engine: Engine,
 ) -> HarnessOutcome {
     let doc = StaticDocument::parse(html);
     let mut scripts = Vec::new();
-    collect_scripts(&doc, doc.document(), base_dir, tests_root, &mut scripts);
+    collect_scripts(&doc, doc.document(), loader, &mut scripts);
     let test_src = scripts.join("\n;\n");
 
     match engine {
-        Engine::Boa => run_with::<script_engine_boa::BoaEngine>(testharness_js, &test_src, &doc),
-        Engine::Nova => run_with::<script_engine_nova::NovaEngine>(testharness_js, &test_src, &doc),
+        Engine::Boa => {
+            run_with::<script_engine_boa::BoaEngine>(testharness_js, &test_src, &doc, base_url, handler)
+        }
+        Engine::Nova => {
+            run_with::<script_engine_nova::NovaEngine>(testharness_js, &test_src, &doc, base_url, handler)
+        }
     }
 }
 
 /// Engine-generic core: build a `Runtime<E>`, load the test's body as the live
-/// DOM, run the harness, collect results. Each backend implements `ScriptEngine`
-/// (Nova native-primary, Boa pure-Rust oracle), so the only per-engine thing is
-/// the monomorphization chosen by [`run_test`].
+/// DOM, set the base URL + fetch handler if given, run the harness, collect
+/// results. Each backend implements `ScriptEngine`, so the only per-engine thing
+/// is the monomorphization chosen by [`run_test`].
 fn run_with<E: ScriptEngine>(
     testharness_js: &str,
     test_src: &str,
     doc: &StaticDocument,
+    base_url: Option<&str>,
+    handler: Option<Box<dyn FetchHandler>>,
 ) -> HarnessOutcome {
     let mut rt = match Runtime::<E>::new() {
         Ok(rt) => rt,
@@ -103,6 +134,12 @@ fn run_with<E: ScriptEngine>(
     // The test's body becomes the live DOM, so scripts querying body elements
     // (getElementById / querySelector / document.body) see them.
     rt.load_dom(doc);
+    if let Some(base) = base_url {
+        let _ = rt.set_base_url(base);
+    }
+    if let Some(h) = handler {
+        rt.set_fetch_handler(h);
+    }
     match rt.run_testharness(testharness_js, test_src) {
         Ok(results) => HarnessOutcome::Ran(results),
         // `ScriptEngine::Error` is `Debug`-only; truncate the (sometimes
@@ -112,22 +149,19 @@ fn run_with<E: ScriptEngine>(
 }
 
 /// Walk the document collecting test scripts in document order: inline `<script>`
-/// text, and the contents of local `<script src>` files (skipping the harness and
-/// remote sources).
+/// text, and the contents of `<script src>` from `loader` (skipping the harness /
+/// report hook, which the host surface supplies).
 fn collect_scripts<D: LayoutDom>(
     dom: &D,
     node: D::NodeId,
-    base_dir: &Path,
-    tests_root: &Path,
+    loader: &dyn ScriptSrcLoader,
     out: &mut Vec<String>,
 ) {
     if dom.element_name(node).is_some_and(|q| q.local.as_ref() == "script") {
         match dom.attribute(node, &Namespace::default(), &LocalName::from("src")) {
             Some(src) if !is_harness_src(src) => {
-                if let Some(path) = resolve(src, base_dir, tests_root) {
-                    if let Ok(text) = fs::read_to_string(path) {
-                        out.push(text);
-                    }
+                if let Some(text) = loader.load_script(src) {
+                    out.push(text);
                 }
             }
             Some(_) => {} // the harness / report hook: the host surface supplies these
@@ -145,7 +179,7 @@ fn collect_scripts<D: LayoutDom>(
         }
     }
     for child in dom.dom_children(node) {
-        collect_scripts(dom, child, base_dir, tests_root, out);
+        collect_scripts(dom, child, loader, out);
     }
 }
 
@@ -223,9 +257,10 @@ pub fn bench(tests_root: &str) {
     // (c) a full run_test on a trivial inline testharness test.
     let html = "<!doctype html><script src=/resources/testharness.js></script>\
                 <script>test(function(){ assert_true(true); }, 'x');</script>";
+    let loader = DiskLoader { base_dir: root, tests_root: root };
     let t = Instant::now();
     for _ in 0..n {
-        let _ = run_test(&testharness_js, html, root, root, Engine::Boa);
+        let _ = run_test(&testharness_js, html, &loader, None, None, Engine::Boa);
     }
     let run_ms = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
 

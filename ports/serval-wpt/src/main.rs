@@ -261,6 +261,10 @@ struct Args {
     tests_root: String,
     verbose: bool,
     engine: harness::Engine,
+    /// Connect to an already-running `wpt serve` at this origin (server mode).
+    server_base: Option<String>,
+    /// Spawn (and tear down) a `wpt serve` for the run (server mode).
+    spawn_server: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -269,6 +273,8 @@ fn parse_args() -> Result<Args, String> {
     let mut tests_root = DEFAULT_TESTS_ROOT.to_string();
     let mut verbose = false;
     let mut engine = harness::Engine::default();
+    let mut server_base = None;
+    let mut spawn_server = false;
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -280,6 +286,10 @@ fn parse_args() -> Result<Args, String> {
                 engine = harness::Engine::parse(&v)
                     .ok_or_else(|| format!("unknown engine: {v} (expected boa | nova)"))?;
             }
+            "--server-base" => {
+                server_base = Some(it.next().ok_or("--server-base needs a URL")?);
+            }
+            "--spawn-server" => spawn_server = true,
             "-v" | "--verbose" => verbose = true,
             "-h" | "--help" => return Err(usage()),
             _ if arg.starts_with('-') => return Err(format!("unknown flag: {arg}\n{}", usage())),
@@ -294,6 +304,8 @@ fn parse_args() -> Result<Args, String> {
         tests_root,
         verbose,
         engine,
+        server_base,
+        spawn_server,
     })
 }
 
@@ -310,6 +322,10 @@ Usage:
 Options:
     --tests-root <dir>   tests root (default: tests/wpt)
     --engine <name>      testharness JS engine: boa (default) | nova
+    --server-base <url>  run testharness against a live `wpt serve` at <url>
+                         (server mode; needs --features netfetch)
+    --spawn-server       spawn + tear down a `wpt serve` for the run
+                         (server mode; needs --features netfetch)
     -v, --verbose        print every test, not just failures
     -h, --help
 
@@ -438,6 +454,32 @@ fn run(tests: &[PathBuf], args: &Args) {
     }
 }
 
+/// Resolve the server-mode context from the args: spawn a `wpt serve`, connect to
+/// one, or `None` (disk mode). `--spawn-server` wins over `--server-base`. A
+/// requested-but-unreachable server is fatal (the run would silently fall back to
+/// network errors otherwise).
+#[cfg(feature = "netfetch")]
+fn setup_server(args: &Args) -> Option<net::ServerCtx> {
+    let result = if args.spawn_server {
+        eprintln!("spawning `wpt serve` under {} ...", args.tests_root);
+        net::ServerCtx::spawn(Path::new(&args.tests_root))
+    } else if let Some(base) = &args.server_base {
+        net::ServerCtx::connect(base.clone())
+    } else {
+        return None;
+    };
+    match result {
+        Ok(s) => {
+            eprintln!("server mode: driving fetch against {}", s.origin);
+            Some(s)
+        }
+        Err(e) => {
+            eprintln!("server mode setup failed: {e}");
+            std::process::exit(2);
+        }
+    }
+}
+
 /// Phase 3: run testharness.js tests and report per-subtest results.
 fn testharness(tests: &[PathBuf], args: &Args) {
     let tests_root = Path::new(&args.tests_root);
@@ -449,6 +491,17 @@ fn testharness(tests: &[PathBuf], args: &Args) {
             std::process::exit(2);
         }
     };
+
+    // Server mode (netfetch): connect to / spawn a `wpt serve` so `fetch()` hits a
+    // real server, `<script src>` is fetched (`.sub.js` substituted), and the
+    // document base URL resolves relative URLs. Disk mode leaves this `None`.
+    #[cfg(feature = "netfetch")]
+    let server = setup_server(args);
+    #[cfg(not(feature = "netfetch"))]
+    if args.spawn_server || args.server_base.is_some() {
+        eprintln!("server mode (--server-base / --spawn-server) needs `--features netfetch`");
+        std::process::exit(2);
+    }
 
     // Boa / the bridge can panic on unimplemented paths; report, don't spam.
     let prev = panic::take_hook();
@@ -501,8 +554,22 @@ fn testharness(tests: &[PathBuf], args: &Args) {
         };
 
         let base_dir = path.parent().unwrap_or(tests_root);
+        let disk = harness::DiskLoader { base_dir, tests_root };
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            harness::run_test(&testharness_js, &html, base_dir, tests_root, args.engine)
+            #[cfg(feature = "netfetch")]
+            if let Some(s) = &server {
+                let doc_url = s.doc_url(&rel(path, &args.tests_root));
+                let loader = s.loader(&doc_url);
+                return harness::run_test(
+                    &testharness_js,
+                    &html,
+                    &loader,
+                    Some(&doc_url),
+                    Some(s.handler()),
+                    args.engine,
+                );
+            }
+            harness::run_test(&testharness_js, &html, &disk, None, None, args.engine)
         }));
         let name = rel(path, &args.tests_root);
 
@@ -914,5 +981,278 @@ fn dump(tests: &[PathBuf], args: &Args) {
         let s = diff_stats(&t, &r);
         let pct = if s.total > 0 { s.differing * 100 / s.total } else { 0 };
         println!("DUMP {} -> {} / {}  (diff={pct}% maxδ={})", rel(path, &args.tests_root), tp.display(), rp.display(), s.max_channel_diff);
+    }
+}
+
+/// Server mode: drive the `fetch/` corpus against a live `wpt serve` (the netfetch
+/// feature). The runtime gets a netfetcher-backed `fetch()` handler, `<script src>`
+/// resources are HTTP-fetched (so `.sub.js` substitution happens), and the document
+/// base URL is set so relative `fetch()` / `Request` URLs resolve to the server.
+#[cfg(feature = "netfetch")]
+mod net {
+    use std::io::{BufRead, BufReader};
+    use std::path::Path;
+    use std::process::{Child, Command, Stdio};
+    use std::sync::OnceLock;
+
+    use script_runtime_api::{FetchHandler, FetchOutcome, FetchRequest};
+
+    use crate::harness::ScriptSrcLoader;
+
+    /// One shared Tokio current-thread runtime for every blocking bridge call
+    /// (resource GETs + the `fetch()` handler). A pooled off-thread runtime is the
+    /// Mere shape; for the runner one shared runtime amortizes the per-test cost.
+    fn runtime() -> &'static tokio::runtime::Runtime {
+        static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+        RT.get_or_init(|| {
+            tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime")
+        })
+    }
+
+    /// Blocking HTTP GET, body as a (UTF-8-lossy) string. `None` on parse / network
+    /// error or non-2xx. Used for `<script src>` and readiness probes.
+    pub fn http_get(url: &str) -> Option<String> {
+        let u = url::Url::parse(url).ok()?;
+        runtime().block_on(async move {
+            let req = netfetcher::Request::get(u);
+            let cx = netfetcher::FetchContext::permissive();
+            let resp = netfetcher::fetch(req, &cx).await;
+            if resp.is_network_error() || resp.status < 200 || resp.status >= 300 {
+                return None;
+            }
+            resp.bytes().await.ok().map(|b| String::from_utf8_lossy(&b).into_owned())
+        })
+    }
+
+    /// The host `fetch()` seam, backed by netfetcher over the shared runtime. A ZST:
+    /// the runtime is global, so minting one per test is free.
+    pub struct NetFetchHandler;
+
+    impl FetchHandler for NetFetchHandler {
+        fn fetch(&self, req: FetchRequest) -> FetchOutcome {
+            let Ok(url) = url::Url::parse(&req.url) else {
+                return FetchOutcome::network_error();
+            };
+            runtime().block_on(async move {
+                let mut request = netfetcher::Request::get(url);
+                request.method = match req.method.as_str() {
+                    "HEAD" => netfetcher::Method::Head,
+                    "POST" => netfetcher::Method::Post,
+                    "PUT" => netfetcher::Method::Put,
+                    "DELETE" => netfetcher::Method::Delete,
+                    "PATCH" => netfetcher::Method::Patch,
+                    "OPTIONS" => netfetcher::Method::Options,
+                    _ => netfetcher::Method::Get,
+                };
+                request.headers = req.headers;
+                request.body = req.body.map(bytes::Bytes::from);
+
+                let cx = netfetcher::FetchContext::permissive();
+                let resp = netfetcher::fetch(request, &cx).await;
+                if resp.is_network_error() {
+                    return FetchOutcome::network_error();
+                }
+                let status = resp.status;
+                let headers = resp.headers.clone();
+                let response_type = match resp.response_type {
+                    netfetcher::ResponseType::Basic => "basic",
+                    netfetcher::ResponseType::Cors => "cors",
+                    netfetcher::ResponseType::Opaque => "opaque",
+                    netfetcher::ResponseType::OpaqueRedirect => "opaqueredirect",
+                    netfetcher::ResponseType::Error => "error",
+                }
+                .to_owned();
+                let url = resp.url_list.last().map(|u| u.to_string()).unwrap_or_default();
+                let body = resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
+                FetchOutcome {
+                    network_error: false,
+                    status,
+                    status_text: String::new(),
+                    response_type,
+                    url,
+                    headers,
+                    body,
+                }
+            })
+        }
+    }
+
+    /// Loads `<script src>` by HTTP GET, resolving each `src` against the test's
+    /// document URL (so `.sub.js` helpers like `get-host-info.sub.js` come back
+    /// substituted). One per test (cheap: it owns only the doc URL string).
+    pub struct ServerLoader {
+        pub doc_url: String,
+    }
+
+    impl ScriptSrcLoader for ServerLoader {
+        fn load_script(&self, src: &str) -> Option<String> {
+            let base = url::Url::parse(&self.doc_url).ok()?;
+            let abs = base.join(src).ok()?;
+            http_get(abs.as_str())
+        }
+    }
+
+    /// A connected (or spawned) `wpt serve`. `origin` is the plain-http origin the
+    /// runner drives. A spawned server is torn down on drop.
+    pub struct ServerCtx {
+        pub origin: String,
+        _spawned: Option<ServerHandle>,
+    }
+
+    impl ServerCtx {
+        /// Connect to an already-running server at `origin` (the `--server-base`
+        /// path). Probes once so a typo / down server fails loudly up front.
+        pub fn connect(origin: String) -> Result<Self, String> {
+            let origin = origin.trim_end_matches('/').to_owned();
+            if http_get(&format!("{origin}/common/blank.html")).is_none() {
+                return Err(format!("no WPT server reachable at {origin} (is `wpt serve` up?)"));
+            }
+            Ok(Self { origin, _spawned: None })
+        }
+
+        /// Spawn `python wpt serve` under `tests_root`, discover its plain-http
+        /// origin, and wait until it answers. Torn down when the returned ctx drops.
+        pub fn spawn(tests_root: &Path) -> Result<Self, String> {
+            let handle = ServerHandle::spawn(tests_root)?;
+            let origin = handle.origin.clone();
+            Ok(Self { origin, _spawned: Some(handle) })
+        }
+
+        /// The document URL for a test, given its path relative to the tests root.
+        pub fn doc_url(&self, test_rel: &str) -> String {
+            format!("{}/{}", self.origin, test_rel.trim_start_matches('/'))
+        }
+
+        pub fn loader(&self, doc_url: &str) -> ServerLoader {
+            ServerLoader { doc_url: doc_url.to_owned() }
+        }
+
+        pub fn handler(&self) -> Box<dyn FetchHandler> {
+            Box::new(NetFetchHandler)
+        }
+    }
+
+    /// A spawned `wpt serve` child; killed (whole tree) on drop.
+    pub struct ServerHandle {
+        child: Child,
+        pub origin: String,
+    }
+
+    impl ServerHandle {
+        fn spawn(tests_root: &Path) -> Result<Self, String> {
+            let mut child = Command::new("python")
+                .arg("wpt")
+                .arg("serve")
+                .current_dir(tests_root)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| format!("spawning `python wpt serve`: {e}"))?;
+
+            // Read stdout until the canonical plain-http server announces its port,
+            // then drain the rest off-thread so the pipe never backs up.
+            let stdout = child.stdout.take().ok_or("no stdout from wpt serve")?;
+            let mut reader = BufReader::new(stdout);
+            let mut port = None;
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break, // EOF: server exited before binding
+                    Ok(_) => {
+                        if let Some(p) = parse_http_port(&line) {
+                            port = Some(p);
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            std::thread::spawn(move || {
+                let mut sink = String::new();
+                while reader.read_line(&mut sink).map(|n| n > 0).unwrap_or(false) {
+                    sink.clear();
+                }
+            });
+
+            let port = port.ok_or("could not read the wpt serve http port from its output")?;
+            let origin = format!("http://web-platform.test:{port}");
+
+            // Readiness: poll until the server answers (it logs the port before the
+            // listener is fully up).
+            for _ in 0..50 {
+                if http_get(&format!("{origin}/common/blank.html")).is_some() {
+                    return Ok(Self { child, origin });
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            let _ = child.kill();
+            Err(format!("wpt serve bound {origin} but never answered"))
+        }
+    }
+
+    impl Drop for ServerHandle {
+        fn drop(&mut self) {
+            // Kill the whole process tree: wpt serve forks per-protocol workers that
+            // a bare child.kill() would orphan.
+            #[cfg(windows)]
+            {
+                let _ = Command::new("taskkill")
+                    .args(["/T", "/F", "/PID", &self.child.id().to_string()])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .output();
+            }
+            #[cfg(not(windows))]
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    /// The primary plain-http port from a `wpt serve` log line. The canonical
+    /// server is tagged ` http on port N]` (with surrounding spaces, so it does not
+    /// match `http-local` / `http-public` / `http2`); the first such line is
+    /// `ports.http[0]`, the origin tests fetch from.
+    fn parse_http_port(line: &str) -> Option<u16> {
+        let tag = " http on port ";
+        let start = line.find(tag)? + tag.len();
+        let rest = &line[start..];
+        let end = rest.find(']')?;
+        rest[..end].trim().parse().ok()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parses_the_primary_http_port_only() {
+            // The canonical server line.
+            assert_eq!(
+                parse_http_port("[2026-06-02 21:48:27,647 http on port 8000] INFO - Starting http server on http://web-platform.test:8000"),
+                Some(8000)
+            );
+            // The variant servers must not match (their tag is not ` http on port `).
+            assert_eq!(parse_http_port("[ts http-local on port 62276] INFO - ..."), None);
+            assert_eq!(parse_http_port("[ts http-public on port 62277] INFO - ..."), None);
+            assert_eq!(parse_http_port("[ts h2 on port 9000] INFO - ..."), None);
+            assert_eq!(parse_http_port("[ts ws on port 62280] INFO - ..."), None);
+            // Noise lines.
+            assert_eq!(parse_http_port("INFO:root:Status of subprocess ..."), None);
+        }
+
+        #[test]
+        fn doc_url_joins_origin_and_test_path() {
+            let ctx = ServerCtx { origin: "http://web-platform.test:8000".into(), _spawned: None };
+            assert_eq!(
+                ctx.doc_url("fetch/api/basic/x.any.js"),
+                "http://web-platform.test:8000/fetch/api/basic/x.any.js"
+            );
+            // A leading slash on the rel path is not doubled.
+            assert_eq!(
+                ctx.doc_url("/fetch/api/basic/x.any.js"),
+                "http://web-platform.test:8000/fetch/api/basic/x.any.js"
+            );
+        }
     }
 }

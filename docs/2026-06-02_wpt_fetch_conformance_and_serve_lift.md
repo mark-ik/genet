@@ -2,10 +2,12 @@
 
 Status: **2026-06-02.** Stood up the JS Fetch API surface, wired `fetch()` to a
 host seam, backed that seam with netfetcher in `serval-wpt`, and taught the
-runner to wrap `.any.js` tests. The network-free `fetch/api/` subset now runs and
-scores on both engines (was 0 before). The full network-dependent run is gated on
-`wpt serve`, which is blocked on a one-time hosts-file setup plus a server-mode
-harness rework.
+runner to wrap `.any.js` tests. The network-free `fetch/api/` subset runs and
+scores on both engines (was 0 before). Both gates are now cleared: the hosts file
+is set up (Gate A) and `serval-wpt` has a **server mode** (Gate B) that drives the
+network-dependent `fetch/` corpus against a live `wpt serve`. Network fetch tests
+that were previously impossible now pass against the real server on both engines
+(e.g. `fetch/api/basic/http-response-code` 1/1, `mode-same-origin` 6/8).
 
 ## What landed
 
@@ -103,9 +105,10 @@ the backup is a clean revert. After this, `python wpt serve --exit-after-start`
 binds every protocol (http/https/ws/wss/h2) and exits 0. Revert by restoring the
 `.bak-<date>` copy (elevated).
 
-**Gate B, server mode in `serval-wpt`.** Past the hosts file, running the
-network-dependent `fetch/` tests needs harness changes. This is the remaining work;
-it is all serval-side, no further external setup.
+**Gate B, server mode in `serval-wpt`. BUILT + PROVEN 2026-06-02.** Past the hosts
+file, running the network-dependent `fetch/` tests needed harness changes, all
+serval-side. They are done; see "Server mode" below for what shipped and the
+results. The rest of this section records the server-side proof and the design.
 
 ### Server side proven (2026-06-02)
 
@@ -121,56 +124,92 @@ directly. All three behaviours that Gate B depends on work:
   (`HTTP_PORT = '8000'`, `HTTP_PORT2 = '62275'`), so `get_host_info()` /
   `make_absolute_url` will resolve correctly once the harness loads it over HTTP.
 
-So the WPT server is solid. The rest is harness wiring.
+So the WPT server is solid. The rest was harness wiring, now done.
 
-### Harness changes (grounded in `harness.rs` + `main.rs`)
+## Server mode (Gate B, shipped)
 
-Today `harness::run_test` reads the test HTML from disk, `collect_scripts` reads
-inline + local `<script src>` from disk (remote/`data:` skipped), no `fetch`
-handler is installed on the `Runtime`, and there is no document URL / `location`.
-Add a **server mode** behind a new flag (`--server-base http://web-platform.test:8000`),
-default off so disk mode is unchanged:
+`serval-wpt testharness` gained a server mode behind the `netfetch` feature,
+default off so disk-mode runs are byte-for-byte unchanged. Two ways in:
 
-1. **Install the fetch handler.** In `run_with`, when in server mode,
-   `rt.set_fetch_handler(Box::new(NetFetchHandler::new()))` — promote the handler
-   from `tests/fetch_netfetcher.rs` into the binary behind the `netfetch` feature.
-   Test `fetch()` calls then hit the live server.
-2. **Base URL / `location`.** Set the document URL to `<server-base>/<test-rel-path>`
-   so relative `fetch()` and `make_absolute_url` resolve. Two parts: a host
-   `location` global (`href`/`origin`/`protocol`/`host`/`pathname`), and relative
-   URL resolution in `fetch()` (best as a native fn over the Rust `url` crate's
-   `Url::join`, not a JS reimplementation).
-3. **Server-loaded resources (the bulk).** In server mode, `collect_scripts` loads
-   `<script src>` (and the test HTML itself when `.sub.html`) by HTTP GET from the
-   server instead of `fs::read_to_string`, so `.sub.js`/`.sub.html` substitution
-   happens. `get-host-info.sub.js` then carries real ports (proven above).
-4. **Server lifecycle.** Two options: (a) **connect mode** — user runs
-   `wpt serve`, passes `--server-base`; simplest, recommended first. (b)
-   **auto-spawn** — runner spawns `wpt serve`, parses the http port from its
-   `Starting http server on http://web-platform.test:PORT` line (8000 is the stable
-   plain-http port), waits for ready, tears down. More convenient, more moving
-   parts; later.
+- `--server-base http://web-platform.test:8000` — connect to a `wpt serve` you
+  started (it is probed once up front, so a typo / down server fails loudly).
+- `--spawn-server` — the runner spawns `python wpt serve`, reads its primary
+  plain-http port from the `... http on port N]` log line, waits until it answers,
+  and tears the whole process tree down on exit.
 
-Dependencies: (1) and (3) need a running server (4); (2) is independent; (3) is
-most of the work. First slice: one network `fetch/` test end-to-end in connect
-mode (handler + base URL + server-loaded `get-host-info`), confirm its subtests
-pass against the live server, then widen.
+What it wires (all on the `netfetch` feature):
+
+1. **Fetch handler.** `net::NetFetchHandler` (netfetcher over one shared Tokio
+   runtime) is installed on the per-test `Runtime` via `set_fetch_handler`. A ZST,
+   so minting one per test is free.
+2. **Base URL / `location`.** `Runtime::set_base_url` (new, in `script-runtime-api`)
+   stores the test's document URL and populates `window.location` from its parsed
+   components. A new `__resolve_url` native (over the `url` crate's `Url::join`)
+   resolves relative `Request` / `fetch()` URLs against it; with no base set it is a
+   no-op, so disk mode and the binding tests are unaffected.
+3. **Server-loaded `<script src>`.** `collect_scripts` now takes a
+   `ScriptSrcLoader`; the `net::ServerLoader` HTTP-GETs each `src` (joined against
+   the document URL), so `get-host-info.sub.js` and other `.sub.js` arrive
+   substituted. Disk mode uses `DiskLoader` (the prior `fs::read` path).
+4. **Lifecycle.** `net::ServerCtx` (connect or spawn) owns the origin and a
+   `ServerHandle` whose `Drop` kills the spawned tree (`taskkill /T /F` on Windows).
+
+### Results (network fetch, was 0 — impossible — before)
+
+A clean slice of `fetch/api/basic` (no `Blob`/`FormData`/stream deps), connect mode,
+against a live `wpt serve`:
+
+| test | boa | nova |
+|---|---|---|
+| http-response-code | 1/1 | 1/1 |
+| mode-same-origin | 6/8 | 6/8 |
+| accept-header | 3/4 | - |
+| response-url.sub | 1/4 | - |
+
+`http-response-code` is a full pass through the whole path: JS `fetch()` ->
+`__fetch` -> `NetFetchHandler` -> netfetcher -> live WPT handler -> a `Response`
+script asserts on. `accept-header`'s one failure is a real gap (serval sends no
+`accept-language`), not a plumbing bug — the three Accept-header subtests that *do*
+round-trip through `inspect-headers.py` pass.
+
+### Run it
+
+```bash
+# connect mode (start the server yourself)
+python wpt serve                                   # in tests/wpt/tests
+cargo run -p serval-wpt --features netfetch -- \
+  testharness fetch/api/basic --server-base http://web-platform.test:8000 --engine boa
+
+# spawn mode (runner owns the server)
+cargo run -p serval-wpt --features netfetch -- \
+  testharness fetch/api/basic --spawn-server --engine boa
+```
 
 ## Not done (deliberately deferred)
 
-- **Gate B server mode**: the four-step harness rework above. Server side proven;
-  harness wiring pending a go-ahead on connect-vs-spawn.
-- **The failing object-semantics tail**: request/response sit well under half.
-  Many failures are missing pieces (`FormData`, `Blob`, `URLSearchParams` bodies,
-  `ReadableStream`), not seam bugs. Each is its own slice.
+- **`.sub.html` page substitution.** Server mode loads `<script src>` over HTTP
+  (so `.sub.js` substitutes) but still reads the test *page* from disk. `.sub.html`
+  fetch tests need the page GET'd too — a small follow-up.
+- **Missing Fetch globals.** `Blob`, `FormData`, `URLSearchParams` bodies,
+  `ReadableStream` — top-level references to these abort whole `.any.js` files
+  (e.g. `request-headers.any.js`). Each is its own slice and gates a chunk of
+  `fetch/api/basic`.
+- **The failing object-semantics tail**: request/response sit well under half,
+  same missing pieces as above. Not seam bugs.
+- **Per-test runtime reuse.** A fresh `Runtime` per test re-evals testharness.js
+  each time (the dominant cost; see `harness::bench`). A snapshot-clone pool is the
+  amortization, unchanged by this work.
 
 ## Pointers
 
-- Seam + surface: `components/script-runtime-api/fetch.rs`, `lib.rs`; tests
-  `tests/fetch_binding.rs` (7).
-- netfetcher handler: `ports/serval-wpt` `netfetch` feature; test
-  `tests/fetch_netfetcher.rs` (mockito).
+- Seam + surface: `components/script-runtime-api/fetch.rs`, `lib.rs`
+  (`set_base_url`, `__resolve_url`); tests `tests/fetch_binding.rs` (7).
+- Server mode: `ports/serval-wpt/src/main.rs` `mod net` (`ServerCtx`,
+  `ServerLoader`, `NetFetchHandler`, `parse_http_port`) + `setup_server`; the
+  `ScriptSrcLoader` / `DiskLoader` split is in `src/harness.rs`. Unit tests:
+  `net::tests` (port parse, doc-url join). Off-server proof: `tests/fetch_netfetcher.rs`.
 - Runner wrapping: `ports/serval-wpt/src/main.rs` (`synthesize_any_js`).
 - netfetcher refinements behind this (PSL same-site, h3-with-body, mixed-content
   split): netfetcher commit `8bde3c1`.
-- This work: serval `c98f551aeb7` (richer API + wrapping), `c1c9246beeb` (seam).
+- This work: serval `c98f551aeb7` (richer API + wrapping), `c1c9246beeb` (seam),
+  plus the server-mode commit recorded alongside this doc.
