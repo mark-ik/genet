@@ -36,6 +36,7 @@ use wayland_client::backend::{Backend, ObjectId};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::wl_buffer::WlBuffer;
 use wayland_client::protocol::wl_compositor::WlCompositor;
+use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_subcompositor::WlSubcompositor;
 use wayland_client::protocol::wl_subsurface::WlSubsurface;
@@ -238,6 +239,7 @@ macro_rules! noop_dispatch {
 }
 
 noop_dispatch!(WlCompositor);
+noop_dispatch!(WlRegion);
 noop_dispatch!(WlSubcompositor);
 noop_dispatch!(WlSubsurface);
 noop_dispatch!(WpViewporter);

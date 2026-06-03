@@ -395,6 +395,152 @@ impl WaylandSubsurfaceBackend {
 
         Ok(dest_texture)
     }
+
+    fn present_inherent(
+        &mut self,
+        key: SurfaceKey,
+        transform: [f32; 6],
+        clip: Option<[f32; 4]>,
+        opacity: f32,
+    ) -> Result<(), BackendError> {
+        self.wayland.dispatch_pending()?;
+
+        let needs_rotation = transform[1].abs() > 1e-6 || transform[2].abs() > 1e-6;
+        let needs_alpha_bake = !self.wayland.globals.alpha_modifier.is_some()
+            && (opacity - 1.0).abs() > 1e-6;
+
+        // Bake path lives in 6.5. Fast path:
+        if needs_rotation || needs_alpha_bake {
+            return self.present_baked_path(key, transform, clip, opacity);
+        }
+
+        // Acquire a swap slot; roundtrip if starved.
+        // We use a raw index approach to avoid conflicting borrows of
+        // self.surfaces and self.wayland in the loop body.
+        let slot_index = loop {
+            if let Some(i) = self
+                .surfaces
+                .get_mut(&key)
+                .ok_or_else(|| {
+                    BackendError::Wayland(format!("present({key:?}): surface not declared"))
+                })?
+                .swap_pool
+                .acquire()
+            {
+                break i;
+            }
+            self.wayland.roundtrip()?;
+        };
+
+        let surface = self
+            .surfaces
+            .get_mut(&key)
+            .ok_or_else(|| BackendError::Wayland(format!("present({key:?}): surface not declared")))?;
+
+        let slot = &surface.swap_pool.slots[slot_index];
+
+        // Copy dest → slot.image on wgpu's queue.
+        let mut encoder =
+            self.host
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("WaylandSubsurfaceBackend::present dest→slot"),
+                });
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &surface.dest_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &slot.image.wgpu_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: surface.size.0,
+                height: surface.size.1,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.host.queue.submit([encoder.finish()]);
+
+        // Viewport — source rect is full source-dest size; destination
+        // size derived from transform scale.
+        let m11 = transform[0];
+        let m22 = transform[3];
+        let dest_w = (surface.size.0 as f32 * m11).round().max(1.0) as i32;
+        let dest_h = (surface.size.1 as f32 * m22).round().max(1.0) as i32;
+        // viewporter takes set_source as wl_fixed_t (24.8 fixed-point);
+        // wayland-protocols's WpViewport::set_source converts from f64
+        // for us.
+        surface.viewport.set_source(
+            0.0,
+            0.0,
+            surface.size.0 as f64,
+            surface.size.1 as f64,
+        );
+        surface.viewport.set_destination(dest_w, dest_h);
+
+        // Subsurface position from translation.
+        let tx = transform[4].round() as i32;
+        let ty = transform[5].round() as i32;
+        surface.wl_subsurface.set_position(tx, ty);
+
+        // Clip via input region.
+        match clip {
+            Some([x0, y0, x1, y1]) => {
+                let region = self
+                    .wayland
+                    .globals
+                    .compositor
+                    .create_region(&self.wayland.queue_handle, ());
+                region.add(
+                    x0.round() as i32,
+                    y0.round() as i32,
+                    (x1 - x0).round().max(0.0) as i32,
+                    (y1 - y0).round().max(0.0) as i32,
+                );
+                surface.wl_surface.set_input_region(Some(&region));
+                region.destroy();
+            },
+            None => {
+                surface.wl_surface.set_input_region(None);
+            },
+        }
+
+        // Opacity (via protocol — we're in fast path so it's bound).
+        if let Some(am) = &surface.alpha_modifier {
+            let multiplier =
+                (opacity.clamp(0.0, 1.0) * (u32::MAX as f32)).round() as u32;
+            am.set_multiplier(multiplier);
+        }
+
+        // Attach + damage + commit + flush.
+        surface.wl_surface.attach(Some(&slot.wl_buffer), 0, 0);
+        surface
+            .wl_surface
+            .damage_buffer(0, 0, surface.size.0 as i32, surface.size.1 as i32);
+        surface.wl_surface.commit();
+        self.wayland.flush()?;
+
+        Ok(())
+    }
+
+    fn present_baked_path(
+        &mut self,
+        key: SurfaceKey,
+        transform: [f32; 6],
+        clip: Option<[f32; 4]>,
+        opacity: f32,
+    ) -> Result<(), BackendError> {
+        let _ = (key, transform, clip, opacity);
+        // Real impl lands in Phase 7. Stubbed to return Ok for now so the
+        // fast path can be exercised without the bake module in flight.
+        Err(BackendError::Unwired("present_baked_path — Phase 7"))
+    }
 }
 
 impl OsCompositorBackend for WaylandSubsurfaceBackend {
@@ -428,6 +574,17 @@ impl OsCompositorBackend for WaylandSubsurfaceBackend {
             .map_err(|e| Box::new(e) as crate::compositor::BoxedBackendError)
     }
 
-    // destroy / present inherit the trait defaults (no-ops
-    // for now) until Tasks 6.4-6.5 wire them.
+    fn present(
+        &mut self,
+        key: SurfaceKey,
+        transform: [f32; 6],
+        clip: Option<[f32; 4]>,
+        opacity: f32,
+    ) {
+        if let Err(err) = WaylandSubsurfaceBackend::present_inherent(self, key, transform, clip, opacity) {
+            log::warn!("[WaylandSubsurfaceBackend] present({key:?}): {err}");
+        }
+    }
+
+    // destroy inherits the trait default (no-op) until Task 6.5 wires it.
 }
