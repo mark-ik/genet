@@ -70,6 +70,14 @@ winit = { workspace = true }
 # version paint depends on.
 windows = { workspace = true, optional = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Linux-only ash extension NAME constants used by the `linux-present`
+# feature's `smoke_wayland::build_vulkan_handles` to enable the dmabuf
+# export extensions on the wgpu-hal Vulkan device before handing it to
+# wgpu via `Adapter::create_device_from_hal`. Version matches paint's
+# (which in turn matches wgpu-hal 29's lockfile pin 0.38.0+1.3.281).
+ash = "0.38"
+
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)', 'cfg(llvm_pgo)'] }

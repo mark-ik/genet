@@ -108,6 +108,30 @@ mod linux_impl {
         }
     }
 
+    /// Build a wgpu Vulkan device with the extra device extensions our
+    /// dmabuf-export path (`paint::compositor_wayland::dmabuf`) calls into.
+    ///
+    /// wgpu's public `Adapter::request_device` does NOT expose Vulkan
+    /// device-extension control, so the default device that ash's
+    /// `image_drm_format_modifier::Device::new` runs against is missing
+    /// `VK_EXT_image_drm_format_modifier`, which causes
+    /// `get_image_drm_format_modifier_properties_ext` to panic-load.
+    ///
+    /// To enable the extensions we drop to `wgpu-hal` and use
+    /// `wgpu_hal::vulkan::Adapter::open_with_callback`
+    /// (wgpu-hal 29.0.3 `src/vulkan/adapter.rs:2812`), which lets a
+    /// `CreateDeviceCallback` mutate the `&mut Vec<&'static CStr>` of
+    /// enabled extensions before `vkCreateDevice`. We then wrap the
+    /// resulting `OpenDevice<Vulkan>` into a wgpu `Device + Queue` via
+    /// `Adapter::create_device_from_hal`
+    /// (wgpu 29.0.3 `src/api/adapter.rs:77`).
+    ///
+    /// Extensions enabled on top of wgpu-hal's defaults:
+    /// - `VK_EXT_image_drm_format_modifier`
+    /// - `VK_EXT_external_memory_dma_buf`
+    /// - `VK_KHR_external_memory_fd`
+    /// - `VK_KHR_timeline_semaphore` (already Vulkan 1.2 core, explicit for safety)
+    /// - `VK_KHR_external_semaphore_fd`
     fn build_vulkan_handles() -> Result<netrender::WgpuHandles, String> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN,
@@ -122,17 +146,59 @@ mod linux_impl {
             force_fallback_adapter: false,
         }))
         .map_err(|err| format!("request_adapter: {err}"))?;
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("pelt wayland-present device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits {
-                    max_inter_stage_shader_variables: 28,
-                    ..Default::default()
-                },
-                ..Default::default()
-            }))
-            .map_err(|err| format!("request_device: {err}"))?;
+
+        let limits = wgpu::Limits {
+            max_inter_stage_shader_variables: 28,
+            ..Default::default()
+        };
+        let memory_hints = wgpu::MemoryHints::default();
+        let features = wgpu::Features::empty();
+
+        // Drop to wgpu-hal to enable the dmabuf-export device extensions.
+        let open_device = unsafe {
+            let hal_adapter = adapter
+                .as_hal::<wgpu::wgc::api::Vulkan>()
+                .ok_or_else(|| "as_hal::<Vulkan> returned None".to_string())?;
+
+            let extra_extensions: Vec<&'static std::ffi::CStr> = vec![
+                ash::ext::image_drm_format_modifier::NAME,
+                ash::ext::external_memory_dma_buf::NAME,
+                ash::khr::external_memory_fd::NAME,
+                ash::khr::timeline_semaphore::NAME,
+                ash::khr::external_semaphore_fd::NAME,
+            ];
+
+            let callback: Box<wgpu::hal::vulkan::CreateDeviceCallback<'_>> =
+                Box::new(move |args: wgpu::hal::vulkan::CreateDeviceCallbackArgs<'_, '_, '_>| {
+                    for ext in &extra_extensions {
+                        if !args.extensions.iter().any(|existing| *existing == *ext) {
+                            args.extensions.push(ext);
+                        }
+                    }
+                });
+
+            hal_adapter
+                .open_with_callback(features, &limits, &memory_hints, Some(callback))
+                .map_err(|err| format!("hal Adapter::open_with_callback: {err}"))?
+        };
+
+        // Wrap into wgpu Device + Queue. SAFETY: `open_device` was created
+        // from `adapter`'s hal handle just above; `features` is the same
+        // empty set we passed to `open_with_callback`.
+        let (device, queue) = unsafe {
+            adapter
+                .create_device_from_hal::<wgpu::wgc::api::Vulkan>(
+                    open_device,
+                    &wgpu::DeviceDescriptor {
+                        label: Some("pelt wayland-present device"),
+                        required_features: features,
+                        required_limits: limits,
+                        ..Default::default()
+                    },
+                )
+                .map_err(|err| format!("create_device_from_hal: {err}"))?
+        };
+
         Ok(netrender::WgpuHandles {
             instance,
             adapter,
