@@ -90,6 +90,8 @@ objc2-app-kit = { workspace = true }
 # C4 Wayland compositor backend (compositor_wayland/). ash version matches
 # wgpu-hal 29's lockfile-pinned 0.38.0+1.3.281 so the types line up.
 ash = "0.38"
+# Bake pipeline uniform upload (compositor_wayland/bake.rs).
+bytemuck = { workspace = true }
 smallvec = { workspace = true }
 # `system` feature enables `wayland-backend/client_system`, which is what
 # exposes `Backend::from_foreign_display(*mut wl_display)` + `ObjectId::from_ptr`.

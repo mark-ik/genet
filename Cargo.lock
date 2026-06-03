@@ -7455,6 +7455,7 @@ version = "0.2.0"
 dependencies = [
  "ash",
  "base64",
+ "bytemuck",
  "crossbeam-channel",
  "dpi",
  "euclid",
