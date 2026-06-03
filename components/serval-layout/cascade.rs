@@ -10,12 +10,16 @@
 //! architecture where style state lives in `serval-layout`-owned planes
 //! rather than embedded on DOM nodes.
 //!
-//! ## Status (v1.1, 2026-05-18) — END-TO-END, EMPTY-STYLIST
+//! ## Status (2026-06-03) — LIVE, REAL STYLESHEETS
 //!
-//! Cascade runs and populates `ElementData` for every element in the test
-//! document. Probe slice exercises an empty `Stylist` (no stylesheets
-//! loaded), so every element receives Stylo's default cascaded values —
-//! the real win is that the trait surface holds together end-to-end.
+//! `run_cascade` builds a `Stylist` from the caller's author sheets and
+//! cascades real CSS over every element, populating `ElementData` in the
+//! `StylePlane`. This is the live path behind pelt-viewer, pelt-live,
+//! meerkat, and the orrery. Selector matching (`each_class` /
+//! `each_attr_name` / `id`) and `SharedRwLock` exposure via
+//! `TDocument::shared_lock` are wired (see `adapter_stylo.rs`). The one
+//! intentional gap is Shadow DOM, which the static/scripted profile does
+//! not support (`unimplemented!()` in the `TElement` impl).
 //!
 //! The original integration blocker (Stylo's style-sharing cache size
 //! assertion in `style/sharing/mod.rs:611`) was resolved by the
@@ -28,14 +32,6 @@
 //! not on nodes) and shrunk `StyleNodeRef<'a, D>` to `{ id: D::NodeId }`
 //! (8 bytes for `usize`-sized NodeIds); `(dom, plane)` is stashed in a
 //! TLS slot for the cascade duration via `CascadeGuard`.
-//!
-//! Next steps:
-//! - Load stylesheets into the `Stylist` so real CSS rules apply.
-//! - Wire `SharedRwLock` exposure through `TDocument::shared_lock`
-//!   (currently `unimplemented!()`, untouched because the empty-stylist
-//!   path doesn't reach it).
-//! - Replace `each_class` / `each_attr_name` / `id` skeletons with
-//!   real impls once stylesheets exist to exercise them.
 
 #![allow(unsafe_code)]
 
