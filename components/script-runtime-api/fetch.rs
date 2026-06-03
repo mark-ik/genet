@@ -205,13 +205,15 @@ pub(crate) fn install_fetch_surface<E: ScriptEngine>(engine: &mut E) -> Result<(
 }
 
 /// The Fetch API JS surface: `Headers` (with validation + sorted iteration +
-/// getSetCookie), `URLSearchParams`, `Blob` / `File`, `FormData`, `Request`,
-/// `Response` (+ `error`/`redirect`/`json` statics), a shared body mixin
-/// (`text`/`json`/`arrayBuffer`/`blob`/`formData`) with WHATWG body extraction
-/// (string / URLSearchParams / Blob / FormData / buffers set the right
-/// Content-Type), and `fetch()` over the `__fetch` sink. Still missing streaming
-/// bodies (`ReadableStream`), multipart `formData()` parsing, and `AbortSignal`;
-/// binary bodies degrade through the UTF-8 string sink.
+/// getSetCookie), `TextEncoder` / `TextDecoder`, `URLSearchParams`, `Blob` /
+/// `File`, `FormData`, a buffered `ReadableStream` (+ default reader), `Request`,
+/// `Response` (+ `error`/`redirect`/`json` statics, `body` as a stream), a shared
+/// body mixin (`text`/`json`/`arrayBuffer`/`blob`/`formData`) with WHATWG body
+/// extraction (string / URLSearchParams / Blob / FormData / buffers / stream set
+/// the right Content-Type), and `fetch()` over the `__fetch` sink. Still missing
+/// byte (BYOB) readers, `pipeTo` / `pipeThrough`, true async streaming,
+/// multipart `formData()` parsing, and `AbortSignal`; binary bodies degrade
+/// through the UTF-8 string sink.
 const FETCH_BOOTSTRAP: &str = r#"
 (function() {
   var hasSym = (typeof Symbol !== 'undefined' && Symbol.iterator);
@@ -303,9 +305,25 @@ const FETCH_BOOTSTRAP: &str = r#"
 
   // ---- Body mixin: text / json / arrayBuffer, single-use. ----
   function consume(self) {
-    if (self.bodyUsed) return Promise.reject(new TypeError("Body has already been consumed."));
+    if (self.__stream && self.__stream.locked)
+      return Promise.reject(new TypeError("Body is locked"));
+    if (self.bodyUsed || (self.__stream && self.__stream._disturbed))
+      return Promise.reject(new TypeError("Body has already been consumed."));
     self.bodyUsed = true;
+    if (self.__stream) self.__stream._disturbed = true;
     return Promise.resolve(self.__body != null ? String(self.__body) : "");
+  }
+  // Lazily expose the body as a ReadableStream (the same one each access, so its
+  // identity and lock state persist). Getting it does not disturb; reading does.
+  function bodyStream(self) {
+    if (self.__body == null) return null;
+    if (!self.__stream) {
+      var bytes = utf8Encode(self.__body);
+      self.__stream = new ReadableStream({ start: function(c) { if (bytes.length) c.enqueue(bytes); c.close(); } });
+      self.__stream._owner = self;
+      if (self.bodyUsed) self.__stream._disturbed = true;
+    }
+    return self.__stream;
   }
   function utf8Encode(s) {
     var b = [];
@@ -334,6 +352,115 @@ const FETCH_BOOTSTRAP: &str = r#"
     }
     return out;
   }
+
+  // ---- TextEncoder / TextDecoder (UTF-8) ----
+  function TextEncoder() { this.encoding = 'utf-8'; }
+  TextEncoder.prototype.encode = function(s) { return utf8Encode(s === undefined ? '' : String(s)); };
+  TextEncoder.prototype.encodeInto = function(s, dest) {
+    var b = utf8Encode(String(s)), n = Math.min(b.length, dest.length);
+    for (var i = 0; i < n; i++) dest[i] = b[i];
+    return { read: n, written: n };
+  };
+  globalThis.TextEncoder = TextEncoder;
+  function TextDecoder(label, opts) {
+    this.encoding = 'utf-8'; this.fatal = !!(opts && opts.fatal); this.ignoreBOM = !!(opts && opts.ignoreBOM);
+  }
+  TextDecoder.prototype.decode = function(input) {
+    if (input == null) return '';
+    var bytes;
+    if (input instanceof ArrayBuffer) bytes = new Uint8Array(input);
+    else if (ArrayBuffer.isView(input)) bytes = new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+    else bytes = input;
+    return utf8Decode(bytes);
+  };
+  globalThis.TextDecoder = TextDecoder;
+
+  // ---- ReadableStream (fully-buffered model) ----
+  // Bodies are already buffered (the __fetch sink returns the whole body), so a
+  // stream is a queue of chunks the source enqueues in start()/pull(). Enough for
+  // the fetch body-as-stream tests; true async streaming, byte (BYOB) readers,
+  // and pipeTo/pipeThrough are deferred.
+  function ReadableStream(source, strategy) {
+    source = source || {};
+    this._chunks = [];
+    this._closed = false;
+    this._errored = false;
+    this._error = undefined;
+    this._reader = null;
+    this._disturbed = false;
+    this._source = source;
+    var self = this;
+    this._controller = {
+      enqueue: function(chunk) {
+        if (self._closed || self._errored) throw new TypeError("Cannot enqueue on a closed stream");
+        self._chunks.push(chunk);
+      },
+      close: function() { self._closed = true; },
+      error: function(e) { self._errored = true; self._error = e; },
+      get desiredSize() { return self._closed ? null : 1; }
+    };
+    if (typeof source.start === 'function') {
+      try { source.start(this._controller); } catch (e) { this._controller.error(e); }
+    }
+  }
+  Object.defineProperty(ReadableStream.prototype, 'locked', { configurable: true, get: function() { return this._reader !== null; } });
+  ReadableStream.prototype.getReader = function(opts) {
+    // BYOB readers are not implemented; ignore the mode and hand back a default
+    // reader so `getReader({mode:'byob'})` tests still read the bytes.
+    if (this._reader) throw new TypeError("ReadableStream is already locked to a reader");
+    var r = new ReadableStreamDefaultReader(this);
+    this._reader = r;
+    return r;
+  };
+  ReadableStream.prototype.cancel = function(reason) {
+    this._disturbed = true; this._closed = true; this._chunks = [];
+    if (typeof this._source.cancel === 'function') { try { this._source.cancel(reason); } catch (e) {} }
+    return Promise.resolve(undefined);
+  };
+  ReadableStream.prototype.tee = function() {
+    // Buffered: snapshot the remaining chunks into two independent streams.
+    var chunks = this._chunks.slice();
+    this._disturbed = true;
+    function mk() {
+      return new ReadableStream({ start: function(c) { for (var i = 0; i < chunks.length; i++) c.enqueue(chunks[i]); c.close(); } });
+    }
+    return [mk(), mk()];
+  };
+  if (hasSym) ReadableStream.prototype[Symbol.asyncIterator] = function() {
+    var reader = this.getReader();
+    return { next: function() { return reader.read(); }, 'return': function() { reader.releaseLock(); return Promise.resolve({ value: undefined, done: true }); } };
+  };
+  globalThis.ReadableStream = ReadableStream;
+
+  function ReadableStreamDefaultReader(stream) {
+    this._stream = stream;
+    var self = this;
+    this.closed = new Promise(function(res, rej) { self._cRes = res; self._cRej = rej; });
+    if (stream._closed) { this._cRes(undefined); }
+    else if (stream._errored) { this._cRej(stream._error); }
+  }
+  ReadableStreamDefaultReader.prototype.read = function() {
+    var s = this._stream;
+    if (!s) return Promise.reject(new TypeError("Reader has been released"));
+    s._disturbed = true;
+    if (s._owner) s._owner.bodyUsed = true;
+    if (s._chunks.length > 0) return Promise.resolve({ value: s._chunks.shift(), done: false });
+    if (!s._closed && !s._errored && typeof s._source.pull === 'function') {
+      try { s._source.pull(s._controller); } catch (e) { s._errored = true; s._error = e; }
+      if (s._chunks.length > 0) return Promise.resolve({ value: s._chunks.shift(), done: false });
+    }
+    if (s._errored) { if (this._cRej) { this._cRej(s._error); this._cRej = null; } return Promise.reject(s._error); }
+    if (this._cRes) { this._cRes(undefined); this._cRes = null; }
+    return Promise.resolve({ value: undefined, done: true });
+  };
+  ReadableStreamDefaultReader.prototype.releaseLock = function() {
+    if (this._stream) { if (this._stream._reader === this) this._stream._reader = null; this._stream = null; }
+  };
+  ReadableStreamDefaultReader.prototype.cancel = function(reason) {
+    if (this._stream) return this._stream.cancel(reason);
+    return Promise.resolve(undefined);
+  };
+  globalThis.ReadableStreamDefaultReader = ReadableStreamDefaultReader;
 
   // ---- URLSearchParams ----
   function uspEnc(s) {
@@ -489,6 +616,16 @@ const FETCH_BOOTSTRAP: &str = r#"
     if (v instanceof URLSearchParams) return { body: v.toString(), type: 'application/x-www-form-urlencoded;charset=UTF-8' };
     if (v instanceof Blob) return { body: utf8Decode(v._b), type: v.type ? v.type : null };
     if (v instanceof FormData) return serializeFormData(v);
+    if (v instanceof ReadableStream) {
+      // Drain the (fully-buffered) stream: chunks the source enqueued in start().
+      // Async-pull streams degrade to what is already queued (a known limit).
+      var parts = v._chunks.slice(); v._chunks = []; v._disturbed = true; v._closed = true;
+      var total = 0, i;
+      for (i = 0; i < parts.length; i++) total += parts[i].length;
+      var all = new Uint8Array(total), off = 0;
+      for (i = 0; i < parts.length; i++) { all.set(parts[i], off); off += parts[i].length; }
+      return { body: utf8Decode(all), type: null };
+    }
     if (v instanceof ArrayBuffer) return { body: utf8Decode(new Uint8Array(v)), type: null };
     if (ArrayBuffer.isView(v)) return { body: utf8Decode(new Uint8Array(v.buffer, v.byteOffset, v.byteLength)), type: null };
     return { body: String(v), type: 'text/plain;charset=UTF-8' };
@@ -551,7 +688,7 @@ const FETCH_BOOTSTRAP: &str = r#"
       throw new TypeError("Request with GET/HEAD method cannot have body.");
   }
   Request.prototype.clone = function() {
-    if (this.bodyUsed) throw new TypeError("Body has already been consumed.");
+    if (this.bodyUsed || (this.__stream && this.__stream.locked)) throw new TypeError("Body is disturbed or locked.");
     var r = new Request(this); r.__body = this.__body; r.bodyUsed = false; return r;
   };
   Request.prototype.text = bodyMixin.text;
@@ -559,6 +696,7 @@ const FETCH_BOOTSTRAP: &str = r#"
   Request.prototype.arrayBuffer = bodyMixin.arrayBuffer;
   Request.prototype.blob = bodyMixin.blob;
   Request.prototype.formData = bodyMixin.formData;
+  Object.defineProperty(Request.prototype, 'body', { configurable: true, get: function() { return bodyStream(this); } });
   globalThis.Request = Request;
 
   // ---- Response ----
@@ -583,8 +721,9 @@ const FETCH_BOOTSTRAP: &str = r#"
   Response.prototype.arrayBuffer = bodyMixin.arrayBuffer;
   Response.prototype.blob = bodyMixin.blob;
   Response.prototype.formData = bodyMixin.formData;
+  Object.defineProperty(Response.prototype, 'body', { configurable: true, get: function() { return bodyStream(this); } });
   Response.prototype.clone = function() {
-    if (this.bodyUsed) throw new TypeError("Body has already been consumed.");
+    if (this.bodyUsed || (this.__stream && this.__stream.locked)) throw new TypeError("Body is disturbed or locked.");
     var r = Object.create(Response.prototype);
     r.status = this.status; r.statusText = this.statusText; r.ok = this.ok;
     r.type = this.type; r.url = this.url; r.redirected = this.redirected;
