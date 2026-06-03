@@ -31,7 +31,6 @@ use super::{HostWgpuContext, InteropBackend, InteropError};
 /// frames. Producers wire [`semaphore`](Self::semaphore) into their own
 /// `vkQueueSubmit` calls; the wrapper does not issue empty-buffer signal
 /// or wait submits.
-#[allow(dead_code)]
 pub struct VulkanTimelineSemaphoreSynchronizer {
     vk_device: ash::Device,
     timeline_semaphore: vk::Semaphore,
@@ -120,6 +119,58 @@ impl VulkanTimelineSemaphoreSynchronizer {
     /// Highest value reserved by [`next_value`]. Snapshot.
     pub fn reserved_value(&self) -> u64 {
         self.next_value.load(Ordering::SeqCst)
+    }
+
+    /// Live host-readable semaphore value (`vkGetSemaphoreCounterValue`).
+    /// This is the GPU's view — distinct from [`reserved_value`], which
+    /// is the client-side bookkeeping atomic.
+    pub fn signaled_value(&self) -> Result<u64, InteropError> {
+        unsafe {
+            self.vk_device
+                .get_semaphore_counter_value(self.timeline_semaphore)
+                .map_err(|err| InteropError::Vulkan(format!("get_semaphore_counter_value: {err}")))
+        }
+    }
+
+    /// Block the calling thread until the timeline reaches `value`.
+    /// `timeout_ns` is the per-Vulkan-spec nanosecond timeout
+    /// (`u64::MAX` = wait forever).
+    pub fn wait_host(&self, value: u64, timeout_ns: u64) -> Result<(), InteropError> {
+        let semaphores = [self.timeline_semaphore];
+        let values = [value];
+        let info = vk::SemaphoreWaitInfo::default()
+            .flags(vk::SemaphoreWaitFlags::empty())
+            .semaphores(&semaphores)
+            .values(&values);
+        unsafe {
+            self.vk_device
+                .wait_semaphores(&info, timeout_ns)
+                .map_err(|err| InteropError::Vulkan(format!("wait_semaphores({value}): {err}")))?;
+        }
+        Ok(())
+    }
+
+    /// Export the semaphore as an OPAQUE_FD for cross-process /
+    /// external-driver consumers. Each call duplicates the fd; the
+    /// caller owns the returned [`OwnedFd`].
+    pub fn export_fd(&self) -> Result<OwnedFd, InteropError> {
+        let info = vk::SemaphoreGetFdInfoKHR::default()
+            .semaphore(self.timeline_semaphore)
+            .handle_type(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD);
+        let raw_fd = unsafe {
+            self.external_semaphore_fd
+                .get_semaphore_fd(&info)
+                .map_err(|err| InteropError::Vulkan(format!("get_semaphore_fd: {err}")))?
+        };
+        // SAFETY: ash returned a fresh fd we own; wrap into OwnedFd so
+        // the caller gets RAII close.
+        Ok(unsafe { OwnedFd::from_raw_fd(raw_fd) })
+    }
+}
+
+impl Drop for VulkanTimelineSemaphoreSynchronizer {
+    fn drop(&mut self) {
+        unsafe { self.vk_device.destroy_semaphore(self.timeline_semaphore, None) };
     }
 }
 
