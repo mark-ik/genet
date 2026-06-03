@@ -19,6 +19,8 @@ mod smoke_netrender;
 mod smoke_webgl;
 #[cfg(feature = "windows-present")]
 mod smoke_windows;
+#[cfg(feature = "linux-present")]
+mod smoke_wayland;
 
 pub use profile::{DesktopHostProfile, WindowingMode};
 #[cfg(feature = "macos-present")]
@@ -33,5 +35,9 @@ pub use smoke_webgl::{WebGlWgpuSmokeOutcome, run_webgl_wgpu_smoke};
 #[cfg(feature = "windows-present")]
 pub use smoke_windows::{
     WindowsDxgiPresentSmokeConfig, WindowsDxgiPresentSmokeOutcome, run_windows_dxgi_present_smoke,
+};
+#[cfg(feature = "linux-present")]
+pub use smoke_wayland::{
+    run_wayland_subsurface_present_smoke, WaylandPresentSmokeConfig, WaylandPresentSmokeOutcome,
 };
 pub use static_viewer::{StaticViewerConfig, StaticViewerOutcome, run_static_viewer};

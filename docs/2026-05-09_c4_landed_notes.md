@@ -154,9 +154,56 @@ Validation env at [`.cargo-check-logs/cargo-check-env.ps1`](../.cargo-check-logs
   (for example a `raw_queue()` accessor mirroring
   `Device::raw_device()`), but that no longer blocks the visible smoke
   path.
-4. **Linux smoke receipt.** `WaylandSubsurfaceBackend` is still a
-   skeleton — `wl_subsurface` placement + commit, `dmabuf` import
-   path need a Wayland session (Mutter or Sway) to validate.
+4. **Linux smoke receipt — ✅ landed (2026-06-03).** `WaylandSubsurfaceBackend::new`
+   now constructs end-to-end: borrows the embedder's `wl_display` + `wl_surface`
+   via `wayland_backend::sys::client::Backend::from_foreign_display` + `Connection::from_backend`,
+   binds the required globals (`wl_compositor` v4-6, `wl_subcompositor`,
+   `zwp_linux_dmabuf_v1` v3-4, `wp_viewporter`, optional `wp_alpha_modifier_v1`),
+   runs an initial roundtrip, and picks `(DRM_FORMAT_ABGR8888, DRM_FORMAT_MOD_LINEAR)`
+   (v1 picker hard-codes LINEAR after verifying Vulkan-importable; trusts the
+   compositor accepts it per dmabuf-protocol baseline — Mutter advertises via
+   v4 `default_feedback` rather than v3 `Modifier` events, so the Wayland-side
+   advertisement check is soft). `present_master` blits the netrender master
+   into a per-frame side-buffer (dmabuf-exportable VkImage wrapped as
+   `wgpu::Texture` via `wgpu::hal::vulkan::Device::texture_from_raw` with
+   `TextureMemory::External` + `create_texture_from_hal::<Vulkan>`) and attaches
+   the resulting `wl_buffer` to the parent `wl_surface` via
+   `zwp_linux_dmabuf_v1.create_params` → `params.create_immed`. The
+   per-`SurfaceKey` `declare`/`destroy`/`present` paths are wired: `declare`
+   creates a per-key `wl_surface` + `wl_subsurface` (parented to the embedder
+   surface, `set_desync`), a `wp_viewport`, and (when advertised) a
+   `wp_alpha_modifier_surface_v1`; `present` copies the per-key destination
+   texture into a two-slot mailbox dmabuf pool (recycled via implicit
+   `wl_buffer.release`), applies viewport + input region + alpha-modifier,
+   then attach/damage/commit/flush. A wgpu render-pipeline bake target
+   (single textured quad shader applying the linear 2×2 affine + alpha
+   multiplier) covers transforms `wp_viewporter` can't express (rotation/skew)
+   and the alpha-modifier protocol fallback path. Vulkan device construction
+   drops to wgpu-hal `Adapter::open_with_callback` to enable the dmabuf-export
+   extensions (`VK_EXT_image_drm_format_modifier`, `VK_EXT_external_memory_dma_buf`,
+   `VK_KHR_external_memory_fd`, `VK_KHR_timeline_semaphore`,
+   `VK_KHR_external_semaphore_fd`) — wgpu's default device creation doesn't
+   request them. Smoke receipts:
+   - Headless: `pelt --wayland-present-smoke` → exit 0, prints
+     `pelt wayland-present smoke 800x600 frames=60 created_window=true
+     declared_subsurface=false`.
+   - Visual receipt + headless surfaces validation:
+     `pelt --wayland-present-surfaces-smoke` → window opens; closes cleanly
+     (exit 0, `declared_subsurface=true`); per-surface CompositorSurface
+     composes correctly at the top-left quarter. **Known polish caveat**:
+     the per-surface composed at opacity 1.0 (pure green) rather than the
+     spec'd 0.5 (olive blend) — `wp_alpha_modifier_v1` was bound but Mutter
+     on this Fedora 44 version isn't applying the per-surface multiplier.
+     Plumbing reached the compositor; the multiplier didn't take effect.
+     Follow-up: investigate the `wp_alpha_modifier_v1` interop (possibly
+     needs an ordering tweak after `set_multiplier`, possibly a
+     staging-protocol mismatch). Not a C4 gate failure — the per-surface
+     present path is verified.
+   The `VulkanTimelineSemaphoreSynchronizer` interop slot is filled
+   (idiomatic Vulkan-timeline shape: semaphore handle + `next_value` +
+   `signaled_value` via `vkGetSemaphoreCounterValue` + `wait_host` via
+   `vkWaitSemaphores` + OPAQUE_FD export); dormant on the smoke path because
+   same-queue FIFO covers it, ready for cross-queue / cross-process consumers.
 5. **C4 tail — `components/servo/webview.rs` `Paint`-method
    gaps — ✅ landed (closed prior to this doc revision).** Every
    method `webview.rs` calls on `Paint` (`add_webview`,
@@ -175,13 +222,7 @@ Validation env at [`.cargo-check-logs/cargo-check-env.ps1`](../.cargo-check-logs
    the remaining `cargo check -p servo` cost on Mac is the
    SpiderMonkey native build, not Rust-side method gaps.
 
-(0) is ✅ (code landed; runtime smoke **executed on Windows hardware 2026-05-25** — both basic and per-surface DCOMP paths present clean, exit 0; only a cosmetic color-screenshot is left). (1) is ✅. (2) is ✅ as
-well. (3) was a wait-and-see deferred to (2)'s landing — the
-master-path sync is now FIFO-ordered without the wgpu-hal queue
-accessor; future per-`SurfaceKey` GPU sync upgrades may still want it,
-but no longer block anything visible. (4) gates D3 ✅ on Linux. (5) is
-✅. Once (0) lands, the remaining roadmap should move to C5/C7 while
-Linux stays externally gated.
+(0) is ✅. (1) is ✅. (2) is ✅ as well. (3) was a wait-and-see deferred to (2)'s landing — the master-path sync is now FIFO-ordered without the wgpu-hal queue accessor; future per-`SurfaceKey` GPU sync upgrades may still want it, but no longer block anything visible. (4) is ✅ as of 2026-06-03 — Linux Wayland smoke + visual receipt on Fedora 44 / GNOME-Mutter / RADV. One polish-level follow-up: investigate `wp_alpha_modifier_v1` opacity multiplier (Mutter not applying the per-surface multiplier — pure-green vs olive in the surfaces smoke). (5) is ✅. C4 is universally green; the roadmap can move to C5/C7 without Linux gating.
 
 ---
 

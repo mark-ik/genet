@@ -183,8 +183,14 @@ mod windows_dx12;
 #[cfg(target_os = "windows")]
 pub use windows_dx12::Dx12FenceSynchronizer;
 
-// Vulkan / Metal counterparts will land alongside their respective
-// `OsCompositorBackend` impls. No trait shape here — backends call
+#[cfg(target_os = "linux")]
+mod vulkan_timeline;
+
+#[cfg(target_os = "linux")]
+pub use vulkan_timeline::VulkanTimelineSemaphoreSynchronizer;
+
+// macOS counterpart will land alongside its respective
+// `OsCompositorBackend` impl. No trait shape here — backends call
 // into per-platform synchronizers via inherent methods, so the
 // import-direction-coupled `InteropSynchronizer` trait the upstream
 // iterations carried doesn't apply. See the lineage brief at

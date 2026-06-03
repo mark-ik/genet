@@ -23,6 +23,10 @@ pub(crate) fn main() {
     let mut macos_present_smoke = false;
     #[cfg(feature = "macos-present")]
     let mut macos_present_surfaces_smoke = false;
+    #[cfg(feature = "linux-present")]
+    let mut wayland_present_smoke = false;
+    #[cfg(feature = "linux-present")]
+    let mut wayland_present_surfaces_smoke = false;
 
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -66,6 +70,14 @@ pub(crate) fn main() {
             #[cfg(feature = "macos-present")]
             "--macos-present-surfaces-smoke" => {
                 macos_present_surfaces_smoke = true;
+            },
+            #[cfg(feature = "linux-present")]
+            "--wayland-present-smoke" => {
+                wayland_present_smoke = true;
+            },
+            #[cfg(feature = "linux-present")]
+            "--wayland-present-surfaces-smoke" => {
+                wayland_present_surfaces_smoke = true;
             },
             value if value.starts_with('-') => {
                 eprintln!("unsupported script-free viewer option: {value}");
@@ -126,6 +138,18 @@ pub(crate) fn main() {
     #[cfg(feature = "macos-present")]
     if macos_present_surfaces_smoke {
         run_optional_macos_present_surfaces_smoke();
+        return;
+    }
+
+    #[cfg(feature = "linux-present")]
+    if wayland_present_smoke {
+        run_optional_wayland_present_smoke();
+        return;
+    }
+
+    #[cfg(feature = "linux-present")]
+    if wayland_present_surfaces_smoke {
+        run_optional_wayland_present_surfaces_smoke();
         return;
     }
 
@@ -269,6 +293,58 @@ fn run_optional_macos_present_surfaces_smoke() {
     }
 }
 
+#[cfg(feature = "linux-present")]
+fn run_optional_wayland_present_smoke() {
+    let config = pelt_desktop::WaylandPresentSmokeConfig::default();
+    match pelt_desktop::run_wayland_subsurface_present_smoke(config) {
+        Ok(outcome) => {
+            println!(
+                "pelt wayland-present smoke {}x{} frames={} created_window={} declared_subsurface={}",
+                outcome.width,
+                outcome.height,
+                outcome.frames_presented,
+                outcome.created_window,
+                outcome.declared_subsurface
+            );
+        },
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        },
+    }
+}
+
+#[cfg(feature = "linux-present")]
+fn run_optional_wayland_present_surfaces_smoke() {
+    // Same shape as the basic smoke but flips `declare_subsurface`
+    // on and runs frames=0 (held until window close) so the per-
+    // surface composition is visible long enough for the visual
+    // receipt: red master + green declared-quarter at 50% opacity
+    // producing olive blend where they compose.
+    let config = pelt_desktop::WaylandPresentSmokeConfig {
+        title: "pelt — wayland-subsurface present smoke (with declared surface)".into(),
+        declare_subsurface: true,
+        frames: 0,
+        ..pelt_desktop::WaylandPresentSmokeConfig::default()
+    };
+    match pelt_desktop::run_wayland_subsurface_present_smoke(config) {
+        Ok(outcome) => {
+            println!(
+                "pelt wayland-present surfaces smoke {}x{} frames={} created_window={} declared_subsurface={}",
+                outcome.width,
+                outcome.height,
+                outcome.frames_presented,
+                outcome.created_window,
+                outcome.declared_subsurface
+            );
+        },
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        },
+    }
+}
+
 fn parse_engine_profile(value: &str) -> EngineProfile {
     match value.parse() {
         Ok(profile) => profile,
@@ -296,6 +372,8 @@ Options:
     --windows-present-surfaces-smoke   (same as --windows-present-smoke + a declared compositor surface)
     --macos-present-smoke              (requires --features macos-present, target_vendor = \"apple\")
     --macos-present-surfaces-smoke     (same as --macos-present-smoke + a declared compositor surface)
+    --wayland-present-smoke            (requires --features linux-present, target_os = \"linux\")
+    --wayland-present-surfaces-smoke   (same as --wayland-present-smoke + a declared compositor surface)
     --version
     -h, --help"
     );

@@ -39,6 +39,11 @@ windows-present = ["viewer-engine", "pelt-desktop/windows-present"]
 # `cfg(target_vendor = "apple")` gated so the feature still builds
 # on non-Apple hosts.
 macos-present = ["viewer-engine", "pelt-desktop/macos-present"]
+# C4 headed-presentation smoke on Linux. Pulls serval's
+# `WaylandSubsurfaceBackend` in through `pelt-desktop`. Inner code is
+# `cfg(target_os = "linux")` gated so the feature still builds
+# on non-Linux hosts.
+linux-present = ["viewer-engine", "pelt-desktop/linux-present"]
 # Route remote http(s) resources (images, linked stylesheets) through
 # netfetcher. Off by default so the binary stays free of the async network
 # stack unless explicitly built with it.
