@@ -84,3 +84,10 @@ objc2-metal = { workspace = true, features = ["MTLDevice", "MTLTexture", "MTLAll
 # `cfg(target_vendor = "apple")` block above because AppKit is a
 # Mac-only framework; iOS / iPadOS go through UIKit instead.
 objc2-app-kit = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# C4 Wayland compositor backend (compositor_wayland/). ash version matches
+# wgpu-hal 29's lockfile-pinned 0.38.0+1.3.281 so the types line up.
+ash = "0.38"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }

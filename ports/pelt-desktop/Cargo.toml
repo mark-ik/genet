@@ -39,6 +39,19 @@ macos-present = [
     "dep:raw-window-handle",
     "dep:pollster",
 ]
+# Headed presentation through serval's `WaylandSubsurfaceBackend`. Drives
+# the netrender renderer through a winit Wayland window with per-`SurfaceKey`
+# subsurfaces. Linux-only at runtime; the feature gate is platform-agnostic so
+# `cargo check --features linux-present` works on non-Linux hosts (the inner
+# code is `cfg(target_os = "linux")` gated). The wl_display + wl_surface
+# extraction lives in `paint::compositor_factory`; pelt-desktop calls
+# `default_compositor_for_window` and doesn't need its own wayland-client deps.
+linux-present = [
+    "netrender",
+    "dep:paint",
+    "dep:raw-window-handle",
+    "dep:pollster",
+]
 
 [dependencies]
 netrender = { workspace = true, optional = true }
