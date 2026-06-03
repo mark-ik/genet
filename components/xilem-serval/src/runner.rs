@@ -78,6 +78,14 @@ where
     /// cleared by [`dispatch_pointer_up`](Self::dispatch_pointer_up). So a drag
     /// keeps reaching the element it started on even if the cursor leaves it.
     pointer_capture: Option<NodeId>,
+    /// Whether the most recent [`dispatch_click`](Self::dispatch_click) /
+    /// [`dispatch_key`](Self::dispatch_key) had its default action prevented (a
+    /// handler called `prevent_default` on the shared [`Propagation`](crate::Propagation)
+    /// cell). Read via [`default_prevented`](Self::default_prevented) after
+    /// dispatch to gate the host's own default action (navigate, caret move,
+    /// form activation) — the host-consumption end of the converged
+    /// native+JS cancellation contract.
+    last_default_prevented: bool,
     phantom: PhantomData<fn() -> Action>,
 }
 
@@ -113,6 +121,7 @@ where
             root,
             focus: None,
             pointer_capture: None,
+            last_default_prevented: false,
             phantom: PhantomData,
         }
     }
@@ -282,7 +291,8 @@ where
 
         if paths.is_empty() {
             // No click handler anywhere on the chain: nothing routed, no rebuild.
-            // Focus was still updated above.
+            // Focus was still updated above; nothing could prevent the default.
+            self.last_default_prevented = event.prop.default_prevented();
             return Vec::new();
         }
 
@@ -334,11 +344,27 @@ where
             }
         }
 
+        // Record whether a handler prevented the default action — the host reads
+        // this (default_prevented()) to gate its own default (the cancellation
+        // seam's consumption point).
+        self.last_default_prevented = event.prop.default_prevented();
+
         // 4. Rebuild so the handler's state mutation reaches the DOM — the same
         //    tail `update` runs.
         self.rebuild();
 
         actions
+    }
+
+    /// Whether the most recent [`dispatch_click`](Self::dispatch_click) or
+    /// [`dispatch_key`](Self::dispatch_key) had its default action prevented by a
+    /// handler (`prevent_default` on the event). The host calls this right after
+    /// dispatch to decide whether to run its own default action — navigation,
+    /// caret movement, form activation, drag start. This is the native side of
+    /// the converged cancellation contract (the JS side returns it from
+    /// `dispatchEvent`); a handler that does not prevent leaves it `false`.
+    pub fn default_prevented(&self) -> bool {
+        self.last_default_prevented
     }
 
     /// The currently focused node, if any.
@@ -415,6 +441,9 @@ where
     /// immutable `ctx`/`dom` borrows release before the `&mut self` message +
     /// rebuild borrows.
     pub fn dispatch_key(&mut self, event: KeyEvent) -> Vec<Action> {
+        // Reset the cancellation flag; the routing tail records the real value, the
+        // early returns (Tab traversal, no focus, no handler) leave it false.
+        self.last_default_prevented = false;
         // Tab / Shift+Tab is focus traversal — a runner-level default, because a
         // document engine has no built-in tab order. Intercept it before routing
         // (so it works even with nothing focused) and move focus across the
@@ -489,6 +518,9 @@ where
                 }
             }
         }
+
+        // Record whether a handler prevented the default (host gates on it).
+        self.last_default_prevented = event.prop.default_prevented();
 
         // 4. Rebuild so the handler's state mutation reaches the DOM.
         self.rebuild();
