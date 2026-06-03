@@ -41,6 +41,10 @@
 #![allow(unsafe_code)]
 #![allow(dead_code)]
 
+mod errors;
+
+pub use errors::BackendError;
+
 use rustc_hash::FxHashMap;
 use wgpu::Texture;
 
@@ -190,34 +194,3 @@ impl OsCompositorBackend for WaylandSubsurfaceBackend {
         self.surfaces.remove(&key);
     }
 }
-
-/// Errors raised by [`WaylandSubsurfaceBackend::new`] /
-/// [`WaylandSubsurfaceBackend::present_master`].
-#[derive(Debug)]
-pub enum BackendError {
-    /// The supplied host wgpu context is not running on Vulkan.
-    WrongBackend(InteropBackend),
-    /// The provided wl_display pointer was null.
-    NullDisplay,
-    /// The provided wl_surface pointer was null.
-    NullSurface,
-    /// A path that hasn't been wired yet — see the named area.
-    Unwired(&'static str),
-}
-
-impl std::fmt::Display for BackendError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::WrongBackend(b) => {
-                write!(f, "WaylandSubsurfaceBackend requires Vulkan, found {b:?}")
-            },
-            Self::NullDisplay => f.write_str("WaylandSubsurfaceBackend: null wl_display"),
-            Self::NullSurface => f.write_str("WaylandSubsurfaceBackend: null wl_surface"),
-            Self::Unwired(area) => {
-                write!(f, "WaylandSubsurfaceBackend: not yet wired: {area}")
-            },
-        }
-    }
-}
-
-impl std::error::Error for BackendError {}
