@@ -57,16 +57,151 @@ impl ExportableImage {
     /// Allocate an `R8G8B8A8_UNORM` image of `width × height` with the
     /// given DRM modifier, export the dmabuf fd, and wrap the VkImage
     /// back into a `wgpu::Texture`.
-    ///
-    /// Real impl lands in Task 4.2.
     pub fn new(
         host: &HostWgpuContext,
         width: u32,
         height: u32,
         drm_modifier: u64,
     ) -> Result<Self, BackendError> {
-        let _ = (host, width, height, drm_modifier);
-        Err(BackendError::Unwired("ExportableImage::new"))
+        let (vk_device, vk_image, vk_memory, dmabuf_fd, planes) = unsafe {
+            let hal_device = host
+                .device
+                .as_hal::<wgpu::wgc::api::Vulkan>()
+                .ok_or_else(|| BackendError::Dmabuf("wgpu-hal Vulkan device unavailable".into()))?;
+            let vk_device = hal_device.raw_device().clone();
+            let vk_instance = hal_device.shared_instance().raw_instance().clone();
+            let vk_phys = hal_device.raw_physical_device();
+            drop(hal_device);
+
+            let external_memory_fd =
+                ash::khr::external_memory_fd::Device::new(&vk_instance, &vk_device);
+            let image_drm_modifier =
+                ash::ext::image_drm_format_modifier::Device::new(&vk_instance, &vk_device);
+
+            // ---- VkImage with the dmabuf + modifier chain ----------
+            let modifier_list = [drm_modifier];
+            let mut modifier_info = vk::ImageDrmFormatModifierListCreateInfoEXT::default()
+                .drm_format_modifiers(&modifier_list);
+            let mut external_info = vk::ExternalMemoryImageCreateInfo::default()
+                .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+            let image_create_info = vk::ImageCreateInfo::default()
+                .image_type(vk::ImageType::TYPE_2D)
+                .format(vk::Format::R8G8B8A8_UNORM)
+                .extent(vk::Extent3D {
+                    width,
+                    height,
+                    depth: 1,
+                })
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+                .usage(
+                    vk::ImageUsageFlags::TRANSFER_DST
+                        | vk::ImageUsageFlags::SAMPLED
+                        | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                )
+                .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                .initial_layout(vk::ImageLayout::UNDEFINED)
+                .push_next(&mut external_info)
+                .push_next(&mut modifier_info);
+
+            let vk_image = vk_device
+                .create_image(&image_create_info, None)
+                .map_err(|e| BackendError::Dmabuf(format!("create_image: {e}")))?;
+
+            // ---- Memory allocation with export hint ----------------
+            let mem_req = vk_device.get_image_memory_requirements(vk_image);
+            let mem_props = vk_instance.get_physical_device_memory_properties(vk_phys);
+            let mem_type_index = pick_memory_type(
+                &mem_props,
+                mem_req.memory_type_bits,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )
+            .ok_or_else(|| {
+                vk_device.destroy_image(vk_image, None);
+                BackendError::Dmabuf("no compatible memory type".into())
+            })?;
+
+            let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().image(vk_image);
+            let mut export_info = vk::ExportMemoryAllocateInfo::default()
+                .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+            let alloc_info = vk::MemoryAllocateInfo::default()
+                .allocation_size(mem_req.size)
+                .memory_type_index(mem_type_index)
+                .push_next(&mut dedicated)
+                .push_next(&mut export_info);
+
+            let vk_memory = vk_device.allocate_memory(&alloc_info, None).map_err(|e| {
+                vk_device.destroy_image(vk_image, None);
+                BackendError::Dmabuf(format!("allocate_memory: {e}"))
+            })?;
+
+            vk_device
+                .bind_image_memory(vk_image, vk_memory, 0)
+                .map_err(|e| {
+                    vk_device.free_memory(vk_memory, None);
+                    vk_device.destroy_image(vk_image, None);
+                    BackendError::Dmabuf(format!("bind_image_memory: {e}"))
+                })?;
+
+            // ---- Export the dmabuf fd ------------------------------
+            let get_fd_info = vk::MemoryGetFdInfoKHR::default()
+                .memory(vk_memory)
+                .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+            let raw_fd = external_memory_fd.get_memory_fd(&get_fd_info).map_err(|e| {
+                vk_device.free_memory(vk_memory, None);
+                vk_device.destroy_image(vk_image, None);
+                BackendError::Dmabuf(format!("get_memory_fd: {e}"))
+            })?;
+            use std::os::fd::FromRawFd;
+            let dmabuf_fd = OwnedFd::from_raw_fd(raw_fd);
+
+            // ---- Plane layout via the modifier-properties ext ------
+            let mut mod_props = vk::ImageDrmFormatModifierPropertiesEXT::default();
+            image_drm_modifier
+                .get_image_drm_format_modifier_properties(vk_image, &mut mod_props)
+                .map_err(|e| {
+                    vk_device.free_memory(vk_memory, None);
+                    vk_device.destroy_image(vk_image, None);
+                    BackendError::Dmabuf(format!(
+                        "get_image_drm_format_modifier_properties: {e}"
+                    ))
+                })?;
+
+            // For LINEAR-only v1, plane count is 1. Multi-plane modifiers
+            // (when the picker promotes to tile-preferred) will need a
+            // plane_count query — left as a Phase-7 follow-up.
+            let aspect = vk::ImageAspectFlags::MEMORY_PLANE_0_EXT;
+            let subresource = vk::ImageSubresource::default()
+                .aspect_mask(aspect)
+                .mip_level(0)
+                .array_layer(0);
+            let layout = vk_device.get_image_subresource_layout(vk_image, subresource);
+            let planes = SmallVec::from_slice(&[PlaneLayout {
+                offset: layout.offset,
+                pitch: layout.row_pitch,
+            }]);
+
+            (vk_device, vk_image, vk_memory, dmabuf_fd, planes)
+        };
+
+        // ---- Wrap as wgpu::Texture via wgpu-hal --------------------
+        let wgpu_texture =
+            wrap_vk_image_as_wgpu(host, &vk_device, vk_image, vk_memory, width, height)?;
+
+        Ok(Self {
+            vk_device,
+            vk_image: vk::Image::null(), // ownership moved to wgpu wrapper's drop callback
+            vk_memory: vk::DeviceMemory::null(),
+            dmabuf_fd,
+            width,
+            height,
+            drm_format: DRM_FORMAT_ABGR8888,
+            drm_modifier,
+            planes,
+            wgpu_texture,
+        })
     }
 }
 
@@ -85,4 +220,92 @@ impl Drop for ExportableImage {
             }
         }
     }
+}
+
+fn pick_memory_type(
+    props: &vk::PhysicalDeviceMemoryProperties,
+    type_bits: u32,
+    required: vk::MemoryPropertyFlags,
+) -> Option<u32> {
+    for i in 0..props.memory_type_count {
+        let suitable = type_bits & (1 << i) != 0;
+        let flags = props.memory_types[i as usize].property_flags;
+        if suitable && flags.contains(required) {
+            return Some(i);
+        }
+    }
+    None
+}
+
+fn wrap_vk_image_as_wgpu(
+    host: &HostWgpuContext,
+    vk_device: &ash::Device,
+    vk_image: vk::Image,
+    vk_memory: vk::DeviceMemory,
+    width: u32,
+    height: u32,
+) -> Result<wgpu::Texture, BackendError> {
+    // Drop callback: wgpu invokes this when the wgpu::Texture's last
+    // ref drops. Destroys the image, frees the memory.
+    let device_for_drop = vk_device.clone();
+    let drop_image = vk_image;
+    let drop_memory = vk_memory;
+    let drop_callback: wgpu::hal::DropCallback = Box::new(move || unsafe {
+        device_for_drop.destroy_image(drop_image, None);
+        device_for_drop.free_memory(drop_memory, None);
+    });
+
+    let hal_descriptor = wgpu::hal::TextureDescriptor {
+        label: Some("ExportableImage dmabuf"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUses::COPY_DST
+            | wgpu::TextureUses::RESOURCE
+            | wgpu::TextureUses::COLOR_TARGET,
+        memory_flags: wgpu::hal::MemoryFlags::empty(),
+        view_formats: vec![],
+    };
+
+    let wgpu_texture = unsafe {
+        let hal_device = host
+            .device
+            .as_hal::<wgpu::wgc::api::Vulkan>()
+            .ok_or_else(|| BackendError::Dmabuf("wgpu-hal Vulkan device unavailable".into()))?;
+        let hal_texture = hal_device.texture_from_raw(
+            vk_image,
+            &hal_descriptor,
+            Some(drop_callback),
+            wgpu::hal::vulkan::TextureMemory::External,
+        );
+        drop(hal_device);
+
+        host.device.create_texture_from_hal::<wgpu::wgc::api::Vulkan>(
+            hal_texture,
+            &wgpu::TextureDescriptor {
+                label: Some("ExportableImage dmabuf"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            },
+        )
+    };
+
+    Ok(wgpu_texture)
 }
