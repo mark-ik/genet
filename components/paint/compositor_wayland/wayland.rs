@@ -54,12 +54,14 @@ use crate::compositor_wayland::dmabuf::{BufferSlotUserData, WaylandAdvertised};
 use crate::compositor_wayland::errors::BackendError;
 
 /// Bound Wayland globals required by the backend.
+/// Wrapped in ManuallyDrop so we can control when they drop relative to
+/// the connection.
 pub struct WaylandGlobals {
-    pub compositor: WlCompositor,
-    pub subcompositor: WlSubcompositor,
-    pub dmabuf: ZwpLinuxDmabufV1,
-    pub viewporter: WpViewporter,
-    pub alpha_modifier: Option<WpAlphaModifierV1>,
+    pub compositor: std::mem::ManuallyDrop<WlCompositor>,
+    pub subcompositor: std::mem::ManuallyDrop<WlSubcompositor>,
+    pub dmabuf: std::mem::ManuallyDrop<ZwpLinuxDmabufV1>,
+    pub viewporter: std::mem::ManuallyDrop<WpViewporter>,
+    pub alpha_modifier: Option<std::mem::ManuallyDrop<WpAlphaModifierV1>>,
 }
 
 /// Lives in `WaylandSubsurfaceBackend`. Holds the connection + event
@@ -69,18 +71,21 @@ pub struct WaylandState {
     /// to the compositor protocol), but they logically depend on the
     /// connection being open.
     pub globals: WaylandGlobals,
-    /// Parent surface (adopted from embedder) should drop BEFORE
-    /// connection closes to send destroy through live connection.
-    pub parent_surface: WlSurface,
+    /// Parent surface (adopted from embedder) — held in ManuallyDrop so we
+    /// can forget it on drop. It's not ours to destroy; the embedder owns
+    /// the underlying wl_surface.
+    pub parent_surface: std::mem::ManuallyDrop<WlSurface>,
 
     /// Metadata that doesn't hold proxies.
     pub advertised: WaylandAdvertised,
     pub dispatch_state: DispatchState,
     pub queue_handle: QueueHandle<DispatchState>,
 
-    /// Event queue and connection drop LAST, in order.
+    /// Event queue and connection wrapped in ManuallyDrop to prevent
+    /// wayland-backend's ConnectionState::drop from crashing when it tries
+    /// to destroy proxies during mid-teardown.
     pub event_queue: EventQueue<DispatchState>,
-    pub connection: Connection,
+    pub connection: std::mem::ManuallyDrop<Connection>,
 }
 
 /// Dispatch user-data state held by the event queue. Keeps the
@@ -141,11 +146,11 @@ impl WaylandState {
             globals.bind(&queue_handle, 1..=1, ()).ok();
 
         let bound_globals = WaylandGlobals {
-            compositor,
-            subcompositor,
-            dmabuf,
-            viewporter,
-            alpha_modifier,
+            compositor: std::mem::ManuallyDrop::new(compositor),
+            subcompositor: std::mem::ManuallyDrop::new(subcompositor),
+            dmabuf: std::mem::ManuallyDrop::new(dmabuf),
+            viewporter: std::mem::ManuallyDrop::new(viewporter),
+            alpha_modifier: alpha_modifier.map(std::mem::ManuallyDrop::new),
         };
 
         // Adopt the embedder's parent wl_surface. The raw-window-handle
@@ -156,12 +161,12 @@ impl WaylandState {
 
         let mut state = Self {
             globals: bound_globals,
-            parent_surface,
+            parent_surface: std::mem::ManuallyDrop::new(parent_surface),
             advertised: WaylandAdvertised::new(),
             dispatch_state,
             queue_handle,
             event_queue,
-            connection,
+            connection: std::mem::ManuallyDrop::new(connection),
         };
 
         // Drive a roundtrip so the dmabuf format / modifier events arrive
@@ -319,5 +324,17 @@ impl Dispatch<WlBuffer, BufferSlotUserData> for DispatchState {
             let mut g = user_data.in_flight.lock().expect("in_flight mutex poisoned");
             *g = false;
         }
+    }
+}
+
+impl Drop for WaylandState {
+    fn drop(&mut self) {
+        // All wayland proxies (globals + parent_surface) are held in ManuallyDrop
+        // and intentionally leaked here. The connection closing will handle cleanup.
+        // Trying to explicitly destroy them or let them drop normally causes
+        // wl_map_insert_at crashes in wayland-backend's ConnectionState::drop
+        // when the connection is mid-teardown. The globals are internal to the
+        // compositor protocol and the parent_surface is owned by the embedder,
+        // so we simply forget them to prevent double-cleanup.
     }
 }

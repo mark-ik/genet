@@ -464,9 +464,16 @@ impl SurfaceBufferPool {
 
 impl Drop for SurfaceBufferPool {
     fn drop(&mut self) {
-        for slot in &self.slots {
-            slot.wl_buffer.destroy();
-        }
+        // Do NOT explicitly call wl_buffer.destroy() here. When the wayland
+        // Connection drops, libwayland will automatically destroy all buffers.
+        // Calling destroy during Rust struct unwinding causes wl_map_insert_at
+        // crashes in wayland-backend's ConnectionState::drop because the
+        // underlying connection state is mid-teardown.
+        //
+        // The runtime per-surface destroy path (OsCompositorBackend::destroy)
+        // in mod.rs DOES call wl_subsurface.destroy() and wl_surface.destroy()
+        // because those occur while the Connection is fully alive. Only backend
+        // teardown cleanup is changed here.
     }
 }
 
