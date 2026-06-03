@@ -60,7 +60,7 @@ mod wayland;
 pub use errors::BackendError;
 
 use std::ffi::c_void;
-use std::os::fd::{AsFd, IntoRawFd};
+use std::os::fd::AsFd;
 use std::sync::{Arc, Mutex};
 
 use rustc_hash::FxHashMap;
@@ -78,7 +78,6 @@ use wayland::WaylandState;
 
 use wayland_client::protocol::wl_subsurface::WlSubsurface;
 use wayland_client::protocol::wl_surface::WlSurface;
-use wayland_client::Proxy;
 
 use wayland_protocols::wp::alpha_modifier::v1::client::wp_alpha_modifier_surface_v1::WpAlphaModifierSurfaceV1;
 use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1;
@@ -586,5 +585,13 @@ impl OsCompositorBackend for WaylandSubsurfaceBackend {
         }
     }
 
-    // destroy inherits the trait default (no-op) until Task 6.5 wires it.
+    fn destroy(&mut self, key: SurfaceKey) {
+        if let Some(surface) = self.surfaces.remove(&key) {
+            surface.wl_subsurface.destroy();
+            surface.wl_surface.destroy();
+            // viewport + alpha_modifier proxies destroy on drop.
+            // swap_pool + bake drop via their own Drop impls.
+            drop(surface);
+        }
+    }
 }
