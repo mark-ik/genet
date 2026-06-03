@@ -39,6 +39,7 @@ pub mod error;
 pub mod lex;
 pub mod lower;
 pub mod parse;
+pub mod reflect;
 pub mod span;
 pub mod token;
 pub mod validate;

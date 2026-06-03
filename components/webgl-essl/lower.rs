@@ -530,18 +530,40 @@ fn build_spirv(
         type_sampler,
     );
 
+    // Detect ESSL 3.00 fragment shaders that declare their own
+    // `out` outputs. In that mode the `gl_FragColor` builtin is
+    // not used (the spec doesn't expose it) and the user's
+    // `out` decls fill `@location(0)..` instead, so allocating
+    // `gl_FragColor` would collide on Location 0.
+    let has_user_fragment_outs = stage == ShaderStage::Fragment
+        && tu.decls.iter().any(|d| {
+            matches!(
+                d,
+                ExternalDecl::Global(g) if g.storage == StorageQualifier::Out
+            )
+        });
+
     // Primary output variable (gl_FragColor / gl_Position; always
-    // vec4 in the cases this module handles).
-    let ptr_output = b.type_pointer(None, StorageClass::Output, type_vec4);
-    let primary_output = b.variable(ptr_output, None, StorageClass::Output, None);
-    match stage {
-        ShaderStage::Vertex => {
-            b.decorate(primary_output, Decoration::BuiltIn, [Operand::BuiltIn(BuiltIn::Position)]);
-        },
-        ShaderStage::Fragment => {
-            b.decorate(primary_output, Decoration::Location, [Operand::LiteralBit32(0)]);
-        },
-    }
+    // vec4 in the cases this module handles). For ESSL 3.00
+    // fragments with user-declared `out` outputs the primary is
+    // skipped entirely.
+    let primary_output: Option<Word> = if stage == ShaderStage::Vertex
+        || !has_user_fragment_outs
+    {
+        let ptr_output = b.type_pointer(None, StorageClass::Output, type_vec4);
+        let var = b.variable(ptr_output, None, StorageClass::Output, None);
+        match stage {
+            ShaderStage::Vertex => {
+                b.decorate(var, Decoration::BuiltIn, [Operand::BuiltIn(BuiltIn::Position)]);
+            },
+            ShaderStage::Fragment => {
+                b.decorate(var, Decoration::Location, [Operand::LiteralBit32(0)]);
+            },
+        }
+        Some(var)
+    } else {
+        None
+    };
 
     let mut ctx = Ctx {
         b,
@@ -657,7 +679,9 @@ fn build_spirv(
         interface.push(s.image_var);
         interface.push(s.sampler_var);
     }
-    interface.push(primary_output);
+    if let Some(p) = primary_output {
+        interface.push(p);
+    }
     ctx.b.entry_point(execution_model, main_fn, "main", interface);
     if stage == ShaderStage::Fragment {
         ctx.b.execution_mode(main_fn, ExecutionMode::OriginUpperLeft, []);
@@ -676,21 +700,22 @@ fn register_varying_outputs(
     type_vec4: Word,
 ) -> HashMap<String, OutputBinding> {
     let mut outputs = HashMap::new();
-    if stage != ShaderStage::Vertex {
-        // Fragment varyings register as inputs; user-defined
-        // fragment outputs are queued (ESSL 3.00).
-        return outputs;
-    }
-    // SPIR-V Output Locations are an independent set from Input
-    // Locations; we count from 0 for the varying outputs. A
-    // matrix is column-split into N separate vec_n outputs at
-    // sequential Locations — naga's WGSL pipeline rejects matrix
-    // I/O variables (`NotIOShareableType`) but accepts the split
-    // vec_n form.
+    // Output storage qualifiers per stage:
+    //   Vertex   stage: `varying` (ESSL 1.00) + `out` (ESSL 3.00).
+    //   Fragment stage: `out` only (ESSL 3.00); `gl_FragColor`
+    //                   is the implicit ESSL 1.00 output and is
+    //                   handled separately as the primary.
     let mut location: u32 = 0;
     for d in &tu.decls {
         let ExternalDecl::Global(g) = d else { continue };
-        if g.storage != StorageQualifier::Varying {
+        let qualifies = match stage {
+            ShaderStage::Vertex => matches!(
+                g.storage,
+                StorageQualifier::Varying | StorageQualifier::Out
+            ),
+            ShaderStage::Fragment => g.storage == StorageQualifier::Out,
+        };
+        if !qualifies {
             continue;
         }
         let (column_type, column_count, kind) = match g.ty.kind {
@@ -721,8 +746,12 @@ fn register_varying_outputs(
 /// `gl_FragColor` resolves to `primary_output` instead of an
 /// undefined identifier.
 struct MainCtx {
-    primary_name: &'static str,
-    primary_output: Word,
+    /// `(name, var)` of the implicit primary output:
+    /// `("gl_Position", var)` for Vertex, `("gl_FragColor", var)`
+    /// for Fragment under ESSL 1.00. `None` when the shader is
+    /// an ESSL 3.00 fragment that declares its own `out`
+    /// variables — assignments then route through `ctx.outputs`.
+    primary: Option<(&'static str, Word)>,
     stage: ShaderStage,
 }
 
@@ -730,14 +759,14 @@ fn lower_main_body(
     ctx: &mut Ctx,
     main: &FunctionDef,
     stage: ShaderStage,
-    primary_output: Word,
+    primary_output: Option<Word>,
 ) -> Result<(), LoweringError> {
     let main_ctx = MainCtx {
-        primary_name: match stage {
-            ShaderStage::Vertex => "gl_Position",
-            ShaderStage::Fragment => "gl_FragColor",
+        primary: match (stage, primary_output) {
+            (ShaderStage::Vertex, Some(v)) => Some(("gl_Position", v)),
+            (ShaderStage::Fragment, Some(v)) => Some(("gl_FragColor", v)),
+            _ => None,
         },
-        primary_output,
         stage,
     };
     // Hoist all locals declared anywhere in the body (including
@@ -964,19 +993,25 @@ fn lower_stmt(
                 return Ok(());
             }
             if let Some(mc) = main_ctx {
-                if target_name == mc.primary_name {
-                    ctx.b
-                        .store(mc.primary_output, value, None, [])
-                        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
-                    return Ok(());
+                if let Some((pname, pvar)) = mc.primary {
+                    if target_name == pname {
+                        ctx.b
+                            .store(pvar, value, None, [])
+                            .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+                        return Ok(());
+                    }
                 }
                 if let Some(out) = ctx.outputs.get(target_name).cloned() {
                     return store_to_output(ctx, &out, target_name, value);
                 }
+                let expected = mc
+                    .primary
+                    .map(|(n, _)| n.to_string())
+                    .unwrap_or_else(|| "<user-declared out>".into());
                 return Err(LoweringError::UnsupportedShape {
                     what: format!(
-                        "main body assigns to `{target_name}`, expected `{}` for {:?}",
-                        mc.primary_name, mc.stage
+                        "main body assigns to `{target_name}`, expected `{expected}` for {:?}",
+                        mc.stage
                     ),
                 });
             }
@@ -2329,12 +2364,14 @@ fn resolve_lhs_target(
         }
     }
     if let Some(mc) = main_ctx {
-        if name == mc.primary_name {
-            return Some(LhsTarget {
-                var: mc.primary_output,
-                kind: TypeKind::Vec4,
-                storage: StorageClass::Output,
-            });
+        if let Some((pname, pvar)) = mc.primary {
+            if name == pname {
+                return Some(LhsTarget {
+                    var: pvar,
+                    kind: TypeKind::Vec4,
+                    storage: StorageClass::Output,
+                });
+            }
         }
     }
     None

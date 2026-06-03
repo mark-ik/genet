@@ -166,3 +166,192 @@ fn integrated_compile_returns_wgsl_for_canonical_pair() {
     assert!(v.contains("@vertex"));
     assert!(f.contains("@fragment"));
 }
+
+// =====================================================================
+// pipeline-layout probe — `reflect()` carries enough info for a
+// consumer to build wgpu BindGroupLayoutEntry rows directly. This
+// exercises the alignment between webgl-essl's `@group(0)
+// @binding(N)` emission and the wgpu layout types webgl-wgpu's
+// pipeline builder already speaks.
+// =====================================================================
+
+use webgl_essl::ast::TypeKind;
+use webgl_essl::reflect::reflect;
+use webgl_essl::parse_source;
+
+/// Translate webgl-essl's [`reflect::ProgramReflection`] into
+/// the `wgpu::BindGroupLayoutEntry` rows a pipeline layout
+/// builder would feed into `wgpu::Device::create_bind_group_layout`.
+///
+/// The mapping is deliberately small:
+/// - Each non-sampler uniform contributes to the single
+///   uniform `Block` struct at `@binding(0)` — represented as
+///   a single `Buffer { Uniform }` entry (since wgpu doesn't
+///   expose per-member binding info; the offset / size are
+///   the consumer's concern).
+/// - Each sampler contributes two entries: a `Texture` at the
+///   image binding, and a `Sampler` at the next binding.
+fn bind_group_layout_from_reflection(
+    r: &webgl_essl::reflect::ProgramReflection,
+    visibility: wgpu::ShaderStages,
+) -> Vec<wgpu::BindGroupLayoutEntry> {
+    let mut entries = Vec::new();
+    if !r.uniforms.is_empty() {
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        });
+    }
+    for s in &r.samplers {
+        let view_dim = match s.kind {
+            TypeKind::Sampler2D => wgpu::TextureViewDimension::D2,
+            TypeKind::SamplerCube => wgpu::TextureViewDimension::Cube,
+            other => panic!("unexpected sampler kind {other:?}"),
+        };
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: s.image_binding,
+            visibility,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: view_dim,
+                multisampled: false,
+            },
+            count: None,
+        });
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: s.sampler_binding,
+            visibility,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        });
+    }
+    entries
+}
+
+#[test]
+fn reflection_translates_to_uniform_block_bind_group_layout_entry() {
+    let src = r#"
+precision mediump float;
+uniform vec4 u_tint;
+uniform float u_amount;
+varying vec3 v_color;
+void main() {
+    gl_FragColor = vec4(v_color, 1.0) * u_tint * u_amount;
+}
+"#;
+    let tu = parse_source(src).unwrap();
+    let r = reflect(&tu, ShaderStage::Fragment);
+    let entries = bind_group_layout_from_reflection(&r, wgpu::ShaderStages::FRAGMENT);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].binding, 0);
+    assert!(matches!(
+        entries[0].ty,
+        wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, .. }
+    ));
+}
+
+#[test]
+fn reflection_translates_to_texture_and_sampler_bind_group_layout_entries() {
+    let src = r#"
+precision mediump float;
+uniform sampler2D u_tex;
+varying vec2 v_uv;
+void main() {
+    gl_FragColor = texture2D(u_tex, v_uv);
+}
+"#;
+    let tu = parse_source(src).unwrap();
+    let r = reflect(&tu, ShaderStage::Fragment);
+    let entries = bind_group_layout_from_reflection(&r, wgpu::ShaderStages::FRAGMENT);
+    // No regular uniforms → no Block entry. One sampler → two
+    // entries: Texture(1) + Sampler(2).
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].binding, 1);
+    assert!(matches!(
+        entries[0].ty,
+        wgpu::BindingType::Texture {
+            view_dimension: wgpu::TextureViewDimension::D2,
+            ..
+        }
+    ));
+    assert_eq!(entries[1].binding, 2);
+    assert!(matches!(entries[1].ty, wgpu::BindingType::Sampler(_)));
+}
+
+#[test]
+fn reflection_full_uniform_plus_two_samplers_pipeline_layout() {
+    let src = r#"
+precision mediump float;
+uniform vec4 u_tint;
+uniform sampler2D u_diffuse;
+uniform sampler2D u_normal;
+varying vec2 v_uv;
+void main() {
+    gl_FragColor = (texture2D(u_diffuse, v_uv) + texture2D(u_normal, v_uv)) * u_tint;
+}
+"#;
+    let tu = parse_source(src).unwrap();
+    let r = reflect(&tu, ShaderStage::Fragment);
+    let entries = bind_group_layout_from_reflection(&r, wgpu::ShaderStages::FRAGMENT);
+    // 1 uniform block + 2 samplers × 2 entries each = 5
+    assert_eq!(entries.len(), 5);
+    assert_eq!(entries[0].binding, 0); // Block
+    assert_eq!(entries[1].binding, 1); // diffuse texture
+    assert_eq!(entries[2].binding, 2); // diffuse sampler
+    assert_eq!(entries[3].binding, 3); // normal texture
+    assert_eq!(entries[4].binding, 4); // normal sampler
+}
+
+#[test]
+fn reflection_samplerCube_maps_to_cube_texture_view_dimension() {
+    let src = r#"
+precision mediump float;
+uniform samplerCube u_env;
+varying vec3 v_dir;
+void main() {
+    gl_FragColor = textureCube(u_env, v_dir);
+}
+"#;
+    let tu = parse_source(src).unwrap();
+    let r = reflect(&tu, ShaderStage::Fragment);
+    let entries = bind_group_layout_from_reflection(&r, wgpu::ShaderStages::FRAGMENT);
+    assert_eq!(entries.len(), 2);
+    assert!(matches!(
+        entries[0].ty,
+        wgpu::BindingType::Texture {
+            view_dimension: wgpu::TextureViewDimension::Cube,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn reflection_and_wgsl_agree_on_binding_numbers() {
+    let src = r#"
+precision mediump float;
+uniform vec4 u_tint;
+uniform sampler2D u_tex;
+varying vec2 v_uv;
+void main() {
+    gl_FragColor = texture2D(u_tex, v_uv) * u_tint;
+}
+"#;
+    let tu = parse_source(src).unwrap();
+    let r = reflect(&tu, ShaderStage::Fragment);
+    let wgsl = webgl_essl::compile(src, ShaderStage::Fragment)
+        .expect("compile")
+        .wgsl;
+    // Reflection says sampler image at binding(1).
+    assert_eq!(r.samplers[0].image_binding, 1);
+    // WGSL must agree.
+    assert!(
+        wgsl.contains("@binding(1)"),
+        "reflection / wgsl disagree on sampler image binding: {wgsl}"
+    );
+}
