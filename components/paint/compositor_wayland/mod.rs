@@ -42,6 +42,7 @@
 #![allow(dead_code)]
 
 mod errors;
+mod dmabuf;
 
 pub use errors::BackendError;
 
