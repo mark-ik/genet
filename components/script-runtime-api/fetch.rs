@@ -423,27 +423,71 @@ const FETCH_BOOTSTRAP: &str = r#"
   // already-computed result. That matters: resolving with a primitive (text) is
   // immune to a poisoned `Object.prototype.then`, which a userland Promise.resolve
   // of the raw byte array would adopt (the broken-then WPT tests).
+  // Permanently lock + disturb a body stream: consuming a body acquires a reader
+  // and never releases it, so `body.getReader()` afterwards throws (the
+  // disturbed-5 tests). The sentinel is not a real reader, so releaseLock can't
+  // clear it.
+  function lockBody(s) { s._disturbed = true; if (!s._reader) s._reader = { __sentinel: true }; }
+  // Drain a (buffered) body stream to bytes, validating every chunk is a view
+  // (a bad chunk -> TypeError, per the bad-chunk tests).
+  function drainStreamSync(s) {
+    var parts = s._chunks.slice(); s._chunks = [];
+    var total = 0, i, p;
+    for (i = 0; i < parts.length; i++) {
+      p = parts[i];
+      if (!ArrayBuffer.isView(p)) throw new TypeError("ReadableStream chunk is not a Uint8Array");
+      total += p.byteLength;
+    }
+    var all = new Uint8Array(total), off = 0;
+    for (i = 0; i < parts.length; i++) {
+      p = parts[i];
+      all.set(new Uint8Array(p.buffer, p.byteOffset, p.byteLength), off);
+      off += p.byteLength;
+    }
+    return all;
+  }
   function takeBytes(self) {
     if (self.__stream && self.__stream.locked)
       throw new TypeError("Body is locked");
     if (self.bodyUsed || (self.__stream && self.__stream._disturbed))
       throw new TypeError("Body has already been consumed.");
     self.bodyUsed = true;
-    if (self.__stream) self.__stream._disturbed = true;
-    return self.__bytes != null ? self.__bytes : new Uint8Array(0);
+    var bytes;
+    if (self.__bytes != null) {
+      bytes = self.__bytes;                       // buffered body
+    } else if (self.__stream) {
+      bytes = drainStreamSync(self.__stream);     // live stream-backed body
+      self.__bytes = bytes;
+    } else {
+      bytes = new Uint8Array(0);
+    }
+    if (self.__stream) lockBody(self.__stream);
+    return bytes;
   }
   function settled(fn) { try { return Promise.resolve(fn()); } catch (e) { return Promise.reject(e); } }
-  // Lazily expose the body as a ReadableStream (the same one each access, so its
-  // identity and lock state persist). Getting it does not disturb; reading does.
+  // The body's ReadableStream. A stream-backed body returns that very stream; a
+  // buffered body lazily wraps its bytes (same stream each access, so identity and
+  // lock state persist). Getting it does not disturb; reading does.
   function bodyStream(self) {
+    if (self.__stream) return self.__stream;
     if (self.__bytes == null) return null;
-    if (!self.__stream) {
-      var bytes = self.__bytes;
-      self.__stream = new ReadableStream({ start: function(c) { if (bytes.length) c.enqueue(bytes.slice(0)); c.close(); } });
-      self.__stream._owner = self;
-      if (self.bodyUsed) self.__stream._disturbed = true;
-    }
+    var bytes = self.__bytes;
+    self.__stream = new ReadableStream({ start: function(c) { if (bytes.length) c.enqueue(bytes.slice(0)); c.close(); } });
+    self.__stream._owner = self;
+    if (self.bodyUsed) lockBody(self.__stream);
     return self.__stream;
+  }
+  // Copy a body for clone(): buffered bytes copy by reference; a live stream-backed
+  // body is tee'd so source and clone each get an independent stream.
+  function cloneBodyInto(src, dst) {
+    dst.__bytes = src.__bytes;
+    if (src.__stream && src.__bytes == null) {
+      var t = src.__stream.tee();
+      src.__stream = t[0]; src.__stream._owner = src;
+      dst.__stream = t[1]; dst.__stream._owner = dst;
+    } else {
+      dst.__stream = null;
+    }
   }
   function utf8Encode(s) {
     var b = [];
@@ -549,6 +593,7 @@ const FETCH_BOOTSTRAP: &str = r#"
   };
   ReadableStream.prototype.cancel = function(reason) {
     this._disturbed = true; this._closed = true; this._chunks = [];
+    if (this._owner) this._owner.bodyUsed = true;
     if (typeof this._source.cancel === 'function') { try { this._source.cancel(reason); } catch (e) {} }
     return Promise.resolve(undefined);
   };
@@ -803,25 +848,21 @@ const FETCH_BOOTSTRAP: &str = r#"
   // Blob / ArrayBuffer / typed-array bodies carry their bytes directly, so binary
   // is exact end-to-end (the body crosses __fetch as a lossless binary string).
   function extractBody(v) {
-    if (v == null) return { bytes: null, type: null };
-    if (typeof v === 'string') return { bytes: utf8Encode(v), type: 'text/plain;charset=UTF-8' };
-    if (v instanceof URLSearchParams) return { bytes: utf8Encode(v.toString()), type: 'application/x-www-form-urlencoded;charset=UTF-8' };
+    if (v == null) return { bytes: null, stream: null, type: null };
+    if (typeof v === 'string') return { bytes: utf8Encode(v), stream: null, type: 'text/plain;charset=UTF-8' };
+    if (v instanceof URLSearchParams) return { bytes: utf8Encode(v.toString()), stream: null, type: 'application/x-www-form-urlencoded;charset=UTF-8' };
     // Blob / buffers carry their bytes directly: no text round-trip, so binary is exact.
-    if (v instanceof Blob) return { bytes: v._b.slice(0), type: v.type ? v.type : null };
-    if (v instanceof FormData) { var r = serializeFormData(v); return { bytes: utf8Encode(r.body), type: r.type }; }
+    if (v instanceof Blob) return { bytes: v._b.slice(0), stream: null, type: v.type ? v.type : null };
+    if (v instanceof FormData) { var r = serializeFormData(v); return { bytes: utf8Encode(r.body), stream: null, type: r.type }; }
     if (v instanceof ReadableStream) {
-      // Drain the (fully-buffered) stream: chunks the source enqueued in start().
-      // Async-pull streams degrade to what is already queued (a known limit).
-      var parts = v._chunks.slice(); v._chunks = []; v._disturbed = true; v._closed = true;
-      var total = 0, i;
-      for (i = 0; i < parts.length; i++) total += parts[i].length;
-      var all = new Uint8Array(total), off = 0;
-      for (i = 0; i < parts.length; i++) { all.set(parts[i], off); off += parts[i].length; }
-      return { bytes: all, type: null };
+      // A stream body stays a live stream (consumed lazily): a stream already
+      // locked or disturbed is not a usable body (the from-stream tests).
+      if (v.locked || v._disturbed) throw new TypeError("Body stream is already locked or disturbed");
+      return { bytes: null, stream: v, type: null };
     }
-    if (v instanceof ArrayBuffer) return { bytes: new Uint8Array(v.slice(0)), type: null };
-    if (ArrayBuffer.isView(v)) return { bytes: new Uint8Array(v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength)), type: null };
-    return { bytes: utf8Encode(String(v)), type: 'text/plain;charset=UTF-8' };
+    if (v instanceof ArrayBuffer) return { bytes: new Uint8Array(v.slice(0)), stream: null, type: null };
+    if (ArrayBuffer.isView(v)) return { bytes: new Uint8Array(v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength)), stream: null, type: null };
+    return { bytes: utf8Encode(String(v)), stream: null, type: 'text/plain;charset=UTF-8' };
   }
 
   // Parse a consumed body back to a FormData for `.formData()`. Handles
@@ -905,11 +946,11 @@ const FETCH_BOOTSTRAP: &str = r#"
     init = init || {};
     if (input instanceof Request) {
       this.url = input.url; this.method = input.method; this.headers = new Headers(input.headers);
-      this.__bytes = input.__bytes; this.mode = input.mode; this.credentials = input.credentials;
+      this.__bytes = input.__bytes; this.__stream = input.__stream || null; this.mode = input.mode; this.credentials = input.credentials;
       this.redirect = input.redirect; this.cache = input.cache; this.destination = input.destination;
       this.signal = input.signal;
     } else {
-      this.url = __resolve_url(String(input)); this.method = 'GET'; this.headers = new Headers(); this.__bytes = null;
+      this.url = __resolve_url(String(input)); this.method = 'GET'; this.headers = new Headers(); this.__bytes = null; this.__stream = null;
       this.mode = 'cors'; this.credentials = 'same-origin'; this.redirect = 'follow'; this.cache = 'default'; this.destination = '';
       this.signal = makeSignal();
     }
@@ -918,7 +959,8 @@ const FETCH_BOOTSTRAP: &str = r#"
     if (init.headers !== undefined) this.headers = new Headers(init.headers);
     if (init.body !== undefined && init.body !== null) {
       var eb = extractBody(init.body);
-      this.__bytes = eb.bytes;
+      this.__bytes = eb.bytes; this.__stream = eb.stream;
+      if (this.__stream) this.__stream._owner = this;
       if (eb.type && !this.headers.has('content-type')) this.headers.set('content-type', eb.type);
     }
     if (init.mode !== undefined) this.mode = String(init.mode);
@@ -926,12 +968,12 @@ const FETCH_BOOTSTRAP: &str = r#"
     if (init.redirect !== undefined) this.redirect = String(init.redirect);
     if (init.cache !== undefined) this.cache = String(init.cache);
     this.bodyUsed = false;
-    if ((this.method === 'GET' || this.method === 'HEAD') && this.__bytes != null)
+    if ((this.method === 'GET' || this.method === 'HEAD') && (this.__bytes != null || this.__stream))
       throw new TypeError("Request with GET/HEAD method cannot have body.");
   }
   Request.prototype.clone = function() {
     if (this.bodyUsed || (this.__stream && this.__stream.locked)) throw new TypeError("Body is disturbed or locked.");
-    var r = new Request(this); r.__bytes = this.__bytes; r.bodyUsed = false; return r;
+    var r = new Request(this); r.bodyUsed = false; cloneBodyInto(this, r); return r;
   };
   Request.prototype.text = bodyMixin.text;
   Request.prototype.json = bodyMixin.json;
@@ -952,11 +994,13 @@ const FETCH_BOOTSTRAP: &str = r#"
     this.ok = this.status >= 200 && this.status < 300;
     this.type = "default"; this.url = ""; this.redirected = false;
     this.headers = new Headers(init.headers);
+    this.__bytes = null; this.__stream = null;
     if (body != null) {
       var eb = extractBody(body);
-      this.__bytes = eb.bytes;
+      this.__bytes = eb.bytes; this.__stream = eb.stream;
+      if (this.__stream) this.__stream._owner = this;
       if (eb.type && !this.headers.has('content-type')) this.headers.set('content-type', eb.type);
-    } else this.__bytes = null;
+    }
     this.bodyUsed = false;
   }
   Response.prototype.text = bodyMixin.text;
@@ -971,7 +1015,8 @@ const FETCH_BOOTSTRAP: &str = r#"
     var r = Object.create(Response.prototype);
     r.status = this.status; r.statusText = this.statusText; r.ok = this.ok;
     r.type = this.type; r.url = this.url; r.redirected = this.redirected;
-    r.headers = new Headers(this.headers); r.__bytes = this.__bytes; r.bodyUsed = false;
+    r.headers = new Headers(this.headers); r.bodyUsed = false;
+    cloneBodyInto(this, r);
     return r;
   };
   Response.error = function() {

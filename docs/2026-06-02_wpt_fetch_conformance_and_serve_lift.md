@@ -65,8 +65,8 @@ is what makes the `fetch/api/` `.any.js` corpus runnable at all.
 | subset | boa subtests | nova subtests |
 |---|---|---|
 | fetch/api/headers | 86/197 | 86/197 |
-| fetch/api/request | 253/545 | 253/505 |
-| fetch/api/response | 160/290 | 160/290 |
+| fetch/api/request | 257/545 | 257/505 |
+| fetch/api/response | 182/290 | 182/290 |
 
 All three were **0** before this work (the files would not even parse and run).
 These are the headers/request/response object-semantics tests that need no live
@@ -84,9 +84,16 @@ Two passes drove the request / response jumps (request 168 -> 246, response
 - **ReadableStream.** A buffered `ReadableStream` (+ default reader) and
   `response.body` / `request.body` as streams, with `Response`-from-stream body
   extraction. This took response from 96 to 160 (`response-consume-stream` 14/15,
-  the `response-stream-disturbed-*` family 8/12). Byte (BYOB) readers,
-  `pipeTo` / `pipeThrough`, and true async streaming are deferred; binary bodies
-  still degrade through the UTF-8 string sink.
+  the `response-stream-disturbed-*` family 8/12). A later pass made the
+  stream-backed body **lazy** (a `Response`/`Request` built from a stream keeps the
+  stream, consumed on demand) with correct lock/disturb semantics: a locked or
+  disturbed input stream is rejected, consuming locks the body so
+  `body.getReader()` then throws, reading the original stream disturbs the
+  response, and a non-`Uint8Array` chunk fails consumption. That took response to
+  182/290 — `response-from-stream`, `response-stream-bad-chunk`, and
+  `response-stream-disturbed-6` now pass in full, and `disturbed-5` reaches 8/12.
+  Byte (BYOB) readers, `pipeTo` / `pipeThrough`, and true async producers are still
+  deferred.
 - **AbortController / AbortSignal.** `AbortSignal` is an `EventTarget` (abort
   event + `onabort`), with `throwIfAborted` and the `abort` / `timeout` / `any`
   statics; `fetch(url, {signal})` rejects a pre-aborted signal with its reason.
@@ -223,11 +230,12 @@ cargo run -p serval-wpt --features netfetch -- \
 
 ## Not done (deliberately deferred)
 
-- **Byte / async streams.** The `ReadableStream` is a buffered model (chunks
-  enqueued in `start()`/`pull()` from an already-complete body). Byte (BYOB)
-  readers, `pipeTo` / `pipeThrough` (need `WritableStream` / `TransformStream`),
-  and genuinely async producers are deferred: `response-stream-disturbed-5/6`,
-  `response-from-stream`, and `*-by-pipe` need them.
+- **`WritableStream` / `TransformStream` + byte/async streams.** The
+  `ReadableStream` is a buffered model with correct body lock/disturb semantics,
+  but `pipeTo` / `pipeThrough` (need `WritableStream` / `TransformStream`), byte
+  (BYOB) readers, and genuinely async producers are deferred:
+  `response-stream-disturbed-by-pipe` (0/2) and the back-4 of `disturbed-5` need
+  them.
 - **Multipart bodies.** `formData()` parses urlencoded but not multipart, and a
   binary `File` part in a multipart request body is still spliced as text (the one
   remaining lossy body spot). A multipart parser/serializer over the byte body is

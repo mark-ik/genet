@@ -353,3 +353,57 @@ fn binary_body_round_trips_losslessly() {
     assert_eq!(read(&mut rt, "String(B.outLen)"), "256");
     assert_eq!(read(&mut rt, "String(B.identical)"), "true", "every byte survived the round trip");
 }
+
+#[test]
+fn stream_backed_body_semantics() {
+    let mut rt = Runtime::<BoaEngine>::new().unwrap();
+    // A stream already locked / disturbed is not a usable body (from-stream).
+    assert_eq!(
+        read(&mut rt, r#"(function(){var s=new ReadableStream();s.getReader();try{new Response(s);return "no";}catch(e){return e instanceof TypeError?"TypeError":"other";}})()"#),
+        "TypeError"
+    );
+    // A non-Uint8Array chunk makes consumption fail with a TypeError (bad-chunk).
+    rt.eval(
+        r#"
+        var BC = {};
+        var s = new ReadableStream({ start: function(c){ c.enqueue("not bytes"); c.close(); } });
+        new Response(s).text().then(function(){ BC.r = "resolved"; }, function(e){ BC.r = e instanceof TypeError ? "TypeError" : "other"; });
+        "#,
+    ).unwrap();
+    rt.run_microtasks();
+    assert_eq!(read(&mut rt, "BC.r"), "TypeError");
+    // After consuming, body is non-null but getReader() throws (disturbed-5).
+    rt.eval(
+        r#"
+        var D = {};
+        var s = new ReadableStream({ start: function(c){ c.enqueue(new TextEncoder().encode("hi")); c.close(); } });
+        var resp = new Response(s);
+        resp.text().then(function(t){
+          D.text = t;
+          D.bodyNotNull = (resp.body !== null);
+          try { resp.body.getReader(); D.getReader = "ok"; } catch (e) { D.getReader = e instanceof TypeError ? "TypeError" : "other"; }
+        });
+        "#,
+    ).unwrap();
+    rt.run_microtasks();
+    assert_eq!(read(&mut rt, "D.text"), "hi");
+    assert_eq!(read(&mut rt, "String(D.bodyNotNull)"), "true");
+    assert_eq!(read(&mut rt, "D.getReader"), "TypeError");
+    // Reading the original stream disturbs the response's body (disturbed-6).
+    rt.eval(
+        r#"
+        var U = {};
+        var s = new ReadableStream();
+        var resp = new Response(s);
+        U.onConstruct = resp.bodyUsed;
+        var rd = s.getReader();
+        U.afterGetReader = resp.bodyUsed;
+        rd.read();
+        U.afterRead = resp.bodyUsed;
+        "#,
+    ).unwrap();
+    rt.run_microtasks();
+    assert_eq!(read(&mut rt, "String(U.onConstruct)"), "false");
+    assert_eq!(read(&mut rt, "String(U.afterGetReader)"), "false");
+    assert_eq!(read(&mut rt, "String(U.afterRead)"), "true");
+}
