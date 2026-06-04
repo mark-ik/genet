@@ -627,6 +627,229 @@ fn clear_depth_buffer_on_depthless_canvas_records_invalid_operation() {
     assert_eq!(context.get_error(), WebGlError::InvalidOperation);
 }
 
+// =====================================================================
+// multi-sampler: two sampler2D uniforms in one fragment shader
+// bind their image+sampler pairs into the single @group(0) BGL.
+// =====================================================================
+
+#[test]
+fn two_samplers_combine_into_one_fragment() {
+    // Red texture at texture unit 0, green texture at unit 1.
+    // Fragment shader sums them: (1,0,0,1) + (0,1,0,1) clamps to
+    // (1,1,0,2) -> writes (1,1,0,1) into Rgba8Unorm (alpha
+    // saturates at 1.0). Center pixel reads as yellow only if
+    // BOTH samplers are actually being sampled — proves the new
+    // multi-sampler entries are wired into the bind group.
+    let vertex = r#"
+attribute vec2 a_position;
+attribute vec2 a_uv;
+varying vec2 v_uv;
+void main() {
+    v_uv = a_uv;
+    gl_Position = vec4(a_position, 0.0, 1.0);
+}
+"#;
+    let fragment = r#"
+precision mediump float;
+varying vec2 v_uv;
+uniform sampler2D u_a;
+uniform sampler2D u_b;
+void main() {
+    gl_FragColor = texture2D(u_a, v_uv) + texture2D(u_b, v_uv);
+}
+"#;
+    let mut context = make_context(32, 32);
+    context.clear(wgpu::Color {
+        r: 0.0,
+        g: 0.0,
+        b: 1.0,
+        a: 1.0,
+    });
+    let program = context
+        .create_program_from_essl(vertex, fragment)
+        .expect("two-sampler program links");
+    context.use_program(Some(program));
+
+    let a_loc = context
+        .get_uniform_location(program, "u_a")
+        .expect("u_a sampler location");
+    let b_loc = context
+        .get_uniform_location(program, "u_b")
+        .expect("u_b sampler location");
+    context.uniform1i(a_loc, 0);
+    context.uniform1i(b_loc, 1);
+
+    let red_texture = context.create_texture();
+    context.active_texture(0);
+    context.bind_texture_2d(Some(red_texture));
+    context.tex_image_2d_rgba8(1, 1, &[255, 0, 0, 255]);
+
+    let green_texture = context.create_texture();
+    context.active_texture(1);
+    context.bind_texture_2d(Some(green_texture));
+    context.tex_image_2d_rgba8(1, 1, &[0, 255, 0, 255]);
+
+    let positions = context.create_buffer();
+    context.bind_buffer(BufferTarget::ArrayBuffer, Some(positions));
+    context.buffer_data_f32(
+        BufferTarget::ArrayBuffer,
+        &[-0.8, -0.8, 0.8, -0.8, 0.0, 0.8],
+        BufferUsage::StaticDraw,
+    );
+    context.enable_vertex_attrib_array(0);
+    context.vertex_attrib_pointer_f32(0, 2, false, 0, 0);
+
+    let uvs = context.create_buffer();
+    context.bind_buffer(BufferTarget::ArrayBuffer, Some(uvs));
+    context.buffer_data_f32(
+        BufferTarget::ArrayBuffer,
+        &[0.0, 0.0, 1.0, 0.0, 0.5, 1.0],
+        BufferUsage::StaticDraw,
+    );
+    context.enable_vertex_attrib_array(1);
+    context.vertex_attrib_pointer_f32(1, 2, false, 0, 0);
+
+    context.draw_arrays(PrimitiveMode::Triangles, 0, 3);
+
+    // Inside the triangle: red + green = yellow.
+    let center = context.read_pixels(16, 16, 1, 1).expect("center");
+    assert_eq!(&center[0..4], &[255, 255, 0, 255]);
+    // Outside (corner): cleared blue.
+    let corner = context.read_pixels(0, 0, 1, 1).expect("corner");
+    assert_eq!(&corner[0..4], &[0, 0, 255, 255]);
+    assert_eq!(context.get_error(), WebGlError::NoError);
+}
+
+// =====================================================================
+// samplerCube: per-face uploads through bind_texture_cube +
+// tex_image_2d_cube_face, sampled in the fragment via textureCube.
+// =====================================================================
+
+#[test]
+fn sampler_cube_samples_positive_z_face() {
+    // Each face is 1x1 with a distinct color:
+    //   +X red, -X yellow, +Y magenta, -Y cyan, +Z green, -Z white
+    // The varying carries a constant direction (0, 0, 1) which
+    // textureCube samples from the +Z face. A center pixel of
+    // green proves both that the cube view dimension is wired
+    // through to the BGL and that webgl-essl's textureCube
+    // lowering goes end-to-end.
+    let vertex = r#"
+attribute vec2 a_position;
+varying vec3 v_dir;
+void main() {
+    v_dir = vec3(0.0, 0.0, 1.0);
+    gl_Position = vec4(a_position, 0.0, 1.0);
+}
+"#;
+    let fragment = r#"
+precision mediump float;
+varying vec3 v_dir;
+uniform samplerCube u_env;
+void main() {
+    gl_FragColor = textureCube(u_env, v_dir);
+}
+"#;
+    let mut context = make_context(32, 32);
+    context.clear(wgpu::Color {
+        r: 0.0,
+        g: 0.0,
+        b: 1.0,
+        a: 1.0,
+    });
+    let program = context
+        .create_program_from_essl(vertex, fragment)
+        .expect("cube program links");
+    context.use_program(Some(program));
+
+    let env_loc = context
+        .get_uniform_location(program, "u_env")
+        .expect("u_env sampler location");
+    context.uniform1i(env_loc, 0);
+
+    let cube = context.create_texture();
+    context.active_texture(0);
+    context.bind_texture_cube(Some(cube));
+    context.tex_image_2d_cube_face(CubeFace::PositiveX, 1, 1, &[255, 0, 0, 255]);
+    context.tex_image_2d_cube_face(CubeFace::NegativeX, 1, 1, &[255, 255, 0, 255]);
+    context.tex_image_2d_cube_face(CubeFace::PositiveY, 1, 1, &[255, 0, 255, 255]);
+    context.tex_image_2d_cube_face(CubeFace::NegativeY, 1, 1, &[0, 255, 255, 255]);
+    context.tex_image_2d_cube_face(CubeFace::PositiveZ, 1, 1, &[0, 255, 0, 255]);
+    context.tex_image_2d_cube_face(CubeFace::NegativeZ, 1, 1, &[255, 255, 255, 255]);
+
+    let positions = context.create_buffer();
+    context.bind_buffer(BufferTarget::ArrayBuffer, Some(positions));
+    context.buffer_data_f32(
+        BufferTarget::ArrayBuffer,
+        &[-0.8, -0.8, 0.8, -0.8, 0.0, 0.8],
+        BufferUsage::StaticDraw,
+    );
+    context.enable_vertex_attrib_array(0);
+    context.vertex_attrib_pointer_f32(0, 2, false, 0, 0);
+
+    context.draw_arrays(PrimitiveMode::Triangles, 0, 3);
+
+    let center = context.read_pixels(16, 16, 1, 1).expect("center");
+    assert_eq!(&center[0..4], &[0, 255, 0, 255]);
+    assert_eq!(context.get_error(), WebGlError::NoError);
+}
+
+#[test]
+fn sampler_cube_binding_2d_texture_records_invalid_operation() {
+    // The texture-kind cross-check at draw time catches the
+    // wrong-slot bind: a 2D texture lookup-by-cube-sampler must
+    // surface as InvalidOperation rather than panicking inside
+    // wgpu when the view dimension doesn't match the BGL entry.
+    let vertex = r#"
+attribute vec2 a_position;
+varying vec3 v_dir;
+void main() {
+    v_dir = vec3(0.0, 0.0, 1.0);
+    gl_Position = vec4(a_position, 0.0, 1.0);
+}
+"#;
+    let fragment = r#"
+precision mediump float;
+varying vec3 v_dir;
+uniform samplerCube u_env;
+void main() {
+    gl_FragColor = textureCube(u_env, v_dir);
+}
+"#;
+    let mut context = make_context(8, 8);
+    let program = context
+        .create_program_from_essl(vertex, fragment)
+        .expect("cube program");
+    context.use_program(Some(program));
+    let env_loc = context
+        .get_uniform_location(program, "u_env")
+        .expect("u_env");
+    context.uniform1i(env_loc, 0);
+
+    // Bind a 2D texture into unit 0's CUBE slot — the bind is
+    // *allowed* (it just records the id), but the draw-time
+    // resolution rejects it because the texture's kind is 2D
+    // while the sampler expects Cube.
+    let bad = context.create_texture();
+    context.active_texture(0);
+    context.bind_texture_2d(Some(bad));
+    context.tex_image_2d_rgba8(1, 1, &[0, 0, 0, 255]);
+    context.bind_texture_cube(Some(bad));
+
+    let positions = context.create_buffer();
+    context.bind_buffer(BufferTarget::ArrayBuffer, Some(positions));
+    context.buffer_data_f32(
+        BufferTarget::ArrayBuffer,
+        &[-0.8, -0.8, 0.8, -0.8, 0.0, 0.8],
+        BufferUsage::StaticDraw,
+    );
+    context.enable_vertex_attrib_array(0);
+    context.vertex_attrib_pointer_f32(0, 2, false, 0, 0);
+
+    context.draw_arrays(PrimitiveMode::Triangles, 0, 3);
+    assert_eq!(context.get_error(), WebGlError::InvalidOperation);
+}
+
 #[test]
 fn uniform_setters_reject_kind_mismatch() {
     let mut context = make_context(8, 8);

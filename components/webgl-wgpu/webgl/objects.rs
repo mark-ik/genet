@@ -50,6 +50,14 @@ impl WebGlContext {
         self.bound_texture_2d_units[self.active_texture_unit as usize] = texture;
     }
 
+    pub fn bind_texture_cube(&mut self, texture: Option<WebGlTextureId>) {
+        if self.lost {
+            self.record_error(WebGlError::ContextLostWebgl);
+            return;
+        }
+        self.bound_texture_cube_units[self.active_texture_unit as usize] = texture;
+    }
+
     pub fn active_texture(&mut self, unit: u32) {
         if self.lost {
             self.record_error(WebGlError::ContextLostWebgl);
@@ -137,6 +145,100 @@ impl WebGlContext {
             TextureObject {
                 _texture: texture,
                 view,
+                kind: TextureKind::Texture2D,
+                size: (width, height),
+            },
+        );
+    }
+
+    /// Upload one face of the cube texture bound to the active
+    /// texture unit's `TEXTURE_CUBE_MAP` slot. If the texture
+    /// doesn't exist yet, it's allocated at `width x height x 6`
+    /// (all 6 layers zero-initialized — wgpu requires a complete
+    /// cube view to be sample-able). Subsequent calls for other
+    /// faces update their specific layer.
+    pub fn tex_image_2d_cube_face(
+        &mut self,
+        face: CubeFace,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+    ) {
+        if self.lost {
+            self.record_error(WebGlError::ContextLostWebgl);
+            return;
+        }
+        if width == 0
+            || height == 0
+            || width != height
+            || pixels.len() != width as usize * height as usize * 4
+        {
+            self.record_error(WebGlError::InvalidValue);
+            return;
+        }
+        let Some(id) = self.bound_texture_cube_units[self.active_texture_unit as usize] else {
+            self.record_error(WebGlError::InvalidOperation);
+            return;
+        };
+        // Drop any 2D entry with this id that was sized wrong
+        // for cube reuse.
+        if let Some(existing) = self.textures.get(&id) {
+            if existing.kind != TextureKind::TextureCube || existing.size != (width, height) {
+                self.textures.remove(&id);
+            }
+        }
+        if !self.textures.contains_key(&id) {
+            let texture = self.canvas.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("webgl-wgpu cube texture"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 6,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("webgl-wgpu cube texture view"),
+                dimension: Some(wgpu::TextureViewDimension::Cube),
+                ..Default::default()
+            });
+            self.textures.insert(
+                id,
+                TextureObject {
+                    _texture: texture,
+                    view,
+                    kind: TextureKind::TextureCube,
+                    size: (width, height),
+                },
+            );
+        }
+        let texture_object = self.textures.get(&id).expect("texture just inserted");
+        self.canvas.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture_object._texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: face.layer(),
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
             },
         );
     }

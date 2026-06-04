@@ -94,6 +94,33 @@ pub enum WebGlFramebufferStatus {
     IncompleteAttachment,
 }
 
+/// One face of a cube-map texture. Matches the WebGL
+/// `TEXTURE_CUBE_MAP_POSITIVE_X` / ... `NEGATIVE_Z` set; the
+/// numeric mapping is the wgpu layer index (0..6) the face
+/// occupies inside a cube `wgpu::Texture`.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum CubeFace {
+    PositiveX,
+    NegativeX,
+    PositiveY,
+    NegativeY,
+    PositiveZ,
+    NegativeZ,
+}
+
+impl CubeFace {
+    pub(super) fn layer(self) -> u32 {
+        match self {
+            Self::PositiveX => 0,
+            Self::NegativeX => 1,
+            Self::PositiveY => 2,
+            Self::NegativeY => 3,
+            Self::PositiveZ => 4,
+            Self::NegativeZ => 5,
+        }
+    }
+}
+
 /// WebGL `gl.depthFunc` comparison. Determines which incoming
 /// fragments survive the depth test against the existing depth
 /// buffer value.
@@ -177,6 +204,14 @@ struct BufferObject {
 struct TextureObject {
     _texture: wgpu::Texture,
     view: wgpu::TextureView,
+    kind: TextureKind,
+    size: (u32, u32),
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum TextureKind {
+    Texture2D,
+    TextureCube,
 }
 
 struct RenderbufferObject {
@@ -262,6 +297,7 @@ pub struct WebGlContext {
     bound_array_buffer: Option<WebGlBufferId>,
     bound_element_array_buffer: Option<WebGlBufferId>,
     bound_texture_2d_units: [Option<WebGlTextureId>; MAX_TEXTURE_IMAGE_UNITS],
+    bound_texture_cube_units: [Option<WebGlTextureId>; MAX_TEXTURE_IMAGE_UNITS],
     active_texture_unit: u32,
     bound_framebuffer: Option<WebGlFramebufferId>,
     bound_renderbuffer: Option<WebGlRenderbufferId>,
@@ -328,6 +364,7 @@ impl WebGlContext {
             bound_array_buffer: None,
             bound_element_array_buffer: None,
             bound_texture_2d_units: [None; MAX_TEXTURE_IMAGE_UNITS],
+            bound_texture_cube_units: [None; MAX_TEXTURE_IMAGE_UNITS],
             active_texture_unit: 0,
             bound_framebuffer: None,
             bound_renderbuffer: None,

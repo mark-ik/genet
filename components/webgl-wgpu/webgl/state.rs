@@ -110,6 +110,7 @@ impl WebGlContext {
         self.bound_array_buffer = None;
         self.bound_element_array_buffer = None;
         self.bound_texture_2d_units = [None; MAX_TEXTURE_IMAGE_UNITS];
+        self.bound_texture_cube_units = [None; MAX_TEXTURE_IMAGE_UNITS];
         self.active_texture_unit = 0;
         self.bound_framebuffer = None;
         self.bound_renderbuffer = None;

@@ -455,6 +455,9 @@ impl WebGlContext {
     /// the caller continue mutating `self.programs` (e.g. to
     /// insert a new pipeline-cache entry) before turning them
     /// into `&wgpu::TextureView`s at bind-group-build time.
+    /// Dispatches on `sampler.kind`: a `sampler2D` reads from
+    /// `bound_texture_2d_units`, a `samplerCube` from
+    /// `bound_texture_cube_units`.
     fn resolve_sampler_texture_ids(
         &self,
         reflection: &ProgramReflection,
@@ -467,11 +470,32 @@ impl WebGlContext {
                 .copied()
                 .flatten()
                 .ok_or(WebGlError::InvalidOperation)?;
-            let unit_slot = self
-                .bound_texture_2d_units
-                .get(unit as usize)
-                .ok_or(WebGlError::InvalidOperation)?;
+            let unit_slot = match sampler.kind {
+                crate::shader::UniformKind::Sampler2D => self
+                    .bound_texture_2d_units
+                    .get(unit as usize)
+                    .ok_or(WebGlError::InvalidOperation)?,
+                crate::shader::UniformKind::SamplerCube => self
+                    .bound_texture_cube_units
+                    .get(unit as usize)
+                    .ok_or(WebGlError::InvalidOperation)?,
+                _ => return Err(WebGlError::InvalidOperation),
+            };
             let texture_id = unit_slot.ok_or(WebGlError::InvalidOperation)?;
+            // Verify the bound texture's kind agrees with the
+            // sampler's declared kind — catches the case where
+            // a 2D texture got bound to the CUBE slot or vice
+            // versa.
+            if let Some(texture) = self.textures.get(&texture_id) {
+                let expected = match sampler.kind {
+                    crate::shader::UniformKind::Sampler2D => TextureKind::Texture2D,
+                    crate::shader::UniformKind::SamplerCube => TextureKind::TextureCube,
+                    _ => return Err(WebGlError::InvalidOperation),
+                };
+                if texture.kind != expected {
+                    return Err(WebGlError::InvalidOperation);
+                }
+            }
             ids.push((sampler.image_binding, sampler.sampler_binding, texture_id));
         }
         Ok(ids)
