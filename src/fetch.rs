@@ -18,7 +18,7 @@ use crate::client::shared_client;
 use crate::cors;
 use crate::decode::decode_stream;
 use crate::hsts;
-use crate::request::{Credentials, Method, RedirectMode, RequestMode};
+use crate::request::{CacheMode, Credentials, Method, RedirectMode, RequestMode};
 use crate::response::{BodyStream, ResponseBody, ResponseType};
 use crate::{FetchContext, Request, Response, SameSiteContext};
 
@@ -61,18 +61,43 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
     let mut url_list = vec![current_url.clone()];
     let mut redirects_remaining = MAX_REDIRECTS;
 
-    // HTTP cache (RFC 9111): only for GET, only when a real cache is wired.
+    // HTTP cache (RFC 9111 + request cache mode): only for GET, only when a real
+    // cache is wired, and never for `no-store`.
     let now = SystemTime::now();
-    let cache_key = (cx.cache.enabled() && matches!(method, Method::Get))
-        .then(|| cache::cache_key("GET", &current_url));
+    let mode = request.cache;
+    let cache_key =
+        (cx.cache.enabled() && matches!(method, Method::Get) && mode != CacheMode::NoStore)
+            .then(|| cache::cache_key("GET", &current_url));
     let mut revalidate: Option<StoredResponse> = None;
     if let Some(key) = &cache_key {
-        if let Some(entry) = cx.cache.get(key) {
-            if cache::is_fresh(&entry, now) && !cache::must_revalidate(&entry) {
-                return cache::to_response(entry, url_list); // fresh hit — no network
-            }
-            if cache::has_validators(&entry) {
-                revalidate = Some(entry); // stale / no-cache → conditional GET
+        // `reload` always goes to the network (but still stores); the others may
+        // consult the stored entry.
+        if mode != CacheMode::Reload {
+            match cx.cache.get(key) {
+                Some(entry) => match mode {
+                    // Use the stored response as-is, even if stale.
+                    CacheMode::ForceCache | CacheMode::OnlyIfCached => {
+                        return cache::to_response(entry, url_list);
+                    }
+                    // Always revalidate.
+                    CacheMode::NoCache => {
+                        if cache::has_validators(&entry) {
+                            revalidate = Some(entry);
+                        }
+                    }
+                    // Default: serve fresh, revalidate stale / no-cache.
+                    _ => {
+                        if cache::is_fresh(&entry, now) && !cache::must_revalidate(&entry) {
+                            return cache::to_response(entry, url_list);
+                        }
+                        if cache::has_validators(&entry) {
+                            revalidate = Some(entry);
+                        }
+                    }
+                },
+                // `only-if-cached` with no stored response is a network error.
+                None if mode == CacheMode::OnlyIfCached => return Response::network_error(),
+                None => {}
             }
         }
     }
@@ -126,6 +151,24 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
         if url_list.len() == 1 {
             if let Some(entry) = &revalidate {
                 req_headers.extend(cache::conditional_headers(entry));
+            }
+            // Cache-mode request headers (WHATWG HTTP-network-or-cache fetch): the
+            // server logs these, and the cache tests assert on them.
+            match mode {
+                CacheMode::NoCache => {
+                    if header_val(&req_headers, "cache-control").is_none() {
+                        req_headers.push(("cache-control".to_owned(), "max-age=0".to_owned()));
+                    }
+                }
+                CacheMode::NoStore | CacheMode::Reload => {
+                    if header_val(&req_headers, "pragma").is_none() {
+                        req_headers.push(("pragma".to_owned(), "no-cache".to_owned()));
+                    }
+                    if header_val(&req_headers, "cache-control").is_none() {
+                        req_headers.push(("cache-control".to_owned(), "no-cache".to_owned()));
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -488,7 +531,7 @@ mod tests {
     fn caching_cx() -> FetchContext {
         FetchContext {
             cookies: Box::new(InMemoryCookieJar::new()),
-            cache: Box::new(InMemoryHttpCache::new()),
+            cache: std::sync::Arc::new(InMemoryHttpCache::new()),
             csp: Box::new(AllowAllCsp),
             hsts: Box::new(crate::InMemoryHsts::new()),
             preflight: Box::new(crate::InMemoryPreflightCache::new()),
@@ -614,7 +657,7 @@ mod tests {
         let spy = SpyJar::default();
         let cx = FetchContext {
             cookies: Box::new(spy.clone()),
-            cache: Box::new(NoHttpCache),
+            cache: std::sync::Arc::new(NoHttpCache),
             csp: Box::new(AllowAllCsp),
             hsts: Box::new(crate::InMemoryHsts::new()),
             preflight: Box::new(crate::InMemoryPreflightCache::new()),
@@ -894,7 +937,7 @@ mod tests {
         let spy = SpyAltSvc::default();
         let cx = FetchContext {
             cookies: Box::new(InMemoryCookieJar::new()),
-            cache: Box::new(NoHttpCache),
+            cache: std::sync::Arc::new(NoHttpCache),
             csp: Box::new(AllowAllCsp),
             hsts: Box::new(crate::InMemoryHsts::new()),
             preflight: Box::new(crate::InMemoryPreflightCache::new()),

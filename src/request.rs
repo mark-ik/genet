@@ -33,6 +33,9 @@ pub struct Request {
     /// destinations (image/audio/video) are auto-upgraded http→https, the rest
     /// are blocked in a secure context.
     pub destination: Destination,
+    /// The HTTP cache mode (WHATWG Fetch request *cache mode*): which cached
+    /// response, if any, this request may use, and which request headers it adds.
+    pub cache: CacheMode,
 }
 
 impl Request {
@@ -48,6 +51,7 @@ impl Request {
             redirect: RedirectMode::default(),
             origin: None,
             destination: Destination::default(),
+            cache: CacheMode::default(),
         }
     }
 
@@ -62,6 +66,24 @@ impl Request {
         self.origin = Some(origin);
         self
     }
+}
+
+/// HTTP cache mode (WHATWG Fetch §2.2.5 request cache mode).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CacheMode {
+    /// RFC 9111: serve a fresh stored response, revalidate a stale one.
+    #[default]
+    Default,
+    /// Never read or write the cache; force a network fetch.
+    NoStore,
+    /// Bypass the stored response (always network) but store the result.
+    Reload,
+    /// Always revalidate a stored response before using it.
+    NoCache,
+    /// Use a stored response even if stale; only network on a miss.
+    ForceCache,
+    /// Use a stored response even if stale; a miss is a network error.
+    OnlyIfCached,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

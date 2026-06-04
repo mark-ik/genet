@@ -14,6 +14,8 @@
 //! and *record* (store `Set-Cookie`) during a fetch — and they are `Send + Sync`
 //! so the fetch future is movable across a multi-thread runtime.
 
+use std::sync::Arc;
+
 use url::Url;
 
 use crate::altsvc::{AltSvcStore, InMemoryAltSvc};
@@ -25,7 +27,9 @@ use crate::hsts::{HstsStore, InMemoryHsts};
 /// Caller-owned bundle of policy + storage the Fetch algorithm consults.
 pub struct FetchContext {
     pub cookies: Box<dyn CookieStore>,
-    pub cache: Box<dyn HttpCache>,
+    /// The HTTP cache. An `Arc` so one cache can be shared across many fetches
+    /// (the `Default`/etc. modes are only meaningful against a persistent store).
+    pub cache: Arc<dyn HttpCache>,
     pub csp: Box<dyn CspChecker>,
     pub hsts: Box<dyn HstsStore>,
     pub preflight: Box<dyn PreflightCache>,
@@ -40,7 +44,7 @@ impl FetchContext {
     pub fn permissive() -> Self {
         Self {
             cookies: Box::new(InMemoryCookieJar::default()),
-            cache: Box::new(NoHttpCache),
+            cache: Arc::new(NoHttpCache),
             csp: Box::new(AllowAllCsp),
             hsts: Box::new(InMemoryHsts::new()),
             preflight: Box::new(InMemoryPreflightCache::new()),

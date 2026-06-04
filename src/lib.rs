@@ -56,7 +56,7 @@ pub use cors::{InMemoryPreflightCache, PreflightCache};
 pub use cookie_jar::InMemoryCookieJar;
 pub use fetch::fetch;
 pub use hsts::{HstsStore, InMemoryHsts};
-pub use request::{Credentials, Destination, Method, RedirectMode, Request, RequestMode};
+pub use request::{CacheMode, Credentials, Destination, Method, RedirectMode, Request, RequestMode};
 pub use response::{Response, ResponseBody, ResponseType};
 #[cfg(not(target_arch = "wasm32"))]
 pub use websocket::{WebSocket, WsMessage, connect as connect_websocket};
