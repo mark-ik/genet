@@ -396,6 +396,55 @@ const FETCH_BOOTSTRAP: &str = r#"
     return v;
   }
 
+  // ---- Header guards (WHATWG): request / request-no-cors / response / immutable. ----
+  var FORBIDDEN_REQUEST = {
+    'accept-charset': 1, 'accept-encoding': 1, 'access-control-request-headers': 1,
+    'access-control-request-method': 1, 'connection': 1, 'content-length': 1,
+    'cookie': 1, 'cookie2': 1, 'date': 1, 'dnt': 1, 'expect': 1, 'host': 1,
+    'keep-alive': 1, 'origin': 1, 'permissions-policy': 1, 'referer': 1,
+    'set-cookie': 1, 'te': 1, 'trailer': 1, 'transfer-encoding': 1, 'upgrade': 1, 'via': 1
+  };
+  var METHOD_OVERRIDE = { 'x-http-method': 1, 'x-http-method-override': 1, 'x-method-override': 1 };
+  // name + value are already lower-cased name / normalized value.
+  function isForbiddenRequestHeader(name, value) {
+    if (FORBIDDEN_REQUEST[name] || /^proxy-/.test(name) || /^sec-/.test(name)) return true;
+    if (METHOD_OVERRIDE[name]) {
+      var toks = String(value).split(',');
+      for (var i = 0; i < toks.length; i++) {
+        var t = toks[i].replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "").toLowerCase();
+        if (t === 'connect' || t === 'trace' || t === 'track') return true;
+      }
+    }
+    return false;
+  }
+  function isForbiddenResponseHeader(name) {
+    return name === 'set-cookie' || name === 'set-cookie2';
+  }
+  // A CORS-unsafe request-header byte: < 0x20 (except HT), or one of "():<>?@[\]{} or 0x7F.
+  var CORS_UNSAFE_RE = /[\x00-\x08\x0a-\x1f"():<>?@\[\\\]{}\x7f]/;
+  function isNoCorsSafelisted(name, value) {
+    if (name === 'accept' || name === 'accept-language' || name === 'content-language') {
+      return value.length <= 128 && !CORS_UNSAFE_RE.test(value);
+    }
+    if (name === 'content-type') {
+      if (value.length > 128) return false;
+      var mime = value.split(';')[0].replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "").toLowerCase();
+      return mime === 'application/x-www-form-urlencoded' || mime === 'multipart/form-data' || mime === 'text/plain';
+    }
+    return false;
+  }
+  // Whether `guard` permits writing (name, value). `immutable` throws; the others
+  // silently drop a disallowed header (the WHATWG "fill"/append behaviour).
+  function guardAllows(guard, name, value) {
+    switch (guard) {
+      case 'immutable': throw new TypeError("Headers are immutable");
+      case 'request': return !isForbiddenRequestHeader(name, value);
+      case 'request-no-cors': return isNoCorsSafelisted(name, value);
+      case 'response': return !isForbiddenResponseHeader(name);
+      default: return true;
+    }
+  }
+
   // %IteratorPrototype% (two protos up from an array iterator), so our iterators
   // sit on the right chain for `checkIteratorProperties`-style WPT assertions.
   var IteratorProto = (hasSym && [][Symbol.iterator])
@@ -450,9 +499,17 @@ const FETCH_BOOTSTRAP: &str = r#"
       for (var k = 0; k < keys.length; k++) this.append(keys[k], init[keys[k]]);
     }
   }
-  Headers.prototype.append = function(n, v) { this._h.push([checkName(n), checkValue(v)]); };
+  Headers.prototype.append = function(n, v) {
+    n = checkName(n); v = checkValue(v);
+    // For request-no-cors the safelist check runs against the *combined* value.
+    var check = v;
+    if (this._guard === 'request-no-cors') { var cur = this.get(n); if (cur !== null) check = cur + ", " + v; }
+    if (!guardAllows(this._guard || 'none', n, check)) return;
+    this._h.push([n, v]);
+  };
   Headers.prototype.set = function(n, v) {
     n = checkName(n); v = checkValue(v);
+    if (!guardAllows(this._guard || 'none', n, v)) return;
     this._h = this._h.filter(function(p) { return p[0] !== n; });
     this._h.push([n, v]);
   };
@@ -469,6 +526,7 @@ const FETCH_BOOTSTRAP: &str = r#"
   };
   Headers.prototype['delete'] = function(n) {
     n = checkName(n);
+    if (!guardAllows(this._guard || 'none', n, '')) return;
     this._h = this._h.filter(function(p) { return p[0] !== n; });
   };
   Headers.prototype.getSetCookie = function() {
@@ -1228,6 +1286,13 @@ const FETCH_BOOTSTRAP: &str = r#"
     if (init.credentials !== undefined) this.credentials = String(init.credentials);
     if (init.redirect !== undefined) this.redirect = String(init.redirect);
     if (init.cache !== undefined) this.cache = String(init.cache);
+    // The request header guard (from the mode) drops forbidden / non-safelisted
+    // headers and governs later append/set/delete.
+    this.headers._guard = (this.mode === 'no-cors') ? 'request-no-cors' : 'request';
+    var __g = this.headers._guard, __hs = this.headers;
+    __hs._h = __hs._h.filter(function(p) {
+      try { return guardAllows(__g, p[0], p[1]); } catch (e) { return false; }
+    });
     this.bodyUsed = false;
     if ((this.method === 'GET' || this.method === 'HEAD') && (this.__bytes != null || this.__stream))
       throw new TypeError("Request with GET/HEAD method cannot have body.");
@@ -1334,6 +1399,7 @@ const FETCH_BOOTSTRAP: &str = r#"
     var req;
     try { req = new Request(input, init); } catch (e) { return Promise.reject(e); }
     if (!req.headers.has("accept")) req.headers.append("accept", "*/*");
+    if (!req.headers.has("accept-language")) req.headers.append("accept-language", "*");
     // A pre-aborted signal rejects synchronously with its reason and allocates no
     // id (preserves the immediate-reject ordering + reason identity).
     if (req.signal && req.signal.aborted) {
