@@ -258,6 +258,21 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
         if (300..400).contains(&status) {
             // Own the location so `raw.headers` is free to move below.
             let location = header_val(&raw.headers, "location").map(str::to_owned);
+            // Error / manual redirect modes apply to any redirect status, even one
+            // without a `Location` header (only Follow needs a target).
+            match (request.redirect, &location) {
+                (RedirectMode::Error, None) => return Response::network_error(),
+                (RedirectMode::Manual, None) => {
+                    return Response {
+                        status: 0,
+                        headers: Vec::new(),
+                        body: ResponseBody::empty(),
+                        url_list,
+                        response_type: ResponseType::OpaqueRedirect,
+                    };
+                }
+                _ => {}
+            }
             if let Some(location) = location {
                 // Gate the redirect response *before* the redirect-mode switch
                 // (WHATWG HTTP fetch runs the CORS check on the actual response,
