@@ -1260,21 +1260,72 @@ const FETCH_BOOTSTRAP: &str = r#"
   AbortController.prototype.abort = function(reason) { signalAbort(this.signal, reason); };
   globalThis.AbortController = AbortController;
 
+  // ---- Request init validation (WHATWG) ----
+  var NORMALIZE_METHODS = { DELETE: 1, GET: 1, HEAD: 1, OPTIONS: 1, POST: 1, PUT: 1 };
+  var FORBIDDEN_METHODS = { CONNECT: 1, TRACE: 1, TRACK: 1 };
+  var SIMPLE_METHODS = { GET: 1, HEAD: 1, POST: 1 };
+  function normalizeMethod(m) {
+    m = String(m);
+    if (!TOKEN_RE.test(m)) throw new TypeError("Invalid method: '" + m + "'");
+    var up = m.toUpperCase();
+    if (FORBIDDEN_METHODS[up]) throw new TypeError("Forbidden method: " + m);
+    return NORMALIZE_METHODS[up] ? up : m;
+  }
+  var ENUMS = {
+    mode: { 'same-origin': 1, 'no-cors': 1, 'cors': 1, 'navigate': 1 },
+    credentials: { 'omit': 1, 'same-origin': 1, 'include': 1 },
+    cache: { 'default': 1, 'no-store': 1, 'reload': 1, 'no-cache': 1, 'force-cache': 1, 'only-if-cached': 1 },
+    redirect: { 'follow': 1, 'error': 1, 'manual': 1 },
+    referrerPolicy: {
+      '': 1, 'no-referrer': 1, 'no-referrer-when-downgrade': 1, 'same-origin': 1, 'origin': 1,
+      'strict-origin': 1, 'origin-when-cross-origin': 1, 'strict-origin-when-cross-origin': 1, 'unsafe-url': 1
+    }
+  };
+  function checkEnum(kind, v) {
+    var s = String(v);
+    if (!ENUMS[kind][s]) throw new TypeError("Invalid " + kind + ": '" + s + "'");
+    return s;
+  }
+
   // ---- Request ----
   function Request(input, init) {
+    if (!(this instanceof Request)) throw new TypeError("Failed to construct 'Request': use 'new'");
     init = init || {};
+    if (init.window !== undefined && init.window !== null) throw new TypeError("RequestInit window must be null");
     if (input instanceof Request) {
       this.url = input.url; this.method = input.method; this.headers = new Headers(input.headers);
       this.__bytes = input.__bytes; this.__stream = input.__stream || null; this.mode = input.mode; this.credentials = input.credentials;
       this.redirect = input.redirect; this.cache = input.cache; this.destination = input.destination;
       this.signal = input.signal;
     } else {
-      this.url = __resolve_url(String(input)); this.method = 'GET'; this.headers = new Headers(); this.__bytes = null; this.__stream = null;
+      // Resolve leniently (relative URLs resolve at fetch when there is no base),
+      // then validate: a resolved absolute URL must not carry credentials; an
+      // unresolvable URL is an error only when a real document base exists (with no
+      // base, a relative URL legitimately stays unresolved).
+      this.url = __resolve_url(String(input));
+      var pj = __url_parse(this.url, "");
+      if (pj) {
+        var pc = JSON.parse(pj);
+        if (pc.username || pc.password) throw new TypeError("Request URL cannot have credentials");
+        this.url = pc.href;
+      } else if (typeof location !== 'undefined' && location && location.href && location.href !== 'about:blank') {
+        throw new TypeError("Failed to construct 'Request': invalid URL");
+      }
+      this.method = 'GET'; this.headers = new Headers(); this.__bytes = null; this.__stream = null;
       this.mode = 'cors'; this.credentials = 'same-origin'; this.redirect = 'follow'; this.cache = 'default'; this.destination = '';
       this.signal = makeSignal();
     }
     if (init.signal !== undefined) this.signal = init.signal;
-    if (init.method !== undefined) this.method = String(init.method).toUpperCase();
+    if (init.method !== undefined) this.method = normalizeMethod(init.method);
+    if (init.mode !== undefined) { if (String(init.mode) === 'navigate') throw new TypeError("Cannot construct a Request with mode 'navigate'"); this.mode = checkEnum('mode', init.mode); }
+    if (init.credentials !== undefined) this.credentials = checkEnum('credentials', init.credentials);
+    if (init.cache !== undefined) this.cache = checkEnum('cache', init.cache);
+    if (init.redirect !== undefined) this.redirect = checkEnum('redirect', init.redirect);
+    if (init.referrerPolicy !== undefined) checkEnum('referrerPolicy', init.referrerPolicy);
+    // no-cors restricts the method to GET/HEAD/POST.
+    if (this.mode === 'no-cors' && !SIMPLE_METHODS[this.method]) throw new TypeError("Method '" + this.method + "' not allowed in no-cors mode");
+    // only-if-cached requires same-origin mode.
+    if (this.cache === 'only-if-cached' && this.mode !== 'same-origin') throw new TypeError("only-if-cached requires same-origin mode");
     if (init.headers !== undefined) this.headers = new Headers(init.headers);
     if (init.body !== undefined && init.body !== null) {
       var eb = extractBody(init.body);
@@ -1282,10 +1333,6 @@ const FETCH_BOOTSTRAP: &str = r#"
       if (this.__stream) this.__stream._owner = this;
       if (eb.type && !this.headers.has('content-type')) this.headers.set('content-type', eb.type);
     }
-    if (init.mode !== undefined) this.mode = String(init.mode);
-    if (init.credentials !== undefined) this.credentials = String(init.credentials);
-    if (init.redirect !== undefined) this.redirect = String(init.redirect);
-    if (init.cache !== undefined) this.cache = String(init.cache);
     // The request header guard (from the mode) drops forbidden / non-safelisted
     // headers and governs later append/set/delete.
     this.headers._guard = (this.mode === 'no-cors') ? 'request-no-cors' : 'request';
