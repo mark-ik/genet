@@ -59,29 +59,65 @@ impl FetchOutcome {
     }
 }
 
-/// The host seam. Implement over a real network engine (e.g. netfetcher) and
-/// install with `Runtime::set_fetch_handler`. Synchronous: do any async work
-/// inside (the runtime calls this from a native callback, off no event loop).
+/// The host seam: a host (the WPT runner, or Mere's content actor) implements it
+/// over a real network engine. Install with `Runtime::set_fetch_handler`.
+///
+/// Two shapes. A **synchronous** host implements only [`FetchHandler::fetch`] and
+/// answers in place (the runner's offline mock, a `block_on` over netfetcher); the
+/// JS `fetch()` Promise resolves in the same tick. An **async / deferred** host
+/// overrides [`FetchHandler::start`], spawns the work off-thread, returns `None`,
+/// and later drives [`Runtime::settle_fetch`] / [`Runtime::fail_fetch`] when the
+/// reply arrives. The deferred handler owns its own delivery channel (it is the
+/// actor-mailbox seam: a send into the script actor's inbox), so the runtime stays
+/// network-free and the engine stays `!Send`. Deferred delivery is what makes
+/// mid-flight abort and streaming response bodies possible.
 pub trait FetchHandler {
-    fn fetch(&self, request: FetchRequest) -> FetchOutcome;
+    /// Begin a fetch. The default bridges to [`fetch`](FetchHandler::fetch) and
+    /// answers **inline**: returning `Some(outcome)` resolves the JS Promise in the
+    /// same tick (no Rust-to-JS re-entry, no pump). A deferred host spawns the work,
+    /// returns `None` (Promise left pending), and settles later by `id`.
+    fn start(&self, _id: u64, request: FetchRequest) -> Option<FetchOutcome> {
+        Some(self.fetch(request))
+    }
+    /// Synchronous convenience: a host with the answer in hand implements only this.
+    fn fetch(&self, _request: FetchRequest) -> FetchOutcome {
+        FetchOutcome::network_error()
+    }
+    /// Cancel an in-flight deferred request (from `AbortController.abort()`). The
+    /// default is a no-op (synchronous hosts have nothing in flight).
+    fn cancel(&self, _id: u64) {}
 }
 
-/// `__fetch(method, url, headers, body)` — the single native sink behind the JS
-/// `fetch()` bootstrap. `headers` is a newline-delimited `k,v,k,v` list; `body`
-/// is a string (empty = no body). Returns a JSON outcome string the bootstrap
-/// parses. With no handler installed, every fetch is a network error.
-pub(crate) struct Fetch;
+/// Clone the installed handler out from under the `HostState` borrow, so the
+/// handler call holds no borrow (it must not be live if the handler re-enters a
+/// native sink). `None` = no handler installed.
+fn host_handler<E: ScriptEngine>(cx: &mut E::CallCx<'_>) -> Option<std::rc::Rc<dyn FetchHandler>> {
+    let data = cx.host_data()?;
+    let cell = data.downcast_ref::<RefCell<HostState>>()?;
+    let h = cell.borrow().fetch.clone();
+    h
+}
 
-impl<E: ScriptEngine> NativeFn<E> for Fetch {
+/// `__fetch_start(id, method, url, headers, body)` — start a fetch for Promise
+/// `id`. `headers` is a newline-delimited `k,v,k,v` list; `body` is the binary
+/// string (empty = no body). Returns the JSON outcome string when the host
+/// answered inline (sync), or `""` when the fetch is deferred (the JS bootstrap
+/// leaves the Promise pending for a later `__fetchSettle` / `__fetchFail`). With no
+/// handler installed, every fetch is an inline network error.
+pub(crate) struct FetchStart;
+
+impl<E: ScriptEngine> NativeFn<E> for FetchStart {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
         let a0 = cx.arg(0);
-        let method = cx.value_to_string(&a0)?;
+        let id = cx.value_to_string(&a0)?.parse::<u64>().unwrap_or(0);
         let a1 = cx.arg(1);
-        let url = cx.value_to_string(&a1)?;
+        let method = cx.value_to_string(&a1)?;
         let a2 = cx.arg(2);
-        let headers_flat = cx.value_to_string(&a2)?;
+        let url = cx.value_to_string(&a2)?;
         let a3 = cx.arg(3);
-        let body_str = cx.value_to_string(&a3)?;
+        let headers_flat = cx.value_to_string(&a3)?;
+        let a4 = cx.arg(4);
+        let body_str = cx.value_to_string(&a4)?;
 
         let headers = parse_flat_headers(&headers_flat);
         // The body crosses as a lossless "binary string": each JS char code (0-255)
@@ -89,17 +125,30 @@ impl<E: ScriptEngine> NativeFn<E> for Fetch {
         let body = (!body_str.is_empty()).then(|| body_str.chars().map(|c| c as u8).collect::<Vec<u8>>());
         let request = FetchRequest { method, url, headers, body };
 
-        let outcome = match cx.host_data() {
-            Some(data) => match data.downcast_ref::<RefCell<HostState>>() {
-                Some(cell) => match cell.borrow().fetch.as_ref() {
-                    Some(handler) => handler.fetch(request),
-                    None => FetchOutcome::network_error(),
-                },
-                None => FetchOutcome::network_error(),
-            },
-            None => FetchOutcome::network_error(),
+        // Clone the handler before calling it (no borrow held across `start`).
+        let outcome = match host_handler::<E>(cx) {
+            Some(handler) => handler.start(id, request),
+            None => Some(FetchOutcome::network_error()),
         };
-        cx.make_string(&encode_outcome(&outcome))
+        match outcome {
+            Some(o) => cx.make_string(&encode_outcome(&o)), // inline (sync) answer
+            None => cx.make_string(""),                     // deferred: settle later
+        }
+    }
+}
+
+/// `__fetch_abort(id)` — relay `AbortController.abort()` to the host so it can
+/// cancel the in-flight deferred request. Tolerant of unknown / already-settled ids.
+pub(crate) struct FetchAbort;
+
+impl<E: ScriptEngine> NativeFn<E> for FetchAbort {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let a0 = cx.arg(0);
+        let id = cx.value_to_string(&a0)?.parse::<u64>().unwrap_or(0);
+        if let Some(handler) = host_handler::<E>(cx) {
+            handler.cancel(id);
+        }
+        Ok(cx.undefined())
     }
 }
 
@@ -259,7 +308,7 @@ fn parse_flat_headers(flat: &str) -> Vec<(String, String)> {
 /// dep). The body crosses losslessly as a "binary string": each byte becomes a
 /// char (code point 0-255), which `push_json_str` escapes safely and the bootstrap
 /// maps back to bytes — so binary bodies survive intact.
-fn encode_outcome(o: &FetchOutcome) -> String {
+pub(crate) fn encode_outcome(o: &FetchOutcome) -> String {
     let mut s = String::new();
     s.push('{');
     s.push_str(&format!("\"networkError\":{},", o.network_error));
@@ -305,10 +354,11 @@ fn push_json_str(out: &mut String, s: &str) {
     out.push('"');
 }
 
-/// Install the `__fetch` sink and the `fetch()` / `Request` / `Response` /
-/// `Headers` bootstrap.
+/// Install the deferred fetch sinks (`__fetch_start` / `__fetch_abort`) and the
+/// `fetch()` / `Request` / `Response` / `Headers` bootstrap.
 pub(crate) fn install_fetch_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error> {
-    engine.set_function::<Fetch>("__fetch", 4)?;
+    engine.set_function::<FetchStart>("__fetch_start", 5)?;
+    engine.set_function::<FetchAbort>("__fetch_abort", 1)?;
     engine.set_function::<ResolveUrl>("__resolve_url", 1)?;
     engine.set_function::<UrlParse>("__url_parse", 2)?;
     engine.set_function::<UrlWith>("__url_with", 3)?;
@@ -1155,21 +1205,67 @@ const FETCH_BOOTSTRAP: &str = r#"
     return flat.join("\n");
   }
 
+  // ---- Deferred fetch registry ----
+  // Each in-flight fetch() owns an entry keyed by a monotonic id. A synchronous
+  // host answers inline (__fetch_start returns the outcome JSON, resolved in this
+  // tick). A deferred host returns "" and the entry stays pending until Rust drives
+  // __fetchSettle / __fetchFail (or __fetchPushChunk / __fetchClose for streams).
+  // Single authority, delete-once: every terminal removes the entry exactly once.
+  var __pending = Object.create(null);
+  globalThis.__pending = __pending;          // Object.keys count drives the host's quiescence probe
+  var __nextFetchId = 1;
+
+  function settleEntry(e, o) {
+    if (o.networkError) e.reject(new TypeError('Failed to fetch'));
+    else e.resolve(responseFromOutcome(o));
+  }
+
   globalThis.fetch = function(input, init) {
     var req;
     try { req = new Request(input, init); } catch (e) { return Promise.reject(e); }
     if (!req.headers.has("accept")) req.headers.append("accept", "*/*");
+    // A pre-aborted signal rejects synchronously with its reason and allocates no
+    // id (preserves the immediate-reject ordering + reason identity).
+    if (req.signal && req.signal.aborted) {
+      var pre = abortReason(req.signal.reason);
+      if (req.__stream && !req.__stream._disturbed) { try { req.__stream.cancel(pre); } catch (x) {} }
+      return Promise.reject(pre);
+    }
+    var id = __nextFetchId++;
     return new Promise(function(resolve, reject) {
-      // A pre-aborted signal rejects with its reason (the fetch is synchronous, so
-      // there is no mid-flight window; the pre-flight abort check is the one that
-      // matters for the harness).
-      if (req.signal && req.signal.aborted) { reject(abortReason(req.signal.reason)); return; }
-      var o;
-      try { o = JSON.parse(__fetch(req.method, req.url, headersFlat(req.headers), req.__bytes != null ? bytesToBinaryString(req.__bytes) : "")); }
-      catch (e) { reject(new TypeError("Failed to fetch")); return; }
-      if (o.networkError) { reject(new TypeError("Failed to fetch")); return; }
-      resolve(responseFromOutcome(o));
+      var entry = { resolve: resolve, reject: reject, controller: null, settled: false };
+      __pending[id] = entry;
+      // Mid-flight abort: relay to the host (cancel the in-flight work) and reject
+      // with the signal's reason. JS mints the reason once so the same instance
+      // flows to the body and the rejection (promise_rejects_exactly).
+      if (req.signal) req.signal.addEventListener('abort', function() {
+        var e = __pending[id]; if (!e || e.settled) return;
+        e.settled = true; delete __pending[id];
+        var err = abortReason(req.signal.reason);
+        if (e.controller) { try { e.controller.error(err); } catch (x) {} }
+        try { __fetch_abort(id); } catch (x) {}
+        e.reject(err);
+      });
+      var inline = __fetch_start(id, req.method, req.url, headersFlat(req.headers),
+                                 req.__bytes != null ? bytesToBinaryString(req.__bytes) : "");
+      if (inline) {
+        // Synchronous host answered in this tick (today's path; one pump drains).
+        var e = __pending[id];
+        if (e && !e.settled) { e.settled = true; delete __pending[id]; settleEntry(e, JSON.parse(inline)); }
+      }
     });
+  };
+
+  // Rust-invoked deferred terminals (eval'd from Runtime::settle_fetch / fail_fetch;
+  // Rust cannot call a held JS function, so it evals these). Guard on presence so a
+  // reply racing an abort is a no-op.
+  globalThis.__fetchSettle = function(id, ojson) {
+    var e = __pending[id]; if (!e || e.settled) return; e.settled = true; delete __pending[id];
+    settleEntry(e, JSON.parse(ojson));
+  };
+  globalThis.__fetchFail = function(id, msg) {
+    var e = __pending[id]; if (!e || e.settled) return; e.settled = true; delete __pending[id];
+    e.reject(new TypeError(msg || 'Failed to fetch'));
   };
 })();
 "#;

@@ -46,6 +46,69 @@ fn read(rt: &mut Runtime<BoaEngine>, expr: &str) -> String {
     rt.engine_mut().value_to_string(&v).expect("value_to_string")
 }
 
+/// A deferred host: `start` records the id and returns `None` (leaving the Promise
+/// pending); the test settles it later via `Runtime::settle_fetch` / `fail_fetch`,
+/// and `cancel` records aborted ids. This is the actor-mailbox shape.
+struct DeferredRecorder {
+    seen: std::rc::Rc<std::cell::RefCell<Vec<(u64, String)>>>,
+    cancelled: std::rc::Rc<std::cell::RefCell<Vec<u64>>>,
+}
+
+impl FetchHandler for DeferredRecorder {
+    fn start(&self, id: u64, req: FetchRequest) -> Option<FetchOutcome> {
+        self.seen.borrow_mut().push((id, req.url.clone()));
+        None
+    }
+    fn cancel(&self, id: u64) {
+        self.cancelled.borrow_mut().push(id);
+    }
+}
+
+#[test]
+fn deferred_fetch_settles_later() {
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(u64, String)>::new()));
+    let cancelled = std::rc::Rc::new(std::cell::RefCell::new(Vec::<u64>::new()));
+    let mut rt = Runtime::<BoaEngine>::new().unwrap();
+    rt.set_fetch_handler(Box::new(DeferredRecorder { seen: seen.clone(), cancelled: cancelled.clone() }));
+
+    // (1) A deferred fetch stays pending until the host settles it.
+    rt.eval(r#"var D={}; fetch("http://x/a").then(function(r){D.s=r.status; return r.text();}).then(function(t){D.b=t;});"#).unwrap();
+    rt.run_microtasks();
+    assert_eq!(rt.pending_fetches(), 1, "deferred fetch is pending");
+    assert_eq!(read(&mut rt, "String(D.s)"), "undefined", "not resolved before the host settles");
+    let id_a = seen.borrow()[0].0;
+    rt.settle_fetch(
+        id_a,
+        FetchOutcome {
+            network_error: false,
+            status: 200,
+            status_text: "OK".into(),
+            response_type: "basic".into(),
+            url: "http://x/a".into(),
+            headers: vec![],
+            body: b"hi".to_vec(),
+        },
+    );
+    assert_eq!(read(&mut rt, "String(D.s)"), "200");
+    assert_eq!(read(&mut rt, "D.b"), "hi");
+    assert_eq!(rt.pending_fetches(), 0, "settling removes the pending entry");
+
+    // (2) fail_fetch rejects with a TypeError (a network error).
+    rt.eval(r#"var F={}; fetch("http://x/b").then(function(){F.r="ok";}, function(e){F.r=(e instanceof TypeError)?"TypeError":"other";});"#).unwrap();
+    rt.run_microtasks();
+    let id_b = seen.borrow()[1].0;
+    rt.fail_fetch(id_b, "boom");
+    assert_eq!(read(&mut rt, "F.r"), "TypeError");
+
+    // (3) Mid-flight abort cancels the in-flight request and rejects with AbortError.
+    rt.eval(r#"var A={}; var c=new AbortController(); fetch("http://x/c",{signal:c.signal}).then(function(){A.r="ok";}, function(e){A.r=e.name;}); c.abort();"#).unwrap();
+    rt.run_microtasks();
+    let id_c = seen.borrow()[2].0;
+    assert_eq!(read(&mut rt, "A.r"), "AbortError", "abort rejects with the signal reason");
+    assert!(cancelled.borrow().contains(&id_c), "host cancel() ran for the aborted id");
+    assert_eq!(rt.pending_fetches(), 0, "abort removes the pending entry");
+}
+
 #[test]
 fn fetch_resolves_to_response_through_the_handler() {
     let mut rt = Runtime::<BoaEngine>::new().unwrap();

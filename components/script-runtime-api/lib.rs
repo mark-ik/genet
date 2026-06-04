@@ -62,9 +62,11 @@ pub struct HostState {
     /// callback (the results bridge). Populated by [`Runtime::run_testharness`].
     pub results: Vec<TestResult>,
     /// The host's network seam for `fetch()`. `None` = no network (every fetch is
-    /// a network error). Installed by [`Runtime::set_fetch_handler`]; kept as a
-    /// trait object so this crate links no network stack.
-    pub fetch: Option<Box<dyn FetchHandler>>,
+    /// a network error). Installed by [`Runtime::set_fetch_handler`]; an `Rc` so the
+    /// native `__fetch_start` sink clones it out from under the `HostState` borrow
+    /// before calling it (the handler must not run with a live borrow). No `Send`
+    /// bound, so this crate links no network stack and stays `!Send`.
+    pub fetch: Option<std::rc::Rc<dyn FetchHandler>>,
     /// The document base URL, against which relative `fetch()` / `Request` URLs
     /// resolve (the `__resolve_url` sink reads it). `None` = no base (relative URLs
     /// stay relative, so a network fetch of one is an error). Set by
@@ -147,9 +149,41 @@ impl<E: ScriptEngine> Runtime<E> {
     }
 
     /// Install the host's `fetch()` network seam (e.g. a netfetcher-backed
-    /// handler). Until set, `fetch()` yields a network error.
+    /// handler). Until set, `fetch()` yields a network error. A synchronous handler
+    /// (implementing only `fetch`) settles each request in-tick; a deferred handler
+    /// (overriding `start`) settles later via [`settle_fetch`](Self::settle_fetch).
     pub fn set_fetch_handler(&mut self, handler: Box<dyn FetchHandler>) {
-        self.host.borrow_mut().fetch = Some(handler);
+        self.host.borrow_mut().fetch = Some(std::rc::Rc::from(handler));
+    }
+
+    /// Resolve the pending `fetch()` Promise `id` with `outcome` (a deferred host
+    /// calls this when the reply arrives). Rust cannot call a held JS function, so
+    /// this evals the `__fetchSettle` entry point (the same shape as `__runTimers`)
+    /// and pumps microtasks. Holds no `HostState` borrow across the eval.
+    pub fn settle_fetch(&mut self, id: u64, outcome: FetchOutcome) {
+        let json = fetch::encode_outcome(&outcome);
+        let js = format!("globalThis.__fetchSettle({},{});", id, js_str(&json));
+        let _ = self.engine.eval(&js);
+        self.engine.pump_microtasks();
+    }
+
+    /// Reject the pending `fetch()` Promise `id` as a network error with `message`
+    /// (a `TypeError`, per Fetch). For a deferred host's failed request.
+    pub fn fail_fetch(&mut self, id: u64, message: &str) {
+        let js = format!("globalThis.__fetchFail({},{});", id, js_str(message));
+        let _ = self.engine.eval(&js);
+        self.engine.pump_microtasks();
+    }
+
+    /// How many `fetch()` Promises are still pending. The host drive loop reads this
+    /// to know when script has quiesced (no in-flight fetches left to settle).
+    pub fn pending_fetches(&mut self) -> usize {
+        self.engine
+            .eval("String(Object.keys(globalThis.__pending).length)")
+            .ok()
+            .and_then(|v| self.engine.value_to_string(&v).ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0)
     }
 
     /// Set the document base URL: relative `fetch()` / `Request` URLs resolve
@@ -383,7 +417,10 @@ const EVENT_TARGET_BOOTSTRAP: &str = r#"
 "#;
 
 /// A JS string literal (quotes + minimal escaping) for embedding a Rust string in
-/// evaluated source. Used to build the `location` object from URL components.
+/// evaluated source. Used to build the `location` object from URL components and to
+/// carry a fetch outcome's JSON into `__fetchSettle`. U+2028 / U+2029 are escaped
+/// because, unescaped, they are JS line terminators that would break the eval'd
+/// source (a header value or URL can contain them).
 fn js_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -394,6 +431,8 @@ fn js_str(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
             c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
             c => out.push(c),
         }
