@@ -110,6 +110,12 @@ impl ResponseBody {
         }
         Ok(buf.freeze())
     }
+
+    /// The next decoded chunk, or `None` at end of stream. Lets an embedder consume
+    /// the body incrementally (stream it to a sink) without pulling in `StreamExt`.
+    pub async fn next_chunk(&mut self) -> Option<io::Result<Bytes>> {
+        self.inner.next().await
+    }
 }
 
 impl Stream for ResponseBody {
