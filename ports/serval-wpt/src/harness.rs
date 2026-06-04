@@ -180,28 +180,23 @@ fn run_with<E: ScriptEngine>(
         };
     };
 
-    // Deferred path: set the run up, then drive timers + the completion channel to
-    // quiescence (no pending fetches, no timer fired, an empty channel) or the
-    // wall-clock deadline.
+    // Deferred path: drive the event loop ourselves. Timers fire on a real-time
+    // gate (virtual clock = elapsed ms), so a short abort timer fires at its delay
+    // while the far-future testharness timeout stays pending, and fetch completions
+    // arrive out of band on the channel. Each turn: run microtasks, drain ready
+    // completions, fire due timers, then sleep until the next event (a completion or
+    // the next timer's due time) up to the wall-clock deadline.
     if let Err(e) = rt.begin_testharness(testharness_js, test_src) {
         return HarnessOutcome::Threw(truncate(&format!("{e:?}"), 200));
     }
-    let deadline = Instant::now() + DRIVE_DEADLINE;
-    // Fire the load timer up front so the testharness `all_loaded` flag is set even
-    // if the run later deadlines on a never-settling fetch (otherwise completion is
-    // gated forever and the test reports no results). `__runTimers` bails as soon as
-    // a fetch goes pending, so this cannot fire the testharness timeout early.
+    let start = Instant::now();
+    let elapsed_ms = |start: Instant| (Instant::now().saturating_duration_since(start)).as_millis() as f64;
     rt.run_microtasks();
-    rt.run_timers(TIMER_BUDGET);
     loop {
-        // Wall-clock deadline gates BOTH branches (a self-rescheduling timer in the
-        // no-fetch branch would otherwise spin forever).
-        if Instant::now() >= deadline {
+        if elapsed_ms(start) >= DRIVE_DEADLINE.as_millis() as f64 {
             rt.fail_all_pending("test timed out");
             break;
         }
-        // Start async functions / run continuations (which may issue fetches), but
-        // do NOT advance timers yet.
         rt.run_microtasks();
         let applied = cs.drain(&mut |c| match c {
             FetchCompletion::StartStream(id, o) => rt.start_stream(id, o),
@@ -209,26 +204,32 @@ fn run_with<E: ScriptEngine>(
             FetchCompletion::Close(id) => rt.close_stream(id),
             FetchCompletion::Fail(id, m) => rt.fail_fetch(id, &m),
         });
-        if rt.pending_fetches() > 0 {
-            // A real fetch is in flight. Resolve it BEFORE advancing the cooperative
-            // timer clock, otherwise `__runTimers` (no real-time gate) would fire the
-            // testharness timeout and time the test out spuriously. Block for the next
-            // completion, bounded by the deadline.
-            if applied == 0 {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                cs.wait(remaining, &mut |c| match c {
+        let fired = rt.run_timers(TIMER_BUDGET, elapsed_ms(start));
+        let pending = rt.pending_fetches();
+        let next_timer = rt.next_timer_delay();
+        if pending == 0 && next_timer.is_none() && fired == 0 && applied == 0 {
+            break; // quiescent: no fetch, no timer, nothing applied
+        }
+        if fired == 0 && applied == 0 {
+            // Nothing ran this turn. Sleep until the next event: a fetch completion
+            // (if one is pending) or the next timer's due time, bounded by deadline.
+            let remaining = (DRIVE_DEADLINE.as_millis() as f64 - elapsed_ms(start)).max(0.0);
+            let mut wait_ms = remaining;
+            if let Some(d) = next_timer {
+                wait_ms = wait_ms.min(d);
+            }
+            if pending > 0 {
+                // Wake on a completion or after the slice (whichever first).
+                cs.wait(Duration::from_millis(wait_ms.ceil() as u64), &mut |c| match c {
                     FetchCompletion::StartStream(id, o) => rt.start_stream(id, o),
                     FetchCompletion::Chunk(id, b) => rt.push_chunk(id, &b),
                     FetchCompletion::Close(id) => rt.close_stream(id),
                     FetchCompletion::Fail(id, m) => rt.fail_fetch(id, &m),
                 });
+            } else if wait_ms > 0.0 {
+                // Only timers are outstanding: sleep until the soonest is due.
+                std::thread::sleep(Duration::from_millis(wait_ms.ceil() as u64));
             }
-            continue;
-        }
-        // No fetch in flight: advance timers (genuine test timers + any timeout).
-        // Quiescent when a turn fires nothing and applies nothing.
-        if rt.run_timers(TIMER_BUDGET) == 0 && applied == 0 {
-            break;
         }
     }
     HarnessOutcome::Ran(rt.results())

@@ -164,20 +164,38 @@ impl<E: ScriptEngine> Runtime<E> {
     }
 
     /// Fire up to `budget` due timers (with microtask checkpoints around the batch)
-    /// and return how many fired. The driver loop uses the count to detect
-    /// quiescence: zero fired + no pending fetches + an empty completion channel
-    /// means script has nothing left to do.
-    pub fn run_timers(&mut self, budget: u32) -> usize {
+    /// against the virtual clock at `now_ms` (the real elapsed time of the run), and
+    /// return how many fired. Real-time gating lets a short abort timer fire at its
+    /// delay while the far-future testharness timeout stays pending.
+    pub fn run_timers(&mut self, budget: u32, now_ms: f64) -> usize {
         self.engine.pump_microtasks();
         let fired = self
             .engine
-            .eval(&format!("String(globalThis.__runTimers({budget}))"))
+            .eval(&format!("String(globalThis.__runTimers({budget},{now_ms}))"))
             .ok()
             .and_then(|v| self.engine.value_to_string(&v).ok())
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
         self.engine.pump_microtasks();
         fired
+    }
+
+    /// Milliseconds until the next timer is due (relative to the last `run_timers`
+    /// virtual clock), or `None` if no timer is scheduled. The drive loop sleeps at
+    /// most this long so a timer fires near its real deadline.
+    pub fn next_timer_delay(&mut self) -> Option<f64> {
+        let d: f64 = self
+            .engine
+            .eval("String(globalThis.__nextTimerDelay())")
+            .ok()
+            .and_then(|v| self.engine.value_to_string(&v).ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(-1.0);
+        if d < 0.0 {
+            None
+        } else {
+            Some(d)
+        }
     }
 
     /// The per-subtest results collected so far (the driver reads this after the run
@@ -361,9 +379,11 @@ const EVENT_LOOP_BOOTSTRAP: &str = r#"
 (function() {
   var timers = [];
   var nextId = 1;
+  var vnow = 0; // virtual clock (ms); advanced by __runTimers in real-time mode
   function schedule(cb, delay, repeat) {
+    var d = +delay || 0; if (d < 0) d = 0;
     var id = nextId++;
-    timers.push({ id: id, cb: cb, delay: +delay || 0, seq: timers.length, repeat: !!repeat });
+    timers.push({ id: id, cb: cb, delay: d, at: vnow + d, seq: timers.length, repeat: !!repeat });
     return id;
   }
   globalThis.setTimeout = function(cb, delay) { return schedule(cb, delay, false); };
@@ -374,21 +394,45 @@ const EVENT_LOOP_BOOTSTRAP: &str = r#"
     }
   };
   globalThis.clearInterval = globalThis.clearTimeout;
-  globalThis.__runTimers = function(budget) {
+  // Fire due timers. `nowMs` undefined => cooperative (disk path): fire everything
+  // in (delay, seq) order, ignoring real time. `nowMs` given => real-time gate
+  // (deferred drive loop): advance the virtual clock and fire only timers whose
+  // `at` has elapsed, in (at, seq) order — so a short abort timer fires at its real
+  // delay while the far-future testharness timeout stays pending.
+  globalThis.__runTimers = function(budget, nowMs) {
+    var realtime = (nowMs !== undefined);
+    if (realtime && nowMs > vnow) vnow = nowMs;
     var fired = 0;
-    while (timers.length > 0 && fired < budget) {
-      timers.sort(function(a, b) { return (a.delay - b.delay) || (a.seq - b.seq); });
-      var t = timers.shift();
+    while (fired < budget) {
+      var idx = -1, bestKey = 0, bestSeq = 0;
+      for (var i = 0; i < timers.length; i++) {
+        var t = timers[i];
+        if (realtime && t.at > vnow) continue; // not due yet
+        var key = realtime ? t.at : t.delay;
+        if (idx < 0 || key < bestKey || (key === bestKey && t.seq < bestSeq)) { idx = i; bestKey = key; bestSeq = t.seq; }
+      }
+      if (idx < 0) break; // nothing eligible
+      var due = timers.splice(idx, 1)[0];
       fired++;
-      if (t.repeat) { t.seq = nextId++; timers.push(t); }
-      t.cb();
-      // If a timer callback issued a deferred fetch (left a pending entry), stop the
-      // batch so the host drive loop can settle it before later timers fire (e.g.
-      // the testharness timeout). No-op when nothing is pending (the disk path).
+      if (due.repeat) { due.at = vnow + due.delay; due.seq = nextId++; timers.push(due); }
+      due.cb();
+      // If a timer callback issued a deferred fetch (left a pending entry), stop so
+      // the host drive loop can settle it before later timers (e.g. the harness
+      // timeout) fire. No-op when nothing is pending (the disk path).
       var p = globalThis.__pending;
       if (p && Object.keys(p).length > 0) break;
     }
     return fired;
+  };
+  // Milliseconds until the next timer is due (real-time), or -1 if none. The drive
+  // loop sleeps at most this long so a timer fires near its real deadline.
+  globalThis.__nextTimerDelay = function() {
+    var best = -1;
+    for (var i = 0; i < timers.length; i++) {
+      var d = timers[i].at - vnow; if (d < 0) d = 0;
+      if (best < 0 || d < best) best = d;
+    }
+    return best;
   };
 })();
 "#;
