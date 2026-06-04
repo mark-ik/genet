@@ -528,9 +528,14 @@ const FETCH_BOOTSTRAP: &str = r#"
     if (self.bodyUsed) lockBody(self.__stream);
     return self.__stream;
   }
-  // Copy a body for clone(): buffered bytes copy by reference; a live stream-backed
-  // body is tee'd so source and clone each get an independent stream.
+  // Copy a body for clone(): buffered bytes copy by reference; an already-closed
+  // stream is tee'd from its snapshot. A live (still-arriving) stream cannot be
+  // tee'd losslessly by the buffered tee, so cloning one throws rather than
+  // silently truncating both copies (a real fan-out tee is a later refinement).
   function cloneBodyInto(src, dst) {
+    if (src.__stream && src.__bytes == null && !src.__stream._closed) {
+      throw new TypeError("Cannot clone a body with a streaming (in-flight) ReadableStream");
+    }
     dst.__bytes = src.__bytes;
     if (src.__stream && src.__bytes == null) {
       var t = src.__stream.tee();

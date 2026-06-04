@@ -183,7 +183,19 @@ fn run_with<E: ScriptEngine>(
         return HarnessOutcome::Threw(truncate(&format!("{e:?}"), 200));
     }
     let deadline = Instant::now() + DRIVE_DEADLINE;
+    // Fire the load timer up front so the testharness `all_loaded` flag is set even
+    // if the run later deadlines on a never-settling fetch (otherwise completion is
+    // gated forever and the test reports no results). `__runTimers` bails as soon as
+    // a fetch goes pending, so this cannot fire the testharness timeout early.
+    rt.run_microtasks();
+    rt.run_timers(TIMER_BUDGET);
     loop {
+        // Wall-clock deadline gates BOTH branches (a self-rescheduling timer in the
+        // no-fetch branch would otherwise spin forever).
+        if Instant::now() >= deadline {
+            rt.fail_all_pending("test timed out");
+            break;
+        }
         // Start async functions / run continuations (which may issue fetches), but
         // do NOT advance timers yet.
         rt.run_microtasks();
@@ -193,21 +205,15 @@ fn run_with<E: ScriptEngine>(
         });
         if rt.pending_fetches() > 0 {
             // A real fetch is in flight. Resolve it BEFORE advancing the cooperative
-            // timer clock, otherwise `__runTimers` would fire the testharness timeout
-            // (which has no real-time gate) and time the test out spuriously.
-            let now = Instant::now();
-            if now >= deadline {
-                rt.fail_all_pending("fetch timed out");
-                break;
-            }
-            if applied == 0
-                && cs.wait(deadline - now, &mut |c| match c {
+            // timer clock, otherwise `__runTimers` (no real-time gate) would fire the
+            // testharness timeout and time the test out spuriously. Block for the next
+            // completion, bounded by the deadline.
+            if applied == 0 {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                cs.wait(remaining, &mut |c| match c {
                     FetchCompletion::Settle(id, o) => rt.settle_fetch(id, o),
                     FetchCompletion::Fail(id, m) => rt.fail_fetch(id, &m),
-                }) == 0
-            {
-                rt.fail_all_pending("fetch timed out");
-                break;
+                });
             }
             continue;
         }

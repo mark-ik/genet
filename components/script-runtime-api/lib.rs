@@ -254,9 +254,10 @@ impl<E: ScriptEngine> Runtime<E> {
     /// awaits a never-settling fetch records a failure rather than hanging.
     pub fn fail_all_pending(&mut self, message: &str) {
         let js = format!(
-            "(function(){{var p=globalThis.__pending;for(var k in p){{var e=p[k];delete p[k];\
-             if(e&&!e.settled){{e.settled=true;e.reject(new TypeError({}));}}}}}})();",
-            js_str(message)
+            "(function(){{var p=globalThis.__pending;for(var k in p){{var e=p[k];delete p[k];if(e){{\
+             if(e.controller){{try{{e.controller.error(new TypeError({m}));}}catch(x){{}}}}\
+             if(!e.settled){{e.settled=true;e.reject(new TypeError({m}));}}}}}}}})();",
+            m = js_str(message)
         );
         let _ = self.engine.eval(&js);
         self.engine.pump_microtasks();
@@ -381,6 +382,11 @@ const EVENT_LOOP_BOOTSTRAP: &str = r#"
       fired++;
       if (t.repeat) { t.seq = nextId++; timers.push(t); }
       t.cb();
+      // If a timer callback issued a deferred fetch (left a pending entry), stop the
+      // batch so the host drive loop can settle it before later timers fire (e.g.
+      // the testharness timeout). No-op when nothing is pending (the disk path).
+      var p = globalThis.__pending;
+      if (p && Object.keys(p).length > 0) break;
     }
     return fired;
   };

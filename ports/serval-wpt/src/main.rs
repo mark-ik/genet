@@ -1210,6 +1210,18 @@ mod net {
         }
     }
 
+    impl Drop for NetFetchHandler {
+        // When the per-test handler drops (the Runtime is torn down, e.g. after the
+        // drive loop's deadline), cancel every fetch it ever started so the worker
+        // drops any still-in-flight future instead of leaking a hung task and a
+        // checked-out hyper connection. Cancelling an already-finished key is a no-op.
+        fn drop(&mut self) {
+            for key in self.keys.borrow().values() {
+                let _ = worker_jobs().send(Job::Cancel(*key));
+            }
+        }
+    }
+
     /// Bridges a test's fetch-event channel to the harness drive loop. Owns the
     /// receiver (per test, created alongside the handler's `Sender`).
     pub struct ChannelCompletion {

@@ -168,6 +168,26 @@ fn streaming_response_body_delivers_incrementally() {
 }
 
 #[test]
+fn clone_of_live_streaming_body_rejects() {
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(u64, String)>::new()));
+    let cancelled = std::rc::Rc::new(std::cell::RefCell::new(Vec::<u64>::new()));
+    let mut rt = Runtime::<BoaEngine>::new().unwrap();
+    rt.set_fetch_handler(Box::new(DeferredRecorder { seen: seen.clone(), cancelled }));
+
+    rt.eval(r#"var C={}; fetch("http://x/live").then(function(r){ C.resp = r; });"#).unwrap();
+    rt.run_microtasks();
+    let id = seen.borrow()[0].0;
+    rt.start_stream(id, ok_meta("http://x/live"));
+    // C.resp is a live (still-arriving) streaming Response. The buffered tee cannot
+    // clone it losslessly, so clone() must throw rather than silently truncate.
+    assert_eq!(
+        read(&mut rt, r#"(function(){try{C.resp.clone();return "no-throw";}catch(e){return e instanceof TypeError?"TypeError":"other";}})()"#),
+        "TypeError"
+    );
+    rt.close_stream(id);
+}
+
+#[test]
 fn fetch_resolves_to_response_through_the_handler() {
     let mut rt = Runtime::<BoaEngine>::new().unwrap();
     rt.set_fetch_handler(Box::new(EchoFetch));
