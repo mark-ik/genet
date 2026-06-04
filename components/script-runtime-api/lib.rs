@@ -213,6 +213,42 @@ impl<E: ScriptEngine> Runtime<E> {
         self.engine.pump_microtasks();
     }
 
+    /// Early-settle the pending `fetch()` Promise `id` with a streaming response:
+    /// status + headers from `meta` (its body is ignored), body delivered
+    /// incrementally via [`push_chunk`](Self::push_chunk) then
+    /// [`close_stream`](Self::close_stream). For a host that streams a response body
+    /// as it arrives rather than buffering the whole thing.
+    pub fn start_stream(&mut self, id: u64, meta: FetchOutcome) {
+        let json = fetch::encode_outcome(&meta);
+        let js = format!("globalThis.__fetchStartStream({},{});", id, js_str(&json));
+        let _ = self.engine.eval(&js);
+        self.engine.pump_microtasks();
+    }
+
+    /// Push a body chunk to a streaming response started with
+    /// [`start_stream`](Self::start_stream). Bytes cross as a JS array literal (no
+    /// string-escape hazard), feeding the response's `ReadableStream` controller.
+    pub fn push_chunk(&mut self, id: u64, bytes: &[u8]) {
+        let mut lit = String::with_capacity(bytes.len() * 4 + 2);
+        lit.push('[');
+        for (i, b) in bytes.iter().enumerate() {
+            if i > 0 {
+                lit.push(',');
+            }
+            lit.push_str(&b.to_string());
+        }
+        lit.push(']');
+        let _ = self.engine.eval(&format!("globalThis.__fetchPushChunk({},{});", id, lit));
+        self.engine.pump_microtasks();
+    }
+
+    /// Close a streaming response started with [`start_stream`](Self::start_stream):
+    /// the body's `ReadableStream` ends and pending reads resolve `done`.
+    pub fn close_stream(&mut self, id: u64) {
+        let _ = self.engine.eval(&format!("globalThis.__fetchClose({});", id));
+        self.engine.pump_microtasks();
+    }
+
     /// Reject every still-pending `fetch()` Promise with `message` (a `TypeError`).
     /// The host drive loop calls this at its wall-clock deadline so a test that
     /// awaits a never-settling fetch records a failure rather than hanging.

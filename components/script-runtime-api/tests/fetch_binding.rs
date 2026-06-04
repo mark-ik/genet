@@ -109,6 +109,64 @@ fn deferred_fetch_settles_later() {
     assert_eq!(rt.pending_fetches(), 0, "abort removes the pending entry");
 }
 
+fn ok_meta(url: &str) -> FetchOutcome {
+    FetchOutcome {
+        network_error: false,
+        status: 200,
+        status_text: "OK".into(),
+        response_type: "basic".into(),
+        url: url.into(),
+        headers: vec![],
+        body: vec![],
+    }
+}
+
+#[test]
+fn streaming_response_body_delivers_incrementally() {
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(u64, String)>::new()));
+    let cancelled = std::rc::Rc::new(std::cell::RefCell::new(Vec::<u64>::new()));
+    let mut rt = Runtime::<BoaEngine>::new().unwrap();
+    rt.set_fetch_handler(Box::new(DeferredRecorder { seen: seen.clone(), cancelled }));
+
+    // (1) Incremental read via response.body.getReader(): each chunk surfaces as it
+    // is pushed; the reader parks between chunks and ends on close.
+    rt.eval(
+        r#"
+        var S = { chunks: [] };
+        fetch("http://x/stream").then(function(r){
+          S.status = r.status;
+          var rd = r.body.getReader();
+          function pump(){ return rd.read().then(function(res){ if (res.done) { S.done = true; return; } S.chunks.push(new TextDecoder().decode(res.value)); return pump(); }); }
+          return pump();
+        });
+        "#,
+    ).unwrap();
+    rt.run_microtasks();
+    let id = seen.borrow()[0].0;
+    rt.start_stream(id, ok_meta("http://x/stream"));
+    assert_eq!(read(&mut rt, "String(S.status)"), "200", "early-settled with status before body");
+    assert_eq!(read(&mut rt, "String(S.chunks.length)"), "0", "no chunks before any push");
+    rt.push_chunk(id, b"foo");
+    assert_eq!(read(&mut rt, "S.chunks.join(',')"), "foo");
+    rt.push_chunk(id, b"bar");
+    assert_eq!(read(&mut rt, "S.chunks.join(',')"), "foo,bar");
+    assert_eq!(read(&mut rt, "String(S.done)"), "undefined", "not done until close");
+    rt.close_stream(id);
+    assert_eq!(read(&mut rt, "String(S.done)"), "true");
+    assert_eq!(rt.pending_fetches(), 0, "closing a stream removes the pending entry");
+
+    // (2) Async drain via text() on a streaming response (resolves a primitive once
+    // all chunks have arrived).
+    rt.eval(r#"var T={}; fetch("http://x/s2").then(function(r){ return r.text(); }).then(function(t){ T.text = t; });"#).unwrap();
+    rt.run_microtasks();
+    let id2 = seen.borrow()[1].0;
+    rt.start_stream(id2, ok_meta("http://x/s2"));
+    rt.push_chunk(id2, b"hel");
+    rt.push_chunk(id2, b"lo");
+    rt.close_stream(id2);
+    assert_eq!(read(&mut rt, "T.text"), "hello", "text() awaits the whole streamed body");
+}
+
 #[test]
 fn fetch_resolves_to_response_through_the_handler() {
     let mut rt = Runtime::<BoaEngine>::new().unwrap();

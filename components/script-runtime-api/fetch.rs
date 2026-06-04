@@ -613,26 +613,43 @@ const FETCH_BOOTSTRAP: &str = r#"
   function ReadableStream(source, strategy) {
     source = source || {};
     this._chunks = [];
+    this._waiters = []; // parked read() promises {res, rej} for a live (incremental) stream
     this._closed = false;
     this._errored = false;
     this._error = undefined;
     this._reader = null;
     this._disturbed = false;
+    this._owner = null;
     this._source = source;
     var self = this;
     this._controller = {
       enqueue: function(chunk) {
         if (self._closed || self._errored) throw new TypeError("Cannot enqueue on a closed stream");
-        self._chunks.push(chunk);
+        // Hand the chunk straight to a parked reader, else buffer it.
+        if (self._waiters.length > 0) self._waiters.shift().res({ value: chunk, done: false });
+        else self._chunks.push(chunk);
       },
-      close: function() { self._closed = true; },
-      error: function(e) { self._errored = true; self._error = e; },
+      close: function() { self._closeStream(); },
+      error: function(e) { self._errorStream(e); },
       get desiredSize() { return self._closed ? null : 1; }
     };
     if (typeof source.start === 'function') {
-      try { source.start(this._controller); } catch (e) { this._controller.error(e); }
+      try { source.start(this._controller); } catch (e) { this._errorStream(e); }
     }
   }
+  // Close: wake every parked reader with done, and resolve the reader's `closed`.
+  ReadableStream.prototype._closeStream = function() {
+    if (this._closed || this._errored) return;
+    this._closed = true;
+    while (this._waiters.length) this._waiters.shift().res({ value: undefined, done: true });
+    if (this._reader && this._reader._cRes) { this._reader._cRes(undefined); this._reader._cRes = null; }
+  };
+  ReadableStream.prototype._errorStream = function(e) {
+    if (this._closed || this._errored) return;
+    this._errored = true; this._error = e;
+    while (this._waiters.length) this._waiters.shift().rej(e);
+    if (this._reader && this._reader._cRej) { this._reader._cRej(e); this._reader._cRej = null; }
+  };
   Object.defineProperty(ReadableStream.prototype, 'locked', { configurable: true, get: function() { return this._reader !== null; } });
   ReadableStream.prototype.getReader = function(opts) {
     // BYOB readers are not implemented; ignore the mode and hand back a default
@@ -643,8 +660,9 @@ const FETCH_BOOTSTRAP: &str = r#"
     return r;
   };
   ReadableStream.prototype.cancel = function(reason) {
-    this._disturbed = true; this._closed = true; this._chunks = [];
+    this._disturbed = true; this._chunks = [];
     if (this._owner) this._owner.bodyUsed = true;
+    this._closeStream(); // wake any parked readers with done
     if (typeof this._source.cancel === 'function') { try { this._source.cancel(reason); } catch (e) {} }
     return Promise.resolve(undefined);
   };
@@ -677,12 +695,13 @@ const FETCH_BOOTSTRAP: &str = r#"
     if (s._owner) s._owner.bodyUsed = true;
     if (s._chunks.length > 0) return Promise.resolve({ value: s._chunks.shift(), done: false });
     if (!s._closed && !s._errored && typeof s._source.pull === 'function') {
-      try { s._source.pull(s._controller); } catch (e) { s._errored = true; s._error = e; }
+      try { s._source.pull(s._controller); } catch (e) { s._errorStream(e); }
       if (s._chunks.length > 0) return Promise.resolve({ value: s._chunks.shift(), done: false });
     }
     if (s._errored) { if (this._cRej) { this._cRej(s._error); this._cRej = null; } return Promise.reject(s._error); }
-    if (this._cRes) { this._cRes(undefined); this._cRes = null; }
-    return Promise.resolve({ value: undefined, done: true });
+    if (s._closed) { if (this._cRes) { this._cRes(undefined); this._cRes = null; } return Promise.resolve({ value: undefined, done: true }); }
+    // Live stream, nothing buffered yet: park until enqueue / close / error.
+    return new Promise(function(res, rej) { s._waiters.push({ res: res, rej: rej }); });
   };
   ReadableStreamDefaultReader.prototype.releaseLock = function() {
     if (this._stream) { if (this._stream._reader === this) this._stream._reader = null; this._stream = null; }
@@ -1030,19 +1049,68 @@ const FETCH_BOOTSTRAP: &str = r#"
     return fd;
   }
 
+  // A body is "live" when it is backed by a stream that has not closed yet (an
+  // incremental network response fed by __fetchPushChunk). Buffered bodies and
+  // already-closed streams use the synchronous takeBytes path, so their behaviour
+  // (and the broken-then immunity of text/json) is unchanged.
+  function isLive(self) { return self.__stream && self.__bytes == null && !self.__stream._closed; }
+  function bodyGuardError(self) {
+    if (self.__stream && self.__stream.locked) return new TypeError("Body is locked");
+    if (self.bodyUsed || (self.__stream && self.__stream._disturbed)) return new TypeError("Body has already been consumed.");
+    return null;
+  }
+  // Drain a live stream to completion via its reader, returning Promise<Uint8Array>.
+  function drainLive(self) {
+    self.bodyUsed = true;
+    var reader = self.__stream.getReader();
+    var parts = [], total = 0;
+    function pump() {
+      return reader.read().then(function(r) {
+        if (r.done) {
+          var all = new Uint8Array(total), off = 0;
+          for (var i = 0; i < parts.length; i++) { all.set(parts[i], off); off += parts[i].length; }
+          return all;
+        }
+        if (!ArrayBuffer.isView(r.value)) throw new TypeError("ReadableStream chunk is not a Uint8Array");
+        parts.push(r.value); total += r.value.length;
+        return pump();
+      });
+    }
+    return pump();
+  }
+  // text/json resolve with a primitive even on the live path (broken-then immune);
+  // arrayBuffer/bytes/blob resolve with an object, as on the buffered path.
   var bodyMixin = {
-    text: function() { var s = this; return settled(function() { return utf8Decode(takeBytes(s)); }); },
-    json: function() { var s = this; return settled(function() { return JSON.parse(utf8Decode(takeBytes(s))); }); },
-    arrayBuffer: function() { var s = this; return settled(function() { return takeBytes(s).slice(0).buffer; }); },
-    bytes: function() { var s = this; return settled(function() { return takeBytes(s).slice(0); }); },
+    text: function() {
+      var s = this; var err = bodyGuardError(s); if (err) return Promise.reject(err);
+      if (isLive(s)) return drainLive(s).then(function(b) { return utf8Decode(b); });
+      return settled(function() { return utf8Decode(takeBytes(s)); });
+    },
+    json: function() {
+      var s = this; var err = bodyGuardError(s); if (err) return Promise.reject(err);
+      if (isLive(s)) return drainLive(s).then(function(b) { return JSON.parse(utf8Decode(b)); });
+      return settled(function() { return JSON.parse(utf8Decode(takeBytes(s))); });
+    },
+    arrayBuffer: function() {
+      var s = this; var err = bodyGuardError(s); if (err) return Promise.reject(err);
+      if (isLive(s)) return drainLive(s).then(function(b) { return b.slice(0).buffer; });
+      return settled(function() { return takeBytes(s).slice(0).buffer; });
+    },
+    bytes: function() {
+      var s = this; var err = bodyGuardError(s); if (err) return Promise.reject(err);
+      if (isLive(s)) return drainLive(s).then(function(b) { return b.slice(0); });
+      return settled(function() { return takeBytes(s).slice(0); });
+    },
     blob: function() {
-      var s = this;
+      var s = this; var err = bodyGuardError(s); if (err) return Promise.reject(err);
       var ct = (s.headers && s.headers.get) ? s.headers.get('content-type') : null;
+      if (isLive(s)) return drainLive(s).then(function(b) { return new Blob([b], { type: ct || '' }); });
       return settled(function() { return new Blob([takeBytes(s)], { type: ct || '' }); });
     },
     formData: function() {
-      var s = this;
+      var s = this; var err = bodyGuardError(s); if (err) return Promise.reject(err);
       var ct = (s.headers && s.headers.get) ? s.headers.get('content-type') : '';
+      if (isLive(s)) return drainLive(s).then(function(b) { return parseFormData(utf8Decode(b), ct); });
       return settled(function() { return parseFormData(utf8Decode(takeBytes(s)), ct); });
     }
   };
@@ -1239,12 +1307,14 @@ const FETCH_BOOTSTRAP: &str = r#"
       // with the signal's reason. JS mints the reason once so the same instance
       // flows to the body and the rejection (promise_rejects_exactly).
       if (req.signal) req.signal.addEventListener('abort', function() {
-        var e = __pending[id]; if (!e || e.settled) return;
-        e.settled = true; delete __pending[id];
+        var e = __pending[id]; if (!e) return;
+        delete __pending[id];
         var err = abortReason(req.signal.reason);
-        if (e.controller) { try { e.controller.error(err); } catch (x) {} }
         try { __fetch_abort(id); } catch (x) {}
-        e.reject(err);
+        // Mid-stream abort errors the in-flight body; pre-headers abort rejects the
+        // Promise. (A settled streaming entry has a controller but no pending Promise.)
+        if (e.controller) { try { e.controller.error(err); } catch (x) {} }
+        if (!e.settled) { e.settled = true; e.reject(err); }
       });
       var inline = __fetch_start(id, req.method, req.url, headersFlat(req.headers),
                                  req.__bytes != null ? bytesToBinaryString(req.__bytes) : "");
@@ -1266,6 +1336,34 @@ const FETCH_BOOTSTRAP: &str = r#"
   globalThis.__fetchFail = function(id, msg) {
     var e = __pending[id]; if (!e || e.settled) return; e.settled = true; delete __pending[id];
     e.reject(new TypeError(msg || 'Failed to fetch'));
+  };
+
+  // ---- Streaming deferred response (incremental body) ----
+  // A deferred host can early-settle with status + headers, then feed the body as
+  // it arrives. __fetchStartStream resolves the Promise with a Response whose body
+  // is a LIVE stream; the entry STAYS in __pending (with its controller) so chunks
+  // and close route to it; __fetchClose removes it.
+  globalThis.__fetchStartStream = function(id, ojson) {
+    var e = __pending[id]; if (!e || e.settled) return; e.settled = true;
+    var o = JSON.parse(ojson);
+    if (o.networkError) { delete __pending[id]; e.reject(new TypeError('Failed to fetch')); return; }
+    var controller = null;
+    var stream = new ReadableStream({ start: function(c) { controller = c; } });
+    var r = new Response(null, { status: o.status || 200, statusText: o.statusText || "", headers: o.headers });
+    r.__bytes = null; r.__stream = stream; stream._owner = r;
+    r.type = o.type || "default"; r.url = o.url || "";
+    e.controller = controller;
+    e.resolve(r);
+  };
+  globalThis.__fetchPushChunk = function(id, arr) {
+    var e = __pending[id]; if (!e || !e.controller) return;
+    var u8 = new Uint8Array(arr.length);
+    for (var i = 0; i < arr.length; i++) u8[i] = arr[i] & 0xFF;
+    try { e.controller.enqueue(u8); } catch (x) {}
+  };
+  globalThis.__fetchClose = function(id) {
+    var e = __pending[id]; if (!e) return; delete __pending[id];
+    if (e.controller) { try { e.controller.close(); } catch (x) {} }
   };
 })();
 "#;
