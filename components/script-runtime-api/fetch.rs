@@ -1320,6 +1320,11 @@ const FETCH_BOOTSTRAP: &str = r#"
     this.ok = this.status >= 200 && this.status < 300;
     this.type = "default"; this.url = ""; this.redirected = false;
     this.headers = new Headers(init.headers);
+    // Response guard: a script-built Response cannot carry set-cookie / set-cookie2
+    // (a network Response sets its headers with the guard bypassed; see
+    // responseFromOutcome). Filter the init headers, then govern later writes.
+    this.headers._h = this.headers._h.filter(function(p) { return !isForbiddenResponseHeader(p[0]); });
+    this.headers._guard = 'response';
     this.__bytes = null; this.__stream = null;
     if (body != null) {
       var eb = extractBody(body);
@@ -1341,13 +1346,13 @@ const FETCH_BOOTSTRAP: &str = r#"
     var r = Object.create(Response.prototype);
     r.status = this.status; r.statusText = this.statusText; r.ok = this.ok;
     r.type = this.type; r.url = this.url; r.redirected = this.redirected;
-    r.headers = new Headers(this.headers); r.bodyUsed = false;
+    r.headers = new Headers(this.headers); r.headers._guard = this.headers._guard; r.bodyUsed = false;
     cloneBodyInto(this, r);
     return r;
   };
   Response.error = function() {
     var r = new Response(null, { status: 200 });
-    r.status = 0; r.ok = false; r.type = "error"; return r;
+    r.status = 0; r.ok = false; r.type = "error"; r.headers._guard = 'immutable'; return r;
   };
   Response.redirect = function(url, status) {
     status = (status === undefined) ? 302 : (status | 0);
@@ -1370,7 +1375,10 @@ const FETCH_BOOTSTRAP: &str = r#"
   // string; decode it straight to bytes (bypassing extractBody, which would treat
   // it as text) so binary responses are exact.
   function responseFromOutcome(o) {
-    var r = new Response(null, { status: o.status || 200, statusText: o.statusText || "", headers: o.headers });
+    var r = new Response(null, { status: o.status || 200, statusText: o.statusText || "" });
+    // Network headers are set with the guard bypassed (a real response keeps
+    // set-cookie, readable via getSetCookie); the guard only blocks later writes.
+    r.headers = new Headers(o.headers); r.headers._guard = 'response';
     r.__bytes = binaryStringToBytes(o.body != null ? o.body : "");
     r.type = o.type || "default"; r.url = o.url || ""; return r;
   }
@@ -1457,7 +1465,8 @@ const FETCH_BOOTSTRAP: &str = r#"
     if (o.networkError) { delete __pending[id]; e.reject(new TypeError('Failed to fetch')); return; }
     var controller = null;
     var stream = new ReadableStream({ start: function(c) { controller = c; } });
-    var r = new Response(null, { status: o.status || 200, statusText: o.statusText || "", headers: o.headers });
+    var r = new Response(null, { status: o.status || 200, statusText: o.statusText || "" });
+    r.headers = new Headers(o.headers); r.headers._guard = 'response'; // network headers, guard bypassed
     r.__bytes = null; r.__stream = stream; stream._owner = r;
     r.type = o.type || "default"; r.url = o.url || "";
     e.controller = controller;
