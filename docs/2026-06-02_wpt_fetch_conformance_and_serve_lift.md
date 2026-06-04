@@ -282,36 +282,39 @@ Inverted it to a **deferred push**, in three slices, all behind the existing
    `push_chunk` / `close_stream` feed it. Lifting the reader to a waiter model also
    closed part of the buffered-stream tail: network-free response 184 -> 196/290 on
    both engines.
+4. **Runner streaming (follow-up, 2026-06-04).** The `serval-wpt` worker now polls
+   the netfetcher body (`ResponseBody::next_chunk`, a small added method) and
+   emits `StartStream` (status + headers) -> `Chunk`* -> `Close` instead of
+   buffering the whole body. So `await fetch()` resolves at the headers and a
+   mid-flight `controller.abort()` runs: `fetch/api/abort` went 37 -> **54/88** in
+   server mode (`general` NORES -> 41/53, `keepalive`'s infinite-slow-response abort
+   0 -> 1/2), both engines, with the network-free numbers (response 196, request
+   257) and the basics (1/1, 6/8, 3/4) unchanged.
 
 The seam is the actor-mailbox shape: a deferred handler owns a send into a worker
 (or, in Mere, the I/O fetch actor's inbox), and replies arrive as messages that
-drive `settle_fetch` / `push_chunk` / `close_stream`. `serval-wpt`'s handler is one
-consumer; Mere's content actor is the other, with no second refactor.
+drive `start_stream` / `push_chunk` / `close_stream` / `fail_fetch`. `serval-wpt`'s
+handler is one consumer; Mere's content actor is the other, with no second refactor.
 
 ## Not done (deliberately deferred)
 
 - **BYOB byte readers.** `getReader({mode:'bytes'})` with a caller-supplied view
   is still ignored (it hands back a default reader). A few `disturbed-*` subtests
   want a true byte reader.
-- **`serval-wpt` streaming + `general.any.js`.** The deferred handler still buffers
-  the whole body before settling (it does not yet poll `resp.body` chunk-by-chunk
-  into `push_chunk`), so the streaming primitive is exercised by the binding tests,
-  not the runner. `fetch/api/abort/general` (cross-origin, ~50 fetches, infinite
-  responses, `timeout=long`) is the hard outlier: it NORES in server mode within
-  the per-test deadline. Incremental runner streaming + a longer deadline are the
-  follow-up.
 - **Multipart bodies.** `formData()` parses urlencoded but not multipart, and a
   binary `File` part in a multipart request body is still spliced as text (the one
   remaining lossy body spot). A multipart parser/serializer over the byte body is
   the fix.
 - **`iframe` / `contentWindow`.** `*/url-parsing.html` and the multi-global tests
   reach into iframe globals, which the single-realm runner has no model for.
+- **Timer-scheduled abort while a fetch is in flight.** `AbortSignal.timeout()` /
+  `setTimeout(abort)` cannot fire while the drive loop is blocked on a pending
+  fetch, because timers advance cooperatively (no real-time gate) and firing them
+  mid-fetch would also fire the testharness timeout. A real-time timer gate scoped
+  to the deferred loop (without changing the cooperative disk path) is the fix.
 - **The failing object-semantics tail**: request / response still sit under
-  two-thirds, now mostly BYOB readers + iframes + multipart + per-handler streaming
-  wiring, not missing constructors, a lossy body channel, or a synchronous seam.
-- **Per-test runtime reuse.** A fresh `Runtime` per test re-evals testharness.js
-  each time (the dominant cost; see `harness::bench`). A snapshot-clone pool is the
-  amortization, unchanged by this work.
+  two-thirds, now mostly BYOB readers + iframes + multipart + timer-abort, not
+  missing constructors, a lossy body channel, or a synchronous seam.
 - **Per-test runtime reuse.** A fresh `Runtime` per test re-evals testharness.js
   each time (the dominant cost; see `harness::bench`). A snapshot-clone pool is the
   amortization, unchanged by this work.

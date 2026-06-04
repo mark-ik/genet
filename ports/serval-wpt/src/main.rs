@@ -1071,16 +1071,7 @@ mod net {
                         });
                     }
                     Ok(Job::Fetch(key, id, req, reply)) => {
-                        let h = tokio::spawn(async move {
-                            let outcome = do_fetch(req).await;
-                            let out = if outcome.network_error {
-                                FetchEvent::Fail(id, "Failed to fetch".to_string())
-                            } else {
-                                FetchEvent::Settle(id, outcome)
-                            };
-                            let _ = reply.send(out);
-                        })
-                        .abort_handle();
+                        let h = tokio::spawn(run_fetch_streaming(id, req, reply)).abort_handle();
                         handles.insert(key, h);
                     }
                     Ok(Job::Cancel(key)) => {
@@ -1122,12 +1113,26 @@ mod net {
         resp.bytes().await.ok().map(|b| String::from_utf8_lossy(&b).into_owned())
     }
 
-    /// Map a `FetchRequest` to a netfetcher request, run it, and shape the result
-    /// into a `FetchOutcome`. The deferred worker runs this; the body crosses back
-    /// to JS as the binary string `encode_outcome` builds.
-    async fn do_fetch(req: FetchRequest) -> FetchOutcome {
+    fn map_response_type(t: netfetcher::ResponseType) -> String {
+        match t {
+            netfetcher::ResponseType::Basic => "basic",
+            netfetcher::ResponseType::Cors => "cors",
+            netfetcher::ResponseType::Opaque => "opaque",
+            netfetcher::ResponseType::OpaqueRedirect => "opaqueredirect",
+            netfetcher::ResponseType::Error => "error",
+        }
+        .to_owned()
+    }
+
+    /// Run a deferred fetch and report it to the test's channel: a network error is
+    /// `Fail`; otherwise `StartStream` once the headers are in (so `await fetch()`
+    /// resolves before the body finishes, which is what lets a mid-flight abort run),
+    /// then a `Chunk` per body chunk as it decodes, then `Close`. Dropping this task
+    /// (Job::Cancel) drops the in-flight body future, cancelling the request.
+    async fn run_fetch_streaming(id: u64, req: FetchRequest, reply: std::sync::mpsc::Sender<FetchEvent>) {
         let Ok(url) = url::Url::parse(&req.url) else {
-            return FetchOutcome::network_error();
+            let _ = reply.send(FetchEvent::Fail(id, "Failed to fetch".to_string()));
+            return;
         };
         let mut request = netfetcher::Request::get(url);
         request.method = match req.method.as_str() {
@@ -1143,23 +1148,34 @@ mod net {
         request.body = req.body.map(bytes::Bytes::from);
 
         let cx = netfetcher::FetchContext::permissive();
-        let resp = netfetcher::fetch(request, &cx).await;
+        let mut resp = netfetcher::fetch(request, &cx).await;
         if resp.is_network_error() {
-            return FetchOutcome::network_error();
+            let _ = reply.send(FetchEvent::Fail(id, "Failed to fetch".to_string()));
+            return;
         }
-        let status = resp.status;
-        let headers = resp.headers.clone();
-        let response_type = match resp.response_type {
-            netfetcher::ResponseType::Basic => "basic",
-            netfetcher::ResponseType::Cors => "cors",
-            netfetcher::ResponseType::Opaque => "opaque",
-            netfetcher::ResponseType::OpaqueRedirect => "opaqueredirect",
-            netfetcher::ResponseType::Error => "error",
+        let meta = FetchOutcome {
+            network_error: false,
+            status: resp.status,
+            status_text: String::new(),
+            response_type: map_response_type(resp.response_type),
+            url: resp.url_list.last().map(|u| u.to_string()).unwrap_or_default(),
+            headers: resp.headers.clone(),
+            body: vec![],
+        };
+        if reply.send(FetchEvent::StartStream(id, meta)).is_err() {
+            return;
         }
-        .to_owned();
-        let url = resp.url_list.last().map(|u| u.to_string()).unwrap_or_default();
-        let body = resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
-        FetchOutcome { network_error: false, status, status_text: String::new(), response_type, url, headers, body }
+        while let Some(chunk) = resp.body.next_chunk().await {
+            match chunk {
+                Ok(bytes) => {
+                    if reply.send(FetchEvent::Chunk(id, bytes.to_vec())).is_err() {
+                        return; // the test's channel is gone (run ended)
+                    }
+                }
+                Err(_) => break, // body decode error: end the stream
+            }
+        }
+        let _ = reply.send(FetchEvent::Close(id));
     }
 
     /// A job for the persistent worker. `Get` is a blocking resource GET (reply: the
@@ -1171,11 +1187,14 @@ mod net {
         Cancel(u64),
     }
 
-    /// A completed deferred fetch, routed to the originating test's channel. `Fail`
-    /// is a network error (rejected as a `TypeError`); `Settle` carries the outcome.
-    /// Both carry the per-test JS `id` (not the global abort key).
+    /// A deferred fetch event, routed to the originating test's channel by the JS
+    /// `id` (not the global abort key). A response streams as `StartStream` (status +
+    /// headers) -> `Chunk`* (body, as it arrives) -> `Close`; a network error before
+    /// the headers is `Fail` (rejected as a `TypeError`).
     pub enum FetchEvent {
-        Settle(u64, FetchOutcome),
+        StartStream(u64, FetchOutcome),
+        Chunk(u64, Vec<u8>),
+        Close(u64),
         Fail(u64, String),
     }
 
@@ -1260,7 +1279,9 @@ mod net {
 
     fn to_completion(ev: FetchEvent) -> crate::harness::FetchCompletion {
         match ev {
-            FetchEvent::Settle(id, o) => crate::harness::FetchCompletion::Settle(id, o),
+            FetchEvent::StartStream(id, o) => crate::harness::FetchCompletion::StartStream(id, o),
+            FetchEvent::Chunk(id, b) => crate::harness::FetchCompletion::Chunk(id, b),
+            FetchEvent::Close(id) => crate::harness::FetchCompletion::Close(id),
             FetchEvent::Fail(id, m) => crate::harness::FetchCompletion::Fail(id, m),
         }
     }

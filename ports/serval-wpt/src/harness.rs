@@ -30,9 +30,13 @@ use script_engine_api::ScriptEngine;
 use script_runtime_api::{FetchHandler, FetchOutcome, Runtime, TestResult};
 use serval_static_dom::StaticDocument;
 
-/// A deferred `fetch()` completion, applied to the runtime by the drive loop.
+/// A deferred `fetch()` completion, applied to the runtime by the drive loop. A
+/// response streams as `StartStream` (status + headers) -> `Chunk`* (body) ->
+/// `Close`; `Fail` is a network error before the headers.
 pub enum FetchCompletion {
-    Settle(u64, FetchOutcome),
+    StartStream(u64, FetchOutcome),
+    Chunk(u64, Vec<u8>),
+    Close(u64),
     Fail(u64, String),
 }
 
@@ -200,7 +204,9 @@ fn run_with<E: ScriptEngine>(
         // do NOT advance timers yet.
         rt.run_microtasks();
         let applied = cs.drain(&mut |c| match c {
-            FetchCompletion::Settle(id, o) => rt.settle_fetch(id, o),
+            FetchCompletion::StartStream(id, o) => rt.start_stream(id, o),
+            FetchCompletion::Chunk(id, b) => rt.push_chunk(id, &b),
+            FetchCompletion::Close(id) => rt.close_stream(id),
             FetchCompletion::Fail(id, m) => rt.fail_fetch(id, &m),
         });
         if rt.pending_fetches() > 0 {
@@ -211,7 +217,9 @@ fn run_with<E: ScriptEngine>(
             if applied == 0 {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 cs.wait(remaining, &mut |c| match c {
-                    FetchCompletion::Settle(id, o) => rt.settle_fetch(id, o),
+                    FetchCompletion::StartStream(id, o) => rt.start_stream(id, o),
+                    FetchCompletion::Chunk(id, b) => rt.push_chunk(id, &b),
+                    FetchCompletion::Close(id) => rt.close_stream(id),
                     FetchCompletion::Fail(id, m) => rt.fail_fetch(id, &m),
                 });
             }
