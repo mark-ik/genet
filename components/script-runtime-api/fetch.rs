@@ -32,6 +32,12 @@ pub struct FetchRequest {
     /// The HTTP cache mode name (`default` / `no-store` / `reload` / `no-cache` /
     /// `force-cache` / `only-if-cached`); the host maps it to its cache engine.
     pub cache: String,
+    /// The redirect mode name (`follow` / `error` / `manual`); the host maps it to
+    /// its redirect handling.
+    pub redirect: String,
+    /// The request mode name (`cors` / `no-cors` / `same-origin` / `navigate`); the
+    /// host maps it to its CORS / response-tainting model.
+    pub mode: String,
 }
 
 /// The result handed back to script. A Fetch *network error* is
@@ -44,6 +50,8 @@ pub struct FetchOutcome {
     pub response_type: String,
     /// Final URL after redirects.
     pub url: String,
+    /// At least one redirect was followed (drives `Response.redirected`).
+    pub redirected: bool,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
 }
@@ -56,6 +64,7 @@ impl FetchOutcome {
             status_text: String::new(),
             response_type: "error".to_owned(),
             url: String::new(),
+            redirected: false,
             headers: Vec::new(),
             body: Vec::new(),
         }
@@ -123,12 +132,16 @@ impl<E: ScriptEngine> NativeFn<E> for FetchStart {
         let body_str = cx.value_to_string(&a4)?;
         let a5 = cx.arg(5);
         let cache = cx.value_to_string(&a5)?;
+        let a6 = cx.arg(6);
+        let redirect = cx.value_to_string(&a6)?;
+        let a7 = cx.arg(7);
+        let mode = cx.value_to_string(&a7)?;
 
         let headers = parse_flat_headers(&headers_flat);
         // The body crosses as a lossless "binary string": each JS char code (0-255)
         // is one byte. `char as u8` recovers the byte (every char is <= 0xFF).
         let body = (!body_str.is_empty()).then(|| body_str.chars().map(|c| c as u8).collect::<Vec<u8>>());
-        let request = FetchRequest { method, url, headers, body, cache };
+        let request = FetchRequest { method, url, headers, body, cache, redirect, mode };
 
         // Clone the handler before calling it (no borrow held across `start`).
         let outcome = match host_handler::<E>(cx) {
@@ -324,6 +337,7 @@ pub(crate) fn encode_outcome(o: &FetchOutcome) -> String {
     push_json_str(&mut s, &o.response_type);
     s.push_str(",\"url\":");
     push_json_str(&mut s, &o.url);
+    s.push_str(&format!(",\"redirected\":{}", o.redirected));
     s.push_str(",\"headers\":[");
     for (i, (k, v)) in o.headers.iter().enumerate() {
         if i > 0 {
@@ -362,7 +376,7 @@ fn push_json_str(out: &mut String, s: &str) {
 /// Install the deferred fetch sinks (`__fetch_start` / `__fetch_abort`) and the
 /// `fetch()` / `Request` / `Response` / `Headers` bootstrap.
 pub(crate) fn install_fetch_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error> {
-    engine.set_function::<FetchStart>("__fetch_start", 6)?;
+    engine.set_function::<FetchStart>("__fetch_start", 8)?;
     engine.set_function::<FetchAbort>("__fetch_abort", 1)?;
     engine.set_function::<ResolveUrl>("__resolve_url", 1)?;
     engine.set_function::<UrlParse>("__url_parse", 2)?;
@@ -1455,13 +1469,26 @@ const FETCH_BOOTSTRAP: &str = r#"
   // Build a Response from the native __fetch outcome. The body crossed as a binary
   // string; decode it straight to bytes (bypassing extractBody, which would treat
   // it as text) so binary responses are exact.
+  // A status-0 (opaqueredirect / opaque) filtered response cannot go through the
+  // Response ctor, which rejects < 200. Build a 200 placeholder then override —
+  // the same trick as Response.error. `o.status || 200` would also mis-map 0 to
+  // 200 (0 is falsy), so route every outcome through here.
+  function makeFilteredShell(o) {
+    var st = (o.status == null) ? 200 : (o.status | 0);
+    if (st >= 200 && st <= 599) {
+      return new Response(null, { status: st, statusText: o.statusText || "" });
+    }
+    var r = new Response(null, { status: 200 });
+    r.status = st; r.statusText = o.statusText || ""; r.ok = st >= 200 && st < 300;
+    return r;
+  }
   function responseFromOutcome(o) {
-    var r = new Response(null, { status: o.status || 200, statusText: o.statusText || "" });
+    var r = makeFilteredShell(o);
     // Network headers are set with the guard bypassed (a real response keeps
     // set-cookie, readable via getSetCookie); the guard only blocks later writes.
     r.headers = new Headers(o.headers); r.headers._guard = 'response';
     r.__bytes = binaryStringToBytes(o.body != null ? o.body : "");
-    r.type = o.type || "default"; r.url = o.url || ""; return r;
+    r.type = o.type || "default"; r.url = o.url || ""; r.redirected = !!o.redirected; return r;
   }
   function headersFlat(h) {
     var flat = [];
@@ -1515,7 +1542,8 @@ const FETCH_BOOTSTRAP: &str = r#"
       });
       var inline = __fetch_start(id, req.method, req.url, headersFlat(req.headers),
                                  req.__bytes != null ? bytesToBinaryString(req.__bytes) : "",
-                                 req.cache || "default");
+                                 req.cache || "default", req.redirect || "follow",
+                                 req.mode || "cors");
       if (inline) {
         // Synchronous host answered in this tick (today's path; one pump drains).
         var e = __pending[id];
@@ -1547,10 +1575,10 @@ const FETCH_BOOTSTRAP: &str = r#"
     if (o.networkError) { delete __pending[id]; e.reject(new TypeError('Failed to fetch')); return; }
     var controller = null;
     var stream = new ReadableStream({ start: function(c) { controller = c; } });
-    var r = new Response(null, { status: o.status || 200, statusText: o.statusText || "" });
+    var r = makeFilteredShell(o);
     r.headers = new Headers(o.headers); r.headers._guard = 'response'; // network headers, guard bypassed
     r.__bytes = null; r.__stream = stream; stream._owner = r;
-    r.type = o.type || "default"; r.url = o.url || "";
+    r.type = o.type || "default"; r.url = o.url || ""; r.redirected = !!o.redirected;
     e.controller = controller;
     e.resolve(r);
   };

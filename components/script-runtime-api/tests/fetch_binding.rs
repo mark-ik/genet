@@ -30,6 +30,7 @@ impl FetchHandler for EchoFetch {
             status_text: "OK".to_owned(),
             response_type: "basic".to_owned(),
             url: req.url.clone(),
+            redirected: false,
             headers: vec![
                 ("content-type".to_owned(), "text/plain".to_owned()),
                 ("x-echo-method".to_owned(), req.method.clone()),
@@ -85,6 +86,7 @@ fn deferred_fetch_settles_later() {
             status_text: "OK".into(),
             response_type: "basic".into(),
             url: "http://x/a".into(),
+            redirected: false,
             headers: vec![],
             body: b"hi".to_vec(),
         },
@@ -116,6 +118,7 @@ fn ok_meta(url: &str) -> FetchOutcome {
         status_text: "OK".into(),
         response_type: "basic".into(),
         url: url.into(),
+        redirected: false,
         headers: vec![],
         body: vec![],
     }
@@ -458,6 +461,7 @@ impl FetchHandler for BinaryEcho {
             status_text: "OK".to_owned(),
             response_type: "basic".to_owned(),
             url: req.url.clone(),
+            redirected: false,
             headers: vec![("x-echo-len".to_owned(), body.len().to_string())],
             body,
         }

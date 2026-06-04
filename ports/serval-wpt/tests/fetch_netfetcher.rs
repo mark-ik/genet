@@ -68,6 +68,7 @@ impl FetchHandler for NetFetchHandler {
             }
             .to_owned();
             let url = resp.url_list.last().map(|u| u.to_string()).unwrap_or_default();
+            let redirected = resp.url_list.len() > 1;
             let body = resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
             FetchOutcome {
                 network_error: false,
@@ -75,6 +76,7 @@ impl FetchHandler for NetFetchHandler {
                 status_text: String::new(),
                 response_type,
                 url,
+                redirected,
                 headers,
                 body,
             }

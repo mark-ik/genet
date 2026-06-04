@@ -475,6 +475,7 @@ fn setup_server(args: &Args) -> Option<net::ServerCtx> {
     match result {
         Ok(s) => {
             eprintln!("server mode: driving fetch against {}", s.origin);
+            net::set_page_origin(&s.origin);
             Some(s)
         }
         Err(e) => {
@@ -1107,6 +1108,23 @@ mod net {
         cx
     }
 
+    /// The document (page) origin every fetch is initiated from — the WPT server
+    /// origin. Drives cross-origin detection (CORS / response tainting): a request
+    /// whose target origin differs is cross-origin. Set once when server mode is
+    /// established; `None` in disk mode (every fetch treated as same-origin).
+    static PAGE_ORIGIN: std::sync::OnceLock<url::Origin> = std::sync::OnceLock::new();
+
+    /// Record the page origin from the server base (idempotent; first wins).
+    pub fn set_page_origin(origin_str: &str) {
+        if let Ok(u) = url::Url::parse(origin_str) {
+            let _ = PAGE_ORIGIN.set(u.origin());
+        }
+    }
+
+    fn page_origin() -> Option<url::Origin> {
+        PAGE_ORIGIN.get().cloned()
+    }
+
     /// A globally-unique abort key (the JS `id` is per-test, so it cannot key the
     /// shared worker's abort map).
     fn next_key() -> u64 {
@@ -1197,6 +1215,20 @@ mod net {
             "only-if-cached" => netfetcher::CacheMode::OnlyIfCached,
             _ => netfetcher::CacheMode::Default,
         };
+        request.redirect = match req.redirect.as_str() {
+            "error" => netfetcher::RedirectMode::Error,
+            "manual" => netfetcher::RedirectMode::Manual,
+            _ => netfetcher::RedirectMode::Follow,
+        };
+        request.mode = match req.mode.as_str() {
+            "no-cors" => netfetcher::RequestMode::NoCors,
+            "same-origin" => netfetcher::RequestMode::SameOrigin,
+            "navigate" => netfetcher::RequestMode::Navigate,
+            _ => netfetcher::RequestMode::Cors,
+        };
+        // The initiator origin (the WPT page) drives cross-origin detection. In disk
+        // mode it stays None (every fetch is same-origin).
+        request.origin = page_origin();
 
         let cx = fetch_context();
         let mut resp = netfetcher::fetch(request, &cx).await;
@@ -1210,6 +1242,7 @@ mod net {
             status_text: reason_phrase(resp.status).to_string(),
             response_type: map_response_type(resp.response_type),
             url: resp.url_list.last().map(|u| u.to_string()).unwrap_or_default(),
+            redirected: resp.url_list.len() > 1,
             headers: resp.headers.clone(),
             body: vec![],
         };
