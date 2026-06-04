@@ -36,6 +36,12 @@ pub struct Request {
     /// The HTTP cache mode (WHATWG Fetch request *cache mode*): which cached
     /// response, if any, this request may use, and which request headers it adds.
     pub cache: CacheMode,
+    /// The request's referrer URL (the initiator document), or `None` for no
+    /// referrer. The `Referer` header is derived from this per [`referrer_policy`].
+    pub referrer: Option<Url>,
+    /// Referrer policy governing the `Referer` header (a redirect's
+    /// `Referrer-Policy` response header can override it mid-chain).
+    pub referrer_policy: ReferrerPolicy,
 }
 
 impl Request {
@@ -52,6 +58,8 @@ impl Request {
             origin: None,
             destination: Destination::default(),
             cache: CacheMode::default(),
+            referrer: None,
+            referrer_policy: ReferrerPolicy::default(),
         }
     }
 
@@ -114,6 +122,22 @@ pub enum Credentials {
     SameOrigin,
     Omit,
     Include,
+}
+
+/// Referrer policy (W3C Referrer Policy) — governs the `Referer` header value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ReferrerPolicy {
+    /// No policy set: apply the default (`strict-origin-when-cross-origin`).
+    #[default]
+    Empty,
+    NoReferrer,
+    NoReferrerWhenDowngrade,
+    SameOrigin,
+    Origin,
+    StrictOrigin,
+    OriginWhenCrossOrigin,
+    StrictOriginWhenCrossOrigin,
+    UnsafeUrl,
 }
 
 /// WHATWG Fetch request *destination* — what the fetched bytes become. Only the

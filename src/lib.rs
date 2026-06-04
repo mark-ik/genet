@@ -43,6 +43,7 @@ mod fetch;
 #[cfg(not(target_arch = "wasm32"))]
 mod h3_client;
 mod hsts;
+mod referrer;
 mod request;
 mod response;
 // WebSocket — native-only (tokio + tungstenite); a wasm build binds browser WS.
@@ -56,7 +57,9 @@ pub use cors::{InMemoryPreflightCache, PreflightCache};
 pub use cookie_jar::InMemoryCookieJar;
 pub use fetch::fetch;
 pub use hsts::{HstsStore, InMemoryHsts};
-pub use request::{CacheMode, Credentials, Destination, Method, RedirectMode, Request, RequestMode};
+pub use request::{
+    CacheMode, Credentials, Destination, Method, RedirectMode, ReferrerPolicy, Request, RequestMode,
+};
 pub use response::{Response, ResponseBody, ResponseType};
 #[cfg(not(target_arch = "wasm32"))]
 pub use websocket::{WebSocket, WsMessage, connect as connect_websocket};

@@ -18,6 +18,7 @@ use crate::client::shared_client;
 use crate::cors;
 use crate::decode::decode_stream;
 use crate::hsts;
+use crate::referrer;
 use crate::request::{CacheMode, Credentials, Method, RedirectMode, RequestMode};
 use crate::response::{BodyStream, ResponseBody, ResponseType};
 use crate::{FetchContext, Request, Response, SameSiteContext};
@@ -64,6 +65,13 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
     // origin becomes opaque, so the `Origin` header flips to "null" (WHATWG
     // HTTP-redirect fetch).
     let mut origin_tainted = false;
+    // The active referrer policy; a redirect's `Referrer-Policy` response header
+    // can override it for subsequent hops.
+    let mut referrer_policy = request.referrer_policy;
+    // The request's referrer, reduced to whatever a hop's policy permits. A
+    // restrictive policy (no-referrer / origin) "sticks": once reduced, a later
+    // redirect that loosens the policy cannot recover the original URL.
+    let mut referrer = request.referrer.clone();
 
     // HTTP cache (RFC 9111 + request cache mode): only for GET, only when a real
     // cache is wired, and never for `no-store`.
@@ -193,6 +201,20 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
             }
         }
 
+        // Append the `Referer` header from the request's referrer under the active
+        // policy (recomputed per hop; the target's origin can change the answer).
+        // The computed value also replaces the referrer, so a policy's reduction
+        // carries forward to later hops.
+        if let Some(r) = referrer.as_ref() {
+            let value = referrer::referrer_header(r, &current_url, referrer_policy);
+            referrer = value.as_deref().and_then(|v| Url::parse(v).ok());
+            if let Some(value) = value {
+                if header_val(&req_headers, "referer").is_none() {
+                    req_headers.push(("referer".to_owned(), value));
+                }
+            }
+        }
+
         // Transport: prefer h3 when this https origin advertised it (Alt-Svc).
         let try_h3 = current_url.scheme() == "https"
             && current_url.host_str().and_then(|h| cx.alt_svc.h3_port(h)).is_some();
@@ -291,6 +313,11 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
                             return Response::network_error();
                         };
                         redirects_remaining -= 1;
+                        // A `Referrer-Policy` on the redirect response governs the
+                        // `Referer` header for subsequent hops.
+                        if let Some(rp) = header_val(&raw.headers, "referrer-policy") {
+                            referrer_policy = referrer::policy_from_header(referrer_policy, rp);
+                        }
                         // Taint the origin to opaque when this redirect is
                         // cross-origin *and* the current URL was already foreign to
                         // the initiator (the second cross-origin hop): the `Origin`
