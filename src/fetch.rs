@@ -57,9 +57,13 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
     }
     let mut method = request.method;
     let mut body = request.body.clone();
-    let base_headers = request.headers.clone();
+    let mut base_headers = request.headers.clone();
     let mut url_list = vec![current_url.clone()];
     let mut redirects_remaining = MAX_REDIRECTS;
+    // Once a cross-origin redirect leaves an already-foreign URL, the request's
+    // origin becomes opaque, so the `Origin` header flips to "null" (WHATWG
+    // HTTP-redirect fetch).
+    let mut origin_tainted = false;
 
     // HTTP cache (RFC 9111 + request cache mode): only for GET, only when a real
     // cache is wired, and never for `no-store`.
@@ -172,6 +176,23 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
             }
         }
 
+        // Append the `Origin` header for a cross-origin request (or one whose
+        // origin has been tainted to opaque by a cross-origin redirect, giving
+        // "null"). A same-origin request carries no `Origin` — matching observed
+        // browser behavior (the WPT redirect-origin oracle), which is narrower than
+        // the spec's literal "append for any non-GET/HEAD method".
+        if let Some(origin) = request.origin.as_ref() {
+            let cur_cross = origin_tainted || *origin != current_url.origin();
+            if cur_cross && header_val(&req_headers, "origin").is_none() {
+                let value = if origin_tainted {
+                    "null".to_owned()
+                } else {
+                    origin.ascii_serialization()
+                };
+                req_headers.push(("origin".to_owned(), value));
+            }
+        }
+
         // Transport: prefer h3 when this https origin advertised it (Alt-Svc).
         let try_h3 = current_url.scheme() == "https"
             && current_url.host_str().and_then(|h| cx.alt_svc.h3_port(h)).is_some();
@@ -216,12 +237,47 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
             // Own the location so `raw.headers` is free to move below.
             let location = header_val(&raw.headers, "location").map(str::to_owned);
             if let Some(location) = location {
+                // Gate the redirect response *before* the redirect-mode switch
+                // (WHATWG HTTP fetch runs the CORS check on the actual response,
+                // a 3xx included, ahead of redirect processing):
+                let req_cross = origin_tainted
+                    || request
+                        .origin
+                        .as_ref()
+                        .is_some_and(|o| *o != current_url.origin());
+                // A cors-tainted request whose redirect fails the CORS check is a
+                // network error even under manual/error redirect modes.
+                if req_cross
+                    && matches!(request.mode, RequestMode::Cors)
+                    && matches!(
+                        cors::evaluate(
+                            request.origin.as_ref(),
+                            &current_url,
+                            request.mode,
+                            request.credentials,
+                            &raw.headers,
+                        ),
+                        cors::Taint::Blocked
+                    )
+                {
+                    return Response::network_error();
+                }
+                // A no-cors cross-origin request may not observe a redirect with a
+                // non-follow redirect mode (it would leak the cross-origin hop).
+                if req_cross
+                    && matches!(request.mode, RequestMode::NoCors)
+                    && !matches!(request.redirect, RedirectMode::Follow)
+                {
+                    return Response::network_error();
+                }
                 match request.redirect {
                     RedirectMode::Error => return Response::network_error(),
                     RedirectMode::Manual => {
+                        // A manual-redirect filtered response: status 0, no headers,
+                        // no body (WHATWG opaque-redirect).
                         return Response {
-                            status,
-                            headers: raw.headers,
+                            status: 0,
+                            headers: Vec::new(),
                             body: ResponseBody::empty(),
                             url_list,
                             response_type: ResponseType::OpaqueRedirect,
@@ -235,7 +291,34 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
                             return Response::network_error();
                         };
                         redirects_remaining -= 1;
+                        // Taint the origin to opaque when this redirect is
+                        // cross-origin *and* the current URL was already foreign to
+                        // the initiator (the second cross-origin hop): the `Origin`
+                        // header becomes "null" from here on.
+                        let crosses = current_url.origin() != next.origin();
+                        let already_foreign = origin_tainted
+                            || request
+                                .origin
+                                .as_ref()
+                                .is_some_and(|o| *o != current_url.origin());
+                        if crosses && already_foreign {
+                            origin_tainted = true;
+                        }
+                        let prev_method = method;
                         method = redirect_method(status, method, &mut body);
+                        // A method-changing redirect (301/302 POST->GET, 303 ->GET)
+                        // drops the body, so the request-body headers go too — per
+                        // WHATWG HTTP-redirect fetch (regardless of whether a body
+                        // was present).
+                        if method != prev_method {
+                            base_headers.retain(|(k, _)| {
+                                !matches!(
+                                    k.to_ascii_lowercase().as_str(),
+                                    "content-type" | "content-length" | "content-encoding"
+                                        | "content-language" | "content-location"
+                                )
+                            });
+                        }
                         current_url = next;
                         if resolve_mixed_content(
                             &mut current_url,
@@ -276,6 +359,17 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
             cors::Taint::Opaque => ResponseType::Opaque,
             cors::Taint::Blocked => return Response::network_error(),
         };
+        // An opaque (cross-origin no-cors) response is filtered: status 0, no
+        // headers, no exposed body — and never cached.
+        if matches!(response_type, ResponseType::Opaque) {
+            return Response {
+                status: 0,
+                headers: Vec::new(),
+                body: ResponseBody::empty(),
+                url_list,
+                response_type: ResponseType::Opaque,
+            };
+        }
         let headers = if matches!(response_type, ResponseType::Cors) {
             cors::filter_cors_response_headers(raw.headers)
         } else {
