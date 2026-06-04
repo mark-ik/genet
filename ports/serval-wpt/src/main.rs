@@ -243,8 +243,12 @@ fn synthesize_any_js(path: &Path) -> Option<String> {
     if name.ends_with(".any.js") && !window_ok {
         return None;
     }
+    // `self.GLOBAL` is injected by WPT's `.any.html` wrapper (tools/serve/serve.py)
+    // before testharness.js; tests branch on it (`GLOBAL.isWorker()`), so synthesize
+    // the window-shaped stub here too or those files throw at load.
     let mut html = String::from(
         "<!doctype html><meta charset=utf-8>\n\
+         <script>self.GLOBAL={isWindow:function(){return true;},isWorker:function(){return false;},isShadowRealm:function(){return false;}};</script>\n\
          <script src=\"/resources/testharness.js\"></script>\n\
          <script src=\"/resources/testharnessreport.js\"></script>\n",
     );
