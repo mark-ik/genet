@@ -71,14 +71,24 @@ is what makes the `fetch/api/` `.any.js` corpus runnable at all.
 
 | subset | boa subtests | nova subtests |
 |---|---|---|
-| fetch/api/headers | 86/197 | 86/197 |
-| fetch/api/request | 257/545 | 257/505 |
-| fetch/api/response | 196/290 | 196/290 |
+| fetch/api/headers | 181/205 | 181/267 |
+| fetch/api/request | 318/545 | 318/505 |
+| fetch/api/response | 202/290 | 202/290 |
 
 All three were **0** before this work (the files would not even parse and run).
 These are the headers/request/response object-semantics tests that need no live
-server. Boa and nova agree on pass counts everywhere; request differs only in a
-subtest-**count** tail (545 vs 505 enumerated).
+server. Boa and nova agree on pass counts everywhere; the denominators differ only
+in a generated-subtest-count tail.
+
+A 2026-06-04 conformance pass on the object-semantics surface (no new network
+needed) lifted these from 86 / 257 / 196 via, in order: header value
+normalization + init validation + live prototyped iterators; the `self.GLOBAL`
+stub in the `.any.js` wrapper; WHATWG **header guards** (forbidden request-header
++ no-CORS safelist on requests, forbidden response-header on responses) — the
+single biggest win (`headers-forbidden-override` 18 -> 90/90); **Request
+constructor validation** (method / init-enum / URL / no-`new`); and multipart
+`formData()` parsing. The real-time timer gate (below) is what makes
+timer-scheduled abort fire.
 
 Two passes drove the request / response jumps (request 168 -> 246, response
 46 -> 160, and more files executing instead of erroring):
@@ -298,23 +308,19 @@ handler is one consumer; Mere's content actor is the other, with no second refac
 
 ## Not done (deliberately deferred)
 
-- **BYOB byte readers.** `getReader({mode:'bytes'})` with a caller-supplied view
-  is still ignored (it hands back a default reader). A few `disturbed-*` subtests
-  want a true byte reader.
-- **Multipart bodies.** `formData()` parses urlencoded but not multipart, and a
-  binary `File` part in a multipart request body is still spliced as text (the one
-  remaining lossy body spot). A multipart parser/serializer over the byte body is
-  the fix.
-- **`iframe` / `contentWindow`.** `*/url-parsing.html` and the multi-global tests
-  reach into iframe globals, which the single-realm runner has no model for.
-- **Timer-scheduled abort while a fetch is in flight.** `AbortSignal.timeout()` /
-  `setTimeout(abort)` cannot fire while the drive loop is blocked on a pending
-  fetch, because timers advance cooperatively (no real-time gate) and firing them
-  mid-fetch would also fire the testharness timeout. A real-time timer gate scoped
-  to the deferred loop (without changing the cooperative disk path) is the fix.
-- **The failing object-semantics tail**: request / response still sit under
-  two-thirds, now mostly BYOB readers + iframes + multipart + timer-abort, not
-  missing constructors, a lossy body channel, or a synchronous seam.
+- **Byte (BYOB) byte streams.** `getReader({mode:'bytes'})` returns a default
+  reader (the view-passing tests pass through it leniently); a true byte stream
+  with BYOB `read(view)` is unbuilt. Few subtests need it.
+- **HTTP cache + request destination + multi-realm.** `request-cache-*` (~100
+  subtests) needs a real HTTP cache (the runner is uncached); `request/destination`
+  needs browsing contexts; `*/url-parsing.html` and the realm tests need iframe /
+  multi-global support. All architectural, out of scope for the JS surface.
+- **Strict malformed-multipart rejection.** `formData()` parses valid multipart
+  (round-trips), but does not reject the buggy-form-data inputs; a binary `File`
+  part still goes through UTF-8 text (the one lossy body spot).
+- **The failing object-semantics tail**: now mostly the cache / destination /
+  multi-realm clusters above, not missing constructors, guards, validation, a lossy
+  body channel, or a synchronous seam.
 - **Per-test runtime reuse.** A fresh `Runtime` per test re-evals testharness.js
   each time (the dominant cost; see `harness::bench`). A snapshot-clone pool is the
   amortization, unchanged by this work.
