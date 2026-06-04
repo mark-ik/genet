@@ -11,6 +11,117 @@ impl WebGlContext {
         error
     }
 
+    /// `gl.enable(DEPTH_TEST)` / `gl.disable(DEPTH_TEST)`
+    /// equivalent. Toggling rebakes the pipeline on next draw
+    /// (the depth state is part of the pipeline cache key).
+    pub fn set_depth_test_enabled(&mut self, enabled: bool) {
+        if self.lost {
+            self.record_error(WebGlError::ContextLostWebgl);
+            return;
+        }
+        self.depth_test_enabled = enabled;
+    }
+
+    /// `gl.depthFunc(func)`. Default is `Less`.
+    pub fn set_depth_func(&mut self, func: DepthFunc) {
+        if self.lost {
+            self.record_error(WebGlError::ContextLostWebgl);
+            return;
+        }
+        self.depth_func = func;
+    }
+
+    /// `gl.clearDepth(d)` — set the depth value used on the
+    /// next `clear_depth_buffer` call. Clamped to [0, 1].
+    pub fn set_clear_depth(&mut self, depth: f32) {
+        if self.lost {
+            self.record_error(WebGlError::ContextLostWebgl);
+            return;
+        }
+        self.depth_clear_value = depth.clamp(0.0, 1.0);
+    }
+
+    /// `gl.clear(DEPTH_BUFFER_BIT)` equivalent. Allocates the
+    /// depth attachment if it doesn't exist yet, then clears
+    /// it to `depth_clear_value`.
+    pub fn clear_depth_buffer(&mut self) {
+        if self.lost {
+            self.record_error(WebGlError::ContextLostWebgl);
+            return;
+        }
+        if self.current_framebuffer_status() != WebGlFramebufferStatus::Complete {
+            self.record_error(WebGlError::InvalidFramebufferOperation);
+            return;
+        }
+        let size = self.canvas.output.size;
+        self.ensure_depth_attachment(size);
+        let Some(attachment) = self.depth_attachment.as_ref() else {
+            self.record_error(WebGlError::InvalidOperation);
+            return;
+        };
+        let clear = self.depth_clear_value;
+        let mut encoder =
+            self.canvas
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("webgl-wgpu depth clear encoder"),
+                });
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("webgl-wgpu depth clear"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &attachment.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(clear),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        self.canvas.queue.submit([encoder.finish()]);
+    }
+
+    pub(super) fn ensure_depth_attachment(&mut self, size: (u32, u32)) {
+        if let Some(existing) = self.depth_attachment.as_ref() {
+            if existing.size == size {
+                return;
+            }
+        }
+        let texture = self.canvas.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("webgl-wgpu depth attachment"),
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_ATTACHMENT_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.depth_attachment = Some(DepthAttachment {
+            texture,
+            view,
+            size,
+        });
+    }
+
+    /// View on the depth attachment to use as a render-pass
+    /// `depth_stencil_attachment` while depth test is enabled.
+    /// Caller is responsible for having already invoked
+    /// `ensure_depth_attachment` with the right size.
+    pub(super) fn depth_attachment_view(&self) -> Option<&wgpu::TextureView> {
+        self.depth_attachment.as_ref().map(|a| &a.view)
+    }
+
     pub fn lose_context(&mut self) {
         self.lost = true;
         self.record_error(WebGlError::ContextLostWebgl);

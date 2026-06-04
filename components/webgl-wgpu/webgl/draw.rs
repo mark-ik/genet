@@ -93,9 +93,18 @@ impl WebGlContext {
                 return;
             },
         };
+        let depth_state = if self.depth_test_enabled {
+            Some(self.depth_func)
+        } else {
+            None
+        };
         let pipeline_key = VertexPipelineKey {
             attribute_layouts: attribute_layouts.clone(),
+            depth_state,
         };
+        if depth_state.is_some() {
+            self.ensure_depth_attachment(self.canvas.output.size);
+        }
 
         let topology = match mode {
             PrimitiveMode::Triangles => wgpu::PrimitiveTopology::TriangleList,
@@ -174,6 +183,19 @@ impl WebGlContext {
             )
         });
 
+        let depth_stencil_attachment = if depth_state.is_some() {
+            self.depth_attachment_view()
+                .map(|view| wgpu::RenderPassDepthStencilAttachment {
+                    view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                })
+        } else {
+            None
+        };
         let mut encoder =
             self.canvas
                 .device
@@ -192,7 +214,7 @@ impl WebGlContext {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment,
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
@@ -287,9 +309,18 @@ impl WebGlContext {
                 return;
             },
         };
+        let depth_state = if self.depth_test_enabled {
+            Some(self.depth_func)
+        } else {
+            None
+        };
         let pipeline_key = VertexPipelineKey {
             attribute_layouts: attribute_layouts.clone(),
+            depth_state,
         };
+        if depth_state.is_some() {
+            self.ensure_depth_attachment(self.canvas.output.size);
+        }
 
         let topology = match mode {
             PrimitiveMode::Triangles => wgpu::PrimitiveTopology::TriangleList,
@@ -364,6 +395,19 @@ impl WebGlContext {
             )
         });
 
+        let depth_stencil_attachment = if depth_state.is_some() {
+            self.depth_attachment_view()
+                .map(|view| wgpu::RenderPassDepthStencilAttachment {
+                    view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                })
+        } else {
+            None
+        };
         let mut encoder =
             self.canvas
                 .device
@@ -382,7 +426,7 @@ impl WebGlContext {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment,
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
@@ -398,8 +442,10 @@ impl WebGlContext {
                 };
                 pass.set_vertex_buffer(slot as u32, buffer.buffer.slice(..));
             }
-            pass.set_index_buffer(index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint16);
-            pass.draw_indexed(first_index as u32..first_index as u32 + count, 0, 0..1);
+            if let Some(index_buffer) = self.buffers.get(&index_buffer_id) {
+                pass.set_index_buffer(index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint16);
+                pass.draw_indexed(first_index as u32..first_index as u32 + count, 0, 0..1);
+            }
         }
         self.canvas.queue.submit([encoder.finish()]);
         if self.bound_framebuffer.is_none() {

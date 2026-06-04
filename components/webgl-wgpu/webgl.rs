@@ -94,6 +94,36 @@ pub enum WebGlFramebufferStatus {
     IncompleteAttachment,
 }
 
+/// WebGL `gl.depthFunc` comparison. Determines which incoming
+/// fragments survive the depth test against the existing depth
+/// buffer value.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum DepthFunc {
+    Never,
+    Less,
+    Equal,
+    LessOrEqual,
+    Greater,
+    NotEqual,
+    GreaterOrEqual,
+    Always,
+}
+
+impl DepthFunc {
+    pub(super) fn to_wgpu(self) -> wgpu::CompareFunction {
+        match self {
+            Self::Never => wgpu::CompareFunction::Never,
+            Self::Less => wgpu::CompareFunction::Less,
+            Self::Equal => wgpu::CompareFunction::Equal,
+            Self::LessOrEqual => wgpu::CompareFunction::LessEqual,
+            Self::Greater => wgpu::CompareFunction::Greater,
+            Self::NotEqual => wgpu::CompareFunction::NotEqual,
+            Self::GreaterOrEqual => wgpu::CompareFunction::GreaterEqual,
+            Self::Always => wgpu::CompareFunction::Always,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct WebGlContextAttributes {
     pub alpha: bool,
@@ -191,6 +221,12 @@ struct VertexPipelineKey {
     /// cached keyed on this tuple so stride changes (e.g.
     /// interleaved vs. tightly-packed) re-bake the pipeline.
     attribute_layouts: Vec<AttributeBufferLayout>,
+    /// Depth-test state at draw time. `None` when depth test
+    /// is disabled (no DepthStencilState attached); `Some` when
+    /// enabled, carrying the comparison function. The cache key
+    /// includes this so toggling depth state rebakes the
+    /// pipeline.
+    depth_state: Option<DepthFunc>,
 }
 
 struct ProgramObject {
@@ -239,9 +275,26 @@ pub struct WebGlContext {
     viewport: [u32; 4],
     scissor_box: [u32; 4],
     scissor_test_enabled: bool,
+    depth_test_enabled: bool,
+    depth_func: DepthFunc,
+    depth_clear_value: f32,
+    /// Lazily-allocated depth-stencil texture sized to match
+    /// the canvas. Created the first time a draw enables depth
+    /// test (or `clear_depth` is called); reallocated on
+    /// resize.
+    depth_attachment: Option<DepthAttachment>,
     pending_error: WebGlError,
     lost: bool,
 }
+
+struct DepthAttachment {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    size: (u32, u32),
+}
+
+pub(super) const DEPTH_ATTACHMENT_FORMAT: wgpu::TextureFormat =
+    wgpu::TextureFormat::Depth32Float;
 
 mod draw;
 mod objects;
@@ -300,6 +353,10 @@ impl WebGlContext {
             viewport: [0, 0, width, height],
             scissor_box: [0, 0, width, height],
             scissor_test_enabled: false,
+            depth_test_enabled: false,
+            depth_func: DepthFunc::Less,
+            depth_clear_value: 1.0,
+            depth_attachment: None,
             pending_error: WebGlError::NoError,
             lost: false,
         }
