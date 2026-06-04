@@ -23,11 +23,34 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
 use script_engine_api::ScriptEngine;
-use script_runtime_api::{FetchHandler, Runtime, TestResult};
+use script_runtime_api::{FetchHandler, FetchOutcome, Runtime, TestResult};
 use serval_static_dom::StaticDocument;
+
+/// A deferred `fetch()` completion, applied to the runtime by the drive loop.
+pub enum FetchCompletion {
+    Settle(u64, FetchOutcome),
+    Fail(u64, String),
+}
+
+/// A source of deferred fetch completions (the netfetch worker's channel). The
+/// drive loop pulls completions and applies each via the callback. Disk / sync
+/// runs pass `None` and never touch this.
+pub trait CompletionSource {
+    /// Apply every currently-ready completion; return how many were applied.
+    fn drain(&self, apply: &mut dyn FnMut(FetchCompletion)) -> usize;
+    /// Block up to `timeout` for one completion, then apply it; return 0 or 1.
+    fn wait(&self, timeout: Duration, apply: &mut dyn FnMut(FetchCompletion)) -> usize;
+}
+
+/// Per-test wall-clock ceiling for the deferred drive loop: a test that awaits a
+/// never-settling fetch fails (TIMEOUT) instead of hanging the runner.
+const DRIVE_DEADLINE: Duration = Duration::from_secs(15);
+/// Timers fired per drive turn before re-checking the completion channel.
+const TIMER_BUDGET: u32 = 64;
 
 /// Which JS engine the testharness runner drives. Boa is the pure-Rust
 /// conformance oracle; Nova is the native primary. Both implement
@@ -99,6 +122,7 @@ pub fn run_test(
     loader: &dyn ScriptSrcLoader,
     base_url: Option<&str>,
     handler: Option<Box<dyn FetchHandler>>,
+    completion: Option<&dyn CompletionSource>,
     engine: Engine,
 ) -> HarnessOutcome {
     let doc = StaticDocument::parse(html);
@@ -107,25 +131,28 @@ pub fn run_test(
     let test_src = scripts.join("\n;\n");
 
     match engine {
-        Engine::Boa => {
-            run_with::<script_engine_boa::BoaEngine>(testharness_js, &test_src, &doc, base_url, handler)
-        }
-        Engine::Nova => {
-            run_with::<script_engine_nova::NovaEngine>(testharness_js, &test_src, &doc, base_url, handler)
-        }
+        Engine::Boa => run_with::<script_engine_boa::BoaEngine>(
+            testharness_js, &test_src, &doc, base_url, handler, completion,
+        ),
+        Engine::Nova => run_with::<script_engine_nova::NovaEngine>(
+            testharness_js, &test_src, &doc, base_url, handler, completion,
+        ),
     }
 }
 
 /// Engine-generic core: build a `Runtime<E>`, load the test's body as the live
 /// DOM, set the base URL + fetch handler if given, run the harness, collect
-/// results. Each backend implements `ScriptEngine`, so the only per-engine thing
-/// is the monomorphization chosen by [`run_test`].
+/// results. With a `completion` source (deferred / server mode) it drives the
+/// event loop and the fetch-completion channel to quiescence (or a deadline)
+/// itself, because deferred replies arrive out of band; without one it uses the
+/// synchronous one-shot path.
 fn run_with<E: ScriptEngine>(
     testharness_js: &str,
     test_src: &str,
     doc: &StaticDocument,
     base_url: Option<&str>,
     handler: Option<Box<dyn FetchHandler>>,
+    completion: Option<&dyn CompletionSource>,
 ) -> HarnessOutcome {
     let mut rt = match Runtime::<E>::new() {
         Ok(rt) => rt,
@@ -140,12 +167,57 @@ fn run_with<E: ScriptEngine>(
     if let Some(h) = handler {
         rt.set_fetch_handler(h);
     }
-    match rt.run_testharness(testharness_js, test_src) {
-        Ok(results) => HarnessOutcome::Ran(results),
-        // `ScriptEngine::Error` is `Debug`-only; truncate the (sometimes
-        // backtrace-carrying) message defensively.
-        Err(e) => HarnessOutcome::Threw(truncate(&format!("{e:?}"), 200)),
+
+    let Some(cs) = completion else {
+        // Synchronous path (disk / sync handler): one-shot, unchanged.
+        return match rt.run_testharness(testharness_js, test_src) {
+            Ok(results) => HarnessOutcome::Ran(results),
+            Err(e) => HarnessOutcome::Threw(truncate(&format!("{e:?}"), 200)),
+        };
+    };
+
+    // Deferred path: set the run up, then drive timers + the completion channel to
+    // quiescence (no pending fetches, no timer fired, an empty channel) or the
+    // wall-clock deadline.
+    if let Err(e) = rt.begin_testharness(testharness_js, test_src) {
+        return HarnessOutcome::Threw(truncate(&format!("{e:?}"), 200));
     }
+    let deadline = Instant::now() + DRIVE_DEADLINE;
+    loop {
+        // Start async functions / run continuations (which may issue fetches), but
+        // do NOT advance timers yet.
+        rt.run_microtasks();
+        let applied = cs.drain(&mut |c| match c {
+            FetchCompletion::Settle(id, o) => rt.settle_fetch(id, o),
+            FetchCompletion::Fail(id, m) => rt.fail_fetch(id, &m),
+        });
+        if rt.pending_fetches() > 0 {
+            // A real fetch is in flight. Resolve it BEFORE advancing the cooperative
+            // timer clock, otherwise `__runTimers` would fire the testharness timeout
+            // (which has no real-time gate) and time the test out spuriously.
+            let now = Instant::now();
+            if now >= deadline {
+                rt.fail_all_pending("fetch timed out");
+                break;
+            }
+            if applied == 0
+                && cs.wait(deadline - now, &mut |c| match c {
+                    FetchCompletion::Settle(id, o) => rt.settle_fetch(id, o),
+                    FetchCompletion::Fail(id, m) => rt.fail_fetch(id, &m),
+                }) == 0
+            {
+                rt.fail_all_pending("fetch timed out");
+                break;
+            }
+            continue;
+        }
+        // No fetch in flight: advance timers (genuine test timers + any timeout).
+        // Quiescent when a turn fires nothing and applies nothing.
+        if rt.run_timers(TIMER_BUDGET) == 0 && applied == 0 {
+            break;
+        }
+    }
+    HarnessOutcome::Ran(rt.results())
 }
 
 /// Walk the document collecting test scripts in document order: inline `<script>`
@@ -260,7 +332,7 @@ pub fn bench(tests_root: &str) {
     let loader = DiskLoader { base_dir: root, tests_root: root };
     let t = Instant::now();
     for _ in 0..n {
-        let _ = run_test(&testharness_js, html, &loader, None, None, Engine::Boa);
+        let _ = run_test(&testharness_js, html, &loader, None, None, None, Engine::Boa);
     }
     let run_ms = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
 

@@ -148,6 +148,44 @@ impl<E: ScriptEngine> Runtime<E> {
         Ok(self.host.borrow().results.clone())
     }
 
+    /// Set up a testharness run (load the harness + bridge, run the test, dispatch
+    /// `load`) WITHOUT draining to completion. The caller then drives the event loop
+    /// and a deferred-fetch completion source itself ([`run_timers`](Self::run_timers),
+    /// [`settle_fetch`](Self::settle_fetch), [`pending_fetches`](Self::pending_fetches)),
+    /// which the synchronous [`run_testharness`](Self::run_testharness) cannot do
+    /// because deferred replies arrive out of band. Read results with
+    /// [`results`](Self::results).
+    pub fn begin_testharness(&mut self, harness_src: &str, test_src: &str) -> Result<(), E::Error> {
+        self.engine.eval(harness_src)?;
+        harness::install_bridge(&mut self.engine)?;
+        self.engine.eval(test_src)?;
+        self.engine.eval("window.dispatchEvent(new Event('load'));")?;
+        Ok(())
+    }
+
+    /// Fire up to `budget` due timers (with microtask checkpoints around the batch)
+    /// and return how many fired. The driver loop uses the count to detect
+    /// quiescence: zero fired + no pending fetches + an empty completion channel
+    /// means script has nothing left to do.
+    pub fn run_timers(&mut self, budget: u32) -> usize {
+        self.engine.pump_microtasks();
+        let fired = self
+            .engine
+            .eval(&format!("String(globalThis.__runTimers({budget}))"))
+            .ok()
+            .and_then(|v| self.engine.value_to_string(&v).ok())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        self.engine.pump_microtasks();
+        fired
+    }
+
+    /// The per-subtest results collected so far (the driver reads this after the run
+    /// quiesces or its deadline elapses).
+    pub fn results(&self) -> Vec<TestResult> {
+        self.host.borrow().results.clone()
+    }
+
     /// Install the host's `fetch()` network seam (e.g. a netfetcher-backed
     /// handler). Until set, `fetch()` yields a network error. A synchronous handler
     /// (implementing only `fetch`) settles each request in-tick; a deferred handler
@@ -171,6 +209,19 @@ impl<E: ScriptEngine> Runtime<E> {
     /// (a `TypeError`, per Fetch). For a deferred host's failed request.
     pub fn fail_fetch(&mut self, id: u64, message: &str) {
         let js = format!("globalThis.__fetchFail({},{});", id, js_str(message));
+        let _ = self.engine.eval(&js);
+        self.engine.pump_microtasks();
+    }
+
+    /// Reject every still-pending `fetch()` Promise with `message` (a `TypeError`).
+    /// The host drive loop calls this at its wall-clock deadline so a test that
+    /// awaits a never-settling fetch records a failure rather than hanging.
+    pub fn fail_all_pending(&mut self, message: &str) {
+        let js = format!(
+            "(function(){{var p=globalThis.__pending;for(var k in p){{var e=p[k];delete p[k];\
+             if(e&&!e.settled){{e.settled=true;e.reject(new TypeError({}));}}}}}})();",
+            js_str(message)
+        );
         let _ = self.engine.eval(&js);
         self.engine.pump_microtasks();
     }

@@ -572,20 +572,29 @@ fn testharness(tests: &[PathBuf], args: &Args) {
         let base_dir = path.parent().unwrap_or(tests_root);
         let disk = harness::DiskLoader { base_dir, tests_root };
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            // Server mode: a fresh per-test fetch-event channel feeds the drive loop,
+            // so deferred fetches settle out of band, mid-flight abort works, and a
+            // hung fetch hits the per-test deadline. The shared worker routes replies
+            // to this channel; a late reply from a prior test lands on a dropped
+            // channel and is harmlessly discarded.
             #[cfg(feature = "netfetch")]
             if let Some(s) = &server {
+                let (ev_tx, ev_rx) = std::sync::mpsc::channel::<net::FetchEvent>();
                 let doc_url = s.doc_url(&rel(path, &args.tests_root));
                 let loader = s.loader(&doc_url);
+                let handler = net::NetFetchHandler::new(ev_tx);
+                let completion = net::ChannelCompletion::new(ev_rx);
                 return harness::run_test(
                     &testharness_js,
                     &html,
                     &loader,
                     Some(&doc_url),
-                    Some(s.handler()),
+                    Some(Box::new(handler)),
+                    Some(&completion),
                     args.engine,
                 );
             }
-            harness::run_test(&testharness_js, &html, &disk, None, None, args.engine)
+            harness::run_test(&testharness_js, &html, &disk, None, None, None, args.engine)
         }));
         let name = rel(path, &args.tests_root);
 
@@ -1015,81 +1024,232 @@ mod net {
 
     use crate::harness::ScriptSrcLoader;
 
-    /// One shared Tokio current-thread runtime for every blocking bridge call
-    /// (resource GETs + the `fetch()` handler). A pooled off-thread runtime is the
-    /// Mere shape; for the runner one shared runtime amortizes the per-test cost.
-    fn runtime() -> &'static tokio::runtime::Runtime {
-        static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-        RT.get_or_init(|| {
-            tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime")
-        })
+    /// One persistent worker thread owns the ONLY Tokio runtime that touches
+    /// netfetcher, so netfetcher's process-wide hyper client pool binds to a runtime
+    /// that is always being driven. Both blocking resource GETs (`Job::Get`) and
+    /// deferred `fetch()` calls (`Job::Fetch`) route through it. A current-thread
+    /// runtime + `spawn_blocking` job intake keeps the runtime thread free to drive
+    /// in-flight fetches; only plain owned data crosses the channel, so the engine
+    /// stays `!Send`.
+    fn worker_jobs() -> std::sync::mpsc::Sender<Job> {
+        static WORKER: OnceLock<std::sync::Mutex<std::sync::mpsc::Sender<Job>>> = OnceLock::new();
+        WORKER
+            .get_or_init(|| {
+                let (tx, rx) = std::sync::mpsc::channel::<Job>();
+                std::thread::spawn(move || worker_loop(rx));
+                std::sync::Mutex::new(tx)
+            })
+            .lock()
+            .expect("worker job sender")
+            .clone()
     }
 
-    /// Blocking HTTP GET, body as a (UTF-8-lossy) string. `None` on parse / network
-    /// error or non-2xx. Used for `<script src>` and readiness probes.
-    pub fn http_get(url: &str) -> Option<String> {
-        let u = url::Url::parse(url).ok()?;
-        runtime().block_on(async move {
-            let req = netfetcher::Request::get(u);
-            let cx = netfetcher::FetchContext::permissive();
-            let resp = netfetcher::fetch(req, &cx).await;
-            if resp.is_network_error() || resp.status < 200 || resp.status >= 300 {
-                return None;
+    fn worker_loop(rx: std::sync::mpsc::Receiver<Job>) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("worker tokio runtime");
+        rt.block_on(async move {
+            let mut handles: std::collections::HashMap<u64, tokio::task::AbortHandle> =
+                std::collections::HashMap::new();
+            let mut rx = Some(rx);
+            loop {
+                // Await the next job on the blocking pool, so the runtime thread stays
+                // free to drive in-flight fetch tasks meanwhile.
+                let owned = rx.take().unwrap();
+                let (owned, job) = tokio::task::spawn_blocking(move || {
+                    let j = owned.recv();
+                    (owned, j)
+                })
+                .await
+                .expect("worker recv join");
+                rx = Some(owned);
+                match job {
+                    Ok(Job::Get(url, reply)) => {
+                        tokio::spawn(async move {
+                            let _ = reply.send(do_get(&url).await);
+                        });
+                    }
+                    Ok(Job::Fetch(key, id, req, reply)) => {
+                        let h = tokio::spawn(async move {
+                            let outcome = do_fetch(req).await;
+                            let out = if outcome.network_error {
+                                FetchEvent::Fail(id, "Failed to fetch".to_string())
+                            } else {
+                                FetchEvent::Settle(id, outcome)
+                            };
+                            let _ = reply.send(out);
+                        })
+                        .abort_handle();
+                        handles.insert(key, h);
+                    }
+                    Ok(Job::Cancel(key)) => {
+                        if let Some(h) = handles.remove(&key) {
+                            h.abort(); // drop the in-flight future
+                        }
+                    }
+                    Err(_) => break, // all senders dropped: shut down
+                }
+                handles.retain(|_, h| !h.is_finished());
             }
-            resp.bytes().await.ok().map(|b| String::from_utf8_lossy(&b).into_owned())
-        })
+        });
     }
 
-    /// The host `fetch()` seam, backed by netfetcher over the shared runtime. A ZST:
-    /// the runtime is global, so minting one per test is free.
-    pub struct NetFetchHandler;
+    /// A globally-unique abort key (the JS `id` is per-test, so it cannot key the
+    /// shared worker's abort map).
+    fn next_key() -> u64 {
+        static KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        KEY.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Blocking HTTP GET on the worker runtime, body as a (UTF-8-lossy) string.
+    /// `None` on parse / network error or non-2xx. Used for `<script src>` and
+    /// readiness probes; the caller blocks on the reply.
+    pub fn http_get(url: &str) -> Option<String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        worker_jobs().send(Job::Get(url.to_owned(), tx)).ok()?;
+        rx.recv().ok().flatten()
+    }
+
+    async fn do_get(url: &str) -> Option<String> {
+        let u = url::Url::parse(url).ok()?;
+        let req = netfetcher::Request::get(u);
+        let cx = netfetcher::FetchContext::permissive();
+        let resp = netfetcher::fetch(req, &cx).await;
+        if resp.is_network_error() || resp.status < 200 || resp.status >= 300 {
+            return None;
+        }
+        resp.bytes().await.ok().map(|b| String::from_utf8_lossy(&b).into_owned())
+    }
+
+    /// Map a `FetchRequest` to a netfetcher request, run it, and shape the result
+    /// into a `FetchOutcome`. The deferred worker runs this; the body crosses back
+    /// to JS as the binary string `encode_outcome` builds.
+    async fn do_fetch(req: FetchRequest) -> FetchOutcome {
+        let Ok(url) = url::Url::parse(&req.url) else {
+            return FetchOutcome::network_error();
+        };
+        let mut request = netfetcher::Request::get(url);
+        request.method = match req.method.as_str() {
+            "HEAD" => netfetcher::Method::Head,
+            "POST" => netfetcher::Method::Post,
+            "PUT" => netfetcher::Method::Put,
+            "DELETE" => netfetcher::Method::Delete,
+            "PATCH" => netfetcher::Method::Patch,
+            "OPTIONS" => netfetcher::Method::Options,
+            _ => netfetcher::Method::Get,
+        };
+        request.headers = req.headers;
+        request.body = req.body.map(bytes::Bytes::from);
+
+        let cx = netfetcher::FetchContext::permissive();
+        let resp = netfetcher::fetch(request, &cx).await;
+        if resp.is_network_error() {
+            return FetchOutcome::network_error();
+        }
+        let status = resp.status;
+        let headers = resp.headers.clone();
+        let response_type = match resp.response_type {
+            netfetcher::ResponseType::Basic => "basic",
+            netfetcher::ResponseType::Cors => "cors",
+            netfetcher::ResponseType::Opaque => "opaque",
+            netfetcher::ResponseType::OpaqueRedirect => "opaqueredirect",
+            netfetcher::ResponseType::Error => "error",
+        }
+        .to_owned();
+        let url = resp.url_list.last().map(|u| u.to_string()).unwrap_or_default();
+        let body = resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
+        FetchOutcome { network_error: false, status, status_text: String::new(), response_type, url, headers, body }
+    }
+
+    /// A job for the persistent worker. `Get` is a blocking resource GET (reply: the
+    /// body or `None`); `Fetch` is a deferred `fetch()` (reply: a `FetchEvent` to the
+    /// test's channel); `Cancel` aborts an in-flight fetch by its global key.
+    pub enum Job {
+        Get(String, std::sync::mpsc::Sender<Option<String>>),
+        Fetch(u64, u64, FetchRequest, std::sync::mpsc::Sender<FetchEvent>),
+        Cancel(u64),
+    }
+
+    /// A completed deferred fetch, routed to the originating test's channel. `Fail`
+    /// is a network error (rejected as a `TypeError`); `Settle` carries the outcome.
+    /// Both carry the per-test JS `id` (not the global abort key).
+    pub enum FetchEvent {
+        Settle(u64, FetchOutcome),
+        Fail(u64, String),
+    }
+
+    /// The deferred host `fetch()` seam: `start` hands the request to the shared
+    /// worker (tagged with a global key for cancellation + the JS id for routing) and
+    /// leaves the JS Promise pending; `cancel` relays an abort. The reply settles
+    /// later via the drive loop. This is the actor-mailbox shape: the handler owns a
+    /// send into the worker's inbox plus the test's reply channel. Per-test (a fresh
+    /// reply channel + key map), so a late reply from a prior test cannot cross over.
+    pub struct NetFetchHandler {
+        reply: std::sync::mpsc::Sender<FetchEvent>,
+        keys: std::cell::RefCell<std::collections::HashMap<u64, u64>>, // js id -> global key
+    }
+
+    impl NetFetchHandler {
+        pub fn new(reply: std::sync::mpsc::Sender<FetchEvent>) -> Self {
+            Self { reply, keys: std::cell::RefCell::new(std::collections::HashMap::new()) }
+        }
+    }
 
     impl FetchHandler for NetFetchHandler {
-        fn fetch(&self, req: FetchRequest) -> FetchOutcome {
-            let Ok(url) = url::Url::parse(&req.url) else {
-                return FetchOutcome::network_error();
-            };
-            runtime().block_on(async move {
-                let mut request = netfetcher::Request::get(url);
-                request.method = match req.method.as_str() {
-                    "HEAD" => netfetcher::Method::Head,
-                    "POST" => netfetcher::Method::Post,
-                    "PUT" => netfetcher::Method::Put,
-                    "DELETE" => netfetcher::Method::Delete,
-                    "PATCH" => netfetcher::Method::Patch,
-                    "OPTIONS" => netfetcher::Method::Options,
-                    _ => netfetcher::Method::Get,
-                };
-                request.headers = req.headers;
-                request.body = req.body.map(bytes::Bytes::from);
+        fn start(&self, id: u64, request: FetchRequest) -> Option<FetchOutcome> {
+            let key = next_key();
+            self.keys.borrow_mut().insert(id, key);
+            let _ = worker_jobs().send(Job::Fetch(key, id, request, self.reply.clone()));
+            None // deferred: the drive loop settles it when the reply arrives
+        }
+        fn cancel(&self, id: u64) {
+            if let Some(key) = self.keys.borrow_mut().remove(&id) {
+                let _ = worker_jobs().send(Job::Cancel(key));
+            }
+        }
+    }
 
-                let cx = netfetcher::FetchContext::permissive();
-                let resp = netfetcher::fetch(request, &cx).await;
-                if resp.is_network_error() {
-                    return FetchOutcome::network_error();
+    /// Bridges a test's fetch-event channel to the harness drive loop. Owns the
+    /// receiver (per test, created alongside the handler's `Sender`).
+    pub struct ChannelCompletion {
+        rx: std::sync::mpsc::Receiver<FetchEvent>,
+    }
+
+    impl ChannelCompletion {
+        pub fn new(rx: std::sync::mpsc::Receiver<FetchEvent>) -> Self {
+            Self { rx }
+        }
+    }
+
+    impl crate::harness::CompletionSource for ChannelCompletion {
+        fn drain(&self, apply: &mut dyn FnMut(crate::harness::FetchCompletion)) -> usize {
+            let mut n = 0;
+            while let Ok(ev) = self.rx.try_recv() {
+                apply(to_completion(ev));
+                n += 1;
+            }
+            n
+        }
+        fn wait(
+            &self,
+            timeout: std::time::Duration,
+            apply: &mut dyn FnMut(crate::harness::FetchCompletion),
+        ) -> usize {
+            match self.rx.recv_timeout(timeout) {
+                Ok(ev) => {
+                    apply(to_completion(ev));
+                    1
                 }
-                let status = resp.status;
-                let headers = resp.headers.clone();
-                let response_type = match resp.response_type {
-                    netfetcher::ResponseType::Basic => "basic",
-                    netfetcher::ResponseType::Cors => "cors",
-                    netfetcher::ResponseType::Opaque => "opaque",
-                    netfetcher::ResponseType::OpaqueRedirect => "opaqueredirect",
-                    netfetcher::ResponseType::Error => "error",
-                }
-                .to_owned();
-                let url = resp.url_list.last().map(|u| u.to_string()).unwrap_or_default();
-                let body = resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
-                FetchOutcome {
-                    network_error: false,
-                    status,
-                    status_text: String::new(),
-                    response_type,
-                    url,
-                    headers,
-                    body,
-                }
-            })
+                Err(_) => 0,
+            }
+        }
+    }
+
+    fn to_completion(ev: FetchEvent) -> crate::harness::FetchCompletion {
+        match ev {
+            FetchEvent::Settle(id, o) => crate::harness::FetchCompletion::Settle(id, o),
+            FetchEvent::Fail(id, m) => crate::harness::FetchCompletion::Fail(id, m),
         }
     }
 
@@ -1141,10 +1301,6 @@ mod net {
 
         pub fn loader(&self, doc_url: &str) -> ServerLoader {
             ServerLoader { doc_url: doc_url.to_owned() }
-        }
-
-        pub fn handler(&self) -> Box<dyn FetchHandler> {
-            Box::new(NetFetchHandler)
         }
     }
 
