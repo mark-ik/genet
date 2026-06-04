@@ -36,7 +36,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use layout_dom_api::{LayoutDom, NodeKind};
+    use layout_dom_api::{LayoutDom, LayoutDomMut, NodeKind};
     use serval_scripted_dom::{NodeId, ScriptedDom};
     use xilem_serval::{
         El, Key, KeyEvent, NamedKey, OnClick, OnKey, PointerClick, ServalAppRunner, ServalCtx,
@@ -64,6 +64,53 @@ mod tests {
         dom.dom_children(node)
             .find(|&c| dom.kind(c) == NodeKind::Text)
             .and_then(|c| dom.text(c).map(str::to_string))
+    }
+
+    /// Render `html` through the full serval pipeline and return the debug
+    /// encoding of the Scene's draw ops — a deterministic fingerprint of the
+    /// visual output (glyph runs with positions, fills with colors; fonts are
+    /// referenced by id, not inlined, so the string stays bounded). Builds its
+    /// own `ScriptedDom` so it can run on any thread: `ScriptedDom` is `!Send`,
+    /// and the `&'static` HTML source is what crosses the thread boundary.
+    fn render_ops_debug(html: &str, w: u32, h: u32) -> String {
+        const BLOCK_SHEET: &[&str] =
+            &["html, body, div, p, h1 { display: block; }", "body { padding: 16px; }"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        dom.set_inner_html(root, html);
+        let scene = scene_from_scripted_dom(&dom, BLOCK_SHEET, w, h, None, &Default::default());
+        format!("{:?}", scene.ops)
+    }
+
+    /// The serval cascade must run off the main thread and concurrently: the
+    /// actor constellation (P2) runs `render_content_scene` on a per-tile
+    /// content-actor thread, several at once. This is sound because Stylo's
+    /// `GLOBAL_STYLE_DATA` is read-shared, the `Stylist` is built fresh per call,
+    /// and the cascade's context (`CascadeGuard`) plus Stylo's sharing cache are
+    /// thread-locals. This test guards it: the scene's draw ops are byte-identical
+    /// on the main thread, off-thread, and across N concurrent threads.
+    #[test]
+    fn cascade_is_deterministic_off_thread_and_concurrent() {
+        const HTML: &str = "<style>p { color: rgb(20, 20, 20); } h1 { font-size: 30px; }</style>\
+             <h1>Heading</h1><p>One paragraph of text.</p><p>Another paragraph here.</p>";
+
+        let baseline = render_ops_debug(HTML, 420, 360);
+        assert!(baseline.contains("GlyphRun"), "the baseline cascade should emit glyph runs");
+
+        let off = std::thread::spawn(|| render_ops_debug(HTML, 420, 360))
+            .join()
+            .expect("the off-thread cascade panicked");
+        assert_eq!(off, baseline, "off-thread ops must match the main thread byte for byte");
+
+        const N: usize = 8;
+        let handles: Vec<_> =
+            (0..N).map(|_| std::thread::spawn(|| render_ops_debug(HTML, 420, 360))).collect();
+        for (i, handle) in handles.into_iter().enumerate() {
+            let ops = handle
+                .join()
+                .unwrap_or_else(|_| panic!("concurrent cascade thread {i} panicked"));
+            assert_eq!(ops, baseline, "concurrent thread {i} diverged from the main thread");
+        }
     }
 
     /// End-to-end: tick a counter 0 → 1 → 2 → 3 through the runner, and after
