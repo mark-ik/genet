@@ -394,6 +394,34 @@ const EVENT_LOOP_BOOTSTRAP: &str = r#"
     }
   };
   globalThis.clearInterval = globalThis.clearTimeout;
+  // Legacy escape() / unescape() (ECMAScript Annex B): percent-escape bytes
+  // (%XX) and code units > 255 (%uXXXX). Some WPT tests build byte sequences
+  // with escape(); provide them if the engine doesn't.
+  if (typeof globalThis.escape !== 'function') {
+    var ESCAPE_OK = /[A-Za-z0-9@*_+\-.\/]/;
+    globalThis.escape = function(s) {
+      s = String(s); var out = '';
+      for (var i = 0; i < s.length; i++) {
+        var ch = s.charAt(i), c = s.charCodeAt(i);
+        if (ESCAPE_OK.test(ch)) out += ch;
+        else if (c < 256) out += '%' + ('0' + c.toString(16).toUpperCase()).slice(-2);
+        else out += '%u' + ('000' + c.toString(16).toUpperCase()).slice(-4);
+      }
+      return out;
+    };
+  }
+  if (typeof globalThis.unescape !== 'function') {
+    globalThis.unescape = function(s) {
+      s = String(s); var out = '';
+      for (var i = 0; i < s.length; i++) {
+        var ch = s.charAt(i);
+        if (ch === '%' && s.charAt(i + 1) === 'u') { out += String.fromCharCode(parseInt(s.substr(i + 2, 4), 16)); i += 5; }
+        else if (ch === '%') { out += String.fromCharCode(parseInt(s.substr(i + 1, 2), 16)); i += 2; }
+        else out += ch;
+      }
+      return out;
+    };
+  }
   // Fire due timers. `nowMs` undefined => cooperative (disk path): fire everything
   // in (delay, seq) order, ignoring real time. `nowMs` given => real-time gate
   // (deferred drive loop): advance the virtual clock and fire only timers whose
