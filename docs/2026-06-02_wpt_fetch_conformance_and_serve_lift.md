@@ -306,21 +306,39 @@ The seam is the actor-mailbox shape: a deferred handler owns a send into a worke
 drive `start_stream` / `push_chunk` / `close_stream` / `fail_fetch`. `serval-wpt`'s
 handler is one consumer; Mere's content actor is the other, with no second refactor.
 
+## HTTP cache (subsystem, 2026-06-04)
+
+`request-cache-*` needs the client to honor the WHATWG request **cache mode**, not
+just RFC 9111 default. netfetcher already had the RFC 9111 policy (freshness,
+revalidation, 304 refresh) + `InMemoryHttpCache`; this added the mode:
+`Request.cache` (`CacheMode`), the read/store/revalidate behaviour per mode, and
+the mode-specific request headers (`Pragma`/`Cache-Control: no-cache`,
+`Cache-Control: max-age=0`) that `cache.py` logs. `FetchContext.cache` became an
+`Arc` so the runner shares **one** process-wide cache across fetches; the mode
+crosses the deferred seam (`FetchRequest.cache` -> `__fetch_start` -> the worker).
+A `reason_phrase()` map fills `response.statusText` (netfetcher discards the wire
+reason), which every cache subtest checks.
+
+request-cache, server mode (was ~2): **default 8/8, force-cache 16/16, no-cache
+4/4, no-store 8/8, reload 12/12, only-if-cached 10/14, default-conditional 20/40**
+(~+76). Remaining: cache + redirect interaction and cross-origin-redirect edges.
+
 ## Not done (deliberately deferred)
 
 - **Byte (BYOB) byte streams.** `getReader({mode:'bytes'})` returns a default
   reader (the view-passing tests pass through it leniently); a true byte stream
   with BYOB `read(view)` is unbuilt. Few subtests need it.
-- **HTTP cache + request destination + multi-realm.** `request-cache-*` (~100
-  subtests) needs a real HTTP cache (the runner is uncached); `request/destination`
-  needs browsing contexts; `*/url-parsing.html` and the realm tests need iframe /
-  multi-global support. All architectural, out of scope for the JS surface.
+- **`request/destination` + multi-realm.** `request/destination` (~48) needs the
+  DOM to initiate fetches with a destination (an `<img>` -> `image`, etc.) — a
+  document/element-fetch integration the runner has no model for; `*/url-parsing.html`
+  and the realm tests need iframe / multi-global support. Both are larger
+  subsystems (element-driven fetch, a second realm), not fetch-surface fixes.
+- **Cache + redirect.** `default-conditional`'s back half and `only-if-cached`'s
+  cross-origin-redirect cases need caching to compose with redirect following
+  (cache the redirect, key the redirected URL).
 - **Strict malformed-multipart rejection.** `formData()` parses valid multipart
   (round-trips), but does not reject the buggy-form-data inputs; a binary `File`
   part still goes through UTF-8 text (the one lossy body spot).
-- **The failing object-semantics tail**: now mostly the cache / destination /
-  multi-realm clusters above, not missing constructors, guards, validation, a lossy
-  body channel, or a synchronous seam.
 - **Per-test runtime reuse.** A fresh `Runtime` per test re-evals testharness.js
   each time (the dominant cost; see `harness::bench`). A snapshot-clone pool is the
   amortization, unchanged by this work.
