@@ -29,6 +29,9 @@ pub struct FetchRequest {
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Option<Vec<u8>>,
+    /// The HTTP cache mode name (`default` / `no-store` / `reload` / `no-cache` /
+    /// `force-cache` / `only-if-cached`); the host maps it to its cache engine.
+    pub cache: String,
 }
 
 /// The result handed back to script. A Fetch *network error* is
@@ -118,12 +121,14 @@ impl<E: ScriptEngine> NativeFn<E> for FetchStart {
         let headers_flat = cx.value_to_string(&a3)?;
         let a4 = cx.arg(4);
         let body_str = cx.value_to_string(&a4)?;
+        let a5 = cx.arg(5);
+        let cache = cx.value_to_string(&a5)?;
 
         let headers = parse_flat_headers(&headers_flat);
         // The body crosses as a lossless "binary string": each JS char code (0-255)
         // is one byte. `char as u8` recovers the byte (every char is <= 0xFF).
         let body = (!body_str.is_empty()).then(|| body_str.chars().map(|c| c as u8).collect::<Vec<u8>>());
-        let request = FetchRequest { method, url, headers, body };
+        let request = FetchRequest { method, url, headers, body, cache };
 
         // Clone the handler before calling it (no borrow held across `start`).
         let outcome = match host_handler::<E>(cx) {
@@ -357,7 +362,7 @@ fn push_json_str(out: &mut String, s: &str) {
 /// Install the deferred fetch sinks (`__fetch_start` / `__fetch_abort`) and the
 /// `fetch()` / `Request` / `Response` / `Headers` bootstrap.
 pub(crate) fn install_fetch_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error> {
-    engine.set_function::<FetchStart>("__fetch_start", 5)?;
+    engine.set_function::<FetchStart>("__fetch_start", 6)?;
     engine.set_function::<FetchAbort>("__fetch_abort", 1)?;
     engine.set_function::<ResolveUrl>("__resolve_url", 1)?;
     engine.set_function::<UrlParse>("__url_parse", 2)?;
@@ -1509,7 +1514,8 @@ const FETCH_BOOTSTRAP: &str = r#"
         if (!e.settled) { e.settled = true; e.reject(err); }
       });
       var inline = __fetch_start(id, req.method, req.url, headersFlat(req.headers),
-                                 req.__bytes != null ? bytesToBinaryString(req.__bytes) : "");
+                                 req.__bytes != null ? bytesToBinaryString(req.__bytes) : "",
+                                 req.cache || "default");
       if (inline) {
         // Synchronous host answered in this tick (today's path; one pump drains).
         var e = __pending[id];

@@ -1090,6 +1090,23 @@ mod net {
         });
     }
 
+    /// One process-wide HTTP cache, shared across every deferred fetch so the
+    /// request cache modes (default / force-cache / only-if-cached / ...) have a
+    /// persistent store to act against. WPT cache tests key on a per-subtest uuid,
+    /// so a global cache does not cross subtests.
+    fn shared_cache() -> std::sync::Arc<netfetcher::InMemoryHttpCache> {
+        static CACHE: std::sync::OnceLock<std::sync::Arc<netfetcher::InMemoryHttpCache>> =
+            std::sync::OnceLock::new();
+        CACHE.get_or_init(|| std::sync::Arc::new(netfetcher::InMemoryHttpCache::new())).clone()
+    }
+
+    /// A fetch context with the shared HTTP cache wired in (the `fetch()` path).
+    fn fetch_context() -> netfetcher::FetchContext {
+        let mut cx = netfetcher::FetchContext::permissive();
+        cx.cache = shared_cache();
+        cx
+    }
+
     /// A globally-unique abort key (the JS `id` is per-test, so it cannot key the
     /// shared worker's abort map).
     fn next_key() -> u64 {
@@ -1115,6 +1132,28 @@ mod net {
             return None;
         }
         resp.bytes().await.ok().map(|b| String::from_utf8_lossy(&b).into_owned())
+    }
+
+    /// The canonical HTTP reason phrase for a status code (netfetcher discards the
+    /// wire reason). WPT checks `response.statusText`, so synthesize it.
+    fn reason_phrase(status: u16) -> &'static str {
+        match status {
+            200 => "OK", 201 => "Created", 202 => "Accepted", 203 => "Non-Authoritative Information",
+            204 => "No Content", 205 => "Reset Content", 206 => "Partial Content",
+            300 => "Multiple Choices", 301 => "Moved Permanently", 302 => "Found", 303 => "See Other",
+            304 => "Not Modified", 307 => "Temporary Redirect", 308 => "Permanent Redirect",
+            400 => "Bad Request", 401 => "Unauthorized", 402 => "Payment Required", 403 => "Forbidden",
+            404 => "Not Found", 405 => "Method Not Allowed", 406 => "Not Acceptable",
+            408 => "Request Timeout", 409 => "Conflict", 410 => "Gone", 411 => "Length Required",
+            412 => "Precondition Failed", 413 => "Payload Too Large", 414 => "URI Too Long",
+            415 => "Unsupported Media Type", 416 => "Range Not Satisfiable", 417 => "Expectation Failed",
+            418 => "I'm a Teapot", 421 => "Misdirected Request", 422 => "Unprocessable Entity",
+            425 => "Too Early", 426 => "Upgrade Required", 428 => "Precondition Required",
+            429 => "Too Many Requests", 431 => "Request Header Fields Too Large",
+            451 => "Unavailable For Legal Reasons", 500 => "Internal Server Error",
+            501 => "Not Implemented", 502 => "Bad Gateway", 503 => "Service Unavailable",
+            504 => "Gateway Timeout", 505 => "HTTP Version Not Supported", _ => "",
+        }
     }
 
     fn map_response_type(t: netfetcher::ResponseType) -> String {
@@ -1150,8 +1189,16 @@ mod net {
         };
         request.headers = req.headers;
         request.body = req.body.map(bytes::Bytes::from);
+        request.cache = match req.cache.as_str() {
+            "no-store" => netfetcher::CacheMode::NoStore,
+            "reload" => netfetcher::CacheMode::Reload,
+            "no-cache" => netfetcher::CacheMode::NoCache,
+            "force-cache" => netfetcher::CacheMode::ForceCache,
+            "only-if-cached" => netfetcher::CacheMode::OnlyIfCached,
+            _ => netfetcher::CacheMode::Default,
+        };
 
-        let cx = netfetcher::FetchContext::permissive();
+        let cx = fetch_context();
         let mut resp = netfetcher::fetch(request, &cx).await;
         if resp.is_network_error() {
             let _ = reply.send(FetchEvent::Fail(id, "Failed to fetch".to_string()));
@@ -1160,7 +1207,7 @@ mod net {
         let meta = FetchOutcome {
             network_error: false,
             status: resp.status,
-            status_text: String::new(),
+            status_text: reason_phrase(resp.status).to_string(),
             response_type: map_response_type(resp.response_type),
             url: resp.url_list.last().map(|u| u.to_string()).unwrap_or_default(),
             headers: resp.headers.clone(),
