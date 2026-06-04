@@ -374,9 +374,10 @@ pub(crate) fn install_fetch_surface<E: ScriptEngine>(engine: &mut E) -> Result<(
 /// extraction (string / URLSearchParams / Blob / FormData / buffers / stream set
 /// the right Content-Type), and `fetch()` over the `__fetch` sink. Bodies cross
 /// that sink as a lossless binary string, so binary request / response bodies are
-/// exact. Streams are a buffered model (`ReadableStream` / `WritableStream` /
-/// `TransformStream` + `pipeTo` / `pipeThrough`); still missing byte (BYOB)
-/// readers, genuinely async producers, and multipart `formData()` parsing.
+/// exact. `formData()` parses both urlencoded and multipart bodies. Streams are a
+/// buffered model (`ReadableStream` / `WritableStream` / `TransformStream` +
+/// `pipeTo` / `pipeThrough`); still missing byte (BYOB) readers, genuinely async
+/// producers, and strict rejection of malformed multipart.
 const FETCH_BOOTSTRAP: &str = r#"
 (function() {
   var hasSym = (typeof Symbol !== 'undefined' && Symbol.iterator);
@@ -1135,18 +1136,46 @@ const FETCH_BOOTSTRAP: &str = r#"
     return { bytes: utf8Encode(String(v)), stream: null, type: 'text/plain;charset=UTF-8' };
   }
 
-  // Parse a consumed body back to a FormData for `.formData()`. Handles
-  // application/x-www-form-urlencoded fully; multipart parsing is a later slice.
-  function parseFormData(text, contentType) {
+  // Parse a multipart/form-data body (already decoded to text) into a FormData.
+  // Text fields round-trip exactly; a file part becomes a File (its content via
+  // the UTF-8 text, the one lossy spot for binary parts).
+  function parseMultipart(text, boundary) {
     var fd = new FormData();
-    var ct = String(contentType || '').toLowerCase();
-    if (ct.indexOf('application/x-www-form-urlencoded') === 0 || ct === '') {
-      var usp = new URLSearchParams(text);
-      usp.forEach(function(val, key) { fd.append(key, val); });
-    } else {
-      throw new TypeError("multipart formData() parsing is not implemented");
+    var segments = text.split("--" + boundary);
+    for (var i = 0; i < segments.length; i++) {
+      var part = segments[i];
+      if (part === "" || /^--\r?\n?$/.test(part)) continue; // preamble / closing delim
+      part = part.replace(/^\r\n/, "").replace(/\r\n$/, "");
+      var sep = part.indexOf("\r\n\r\n");
+      if (sep < 0) continue;
+      var head = part.slice(0, sep), content = part.slice(sep + 4);
+      var nameM = /name="([^"]*)"/i.exec(head);
+      if (!nameM) continue;
+      var fileM = /filename="([^"]*)"/i.exec(head);
+      var ctM = /content-type:\s*([^\r\n]+)/i.exec(head);
+      if (fileM) {
+        fd.append(nameM[1], new File([utf8Encode(content)], fileM[1], { type: ctM ? ctM[1].replace(/\s+$/, "") : "" }));
+      } else {
+        fd.append(nameM[1], content);
+      }
     }
     return fd;
+  }
+  // Parse a consumed body back to a FormData for `.formData()`:
+  // application/x-www-form-urlencoded or multipart/form-data.
+  function parseFormData(text, contentType) {
+    var ct = String(contentType || '').toLowerCase();
+    if (ct.indexOf('multipart/form-data') === 0) {
+      var bM = /boundary=("?)([^";]+)\1/i.exec(String(contentType));
+      if (!bM) throw new TypeError("multipart/form-data without boundary");
+      return parseMultipart(text, bM[2]);
+    }
+    if (ct.indexOf('application/x-www-form-urlencoded') === 0 || ct === '') {
+      var fd = new FormData();
+      new URLSearchParams(text).forEach(function(val, key) { fd.append(key, val); });
+      return fd;
+    }
+    throw new TypeError("Unsupported content-type for formData(): " + ct);
   }
 
   // A body is "live" when it is backed by a stream that has not closed yet (an
