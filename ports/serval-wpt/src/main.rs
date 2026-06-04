@@ -1229,6 +1229,23 @@ mod net {
         // The initiator origin (the WPT page) drives cross-origin detection. In disk
         // mode it stays None (every fetch is same-origin).
         request.origin = page_origin();
+        // Referrer + policy drive the `Referer` header (empty referrer = none).
+        request.referrer = (!req.referrer.is_empty())
+            .then(|| url::Url::parse(&req.referrer).ok())
+            .flatten();
+        request.referrer_policy = match req.referrer_policy.as_str() {
+            "no-referrer" => netfetcher::ReferrerPolicy::NoReferrer,
+            "no-referrer-when-downgrade" => netfetcher::ReferrerPolicy::NoReferrerWhenDowngrade,
+            "same-origin" => netfetcher::ReferrerPolicy::SameOrigin,
+            "origin" => netfetcher::ReferrerPolicy::Origin,
+            "strict-origin" => netfetcher::ReferrerPolicy::StrictOrigin,
+            "origin-when-cross-origin" => netfetcher::ReferrerPolicy::OriginWhenCrossOrigin,
+            "strict-origin-when-cross-origin" => {
+                netfetcher::ReferrerPolicy::StrictOriginWhenCrossOrigin
+            }
+            "unsafe-url" => netfetcher::ReferrerPolicy::UnsafeUrl,
+            _ => netfetcher::ReferrerPolicy::Empty,
+        };
 
         let cx = fetch_context();
         let mut resp = netfetcher::fetch(request, &cx).await;

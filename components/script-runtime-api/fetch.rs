@@ -38,6 +38,12 @@ pub struct FetchRequest {
     /// The request mode name (`cors` / `no-cors` / `same-origin` / `navigate`); the
     /// host maps it to its CORS / response-tainting model.
     pub mode: String,
+    /// The request's referrer URL (the initiator document), or empty for none; the
+    /// host derives the `Referer` header from it per [`Self::referrer_policy`].
+    pub referrer: String,
+    /// The referrer policy name (`` / `no-referrer` / `origin` / `unsafe-url` / …);
+    /// the host maps it to its referrer engine.
+    pub referrer_policy: String,
 }
 
 /// The result handed back to script. A Fetch *network error* is
@@ -136,12 +142,26 @@ impl<E: ScriptEngine> NativeFn<E> for FetchStart {
         let redirect = cx.value_to_string(&a6)?;
         let a7 = cx.arg(7);
         let mode = cx.value_to_string(&a7)?;
+        let a8 = cx.arg(8);
+        let referrer = cx.value_to_string(&a8)?;
+        let a9 = cx.arg(9);
+        let referrer_policy = cx.value_to_string(&a9)?;
 
         let headers = parse_flat_headers(&headers_flat);
         // The body crosses as a lossless "binary string": each JS char code (0-255)
         // is one byte. `char as u8` recovers the byte (every char is <= 0xFF).
         let body = (!body_str.is_empty()).then(|| body_str.chars().map(|c| c as u8).collect::<Vec<u8>>());
-        let request = FetchRequest { method, url, headers, body, cache, redirect, mode };
+        let request = FetchRequest {
+            method,
+            url,
+            headers,
+            body,
+            cache,
+            redirect,
+            mode,
+            referrer,
+            referrer_policy,
+        };
 
         // Clone the handler before calling it (no borrow held across `start`).
         let outcome = match host_handler::<E>(cx) {
@@ -376,7 +396,7 @@ fn push_json_str(out: &mut String, s: &str) {
 /// Install the deferred fetch sinks (`__fetch_start` / `__fetch_abort`) and the
 /// `fetch()` / `Request` / `Response` / `Headers` bootstrap.
 pub(crate) fn install_fetch_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error> {
-    engine.set_function::<FetchStart>("__fetch_start", 8)?;
+    engine.set_function::<FetchStart>("__fetch_start", 10)?;
     engine.set_function::<FetchAbort>("__fetch_abort", 1)?;
     engine.set_function::<ResolveUrl>("__resolve_url", 1)?;
     engine.set_function::<UrlParse>("__url_parse", 2)?;
@@ -1344,6 +1364,7 @@ const FETCH_BOOTSTRAP: &str = r#"
       this.url = input.url; this.method = input.method; this.headers = new Headers(input.headers);
       this.__bytes = input.__bytes; this.__stream = input.__stream || null; this.mode = input.mode; this.credentials = input.credentials;
       this.redirect = input.redirect; this.cache = input.cache; this.destination = input.destination;
+      this.referrer = input.referrer; this.referrerPolicy = input.referrerPolicy;
       this.signal = input.signal;
     } else {
       // Resolve leniently (relative URLs resolve at fetch when there is no base),
@@ -1361,6 +1382,8 @@ const FETCH_BOOTSTRAP: &str = r#"
       }
       this.method = 'GET'; this.headers = new Headers(); this.__bytes = null; this.__stream = null;
       this.mode = 'cors'; this.credentials = 'same-origin'; this.redirect = 'follow'; this.cache = 'default'; this.destination = '';
+      // Default referrer is the client (the document URL, resolved at fetch).
+      this.referrer = 'about:client'; this.referrerPolicy = '';
       this.signal = makeSignal();
     }
     if (init.signal !== undefined) this.signal = init.signal;
@@ -1369,7 +1392,9 @@ const FETCH_BOOTSTRAP: &str = r#"
     if (init.credentials !== undefined) this.credentials = checkEnum('credentials', init.credentials);
     if (init.cache !== undefined) this.cache = checkEnum('cache', init.cache);
     if (init.redirect !== undefined) this.redirect = checkEnum('redirect', init.redirect);
-    if (init.referrerPolicy !== undefined) checkEnum('referrerPolicy', init.referrerPolicy);
+    if (init.referrerPolicy !== undefined) this.referrerPolicy = checkEnum('referrerPolicy', init.referrerPolicy);
+    // referrer: "" = no referrer; "about:client" = default (the document); else a URL.
+    if (init.referrer !== undefined) this.referrer = String(init.referrer);
     // no-cors restricts the method to GET/HEAD/POST.
     if (this.mode === 'no-cors' && !SIMPLE_METHODS[this.method]) throw new TypeError("Method '" + this.method + "' not allowed in no-cors mode");
     // only-if-cached requires same-origin mode.
@@ -1540,10 +1565,17 @@ const FETCH_BOOTSTRAP: &str = r#"
         if (e.controller) { try { e.controller.error(err); } catch (x) {} }
         if (!e.settled) { e.settled = true; e.reject(err); }
       });
+      // Resolve the referrer: "about:client" (the default) / undefined -> the
+      // document URL; "" -> no referrer; otherwise the given URL (resolved).
+      var docHref = (typeof location !== 'undefined' && location && location.href) ? location.href : "";
+      var referrer = req.referrer;
+      if (referrer === undefined || referrer === 'about:client') referrer = docHref;
+      else if (referrer === '') referrer = "";
+      else { try { referrer = new URL(referrer, docHref || undefined).href; } catch (e) { referrer = ""; } }
       var inline = __fetch_start(id, req.method, req.url, headersFlat(req.headers),
                                  req.__bytes != null ? bytesToBinaryString(req.__bytes) : "",
                                  req.cache || "default", req.redirect || "follow",
-                                 req.mode || "cors");
+                                 req.mode || "cors", referrer, req.referrerPolicy || "");
       if (inline) {
         // Synchronous host answered in this tick (today's path; one pump drains).
         var e = __pending[id];
