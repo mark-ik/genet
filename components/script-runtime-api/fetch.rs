@@ -389,28 +389,65 @@ const FETCH_BOOTSTRAP: &str = r#"
     return n.toLowerCase();
   }
   function checkValue(v) {
-    v = String(v).replace(/^[ \t]+|[ \t]+$/g, "");
+    // Normalize: strip leading/trailing HTTP whitespace (tab/LF/CR/space), then a
+    // valid value has no interior NUL/CR/LF.
+    v = String(v).replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "");
     if (/[\r\n\0]/.test(v)) throw new TypeError("Invalid header value");
     return v;
   }
 
+  // %IteratorPrototype% (two protos up from an array iterator), so our iterators
+  // sit on the right chain for `checkIteratorProperties`-style WPT assertions.
+  var IteratorProto = (hasSym && [][Symbol.iterator])
+    ? Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]()))
+    : Object.prototype;
+  // Build an iterator whose own prototype carries `next` (configurable/enumerable/
+  // writable) and chains to %IteratorPrototype%.
+  function makeIter(nextFn) {
+    var proto = Object.create(IteratorProto);
+    proto.next = nextFn;
+    if (hasSym) proto[Symbol.iterator] = function() { return this; };
+    return Object.create(proto);
+  }
+  // Snapshot iterator over a fixed array (URLSearchParams / FormData).
   function makeIterator(arr) {
     var i = 0;
-    var it = { next: function() { return i < arr.length ? { value: arr[i++], done: false } : { value: undefined, done: true }; } };
-    if (hasSym) it[Symbol.iterator] = function() { return this; };
-    return it;
+    return makeIter(function() {
+      return i < arr.length ? { value: arr[i++], done: false } : { value: undefined, done: true };
+    });
+  }
+  // Live iterator over a Headers object: re-reads the sorted list each step, so
+  // appends/deletes during iteration are observed (per the Headers iteration tests).
+  // kind 0 = key, 1 = value, 2 = entry.
+  function headersIter(headers, kind) {
+    var i = 0;
+    return makeIter(function() {
+      var s = headers._sorted();
+      if (i >= s.length) return { value: undefined, done: true };
+      var p = s[i++];
+      var v = kind === 0 ? p[0] : kind === 1 ? p[1] : [p[0], p[1]];
+      return { value: v, done: false };
+    });
   }
 
   function Headers(init) {
     this._h = [];
-    if (init) {
-      if (init instanceof Headers) { for (var i = 0; i < init._h.length; i++) this._h.push([init._h[i][0], init._h[i][1]]); }
-      else if (Array.isArray(init)) {
-        for (var j = 0; j < init.length; j++) {
-          if (!init[j] || init[j].length !== 2) throw new TypeError("Invalid header entry");
-          this.append(init[j][0], init[j][1]);
-        }
-      } else { for (var k in init) this.append(k, init[k]); }
+    if (init === undefined) return; // new Headers() / new Headers(undefined): empty
+    if (init === null || typeof init !== 'object') throw new TypeError("Invalid HeadersInit");
+    if (init instanceof Headers) {
+      for (var i = 0; i < init._h.length; i++) this._h.push([init._h[i][0], init._h[i][1]]);
+    } else if (Array.isArray(init) || (hasSym && typeof init[Symbol.iterator] === 'function')) {
+      // sequence<sequence<ByteString>>: each entry is a [name, value] pair.
+      var seq = Array.isArray(init) ? init : Array.from(init);
+      for (var j = 0; j < seq.length; j++) {
+        if (seq[j] == null || seq[j].length !== 2) throw new TypeError("Invalid header entry");
+        this.append(seq[j][0], seq[j][1]);
+      }
+    } else {
+      // record<ByteString, ByteString>: own enumerable keys, in order (the
+      // Symbol.iterator probe above + Object.keys here match WebIDL trap ordering).
+      var keys = Object.keys(init);
+      for (var k = 0; k < keys.length; k++) this.append(keys[k], init[keys[k]]);
     }
   }
   Headers.prototype.append = function(n, v) { this._h.push([checkName(n), checkValue(v)]); };
@@ -460,9 +497,9 @@ const FETCH_BOOTSTRAP: &str = r#"
     var s = this._sorted();
     for (var i = 0; i < s.length; i++) cb.call(thisArg, s[i][1], s[i][0], this);
   };
-  Headers.prototype.entries = function() { return makeIterator(this._sorted()); };
-  Headers.prototype.keys = function() { return makeIterator(this._sorted().map(function(p) { return p[0]; })); };
-  Headers.prototype.values = function() { return makeIterator(this._sorted().map(function(p) { return p[1]; })); };
+  Headers.prototype.entries = function() { return headersIter(this, 2); };
+  Headers.prototype.keys = function() { return headersIter(this, 0); };
+  Headers.prototype.values = function() { return headersIter(this, 1); };
   if (hasSym) Headers.prototype[Symbol.iterator] = Headers.prototype.entries;
   globalThis.Headers = Headers;
 
