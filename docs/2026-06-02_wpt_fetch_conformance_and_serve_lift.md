@@ -9,6 +9,13 @@ network-dependent `fetch/` corpus against a live `wpt serve`. Network fetch test
 that were previously impossible now pass against the real server on both engines
 (e.g. `fetch/api/basic/http-response-code` 1/1, `mode-same-origin` 6/8).
 
+Update **2026-06-03.** Inverted the host seam from a synchronous pull to a
+**deferred push** (see "The deferred fetch seam" below), so `fetch()` runs
+asynchronously: mid-flight `AbortController.abort()` now cancels an in-flight
+request, and response bodies can stream incrementally. This is the seam Mere's
+actor model wants (fetch replies delivered as messages, not `block_on`). Sync
+hosts still settle in-tick, so nothing in the prior surface regressed.
+
 ## What landed
 
 ### 1. The `fetch()` host seam (`components/script-runtime-api/fetch.rs`)
@@ -66,7 +73,7 @@ is what makes the `fetch/api/` `.any.js` corpus runnable at all.
 |---|---|---|
 | fetch/api/headers | 86/197 | 86/197 |
 | fetch/api/request | 257/545 | 257/505 |
-| fetch/api/response | 184/290 | 184/290 |
+| fetch/api/response | 196/290 | 196/290 |
 
 All three were **0** before this work (the files would not even parse and run).
 These are the headers/request/response object-semantics tests that need no live
@@ -232,28 +239,79 @@ cargo run -p serval-wpt --features netfetch -- \
   testharness fetch/api/basic --spawn-server --engine boa
 ```
 
+## The deferred fetch seam (the async switch, 2026-06-03)
+
+The original seam was synchronous: `FetchHandler::fetch(req) -> FetchOutcome`, and
+`serval-wpt` answered with `block_on`. That parks the JS thread inside the native
+call, which structurally rules out mid-flight abort (no window for `abort()` to
+run) and streaming bodies (no producer can deliver chunks while JS is blocked). It
+is also the one place `serval` violated the message-passing discipline Mere's actor
+plan ("fetch replies delivered as actor input, not direct netfetcher calls").
+
+Inverted it to a **deferred push**, in three slices, all behind the existing
+`netfetch` feature with zero new deps (the engine stays `!Send`):
+
+1. **Seam.** `FetchHandler` gains `start(id, req) -> Option<FetchOutcome>` and
+   `cancel(id)` alongside `fetch()`. The default `start` bridges to `fetch` and
+   answers **inline** (`Some`), so a synchronous host (the offline mocks, the
+   binding tests) resolves the Promise in the same tick, unchanged. A deferred host
+   returns `None` and settles later. Rust cannot call a held JS function, so
+   `Runtime::settle_fetch` / `fail_fetch` eval `__fetchSettle` / `__fetchFail` (the
+   `__runTimers` shape) and pump, holding no `HostState` borrow across the eval. A
+   JS `__pending` registry keyed by a monotonic id owns each `{resolve, reject}`
+   with delete-once discipline; the pre-aborted path stays synchronous.
+2. **Host + abort.** A single persistent worker thread owns the only Tokio runtime
+   that touches netfetcher (current-thread + `spawn_blocking` job intake so the
+   runtime thread stays free to drive in-flight fetches). Both blocking resource
+   GETs and deferred `fetch()` route through it, so netfetcher's process-wide hyper
+   client pool binds to a runtime that is always driven (a separate per-test
+   runtime hung: the pool's IO was registered on a reactor nobody drove). Only
+   plain owned data crosses `std::sync::mpsc`. `start` spawns the fetch; `cancel`
+   aborts the task, **dropping the in-flight future** (drop-the-future
+   cancellation). The harness drive loop resolves ready completions *before*
+   advancing the cooperative timer clock (else `__runTimers`, which has no real-time
+   gate, would fire the testharness timeout while a real fetch is in flight), and
+   ends on quiescence or a per-test wall-clock deadline (so a hung fetch records
+   TIMEOUT, never a hang). **Result:** the deferred path matches the sync path with
+   no regression, and `fetch/api/abort/request` runs at 12/18 with real mid-flight
+   abort.
+3. **Streaming.** `ReadableStream.read()` gains a pending-waiter model (a live,
+   not-yet-closed stream parks until the next chunk; buffered / closed streams never
+   park, so their behaviour and the broken-then immunity of `text`/`json` are
+   unchanged). `start_stream` early-settles with status + headers and a live body;
+   `push_chunk` / `close_stream` feed it. Lifting the reader to a waiter model also
+   closed part of the buffered-stream tail: network-free response 184 -> 196/290 on
+   both engines.
+
+The seam is the actor-mailbox shape: a deferred handler owns a send into a worker
+(or, in Mere, the I/O fetch actor's inbox), and replies arrive as messages that
+drive `settle_fetch` / `push_chunk` / `close_stream`. `serval-wpt`'s handler is one
+consumer; Mere's content actor is the other, with no second refactor.
+
 ## Not done (deliberately deferred)
 
-- **Byte (BYOB) readers + genuinely async streams.** The stream stack is a
-  buffered model: `ReadableStream` / `WritableStream` / `TransformStream` and
-  `pipeTo` / `pipeThrough` all work for already-complete bodies, but BYOB byte
-  readers (`getReader({mode:'bytes'})` with a view) and truly async producers
-  (pull that resolves later, backpressure) are deferred. The back-4 of
-  `disturbed-5` and a few `disturbed-1..4` subtests need real async reads.
+- **BYOB byte readers.** `getReader({mode:'bytes'})` with a caller-supplied view
+  is still ignored (it hands back a default reader). A few `disturbed-*` subtests
+  want a true byte reader.
+- **`serval-wpt` streaming + `general.any.js`.** The deferred handler still buffers
+  the whole body before settling (it does not yet poll `resp.body` chunk-by-chunk
+  into `push_chunk`), so the streaming primitive is exercised by the binding tests,
+  not the runner. `fetch/api/abort/general` (cross-origin, ~50 fetches, infinite
+  responses, `timeout=long`) is the hard outlier: it NORES in server mode within
+  the per-test deadline. Incremental runner streaming + a longer deadline are the
+  follow-up.
 - **Multipart bodies.** `formData()` parses urlencoded but not multipart, and a
   binary `File` part in a multipart request body is still spliced as text (the one
   remaining lossy body spot). A multipart parser/serializer over the byte body is
-  the fix. (The general binary body channel is now done; see above.)
-- **Live mid-flight abort.** `fetch()` runs synchronously through `block_on`, so
-  an `AbortController.abort()` *after* the call cannot interrupt it. Only the
-  pre-flight abort check works. The bulk of `fetch/api/abort/general` asserts
-  mid-flight interruption, so it stays around 25/53 even with a server (and is
-  slow there: it is `timeout=long` and does ~50 sequential fetches).
+  the fix.
 - **`iframe` / `contentWindow`.** `*/url-parsing.html` and the multi-global tests
   reach into iframe globals, which the single-realm runner has no model for.
-- **The failing object-semantics tail**: request / response still sit around half,
-  now mostly byte/async streams + mid-flight abort + iframes + multipart, not
-  missing constructors or a lossy body channel.
+- **The failing object-semantics tail**: request / response still sit under
+  two-thirds, now mostly BYOB readers + iframes + multipart + per-handler streaming
+  wiring, not missing constructors, a lossy body channel, or a synchronous seam.
+- **Per-test runtime reuse.** A fresh `Runtime` per test re-evals testharness.js
+  each time (the dominant cost; see `harness::bench`). A snapshot-clone pool is the
+  amortization, unchanged by this work.
 - **Per-test runtime reuse.** A fresh `Runtime` per test re-evals testharness.js
   each time (the dominant cost; see `harness::bench`). A snapshot-clone pool is the
   amortization, unchanged by this work.
