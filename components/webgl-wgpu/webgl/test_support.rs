@@ -28,3 +28,13 @@ pub(super) fn make_context(width: u32, height: u32) -> WebGlContext {
     WebGlContext::from_wgpu_handles(device, queue, WebGlCanvasDescriptor::new(width, height))
         .expect("context")
 }
+
+pub(super) fn make_context_with_depth(width: u32, height: u32) -> WebGlContext {
+    let (device, queue) = make_device();
+    WebGlContext::from_wgpu_handles(
+        device,
+        queue,
+        WebGlCanvasDescriptor::new(width, height).with_depth(true),
+    )
+    .expect("context with depth")
+}

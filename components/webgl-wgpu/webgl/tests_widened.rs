@@ -7,7 +7,7 @@
 //! Block layouts (mat4 / multi-uniform), and end-to-end draws
 //! that exercise the new pipeline / bind-group factories.
 
-use super::test_support::make_context;
+use super::test_support::{make_context, make_context_with_depth};
 use super::*;
 
 #[test]
@@ -473,7 +473,7 @@ void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }
 precision mediump float;
 void main() { gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0); }
 "#;
-    let mut context = make_context(32, 32);
+    let mut context = make_context_with_depth(32, 32);
     context.clear(wgpu::Color {
         r: 0.0,
         g: 0.0,
@@ -592,6 +592,39 @@ void main() { gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0); }
     let center = context.read_pixels(16, 16, 1, 1).expect("center");
     assert_eq!(&center[0..4], &[0, 255, 0, 255]);
     assert_eq!(context.get_error(), WebGlError::NoError);
+}
+
+#[test]
+fn enabling_depth_test_on_depthless_canvas_records_invalid_operation() {
+    // The default canvas isn't built with `depth = true`, so
+    // there's no depth attachment for the pipeline to render
+    // into. Asking for depth test under those conditions must
+    // surface as `InvalidOperation` — silently no-op'ing here
+    // would mean a user thinking depth was on while their
+    // overlapping geometry still flickered last-write-wins.
+    let mut context = make_context(8, 8);
+    assert_eq!(context.get_error(), WebGlError::NoError);
+    context.set_depth_test_enabled(true);
+    assert_eq!(context.get_error(), WebGlError::InvalidOperation);
+
+    // Same call on a canvas built with depth = true succeeds.
+    let mut depth_context = make_context_with_depth(8, 8);
+    depth_context.set_depth_test_enabled(true);
+    assert_eq!(depth_context.get_error(), WebGlError::NoError);
+    depth_context.clear_depth_buffer();
+    assert_eq!(depth_context.get_error(), WebGlError::NoError);
+}
+
+#[test]
+fn clear_depth_buffer_on_depthless_canvas_records_invalid_operation() {
+    // Symmetric guardrail: even without enabling depth test,
+    // attempting to clear a depth attachment that doesn't
+    // exist must error rather than silently no-op.
+    let mut context = make_context(8, 8);
+    context.set_clear_depth(0.5);
+    assert_eq!(context.get_error(), WebGlError::NoError);
+    context.clear_depth_buffer();
+    assert_eq!(context.get_error(), WebGlError::InvalidOperation);
 }
 
 #[test]

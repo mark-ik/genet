@@ -12,11 +12,18 @@ impl WebGlContext {
     }
 
     /// `gl.enable(DEPTH_TEST)` / `gl.disable(DEPTH_TEST)`
-    /// equivalent. Toggling rebakes the pipeline on next draw
-    /// (the depth state is part of the pipeline cache key).
+    /// equivalent. Records `InvalidOperation` if depth-test is
+    /// enabled on a canvas that wasn't built with `depth = true`
+    /// — there's no attachment to test against. Toggling rebakes
+    /// the pipeline on next draw (the depth state is part of the
+    /// pipeline cache key).
     pub fn set_depth_test_enabled(&mut self, enabled: bool) {
         if self.lost {
             self.record_error(WebGlError::ContextLostWebgl);
+            return;
+        }
+        if enabled && !self.canvas.has_depth() {
+            self.record_error(WebGlError::InvalidOperation);
             return;
         }
         self.depth_test_enabled = enabled;
@@ -41,9 +48,9 @@ impl WebGlContext {
         self.depth_clear_value = depth.clamp(0.0, 1.0);
     }
 
-    /// `gl.clear(DEPTH_BUFFER_BIT)` equivalent. Allocates the
-    /// depth attachment if it doesn't exist yet, then clears
-    /// it to `depth_clear_value`.
+    /// `gl.clear(DEPTH_BUFFER_BIT)` equivalent. No-ops with
+    /// `InvalidOperation` if the canvas was built without a
+    /// depth attachment.
     pub fn clear_depth_buffer(&mut self) {
         if self.lost {
             self.record_error(WebGlError::ContextLostWebgl);
@@ -53,9 +60,7 @@ impl WebGlContext {
             self.record_error(WebGlError::InvalidFramebufferOperation);
             return;
         }
-        let size = self.canvas.output.size;
-        self.ensure_depth_attachment(size);
-        let Some(attachment) = self.depth_attachment.as_ref() else {
+        let Some(view) = self.canvas.depth_view() else {
             self.record_error(WebGlError::InvalidOperation);
             return;
         };
@@ -71,7 +76,7 @@ impl WebGlContext {
                 label: Some("webgl-wgpu depth clear"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &attachment.view,
+                    view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear),
                         store: wgpu::StoreOp::Store,
@@ -84,42 +89,6 @@ impl WebGlContext {
             });
         }
         self.canvas.queue.submit([encoder.finish()]);
-    }
-
-    pub(super) fn ensure_depth_attachment(&mut self, size: (u32, u32)) {
-        if let Some(existing) = self.depth_attachment.as_ref() {
-            if existing.size == size {
-                return;
-            }
-        }
-        let texture = self.canvas.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("webgl-wgpu depth attachment"),
-            size: wgpu::Extent3d {
-                width: size.0,
-                height: size.1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_ATTACHMENT_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        self.depth_attachment = Some(DepthAttachment {
-            texture,
-            view,
-            size,
-        });
-    }
-
-    /// View on the depth attachment to use as a render-pass
-    /// `depth_stencil_attachment` while depth test is enabled.
-    /// Caller is responsible for having already invoked
-    /// `ensure_depth_attachment` with the right size.
-    pub(super) fn depth_attachment_view(&self) -> Option<&wgpu::TextureView> {
-        self.depth_attachment.as_ref().map(|a| &a.view)
     }
 
     pub fn lose_context(&mut self) {

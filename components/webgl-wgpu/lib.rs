@@ -46,6 +46,11 @@ pub struct WebGlCanvasDescriptor {
     pub size: (u32, u32),
     pub format: wgpu::TextureFormat,
     pub alpha_mode: CanvasAlphaMode,
+    /// Whether to allocate a depth-stencil attachment alongside
+    /// the color texture. Mirrors `WebGlContextAttributes.depth`
+    /// — if `false`, `WebGlContext::set_depth_test_enabled(true)`
+    /// records `InvalidOperation`.
+    pub depth: bool,
 }
 
 impl WebGlCanvasDescriptor {
@@ -54,6 +59,7 @@ impl WebGlCanvasDescriptor {
             size: (width, height),
             format: wgpu::TextureFormat::Rgba8Unorm,
             alpha_mode: CanvasAlphaMode::Premultiplied,
+            depth: false,
         }
     }
 
@@ -64,6 +70,11 @@ impl WebGlCanvasDescriptor {
 
     pub fn with_alpha_mode(mut self, alpha_mode: CanvasAlphaMode) -> Self {
         self.alpha_mode = alpha_mode;
+        self
+    }
+
+    pub fn with_depth(mut self, depth: bool) -> Self {
+        self.depth = depth;
         self
     }
 }
@@ -90,7 +101,20 @@ pub struct WebGlCanvas {
     device: wgpu::Device,
     queue: wgpu::Queue,
     output: WebGlCanvasTexture,
+    /// Depth-stencil attachment that mirrors `output` in size,
+    /// allocated only when the canvas descriptor sets `depth =
+    /// true`. Reallocated on `resize`. `WebGlContext` reads
+    /// `depth_view()` when depth test is enabled.
+    depth: Option<CanvasDepthAttachment>,
 }
+
+struct CanvasDepthAttachment {
+    #[allow(dead_code)]
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
+pub(crate) const CANVAS_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 impl WebGlCanvas {
     pub fn from_rendering_context(
@@ -116,10 +140,16 @@ impl WebGlCanvas {
         descriptor: WebGlCanvasDescriptor,
     ) -> Result<Self, WebGlCanvasError> {
         let output = create_canvas_texture(&device, descriptor, 0)?;
+        let depth = if descriptor.depth {
+            Some(create_canvas_depth(&device, descriptor.size))
+        } else {
+            None
+        };
         Ok(Self {
             device,
             queue,
             output,
+            depth,
         })
     }
 
@@ -127,13 +157,28 @@ impl WebGlCanvas {
         &self.output
     }
 
+    /// `true` when this canvas was built with `depth = true` and
+    /// therefore owns a depth-stencil attachment the context can
+    /// render against.
+    pub fn has_depth(&self) -> bool {
+        self.depth.is_some()
+    }
+
+    pub(crate) fn depth_view(&self) -> Option<&wgpu::TextureView> {
+        self.depth.as_ref().map(|d| &d.view)
+    }
+
     pub fn resize(&mut self, width: u32, height: u32) -> Result<(), WebGlCanvasError> {
         let descriptor = WebGlCanvasDescriptor {
             size: (width, height),
             format: self.output.format,
             alpha_mode: self.output.alpha_mode,
+            depth: self.depth.is_some(),
         };
         self.output = create_canvas_texture(&self.device, descriptor, self.output.generation + 1)?;
+        if self.depth.is_some() {
+            self.depth = Some(create_canvas_depth(&self.device, descriptor.size));
+        }
         Ok(())
     }
 
@@ -206,6 +251,25 @@ fn create_canvas_texture(
         generation,
         damage: Some([0, 0, width, height]),
     })
+}
+
+fn create_canvas_depth(device: &wgpu::Device, size: (u32, u32)) -> CanvasDepthAttachment {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("webgl-wgpu canvas depth attachment"),
+        size: wgpu::Extent3d {
+            width: size.0,
+            height: size.1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: CANVAS_DEPTH_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    CanvasDepthAttachment { texture, view }
 }
 
 #[cfg(test)]

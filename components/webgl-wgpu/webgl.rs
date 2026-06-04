@@ -278,23 +278,11 @@ pub struct WebGlContext {
     depth_test_enabled: bool,
     depth_func: DepthFunc,
     depth_clear_value: f32,
-    /// Lazily-allocated depth-stencil texture sized to match
-    /// the canvas. Created the first time a draw enables depth
-    /// test (or `clear_depth` is called); reallocated on
-    /// resize.
-    depth_attachment: Option<DepthAttachment>,
     pending_error: WebGlError,
     lost: bool,
 }
 
-struct DepthAttachment {
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
-    size: (u32, u32),
-}
-
-pub(super) const DEPTH_ATTACHMENT_FORMAT: wgpu::TextureFormat =
-    wgpu::TextureFormat::Depth32Float;
+pub(super) const DEPTH_ATTACHMENT_FORMAT: wgpu::TextureFormat = crate::CANVAS_DEPTH_FORMAT;
 
 mod draw;
 mod objects;
@@ -356,7 +344,6 @@ impl WebGlContext {
             depth_test_enabled: false,
             depth_func: DepthFunc::Less,
             depth_clear_value: 1.0,
-            depth_attachment: None,
             pending_error: WebGlError::NoError,
             lost: false,
         }

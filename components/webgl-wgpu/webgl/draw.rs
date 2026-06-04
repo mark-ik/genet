@@ -93,7 +93,7 @@ impl WebGlContext {
                 return;
             },
         };
-        let depth_state = if self.depth_test_enabled {
+        let depth_state = if self.depth_test_enabled && self.canvas.has_depth() {
             Some(self.depth_func)
         } else {
             None
@@ -102,9 +102,6 @@ impl WebGlContext {
             attribute_layouts: attribute_layouts.clone(),
             depth_state,
         };
-        if depth_state.is_some() {
-            self.ensure_depth_attachment(self.canvas.output.size);
-        }
 
         let topology = match mode {
             PrimitiveMode::Triangles => wgpu::PrimitiveTopology::TriangleList,
@@ -184,7 +181,8 @@ impl WebGlContext {
         });
 
         let depth_stencil_attachment = if depth_state.is_some() {
-            self.depth_attachment_view()
+            self.canvas
+                .depth_view()
                 .map(|view| wgpu::RenderPassDepthStencilAttachment {
                     view,
                     depth_ops: Some(wgpu::Operations {
@@ -309,7 +307,7 @@ impl WebGlContext {
                 return;
             },
         };
-        let depth_state = if self.depth_test_enabled {
+        let depth_state = if self.depth_test_enabled && self.canvas.has_depth() {
             Some(self.depth_func)
         } else {
             None
@@ -318,9 +316,6 @@ impl WebGlContext {
             attribute_layouts: attribute_layouts.clone(),
             depth_state,
         };
-        if depth_state.is_some() {
-            self.ensure_depth_attachment(self.canvas.output.size);
-        }
 
         let topology = match mode {
             PrimitiveMode::Triangles => wgpu::PrimitiveTopology::TriangleList,
@@ -396,7 +391,8 @@ impl WebGlContext {
         });
 
         let depth_stencil_attachment = if depth_state.is_some() {
-            self.depth_attachment_view()
+            self.canvas
+                .depth_view()
                 .map(|view| wgpu::RenderPassDepthStencilAttachment {
                     view,
                     depth_ops: Some(wgpu::Operations {
