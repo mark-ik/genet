@@ -1513,12 +1513,15 @@ const FETCH_BOOTSTRAP: &str = r#"
     r.status = st; r.statusText = o.statusText || ""; r.ok = st >= 200 && st < 300;
     return r;
   }
+  // A null-body status (WHATWG): the response's body is null regardless of any
+  // bytes on the wire, so Response.body reads as null.
+  function isNullBodyStatus(s) { return s === 204 || s === 205 || s === 304; }
   function responseFromOutcome(o) {
     var r = makeFilteredShell(o);
     // Network headers are set with the guard bypassed (a real response keeps
     // set-cookie, readable via getSetCookie); the guard only blocks later writes.
     r.headers = new Headers(o.headers); r.headers._guard = 'response';
-    r.__bytes = binaryStringToBytes(o.body != null ? o.body : "");
+    r.__bytes = isNullBodyStatus(r.status) ? null : binaryStringToBytes(o.body != null ? o.body : "");
     r.type = o.type || "default"; r.url = o.url || ""; r.redirected = !!o.redirected; return r;
   }
   function headersFlat(h) {
@@ -1556,7 +1559,7 @@ const FETCH_BOOTSTRAP: &str = r#"
     }
     var id = __nextFetchId++;
     return new Promise(function(resolve, reject) {
-      var entry = { resolve: resolve, reject: reject, controller: null, settled: false };
+      var entry = { resolve: resolve, reject: reject, controller: null, settled: false, method: req.method };
       __pending[id] = entry;
       // Mid-flight abort: relay to the host (cancel the in-flight work) and reject
       // with the signal's reason. JS mints the reason once so the same instance
@@ -1616,9 +1619,16 @@ const FETCH_BOOTSTRAP: &str = r#"
     var stream = new ReadableStream({ start: function(c) { controller = c; } });
     var r = makeFilteredShell(o);
     r.headers = new Headers(o.headers); r.headers._guard = 'response'; // network headers, guard bypassed
-    r.__bytes = null; r.__stream = stream; stream._owner = r;
     r.type = o.type || "default"; r.url = o.url || ""; r.redirected = !!o.redirected;
-    e.controller = controller;
+    if (isNullBodyStatus(r.status) || e.method === 'HEAD') {
+      // A null-body status (or a HEAD response) has no body; drop the (empty)
+      // stream so .body is null. A trailing __fetchClose just removes the pending
+      // entry (controller stays null).
+      r.__bytes = null; r.__stream = null; e.controller = null;
+    } else {
+      r.__bytes = null; r.__stream = stream; stream._owner = r;
+      e.controller = controller;
+    }
     e.resolve(r);
   };
   globalThis.__fetchPushChunk = function(id, arr) {
