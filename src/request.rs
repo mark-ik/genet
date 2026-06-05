@@ -94,7 +94,7 @@ pub enum CacheMode {
     OnlyIfCached,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Method {
     Get,
     Head,
@@ -103,6 +103,9 @@ pub enum Method {
     Delete,
     Patch,
     Options,
+    /// Any other valid method token (e.g. a custom `REPORT` / `patcH`), preserved
+    /// verbatim. Non-simple, so a cross-origin CORS request with one is preflighted.
+    Other(String),
 }
 
 /// Fetch request mode (WHATWG Fetch §2.2.5) — gates CORS and response tainting.

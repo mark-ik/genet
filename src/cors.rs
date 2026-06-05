@@ -123,7 +123,7 @@ fn is_safelisted_request_header(name_lc: &str, value: &str) -> bool {
 /// Does this cross-origin CORS request need a preflight? (Caller restricts to
 /// cross-origin + cors mode.) Non-simple = a non-`GET`/`HEAD`/`POST` method or any
 /// non-safelisted request header.
-pub(crate) fn needs_preflight(method: Method, headers: &[(String, String)]) -> bool {
+pub(crate) fn needs_preflight(method: &Method, headers: &[(String, String)]) -> bool {
     if !matches!(method, Method::Get | Method::Head | Method::Post) {
         return true;
     }
@@ -150,7 +150,7 @@ pub(crate) fn preflight_request_headers(headers: &[(String, String)]) -> Vec<Str
 pub(crate) fn preflight_verdict(
     origin: Option<&Origin>,
     credentials: Credentials,
-    method: Method,
+    method: &Method,
     requested_headers: &[String],
     response_headers: &[(String, String)],
 ) -> Option<u64> {
@@ -158,7 +158,7 @@ pub(crate) fn preflight_verdict(
         return None;
     }
     let allow_methods = header(response_headers, "access-control-allow-methods");
-    if !list_allows(allow_methods, method_name(method), credentials) {
+    if !list_allows(allow_methods, &method_name(method), credentials) {
         return None;
     }
     let allow_headers = header(response_headers, "access-control-allow-headers");
@@ -188,15 +188,16 @@ fn list_allows(list: Option<&str>, item: &str, credentials: Credentials) -> bool
     })
 }
 
-fn method_name(method: Method) -> &'static str {
+fn method_name(method: &Method) -> String {
     match method {
-        Method::Get => "GET",
-        Method::Head => "HEAD",
-        Method::Post => "POST",
-        Method::Put => "PUT",
-        Method::Delete => "DELETE",
-        Method::Patch => "PATCH",
-        Method::Options => "OPTIONS",
+        Method::Get => "GET".to_owned(),
+        Method::Head => "HEAD".to_owned(),
+        Method::Post => "POST".to_owned(),
+        Method::Put => "PUT".to_owned(),
+        Method::Delete => "DELETE".to_owned(),
+        Method::Patch => "PATCH".to_owned(),
+        Method::Options => "OPTIONS".to_owned(),
+        Method::Other(m) => m.clone(),
     }
 }
 
@@ -232,7 +233,7 @@ pub(crate) fn filter_cors_response_headers(
 pub(crate) fn preflight_key(
     origin: Option<&Origin>,
     target: &Url,
-    method: Method,
+    method: &Method,
     requested_headers: &[String],
 ) -> String {
     let o = origin.map(Origin::ascii_serialization).unwrap_or_default();
@@ -403,12 +404,12 @@ mod tests {
 
     #[test]
     fn preflight_triggers_on_nonsimple() {
-        assert!(!needs_preflight(Method::Get, &[]));
-        assert!(!needs_preflight(Method::Post, &hdr(&[("content-type", "text/plain")])));
-        assert!(needs_preflight(Method::Put, &[]));
-        assert!(needs_preflight(Method::Post, &hdr(&[("x-custom", "1")])));
+        assert!(!needs_preflight(&Method::Get, &[]));
+        assert!(!needs_preflight(&Method::Post, &hdr(&[("content-type", "text/plain")])));
+        assert!(needs_preflight(&Method::Put, &[]));
+        assert!(needs_preflight(&Method::Post, &hdr(&[("x-custom", "1")])));
         assert!(needs_preflight(
-            Method::Post,
+            &Method::Post,
             &hdr(&[("content-type", "application/json")])
         ));
     }
@@ -426,7 +427,7 @@ mod tests {
             preflight_verdict(
                 Some(&o),
                 Credentials::SameOrigin,
-                Method::Put,
+                &Method::Put,
                 &["x-custom".to_string()],
                 &ok
             ),
@@ -434,7 +435,7 @@ mod tests {
         );
         // Method not in Allow-Methods.
         assert_eq!(
-            preflight_verdict(Some(&o), Credentials::SameOrigin, Method::Patch, &[], &ok),
+            preflight_verdict(Some(&o), Credentials::SameOrigin, &Method::Patch, &[], &ok),
             None
         );
         // Requested header not in Allow-Headers.
@@ -446,7 +447,7 @@ mod tests {
             preflight_verdict(
                 Some(&o),
                 Credentials::SameOrigin,
-                Method::Put,
+                &Method::Put,
                 &["x-custom".to_string()],
                 &no_hdr
             ),

@@ -56,7 +56,7 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
     if resolve_mixed_content(&mut current_url, request.destination, secure_context, cx) {
         return Response::network_error();
     }
-    let mut method = request.method;
+    let mut method = request.method.clone();
     let mut body = request.body.clone();
     let mut base_headers = request.headers.clone();
     let mut url_list = vec![current_url.clone()];
@@ -122,15 +122,15 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
         .is_some_and(|o| *o != current_url.origin());
     if cross_origin
         && matches!(request.mode, RequestMode::Cors)
-        && cors::needs_preflight(method, &base_headers)
+        && cors::needs_preflight(&method, &base_headers)
     {
         let requested = cors::preflight_request_headers(&base_headers);
-        let key = cors::preflight_key(request.origin.as_ref(), &current_url, method, &requested);
+        let key = cors::preflight_key(request.origin.as_ref(), &current_url, &method, &requested);
         if !cx.preflight.check(&key) {
             match run_preflight(
                 &current_url,
                 request.origin.as_ref(),
-                method,
+                &method,
                 &requested,
                 request.credentials,
             )
@@ -235,7 +235,7 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
         // Transport: prefer h3 when this https origin advertised it (Alt-Svc).
         let try_h3 = current_url.scheme() == "https"
             && current_url.host_str().and_then(|h| cx.alt_svc.h3_port(h)).is_some();
-        let raw = match send_request(&current_url, method, &req_headers, body.as_ref(), try_h3).await
+        let raw = match send_request(&current_url, &method, &req_headers, body.as_ref(), try_h3).await
         {
             Some(raw) => raw,
             None => return Response::network_error(),
@@ -374,7 +374,7 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
                         if crosses && already_foreign {
                             origin_tainted = true;
                         }
-                        let prev_method = method;
+                        let prev_method = method.clone();
                         method = redirect_method(status, method, &mut body);
                         // A method-changing redirect (301/302 POST->GET, 303 ->GET)
                         // drops the body, so the request-body headers go too — per
@@ -501,7 +501,7 @@ struct RawResponse {
 #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
 async fn send_request(
     url: &Url,
-    method: Method,
+    method: &Method,
     headers: &[(String, String)],
     body: Option<&Bytes>,
     try_h3: bool,
@@ -626,7 +626,7 @@ fn same_registrable_domain(a: &str, b: &str) -> bool {
 async fn run_preflight(
     target: &Url,
     origin: Option<&url::Origin>,
-    method: Method,
+    method: &Method,
     requested_headers: &[String],
     credentials: Credentials,
 ) -> Option<u64> {
@@ -648,7 +648,7 @@ async fn run_preflight(
     cors::preflight_verdict(origin, credentials, method, requested_headers, &headers)
 }
 
-fn http_method(method: Method) -> http::Method {
+fn http_method(method: &Method) -> http::Method {
     match method {
         Method::Get => http::Method::GET,
         Method::Head => http::Method::HEAD,
@@ -657,6 +657,11 @@ fn http_method(method: Method) -> http::Method {
         Method::Delete => http::Method::DELETE,
         Method::Patch => http::Method::PATCH,
         Method::Options => http::Method::OPTIONS,
+        // A custom token: build an http::Method, falling back to GET if (somehow)
+        // it isn't a valid method token.
+        Method::Other(m) => {
+            http::Method::from_bytes(m.as_bytes()).unwrap_or(http::Method::GET)
+        }
     }
 }
 
