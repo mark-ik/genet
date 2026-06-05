@@ -244,9 +244,12 @@ pub(crate) fn preflight_key(
     requested_headers: &[String],
 ) -> String {
     let o = origin.map(Origin::ascii_serialization).unwrap_or_default();
+    // Keyed by the full target URL (not just its origin): two URLs on the same
+    // origin — e.g. a redirect.py that redirects to preflight.py — are distinct
+    // preflight-cache entries, so each is preflighted in its own right.
     format!(
         "{o}|{}|{}|{}",
-        target.origin().ascii_serialization(),
+        target.as_str(),
         method_name(method),
         requested_headers.join(","),
     )

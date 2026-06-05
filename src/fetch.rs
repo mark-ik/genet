@@ -662,6 +662,12 @@ async fn run_preflight(
     }
     let req = builder.body(Full::new(Bytes::new())).ok()?;
     let resp = shared_client().request(req).await.ok()?;
+    // The preflight response must have an ok (2xx) status; a redirect or error
+    // status is a network error (WHATWG CORS-preflight fetch). The client does not
+    // follow redirects here, so a 3xx is delivered as-is and rejected.
+    if !resp.status().is_success() {
+        return None;
+    }
     let headers = collect_headers(resp.headers());
     cors::preflight_verdict(origin, credentials, method, requested_headers, &headers)
 }
