@@ -148,15 +148,32 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
             return Response::network_error();
         }
 
+        // Whether this hop uses credentials (cookies/auth): always for `include`,
+        // never for `omit`, and only same-origin for `same-origin` (WHATWG
+        // HTTP-network-or-cache fetch). Same-origin is recomputed per hop.
+        let same_origin = request
+            .origin
+            .as_ref()
+            .is_none_or(|o| *o == current_url.origin());
+        let use_credentials = match request.credentials {
+            Credentials::Include => true,
+            Credentials::Omit => false,
+            Credentials::SameOrigin => same_origin,
+        };
+
         // Assemble request headers: base + cookies + (initial-only) conditional.
         let mut req_headers = base_headers.clone();
-        let cookies = cx.cookies.cookies_for(
-            &current_url,
-            SameSiteContext {
-                same_site: is_same_site(request.origin.as_ref(), &current_url),
-                top_level_navigation: matches!(request.mode, RequestMode::Navigate),
-            },
-        );
+        let cookies = if use_credentials {
+            cx.cookies.cookies_for(
+                &current_url,
+                SameSiteContext {
+                    same_site: is_same_site(request.origin.as_ref(), &current_url),
+                    top_level_navigation: matches!(request.mode, RequestMode::Navigate),
+                },
+            )
+        } else {
+            Vec::new()
+        };
         if !cookies.is_empty() {
             req_headers.push(("cookie".to_owned(), cookies.join("; ")));
         }
@@ -225,10 +242,13 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
         };
         let status = raw.status;
 
-        // Record any Set-Cookie headers against the URL that produced them.
-        for (name, value) in &raw.headers {
-            if name.eq_ignore_ascii_case("set-cookie") {
-                cx.cookies.set_cookie(&current_url, value);
+        // Record any Set-Cookie headers against the URL that produced them — only
+        // when this hop uses credentials (an `omit` fetch stores nothing).
+        if use_credentials {
+            for (name, value) in &raw.headers {
+                if name.eq_ignore_ascii_case("set-cookie") {
+                    cx.cookies.set_cookie(&current_url, value);
+                }
             }
         }
 
