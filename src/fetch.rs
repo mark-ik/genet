@@ -347,6 +347,14 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
                         let Ok(next) = current_url.join(&location) else {
                             return Response::network_error();
                         };
+                        // A redirect to a URL embedding credentials
+                        // (user:password@host) is a network error for any
+                        // non-navigate request (WHATWG HTTP-redirect fetch).
+                        if (!next.username().is_empty() || next.password().is_some())
+                            && !matches!(request.mode, RequestMode::Navigate)
+                        {
+                            return Response::network_error();
+                        }
                         redirects_remaining -= 1;
                         // A `Referrer-Policy` on the redirect response governs the
                         // `Referer` header for subsequent hops.
@@ -626,6 +634,7 @@ async fn run_preflight(
     let mut builder = http::Request::builder()
         .method(http::Method::OPTIONS)
         .uri(uri)
+        .header("accept", "*/*")
         .header("access-control-request-method", http_method(method).as_str());
     if let Some(o) = origin {
         builder = builder.header(http::header::ORIGIN, o.ascii_serialization());
