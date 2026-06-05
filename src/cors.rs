@@ -157,8 +157,15 @@ pub(crate) fn preflight_verdict(
     if !cors_check(origin, credentials, response_headers) {
         return None;
     }
-    let allow_methods = header(response_headers, "access-control-allow-methods");
-    if !list_allows(allow_methods, &method_name(method), credentials) {
+    // CORS-safelisted methods (GET/HEAD/POST) need not appear in
+    // Access-Control-Allow-Methods; any other method must be listed (or `*`).
+    let method_ok = matches!(method, Method::Get | Method::Head | Method::Post)
+        || list_allows(
+            header(response_headers, "access-control-allow-methods"),
+            &method_name(method),
+            credentials,
+        );
+    if !method_ok {
         return None;
     }
     let allow_headers = header(response_headers, "access-control-allow-headers");

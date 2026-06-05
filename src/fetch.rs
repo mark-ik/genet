@@ -19,7 +19,7 @@ use crate::cors;
 use crate::decode::decode_stream;
 use crate::hsts;
 use crate::referrer;
-use crate::request::{CacheMode, Credentials, Method, RedirectMode, RequestMode};
+use crate::request::{CacheMode, Credentials, Method, RedirectMode, ReferrerPolicy, RequestMode};
 use crate::response::{BodyStream, ResponseBody, ResponseType};
 use crate::{FetchContext, Request, Response, SameSiteContext};
 
@@ -133,6 +133,8 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
                 &method,
                 &requested,
                 request.credentials,
+                request.referrer.as_ref(),
+                request.referrer_policy,
             )
             .await
             {
@@ -629,6 +631,8 @@ async fn run_preflight(
     method: &Method,
     requested_headers: &[String],
     credentials: Credentials,
+    referrer: Option<&Url>,
+    referrer_policy: ReferrerPolicy,
 ) -> Option<u64> {
     let uri = http::Uri::try_from(target.as_str()).ok()?;
     let mut builder = http::Request::builder()
@@ -638,6 +642,13 @@ async fn run_preflight(
         .header("access-control-request-method", http_method(method).as_str());
     if let Some(o) = origin {
         builder = builder.header(http::header::ORIGIN, o.ascii_serialization());
+    }
+    // The preflight carries the request's referrer under its policy (same as the
+    // actual request would for this target).
+    if let Some(r) = referrer {
+        if let Some(value) = referrer::referrer_header(r, target, referrer_policy) {
+            builder = builder.header(http::header::REFERER, value);
+        }
     }
     if !requested_headers.is_empty() {
         builder = builder.header("access-control-request-headers", requested_headers.join(","));
