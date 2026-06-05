@@ -72,6 +72,10 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
     // restrictive policy (no-referrer / origin) "sticks": once reduced, a later
     // redirect that loosens the policy cannot recover the original URL.
     let mut referrer = request.referrer.clone();
+    // Whether the request's response tainting is "cors" — set once any hop is
+    // cross-origin in cors mode, and sticky thereafter (so an unsafe request that
+    // redirects back to the origin is still preflighted).
+    let mut tainting_cors = false;
 
     // HTTP cache (RFC 9111 + request cache mode): only for GET, only when a real
     // cache is wired, and never for `no-store`.
@@ -114,40 +118,43 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
         }
     }
 
-    // CORS preflight: a cross-origin, cors-mode, non-simple request gets an OPTIONS
-    // round-trip first (cached per Access-Control-Max-Age).
-    let cross_origin = request
-        .origin
-        .as_ref()
-        .is_some_and(|o| *o != current_url.origin());
-    if cross_origin
-        && matches!(request.mode, RequestMode::Cors)
-        && cors::needs_preflight(&method, &base_headers)
-    {
-        let requested = cors::preflight_request_headers(&base_headers);
-        let key = cors::preflight_key(request.origin.as_ref(), &current_url, &method, &requested);
-        if !cx.preflight.check(&key) {
-            match run_preflight(
-                &current_url,
-                request.origin.as_ref(),
-                &method,
-                &requested,
-                request.credentials,
-                request.referrer.as_ref(),
-                request.referrer_policy,
-            )
-            .await
-            {
-                Some(max_age) => cx.preflight.store(&key, max_age),
-                None => return Response::network_error(),
-            }
-        }
-    }
-
     loop {
         // CSP connect-src consultation (host-supplied policy).
         if !cx.csp.allows_connect(&current_url) {
             return Response::network_error();
+        }
+
+        // CORS preflight (per hop): a cors-tainted, non-simple request gets an
+        // OPTIONS round-trip first (cached per Access-Control-Max-Age). Tainting is
+        // sticky: once a hop is cross-origin in cors mode it stays "cors", so an
+        // unsafe request that redirects back to its origin is still preflighted.
+        let cross_origin = request
+            .origin
+            .as_ref()
+            .is_some_and(|o| *o != current_url.origin());
+        if cross_origin && matches!(request.mode, RequestMode::Cors) {
+            tainting_cors = true;
+        }
+        if tainting_cors && cors::needs_preflight(&method, &base_headers) {
+            let requested = cors::preflight_request_headers(&base_headers);
+            let key =
+                cors::preflight_key(request.origin.as_ref(), &current_url, &method, &requested);
+            if !cx.preflight.check(&key) {
+                match run_preflight(
+                    &current_url,
+                    request.origin.as_ref(),
+                    &method,
+                    &requested,
+                    request.credentials,
+                    request.referrer.as_ref(),
+                    request.referrer_policy,
+                )
+                .await
+                {
+                    Some(max_age) => cx.preflight.store(&key, max_age),
+                    None => return Response::network_error(),
+                }
+            }
         }
 
         // Whether this hop uses credentials (cookies/auth): always for `include`,
