@@ -26,6 +26,9 @@ use crate::{FetchContext, Request, Response, SameSiteContext};
 /// WHATWG Fetch's redirect cap.
 const MAX_REDIRECTS: u32 = 20;
 
+/// Default `User-Agent` sent when the request carries none.
+const USER_AGENT: &str = "Mozilla/5.0 (compatible; serval netfetcher)";
+
 /// Run the Fetch algorithm for `request` against `cx`.
 ///
 /// Returns a [`Response`] in all cases — a network error is a `Response` with
@@ -210,14 +213,13 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
             }
         }
 
-        // Append the `Origin` header for a cross-origin request (or one whose
-        // origin has been tainted to opaque by a cross-origin redirect, giving
-        // "null"). A same-origin request carries no `Origin` — matching observed
-        // browser behavior (the WPT redirect-origin oracle), which is narrower than
-        // the spec's literal "append for any non-GET/HEAD method".
+        // Append the `Origin` header (WHATWG "append a request Origin header"):
+        // for any non-GET/HEAD method, or a cross-origin request. After a
+        // cross-origin redirect taints the origin, the value becomes "null".
         if let Some(origin) = request.origin.as_ref() {
             let cur_cross = origin_tainted || *origin != current_url.origin();
-            if cur_cross && header_val(&req_headers, "origin").is_none() {
+            let send_origin = !matches!(method, Method::Get | Method::Head) || cur_cross;
+            if send_origin && header_val(&req_headers, "origin").is_none() {
                 let value = if origin_tainted {
                     "null".to_owned()
                 } else {
@@ -239,6 +241,19 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
                     req_headers.push(("referer".to_owned(), value));
                 }
             }
+        }
+
+        // Default User-Agent (a request may override it).
+        if header_val(&req_headers, "user-agent").is_none() {
+            req_headers.push(("user-agent".to_owned(), USER_AGENT.to_owned()));
+        }
+        // A bodyless POST/PUT still carries Content-Length: 0 (WHATWG
+        // HTTP-network-or-cache fetch).
+        if body.is_none()
+            && matches!(method, Method::Post | Method::Put)
+            && header_val(&req_headers, "content-length").is_none()
+        {
+            req_headers.push(("content-length".to_owned(), "0".to_owned()));
         }
 
         // Transport: prefer h3 when this https origin advertised it (Alt-Svc).
@@ -646,6 +661,7 @@ async fn run_preflight(
         .method(http::Method::OPTIONS)
         .uri(uri)
         .header("accept", "*/*")
+        .header("user-agent", USER_AGENT)
         .header("access-control-request-method", http_method(method).as_str());
     if let Some(o) = origin {
         builder = builder.header(http::header::ORIGIN, o.ascii_serialization());
