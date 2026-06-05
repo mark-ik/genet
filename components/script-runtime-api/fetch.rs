@@ -699,17 +699,31 @@ const FETCH_BOOTSTRAP: &str = r#"
     }
     return new Uint8Array(b);
   }
+  // WHATWG "UTF-8 decode": strip a leading UTF-8 BOM, then run the UTF-8 decoder
+  // replacing every ill-formed sequence with U+FFFD (overlong, out-of-range, lone
+  // continuation, and truncated sequences all collapse to the replacement char).
   function utf8Decode(bytes) {
     var out = '', i = 0, n = bytes.length;
+    if (n >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) i = 3;
     while (i < n) {
-      var c = bytes[i++];
-      if (c < 0x80) out += String.fromCharCode(c);
-      else if (c >= 0xC0 && c < 0xE0) out += String.fromCharCode(((c & 0x1F) << 6) | (bytes[i++] & 0x3F));
-      else if (c >= 0xE0 && c < 0xF0) out += String.fromCharCode(((c & 0x0F) << 12) | ((bytes[i++] & 0x3F) << 6) | (bytes[i++] & 0x3F));
-      else {
-        var cp = (((c & 0x07) << 18) | ((bytes[i++] & 0x3F) << 12) | ((bytes[i++] & 0x3F) << 6) | (bytes[i++] & 0x3F)) - 0x10000;
-        out += String.fromCharCode(0xD800 + (cp >> 10), 0xDC00 + (cp & 0x3FF));
+      var b = bytes[i++];
+      if (b < 0x80) { out += String.fromCharCode(b); continue; }
+      var needed, cp, lower = 0x80, upper = 0xBF;
+      if (b >= 0xC2 && b <= 0xDF) { needed = 1; cp = b & 0x1F; }
+      else if (b >= 0xE0 && b <= 0xEF) { needed = 2; cp = b & 0x0F; if (b === 0xE0) lower = 0xA0; else if (b === 0xED) upper = 0x9F; }
+      else if (b >= 0xF0 && b <= 0xF4) { needed = 3; cp = b & 0x07; if (b === 0xF0) lower = 0x90; else if (b === 0xF4) upper = 0x8F; }
+      else { out += '�'; continue; }
+      var ok = true;
+      for (var k = 0; k < needed; k++) {
+        if (i >= n) { ok = false; break; }
+        var nb = bytes[i];
+        var lo = (k === 0) ? lower : 0x80, hi = (k === 0) ? upper : 0xBF;
+        if (nb < lo || nb > hi) { ok = false; break; }
+        cp = (cp << 6) | (nb & 0x3F); i++;
       }
+      if (!ok) { out += '�'; continue; }
+      if (cp <= 0xFFFF) out += String.fromCharCode(cp);
+      else { cp -= 0x10000; out += String.fromCharCode(0xD800 + (cp >> 10), 0xDC00 + (cp & 0x3FF)); }
     }
     return out;
   }
