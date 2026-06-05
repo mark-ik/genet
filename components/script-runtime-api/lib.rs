@@ -442,6 +442,38 @@ const EVENT_LOOP_BOOTSTRAP: &str = r#"
       return out;
     };
   }
+  // btoa() / atob() (base64 of a binary string). Each char is one byte (0-255);
+  // btoa throws on a code unit > 255. Provided if the engine lacks them.
+  if (typeof globalThis.btoa !== 'function') {
+    var B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    globalThis.btoa = function(s) {
+      s = String(s); var out = '';
+      for (var i = 0; i < s.length; i += 3) {
+        var c0 = s.charCodeAt(i);
+        var c1 = i + 1 < s.length ? s.charCodeAt(i + 1) : 0;
+        var c2 = i + 2 < s.length ? s.charCodeAt(i + 2) : 0;
+        if (c0 > 255 || c1 > 255 || c2 > 255) throw new RangeError("btoa: code unit out of range");
+        var n = (c0 << 16) | (c1 << 8) | c2;
+        out += B64.charAt((n >> 18) & 63) + B64.charAt((n >> 12) & 63);
+        out += (i + 1 < s.length) ? B64.charAt((n >> 6) & 63) : '=';
+        out += (i + 2 < s.length) ? B64.charAt(n & 63) : '=';
+      }
+      return out;
+    };
+    globalThis.atob = function(s) {
+      s = String(s).replace(/[ \t\n\f\r]/g, '');
+      if (s.length % 4 === 1) throw new RangeError("atob: invalid length");
+      s = s.replace(/=+$/, '');
+      var out = '', buf = 0, bits = 0;
+      for (var i = 0; i < s.length; i++) {
+        var idx = B64.indexOf(s.charAt(i));
+        if (idx < 0) throw new RangeError("atob: invalid character");
+        buf = (buf << 6) | idx; bits += 6;
+        if (bits >= 8) { bits -= 8; out += String.fromCharCode((buf >> bits) & 0xFF); }
+      }
+      return out;
+    };
+  }
   // Fire due timers. `nowMs` undefined => cooperative (disk path): fire everything
   // in (delay, seq) order, ignoring real time. `nowMs` given => real-time gate
   // (deferred drive loop): advance the virtual clock and fire only timers whose

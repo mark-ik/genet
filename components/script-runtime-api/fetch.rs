@@ -44,6 +44,9 @@ pub struct FetchRequest {
     /// The referrer policy name (`` / `no-referrer` / `origin` / `unsafe-url` / …);
     /// the host maps it to its referrer engine.
     pub referrer_policy: String,
+    /// The credentials mode name (`omit` / `same-origin` / `include`); the host maps
+    /// it to whether cookies/auth travel with the request.
+    pub credentials: String,
 }
 
 /// The result handed back to script. A Fetch *network error* is
@@ -146,6 +149,8 @@ impl<E: ScriptEngine> NativeFn<E> for FetchStart {
         let referrer = cx.value_to_string(&a8)?;
         let a9 = cx.arg(9);
         let referrer_policy = cx.value_to_string(&a9)?;
+        let a10 = cx.arg(10);
+        let credentials = cx.value_to_string(&a10)?;
 
         let headers = parse_flat_headers(&headers_flat);
         // The body crosses as a lossless "binary string": each JS char code (0-255)
@@ -161,6 +166,7 @@ impl<E: ScriptEngine> NativeFn<E> for FetchStart {
             mode,
             referrer,
             referrer_policy,
+            credentials,
         };
 
         // Clone the handler before calling it (no borrow held across `start`).
@@ -396,7 +402,7 @@ fn push_json_str(out: &mut String, s: &str) {
 /// Install the deferred fetch sinks (`__fetch_start` / `__fetch_abort`) and the
 /// `fetch()` / `Request` / `Response` / `Headers` bootstrap.
 pub(crate) fn install_fetch_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error> {
-    engine.set_function::<FetchStart>("__fetch_start", 10)?;
+    engine.set_function::<FetchStart>("__fetch_start", 11)?;
     engine.set_function::<FetchAbort>("__fetch_abort", 1)?;
     engine.set_function::<ResolveUrl>("__resolve_url", 1)?;
     engine.set_function::<UrlParse>("__url_parse", 2)?;
@@ -1575,7 +1581,8 @@ const FETCH_BOOTSTRAP: &str = r#"
       var inline = __fetch_start(id, req.method, req.url, headersFlat(req.headers),
                                  req.__bytes != null ? bytesToBinaryString(req.__bytes) : "",
                                  req.cache || "default", req.redirect || "follow",
-                                 req.mode || "cors", referrer, req.referrerPolicy || "");
+                                 req.mode || "cors", referrer, req.referrerPolicy || "",
+                                 req.credentials || "same-origin");
       if (inline) {
         // Synchronous host answered in this tick (today's path; one pump drains).
         var e = __pending[id];

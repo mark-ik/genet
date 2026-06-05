@@ -1101,10 +1101,38 @@ mod net {
         CACHE.get_or_init(|| std::sync::Arc::new(netfetcher::InMemoryHttpCache::new())).clone()
     }
 
-    /// A fetch context with the shared HTTP cache wired in (the `fetch()` path).
+    /// One process-wide cookie jar, shared across every deferred fetch so a
+    /// `Set-Cookie` from one request is attached to the next (credentials tests set
+    /// a cookie, then verify the following request carries it).
+    fn shared_cookies() -> std::sync::Arc<netfetcher::InMemoryCookieJar> {
+        static JAR: std::sync::OnceLock<std::sync::Arc<netfetcher::InMemoryCookieJar>> =
+            std::sync::OnceLock::new();
+        JAR.get_or_init(|| std::sync::Arc::new(netfetcher::InMemoryCookieJar::default()))
+            .clone()
+    }
+
+    /// A `CookieStore` view over the shared jar (`FetchContext.cookies` is a `Box`,
+    /// so each context wraps a cheap clone of the shared `Arc`).
+    struct SharedJar(std::sync::Arc<netfetcher::InMemoryCookieJar>);
+    impl netfetcher::CookieStore for SharedJar {
+        fn cookies_for(
+            &self,
+            url: &url::Url,
+            ctx: netfetcher::SameSiteContext,
+        ) -> Vec<String> {
+            self.0.cookies_for(url, ctx)
+        }
+        fn set_cookie(&self, url: &url::Url, header: &str) {
+            self.0.set_cookie(url, header)
+        }
+    }
+
+    /// A fetch context with the shared HTTP cache + cookie jar wired in (the
+    /// `fetch()` path).
     fn fetch_context() -> netfetcher::FetchContext {
         let mut cx = netfetcher::FetchContext::permissive();
         cx.cache = shared_cache();
+        cx.cookies = Box::new(SharedJar(shared_cookies()));
         cx
     }
 
@@ -1245,6 +1273,11 @@ mod net {
             }
             "unsafe-url" => netfetcher::ReferrerPolicy::UnsafeUrl,
             _ => netfetcher::ReferrerPolicy::Empty,
+        };
+        request.credentials = match req.credentials.as_str() {
+            "omit" => netfetcher::Credentials::Omit,
+            "include" => netfetcher::Credentials::Include,
+            _ => netfetcher::Credentials::SameOrigin,
         };
 
         let cx = fetch_context();
