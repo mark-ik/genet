@@ -1225,13 +1225,16 @@ mod net {
         };
         let mut request = netfetcher::Request::get(url);
         request.method = match req.method.as_str() {
+            "GET" => netfetcher::Method::Get,
             "HEAD" => netfetcher::Method::Head,
             "POST" => netfetcher::Method::Post,
             "PUT" => netfetcher::Method::Put,
             "DELETE" => netfetcher::Method::Delete,
             "PATCH" => netfetcher::Method::Patch,
             "OPTIONS" => netfetcher::Method::Options,
-            _ => netfetcher::Method::Get,
+            // A custom method token (e.g. "patcH", "REPORT") — kept verbatim so it
+            // is treated as non-simple (preflighted) and sent as-is.
+            other => netfetcher::Method::Other(other.to_string()),
         };
         request.headers = req.headers;
         request.body = req.body.map(bytes::Bytes::from);
