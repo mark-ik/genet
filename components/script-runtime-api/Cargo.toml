@@ -35,6 +35,11 @@ url = { workspace = true }
 script-engine-boa = { path = "../script-engine-boa" }
 # Parse HTML to a LayoutDom for the `load_dom` test (a real source document).
 serval-static-dom = { path = "../serval-static-dom" }
+# Backs the test-side WebGlHandler that proves the JS WebGLRenderingContext
+# surface reaches a real wgpu-backed context end-to-end.
+webgl_wgpu = { workspace = true }
+wgpu = { workspace = true }
+pollster = "0.4"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 script-engine-nova = { path = "../script-engine-nova" }

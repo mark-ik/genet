@@ -3523,6 +3523,7 @@ checksum = "09e54e57b4c48b40f7aec75635392b12b3421fa26fe8b4332e63138ed278459c"
 [[package]]
 name = "imaging"
 version = "0.0.1"
+source = "git+https://github.com/mark-ik/imaging?branch=mere-wgpu-29-vello-0-9#a8ac08d498b4266cd340b6a3cd66eef8fc4a5ab9"
 dependencies = [
  "kurbo",
  "peniko",
@@ -3531,6 +3532,7 @@ dependencies = [
 [[package]]
 name = "imaging_vello"
 version = "0.0.1"
+source = "git+https://github.com/mark-ik/imaging?branch=mere-wgpu-29-vello-0-9#a8ac08d498b4266cd340b6a3cd66eef8fc4a5ab9"
 dependencies = [
  "imaging",
  "imaging_wgpu",
@@ -3542,6 +3544,7 @@ dependencies = [
 [[package]]
 name = "imaging_wgpu"
 version = "0.0.1"
+source = "git+https://github.com/mark-ik/imaging?branch=mere-wgpu-29-vello-0-9#a8ac08d498b4266cd340b6a3cd66eef8fc4a5ab9"
 dependencies = [
  "imaging",
  "wgpu",
@@ -4355,6 +4358,7 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
+ "psl",
  "quinn",
  "rustls",
  "time",
@@ -5845,6 +5849,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "psl"
+version = "2.1.212"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9f6415ab1b08394487005d41ae7ee69e69903efa1ace538f3b274db605bf8ec"
+dependencies = [
+ "psl-types",
+]
+
+[[package]]
+name = "psl-types"
+version = "2.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33cb294fe86a74cbcf50d4445b37da762029549ebeea341421c7c70370f86cac"
+
+[[package]]
 name = "ptr_meta"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6546,12 +6565,15 @@ version = "0.0.0"
 dependencies = [
  "layout-dom-api",
  "markup5ever",
+ "pollster",
  "script-engine-api",
  "script-engine-boa",
  "script-engine-nova",
  "serval-scripted-dom",
  "serval-static-dom",
+ "servo-webgl-wgpu",
  "url",
+ "wgpu",
 ]
 
 [[package]]

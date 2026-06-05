@@ -19,9 +19,10 @@ use paint_api::rendering_context_core::{RenderingContextCore, WgpuCapability};
 
 pub use shader::{CANONICAL_TRIANGLE_FRAGMENT_SHADER, CANONICAL_TRIANGLE_VERTEX_SHADER};
 pub use webgl::{
-    BufferTarget, BufferUsage, IndexType, PrimitiveMode, ShaderStage, WebGlBufferId, WebGlContext,
-    WebGlContextAttributes, WebGlError, WebGlFramebufferId, WebGlFramebufferStatus, WebGlProgramId,
-    WebGlRenderbufferId, WebGlShaderId, WebGlTextureId,
+    BufferTarget, BufferUsage, CubeFace, DepthFunc, IndexType, PrimitiveMode, ShaderStage,
+    WebGlBufferId, WebGlContext, WebGlContextAttributes, WebGlError, WebGlFramebufferId,
+    WebGlFramebufferStatus, WebGlProgramId, WebGlRenderbufferId, WebGlShaderId, WebGlTextureId,
+    WebGlUniformLocation,
 };
 
 const CANVAS_USAGE: wgpu::TextureUsages = wgpu::TextureUsages::RENDER_ATTACHMENT

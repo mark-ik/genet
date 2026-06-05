@@ -43,9 +43,11 @@ mod dom;
 mod fetch;
 mod harness;
 mod selector;
+mod webgl;
 
 pub use fetch::{FetchHandler, FetchOutcome, FetchRequest};
 pub use harness::TestResult;
+pub use webgl::WebGlHandler;
 
 /// State the runtime's native callbacks share, stored as the engine's single
 /// host-data slot (`Rc<dyn Any>`). One aggregate so every host object reaches the
@@ -72,6 +74,12 @@ pub struct HostState {
     /// stay relative, so a network fetch of one is an error). Set by
     /// [`Runtime::set_base_url`] for server-mode WPT runs.
     pub base_url: Option<String>,
+    /// The host's WebGL seam. `None` = no WebGL handler installed (every
+    /// `__webgl_*` sink no-ops or yields 0 / NO_ERROR). Installed by
+    /// [`Runtime::set_webgl_handler`]; a `Box` rather than `Rc` because the
+    /// handler is mutated in place by every method call (a `gl.createBuffer()`
+    /// allocates a new id in the underlying context's id space).
+    pub webgl: Option<Box<dyn WebGlHandler>>,
 }
 
 /// Shared handle to the runtime's [`HostState`]. The host reads it after running
@@ -210,6 +218,14 @@ impl<E: ScriptEngine> Runtime<E> {
     /// (overriding `start`) settles later via [`settle_fetch`](Self::settle_fetch).
     pub fn set_fetch_handler(&mut self, handler: Box<dyn FetchHandler>) {
         self.host.borrow_mut().fetch = Some(std::rc::Rc::from(handler));
+    }
+
+    /// Install the host's WebGL seam (e.g. a webgl-wgpu-backed handler over a
+    /// real `wgpu::Device`). Until set, the JS `WebGLRenderingContext` methods
+    /// no-op or return `gl.NO_ERROR`. One handler per runtime today; multi-
+    /// context (one per `<canvas>`) lands when the trait grows a context id.
+    pub fn set_webgl_handler(&mut self, handler: Box<dyn WebGlHandler>) {
+        self.host.borrow_mut().webgl = Some(handler);
     }
 
     /// Resolve the pending `fetch()` Promise `id` with `outcome` (a deferred host
@@ -366,6 +382,10 @@ fn install_host_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error>
     dom::install_dom_surface(engine)?;
     // The `fetch()` / `Response` / `Headers` surface over the host fetch seam.
     fetch::install_fetch_surface(engine)?;
+    // `WebGLRenderingContext` (Triangle-class subset) over the host webgl seam.
+    // Until step 2 wires `HTMLCanvasElement.getContext('webgl')`, JS reaches it
+    // through the `__createWebGLContext()` helper.
+    webgl::install_webgl_surface(engine)?;
 
     // The `__reportResult` sink for the testharness results bridge. The completion
     // callback that calls it is registered later (after testharness loads).
