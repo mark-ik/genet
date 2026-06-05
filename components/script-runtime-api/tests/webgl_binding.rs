@@ -374,6 +374,100 @@ fn webgl_js_surface_draws_uniform_color_triangle_end_to_end() {
 }
 
 #[test]
+fn html_canvas_get_context_webgl_returns_a_rendering_context() {
+    // The standard Web API path: createElement('canvas') ->
+    // HTMLCanvasElement, .getContext('webgl') -> WebGLRenderingContext.
+    // Same draw shape as the bare-helper smoke above, but the JS now
+    // matches what a conformance test will write verbatim.
+    let mut rt = Runtime::<BoaEngine>::new().expect("runtime");
+    rt.set_webgl_handler(Box::new(WgpuWebGl::new(32, 32)));
+
+    let setup = r#"
+        var c = document.createElement('canvas');
+        var isCanvas = (c instanceof HTMLCanvasElement);
+        var ctx = c.getContext('webgl');
+        var isCtx = (ctx instanceof WebGLRenderingContext);
+        // Per spec: getContext returns the same instance on repeat calls.
+        var sameTwice = (ctx === c.getContext('webgl'));
+        // experimental-webgl alias resolves to the same constructor too.
+        var alias = c.getContext('experimental-webgl');
+        var aliasMatches = (alias === ctx);
+        // Unknown contextType returns null.
+        var unknown = c.getContext('webgl2');
+
+        ctx.clearColor(0, 0, 0, 1);
+        ctx.clear(ctx.COLOR_BUFFER_BIT);
+        var vs = ctx.createShader(ctx.VERTEX_SHADER);
+        ctx.shaderSource(vs,
+          "attribute vec2 a; void main() { gl_Position = vec4(a, 0.0, 1.0); }");
+        ctx.compileShader(vs);
+        var fs = ctx.createShader(ctx.FRAGMENT_SHADER);
+        ctx.shaderSource(fs,
+          "precision mediump float; uniform vec4 u;" +
+          " void main() { gl_FragColor = u; }");
+        ctx.compileShader(fs);
+        var prog = ctx.createProgram();
+        ctx.attachShader(prog, vs);
+        ctx.attachShader(prog, fs);
+        ctx.linkProgram(prog);
+        ctx.useProgram(prog);
+        var loc = ctx.getAttribLocation(prog, 'a');
+        var uloc = ctx.getUniformLocation(prog, 'u');
+        ctx.uniform4f(uloc, 1.0, 0.5, 0.0, 1.0);
+        var buf = ctx.createBuffer();
+        ctx.bindBuffer(ctx.ARRAY_BUFFER, buf);
+        ctx.bufferData(ctx.ARRAY_BUFFER, [-0.8, -0.8, 0.8, -0.8, 0.0, 0.8], ctx.STATIC_DRAW);
+        ctx.enableVertexAttribArray(loc);
+        ctx.vertexAttribPointer(loc, 2, ctx.FLOAT, false, 0, 0);
+        ctx.drawArrays(ctx.TRIANGLES, 0, 3);
+        var px = ctx.readPixels(16, 16, 1, 1, 0, 0);
+        var bag = {
+          isCanvas: isCanvas,
+          isCtx: isCtx,
+          sameTwice: sameTwice,
+          aliasMatches: aliasMatches,
+          unknown: (unknown === null),
+          r: px[0], g: px[1], b: px[2], a: px[3],
+        };
+    "#;
+    rt.eval(setup).expect("setup");
+
+    assert_eq!(read(&mut rt, "String(bag.isCanvas)"), "true");
+    assert_eq!(read(&mut rt, "String(bag.isCtx)"), "true");
+    assert_eq!(read(&mut rt, "String(bag.sameTwice)"), "true");
+    assert_eq!(read(&mut rt, "String(bag.aliasMatches)"), "true");
+    assert_eq!(read(&mut rt, "String(bag.unknown)"), "true");
+    assert_eq!(read(&mut rt, "String(bag.r)"), "255");
+    // 0.5 → u8 round-trip lands at 128 under wgpu's UNORM conversion.
+    assert_eq!(read(&mut rt, "String(bag.g)"), "128");
+    assert_eq!(read(&mut rt, "String(bag.b)"), "0");
+    assert_eq!(read(&mut rt, "String(bag.a)"), "255");
+}
+
+#[test]
+fn html_canvas_get_context_returns_null_without_webgl_constructor() {
+    // If the runtime is missing the webgl bootstrap (e.g. an alternate
+    // install_host_surface), HTMLCanvasElement.getContext falls back to
+    // returning null rather than throwing — matches Web API behavior
+    // for an unsupported contextType.
+    //
+    // In the standard runtime the bootstrap IS installed, so this test
+    // proves the negative path via a non-existent contextType.
+    let mut rt = Runtime::<BoaEngine>::new().expect("runtime");
+    rt.eval(
+        r#"
+        var c = document.createElement('canvas');
+        var webgpu = c.getContext('webgpu');
+        var twod = c.getContext('2d');
+        var bag = { webgpu: webgpu, twod: twod };
+        "#,
+    )
+    .expect("eval");
+    assert_eq!(read(&mut rt, "String(bag.webgpu)"), "null");
+    assert_eq!(read(&mut rt, "String(bag.twod)"), "null");
+}
+
+#[test]
 fn webgl_js_surface_with_no_handler_no_ops_safely() {
     // Without `set_webgl_handler`, every sink returns the default value
     // (0 / NO_ERROR / empty pixel bytes). The JS surface must not throw.

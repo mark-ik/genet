@@ -977,23 +977,35 @@ const DOM_BOOTSTRAP: &str = r#"
   // wrapNode is hoisted (function declaration), so the prototype methods defined
   // below may reference it before this point — they only run when called. The
   // prototype is chosen by nodeType, giving the Element / Text split (`instanceof
-  // Element`, `node.nodeType`).
+  // Element`, `node.nodeType`). Within Element (nodeType 1), elements with a tag
+  // name in the per-tag table get a more specific prototype (HTMLCanvasElement
+  // for CANVAS, etc.) — the rest fall back to HTMLElement. The tag lookup is one
+  // native call per element wrap.
   function wrapNode(ref) {
     if (ref === undefined || ref === null) return null;
     if (wrappers.has(ref)) return wrappers.get(ref);
     var nt = +__nodeType(ref);
-    var proto = nt === 1 ? HTMLElement.prototype
-              : nt === 9 ? Document.prototype
-              : nt === 3 ? Text.prototype
-              : nt === 8 ? Comment.prototype
-              : nt === 11 ? DocumentFragment.prototype
-              : Node.prototype;
+    var proto;
+    if (nt === 1) {
+      var tag = __tagName(ref);
+      proto = (tag && elementSubclassProto[tag]) || HTMLElement.prototype;
+    } else {
+      proto = nt === 9 ? Document.prototype
+            : nt === 3 ? Text.prototype
+            : nt === 8 ? Comment.prototype
+            : nt === 11 ? DocumentFragment.prototype
+            : Node.prototype;
+    }
     var node = Object.create(proto);
     node.__ref = ref;
     node.nodeType = nt;
     wrappers.set(ref, node);
     return node;
   }
+
+  // Per-tag prototype table populated below as HTML* subclasses come online.
+  // Each entry's key is the uppercased tag name `__tagName` returns.
+  var elementSubclassProto = {};
 
   // Node: the base every node shares (tree + events + textContent). Methods live
   // on the prototype (shared, instanceof-able), not per-object. `this.__ref` is
@@ -1701,6 +1713,30 @@ const DOM_BOOTSTRAP: &str = r#"
   HTMLElement.prototype = Object.create(Element.prototype);
   HTMLElement.prototype.constructor = HTMLElement;
   globalThis.HTMLElement = HTMLElement;
+
+  // HTMLCanvasElement: the first per-tag subclass. `wrapNode` dispatches a
+  // <canvas> element to this prototype (via `elementSubclassProto.CANVAS`), so
+  // `instanceof HTMLCanvasElement` works and `getContext('webgl')` lives on
+  // the prototype chain rather than each instance. The WebGLRenderingContext
+  // constructor itself is installed by the webgl bootstrap, which runs after
+  // this DOM bootstrap; `getContext` resolves it lazily at call time, so the
+  // forward reference is fine.
+  function HTMLCanvasElement() {}
+  HTMLCanvasElement.prototype = Object.create(HTMLElement.prototype);
+  HTMLCanvasElement.prototype.constructor = HTMLCanvasElement;
+  HTMLCanvasElement.prototype.getContext = function(contextType) {
+    var t = String(contextType || '');
+    // `experimental-webgl` is the legacy alias retained by most browsers for
+    // the WebGL 1.0 context — the conformance tests use both spellings.
+    if (t !== 'webgl' && t !== 'experimental-webgl') return null;
+    if (this.__webglContext) return this.__webglContext;
+    var Ctor = globalThis.WebGLRenderingContext;
+    if (typeof Ctor !== 'function') return null;
+    this.__webglContext = new Ctor();
+    return this.__webglContext;
+  };
+  globalThis.HTMLCanvasElement = HTMLCanvasElement;
+  elementSubclassProto.CANVAS = HTMLCanvasElement.prototype;
   // (Text / Comment / CharacterData exposed above, with their prototype chain.)
 
   installReflectedAttributes();
