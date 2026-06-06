@@ -1318,7 +1318,7 @@ const FETCH_BOOTSTRAP: &str = r#"
   function makeSignal() {
     var s = Object.create(AbortSignal.prototype);
     EventTarget.call(s);
-    s.aborted = false; s.reason = undefined; s.onabort = null;
+    s.aborted = false; s.reason = undefined; s.onabort = null; s._dependents = [];
     return s;
   }
   function abortReason(reason) {
@@ -1331,6 +1331,10 @@ const FETCH_BOOTSTRAP: &str = r#"
     var ev = new Event('abort');
     if (typeof signal.onabort === 'function') { try { signal.onabort.call(signal, ev); } catch (e) {} }
     signal.dispatchEvent(ev);
+    // Abort dependent signals AFTER this signal's own listeners run (WHATWG
+    // signal-abort order): a clone/any signal fires after its source.
+    var deps = signal._dependents; signal._dependents = [];
+    for (var i = 0; i < deps.length; i++) signalAbort(deps[i], signal.reason);
   }
   // A fresh signal that follows its source signals: aborts (with the source's
   // reason) when any source aborts. A Request's signal and a clone's signal are
@@ -1341,7 +1345,7 @@ const FETCH_BOOTSTRAP: &str = r#"
       var src = sources[i];
       if (!src) continue;
       if (src.aborted) { s.aborted = true; s.reason = src.reason; break; }
-      (function(src) { src.addEventListener('abort', function() { signalAbort(s, src.reason); }); })(src);
+      src._dependents.push(s);
     }
     return s;
   }
@@ -1351,14 +1355,7 @@ const FETCH_BOOTSTRAP: &str = r#"
     setTimeout(function() { signalAbort(s, new DOMException("signal timed out", "TimeoutError")); }, ms);
     return s;
   };
-  AbortSignal.any = function(signals) {
-    var s = makeSignal();
-    for (var i = 0; i < signals.length; i++) { if (signals[i].aborted) { s.aborted = true; s.reason = signals[i].reason; return s; } }
-    for (var j = 0; j < signals.length; j++) {
-      (function(src) { src.addEventListener('abort', function() { signalAbort(s, src.reason); }); })(signals[j]);
-    }
-    return s;
-  };
+  AbortSignal.any = function(signals) { return dependentSignal(signals); };
   globalThis.AbortSignal = AbortSignal;
 
   function AbortController() { this.signal = makeSignal(); }
