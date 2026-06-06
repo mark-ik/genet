@@ -1421,6 +1421,9 @@ const FETCH_BOOTSTRAP: &str = r#"
     if (this.cache === 'only-if-cached' && this.mode !== 'same-origin') throw new TypeError("only-if-cached requires same-origin mode");
     if (init.headers !== undefined) this.headers = new Headers(init.headers);
     if (init.body !== undefined && init.body !== null) {
+      // A ReadableStream body is an upload stream; it requires duplex: "half".
+      if (init.body instanceof ReadableStream && init.duplex !== 'half')
+        throw new TypeError("Request with a ReadableStream body requires 'duplex: \"half\"'");
       var eb = extractBody(init.body);
       this.__bytes = eb.bytes; this.__stream = eb.stream;
       if (this.__stream) this.__stream._owner = this;
