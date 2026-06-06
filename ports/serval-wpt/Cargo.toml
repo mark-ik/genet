@@ -61,3 +61,9 @@ netfetch = ["dep:netfetcher", "dep:tokio", "dep:bytes", "dep:url"]
 [dev-dependencies]
 # Offline mock server for the fetch()->netfetcher integration test.
 mockito = "1"
+# Real wgpu-backed WebGL context for running the Khronos conformance suite
+# through the harness: a WgpuWebGl bridge implements script-runtime-api's
+# WebGlHandler over webgl-wgpu's WebGlContext. Dev-only — the runner binary
+# stays graphics-free; only the conformance test wires a GPU.
+webgl_wgpu = { workspace = true }
+pollster = "0.4"

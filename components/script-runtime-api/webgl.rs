@@ -959,6 +959,41 @@ const WEBGL_BOOTSTRAP: &str = r#"
     __webgl_draw_arrays(String(this._ctx), String(mode >>> 0), String(first | 0), String(count | 0));
   };
 
+  // -----------------------------------------------------------------
+  // Best-effort conveniences the Khronos test utilities reach for.
+  // None have a backend effect yet; they exist so create3DContext /
+  // setupProgram / setupTexturedQuad run instead of throwing on a
+  // missing method.
+  // -----------------------------------------------------------------
+  // No extensions are exposed at this layer.
+  P.getExtension = function(name) { return null; };
+  P.getSupportedExtensions = function() { return []; };
+  // getParameter: the conformance utils mostly read this behind feature
+  // gates the smoke doesn't hit. Return null (unknown) for now; specific
+  // pnames get real values as conformance needs them.
+  P.getParameter = function(pname) { return null; };
+  // webgl-essl assigns attribute locations in declaration order, which
+  // matches how the utils bind them (0, 1, ...), so this is a safe no-op.
+  P.bindAttribLocation = function(program, index, name) {};
+  // Sampler/pixel-store parameters: we sample NEAREST / CLAMP and treat
+  // RGBA8 tightly-packed, which covers the smoke.
+  P.texParameterf = function(target, pname, param) {};
+  P.pixelStorei = function(pname, param) {};
+  // Object deletion: the backend reclaims on context drop; explicit
+  // deletes are accepted as no-ops so teardown code runs.
+  P.deleteProgram = function(p) {};
+  P.deleteShader = function(s) {};
+  P.deleteBuffer = function(b) {};
+  P.deleteTexture = function(t) {};
+  // Resource liveness predicates default to true for live handles.
+  P.isProgram = function(p) { return p != null && p._id != null; };
+  P.isShader = function(s) { return s != null && s._id != null; };
+  P.isBuffer = function(b) { return b != null && b._id != null; };
+  P.isTexture = function(t) { return t != null && t._id != null; };
+  // Cooperative scheduling hooks some tests call; harmless here.
+  P.flush = function() {};
+  P.finish = function() {};
+
   // Constructors on the global so tests can `instanceof` them.
   globalThis.WebGLRenderingContext = WebGLRenderingContext;
   globalThis.WebGLBuffer = WebGLBuffer;

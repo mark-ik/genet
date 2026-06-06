@@ -25,6 +25,8 @@ use serval_static_dom::StaticDocument;
 
 mod harness;
 mod render;
+#[cfg(test)]
+mod webgl_conformance;
 
 // The upstream WPT checkout lives under `tests/wpt/tests/`
 // (`tests/wpt/mozilla/` holds servo-specific tests).

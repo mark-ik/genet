@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
 use script_engine_api::ScriptEngine;
-use script_runtime_api::{FetchHandler, FetchOutcome, Runtime, TestResult};
+use script_runtime_api::{FetchHandler, FetchOutcome, Runtime, TestResult, WebGlFactory};
 use serval_static_dom::StaticDocument;
 
 /// A deferred `fetch()` completion, applied to the runtime by the drive loop. A
@@ -129,6 +129,33 @@ pub fn run_test(
     completion: Option<&dyn CompletionSource>,
     engine: Engine,
 ) -> HarnessOutcome {
+    run_test_with_webgl(
+        testharness_js,
+        html,
+        loader,
+        base_url,
+        handler,
+        completion,
+        None,
+        engine,
+    )
+}
+
+/// Like [`run_test`] but also installs a WebGL context factory, so a test that
+/// calls `canvas.getContext('webgl')` (e.g. the Khronos conformance suite via
+/// `webgl-test-utils.js`) draws against a real backend. The factory is minted
+/// per `getContext`; pass `None` for the graphics-free default.
+#[allow(clippy::too_many_arguments)]
+pub fn run_test_with_webgl(
+    testharness_js: &str,
+    html: &str,
+    loader: &dyn ScriptSrcLoader,
+    base_url: Option<&str>,
+    handler: Option<Box<dyn FetchHandler>>,
+    completion: Option<&dyn CompletionSource>,
+    webgl: Option<WebGlFactory>,
+    engine: Engine,
+) -> HarnessOutcome {
     let doc = StaticDocument::parse(html);
     let mut scripts = Vec::new();
     collect_scripts(&doc, doc.document(), loader, &mut scripts);
@@ -136,10 +163,10 @@ pub fn run_test(
 
     match engine {
         Engine::Boa => run_with::<script_engine_boa::BoaEngine>(
-            testharness_js, &test_src, &doc, base_url, handler, completion,
+            testharness_js, &test_src, &doc, base_url, handler, completion, webgl,
         ),
         Engine::Nova => run_with::<script_engine_nova::NovaEngine>(
-            testharness_js, &test_src, &doc, base_url, handler, completion,
+            testharness_js, &test_src, &doc, base_url, handler, completion, webgl,
         ),
     }
 }
@@ -150,6 +177,7 @@ pub fn run_test(
 /// event loop and the fetch-completion channel to quiescence (or a deadline)
 /// itself, because deferred replies arrive out of band; without one it uses the
 /// synchronous one-shot path.
+#[allow(clippy::too_many_arguments)]
 fn run_with<E: ScriptEngine>(
     testharness_js: &str,
     test_src: &str,
@@ -157,6 +185,7 @@ fn run_with<E: ScriptEngine>(
     base_url: Option<&str>,
     handler: Option<Box<dyn FetchHandler>>,
     completion: Option<&dyn CompletionSource>,
+    webgl: Option<WebGlFactory>,
 ) -> HarnessOutcome {
     let mut rt = match Runtime::<E>::new() {
         Ok(rt) => rt,
@@ -170,6 +199,9 @@ fn run_with<E: ScriptEngine>(
     }
     if let Some(h) = handler {
         rt.set_fetch_handler(h);
+    }
+    if let Some(factory) = webgl {
+        rt.set_webgl_factory(factory);
     }
 
     let Some(cs) = completion else {
