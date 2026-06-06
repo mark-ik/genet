@@ -182,7 +182,9 @@ pub(super) fn build_render_pipeline(
             targets: &[Some(wgpu::ColorTargetState {
                 format,
                 blend: Some(wgpu::BlendState::REPLACE),
-                write_mask: wgpu::ColorWrites::ALL,
+                write_mask: color_writes_from_mask(unpack_color_mask(
+                    pipeline_key.color_write_mask,
+                )),
             })],
         }),
         primitive: wgpu::PrimitiveState {

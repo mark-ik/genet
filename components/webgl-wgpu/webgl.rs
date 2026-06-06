@@ -262,6 +262,10 @@ struct VertexPipelineKey {
     /// includes this so toggling depth state rebakes the
     /// pipeline.
     depth_state: Option<DepthFunc>,
+    /// `gl.colorMask` packed into 4 bits at draw time (see
+    /// [`color_mask_bits`]). Part of the cache key so changing
+    /// the mask rebakes the pipeline with a new `write_mask`.
+    color_write_mask: u8,
 }
 
 struct ProgramObject {
@@ -314,11 +318,52 @@ pub struct WebGlContext {
     depth_test_enabled: bool,
     depth_func: DepthFunc,
     depth_clear_value: f32,
+    /// `gl.colorMask` per-channel write enable (R, G, B, A). Default all
+    /// true. Affects both `drawArrays`/`drawElements` (via the pipeline's
+    /// color `write_mask`) and `clear` (a fully-masked clear short-circuits;
+    /// a partial mask is emulated with a full-viewport quad so unmasked
+    /// channels are preserved, since wgpu's `LoadOp::Clear` ignores masks).
+    color_mask: [bool; 4],
     pending_error: WebGlError,
     lost: bool,
 }
 
 pub(super) const DEPTH_ATTACHMENT_FORMAT: wgpu::TextureFormat = crate::CANVAS_DEPTH_FORMAT;
+
+/// Translate a `gl.colorMask` (R, G, B, A) into wgpu's per-channel
+/// `ColorWrites` for a pipeline's color target.
+pub(super) fn color_writes_from_mask(mask: [bool; 4]) -> wgpu::ColorWrites {
+    let mut writes = wgpu::ColorWrites::empty();
+    if mask[0] {
+        writes |= wgpu::ColorWrites::RED;
+    }
+    if mask[1] {
+        writes |= wgpu::ColorWrites::GREEN;
+    }
+    if mask[2] {
+        writes |= wgpu::ColorWrites::BLUE;
+    }
+    if mask[3] {
+        writes |= wgpu::ColorWrites::ALPHA;
+    }
+    writes
+}
+
+/// Pack a `gl.colorMask` into 4 bits (R=1, G=2, B=4, A=8) for use as a
+/// pipeline-cache key component.
+pub(super) fn color_mask_bits(mask: [bool; 4]) -> u8 {
+    (mask[0] as u8) | (mask[1] as u8) << 1 | (mask[2] as u8) << 2 | (mask[3] as u8) << 3
+}
+
+/// Inverse of [`color_mask_bits`]: unpack 4 mask bits into (R, G, B, A).
+pub(super) fn unpack_color_mask(bits: u8) -> [bool; 4] {
+    [
+        bits & 1 != 0,
+        bits & 2 != 0,
+        bits & 4 != 0,
+        bits & 8 != 0,
+    ]
+}
 
 mod draw;
 mod objects;
@@ -381,6 +426,7 @@ impl WebGlContext {
             depth_test_enabled: false,
             depth_func: DepthFunc::Less,
             depth_clear_value: 1.0,
+            color_mask: [true; 4],
             pending_error: WebGlError::NoError,
             lost: false,
         }
@@ -428,10 +474,22 @@ impl WebGlContext {
             self.record_error(WebGlError::InvalidFramebufferOperation);
             return;
         }
-        let Some((view, _, _)) = self.current_color_target_view() else {
+        let Some((view, format, _)) = self.current_color_target_view() else {
             self.record_error(WebGlError::InvalidFramebufferOperation);
             return;
         };
+        // A partial color mask can't go through `LoadOp::Clear` (wgpu clears
+        // all channels regardless of mask). Emulate it with a full-viewport
+        // quad that writes the clear color through the masked channels only,
+        // preserving the rest.
+        if self.color_mask != [true; 4] {
+            self.masked_clear(&view, format, color);
+            if self.bound_framebuffer.is_none() {
+                self.canvas.output.damage =
+                    Some([0, 0, self.canvas.output.size.0, self.canvas.output.size.1]);
+            }
+            return;
+        }
         let mut encoder =
             self.canvas
                 .device
@@ -462,4 +520,140 @@ impl WebGlContext {
                 Some([0, 0, self.canvas.output.size.0, self.canvas.output.size.1]);
         }
     }
+
+    /// Emulate a color-masked `clear` by drawing a full-viewport solid-color
+    /// quad with the pipeline `write_mask` set to the enabled channels and
+    /// `LoadOp::Load` (preserve). The clear color rides in a uniform buffer.
+    /// Used only when `color_mask` is partial; an all-true mask takes the
+    /// faster `LoadOp::Clear` path.
+    fn masked_clear(&mut self, view: &wgpu::TextureView, format: wgpu::TextureFormat, color: wgpu::Color) {
+        let device = &self.canvas.device;
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("webgl-wgpu masked-clear shader"),
+            source: wgpu::ShaderSource::Wgsl(MASKED_CLEAR_WGSL.into()),
+        });
+        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("webgl-wgpu masked-clear bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("webgl-wgpu masked-clear layout"),
+            bind_group_layouts: &[Some(&bgl)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("webgl-wgpu masked-clear pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: color_writes_from_mask(self.color_mask),
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let color_bytes: [f32; 4] = [
+            color.r as f32,
+            color.g as f32,
+            color.b as f32,
+            color.a as f32,
+        ];
+        let mut raw = Vec::with_capacity(16);
+        for c in color_bytes {
+            raw.extend_from_slice(&c.to_ne_bytes());
+        }
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("webgl-wgpu masked-clear color"),
+            size: raw.len() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        buffer.slice(..).get_mapped_range_mut().copy_from_slice(&raw);
+        buffer.unmap();
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("webgl-wgpu masked-clear bind group"),
+            layout: &bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+        });
+        let mut encoder =
+            self.canvas
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("webgl-wgpu masked-clear encoder"),
+                });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("webgl-wgpu masked-clear pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        self.canvas.queue.submit([encoder.finish()]);
+    }
 }
+
+/// Full-viewport solid-color shader for masked clears. The vertex stage emits
+/// a single oversized triangle covering the viewport; the fragment stage
+/// outputs the uniform clear color (the pipeline's `write_mask` restricts it
+/// to the enabled channels).
+const MASKED_CLEAR_WGSL: &str = r#"
+@group(0) @binding(0) var<uniform> clear_color: vec4<f32>;
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+    var p = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 3.0, -1.0),
+        vec2<f32>(-1.0,  3.0),
+    );
+    return vec4<f32>(p[vi], 0.0, 1.0);
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+    return clear_color;
+}
+"#;

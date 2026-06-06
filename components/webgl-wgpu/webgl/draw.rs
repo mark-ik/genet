@@ -101,6 +101,7 @@ impl WebGlContext {
         let pipeline_key = VertexPipelineKey {
             attribute_layouts: attribute_layouts.clone(),
             depth_state,
+            color_write_mask: color_mask_bits(self.color_mask),
         };
 
         let topology = match mode {
@@ -315,6 +316,7 @@ impl WebGlContext {
         let pipeline_key = VertexPipelineKey {
             attribute_layouts: attribute_layouts.clone(),
             depth_state,
+            color_write_mask: color_mask_bits(self.color_mask),
         };
 
         let topology = match mode {

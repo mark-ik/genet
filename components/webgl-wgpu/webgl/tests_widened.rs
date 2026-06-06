@@ -850,6 +850,132 @@ void main() {
     assert_eq!(context.get_error(), WebGlError::InvalidOperation);
 }
 
+// =====================================================================
+// colorMask: per-channel write enable for both clear and draw.
+// =====================================================================
+
+#[test]
+fn color_mask_alpha_only_clear_preserves_rgb() {
+    // The Khronos gl-clear case: clear to transparent black, then with
+    // colorMask(false,false,false,true) clear to white — only alpha is
+    // written, RGB stays 0. wgpu's LoadOp::Clear ignores masks, so this
+    // exercises the full-viewport masked-clear emulation.
+    let mut context = make_context(16, 16);
+    context.clear(wgpu::Color {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 0.0,
+    });
+    context.set_color_mask(false, false, false, true);
+    context.clear(wgpu::Color {
+        r: 1.0,
+        g: 1.0,
+        b: 1.0,
+        a: 1.0,
+    });
+    let px = context.read_pixels(8, 8, 1, 1).expect("read");
+    assert_eq!(&px[0..4], &[0, 0, 0, 255]);
+    assert_eq!(context.get_error(), WebGlError::NoError);
+}
+
+#[test]
+fn color_mask_single_channel_clear_preserves_others() {
+    // Start red, then green-only masked clear to white -> the G channel
+    // becomes 255 while R/B/A are preserved from the red background.
+    let mut context = make_context(16, 16);
+    context.clear(wgpu::Color {
+        r: 1.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    });
+    context.set_color_mask(false, true, false, false);
+    context.clear(wgpu::Color {
+        r: 1.0,
+        g: 1.0,
+        b: 1.0,
+        a: 1.0,
+    });
+    let px = context.read_pixels(8, 8, 1, 1).expect("read");
+    // R preserved 255, G set 255, B preserved 0, A preserved 255 -> yellow.
+    assert_eq!(&px[0..4], &[255, 255, 0, 255]);
+    assert_eq!(context.get_error(), WebGlError::NoError);
+}
+
+#[test]
+fn color_mask_restores_to_full_clear_after_reset() {
+    // After a masked clear, resetting the mask to all-true takes the fast
+    // LoadOp::Clear path again and writes every channel.
+    let mut context = make_context(16, 16);
+    context.set_color_mask(false, false, false, true);
+    context.clear(wgpu::Color {
+        r: 1.0,
+        g: 1.0,
+        b: 1.0,
+        a: 1.0,
+    });
+    context.set_color_mask(true, true, true, true);
+    context.clear(wgpu::Color {
+        r: 0.0,
+        g: 0.0,
+        b: 1.0,
+        a: 1.0,
+    });
+    let px = context.read_pixels(8, 8, 1, 1).expect("read");
+    assert_eq!(&px[0..4], &[0, 0, 255, 255]);
+    assert_eq!(context.get_error(), WebGlError::NoError);
+}
+
+#[test]
+fn color_mask_draw_writes_only_enabled_channels() {
+    // Background blue, then a full-viewport white triangle drawn with
+    // colorMask(true,false,false,true): R and A written, G/B preserved.
+    let mut context = make_context(16, 16);
+    context.clear(wgpu::Color {
+        r: 0.0,
+        g: 0.0,
+        b: 1.0,
+        a: 1.0,
+    });
+    let vertex = r#"
+attribute vec2 a_position;
+void main() { gl_Position = vec4(a_position, 0.0, 1.0); }
+"#;
+    let fragment = r#"
+precision mediump float;
+uniform vec4 u_color;
+void main() { gl_FragColor = u_color; }
+"#;
+    let program = context
+        .create_program_from_essl(vertex, fragment)
+        .expect("masked-draw program");
+    context.use_program(Some(program));
+    let loc = context.get_attrib_location(program, "a_position") as u32;
+    let color = context
+        .get_uniform_location(program, "u_color")
+        .expect("u_color");
+    context.uniform4f(color, 1.0, 1.0, 1.0, 1.0);
+    context.set_color_mask(true, false, false, true);
+
+    let vertices = context.create_buffer();
+    context.bind_buffer(BufferTarget::ArrayBuffer, Some(vertices));
+    // Oversized covering triangle.
+    context.buffer_data_f32(
+        BufferTarget::ArrayBuffer,
+        &[-1.0, -1.0, 3.0, -1.0, -1.0, 3.0],
+        BufferUsage::StaticDraw,
+    );
+    context.enable_vertex_attrib_array(loc);
+    context.vertex_attrib_pointer_f32(loc, 2, false, 0, 0);
+    context.draw_arrays(PrimitiveMode::Triangles, 0, 3);
+
+    let px = context.read_pixels(8, 8, 1, 1).expect("read");
+    // R written 255, G preserved 0, B preserved 255, A written 255 -> magenta.
+    assert_eq!(&px[0..4], &[255, 0, 255, 255]);
+    assert_eq!(context.get_error(), WebGlError::NoError);
+}
+
 #[test]
 fn uniform_setters_reject_kind_mismatch() {
     let mut context = make_context(8, 8);

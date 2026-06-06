@@ -29,6 +29,21 @@ impl WebGlContext {
         self.depth_test_enabled = enabled;
     }
 
+    /// `gl.colorMask(r, g, b, a)` — per-channel write enable. Affects both
+    /// subsequent draws and `clear`. Default is all-true.
+    pub fn set_color_mask(&mut self, r: bool, g: bool, b: bool, a: bool) {
+        if self.lost {
+            self.record_error(WebGlError::ContextLostWebgl);
+            return;
+        }
+        self.color_mask = [r, g, b, a];
+    }
+
+    /// The current `gl.colorMask` state (R, G, B, A).
+    pub fn color_mask(&self) -> [bool; 4] {
+        self.color_mask
+    }
+
     /// `gl.depthFunc(func)`. Default is `Less`.
     pub fn set_depth_func(&mut self, func: DepthFunc) {
         if self.lost {
@@ -112,6 +127,7 @@ impl WebGlContext {
         self.bound_texture_2d_units = [None; MAX_TEXTURE_IMAGE_UNITS];
         self.bound_texture_cube_units = [None; MAX_TEXTURE_IMAGE_UNITS];
         self.active_texture_unit = 0;
+        self.color_mask = [true; 4];
         self.bound_framebuffer = None;
         self.bound_renderbuffer = None;
         self.current_program = None;
