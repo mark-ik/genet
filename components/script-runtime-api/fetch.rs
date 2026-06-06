@@ -1586,14 +1586,15 @@ const FETCH_BOOTSTRAP: &str = r#"
     try { req = new Request(input, init); } catch (e) { return Promise.reject(e); }
     if (!req.headers.has("accept")) req.headers.append("accept", "*/*");
     if (!req.headers.has("accept-language")) req.headers.append("accept-language", "*");
+    // fetch consumes the input request's body: it becomes used (so a later
+    // request.text() etc. rejects). Empty/bodyless requests are untouched.
+    if (input instanceof Request && (input.__bytes != null || input.__stream)) input.bodyUsed = true;
     // A pre-aborted signal rejects synchronously with its reason and allocates no
     // id (preserves the immediate-reject ordering + reason identity).
     if (req.signal && req.signal.aborted) {
       var pre = abortReason(req.signal.reason);
       if (req.__stream && !req.__stream._disturbed) { try { req.__stream.cancel(pre); } catch (x) {} }
-      // The body is consumed by the fetch attempt even though it is aborted.
-      req.bodyUsed = true;
-      if (input instanceof Request && (input.__bytes != null || input.__stream)) input.bodyUsed = true;
+      req.bodyUsed = true; // the body is consumed by the (aborted) attempt
       return Promise.reject(pre);
     }
     var id = __nextFetchId++;
