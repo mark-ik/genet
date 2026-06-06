@@ -172,3 +172,16 @@ pub struct NativeFontHandle {
     pub name: String,
     pub path: String,
 }
+
+// Other targets (notably wasm32-unknown-unknown) have no native font handle;
+// fonts come from the host (parley's system fonts / the browser). A unit
+// placeholder so the type and its re-export exist. (wasm de-IPC pass, 2026-06-06.)
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "windows",
+    target_os = "macos"
+)))]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize)]
+pub struct NativeFontHandle;

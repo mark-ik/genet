@@ -6815,8 +6815,6 @@ dependencies = [
  "serde_json",
  "serval-scripted-dom",
  "serval-static-dom",
- "servo-base",
- "servo-layout-api",
  "servo-malloc-size-of",
  "servo-paint-types",
  "servo-pixels",

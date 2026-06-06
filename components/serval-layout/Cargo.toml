@@ -19,7 +19,7 @@ data-url = { workspace = true }
 euclid = { workspace = true }
 html5ever = { workspace = true }
 image = { workspace = true }
-layout_api = { workspace = true }
+# layout_api = { workspace = true }  # EXPERIMENT: serval-layout uses parley, not servo-fonts/layout-api
 layout_dom_api = { workspace = true }
 markup5ever = { workspace = true }
 malloc_size_of = { workspace = true }
@@ -39,7 +39,7 @@ serde = { workspace = true }
 rustc-hash = { workspace = true }
 selectors = { workspace = true }
 servo_arc = { workspace = true }
-servo-base = { workspace = true }
+# servo-base = { workspace = true }  # EXPERIMENT: unused by serval-layout source
 servo-url = { workspace = true }
 stylo = { workspace = true }
 stylo_atoms = { workspace = true }
