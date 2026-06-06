@@ -162,6 +162,9 @@ impl ServoUrl {
         self.0.password()
     }
 
+    // `url`'s file-path conversions exist only on targets with a filesystem
+    // (unix / windows / redox / wasi), not wasm32-unknown-unknown; mirror that gate.
+    #[cfg(any(unix, windows, target_os = "redox", target_os = "wasi"))]
     pub fn to_file_path(&self) -> Result<::std::path::PathBuf, UrlError> {
         self.0.to_file_path().map_err(|_| UrlError::ToFilePath)
     }
@@ -194,6 +197,7 @@ impl ServoUrl {
         self.0.query()
     }
 
+    #[cfg(any(unix, windows, target_os = "redox", target_os = "wasi"))]
     pub fn from_file_path<P: AsRef<Path>>(path: P) -> Result<Self, UrlError> {
         Url::from_file_path(path)
             .map(Self::from_url)

@@ -46,7 +46,17 @@ impl ResourceResolver {
         // at a relative dir, so canonicalize first (falling back to the
         // path as-given if canonicalize fails, e.g. in tests).
         let abs = std::fs::canonicalize(base).unwrap_or_else(|_| base.clone());
-        url::Url::from_directory_path(&abs).ok().map(|u| u.to_string())
+        // `url`'s file-path API exists only on filesystem targets; on wasm there is
+        // no local base (resources come from the host loader). (wasm de-IPC pass.)
+        #[cfg(any(unix, windows, target_os = "redox", target_os = "wasi"))]
+        {
+            url::Url::from_directory_path(&abs).ok().map(|u| u.to_string())
+        }
+        #[cfg(not(any(unix, windows, target_os = "redox", target_os = "wasi")))]
+        {
+            let _ = abs;
+            None
+        }
     }
 
     /// Resolve `url` to a path, or `None` if it is remote, a `data:`
@@ -70,7 +80,14 @@ impl ResourceResolver {
         // against the document base into an absolute file URL. Convert
         // it back to a local path directly.
         if url.starts_with("file:") {
-            return url::Url::parse(url).ok().and_then(|u| u.to_file_path().ok());
+            #[cfg(any(unix, windows, target_os = "redox", target_os = "wasi"))]
+            {
+                return url::Url::parse(url).ok().and_then(|u| u.to_file_path().ok());
+            }
+            #[cfg(not(any(unix, windows, target_os = "redox", target_os = "wasi")))]
+            {
+                return None;
+            }
         }
         match url.strip_prefix('/') {
             Some(rest) => self.tests_root.as_ref().map(|root| root.join(rest)),

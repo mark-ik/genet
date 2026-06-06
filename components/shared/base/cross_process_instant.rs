@@ -87,6 +87,16 @@ mod platform {
     }
 }
 
+// Targets without a cross-process monotonic clock (notably wasm32-unknown-unknown,
+// which is single-process anyway). CrossProcessInstant is unused on the serval
+// layout path; `now()` returns 0 so the type compiles. (wasm de-IPC pass, 2026-06-06.)
+#[cfg(not(any(unix, windows)))]
+mod platform {
+    pub(super) fn now() -> u64 {
+        0
+    }
+}
+
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod platform {
     use std::sync::LazyLock;

@@ -29,7 +29,6 @@ markup5ever = { workspace = true }
 mime = { workspace = true }
 parking_lot = { workspace = true }
 resvg = { workspace = true }
-servo-allocator = { workspace = true }
 servo_arc = { workspace = true }
 smallvec = { workspace = true }
 string_cache = { workspace = true }
@@ -45,3 +44,15 @@ unicode-script = { workspace = true }
 url = { workspace = true }
 urlpattern = { workspace = true }
 uuid = { workspace = true }
+
+# wasm de-IPC pass (2026-06-06): servo-allocator installs a native global allocator
+# (jemalloc); its API is unused here (MallocSizeOf is allocator-agnostic via stylo's
+# MallocSizeOfOps), so wasm simply uses the default allocator.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+servo-allocator = { workspace = true }
+
+# uuid v4 needs a wasm randomness backend. Enabling `js` here (malloc_size_of is
+# always in the wasm graph via Stylo) unifies it across the whole wasm build, so
+# the workspace uuid stays plain and native stays wasm-bindgen-free.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+uuid = { workspace = true, features = ["js"] }
