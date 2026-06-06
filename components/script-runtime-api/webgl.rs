@@ -42,6 +42,15 @@ pub trait WebGlHandler {
     fn clear(&mut self, mask: u32);
     fn viewport(&mut self, x: i32, y: i32, width: u32, height: u32);
 
+    /// `gl.enable(cap)` / `gl.disable(cap)`. `cap` is the raw GLenum
+    /// (`DEPTH_TEST` = 0x0B71, `BLEND` = 0x0BE2, `CULL_FACE` = 0x0B44,
+    /// `SCISSOR_TEST` = 0x0C11, ...). The host enables what its backend
+    /// supports and records the rest so `is_enabled` round-trips.
+    fn enable(&mut self, cap: u32);
+    fn disable(&mut self, cap: u32);
+    /// `gl.isEnabled(cap)` — the current enable/disable state of `cap`.
+    fn is_enabled(&mut self, cap: u32) -> bool;
+
     fn create_buffer(&mut self) -> u64;
     fn bind_buffer(&mut self, target: u32, buffer: Option<u64>);
     fn buffer_data_f32(&mut self, target: u32, data: &[f32], usage: u32);
@@ -173,6 +182,36 @@ impl<E: ScriptEngine> NativeFn<E> for Clear {
         let mask = parse_u32::<E>(cx, 1)?;
         with_webgl_ctx::<E, _, _>(cx, ctx, (), |h| h.clear(mask));
         Ok(cx.undefined())
+    }
+}
+
+pub(crate) struct Enable;
+impl<E: ScriptEngine> NativeFn<E> for Enable {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let ctx = parse_ctx::<E>(cx)?;
+        let cap = parse_u32::<E>(cx, 1)?;
+        with_webgl_ctx::<E, _, _>(cx, ctx, (), |h| h.enable(cap));
+        Ok(cx.undefined())
+    }
+}
+
+pub(crate) struct Disable;
+impl<E: ScriptEngine> NativeFn<E> for Disable {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let ctx = parse_ctx::<E>(cx)?;
+        let cap = parse_u32::<E>(cx, 1)?;
+        with_webgl_ctx::<E, _, _>(cx, ctx, (), |h| h.disable(cap));
+        Ok(cx.undefined())
+    }
+}
+
+pub(crate) struct IsEnabled;
+impl<E: ScriptEngine> NativeFn<E> for IsEnabled {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let ctx = parse_ctx::<E>(cx)?;
+        let cap = parse_u32::<E>(cx, 1)?;
+        let on = with_webgl_ctx::<E, _, _>(cx, ctx, false, |h| h.is_enabled(cap));
+        cx.make_string(if on { "1" } else { "0" })
     }
 }
 
@@ -529,6 +568,9 @@ pub(crate) fn install_webgl_surface<E: ScriptEngine>(engine: &mut E) -> Result<(
     engine.set_function::<CreateContext>("__webgl_create_context", 2)?;
     engine.set_function::<ClearColor>("__webgl_clear_color", 5)?;
     engine.set_function::<Clear>("__webgl_clear", 2)?;
+    engine.set_function::<Enable>("__webgl_enable", 2)?;
+    engine.set_function::<Disable>("__webgl_disable", 2)?;
+    engine.set_function::<IsEnabled>("__webgl_is_enabled", 2)?;
     engine.set_function::<Viewport>("__webgl_viewport", 5)?;
     engine.set_function::<CreateBuffer>("__webgl_create_buffer", 1)?;
     engine.set_function::<BindBuffer>("__webgl_bind_buffer", 3)?;
@@ -586,6 +628,11 @@ const WEBGL_BOOTSTRAP: &str = r#"
     NO_ERROR: 0x0000, INVALID_ENUM: 0x0500, INVALID_VALUE: 0x0501,
     INVALID_OPERATION: 0x0502, INVALID_FRAMEBUFFER_OPERATION: 0x0506,
     CONTEXT_LOST_WEBGL: 0x9242,
+    // Capabilities for enable/disable/isEnabled.
+    CULL_FACE: 0x0B44, DEPTH_TEST: 0x0B71, BLEND: 0x0BE2,
+    DITHER: 0x0BD0, SCISSOR_TEST: 0x0C11, STENCIL_TEST: 0x0B90,
+    POLYGON_OFFSET_FILL: 0x8037, SAMPLE_ALPHA_TO_COVERAGE: 0x809E,
+    SAMPLE_COVERAGE: 0x80A0,
   };
 
   // -----------------------------------------------------------------
@@ -643,6 +690,11 @@ const WEBGL_BOOTSTRAP: &str = r#"
     __webgl_clear_color(String(this._ctx), String(+r), String(+g), String(+b), String(+a));
   };
   P.clear = function(mask) { __webgl_clear(String(this._ctx), String(mask >>> 0)); };
+  P.enable = function(cap) { __webgl_enable(String(this._ctx), String(cap >>> 0)); };
+  P.disable = function(cap) { __webgl_disable(String(this._ctx), String(cap >>> 0)); };
+  P.isEnabled = function(cap) {
+    return __webgl_is_enabled(String(this._ctx), String(cap >>> 0)) === '1';
+  };
   P.viewport = function(x, y, w, h) {
     __webgl_viewport(String(this._ctx), String(x|0), String(y|0), String(w>>>0), String(h>>>0));
   };

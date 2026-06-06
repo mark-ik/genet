@@ -33,6 +33,8 @@ const GL_ARRAY_BUFFER: u32 = 0x8892;
 const GL_ELEMENT_ARRAY_BUFFER: u32 = 0x8893;
 const GL_VERTEX_SHADER: u32 = 0x8B31;
 const GL_FRAGMENT_SHADER: u32 = 0x8B30;
+const GL_DITHER: u32 = 0x0BD0;
+const GL_SCISSOR_TEST: u32 = 0x0C11;
 
 /// Test-side WebGL handler. Owns a `WebGlContext` and translates the raw
 /// GLenums / opaque ids the JS bootstrap hands across into webgl-wgpu's typed
@@ -53,26 +55,52 @@ struct WgpuWebGl {
     /// wrapper holds onto. `getUniformLocation` returns the index; setters
     /// look it up by index. `-1` is reserved for "not found", per WebGL.
     uniform_locations: RefCell<Vec<WebGlUniformLocation>>,
+    /// Current `gl.clearColor` state. webgl-wgpu's `clear` takes the color
+    /// directly each call (no bound-color state), so we hold it here and
+    /// pass it through on `clear`. WebGL's default is transparent black.
+    clear_color: RefCell<[f32; 4]>,
+    /// `gl.enable` / `gl.disable` state, keyed by GLenum cap. Source of
+    /// truth for `isEnabled`. Only `SCISSOR_TEST` currently forwards to the
+    /// backend (webgl-wgpu's scissor toggle); the rest are recorded so the
+    /// round-trip is correct even though the draw effect isn't wired yet
+    /// (BLEND / CULL_FACE aren't exposed; DEPTH_TEST needs a depth canvas).
+    enabled_caps: RefCell<std::collections::HashSet<u32>>,
+}
+
+/// One shared wgpu device/queue for every test context. Creating a fresh
+/// adapter+device per `WgpuWebGl` raced the driver under the default
+/// multi-threaded `cargo test` (a STATUS_ACCESS_VIOLATION on Windows); wgpu's
+/// `Device`/`Queue` are `Send + Sync + Clone`, so caching one pair and cloning
+/// it per context removes the device-creation storm while keeping each context
+/// an independent `WebGlCanvas` framebuffer.
+fn shared_device() -> (wgpu::Device, wgpu::Queue) {
+    static DEVICE: std::sync::OnceLock<(wgpu::Device, wgpu::Queue)> = std::sync::OnceLock::new();
+    DEVICE
+        .get_or_init(|| {
+            let instance = wgpu::Instance::default();
+            let adapter =
+                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    force_fallback_adapter: false,
+                    compatible_surface: None,
+                }))
+                .expect("wgpu adapter");
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("script-runtime-api webgl test device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::downlevel_defaults(),
+                memory_hints: wgpu::MemoryHints::MemoryUsage,
+                trace: wgpu::Trace::Off,
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            }))
+            .expect("wgpu device")
+        })
+        .clone()
 }
 
 impl WgpuWebGl {
     fn new(width: u32, height: u32) -> Self {
-        let instance = wgpu::Instance::default();
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-        }))
-        .expect("wgpu adapter");
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("script-runtime-api webgl test device"),
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::downlevel_defaults(),
-            memory_hints: wgpu::MemoryHints::MemoryUsage,
-            trace: wgpu::Trace::Off,
-            experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        }))
-        .expect("wgpu device");
+        let (device, queue) = shared_device();
         let canvas = WebGlCanvas::from_wgpu_handles(
             device,
             queue,
@@ -80,6 +108,9 @@ impl WgpuWebGl {
         )
         .expect("canvas");
         let context = WebGlContext::from_canvas(canvas);
+        // WebGL's only default-enabled capability is DITHER.
+        let mut caps = std::collections::HashSet::new();
+        caps.insert(GL_DITHER);
         Self {
             context: RefCell::new(context),
             next_id: RefCell::new(1),
@@ -87,6 +118,8 @@ impl WgpuWebGl {
             shaders: RefCell::new(HashMap::new()),
             programs: RefCell::new(HashMap::new()),
             uniform_locations: RefCell::new(Vec::new()),
+            clear_color: RefCell::new([0.0, 0.0, 0.0, 0.0]),
+            enabled_caps: RefCell::new(caps),
         }
     }
 
@@ -107,23 +140,41 @@ impl WgpuWebGl {
 }
 
 impl WebGlHandler for WgpuWebGl {
-    fn clear_color(&mut self, _r: f32, _g: f32, _b: f32, _a: f32) {
+    fn clear_color(&mut self, r: f32, g: f32, b: f32, a: f32) {
         // webgl-wgpu's clear takes the color directly each call (no
-        // bound-color state). The smoke uses gl.clear() shortly after,
-        // so we stash the color in a clear+draw helper below.
-        // For now: round-trips silently — exposing a `set_clear_color`
-        // would be the next state-surface addition.
+        // bound-color state), so hold it and pass it through on `clear`.
+        *self.clear_color.borrow_mut() = [r, g, b, a];
     }
 
     fn clear(&mut self, mask: u32) {
         if mask & GL_COLOR_BUFFER_BIT != 0 {
+            let c = *self.clear_color.borrow();
             self.context.borrow_mut().clear(wgpu::Color {
-                r: 0.0,
-                g: 0.0,
-                b: 0.0,
-                a: 1.0,
+                r: c[0] as f64,
+                g: c[1] as f64,
+                b: c[2] as f64,
+                a: c[3] as f64,
             });
         }
+    }
+
+    fn enable(&mut self, cap: u32) {
+        self.enabled_caps.borrow_mut().insert(cap);
+        if cap == GL_SCISSOR_TEST {
+            self.context.borrow_mut().set_scissor_test_enabled(true);
+        }
+        // DEPTH_TEST / BLEND / CULL_FACE recorded only — see struct doc.
+    }
+
+    fn disable(&mut self, cap: u32) {
+        self.enabled_caps.borrow_mut().remove(&cap);
+        if cap == GL_SCISSOR_TEST {
+            self.context.borrow_mut().set_scissor_test_enabled(false);
+        }
+    }
+
+    fn is_enabled(&mut self, cap: u32) -> bool {
+        self.enabled_caps.borrow().contains(&cap)
     }
 
     fn viewport(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) {
@@ -558,4 +609,74 @@ fn webgl_js_surface_with_no_handler_no_ops_safely() {
     assert_eq!(read(&mut rt, "String(noBuf)"), "true");
     assert_eq!(read(&mut rt, "String(noShader)"), "true");
     assert_eq!(read(&mut rt, "String(noProg)"), "true");
+}
+
+// =====================================================================
+// Conformance-shaped receipt: the clear-color portion of the Khronos
+// WebGL conformance test `conformance/rendering/gl-clear.html`, written
+// the way that test writes it (getContext, clearColor + clear, read
+// back and compare). We don't load the upstream HTML — it pulls in
+// `webgl-test-utils.js` + `js-test-pre.js` (thousands of lines) and
+// needs `colorMask` + a textured-quad draw our backend doesn't expose
+// yet. This ports the cases our surface CAN validate today; the
+// remaining gl-clear cases (colorMask masking, drawing a sampled quad)
+// are the next state-surface gaps, deliberately deferred.
+//
+// Source: tests/wpt/webgl/tests/conformance/rendering/gl-clear.html
+// =====================================================================
+
+#[test]
+fn conformance_gl_clear_color_cases() {
+    let mut rt = Runtime::<BoaEngine>::new().expect("runtime");
+    rt.set_webgl_factory(Box::new(|w, h| Box::new(WgpuWebGl::new(w, h))));
+
+    // gl-clear.html uses a 1x1 canvas. `checkCanvas` mirrors wtu's:
+    // read the single pixel and stringify it for an exact compare.
+    let setup = r#"
+        var c = document.createElement('canvas');
+        c.setAttribute('width', '1');
+        c.setAttribute('height', '1');
+        var gl = c.getContext('webgl');
+
+        function checkCanvas() {
+            var p = gl.readPixels(0, 0, 1, 1, 0, 0);
+            return p[0] + ',' + p[1] + ',' + p[2] + ',' + p[3];
+        }
+
+        var results = {};
+
+        // gl-clear: disable depth + blend before the color work (as the
+        // upstream test does). isEnabled must round-trip.
+        gl.disable(gl.DEPTH_TEST);
+        gl.disable(gl.BLEND);
+        results.depthOff = gl.isEnabled(gl.DEPTH_TEST);   // false
+        results.blendOff = gl.isEnabled(gl.BLEND);        // false
+        results.ditherOn = gl.isEnabled(gl.DITHER);       // true (default)
+
+        // clearColor(1,1,1,1) -> white.
+        gl.clearColor(1, 1, 1, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        results.white = checkCanvas();
+
+        // clearColor(0,0,0,0) -> transparent black.
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        results.black = checkCanvas();
+
+        // A mid-channel clear: green only.
+        gl.clearColor(0, 1, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        results.green = checkCanvas();
+
+        results.err = gl.getError();   // no errors across the run
+    "#;
+    rt.eval(setup).expect("setup");
+
+    assert_eq!(read(&mut rt, "String(results.depthOff)"), "false");
+    assert_eq!(read(&mut rt, "String(results.blendOff)"), "false");
+    assert_eq!(read(&mut rt, "String(results.ditherOn)"), "true");
+    assert_eq!(read(&mut rt, "results.white"), "255,255,255,255");
+    assert_eq!(read(&mut rt, "results.black"), "0,0,0,0");
+    assert_eq!(read(&mut rt, "results.green"), "0,255,0,255");
+    assert_eq!(read(&mut rt, "String(results.err)"), "0");
 }
