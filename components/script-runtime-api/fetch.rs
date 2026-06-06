@@ -1423,12 +1423,12 @@ const FETCH_BOOTSTRAP: &str = r#"
       this.referrer = 'about:client'; this.referrerPolicy = '';
       this.signal = makeSignal();
     }
-    // The request's signal is a fresh dependent signal following the input
-    // request's signal (if any) and init.signal (if given) — never a shared ref.
-    var __sigSources = [];
-    if (input instanceof Request) __sigSources.push(input.signal);
-    if (init.signal !== undefined && init.signal !== null) __sigSources.push(init.signal);
-    this.signal = dependentSignal(__sigSources);
+    // The request's signal is a fresh dependent signal following a single source
+    // (WHATWG): init.signal if present (even null removes it), else the input
+    // request's signal — never a shared reference.
+    var __sigSource = (init.signal !== undefined) ? init.signal
+                    : (input instanceof Request) ? input.signal : null;
+    this.signal = dependentSignal(__sigSource ? [__sigSource] : []);
     if (init.method !== undefined) this.method = normalizeMethod(init.method);
     if (init.mode !== undefined) { if (String(init.mode) === 'navigate') throw new TypeError("Cannot construct a Request with mode 'navigate'"); this.mode = checkEnum('mode', init.mode); }
     if (init.credentials !== undefined) this.credentials = checkEnum('credentials', init.credentials);
@@ -1594,6 +1594,9 @@ const FETCH_BOOTSTRAP: &str = r#"
     if (req.signal && req.signal.aborted) {
       var pre = abortReason(req.signal.reason);
       if (req.__stream && !req.__stream._disturbed) { try { req.__stream.cancel(pre); } catch (x) {} }
+      // The body is consumed by the fetch attempt even though it is aborted.
+      req.bodyUsed = true;
+      if (input instanceof Request && (input.__bytes != null || input.__stream)) input.bodyUsed = true;
       return Promise.reject(pre);
     }
     var id = __nextFetchId++;
