@@ -52,6 +52,7 @@ mod websocket;
 
 pub use altsvc::{AltSvcStore, InMemoryAltSvc};
 pub use cache::{HttpCache, InMemoryHttpCache, NoHttpCache, StoredResponse};
+pub use client::accept_invalid_certs;
 pub use context::{AllowAllCsp, CookieStore, CspChecker, FetchContext, SameSiteContext};
 pub use cors::{InMemoryPreflightCache, PreflightCache};
 pub use cookie_jar::InMemoryCookieJar;
