@@ -464,13 +464,18 @@ fn run(tests: &[PathBuf], args: &Args) {
 /// network errors otherwise).
 #[cfg(feature = "netfetch")]
 fn setup_server(args: &Args) -> Option<net::ServerCtx> {
+    if !args.spawn_server && args.server_base.is_none() {
+        return None;
+    }
+    // The WPT server's https / h2 origins use a self-signed CA; trust any
+    // certificate so https:// and h2 fetches reach it. Must run before the first
+    // request (the readiness probe below builds the shared client).
+    netfetcher::accept_invalid_certs();
     let result = if args.spawn_server {
         eprintln!("spawning `wpt serve` under {} ...", args.tests_root);
         net::ServerCtx::spawn(Path::new(&args.tests_root))
-    } else if let Some(base) = &args.server_base {
-        net::ServerCtx::connect(base.clone())
     } else {
-        return None;
+        net::ServerCtx::connect(args.server_base.clone().unwrap())
     };
     match result {
         Ok(s) => {
