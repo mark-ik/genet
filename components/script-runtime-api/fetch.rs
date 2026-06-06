@@ -1243,6 +1243,10 @@ const FETCH_BOOTSTRAP: &str = r#"
   // (and the broken-then immunity of text/json) is unchanged.
   function isLive(self) { return self.__stream && self.__bytes == null && !self.__stream._closed; }
   function bodyGuardError(self) {
+    // An errored (e.g. aborted) body rejects immediately with the stored reason,
+    // ahead of the locked / consumed guards — so consuming an aborted response
+    // rejects in the current microtask, and a second call rejects the same way.
+    if (self.__stream && self.__stream._errored) return self.__stream._error;
     if (self.__stream && self.__stream.locked) return new TypeError("Body is locked");
     if (self.bodyUsed || (self.__stream && self.__stream._disturbed)) return new TypeError("Body has already been consumed.");
     return null;
@@ -1328,6 +1332,19 @@ const FETCH_BOOTSTRAP: &str = r#"
     if (typeof signal.onabort === 'function') { try { signal.onabort.call(signal, ev); } catch (e) {} }
     signal.dispatchEvent(ev);
   }
+  // A fresh signal that follows its source signals: aborts (with the source's
+  // reason) when any source aborts. A Request's signal and a clone's signal are
+  // new dependent signals (WHATWG), never the same object as the input's.
+  function dependentSignal(sources) {
+    var s = makeSignal();
+    for (var i = 0; i < sources.length; i++) {
+      var src = sources[i];
+      if (!src) continue;
+      if (src.aborted) { s.aborted = true; s.reason = src.reason; break; }
+      (function(src) { src.addEventListener('abort', function() { signalAbort(s, src.reason); }); })(src);
+    }
+    return s;
+  }
   AbortSignal.abort = function(reason) { var s = makeSignal(); s.aborted = true; s.reason = abortReason(reason); return s; };
   AbortSignal.timeout = function(ms) {
     var s = makeSignal();
@@ -1406,7 +1423,12 @@ const FETCH_BOOTSTRAP: &str = r#"
       this.referrer = 'about:client'; this.referrerPolicy = '';
       this.signal = makeSignal();
     }
-    if (init.signal !== undefined) this.signal = init.signal;
+    // The request's signal is a fresh dependent signal following the input
+    // request's signal (if any) and init.signal (if given) — never a shared ref.
+    var __sigSources = [];
+    if (input instanceof Request) __sigSources.push(input.signal);
+    if (init.signal !== undefined && init.signal !== null) __sigSources.push(init.signal);
+    this.signal = dependentSignal(__sigSources);
     if (init.method !== undefined) this.method = normalizeMethod(init.method);
     if (init.mode !== undefined) { if (String(init.mode) === 'navigate') throw new TypeError("Cannot construct a Request with mode 'navigate'"); this.mode = checkEnum('mode', init.mode); }
     if (init.credentials !== undefined) this.credentials = checkEnum('credentials', init.credentials);
