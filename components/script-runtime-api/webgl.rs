@@ -50,6 +50,9 @@ pub trait WebGlHandler {
     fn disable(&mut self, cap: u32);
     /// `gl.isEnabled(cap)` — the current enable/disable state of `cap`.
     fn is_enabled(&mut self, cap: u32) -> bool;
+    /// `gl.colorMask(r, g, b, a)` — per-channel write enable for draws and
+    /// clears.
+    fn color_mask(&mut self, r: bool, g: bool, b: bool, a: bool);
 
     fn create_buffer(&mut self) -> u64;
     fn bind_buffer(&mut self, target: u32, buffer: Option<u64>);
@@ -212,6 +215,19 @@ impl<E: ScriptEngine> NativeFn<E> for IsEnabled {
         let cap = parse_u32::<E>(cx, 1)?;
         let on = with_webgl_ctx::<E, _, _>(cx, ctx, false, |h| h.is_enabled(cap));
         cx.make_string(if on { "1" } else { "0" })
+    }
+}
+
+pub(crate) struct ColorMask;
+impl<E: ScriptEngine> NativeFn<E> for ColorMask {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let ctx = parse_ctx::<E>(cx)?;
+        let r = parse_bool::<E>(cx, 1)?;
+        let g = parse_bool::<E>(cx, 2)?;
+        let b = parse_bool::<E>(cx, 3)?;
+        let a = parse_bool::<E>(cx, 4)?;
+        with_webgl_ctx::<E, _, _>(cx, ctx, (), |h| h.color_mask(r, g, b, a));
+        Ok(cx.undefined())
     }
 }
 
@@ -571,6 +587,7 @@ pub(crate) fn install_webgl_surface<E: ScriptEngine>(engine: &mut E) -> Result<(
     engine.set_function::<Enable>("__webgl_enable", 2)?;
     engine.set_function::<Disable>("__webgl_disable", 2)?;
     engine.set_function::<IsEnabled>("__webgl_is_enabled", 2)?;
+    engine.set_function::<ColorMask>("__webgl_color_mask", 5)?;
     engine.set_function::<Viewport>("__webgl_viewport", 5)?;
     engine.set_function::<CreateBuffer>("__webgl_create_buffer", 1)?;
     engine.set_function::<BindBuffer>("__webgl_bind_buffer", 3)?;
@@ -694,6 +711,10 @@ const WEBGL_BOOTSTRAP: &str = r#"
   P.disable = function(cap) { __webgl_disable(String(this._ctx), String(cap >>> 0)); };
   P.isEnabled = function(cap) {
     return __webgl_is_enabled(String(this._ctx), String(cap >>> 0)) === '1';
+  };
+  P.colorMask = function(r, g, b, a) {
+    __webgl_color_mask(String(this._ctx),
+      r ? '1' : '0', g ? '1' : '0', b ? '1' : '0', a ? '1' : '0');
   };
   P.viewport = function(x, y, w, h) {
     __webgl_viewport(String(this._ctx), String(x|0), String(y|0), String(w>>>0), String(h>>>0));

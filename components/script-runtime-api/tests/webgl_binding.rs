@@ -177,6 +177,10 @@ impl WebGlHandler for WgpuWebGl {
         self.enabled_caps.borrow().contains(&cap)
     }
 
+    fn color_mask(&mut self, r: bool, g: bool, b: bool, a: bool) {
+        self.context.borrow_mut().set_color_mask(r, g, b, a);
+    }
+
     fn viewport(&mut self, _x: i32, _y: i32, _w: u32, _h: u32) {
         // Viewport is a draw-state knob webgl-wgpu doesn't expose yet on
         // the WebGlContext directly; the canvas size is the implicit
@@ -612,15 +616,14 @@ fn webgl_js_surface_with_no_handler_no_ops_safely() {
 }
 
 // =====================================================================
-// Conformance-shaped receipt: the clear-color portion of the Khronos
-// WebGL conformance test `conformance/rendering/gl-clear.html`, written
-// the way that test writes it (getContext, clearColor + clear, read
-// back and compare). We don't load the upstream HTML — it pulls in
-// `webgl-test-utils.js` + `js-test-pre.js` (thousands of lines) and
-// needs `colorMask` + a textured-quad draw our backend doesn't expose
-// yet. This ports the cases our surface CAN validate today; the
-// remaining gl-clear cases (colorMask masking, drawing a sampled quad)
-// are the next state-surface gaps, deliberately deferred.
+// Conformance-shaped receipt: the clear portion of the Khronos WebGL
+// conformance test `conformance/rendering/gl-clear.html`, written the
+// way that test writes it (getContext, clearColor + clear + colorMask,
+// read back and compare). We don't load the upstream HTML — it pulls in
+// `webgl-test-utils.js` + `js-test-pre.js` (thousands of lines). This
+// covers the clear-color + colorMask cases now that the backend honors
+// masked clears; the remaining upstream case (drawing a sampled
+// textured quad) is the next gap — JS-side texImage2D.
 //
 // Source: tests/wpt/webgl/tests/conformance/rendering/gl-clear.html
 // =====================================================================
@@ -668,6 +671,21 @@ fn conformance_gl_clear_color_cases() {
         gl.clear(gl.COLOR_BUFFER_BIT);
         results.green = checkCanvas();
 
+        // gl-clear's colorMask case: from transparent black, mask to
+        // alpha-only and clear to white -> [0,0,0,255] (RGB stays 0).
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.colorMask(false, false, false, true);
+        gl.clearColor(1, 1, 1, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        results.alphaOnly = checkCanvas();
+
+        // Restore full mask, clear blue -> every channel written.
+        gl.colorMask(true, true, true, true);
+        gl.clearColor(0, 0, 1, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        results.restored = checkCanvas();
+
         results.err = gl.getError();   // no errors across the run
     "#;
     rt.eval(setup).expect("setup");
@@ -678,5 +696,7 @@ fn conformance_gl_clear_color_cases() {
     assert_eq!(read(&mut rt, "results.white"), "255,255,255,255");
     assert_eq!(read(&mut rt, "results.black"), "0,0,0,0");
     assert_eq!(read(&mut rt, "results.green"), "0,255,0,255");
+    assert_eq!(read(&mut rt, "results.alphaOnly"), "0,0,0,255");
+    assert_eq!(read(&mut rt, "results.restored"), "0,0,255,255");
     assert_eq!(read(&mut rt, "String(results.err)"), "0");
 }
