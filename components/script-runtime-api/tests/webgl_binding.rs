@@ -297,12 +297,12 @@ fn read(rt: &mut Runtime<BoaEngine>, expr: &str) -> String {
 #[test]
 fn webgl_js_surface_draws_uniform_color_triangle_end_to_end() {
     let mut rt = Runtime::<BoaEngine>::new().expect("runtime");
-    rt.set_webgl_handler(Box::new(WgpuWebGl::new(32, 32)));
+    rt.set_webgl_factory(Box::new(|w, h| Box::new(WgpuWebGl::new(w, h))));
 
-    // Use the temporary `__createWebGLContext()` helper until step 2
-    // wires `HTMLCanvasElement.getContext('webgl')`.
+    // The bare-context helper mints a context at the given size through
+    // the factory (the getContext path is exercised separately below).
     let setup = r#"
-        var gl = __createWebGLContext();
+        var gl = __createWebGLContext(32, 32);
         gl.viewport(0, 0, 32, 32);
         gl.clearColor(0, 0, 0, 1);
         gl.clear(gl.COLOR_BUFFER_BIT);
@@ -380,10 +380,14 @@ fn html_canvas_get_context_webgl_returns_a_rendering_context() {
     // Same draw shape as the bare-helper smoke above, but the JS now
     // matches what a conformance test will write verbatim.
     let mut rt = Runtime::<BoaEngine>::new().expect("runtime");
-    rt.set_webgl_handler(Box::new(WgpuWebGl::new(32, 32)));
+    rt.set_webgl_factory(Box::new(|w, h| Box::new(WgpuWebGl::new(w, h))));
 
     let setup = r#"
         var c = document.createElement('canvas');
+        // Size the canvas so the factory mints a 32x32 drawing buffer and
+        // the center pixel (16,16) lands inside the clip-space triangle.
+        c.setAttribute('width', '32');
+        c.setAttribute('height', '32');
         var isCanvas = (c instanceof HTMLCanvasElement);
         var ctx = c.getContext('webgl');
         var isCtx = (ctx instanceof WebGLRenderingContext);
@@ -468,13 +472,76 @@ fn html_canvas_get_context_returns_null_without_webgl_constructor() {
 }
 
 #[test]
+fn two_canvases_get_independent_contexts() {
+    // Each getContext('webgl') invokes the factory afresh, so two canvases
+    // hold distinct contexts with distinct registry indices and distinct
+    // underlying wgpu framebuffers. Drawing a different color into each and
+    // reading both back proves they don't alias.
+    let mut rt = Runtime::<BoaEngine>::new().expect("runtime");
+    rt.set_webgl_factory(Box::new(|w, h| Box::new(WgpuWebGl::new(w, h))));
+
+    let setup = r#"
+        function makeCanvas() {
+            var c = document.createElement('canvas');
+            c.setAttribute('width', '16');
+            c.setAttribute('height', '16');
+            return c.getContext('webgl');
+        }
+        function drawColor(gl, r, g, b) {
+            var vs = gl.createShader(gl.VERTEX_SHADER);
+            gl.shaderSource(vs, "attribute vec2 a; void main(){ gl_Position = vec4(a,0.0,1.0); }");
+            gl.compileShader(vs);
+            var fs = gl.createShader(gl.FRAGMENT_SHADER);
+            gl.shaderSource(fs, "precision mediump float; uniform vec4 u; void main(){ gl_FragColor = u; }");
+            gl.compileShader(fs);
+            var p = gl.createProgram();
+            gl.attachShader(p, vs); gl.attachShader(p, fs); gl.linkProgram(p);
+            gl.useProgram(p);
+            var loc = gl.getAttribLocation(p, 'a');
+            gl.uniform4f(gl.getUniformLocation(p, 'u'), r, g, b, 1.0);
+            var buf = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+            gl.bufferData(gl.ARRAY_BUFFER, [-1.0,-1.0, 3.0,-1.0, -1.0,3.0], gl.STATIC_DRAW);
+            gl.enableVertexAttribArray(loc);
+            gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+        }
+        var a = makeCanvas();
+        var b = makeCanvas();
+        var distinct = (a._ctx !== b._ctx);
+        // Big covering triangle so the center pixel is always inside.
+        drawColor(a, 1.0, 0.0, 0.0);  // red into context A
+        drawColor(b, 0.0, 0.0, 1.0);  // blue into context B
+        var pa = a.readPixels(8, 8, 1, 1, 0, 0);
+        var pb = b.readPixels(8, 8, 1, 1, 0, 0);
+        var bag = {
+            distinct: distinct,
+            aCtx: a._ctx, bCtx: b._ctx,
+            ar: pa[0], ag: pa[1], ab: pa[2],
+            br: pb[0], bg: pb[1], bb: pb[2],
+        };
+    "#;
+    rt.eval(setup).expect("setup");
+
+    assert_eq!(read(&mut rt, "String(bag.distinct)"), "true");
+    assert_eq!(read(&mut rt, "String(bag.aCtx)"), "0");
+    assert_eq!(read(&mut rt, "String(bag.bCtx)"), "1");
+    // Context A is red, context B is blue — no aliasing.
+    assert_eq!(read(&mut rt, "String(bag.ar)"), "255");
+    assert_eq!(read(&mut rt, "String(bag.ab)"), "0");
+    assert_eq!(read(&mut rt, "String(bag.br)"), "0");
+    assert_eq!(read(&mut rt, "String(bag.bb)"), "255");
+}
+
+#[test]
 fn webgl_js_surface_with_no_handler_no_ops_safely() {
-    // Without `set_webgl_handler`, every sink returns the default value
-    // (0 / NO_ERROR / empty pixel bytes). The JS surface must not throw.
+    // Without `set_webgl_factory`, context creation mints index -1 and
+    // every sink returns the default value (0 / NO_ERROR / empty pixel
+    // bytes). The JS surface must not throw.
     let mut rt = Runtime::<BoaEngine>::new().expect("runtime");
     rt.eval(
         r#"
-        var gl = __createWebGLContext();
+        var gl = __createWebGLContext(4, 4);
         gl.viewport(0, 0, 4, 4);
         gl.clearColor(1, 0, 0, 1);
         gl.clear(gl.COLOR_BUFFER_BIT);

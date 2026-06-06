@@ -1732,7 +1732,11 @@ const DOM_BOOTSTRAP: &str = r#"
     if (this.__webglContext) return this.__webglContext;
     var Ctor = globalThis.WebGLRenderingContext;
     if (typeof Ctor !== 'function') return null;
-    this.__webglContext = new Ctor();
+    // The canvas drawing-buffer size comes from the width/height content
+    // attributes, defaulting to the HTML canvas 300x150 when unset/invalid.
+    var w = parseInt(this.getAttribute('width'), 10); if (!(w > 0)) w = 300;
+    var h = parseInt(this.getAttribute('height'), 10); if (!(h > 0)) h = 150;
+    this.__webglContext = new Ctor(w, h);
     return this.__webglContext;
   };
   globalThis.HTMLCanvasElement = HTMLCanvasElement;

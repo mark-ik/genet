@@ -47,7 +47,7 @@ mod webgl;
 
 pub use fetch::{FetchHandler, FetchOutcome, FetchRequest};
 pub use harness::TestResult;
-pub use webgl::WebGlHandler;
+pub use webgl::{WebGlFactory, WebGlHandler};
 
 /// State the runtime's native callbacks share, stored as the engine's single
 /// host-data slot (`Rc<dyn Any>`). One aggregate so every host object reaches the
@@ -74,12 +74,16 @@ pub struct HostState {
     /// stay relative, so a network fetch of one is an error). Set by
     /// [`Runtime::set_base_url`] for server-mode WPT runs.
     pub base_url: Option<String>,
-    /// The host's WebGL seam. `None` = no WebGL handler installed (every
-    /// `__webgl_*` sink no-ops or yields 0 / NO_ERROR). Installed by
-    /// [`Runtime::set_webgl_handler`]; a `Box` rather than `Rc` because the
-    /// handler is mutated in place by every method call (a `gl.createBuffer()`
-    /// allocates a new id in the underlying context's id space).
-    pub webgl: Option<Box<dyn WebGlHandler>>,
+    /// The host's WebGL context factory. `None` = no WebGL support (every
+    /// `__webgl_*` sink no-ops or yields 0 / NO_ERROR, and contexts mint to
+    /// index `-1`). Installed by [`Runtime::set_webgl_factory`]; invoked once
+    /// per `getContext('webgl')` with the canvas drawing-buffer size, the
+    /// result pushed into [`Self::webgl_contexts`].
+    pub webgl_factory: Option<WebGlFactory>,
+    /// Live WebGL contexts, indexed by the registry id the JS context object
+    /// carries (`_ctx`). Each `__webgl_*` sink routes to one of these by its
+    /// leading context-id argument. Grows by one per `getContext('webgl')`.
+    pub webgl_contexts: Vec<Box<dyn WebGlHandler>>,
 }
 
 /// Shared handle to the runtime's [`HostState`]. The host reads it after running
@@ -220,12 +224,13 @@ impl<E: ScriptEngine> Runtime<E> {
         self.host.borrow_mut().fetch = Some(std::rc::Rc::from(handler));
     }
 
-    /// Install the host's WebGL seam (e.g. a webgl-wgpu-backed handler over a
-    /// real `wgpu::Device`). Until set, the JS `WebGLRenderingContext` methods
-    /// no-op or return `gl.NO_ERROR`. One handler per runtime today; multi-
-    /// context (one per `<canvas>`) lands when the trait grows a context id.
-    pub fn set_webgl_handler(&mut self, handler: Box<dyn WebGlHandler>) {
-        self.host.borrow_mut().webgl = Some(handler);
+    /// Install the host's WebGL context factory (e.g. one that mints a
+    /// webgl-wgpu context over a real `wgpu::Device` at the requested size).
+    /// Until set, the JS `WebGLRenderingContext` methods no-op or return
+    /// `gl.NO_ERROR`. The factory is called once per `getContext('webgl')`,
+    /// so each `<canvas>` gets its own independent context.
+    pub fn set_webgl_factory(&mut self, factory: WebGlFactory) {
+        self.host.borrow_mut().webgl_factory = Some(factory);
     }
 
     /// Resolve the pending `fetch()` Promise `id` with `outcome` (a deferred host
