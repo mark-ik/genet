@@ -17,7 +17,7 @@ use script_engine_boa::BoaEngine;
 use script_runtime_api::{Runtime, WebGlHandler};
 use webgl_wgpu::{
     BufferTarget, BufferUsage, PrimitiveMode, ShaderStage, WebGlBufferId, WebGlCanvas,
-    WebGlCanvasDescriptor, WebGlContext, WebGlError, WebGlProgramId, WebGlShaderId,
+    WebGlCanvasDescriptor, WebGlContext, WebGlError, WebGlProgramId, WebGlShaderId, WebGlTextureId,
     WebGlUniformLocation,
 };
 
@@ -51,6 +51,7 @@ struct WgpuWebGl {
     buffers: RefCell<HashMap<u64, WebGlBufferId>>,
     shaders: RefCell<HashMap<u64, WebGlShaderId>>,
     programs: RefCell<HashMap<u64, WebGlProgramId>>,
+    textures: RefCell<HashMap<u64, WebGlTextureId>>,
     /// `i32` index into this list is the opaque uniform-location id the JS
     /// wrapper holds onto. `getUniformLocation` returns the index; setters
     /// look it up by index. `-1` is reserved for "not found", per WebGL.
@@ -117,6 +118,7 @@ impl WgpuWebGl {
             buffers: RefCell::new(HashMap::new()),
             shaders: RefCell::new(HashMap::new()),
             programs: RefCell::new(HashMap::new()),
+            textures: RefCell::new(HashMap::new()),
             uniform_locations: RefCell::new(Vec::new()),
             clear_color: RefCell::new([0.0, 0.0, 0.0, 0.0]),
             enabled_caps: RefCell::new(caps),
@@ -315,6 +317,35 @@ impl WebGlHandler for WgpuWebGl {
         let mut m = [0.0f32; 16];
         m.copy_from_slice(&value[..16]);
         self.context.borrow_mut().uniform_matrix4fv(loc, &m);
+    }
+    fn uniform1i(&mut self, location: i32, value: i32) {
+        if location < 0 {
+            return;
+        }
+        let loc = match self.uniform_locations.borrow().get(location as usize) {
+            Some(loc) => *loc,
+            None => return,
+        };
+        self.context.borrow_mut().uniform1i(loc, value);
+    }
+
+    fn create_texture(&mut self) -> u64 {
+        let id = self.alloc_id();
+        let texture = self.context.borrow_mut().create_texture();
+        self.textures.borrow_mut().insert(id, texture);
+        id
+    }
+    fn bind_texture_2d(&mut self, texture: Option<u64>) {
+        let resolved = texture.and_then(|id| self.textures.borrow().get(&id).copied());
+        self.context.borrow_mut().bind_texture_2d(resolved);
+    }
+    fn active_texture(&mut self, unit: u32) {
+        self.context.borrow_mut().active_texture(unit);
+    }
+    fn tex_image_2d_rgba8(&mut self, width: u32, height: u32, pixels: &[u8]) {
+        self.context
+            .borrow_mut()
+            .tex_image_2d_rgba8(width, height, pixels);
     }
 
     fn draw_arrays(&mut self, mode: u32, first: i32, count: i32) {
@@ -699,4 +730,85 @@ fn conformance_gl_clear_color_cases() {
     assert_eq!(read(&mut rt, "results.alphaOnly"), "0,0,0,255");
     assert_eq!(read(&mut rt, "results.restored"), "0,0,255,255");
     assert_eq!(read(&mut rt, "String(results.err)"), "0");
+}
+
+#[test]
+fn conformance_textured_quad_samples_uploaded_pixel() {
+    // The remaining gl-clear shape: upload a texture and draw a sampled
+    // quad (gl-clear uses wtu.setupTexturedQuad + texImage2D). A 1x1
+    // texture sampled NEAREST over a covering quad paints the whole
+    // canvas its single texel color. Exercises createTexture /
+    // bindTexture / texImage2D / activeTexture / uniform1i end to end.
+    //
+    // Cf. tests/wpt/webgl/tests/conformance/rendering/gl-clear.html and
+    // the broader conformance/textures/* family this unblocks.
+    let mut rt = Runtime::<BoaEngine>::new().expect("runtime");
+    rt.set_webgl_factory(Box::new(|w, h| Box::new(WgpuWebGl::new(w, h))));
+
+    let setup = r#"
+        var c = document.createElement('canvas');
+        c.setAttribute('width', '16');
+        c.setAttribute('height', '16');
+        var gl = c.getContext('webgl');
+
+        var vs = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(vs,
+          "attribute vec2 a_pos; attribute vec2 a_uv; varying vec2 v_uv;" +
+          "void main(){ v_uv = a_uv; gl_Position = vec4(a_pos, 0.0, 1.0); }");
+        gl.compileShader(vs);
+        var fs = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(fs,
+          "precision mediump float; varying vec2 v_uv; uniform sampler2D u_tex;" +
+          "void main(){ gl_FragColor = texture2D(u_tex, v_uv); }");
+        gl.compileShader(fs);
+        var prog = gl.createProgram();
+        gl.attachShader(prog, vs);
+        gl.attachShader(prog, fs);
+        gl.linkProgram(prog);
+        gl.useProgram(prog);
+        var linkOk = gl.getProgramParameter(prog, gl.LINK_STATUS);
+
+        // 1x1 RGBA texture with a distinctive color.
+        var tex = gl.createTexture();
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0,
+                      gl.RGBA, gl.UNSIGNED_BYTE,
+                      new Uint8Array([128, 64, 200, 255]));
+        gl.uniform1i(gl.getUniformLocation(prog, 'u_tex'), 0);
+
+        // Covering triangle: positions + uvs in two buffers.
+        var posLoc = gl.getAttribLocation(prog, 'a_pos');
+        var uvLoc = gl.getAttribLocation(prog, 'a_uv');
+        var posBuf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, [-1.0,-1.0, 3.0,-1.0, -1.0,3.0], gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(posLoc);
+        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+        var uvBuf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, [0.0,0.0, 2.0,0.0, 0.0,2.0], gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(uvLoc);
+        gl.vertexAttribPointer(uvLoc, 2, gl.FLOAT, false, 0, 0);
+
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        var px = gl.readPixels(8, 8, 1, 1, 0, 0);
+        var bag = {
+            linkOk: linkOk,
+            isTexture: (tex instanceof WebGLTexture),
+            r: px[0], g: px[1], b: px[2], a: px[3],
+            err: gl.getError(),
+        };
+    "#;
+    rt.eval(setup).expect("setup");
+
+    assert_eq!(read(&mut rt, "String(bag.linkOk)"), "true");
+    assert_eq!(read(&mut rt, "String(bag.isTexture)"), "true");
+    // The 1x1 texel sampled across the quad — exact round-trip through
+    // linear Rgba8Unorm.
+    assert_eq!(read(&mut rt, "String(bag.r)"), "128");
+    assert_eq!(read(&mut rt, "String(bag.g)"), "64");
+    assert_eq!(read(&mut rt, "String(bag.b)"), "200");
+    assert_eq!(read(&mut rt, "String(bag.a)"), "255");
+    assert_eq!(read(&mut rt, "String(bag.err)"), "0");
 }

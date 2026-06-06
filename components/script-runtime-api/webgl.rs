@@ -89,6 +89,15 @@ pub trait WebGlHandler {
 
     fn uniform4f(&mut self, location: i32, x: f32, y: f32, z: f32, w: f32);
     fn uniform_matrix4fv(&mut self, location: i32, transpose: bool, value: &[f32]);
+    /// `gl.uniform1i` — used to bind a sampler uniform to a texture unit.
+    fn uniform1i(&mut self, location: i32, value: i32);
+
+    fn create_texture(&mut self) -> u64;
+    fn bind_texture_2d(&mut self, texture: Option<u64>);
+    fn active_texture(&mut self, unit: u32);
+    /// `gl.texImage2D` for a 2D RGBA8 texture. `pixels` is `width * height *
+    /// 4` bytes; an empty slice means "allocate, contents undefined".
+    fn tex_image_2d_rgba8(&mut self, width: u32, height: u32, pixels: &[u8]);
 
     fn draw_arrays(&mut self, mode: u32, first: i32, count: i32);
 
@@ -472,6 +481,63 @@ impl<E: ScriptEngine> NativeFn<E> for UniformMatrix4fv {
     }
 }
 
+pub(crate) struct Uniform1i;
+impl<E: ScriptEngine> NativeFn<E> for Uniform1i {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let ctx = parse_ctx::<E>(cx)?;
+        let loc = parse_i32::<E>(cx, 1)?;
+        let value = parse_i32::<E>(cx, 2)?;
+        with_webgl_ctx::<E, _, _>(cx, ctx, (), |h| h.uniform1i(loc, value));
+        Ok(cx.undefined())
+    }
+}
+
+pub(crate) struct CreateTexture;
+impl<E: ScriptEngine> NativeFn<E> for CreateTexture {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let ctx = parse_ctx::<E>(cx)?;
+        let id = with_webgl_ctx::<E, _, _>(cx, ctx, 0, |h| h.create_texture());
+        cx.make_string(&id.to_string())
+    }
+}
+
+pub(crate) struct BindTexture2d;
+impl<E: ScriptEngine> NativeFn<E> for BindTexture2d {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let ctx = parse_ctx::<E>(cx)?;
+        let texture = parse_optional_u64::<E>(cx, 1)?;
+        with_webgl_ctx::<E, _, _>(cx, ctx, (), |h| h.bind_texture_2d(texture));
+        Ok(cx.undefined())
+    }
+}
+
+pub(crate) struct ActiveTexture;
+impl<E: ScriptEngine> NativeFn<E> for ActiveTexture {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let ctx = parse_ctx::<E>(cx)?;
+        let unit = parse_u32::<E>(cx, 1)?;
+        with_webgl_ctx::<E, _, _>(cx, ctx, (), |h| h.active_texture(unit));
+        Ok(cx.undefined())
+    }
+}
+
+pub(crate) struct TexImage2dRgba8;
+impl<E: ScriptEngine> NativeFn<E> for TexImage2dRgba8 {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let ctx = parse_ctx::<E>(cx)?;
+        let width = parse_u32::<E>(cx, 1)?;
+        let height = parse_u32::<E>(cx, 2)?;
+        // Pixels cross as a binary string (one JS char code per byte), the
+        // same encoding readPixels uses in the other direction.
+        let pixels_str = parse_string::<E>(cx, 3)?;
+        let pixels: Vec<u8> = pixels_str.chars().map(|c| c as u8).collect();
+        with_webgl_ctx::<E, _, _>(cx, ctx, (), |h| {
+            h.tex_image_2d_rgba8(width, height, &pixels)
+        });
+        Ok(cx.undefined())
+    }
+}
+
 pub(crate) struct DrawArrays;
 impl<E: ScriptEngine> NativeFn<E> for DrawArrays {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
@@ -609,6 +675,11 @@ pub(crate) fn install_webgl_surface<E: ScriptEngine>(engine: &mut E) -> Result<(
     engine.set_function::<VertexAttribPointer>("__webgl_vertex_attrib_pointer", 6)?;
     engine.set_function::<Uniform4f>("__webgl_uniform4f", 6)?;
     engine.set_function::<UniformMatrix4fv>("__webgl_uniform_matrix4fv", 4)?;
+    engine.set_function::<Uniform1i>("__webgl_uniform1i", 3)?;
+    engine.set_function::<CreateTexture>("__webgl_create_texture", 1)?;
+    engine.set_function::<BindTexture2d>("__webgl_bind_texture_2d", 2)?;
+    engine.set_function::<ActiveTexture>("__webgl_active_texture", 2)?;
+    engine.set_function::<TexImage2dRgba8>("__webgl_tex_image_2d_rgba8", 4)?;
     engine.set_function::<DrawArrays>("__webgl_draw_arrays", 4)?;
     engine.set_function::<GetError>("__webgl_get_error", 1)?;
     engine.set_function::<ReadPixelsRgba8>("__webgl_read_pixels_rgba8", 5)?;
@@ -650,6 +721,12 @@ const WEBGL_BOOTSTRAP: &str = r#"
     DITHER: 0x0BD0, SCISSOR_TEST: 0x0C11, STENCIL_TEST: 0x0B90,
     POLYGON_OFFSET_FILL: 0x8037, SAMPLE_ALPHA_TO_COVERAGE: 0x809E,
     SAMPLE_COVERAGE: 0x80A0,
+    // Textures.
+    TEXTURE_2D: 0x0DE1, TEXTURE_CUBE_MAP: 0x8513, RGBA: 0x1908, RGB: 0x1907,
+    TEXTURE0: 0x84C0, TEXTURE1: 0x84C1, TEXTURE2: 0x84C2,
+    TEXTURE_MIN_FILTER: 0x2801, TEXTURE_MAG_FILTER: 0x2800,
+    TEXTURE_WRAP_S: 0x2802, TEXTURE_WRAP_T: 0x2803,
+    NEAREST: 0x2600, LINEAR: 0x2601, CLAMP_TO_EDGE: 0x812F, REPEAT: 0x2901,
   };
 
   // -----------------------------------------------------------------
@@ -658,6 +735,7 @@ const WEBGL_BOOTSTRAP: &str = r#"
   function WebGLBuffer(id) { this._id = id; }
   function WebGLShader(id) { this._id = id; }
   function WebGLProgram(id) { this._id = id; }
+  function WebGLTexture(id) { this._id = id; }
   function WebGLUniformLocation(loc) { this._loc = loc; }
 
   // -----------------------------------------------------------------
@@ -833,6 +911,48 @@ const WEBGL_BOOTSTRAP: &str = r#"
     __webgl_uniform_matrix4fv(String(this._ctx), String(loc._loc | 0),
       transpose ? '1' : '0', asFloatList(value));
   };
+  P.uniform1i = function(loc, v) {
+    if (loc == null) return;
+    __webgl_uniform1i(String(this._ctx), String(loc._loc | 0), String(v | 0));
+  };
+
+  // Textures.
+  P.createTexture = function() {
+    return new WebGLTexture(__webgl_create_texture(String(this._ctx)));
+  };
+  P.bindTexture = function(target, tex) {
+    // Only TEXTURE_2D is wired through this layer; cube maps land with
+    // the broader texture conformance.
+    if ((target >>> 0) !== K.TEXTURE_2D) return;
+    __webgl_bind_texture_2d(String(this._ctx), idOrZero(tex));
+  };
+  P.activeTexture = function(unit) {
+    // unit is TEXTURE0 + n; the host wants the 0-based index.
+    __webgl_active_texture(String(this._ctx), String(((unit >>> 0) - K.TEXTURE0) >>> 0));
+  };
+  // texParameteri is accepted but a no-op: webgl-wgpu samples NEAREST /
+  // CLAMP_TO_EDGE today, which matches the conformance smoke's needs.
+  P.texParameteri = function(target, pname, param) {};
+  P.texImage2D = function() {
+    // Support the 9-arg pixel-store form
+    //   texImage2D(target, level, internalformat, width, height, border,
+    //              format, type, pixels)
+    // with an RGBA / UNSIGNED_BYTE Uint8Array (or null for an allocate).
+    var a = arguments;
+    if (a.length < 9) {
+      throw new TypeError('texImage2D: only the 9-arg RGBA8 form is supported here');
+    }
+    if ((a[0] >>> 0) !== K.TEXTURE_2D) return;
+    var width = a[3] >>> 0, height = a[4] >>> 0, pixels = a[8];
+    var bin = '';
+    if (pixels != null) {
+      var n = pixels.length | 0;
+      var arr = new Array(n);
+      for (var i = 0; i < n; i++) arr[i] = String.fromCharCode(pixels[i] & 0xFF);
+      bin = arr.join('');
+    }
+    __webgl_tex_image_2d_rgba8(String(this._ctx), String(width), String(height), bin);
+  };
 
   // Draw.
   P.drawArrays = function(mode, first, count) {
@@ -844,6 +964,7 @@ const WEBGL_BOOTSTRAP: &str = r#"
   globalThis.WebGLBuffer = WebGLBuffer;
   globalThis.WebGLShader = WebGLShader;
   globalThis.WebGLProgram = WebGLProgram;
+  globalThis.WebGLTexture = WebGLTexture;
   globalThis.WebGLUniformLocation = WebGLUniformLocation;
 
   // Host / test helper: a bare context at the given drawing-buffer size
