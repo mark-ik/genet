@@ -482,6 +482,38 @@ where
     Some(InlineContent { runs: vec![run], boxes: Vec::new() })
 }
 
+/// Whether an element's cascaded `list-style-position` is `inside` (the marker
+/// flows as the item's first inline content rather than hanging outside).
+pub(crate) fn list_marker_is_inside<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> bool {
+    use style::computed_values::list_style_position::T as ListPosition;
+    styles
+        .get(id)
+        .and_then(|e| e.borrow_data())
+        .is_some_and(|d| d.styles.primary().get_list().list_style_position == ListPosition::Inside)
+}
+
+/// The marker as an inline run (with a trailing space) for `list-style-position:
+/// inside`, styled by the item's font + color. `None` for non-list-items and
+/// `list-style-type: none`.
+pub(crate) fn list_marker_inline_run<NodeId, D>(
+    dom: &D,
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> Option<InlineRun>
+where
+    NodeId: Copy + Eq + Hash,
+    D: LayoutDom<NodeId = NodeId>,
+{
+    let text = list_marker_text(dom, styles, id)?;
+    let mut run = run_for_element(styles, id, format!("{text} "));
+    run.underline = false;
+    run.strikethrough = false;
+    Some(run)
+}
+
 /// Read an element's cascaded `font-size` in CSS px. Returns `None`
 /// when the cascade hasn't been applied to that element (hand-rolled
 /// style fixtures); the caller defaults to `DEFAULT_FONT_SIZE`.

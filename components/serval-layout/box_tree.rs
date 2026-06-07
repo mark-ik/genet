@@ -41,7 +41,7 @@ use taffy::{
 use crate::adapter::NodeRef;
 use crate::construct::{
     establishes_inline_context, gather_inline_content, is_replaced, list_marker_content,
-    replaced_px_size,
+    list_marker_inline_run, list_marker_is_inside, replaced_px_size,
     run_for_element,
 };
 use crate::fragment::FragmentPlane;
@@ -210,8 +210,17 @@ where
     // subtree's runs + boxes; inline children get no boxes of their own.
     if establishes_inline_context(dom, styles, elem) {
         let mut node = BoxNode::new(style);
-        node.inline_content = Some(gather_inline_content(dom, styles, images, elem));
-        node.marker = list_marker_content(dom, styles, elem.id());
+        let mut content = gather_inline_content(dom, styles, images, elem);
+        // List marker: `inside` flows as the item's first inline run; `outside`
+        // (the default) hangs to the left as a separate shaped layout.
+        if list_marker_is_inside(styles, elem.id()) {
+            if let Some(run) = list_marker_inline_run(dom, styles, elem.id()) {
+                content.runs.insert(0, run);
+            }
+        } else {
+            node.marker = list_marker_content(dom, styles, elem.id());
+        }
+        node.inline_content = Some(content);
         let i = tree.push(node);
         tree.node_map.insert(elem.id(), nid(i));
         return i;

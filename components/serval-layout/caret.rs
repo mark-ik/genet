@@ -1018,6 +1018,69 @@ mod tests {
         assert_eq!(valued[2], plain[10], "item after value=10 `11.`");
     }
 
+    /// `list-style-position: inside` flows the marker into the item's inline
+    /// content (no hanging marker, and more inline glyphs since the bullet is
+    /// prepended), where the default `outside` hangs it to the left.
+    #[test]
+    fn list_style_position_inside_flows_marker_inline() {
+        use crate::image_decode::BackgroundImagePlane;
+        use crate::paint_emit::emit_paint_list_with_layouts;
+        use paint_list_api::{DeviceIntSize, PaintCmd, PaintList};
+        use rustc_hash::FxHashMap;
+
+        // (count of hanging markers at x < 0, total glyphs of inline text at x >= 0)
+        let analyze = |sheet: &[&str]| -> (usize, usize) {
+            let doc = StaticDocument::parse("<html><body><ul><li>Item</li></ul></body></html>");
+            let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+            run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+            let viewport = taffy::Size {
+                width: taffy::AvailableSpace::Definite(800.0),
+                height: taffy::AvailableSpace::Definite(600.0),
+            };
+            let (fragments, built, text_ctx) = layout(&doc, &styles, &ImagePlane::new(), viewport);
+            let scroll = FxHashMap::default();
+            let plist = emit_paint_list_with_layouts(
+                &doc,
+                &styles,
+                &fragments,
+                &built,
+                &text_ctx,
+                &ImagePlane::new(),
+                &BackgroundImagePlane::new(),
+                &scroll,
+                DeviceIntSize::new(800, 600),
+            );
+            let hanging = plist
+                .commands()
+                .iter()
+                .filter(|c| {
+                    matches!(c, PaintCmd::DrawText(t)
+                        if !t.glyphs.is_empty() && t.placement.bounds.min.x < 0.0)
+                })
+                .count();
+            let inline_glyphs: usize = plist
+                .commands()
+                .iter()
+                .filter_map(|c| match c {
+                    PaintCmd::DrawText(t) if t.placement.bounds.min.x >= 0.0 => Some(t.glyphs.len()),
+                    _ => None,
+                })
+                .sum();
+            (hanging, inline_glyphs)
+        };
+
+        let outside = analyze(&[]);
+        let inside = analyze(&["li { list-style-position: inside; }"]);
+        assert_eq!(outside.0, 1, "outside (default): one hanging marker");
+        assert_eq!(inside.0, 0, "inside: no hanging marker");
+        assert!(
+            inside.1 > outside.1,
+            "inside prepends the marker inline -> more inline glyphs ({} vs {})",
+            inside.1,
+            outside.1
+        );
+    }
+
     /// A cascaded `line-height` controls the line-box height: `line-height: 2`
     /// on 40px text gives a ~80px line box (2 × font-size), vs the ~46px
     /// font-metric default. Verifies the cascade → parley line-height plumbing
