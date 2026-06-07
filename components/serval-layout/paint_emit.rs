@@ -34,10 +34,11 @@ use std::hash::Hash;
 use layout_dom_api::{LayoutDom, NodeKind};
 use paint_list_api::{
     AlphaType, BorderRadius, BorderSide, BorderStyle, BoxShadowClipMode, ColorF, CommonPlacement,
-    DeviceIntSize, EngineId, FontInstanceKey, FontResource, GlyphInstance, IdNamespace, ImageItem,
-    ImageKey, ImageRendering, ImageResource, LayoutPoint, LayoutRect, LayoutSideOffsets,
-    LayoutSize, LayoutTransform, LayoutVector2D, NormalBorder, PaintCmd, PaintList, RectItem,
-    RepeatingImageItem, TextOptions, TextRunItem, TransformSpec,
+    DeviceIntSize, EngineId, ExtendMode, FontInstanceKey, FontResource, GlyphInstance, GradientStop,
+    IdNamespace, ImageItem, ImageKey, ImageRendering, ImageResource, LayoutPoint, LayoutRect,
+    LayoutSideOffsets, LayoutSize, LayoutTransform, LayoutVector2D, LinearGradientItem,
+    LinearGradientPayload, NormalBorder, PaintCmd, PaintList, RectItem, RepeatingImageItem,
+    TextOptions, TextRunItem, TransformSpec,
 };
 use paint_list_api::items::{BorderDetails, BorderItem, ShadowItem};
 use paint_list_api::specs::{ClipKind, ClipSpec, TransformKind};
@@ -541,6 +542,16 @@ pub(crate) fn walk<D>(
                     placement: CommonPlacement::new(local_bounds),
                     color: background_color_of(styles, id),
                 }));
+                // A linear-gradient background-image layer paints over the color,
+                // clipped to the same background box. Radial / conic are deferred.
+                if let Some(grad) = linear_background_gradient_of(
+                    styles,
+                    id,
+                    local_bounds.width(),
+                    local_bounds.height(),
+                ) {
+                    commands.push(PaintCmd::DrawLinearGradient(grad));
+                }
                 // CSS background-image paints over the background color,
                 // under content + border. Resolve background-size /
                 // -position / -repeat for the first layer against the
@@ -1024,6 +1035,146 @@ fn background_color_of<NodeId: Copy + Eq + std::hash::Hash>(
     let bg = &primary.get_background().background_color;
     let current = primary.get_inherited_text().color;
     stylo_color_to_paint(bg, current)
+}
+
+/// CSS gradient-line angle in radians (0 = "to top", increasing clockwise) for a
+/// `w`x`h` box. `to <side>` / `to <corner>` resolve to angles per CSS Images
+/// (corners use the box aspect).
+fn line_direction_angle(dir: &style::values::computed::image::LineDirection, w: f32, h: f32) -> f32 {
+    use std::f32::consts::{FRAC_PI_2, PI};
+
+    use style::values::computed::image::LineDirection;
+    use style::values::specified::position::{
+        HorizontalPositionKeyword as HK, VerticalPositionKeyword as VK,
+    };
+
+    match dir {
+        LineDirection::Angle(a) => a.radians(),
+        LineDirection::Vertical(VK::Top) => 0.0,
+        LineDirection::Vertical(VK::Bottom) => PI,
+        LineDirection::Horizontal(HK::Left) => 3.0 * FRAC_PI_2,
+        LineDirection::Horizontal(HK::Right) => FRAC_PI_2,
+        LineDirection::Corner(hk, vk) => {
+            // Angle from "to top" to the box's top-right corner direction.
+            let base = w.atan2(h);
+            match (hk, vk) {
+                (HK::Right, VK::Top) => base,
+                (HK::Right, VK::Bottom) => PI - base,
+                (HK::Left, VK::Bottom) => PI + base,
+                (HK::Left, VK::Top) => -base,
+            }
+        },
+    }
+}
+
+/// The first `background-image` layer of `id`, if it is a **linear** gradient,
+/// resolved to a paint-list [`LinearGradientItem`] over a `w`x`h` border box in
+/// node-local coords (the paint walk's transform places it). Radial and conic
+/// gradients are deferred. `None` when there is no cascade data, no
+/// background-image, or the first layer is not a linear gradient.
+fn linear_background_gradient_of<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+    w: f32,
+    h: f32,
+) -> Option<LinearGradientItem> {
+    use style::values::computed::Length;
+    use style::values::generics::image::{Gradient, GradientItem, Image};
+
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    let primary = data.styles.primary();
+    let current = primary.get_inherited_text().color;
+    let first = primary.get_background().background_image.0.iter().next()?;
+    let Image::Gradient(gradient) = first else { return None };
+    let Gradient::Linear { direction, items, .. } = &**gradient else { return None };
+
+    let angle = line_direction_angle(direction, w, h);
+    let (sin, cos) = (angle.sin(), angle.cos());
+    // Gradient line: centered, length = projection of the box onto the line.
+    let len = (w * sin).abs() + (h * cos).abs();
+    if len <= 0.0 {
+        return None;
+    }
+    let (cx, cy) = (w / 2.0, h / 2.0);
+    let (dx, dy) = (sin, -cos);
+    let start = LayoutPoint::new(cx - dx * len / 2.0, cy - dy * len / 2.0);
+    let end = LayoutPoint::new(cx + dx * len / 2.0, cy + dy * len / 2.0);
+
+    // Color stops -> 0..1 offsets along the line. Positioned stops resolve their
+    // length/percentage against the line; unpositioned (`auto`) stops fill in by
+    // even distribution between bracketing positioned ones; offsets clamp
+    // monotonic. Interpolation hints (midpoint biasing) are skipped for now.
+    let mut raw: Vec<(Option<f32>, ColorF)> = Vec::new();
+    for item in items.iter() {
+        match item {
+            GradientItem::SimpleColorStop(color) => {
+                raw.push((None, stylo_color_to_paint(color, current)));
+            },
+            GradientItem::ComplexColorStop { color, position } => {
+                let off = (position.resolve(Length::new(len)).px() / len).clamp(0.0, 1.0);
+                raw.push((Some(off), stylo_color_to_paint(color, current)));
+            },
+            GradientItem::InterpolationHint(_) => {},
+        }
+    }
+    let n = raw.len();
+    if n < 2 {
+        return None;
+    }
+    if raw[0].0.is_none() {
+        raw[0].0 = Some(0.0);
+    }
+    if raw[n - 1].0.is_none() {
+        raw[n - 1].0 = Some(1.0);
+    }
+    // Monotonic clamp on positioned stops.
+    let mut running = 0.0_f32;
+    for (off, _) in raw.iter_mut() {
+        if let Some(o) = off.as_mut() {
+            *o = o.max(running);
+            running = *o;
+        }
+    }
+    // Fill `auto` runs evenly between the bracketing positioned stops.
+    let mut i = 0;
+    while i < n {
+        if raw[i].0.is_some() {
+            i += 1;
+            continue;
+        }
+        let prev = raw[i - 1].0.unwrap();
+        let mut j = i;
+        while j < n && raw[j].0.is_none() {
+            j += 1;
+        }
+        let next = raw[j].0.unwrap();
+        let span = (j - i + 1) as f32;
+        for (k, slot) in raw[i..j].iter_mut().enumerate() {
+            slot.0 = Some(prev + (next - prev) * (k as f32 + 1.0) / span);
+        }
+        i = j;
+    }
+
+    let stops = raw
+        .into_iter()
+        .map(|(off, color)| GradientStop { offset: off.unwrap(), color })
+        .collect();
+
+    Some(LinearGradientItem {
+        placement: CommonPlacement::new(LayoutRect::new(
+            LayoutPoint::new(0.0, 0.0),
+            LayoutPoint::new(w, h),
+        )),
+        gradient: LinearGradientPayload {
+            start_point: start,
+            end_point: end,
+            extend_mode: ExtendMode::Clamp,
+            stops,
+        },
+        tile_size: LayoutSize::new(w, h),
+        tile_spacing: LayoutSize::zero(),
+    })
 }
 
 /// Whether `id` clips its overflow on either axis — i.e. `overflow-x` or

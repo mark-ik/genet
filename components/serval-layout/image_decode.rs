@@ -155,7 +155,9 @@ impl<NodeId: Copy + Eq + Hash> ImagePlane<NodeId> {
 /// `ComputedValues`).
 ///
 /// v1 decodes the first `url()` layer per element (the topmost CSS
-/// background layer). Gradients and additional layers are deferred.
+/// background layer). Gradients are emitted directly by `paint_emit`
+/// (linear; radial / conic deferred), not decoded here; additional
+/// `url()` layers are deferred.
 pub struct BackgroundImagePlane<NodeId: Copy + Eq + Hash> {
     images: FxHashMap<NodeId, DecodedImage>,
 }
