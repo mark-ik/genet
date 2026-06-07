@@ -76,10 +76,19 @@ scaled to the size. Thread the provider into `make_device` / `build_stylist` /
 shared font collection (parley's `FontContext` is created later in
 `TextMeasureCtx`; the cascade would need its own or a shared handle).
 
-**Effort / risk:** Medium. Main risk is thread-safety: Stylo's cascade may query
-the provider from worker threads, so the font collection must be `Send + Sync`
-(or cloned per thread). Verify whether serval runs the parallel cascade before
-committing to a sharing model.
+**Effort / risk:** Medium. Two findings from a closer look (2026-06-07):
+
+- The cascade is **sequential** (`cascade.rs` ~157, `driver::traverse_dom` with
+  no thread pool), so the thread-safety concern is moot for now: the provider is
+  used single-threaded.
+- serval-layout depends only on `parley`, which does **not** re-export `swash`
+  or the fontique `Collection`. So this needs a new font-parsing dependency
+  (`swash` / `skrifa` / `read-fonts`) plus access to a fontique `Collection` to
+  resolve a family and read its metrics. That is a dependency decision, and the
+  value (font-relative units are rare in real CSS) is low, so it was deferred
+  rather than adding a font-parser unprompted. The natural shape is to construct
+  one shared `FontContext` up front and hand it to both the cascade provider and
+  `TextMeasureCtx`, so they agree and the collection is built once.
 
 **Done when:** `width: 2ch` on a monospace element measures ~2 glyph advances,
 not `1em`.
