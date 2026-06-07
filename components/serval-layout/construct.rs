@@ -433,7 +433,7 @@ where
     let mut counter = start;
     let mut ordinal = start;
     for sib in dom.dom_children(parent) {
-        if !dom.element_name(sib).is_some_and(|q| q.local == html5ever::local_name!("li")) {
+        if dom.element_name(sib).is_none_or(|q| q.local != html5ever::local_name!("li")) {
             continue;
         }
         if let Some(v) = dom
