@@ -1202,6 +1202,28 @@ fn line_direction_angle(dir: &style::values::computed::image::LineDirection, w: 
     }
 }
 
+/// For a `repeating-*` gradient whose `stops` are normalized 0..1 over the full
+/// extent: return `(first_offset, last_offset, renormalized_stops)` so the
+/// caller can shrink the geometry to that one period and tile it with
+/// `ExtendMode::Repeat`. `None` for a degenerate period (≤ 0), so the caller
+/// falls back to a single clamped fill.
+fn repeating_period(stops: &[GradientStop]) -> Option<(f32, f32, Vec<GradientStop>)> {
+    let first = stops.first()?.offset;
+    let last = stops.last()?.offset;
+    let period = last - first;
+    if period <= 1e-4 {
+        return None;
+    }
+    let renormalized = stops
+        .iter()
+        .map(|s| GradientStop {
+            offset: ((s.offset - first) / period).clamp(0.0, 1.0),
+            color: s.color,
+        })
+        .collect();
+    Some((first, last, renormalized))
+}
+
 /// All `background-image` gradient layers of `id`, as paint commands in paint
 /// order. CSS lists the topmost layer first, so this iterates the layers in
 /// reverse (back-to-front). Each gradient layer (linear / radial / conic) becomes
@@ -1241,10 +1263,11 @@ fn linear_gradient_layer(
     w: f32,
     h: f32,
 ) -> Option<LinearGradientItem> {
-    use style::values::generics::image::{Gradient, Image};
+    use style::values::generics::image::{Gradient, GradientFlags, Image};
 
     let Image::Gradient(gradient) = image else { return None };
-    let Gradient::Linear { direction, items, .. } = &**gradient else { return None };
+    let Gradient::Linear { direction, items, flags, .. } = &**gradient else { return None };
+    let repeating = flags.contains(GradientFlags::REPEATING);
 
     let angle = line_direction_angle(direction, w, h);
     let (sin, cos) = (angle.sin(), angle.cos());
@@ -1264,15 +1287,30 @@ fn linear_gradient_layer(
         p.resolve(Length::new(len)).px() / len
     })?;
 
+    // `repeating-linear-gradient`: shrink the endpoints to one period (first to
+    // last stop) and re-normalize the stops over it, so the renderer's Repeat
+    // tiling reproduces the CSS pattern. A degenerate period falls back to a
+    // single clamped fill.
+    let (start_point, end_point, stops, extend_mode) =
+        match repeating.then(|| repeating_period(&stops)).flatten() {
+            Some((first, last, renorm)) => {
+                let at = |f: f32| {
+                    LayoutPoint::new(start.x + dx * f * len, start.y + dy * f * len)
+                };
+                (at(first), at(last), renorm, ExtendMode::Repeat)
+            },
+            None => (start, end, stops, ExtendMode::Clamp),
+        };
+
     Some(LinearGradientItem {
         placement: CommonPlacement::new(LayoutRect::new(
             LayoutPoint::new(0.0, 0.0),
             LayoutPoint::new(w, h),
         )),
         gradient: LinearGradientPayload {
-            start_point: start,
-            end_point: end,
-            extend_mode: ExtendMode::Clamp,
+            start_point,
+            end_point,
+            extend_mode,
             stops,
         },
         tile_size: LayoutSize::new(w, h),

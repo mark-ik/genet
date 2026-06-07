@@ -778,6 +778,63 @@ mod tests {
         );
     }
 
+    /// `repeating-linear-gradient` emits a Repeat gradient whose endpoints span
+    /// one period (the first→last stop distance) rather than the whole box, with
+    /// the stops re-normalized to 0..1.
+    #[test]
+    fn repeating_linear_gradient_spans_one_period() {
+        use crate::image_decode::BackgroundImagePlane;
+        use crate::paint_emit::emit_paint_list_with_layouts;
+        use paint_list_api::{DeviceIntSize, ExtendMode, PaintCmd, PaintList};
+        use rustc_hash::FxHashMap;
+
+        let doc = StaticDocument::parse("<html><body><div></div></body></html>");
+        let sheet = &["html, body, div { display: block; margin: 0; border: 0; } \
+            div { width: 100px; height: 50px; background-image: \
+            repeating-linear-gradient(to right, rgb(255, 0, 0), rgb(0, 0, 255) 20px); }"];
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&doc, &styles, &ImagePlane::new(), viewport);
+        let scroll = FxHashMap::default();
+        let plist = emit_paint_list_with_layouts(
+            &doc,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &scroll,
+            DeviceIntSize::new(800, 600),
+        );
+        let grad = plist
+            .commands()
+            .iter()
+            .find_map(|c| match c {
+                PaintCmd::DrawLinearGradient(g) => Some(g),
+                _ => None,
+            })
+            .expect("a repeating-linear-gradient emits a DrawLinearGradient");
+        assert!(
+            matches!(grad.gradient.extend_mode, ExtendMode::Repeat),
+            "repeating gradient uses ExtendMode::Repeat"
+        );
+        let span = (grad.gradient.end_point.x - grad.gradient.start_point.x).abs();
+        assert!((span - 20.0).abs() < 1.0, "endpoints span one 20px period, got {span}");
+        assert!(
+            (grad.gradient.stops.first().unwrap().offset - 0.0).abs() < 1e-3,
+            "first stop renormalized to 0"
+        );
+        assert!(
+            (grad.gradient.stops.last().unwrap().offset - 1.0).abs() < 1e-3,
+            "last stop renormalized to 1"
+        );
+    }
+
     /// An unordered-list item gets a bullet marker hanging to the left of its
     /// content box (negative local x), emitted as its own DrawText.
     #[test]
