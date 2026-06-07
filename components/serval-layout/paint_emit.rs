@@ -823,21 +823,41 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                     }));
                     // `text-decoration: underline` — parley records it on the
                     // run's style but does not draw it, so emit a thin filled
-                    // rect under the run. The underline's top is `baseline +
-                    // underline_offset`, thickness `underline_size` (the run's
-                    // Decoration overrides the font metrics when set). Same
-                    // text color as the glyphs.
+                    // rect under the run. parley carries the font's offset (the
+                    // distance from the baseline to the decoration top, measured
+                    // upward / y-up), so the screen-space top is `baseline -
+                    // offset`; thickness is `underline_size` (the run's Decoration
+                    // overrides the font metrics when set). Same color as glyphs.
                     if let Some(deco) = run.style().underline.as_ref() {
                         let m = parley_run.metrics();
                         let uo = deco.offset.unwrap_or(m.underline_offset);
                         let us = deco.size.unwrap_or(m.underline_size).max(1.0);
-                        let y = bounds.min.y + content_offset.1 + run.baseline() + uo;
+                        let y = bounds.min.y + content_offset.1 + run.baseline() - uo;
                         let x0 = bounds.min.x + content_offset.0 + run.offset();
                         let x1 = x0 + run.advance();
                         commands.push(PaintCmd::DrawRect(RectItem {
                             placement: CommonPlacement::new(LayoutRect::new(
                                 LayoutPoint::new(x0, y),
                                 LayoutPoint::new(x1, y + us),
+                            )),
+                            color,
+                        }));
+                    }
+                    // `text-decoration: line-through` — same arrangement as the
+                    // underline (same y-up offset convention, so subtract). The
+                    // strikethrough offset sits well above the baseline, so the
+                    // line crosses the text middle.
+                    if let Some(deco) = run.style().strikethrough.as_ref() {
+                        let m = parley_run.metrics();
+                        let so = deco.offset.unwrap_or(m.strikethrough_offset);
+                        let ss = deco.size.unwrap_or(m.strikethrough_size).max(1.0);
+                        let y = bounds.min.y + content_offset.1 + run.baseline() - so;
+                        let x0 = bounds.min.x + content_offset.0 + run.offset();
+                        let x1 = x0 + run.advance();
+                        commands.push(PaintCmd::DrawRect(RectItem {
+                            placement: CommonPlacement::new(LayoutRect::new(
+                                LayoutPoint::new(x0, y),
+                                LayoutPoint::new(x1, y + ss),
                             )),
                             color,
                         }));

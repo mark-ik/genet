@@ -113,6 +113,11 @@ pub struct InlineRun {
     /// as `StyleProperty::Underline`; the paint emit draws the line (parley
     /// supplies the geometry but does not draw it).
     pub underline: bool,
+    /// `text-decoration-line: line-through` on the run's element. Pushed to
+    /// parley as `StyleProperty::Strikethrough`; the paint emit draws the line
+    /// from parley's strikethrough geometry (parley supplies it but does not
+    /// draw it).
+    pub strikethrough: bool,
     /// Cascaded `line-height`. Pushed to parley as `StyleProperty::LineHeight`
     /// (skipped when `Normal`, which is parley's default).
     pub line_height: LineHeightSpec,
@@ -130,6 +135,7 @@ impl InlineRun {
             italic: false,
             color: [0.0, 0.0, 0.0, 1.0],
             underline: false,
+            strikethrough: false,
             line_height: LineHeightSpec::Normal,
         }
     }
@@ -188,6 +194,7 @@ impl<NodeId> InlineContent<NodeId> {
                 italic: false,
                 color: [0.0, 0.0, 0.0, 1.0],
                 underline: false,
+                strikethrough: false,
                 line_height: LineHeightSpec::Normal,
             }],
             boxes: Vec::new(),
@@ -357,6 +364,10 @@ pub fn measure_inline_content<NodeId>(
         // the line, since parley supplies the geometry but does not draw it.
         if run.underline {
             builder.push(StyleProperty::Underline(true), range.clone());
+        }
+        // `text-decoration: line-through` — same arrangement as underline.
+        if run.strikethrough {
+            builder.push(StyleProperty::Strikethrough(true), range.clone());
         }
         // Cascaded `line-height`. `Normal` is parley's default (font metrics), so
         // only a CSS `<number>` / `<length>` overrides it.

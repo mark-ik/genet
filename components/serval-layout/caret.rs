@@ -605,6 +605,65 @@ mod tests {
         assert!((grad.gradient.stops[2].offset - 1.0).abs() < 1e-3, "360deg -> 1.0");
     }
 
+    /// `text-decoration: line-through` emits a thin decoration rect through the
+    /// text middle, above where the same text's underline would sit; a plain run
+    /// emits none.
+    #[test]
+    fn line_through_sits_above_the_underline() {
+        use crate::image_decode::BackgroundImagePlane;
+        use crate::paint_emit::emit_paint_list_with_layouts;
+        use paint_list_api::{DeviceIntSize, PaintCmd, PaintList};
+        use rustc_hash::FxHashMap;
+
+        // Top y of the single thin decoration rect a `<p>` with the given
+        // `text-decoration` emits (the other DrawRects are full-height background
+        // boxes), or None when there is no decoration.
+        let decoration_y = |decoration: &str| -> Option<f32> {
+            let doc = StaticDocument::parse("<html><body><p>strike</p></body></html>");
+            let css = format!(
+                "html, body, p {{ display: block; margin: 0; }} \
+                 p {{ font-size: 40px; {decoration} }}"
+            );
+            let sheet: &[&str] = &[css.as_str()];
+            let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+            run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+            let viewport = taffy::Size {
+                width: taffy::AvailableSpace::Definite(800.0),
+                height: taffy::AvailableSpace::Definite(600.0),
+            };
+            let (fragments, built, text_ctx) = layout(&doc, &styles, &ImagePlane::new(), viewport);
+            let scroll = FxHashMap::default();
+            let plist = emit_paint_list_with_layouts(
+                &doc,
+                &styles,
+                &fragments,
+                &built,
+                &text_ctx,
+                &ImagePlane::new(),
+                &BackgroundImagePlane::new(),
+                &scroll,
+                DeviceIntSize::new(800, 600),
+            );
+            plist.commands().iter().find_map(|c| match c {
+                PaintCmd::DrawRect(r) => {
+                    let b = &r.placement.bounds;
+                    (b.height() > 0.0 && b.height() < 10.0).then_some(b.min.y)
+                },
+                _ => None,
+            })
+        };
+
+        let strike_y =
+            decoration_y("text-decoration: line-through;").expect("line-through emits a rect");
+        let underline_y =
+            decoration_y("text-decoration: underline;").expect("underline emits a rect");
+        assert!(
+            strike_y < underline_y,
+            "line-through ({strike_y}) sits above the underline ({underline_y})"
+        );
+        assert!(decoration_y("").is_none(), "no decoration -> no thin rect");
+    }
+
     /// A cascaded `line-height` controls the line-box height: `line-height: 2`
     /// on 40px text gives a ~80px line box (2 × font-size), vs the ~46px
     /// font-metric default. Verifies the cascade → parley line-height plumbing
