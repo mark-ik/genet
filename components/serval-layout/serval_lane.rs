@@ -23,9 +23,15 @@
 //! - Anchor + selection-range methods (`fragments_for_anchor`,
 //!   `text_range_for_fragment`, `rects_for_selection`) return empty/None: no
 //!   anchor index or source-range / line-box tracking is threaded through yet.
-//! - All `InteractionQuery` methods return empty/None: no focus, selection, or
-//!   affordance machinery yet. The traits define the contract; impls land
-//!   alongside real interaction wiring.
+//! - `InteractionQuery::affordances_at` / `activation_target` derive from the
+//!   DOM at the hit point (links / buttons / form controls / editables /
+//!   scrollables), walking hit→root. They cover **block-level** interactive
+//!   elements; inline links need inline hit-testing (runs would have to track
+//!   their source element), a follow-on. `focus_target` / `selection` return the
+//!   host-supplied state from [`ServalLaneView::with_interaction`].
+//! - Dynamic pseudo-class restyle (`:hover` / `:focus` changing computed style)
+//!   is separate: it needs a state-change snapshot path parallel to the
+//!   attribute path (see `StylePlane::set_element_state`).
 //!
 //! The `SourceNodeId ↔ D::NodeId` round-trip uses `LayoutDom::opaque_id`
 //! (forward) + a DOM walk (reverse). The reverse walk is O(n) per `box_model`
@@ -35,8 +41,8 @@
 use std::hash::Hash;
 
 use engine_observables_api::{
-    Affordance, BoxModel, FragmentHit, FragmentQuery, InteractionQuery, Point, Rect, Selection,
-    SourceNodeId, SourceRange,
+    Affordance, AffordanceKind, BoxModel, FragmentHit, FragmentQuery, InteractionQuery, Point,
+    Rect, Selection, SourceNodeId, SourceRange,
 };
 use layout_dom_api::LayoutDom;
 
@@ -62,6 +68,12 @@ pub struct ServalLaneView<'a, D: LayoutDom> {
     /// `-offset` content translate). `None` ⇒ nothing scrolls. The host (which
     /// owns the offsets) supplies the same map it passes to paint.
     scroll_offsets: Option<&'a ScrollOffsets<D::NodeId>>,
+    /// Host-owned focus + selection, surfaced by [`InteractionQuery`]. The host
+    /// owns input, so it supplies these; `None` means "nothing focused / no
+    /// selection". (Affordances + activation targets are derived from the DOM,
+    /// so they need no host state.)
+    focused: Option<SourceNodeId>,
+    selection: Option<Selection>,
 }
 
 impl<'a, D: LayoutDom> ServalLaneView<'a, D> {
@@ -76,11 +88,25 @@ impl<'a, D: LayoutDom> ServalLaneView<'a, D> {
             fragments,
             generation: 0,
             scroll_offsets: None,
+            focused: None,
+            selection: None,
         }
     }
 
     pub fn with_generation(mut self, gen_id: u64) -> Self {
         self.generation = gen_id;
+        self
+    }
+
+    /// Supply the host's current focus + selection, answered back by
+    /// [`InteractionQuery::focus_target`] / [`InteractionQuery::selection`].
+    pub fn with_interaction(
+        mut self,
+        focused: Option<SourceNodeId>,
+        selection: Option<Selection>,
+    ) -> Self {
+        self.focused = focused;
+        self.selection = selection;
         self
     }
 
@@ -180,19 +206,104 @@ where
     D::NodeId: Copy + Eq + Hash,
 {
     fn focus_target(&self) -> Option<SourceNodeId> {
-        None
+        self.focused
     }
 
     fn selection(&self) -> Option<Selection> {
-        None
+        self.selection
     }
 
-    fn affordances_at(&self, _point: Point) -> Vec<Affordance> {
-        Vec::new()
+    fn affordances_at(&self, point: Point) -> Vec<Affordance> {
+        let Some(hit) = self.hit_test(point) else { return Vec::new() };
+        let Some(start) = self.find_by_source_id(hit.source_node) else {
+            return Vec::new();
+        };
+        // Walk hit -> root; each interactive ancestor contributes an affordance
+        // (e.g. a link inside a scroll container surfaces both).
+        let mut out = Vec::new();
+        let mut cur = Some(start);
+        while let Some(id) = cur {
+            if let Some(kind) = affordance_kind(self.dom, id) {
+                out.push(Affordance {
+                    kind,
+                    source_node: SourceNodeId(self.dom.opaque_id(id)),
+                    label: affordance_label(self.dom, id, kind),
+                });
+            } else if clips_overflow(self.styles, id) {
+                out.push(Affordance {
+                    kind: AffordanceKind::Scrollable,
+                    source_node: SourceNodeId(self.dom.opaque_id(id)),
+                    label: None,
+                });
+            }
+            cur = self.dom.parent(id);
+        }
+        out
     }
 
-    fn activation_target(&self, _point: Point) -> Option<SourceNodeId> {
+    fn activation_target(&self, point: Point) -> Option<SourceNodeId> {
+        let hit = self.hit_test(point)?;
+        let mut cur = self.find_by_source_id(hit.source_node);
+        // Nearest activatable ancestor: a link / button / form control / editable
+        // is what a default click acts on (scrollables / hover targets are not).
+        while let Some(id) = cur {
+            if affordance_kind(self.dom, id).is_some() {
+                return Some(SourceNodeId(self.dom.opaque_id(id)));
+            }
+            cur = self.dom.parent(id);
+        }
         None
+    }
+}
+
+/// Classify an element's input affordance from its tag (and a couple of
+/// attributes), or `None` for a non-interactive element. Scrollable containers
+/// are detected separately (they are a style property, not a tag).
+fn affordance_kind<D: LayoutDom>(dom: &D, id: D::NodeId) -> Option<AffordanceKind> {
+    use html5ever::{local_name, ns};
+    let no_ns = ns!();
+    let name = dom.element_name(id)?;
+    let local = &name.local;
+    Some(if *local == local_name!("a") {
+        // A bare anchor with no href is not a link affordance.
+        dom.attribute(id, &no_ns, &local_name!("href"))?;
+        AffordanceKind::Link
+    } else if *local == local_name!("button") {
+        AffordanceKind::Button
+    } else if *local == local_name!("textarea") {
+        AffordanceKind::Editable
+    } else if *local == local_name!("select") {
+        AffordanceKind::FormControl
+    } else if *local == local_name!("input") {
+        match dom.attribute(id, &no_ns, &local_name!("type")) {
+            Some("button") | Some("submit") | Some("reset") | Some("image") => {
+                AffordanceKind::Button
+            },
+            Some("checkbox") | Some("radio") | Some("range") | Some("color") | Some("file") => {
+                AffordanceKind::FormControl
+            },
+            Some("hidden") => return None,
+            // text / search / email / password / number / … and the default.
+            _ => AffordanceKind::Editable,
+        }
+    } else if dom
+        .attribute(id, &no_ns, &local_name!("contenteditable"))
+        .is_some_and(|v| v != "false")
+    {
+        AffordanceKind::Editable
+    } else {
+        return None;
+    })
+}
+
+/// A short label for an affordance: a link's `href` (others have none here).
+fn affordance_label<D: LayoutDom>(dom: &D, id: D::NodeId, kind: AffordanceKind) -> Option<String> {
+    use html5ever::{local_name, ns};
+    match kind {
+        AffordanceKind::Link => {
+            dom.attribute(id, &ns!(), &local_name!("href")).map(str::to_owned)
+        },
+        _ => None,
     }
 }
 
@@ -572,6 +683,54 @@ mod tests {
         assert!(view.selection().is_none());
         assert!(view.affordances_at(Point::new(10.0, 10.0)).is_empty());
         assert!(view.activation_target(Point::new(10.0, 10.0)).is_none());
+    }
+
+    /// `InteractionQuery` over a block link: affordances + activation derive from
+    /// the DOM (the link is the activation target and carries a Link affordance
+    /// labelled with its href), and focus reflects the host-supplied state.
+    /// (Inline links need inline hit-testing, a follow-on.)
+    #[test]
+    fn interaction_query_derives_affordances_and_reflects_host_state() {
+        let document =
+            StaticDocument::parse("<html><body><a href=\"u\">link</a></body></html>");
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        crate::cascade::run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &["a { display: block; width: 200px; height: 50px; }"],
+            None,
+        );
+        let (fragments, _, _) = layout(
+            &document,
+            &styles,
+            &ImagePlane::new(),
+            taffy::Size {
+                width: taffy::AvailableSpace::Definite(800.0),
+                height: taffy::AvailableSpace::Definite(600.0),
+            },
+        );
+        let view = ServalLaneView::new(&document, &styles, &fragments);
+
+        let a = find_element(NodeRef::document(&document), local_name!("a")).expect("<a> exists");
+        let a_src = SourceNodeId(document.opaque_id(a.id()));
+        let origin = absolute_origin(&document, &fragments, a.id()).expect("<a> origin");
+        let rect = fragments.rect_of(a.id()).expect("<a> fragment");
+        let point =
+            Point::new(origin.x + rect.size.width * 0.5, origin.y + rect.size.height * 0.5);
+
+        let affs = view.affordances_at(point);
+        assert!(
+            affs.iter().any(|aff| aff.kind == AffordanceKind::Link
+                && aff.source_node == a_src
+                && aff.label.as_deref() == Some("u")),
+            "link affordance with href label at the <a>: {affs:?}"
+        );
+        assert_eq!(view.activation_target(point), Some(a_src), "activation = the link");
+
+        // Host focus flows through `with_interaction`.
+        let focused = view.with_interaction(Some(a_src), None);
+        assert_eq!(focused.focus_target(), Some(a_src));
     }
 
     /// Collect every `<div>` in document (pre-)order. The clip test builds a
