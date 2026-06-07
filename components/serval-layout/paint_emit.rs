@@ -452,6 +452,18 @@ pub(crate) fn walk<D>(
         return;
     }
 
+    // `display: none` paints nothing — skip the node and its whole subtree.
+    // In-flow content stays invisible via a zero-size box, but a list marker
+    // hangs outside the box, so display:none must be suppressed explicitly.
+    if dom.kind(id) == NodeKind::Element
+        && styles
+            .get(id)
+            .and_then(|e| e.borrow_data())
+            .is_some_and(|d| d.styles.primary().get_box().display.is_none())
+    {
+        return;
+    }
+
     // An overflow container clips its descendants to its padding box; captured
     // here (while the layout is in scope) and applied around the children below.
     let mut clip_rect: Option<LayoutRect> = None;
