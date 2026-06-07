@@ -120,6 +120,12 @@ pub struct InlineRun {
     /// underline / strikethrough brush, so the decoration can differ in color
     /// from the glyphs.
     pub decoration_color: [f32; 4],
+    /// Cascaded `letter-spacing` in px (0 = `normal`). Pushed to parley as
+    /// `StyleProperty::LetterSpacing`, so it widens the run's measured advance.
+    pub letter_spacing: f32,
+    /// Cascaded `word-spacing` in px (0 = `normal`). Pushed to parley as
+    /// `StyleProperty::WordSpacing`.
+    pub word_spacing: f32,
     /// Cascaded `line-height`. Pushed to parley as `StyleProperty::LineHeight`
     /// (skipped when `Normal`, which is parley's default).
     pub line_height: LineHeightSpec,
@@ -139,6 +145,8 @@ impl InlineRun {
             underline: false,
             strikethrough: false,
             decoration_color: [0.0, 0.0, 0.0, 1.0],
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
             line_height: LineHeightSpec::Normal,
         }
     }
@@ -199,6 +207,8 @@ impl<NodeId> InlineContent<NodeId> {
                 underline: false,
                 strikethrough: false,
                 decoration_color: [0.0, 0.0, 0.0, 1.0],
+                letter_spacing: 0.0,
+                word_spacing: 0.0,
                 line_height: LineHeightSpec::Normal,
             }],
             boxes: Vec::new(),
@@ -403,6 +413,15 @@ pub fn measure_inline_content<NodeId>(
                 StyleProperty::StrikethroughBrush(Some(ColorBrush(run.decoration_color))),
                 range.clone(),
             );
+        }
+        // `letter-spacing` / `word-spacing` widen the run's advance at shape time
+        // (0 = `normal` = parley's default). Pushed only when set, to keep the
+        // common no-spacing path free of redundant spans.
+        if run.letter_spacing != 0.0 {
+            builder.push(StyleProperty::LetterSpacing(run.letter_spacing), range.clone());
+        }
+        if run.word_spacing != 0.0 {
+            builder.push(StyleProperty::WordSpacing(run.word_spacing), range.clone());
         }
         // Cascaded `line-height`. `Normal` is parley's default (font metrics), so
         // only a CSS `<number>` / `<length>` overrides it.

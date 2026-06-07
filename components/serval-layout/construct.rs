@@ -232,6 +232,8 @@ pub(crate) fn run_for_element<NodeId: Copy + Eq + Hash>(
         underline: text_underline_of(styles, id).unwrap_or(false),
         strikethrough: text_strikethrough_of(styles, id).unwrap_or(false),
         decoration_color: text_decoration_color_of(styles, id).unwrap_or([0.0, 0.0, 0.0, 1.0]),
+        letter_spacing: letter_spacing_of(styles, id).unwrap_or(0.0),
+        word_spacing: word_spacing_of(styles, id).unwrap_or(0.0),
         line_height: line_height_of(styles, id).unwrap_or_default(),
     }
 }
@@ -391,6 +393,34 @@ fn font_size_of<NodeId: Copy + Eq + Hash>(
     let entry = styles.get(id)?;
     let data = entry.borrow_data()?;
     Some(data.styles.primary().get_font().font_size.computed_size().px())
+}
+
+/// An element's cascaded `letter-spacing` in CSS px (`normal` resolves to 0).
+/// Percentages resolve against the font size. `None` when the cascade hasn't run.
+fn letter_spacing_of<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> Option<f32> {
+    use style::values::computed::Length;
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    let primary = data.styles.primary();
+    let fs = primary.get_font().font_size.computed_size().px();
+    Some(primary.get_inherited_text().letter_spacing.0.resolve(Length::new(fs)).px())
+}
+
+/// An element's cascaded `word-spacing` in CSS px (`normal` resolves to 0).
+/// Percentages resolve against the font size. `None` when the cascade hasn't run.
+fn word_spacing_of<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> Option<f32> {
+    use style::values::computed::Length;
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    let primary = data.styles.primary();
+    let fs = primary.get_font().font_size.computed_size().px();
+    Some(primary.get_inherited_text().word_spacing.resolve(Length::new(fs)).px())
 }
 
 /// Read an element's cascaded `font-family` and collapse the family

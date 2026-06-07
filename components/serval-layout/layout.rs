@@ -193,4 +193,25 @@ mod tests {
         assert!(rect.size.width > 0.0, "expected positive width, got {}", rect.size.width);
         assert!(rect.size.height > 0.0, "expected positive height, got {}", rect.size.height);
     }
+
+    /// `letter-spacing` widens the measured inline run: parley adds the spacing
+    /// between characters at shape time, so the cached layout for `iiiii` is
+    /// wider with `letter-spacing: 10px` than without (4 gaps, ~40px wider).
+    #[test]
+    fn letter_spacing_widens_measured_text() {
+        let measured_width = |sheets: &[&str]| -> f32 {
+            let (doc, styles) = cascade("<html><body><p>iiiii</p></body></html>", sheets);
+            let images = ImagePlane::new();
+            let (_frags, built, ctx) = layout(&doc, &styles, &images, viewport());
+            let p = find_element(NodeRef::document(&doc), local_name!("p")).unwrap();
+            let taffy_id = built.node_map.get(&p.id()).expect("<p> in node_map");
+            ctx.layouts.get(taffy_id).expect("<p> cached layout").width()
+        };
+        let plain = measured_width(&[]);
+        let spaced = measured_width(&["p { letter-spacing: 10px; }"]);
+        assert!(
+            spaced > plain + 30.0,
+            "letter-spacing should widen measured text: plain={plain} spaced={spaced}"
+        );
+    }
 }
