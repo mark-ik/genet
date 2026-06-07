@@ -545,16 +545,13 @@ pub(crate) fn walk<D>(
                     placement: CommonPlacement::new(local_bounds),
                     color: background_color_of(styles, id),
                 }));
-                // A gradient background-image layer paints over the color, over
-                // the same background box. Linear / radial / conic are emitted.
-                // Only the first background layer is read.
+                // Background-image gradient layers paint over the color. CSS lists
+                // the topmost layer first, so they emit back-to-front; each gradient
+                // layer (linear / radial / conic) becomes its draw command. url()
+                // image layers are handled by the block below (first layer only).
                 let (gw, gh) = (local_bounds.width(), local_bounds.height());
-                if let Some(grad) = linear_background_gradient_of(styles, id, gw, gh) {
-                    commands.push(PaintCmd::DrawLinearGradient(grad));
-                } else if let Some(grad) = radial_background_gradient_of(styles, id, gw, gh) {
-                    commands.push(PaintCmd::DrawRadialGradient(grad));
-                } else if let Some(grad) = conic_background_gradient_of(styles, id, gw, gh) {
-                    commands.push(PaintCmd::DrawConicGradient(grad));
+                for cmd in background_gradient_layers(styles, id, gw, gh) {
+                    commands.push(cmd);
                 }
                 // CSS background-image paints over the background color,
                 // under content + border. Resolve background-size /
@@ -1095,25 +1092,48 @@ fn line_direction_angle(dir: &style::values::computed::image::LineDirection, w: 
     }
 }
 
-/// The first `background-image` layer of `id`, if it is a **linear** gradient,
-/// resolved to a paint-list [`LinearGradientItem`] over a `w`x`h` border box in
-/// node-local coords (the paint walk's transform places it). Radial and conic
-/// gradients are deferred. `None` when there is no cascade data, no
-/// background-image, or the first layer is not a linear gradient.
-fn linear_background_gradient_of<NodeId: Copy + Eq + Hash>(
+/// All `background-image` gradient layers of `id`, as paint commands in paint
+/// order. CSS lists the topmost layer first, so this iterates the layers in
+/// reverse (back-to-front). Each gradient layer (linear / radial / conic) becomes
+/// its draw command. Non-gradient layers (`url()` images) are emitted separately
+/// by the background-image block, which currently decodes only the first such
+/// layer; additional image layers are deferred.
+fn background_gradient_layers<NodeId: Copy + Eq + Hash>(
     styles: &StylePlane<NodeId>,
     id: NodeId,
+    w: f32,
+    h: f32,
+) -> Vec<PaintCmd> {
+    let Some(entry) = styles.get(id) else { return Vec::new() };
+    let Some(data) = entry.borrow_data() else { return Vec::new() };
+    let primary = data.styles.primary();
+    let current = primary.get_inherited_text().color;
+    let mut cmds = Vec::new();
+    for image in primary.get_background().background_image.0.iter().rev() {
+        if let Some(g) = linear_gradient_layer(image, current, w, h) {
+            cmds.push(PaintCmd::DrawLinearGradient(g));
+        } else if let Some(g) = radial_gradient_layer(image, current, w, h) {
+            cmds.push(PaintCmd::DrawRadialGradient(g));
+        } else if let Some(g) = conic_gradient_layer(image, current, w, h) {
+            cmds.push(PaintCmd::DrawConicGradient(g));
+        }
+    }
+    cmds
+}
+
+/// A single `background-image` layer `image`, if it is a **linear** gradient,
+/// resolved to a paint-list [`LinearGradientItem`] over a `w`x`h` border box in
+/// node-local coords (the paint walk's transform places it). `current` resolves
+/// `currentColor` in the stops. `None` when the layer is not a linear gradient.
+fn linear_gradient_layer(
+    image: &style::values::computed::image::Image,
+    current: style::color::AbsoluteColor,
     w: f32,
     h: f32,
 ) -> Option<LinearGradientItem> {
     use style::values::generics::image::{Gradient, Image};
 
-    let entry = styles.get(id)?;
-    let data = entry.borrow_data()?;
-    let primary = data.styles.primary();
-    let current = primary.get_inherited_text().color;
-    let first = primary.get_background().background_image.0.iter().next()?;
-    let Image::Gradient(gradient) = first else { return None };
+    let Image::Gradient(gradient) = image else { return None };
     let Gradient::Linear { direction, items, .. } = &**gradient else { return None };
 
     let angle = line_direction_angle(direction, w, h);
@@ -1223,28 +1243,22 @@ fn resolve_gradient_stops<T>(
     )
 }
 
-/// The first `background-image` layer of `id`, if it is a **radial** gradient,
+/// A single `background-image` layer `image`, if it is a **radial** gradient,
 /// resolved to a paint-list [`RadialGradientItem`] over a `w`x`h` border box in
-/// node-local coords (the paint walk's transform places it). Circle and ellipse
-/// shapes are supported, sized by explicit radii or any extent keyword
-/// (`closest`/`farthest-side`/`-corner`, `contain`, `cover`); `position` sets the
-/// center. Conic gradients are deferred. `None` when there is no cascade data, no
-/// background-image, or the first layer is not a radial gradient.
-fn radial_background_gradient_of<NodeId: Copy + Eq + Hash>(
-    styles: &StylePlane<NodeId>,
-    id: NodeId,
+/// node-local coords. Circle and ellipse shapes are supported, sized by explicit
+/// radii or any extent keyword (`closest`/`farthest-side`/`-corner`, `contain`,
+/// `cover`); `position` sets the center. `None` when the layer is not a radial
+/// gradient.
+fn radial_gradient_layer(
+    image: &style::values::computed::image::Image,
+    current: style::color::AbsoluteColor,
     w: f32,
     h: f32,
 ) -> Option<RadialGradientItem> {
     use style::values::computed::Length;
     use style::values::generics::image::{Circle, Ellipse, EndingShape, Gradient, Image};
 
-    let entry = styles.get(id)?;
-    let data = entry.borrow_data()?;
-    let primary = data.styles.primary();
-    let current = primary.get_inherited_text().color;
-    let first = primary.get_background().background_image.0.iter().next()?;
-    let Image::Gradient(gradient) = first else { return None };
+    let Image::Gradient(gradient) = image else { return None };
     let Gradient::Radial { shape, position, items, .. } = &**gradient else { return None };
 
     // Center: resolve the position against the box (percentages vs each axis).
@@ -1344,29 +1358,24 @@ fn resolve_extent_radii(
     }
 }
 
-/// The first `background-image` layer of `id`, if it is a **conic** gradient,
+/// A single `background-image` layer `image`, if it is a **conic** gradient,
 /// resolved to a paint-list [`ConicGradientItem`] over a `w`x`h` border box in
 /// node-local coords (the paint walk's transform places it). `from <angle>` sets
 /// the seam and `at <position>` the center; angular color stops resolve to 0..1
-/// around the clockwise sweep. `None` when there is no cascade data, no
-/// background-image, or the first layer is not a conic gradient.
-fn conic_background_gradient_of<NodeId: Copy + Eq + Hash>(
-    styles: &StylePlane<NodeId>,
-    id: NodeId,
+/// around the clockwise sweep. `None` when the layer is not a conic gradient.
+fn conic_gradient_layer(
+    image: &style::values::computed::image::Image,
+    current: style::color::AbsoluteColor,
     w: f32,
     h: f32,
 ) -> Option<ConicGradientItem> {
     use std::f32::consts::{FRAC_PI_2, TAU};
 
-    use style::values::computed::{AngleOrPercentage, Length};
+    use style::values::computed::AngleOrPercentage;
+    use style::values::computed::Length;
     use style::values::generics::image::{Gradient, Image};
 
-    let entry = styles.get(id)?;
-    let data = entry.borrow_data()?;
-    let primary = data.styles.primary();
-    let current = primary.get_inherited_text().color;
-    let first = primary.get_background().background_image.0.iter().next()?;
-    let Image::Gradient(gradient) = first else { return None };
+    let Image::Gradient(gradient) = image else { return None };
     let Gradient::Conic { angle, position, items, .. } = &**gradient else { return None };
 
     let cx = position.horizontal.resolve(Length::new(w)).px();

@@ -721,6 +721,57 @@ mod tests {
         assert!(text.b > 0.9 && text.r < 0.1, "text is blue, got {text:?}");
     }
 
+    /// Multiple background-image layers all paint, back-to-front: CSS lists the
+    /// topmost layer first, so `linear-gradient(...), radial-gradient(...)` emits
+    /// the radial (bottom) then the linear (top).
+    #[test]
+    fn multiple_background_gradient_layers_paint_back_to_front() {
+        use crate::image_decode::BackgroundImagePlane;
+        use crate::paint_emit::emit_paint_list_with_layouts;
+        use paint_list_api::{DeviceIntSize, PaintCmd, PaintList};
+        use rustc_hash::FxHashMap;
+
+        let doc = StaticDocument::parse("<html><body><div></div></body></html>");
+        let sheet = &["html, body, div { display: block; margin: 0; border: 0; } \
+            div { width: 100px; height: 50px; background-image: \
+            linear-gradient(rgb(255, 0, 0), rgb(0, 0, 255)), \
+            radial-gradient(rgb(0, 255, 0), rgb(0, 0, 0)); }"];
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&doc, &styles, &ImagePlane::new(), viewport);
+        let scroll = FxHashMap::default();
+        let plist = emit_paint_list_with_layouts(
+            &doc,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &scroll,
+            DeviceIntSize::new(800, 600),
+        );
+        let grads: Vec<&str> = plist
+            .commands()
+            .iter()
+            .filter_map(|c| match c {
+                PaintCmd::DrawLinearGradient(_) => Some("linear"),
+                PaintCmd::DrawRadialGradient(_) => Some("radial"),
+                PaintCmd::DrawConicGradient(_) => Some("conic"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            grads,
+            vec!["radial", "linear"],
+            "back-to-front: radial (bottom layer) then linear (top layer)"
+        );
+    }
+
     /// A cascaded `line-height` controls the line-box height: `line-height: 2`
     /// on 40px text gives a ~80px line box (2 × font-size), vs the ~46px
     /// font-metric default. Verifies the cascade → parley line-height plumbing
