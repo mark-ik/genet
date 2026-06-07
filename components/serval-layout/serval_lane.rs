@@ -10,28 +10,27 @@
 //! serval-layout's implementation detail; consumers (mere-host,
 //! Apparatus, Hekate) speak only the trait surface.
 //!
-//! ## Probe v1 scope (2026-05-18)
+//! ## Implemented vs. stubbed
 //!
-//! - `FragmentQuery::hit_test` walks the DOM in **paint order**
-//!   (pre-order document order; the same order `paint_emit` produces
-//!   its command stream) and keeps the **last** containing rect — that
-//!   matches "topmost in paint order is later in the list."
-//! - `FragmentQuery::box_model` returns the same rect for content /
-//!   padding / border / margin because the cascade doesn't yet apply
-//!   real CSS padding/border/margin. Once real stylesheets land, this
-//!   is the seam where `ComputedValues::margin/padding/border` shapes
-//!   each box.
-//! - Anchor + selection methods return empty/None — no anchor index
-//!   or selection state in the probe.
-//! - All `InteractionQuery` methods return empty/None — no focus,
-//!   selection, or affordance machinery yet. The traits define the
-//!   contract; impls land alongside real interaction wiring.
+//! - `FragmentQuery::hit_test` walks the DOM in **paint order** (pre-order
+//!   document order, the same order `paint_emit` produces its command stream)
+//!   and keeps the **last** containing rect, matching "topmost in paint order
+//!   is later in the list." Clip- and scroll-aware (see `hit_test_walk`).
+//! - `FragmentQuery::box_model` returns distinct content / padding / border /
+//!   margin rects, derived from the taffy border box by the cascaded
+//!   border / padding / margin (they collapse to the border box for an
+//!   unstyled element).
+//! - Anchor + selection-range methods (`fragments_for_anchor`,
+//!   `text_range_for_fragment`, `rects_for_selection`) return empty/None: no
+//!   anchor index or source-range / line-box tracking is threaded through yet.
+//! - All `InteractionQuery` methods return empty/None: no focus, selection, or
+//!   affordance machinery yet. The traits define the contract; impls land
+//!   alongside real interaction wiring.
 //!
 //! The `SourceNodeId ↔ D::NodeId` round-trip uses `LayoutDom::opaque_id`
-//! (forward) + a DOM walk (reverse). The reverse walk is O(n) per
-//! `box_model` call — acceptable for the probe, fixable with a
-//! reverse-index `FxHashMap<u64, D::NodeId>` cached on the view when
-//! a consumer pulls on perf.
+//! (forward) + a DOM walk (reverse). The reverse walk is O(n) per `box_model`
+//! call, fixable with a reverse-index `FxHashMap<u64, D::NodeId>` cached on the
+//! view if a consumer pulls on perf.
 
 use std::hash::Hash;
 

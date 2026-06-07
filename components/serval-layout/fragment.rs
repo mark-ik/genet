@@ -2,20 +2,18 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Fragment plane skeleton — laid-out rects keyed by DOM `NodeId`.
+//! Fragment plane — laid-out rects keyed by DOM `NodeId`.
 //!
-//! After Taffy runs, this plane stores the per-node layout result so
-//! consumers (display-list emission, hit-testing, apparatus inspector,
-//! eventual `getBoundingClientRect`) can read positions back without
-//! re-running layout. Today the plane is just a `NodeId → taffy::Layout`
-//! map; the eventual impl will carry richer fragment data (line boxes,
-//! pseudo-element fragments, scroll-container metadata) per the planes
-//! doc.
+//! After Taffy runs, this plane stores the per-node layout result so consumers
+//! (paint emission, hit-testing, the apparatus inspector,
+//! `getBoundingClientRect`-shaped queries) can read positions back without
+//! re-running layout. The plane is a `NodeId → taffy::Layout` map; richer
+//! fragment data (line boxes, pseudo-element fragments, scroll-container
+//! metadata) is a future extension per the planes doc.
 //!
-//! Per the Hekate doc's "publishing observables" rule, the plane is
-//! `pub(crate)` and the public ABI is a query trait (`FragmentQuery`)
-//! living in a future `engine_observables_api` crate. The probe slice
-//! exposes just enough for tests to assert rects came out non-zero.
+//! Per the Hekate doc's "publishing observables" rule the plane is `pub(crate)`,
+//! and the public query surface is the `engine_observables_api` `FragmentQuery`
+//! trait, implemented by `ServalLaneView` (`serval_lane.rs`).
 
 use std::hash::Hash;
 

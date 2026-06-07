@@ -5,17 +5,16 @@
 //! Stub `FontMetricsProvider` for the cascade runner.
 //!
 //! Stylo's cascade requires a `FontMetricsProvider` to resolve font-relative
-//! units (`ex`, `cap`, `ic`, `ch`). For the v1 cascade integration we don't
-//! have parley wired in yet (that's step (2) in the roadmap), so this stub
-//! returns `FontMetrics::default()` for every query.
+//! units (`ex`, `cap`, `ic`, `ch`). This stub returns `FontMetrics::default()`
+//! for every query, so those units resolve to fallback defaults (e.g. `ex`
+//! becomes `0.5em`). The cascade still produces correct computed values for
+//! everything that does not depend on real font metrics.
 //!
-//! Effect on rendering: font-relative units resolve to fallback defaults
-//! (e.g., `ex` becomes `0.5em`). The cascade still produces useful
-//! computed values for everything that doesn't depend on real font metrics.
-//!
-//! When parley wires in for step (2), this stub is replaced with a real
-//! impl that queries parley's font collection for metrics (mirroring Blitz's
-//! `BlitzFontMetricsProvider` in `blitz-dom/src/font_metrics.rs`).
+//! Parley is wired in for inline measurement (`text_measure.rs`), but this
+//! cascade-time provider is not yet backed by it. Replacing this stub with one
+//! that queries parley's font collection (mirroring Blitz's
+//! `BlitzFontMetricsProvider` in `blitz-dom/src/font_metrics.rs`) is the
+//! remaining step for real font-relative units.
 
 use style::device::servo::FontMetricsProvider;
 use style::font_metrics::FontMetrics;
@@ -38,9 +37,8 @@ impl FontMetricsProvider for StubFontMetricsProvider {
     }
 
     fn base_size_for_generic(&self, _generic: GenericFontFamily) -> Length {
-        // Default to 16px (browser-conventional medium font size). When
-        // parley wires in for step (2), this returns size from the
-        // font-family-specific user preference.
+        // Default to 16px (browser-conventional medium font size). A real
+        // provider would return the font-family-specific user preference.
         Length::new(16.0)
     }
 }

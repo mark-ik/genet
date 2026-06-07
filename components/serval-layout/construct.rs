@@ -81,7 +81,7 @@ where
 }
 
 /// Whether an element is replaced content we render as its own box
-/// rather than as flowed inline text. v1: just `<img>`.
+/// rather than as flowed inline text. Currently just `<img>`.
 pub(crate) fn is_replaced<D>(dom: &D, id: D::NodeId) -> bool
 where
     D: LayoutDom,

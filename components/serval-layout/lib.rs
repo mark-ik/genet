@@ -6,16 +6,24 @@
 
 //! Profile-neutral layout engine for serval.
 //!
-//! Consumes any `LayoutDom`-shaped DOM and produces planes
-//! (`StylePlane`, eventually `LayoutPlane`, `FragmentPlane`) per the
-//! planes architecture in
+//! Consumes any `LayoutDom`-shaped DOM and produces planes (`StylePlane`,
+//! `FragmentPlane`) per the planes architecture in
 //! `docs/2026-05-17_serval_layout_planes_architecture.md`.
 //!
-//! Probe slice (2026-05-17): minimum end-to-end is wired —
-//! `NodeRef` (foreign-trait firewall for Stylo, draft impls in
-//! `adapter_stylo.rs` deferred) + `StylePlane` (hand-built today; cascade
-//! populates later) + `construct` (DOM → Taffy tree) + `taffy::compute_root_layout`
-//! + `FragmentPlane` (per-node rects).
+//! The full pipeline is wired, and is the shared core behind every content lane
+//! (the static viewer, the scripted live path, meerkat's content card):
+//!
+//! - `NodeRef` / `StyleNodeRef` are the foreign-trait firewall: Stylo's trait
+//!   family (`TNode` / `TElement` / `selectors::Element` / etc.) is impl'd in
+//!   `adapter_stylo` and nowhere else in the crate.
+//! - `run_cascade` runs Stylo over the DOM to populate `StylePlane` (computed
+//!   values) from author + UA sheets.
+//! - `construct` builds the Taffy tree (parley measures inline content), and
+//!   `layout` computes it into a `FragmentPlane` of per-node rects.
+//! - `emit_paint_list*` walks fragments + styles into a `ServalPaintList`.
+//! - `IncrementalLayout` re-runs the minimum work on DOM / style mutations.
+//!
+//! `render` and `paint_list_from_layout_dom` are the convenience entry points.
 
 mod adapter;
 mod adapter_stylo;

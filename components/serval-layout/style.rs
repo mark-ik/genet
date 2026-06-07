@@ -6,15 +6,13 @@
 // cascade exclusive-access invariant. Documented per-method.
 #![allow(unsafe_code)]
 
-//! Style plane skeleton.
+//! Style plane.
 //!
-//! Per the planes architecture, computed style lives in a `serval-layout`-
-//! owned side table keyed by `D::NodeId`. The real implementation will be
-//! populated by Stylo's cascade running over `NodeRef` (Stylo trait impls
-//! live in `adapter_stylo.rs`, currently a draft). For the probe slice,
-//! `StylePlane` is populated by hand — the test constructs the entries
-//! directly, bypassing the cascade. This validates the construct + Taffy
-//! pipeline without committing to the Stylo adapter shape yet.
+//! Per the planes architecture, computed style lives in a `serval-layout`-owned
+//! side table keyed by `D::NodeId`. `run_cascade` (`cascade.rs`) populates it by
+//! running Stylo's cascade over `StyleNodeRef` (the Stylo trait impls in
+//! `adapter_stylo.rs`). Tests may also populate a `StylePlane` by hand to
+//! exercise construct + layout without a stylesheet.
 //!
 //! Cf. `docs/2026-05-17_serval_layout_planes_architecture.md`.
 
@@ -149,8 +147,9 @@ impl StyleEntry {
 impl Clone for StyleEntry {
     fn clone(&self) -> Self {
         // ElementDataWrapper is not Clone in general; provide a default
-        // (empty) for any cloning need. The probe doesn't clone style
-        // entries; cascade-time work mutates in place.
+        // (empty) to satisfy the `Clone` bound. Nothing in the pipeline clones
+        // a live style entry (the cascade mutates in place, and `StylePlane`
+        // is not `Clone`), so this empty clone is not exercised in practice.
         Self {
             stylo_data: UnsafeCell::new(None),
             state: self.state,
@@ -185,9 +184,9 @@ impl std::fmt::Debug for StyleEntry {
     }
 }
 
-/// Sparse storage of computed style keyed by `D::NodeId`. Sparse for the
-/// probe; the eventual impl picks dense `IndexVec` storage when
-/// `D::NodeId` is dense (per `NodeIdSpace` in the planes doc).
+/// Sparse storage of computed style keyed by `D::NodeId`. A dense `IndexVec`
+/// backing (when `D::NodeId` is dense, per `NodeIdSpace` in the planes doc) is
+/// a possible future optimization.
 pub struct StylePlane<NodeId: Copy + Eq + Hash> {
     entries: FxHashMap<NodeId, StyleEntry>,
     /// One `SharedRwLock` for the lifetime of this plane. Stylesheet contents and

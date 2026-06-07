@@ -2,57 +2,35 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! `NodeRef<'a, D>` — handle that wraps `(dom: &'a D, id: D::NodeId)` for any
-//! `layout_dom_api::LayoutDom` impl, and acts as the foreign-trait firewall:
-//! Stylo's trait family (`TNode` / `TElement` / `selectors::Element` / etc.)
-//! is impl'd on `NodeRef` and nowhere else in serval-layout.
+//! `NodeRef<'a, D>` — the structural handle wrapping `(dom: &'a D, id:
+//! D::NodeId)` for any `layout_dom_api::LayoutDom` impl. It exposes structural
+//! navigation (parent, sibling navigation, children, kind), and is what
+//! `construct.rs` walks to build the box tree.
+//!
+//! The Stylo foreign-trait firewall is its sibling `StyleNodeRef`
+//! (`adapter_stylo.rs`), which implements Stylo's trait family (`TNode` /
+//! `TElement` / `selectors::Element` / etc.) over a `(dom, id, plane)` triple.
+//! `NodeRef` itself carries no Stylo impls and no side-table references: per the
+//! planes architecture, computed style and atom storage live in
+//! `serval-layout`-owned planes (`StylePlane`) keyed by `D::NodeId`, read via
+//! plane accessors during the cascade rather than embedded on the handle.
 //!
 //! See `docs/2026-05-17_serval_layout_planes_architecture.md` for the
-//! architectural context — planes architecture, NodeRef as the single Stylo
-//! adapter, no `layout_api` LayoutNode/Element bundle (the path-C lift plan's
-//! original target shape is superseded).
-//!
-//! ## What's here today
-//!
-//! - `NodeRef<'a, D>` type with structural methods backed by `LayoutDom`
-//!   primitives (parent, sibling navigation, children, kind).
-//! - Smoke tests that round-trip structural navigation through
-//!   `serval-static-dom::StaticDocument`.
-//!
-//! ## What's not here yet
-//!
-//! - Stylo trait impls (`NodeInfo` / `TNode` / `TDocument` / `TShadowRoot` /
-//!   `TElement` / `selectors::Element` / `AttributeProvider`). Draft sketch
-//!   in `adapter_stylo.rs` (not yet mod-declared). When written for real,
-//!   read the script-side reference impls in
-//!   `components/script/layout_dom/servo_*` side-by-side rather than from
-//!   memory.
-//! - Side-table references on `NodeRef`. The planes architecture has
-//!   `StylePlane` and atom storage owned by `serval-layout`, not embedded on
-//!   `NodeRef`. The Stylo adapter methods (`borrow_data` / `id` /
-//!   `each_class`) read those planes via accessor methods, not via fields
-//!   on `NodeRef`. Adapter shape may grow to carry plane refs as the design
-//!   converges; today it's just `(dom, id)`.
-//!
-//! Next concrete step: probe slice (NodeRef + minimal Stylo adapter + tiny
-//! StylePlane skeleton + construct.rs + Taffy + parley → log the resulting
-//! rect for one `<p>`).
+//! architectural context (planes architecture; `StyleNodeRef` as the single
+//! Stylo adapter; no `layout_api` LayoutNode/Element bundle, the path-C lift
+//! plan's original target shape superseded).
 
 use layout_dom_api::LayoutDom;
 
-/// A handle into a `LayoutDom`-backed DOM. Carries a borrow of the DOM
-/// (`&'a D`) plus the node identity.
+/// A structural handle into a `LayoutDom`-backed DOM. Carries a borrow of the
+/// DOM (`&'a D`) plus the node identity, and exposes structural navigation for
+/// `construct.rs`.
 ///
-/// Stylo's trait family (`TNode`, `TElement`, `selectors::Element`, etc.)
-/// gets impl'd on this type and nowhere else in `serval-layout` — the
-/// foreign-trait firewall per the planes architecture. Today the impls
-/// haven't landed yet; see `adapter_stylo.rs` for the draft.
-///
-/// Style-side state (computed style, atomized id/class, etc.) lives in
-/// `serval-layout`-owned planes (`StylePlane` etc.), keyed by `D::NodeId`,
-/// not embedded on `NodeRef`. The Stylo adapter methods that need that
-/// state (`borrow_data`, `id`, `each_class`, etc.) read it via plane
-/// accessors. See the planes doc for the rationale.
+/// Stylo's trait family is implemented on the sibling `StyleNodeRef`
+/// (`adapter_stylo.rs`), not on `NodeRef`. Style-side state (computed style,
+/// atomized id/class) lives in `serval-layout`-owned planes (`StylePlane`)
+/// keyed by `D::NodeId`, read via plane accessors during the cascade rather
+/// than embedded on the handle. See the planes doc for the rationale.
 pub struct NodeRef<'a, D: LayoutDom> {
     pub(crate) dom: &'a D,
     pub(crate) id: D::NodeId,

@@ -5,26 +5,28 @@
 //! Producer-side: emit [`ServalPaintList`] from `FragmentPlane` +
 //! `StylePlane` + DOM.
 //!
-//! Walks the DOM in paint order (pre-order traversal — normal-flow
-//! paint order matches DOM order; positioned descendants would
-//! reorder via z-index, but the probe doesn't exercise positioning).
-//! Reads per-node layout from `FragmentPlane`, reads per-node style
-//! from `StylePlane`, and produces a closed-set [`PaintCmd`] stream.
+//! Walks the DOM in paint order (pre-order traversal; normal-flow paint order
+//! matches DOM order). Out-of-flow and stacking-context content is lifted to
+//! `Deferred` layers and placed by the recursive painter in `paint_stacking.rs`,
+//! which orders positioned / z-index descendants per CSS 2.1 Appendix E, so this
+//! walk emits in-flow content and defers the rest. Reads per-node layout from
+//! `FragmentPlane` and per-node style from `StylePlane`, and produces a
+//! closed-set [`PaintCmd`] stream.
 //!
 //! ## Scope
 //!
-//! - `DrawRect` per element from the cascade's
-//!   `ComputedValues::background.background_color` (via
-//!   [`background_color_of`]); transparent when no cascade data.
-//! - `DrawText` per inline-context leaf carrying shaped glyph runs.
-//!   Path (b) is the live one: [`emit_paint_list_with_layouts`] reads
-//!   cached parley `Layout`s from the [`TextMeasureCtx`] populated by
-//!   `crate::layout::layout`. The cache-less [`emit_paint_list`] still
-//!   exists for probes / callers that haven't run layout; it emits
-//!   empty glyph runs so the command structure is still present.
-//! - `PushTransform`/`PopTransform` per fragment around the node's
-//!   primitives, composing the parent-relative `taffy::Layout.location`
-//!   onto the transform stack; absolute scene coordinates fall out
+//! - Per element: background color, background gradient (linear / radial /
+//!   conic) and image, border, outset box-shadow, and a rounded-rect clip for
+//!   `border-radius` (via [`background_color_of`] and the sibling helpers).
+//! - `DrawText` per inline-context leaf carrying shaped glyph runs, plus
+//!   underline / line-through decoration. [`emit_paint_list_with_layouts`] is
+//!   the live path: it reads cached parley `Layout`s from the [`TextMeasureCtx`]
+//!   populated by `crate::layout::layout` (per-run color via the run brush). The
+//!   cache-less [`emit_paint_list`] still exists for callers that have not run
+//!   layout; it emits empty glyph runs so the command structure is still present.
+//! - `PushTransform` / `PopTransform` per fragment around the node's primitives,
+//!   composing the parent-relative `taffy::Layout.location` (and any CSS
+//!   `transform`) onto the transform stack; absolute scene coordinates fall out
 //!   of the composition.
 //!
 //! Cf. `docs/2026-05-17_paintlist_polyglot_renderer.md` (PM-3).
@@ -1427,11 +1429,13 @@ where
     }
 }
 
-/// An element's own cascaded text `color` as a `ColorF`. Used for the
-/// uniform color of an inline-context element's text. (Per-span color
-/// — colored `<span>` / `<a>` inside the flow — is a follow-up; v1
-/// colors the whole inline content with the context element's color.)
-/// Falls back to opaque black when the cascade hasn't run.
+/// An element's own cascaded text `color` as a `ColorF`. Used by the cache-less
+/// text path ([`emit_paint_list`]) to color an inline-context element's text
+/// uniformly. The live path ([`emit_paint_list_with_layouts`]) instead reads
+/// each glyph run's parley brush, so colored `<span>` / `<a>` runs inside the
+/// flow already get their own color (set per styling element in
+/// `construct::gather_inline_content`). Falls back to opaque black when the
+/// cascade hasn't run.
 fn element_text_color<NodeId: Copy + Eq + std::hash::Hash>(
     styles: &StylePlane<NodeId>,
     id: NodeId,

@@ -12,7 +12,7 @@
 //! - **Paint emission** reads the pixels to emit `DrawImage` +
 //!   `ImageResource` (`paint_emit`).
 //!
-//! ## Scope (v1, 2026-05-18)
+//! ## Fetch boundary
 //!
 //! `data:` URIs are decoded inline (self-contained, no fetch): the
 //! `src` is parsed via the `data-url` crate (base64 / percent

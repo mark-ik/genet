@@ -2,6 +2,13 @@
 
 **Status (2026-05-17, revised PM):** proposed. Resolves the "Blitz vs path-C lift" question raised after reading `linebender/blitz` and `DioxusLabs/blitz`, by synthesizing both with the goals path C was protecting.
 
+**Implementation status (2026-06-07):** built and shipped, with two load-bearing deviations from the proposal below.
+
+- **The handle split in two.** Stylo's style-sharing cache is a thread-local buffer sized for a pointer-shaped element, so a `NodeRef { dom, id }` that also carried plane access did not fit. `NodeRef` (`adapter.rs`) stayed structural-only (used by `construct`); a sibling `StyleNodeRef` (`adapter_stylo.rs`) carries the Stylo trait impls over a `(dom, id, plane)` triple stashed in TLS for the cascade's duration. The "handle: `NodeRef`" and "foreign-trait firewall" sections below describe `StyleNodeRef`'s role, and the `style_plane()` accessor sketch is replaced by that TLS context.
+- **Flat modules; paint is not lifted from Servo.** The proposed `stylo_adapter/` / `style/` / `layout/` / `inline/` / `fragment/` / `display_list/` tree was not built. The crate is flat: `adapter.rs` + `adapter_stylo.rs` (firewall), `cascade.rs` + `style.rs` (Style), `construct.rs` + `box_tree.rs` + `layout.rs` (Layout, over Taffy with parley measuring inline content), `fragment.rs` (Fragment), `text_measure.rs`, `image_decode.rs`, `paint_emit.rs` + `paint_stacking.rs` (Paint), `caret.rs`, `incremental.rs`, and `serval_lane.rs` (the `engine_observables_api` query surface). Paint emits a `ServalPaintList` (paint_list_api), so the "lift from Servo" file list (`display_list/`, `geom.rs`, `style_ext.rs`, `lists.rs`, `quotes.rs`) was largely dropped for Taffy + parley + paint_list_api.
+
+The design rationale below (why planes, the firewall discipline, `NodeIdSpace`, observables) still holds; treat the specific handle shape and module tree as superseded by these two notes.
+
 **Companion doc (read together):** [2026-05-17_hekate_lanes_observables.md](./2026-05-17_hekate_lanes_observables.md) — the cross-engine architecture. Serval is **one lane** in Hekate's lane system; Nematic is a peer lane; extract is Hekate's own work, not a Serval head. This doc covers serval-layout's piece (Style + Layout + Fragment + Paint planes for HTML) and how it publishes observables to the host. The lane decomposition and observable-plane vocabulary live in the Hekate doc.
 
 This doc is the architectural reference for `serval-layout`. The implementation plan that follows it is in [2026-05-16_serval_layout_lift_plan.md](./2026-05-16_serval_layout_lift_plan.md) (updated 2026-05-17 to align with this doc).

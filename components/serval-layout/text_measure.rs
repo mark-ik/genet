@@ -4,27 +4,24 @@
 
 //! Parley-backed text measurement for Taffy's measure_function hook.
 //!
-//! ## Scope (v1, 2026-05-18)
+//! Provides [`TextMeasureCtx`] (parley's `FontContext` + `LayoutContext`,
+//! created once per layout pass and threaded through every measure call) and
+//! [`InlineContent`] (a Taffy leaf's inline content: styled [`InlineRun`]s plus
+//! replaced inline boxes such as `<img>`).
 //!
-//! Provides [`TextMeasureCtx`] (parley's `FontContext` + `LayoutContext`
-//! bundled — created once per layout pass, threaded through every
-//! measure call) and [`TextLeaf`] (per-text-node Taffy node context
-//! carrying the text content + font properties needed to lay it out).
+//! [`measure_inline_content`] builds a parley `Layout` from the runs + boxes,
+//! breaks lines against the available width, and returns the measured
+//! `(width, height)` for Taffy to use as the leaf's natural size. The same
+//! `Layout` is cached for paint emission (positioned glyph runs + per-run brush
+//! color), so measurement and paint agree.
 //!
-//! [`measure_text_leaf`] builds a parley `Layout`, runs
-//! `break_all_lines` against the available width, and returns the
-//! measured `(width, height)` for Taffy to use as the leaf's natural
-//! size.
+//! Each [`InlineRun`] carries the cascaded text style (`font-size`,
+//! `font-family`, `font-weight`, italic, `color`, `text-decoration`
+//! underline / line-through, `line-height`); `construct::gather_inline_content`
+//! reads it per styling element. Overline and decoration color / style are not
+//! yet plumbed.
 //!
-//! Cascade integration is deliberately minimal here: the only style
-//! input is `font_size` (defaulted to 16 px) and the default font
-//! family resolved by fontique. Real `ComputedValues`-driven text
-//! styling (font-family, font-weight, line-height, letter-spacing,
-//! etc.) arrives once the cascade applies real CSS rules to text
-//! nodes — `TextLeaf` is the seam where that data lands.
-//!
-//! Cf. `docs/2026-05-17_serval_layout_planes_architecture.md` —
-//! parley wiring is step (2) in the roadmap.
+//! Cf. `docs/2026-05-17_serval_layout_planes_architecture.md`.
 
 use std::borrow::Cow;
 
