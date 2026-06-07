@@ -64,6 +64,10 @@ b, strong { font-weight: bold; }
 i, em, cite, var, dfn, address { font-style: italic; }
 
 /* Lists indent so their markers (emitted by paint as a hanging bullet /
-   ordinal) have room to sit in the padding, left of each item's content. */
+   ordinal) have room to sit in the padding, left of each item's content.
+   `list-style-type` is inherited, so the item's marker kind comes from its
+   list: bullets for `ul`, numbers for `ol`. */
 ul, ol { padding-left: 40px; }
+ul { list-style-type: disc; }
+ol { list-style-type: decimal; }
 "#;

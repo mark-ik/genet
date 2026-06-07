@@ -853,6 +853,65 @@ mod tests {
         assert_ne!(markers[0], markers[1], "ordinals `1.` and `2.` differ in glyphs");
     }
 
+    /// `list-style-type` selects the marker: `decimal`, `lower-alpha`, and
+    /// `square` produce visibly different first markers, and `none` suppresses
+    /// the marker entirely.
+    #[test]
+    fn list_style_type_selects_the_marker() {
+        use crate::image_decode::BackgroundImagePlane;
+        use crate::paint_emit::emit_paint_list_with_layouts;
+        use paint_list_api::{DeviceIntSize, PaintCmd, PaintList};
+        use rustc_hash::FxHashMap;
+
+        // Glyphs of the first hanging marker (x < 0) for an `<ol>` whose
+        // `list-style-type` is set by the given rule; empty if no marker.
+        let first_marker = |decl: &str| -> Vec<u32> {
+            let doc = StaticDocument::parse("<html><body><ol><li>x</li></ol></body></html>");
+            let sheet: &[&str] = &[decl];
+            let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+            run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+            let viewport = taffy::Size {
+                width: taffy::AvailableSpace::Definite(800.0),
+                height: taffy::AvailableSpace::Definite(600.0),
+            };
+            let (fragments, built, text_ctx) = layout(&doc, &styles, &ImagePlane::new(), viewport);
+            let scroll = FxHashMap::default();
+            let plist = emit_paint_list_with_layouts(
+                &doc,
+                &styles,
+                &fragments,
+                &built,
+                &text_ctx,
+                &ImagePlane::new(),
+                &BackgroundImagePlane::new(),
+                &scroll,
+                DeviceIntSize::new(800, 600),
+            );
+            plist
+                .commands()
+                .iter()
+                .find_map(|c| match c {
+                    PaintCmd::DrawText(t)
+                        if t.placement.bounds.min.x < 0.0 && !t.glyphs.is_empty() =>
+                    {
+                        Some(t.glyphs.iter().map(|g| g.index).collect())
+                    },
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+
+        let decimal = first_marker("ol { list-style-type: decimal; }");
+        let alpha = first_marker("ol { list-style-type: lower-alpha; }");
+        let square = first_marker("ol { list-style-type: square; }");
+        let none = first_marker("ol { list-style-type: none; }");
+
+        assert!(!decimal.is_empty(), "decimal emits a marker");
+        assert_ne!(decimal, alpha, "decimal `1.` differs from lower-alpha `a.`");
+        assert_ne!(decimal, square, "decimal differs from the square bullet");
+        assert!(none.is_empty(), "list-style-type: none emits no marker");
+    }
+
     /// A cascaded `line-height` controls the line-box height: `line-height: 2`
     /// on 40px text gives a ~80px line box (2 × font-size), vs the ~46px
     /// font-metric default. Verifies the cascade → parley line-height plumbing
