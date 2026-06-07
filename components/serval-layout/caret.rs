@@ -501,6 +501,110 @@ mod tests {
         );
     }
 
+    /// A default `conic-gradient(...)` centers on the box and starts its seam at
+    /// the top: the renderer's sweep is 0 at the +x axis, so the emitted start
+    /// angle is rotated back a quarter turn (-pi/2).
+    #[test]
+    fn conic_gradient_default_starts_at_top() {
+        use crate::image_decode::BackgroundImagePlane;
+        use crate::paint_emit::emit_paint_list_with_layouts;
+        use paint_list_api::{DeviceIntSize, PaintCmd, PaintList};
+        use rustc_hash::FxHashMap;
+
+        let doc = StaticDocument::parse("<html><body><div></div></body></html>");
+        let sheet = &["html, body, div { display: block; margin: 0; border: 0; } \
+            div { width: 100px; height: 50px; \
+            background-image: conic-gradient(rgb(255, 0, 0), rgb(0, 0, 255)); }"];
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&doc, &styles, &ImagePlane::new(), viewport);
+        let scroll = FxHashMap::default();
+        let plist = emit_paint_list_with_layouts(
+            &doc,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &scroll,
+            DeviceIntSize::new(800, 600),
+        );
+        let grad = plist
+            .commands()
+            .iter()
+            .find_map(|c| match c {
+                PaintCmd::DrawConicGradient(g) => Some(g),
+                _ => None,
+            })
+            .expect("a conic-gradient background emits a DrawConicGradient");
+        assert!((grad.gradient.center.x - 50.0).abs() < 1e-3, "center x at box midpoint");
+        assert!((grad.gradient.center.y - 25.0).abs() < 1e-3, "center y at box midpoint");
+        assert!(
+            (grad.gradient.angle - (-std::f32::consts::FRAC_PI_2)).abs() < 1e-3,
+            "default seam (from 0deg) rotated to the top: start angle -pi/2"
+        );
+        assert_eq!(grad.gradient.stops.len(), 2, "two color stops");
+    }
+
+    /// `conic-gradient(from <a> at <x> <y>, c1 0deg, c2 90deg, c3 360deg)` puts
+    /// the angular stops at 0, 0.25, and 1.0 of the turn, centered at the position,
+    /// with `from 90deg` cancelling the top-rotation to a 0 start angle.
+    #[test]
+    fn conic_gradient_angular_stops_and_from_angle() {
+        use crate::image_decode::BackgroundImagePlane;
+        use crate::paint_emit::emit_paint_list_with_layouts;
+        use paint_list_api::{DeviceIntSize, PaintCmd, PaintList};
+        use rustc_hash::FxHashMap;
+
+        let doc = StaticDocument::parse("<html><body><div></div></body></html>");
+        let sheet = &["html, body, div { display: block; margin: 0; border: 0; } \
+            div { width: 100px; height: 50px; \
+            background-image: conic-gradient(from 90deg at 10px 20px, \
+            rgb(255, 0, 0) 0deg, rgb(0, 255, 0) 90deg, rgb(0, 0, 255) 360deg); }"];
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&doc, &styles, &ImagePlane::new(), viewport);
+        let scroll = FxHashMap::default();
+        let plist = emit_paint_list_with_layouts(
+            &doc,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &scroll,
+            DeviceIntSize::new(800, 600),
+        );
+        let grad = plist
+            .commands()
+            .iter()
+            .find_map(|c| match c {
+                PaintCmd::DrawConicGradient(g) => Some(g),
+                _ => None,
+            })
+            .expect("a conic gradient emits a DrawConicGradient");
+        assert!((grad.gradient.center.x - 10.0).abs() < 1e-3, "center x");
+        assert!((grad.gradient.center.y - 20.0).abs() < 1e-3, "center y");
+        assert!(
+            grad.gradient.angle.abs() < 1e-3,
+            "from 90deg - 90deg top-rotation = 0 start angle"
+        );
+        assert_eq!(grad.gradient.stops.len(), 3, "three color stops");
+        assert!((grad.gradient.stops[0].offset - 0.0).abs() < 1e-3, "0deg -> 0.0");
+        assert!((grad.gradient.stops[1].offset - 0.25).abs() < 1e-3, "90deg -> 0.25");
+        assert!((grad.gradient.stops[2].offset - 1.0).abs() < 1e-3, "360deg -> 1.0");
+    }
+
     /// A cascaded `line-height` controls the line-box height: `line-height: 2`
     /// on 40px text gives a ~80px line box (2 × font-size), vs the ~46px
     /// font-metric default. Verifies the cascade → parley line-height plumbing

@@ -34,6 +34,7 @@ use std::hash::Hash;
 use layout_dom_api::{LayoutDom, NodeKind};
 use paint_list_api::{
     AlphaType, BorderRadius, BorderSide, BorderStyle, BoxShadowClipMode, ColorF, CommonPlacement,
+    ConicGradientItem, ConicGradientPayload,
     DeviceIntSize, EngineId, ExtendMode, FontInstanceKey, FontResource, GlyphInstance, GradientStop,
     IdNamespace, ImageItem, ImageKey, ImageRendering, ImageResource, LayoutPoint, LayoutRect,
     LayoutSideOffsets, LayoutSize, LayoutTransform, LayoutVector2D, LinearGradientItem,
@@ -543,22 +544,15 @@ pub(crate) fn walk<D>(
                     color: background_color_of(styles, id),
                 }));
                 // A gradient background-image layer paints over the color, over
-                // the same background box. Linear + radial are emitted; conic is
-                // deferred. Only the first background layer is read.
-                if let Some(grad) = linear_background_gradient_of(
-                    styles,
-                    id,
-                    local_bounds.width(),
-                    local_bounds.height(),
-                ) {
+                // the same background box. Linear / radial / conic are emitted.
+                // Only the first background layer is read.
+                let (gw, gh) = (local_bounds.width(), local_bounds.height());
+                if let Some(grad) = linear_background_gradient_of(styles, id, gw, gh) {
                     commands.push(PaintCmd::DrawLinearGradient(grad));
-                } else if let Some(grad) = radial_background_gradient_of(
-                    styles,
-                    id,
-                    local_bounds.width(),
-                    local_bounds.height(),
-                ) {
+                } else if let Some(grad) = radial_background_gradient_of(styles, id, gw, gh) {
                     commands.push(PaintCmd::DrawRadialGradient(grad));
+                } else if let Some(grad) = conic_background_gradient_of(styles, id, gw, gh) {
+                    commands.push(PaintCmd::DrawConicGradient(grad));
                 }
                 // CSS background-image paints over the background color,
                 // under content + border. Resolve background-size /
@@ -1109,7 +1103,10 @@ fn linear_background_gradient_of<NodeId: Copy + Eq + Hash>(
     let end = LayoutPoint::new(cx + dx * len / 2.0, cy + dy * len / 2.0);
 
     // Color stops resolve to 0..1 offsets along the gradient line (length `len`).
-    let stops = resolve_gradient_stops(items, len, current)?;
+    use style::values::computed::Length;
+    let stops = resolve_gradient_stops(items, current, |p| {
+        p.resolve(Length::new(len)).px() / len
+    })?;
 
     Some(LinearGradientItem {
         placement: CommonPlacement::new(LayoutRect::new(
@@ -1127,21 +1124,19 @@ fn linear_background_gradient_of<NodeId: Copy + Eq + Hash>(
     })
 }
 
-/// Resolve a gradient's color stops to ascending 0..1 offsets along a gradient
-/// line of length `reference_len`. Positioned stops resolve their
-/// length/percentage against the line; unpositioned (`auto`) stops fill in by
+/// Resolve a gradient's color stops to ascending 0..1 offsets. `offset_of` maps
+/// a positioned stop's position (a length along the gradient line, or an angle
+/// around the sweep) to a raw 0..1 offset; unpositioned (`auto`) stops fill in by
 /// even distribution between bracketing positioned ones; offsets clamp monotonic.
 /// Interpolation hints (midpoint biasing) are skipped for now. `None` for fewer
-/// than two stops. Shared by the linear and radial emitters.
-fn resolve_gradient_stops(
-    items: &[style::values::generics::image::GradientItem<
-        style::values::computed::Color,
-        style::values::computed::LengthPercentage,
-    >],
-    reference_len: f32,
+/// than two stops. Shared by the linear, radial, and conic emitters (generic over
+/// the position type `T`: `LengthPercentage` for linear/radial, `AngleOrPercentage`
+/// for conic).
+fn resolve_gradient_stops<T>(
+    items: &[style::values::generics::image::GradientItem<style::values::computed::Color, T>],
     current: style::color::AbsoluteColor,
+    mut offset_of: impl FnMut(&T) -> f32,
 ) -> Option<Vec<GradientStop>> {
-    use style::values::computed::Length;
     use style::values::generics::image::GradientItem;
 
     let mut raw: Vec<(Option<f32>, ColorF)> = Vec::new();
@@ -1151,8 +1146,7 @@ fn resolve_gradient_stops(
                 raw.push((None, stylo_color_to_paint(color, current)));
             },
             GradientItem::ComplexColorStop { color, position } => {
-                let off =
-                    (position.resolve(Length::new(reference_len)).px() / reference_len).clamp(0.0, 1.0);
+                let off = offset_of(position).clamp(0.0, 1.0);
                 raw.push((Some(off), stylo_color_to_paint(color, current)));
             },
             GradientItem::InterpolationHint(_) => {},
@@ -1251,7 +1245,7 @@ fn radial_background_gradient_of<NodeId: Copy + Eq + Hash>(
     // Stops resolve along the horizontal radius: the renderer builds a unit-circle
     // radial and scales it by (rx, ry), so offset 1.0 lands on the ending shape on
     // every ray regardless of which radius the lengths were resolved against.
-    let stops = resolve_gradient_stops(items, rx, current)?;
+    let stops = resolve_gradient_stops(items, current, |p| p.resolve(Length::new(rx)).px() / rx)?;
 
     Some(RadialGradientItem {
         placement: CommonPlacement::new(LayoutRect::new(
@@ -1322,6 +1316,61 @@ fn resolve_extent_radii(
             E::Contain | E::Cover => unreachable!("aliased above"),
         }
     }
+}
+
+/// The first `background-image` layer of `id`, if it is a **conic** gradient,
+/// resolved to a paint-list [`ConicGradientItem`] over a `w`x`h` border box in
+/// node-local coords (the paint walk's transform places it). `from <angle>` sets
+/// the seam and `at <position>` the center; angular color stops resolve to 0..1
+/// around the clockwise sweep. `None` when there is no cascade data, no
+/// background-image, or the first layer is not a conic gradient.
+fn conic_background_gradient_of<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+    w: f32,
+    h: f32,
+) -> Option<ConicGradientItem> {
+    use std::f32::consts::{FRAC_PI_2, TAU};
+
+    use style::values::computed::{AngleOrPercentage, Length};
+    use style::values::generics::image::{Gradient, Image};
+
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    let primary = data.styles.primary();
+    let current = primary.get_inherited_text().color;
+    let first = primary.get_background().background_image.0.iter().next()?;
+    let Image::Gradient(gradient) = first else { return None };
+    let Gradient::Conic { angle, position, items, .. } = &**gradient else { return None };
+
+    let cx = position.horizontal.resolve(Length::new(w)).px();
+    let cy = position.vertical.resolve(Length::new(h)).px();
+    // CSS conic 0deg points up (12 o'clock) and sweeps clockwise; the renderer's
+    // sweep seam at 0 is the +x axis (3 o'clock). Rotate the `from` angle back a
+    // quarter turn so the gradient start lands at the top.
+    let start_angle = angle.radians() - FRAC_PI_2;
+
+    // Angular stops -> 0..1 around the turn: an angle as a fraction of the full
+    // turn, or the percentage directly.
+    let stops = resolve_gradient_stops(items, current, |p| match p {
+        AngleOrPercentage::Angle(a) => a.radians() / TAU,
+        AngleOrPercentage::Percentage(pc) => pc.0,
+    })?;
+
+    Some(ConicGradientItem {
+        placement: CommonPlacement::new(LayoutRect::new(
+            LayoutPoint::new(0.0, 0.0),
+            LayoutPoint::new(w, h),
+        )),
+        gradient: ConicGradientPayload {
+            center: LayoutPoint::new(cx, cy),
+            angle: start_angle,
+            extend_mode: ExtendMode::Clamp,
+            stops,
+        },
+        tile_size: LayoutSize::new(w, h),
+        tile_spacing: LayoutSize::zero(),
+    })
 }
 
 /// Whether `id` clips its overflow on either axis — i.e. `overflow-x` or
