@@ -258,6 +258,11 @@ pub struct TextMeasureCtx {
     /// positioned glyphs (and per-run color via the brush) without
     /// re-shaping.
     pub layouts: FxHashMap<taffy::NodeId, Layout<ColorBrush>>,
+    /// Cached marker `Layout` per list item (keyed by the item's Taffy id),
+    /// shaped after layout by [`TextMeasureCtx::shape_marker`]. Separate from
+    /// `layouts` so an item's own inline text and its marker don't collide on
+    /// the same key. Paint reads it to hang the marker left of the content box.
+    pub marker_layouts: FxHashMap<taffy::NodeId, Layout<ColorBrush>>,
 }
 
 impl Default for TextMeasureCtx {
@@ -272,7 +277,25 @@ impl TextMeasureCtx {
             font_ctx: FontContext::new(),
             layout_ctx: LayoutContext::new(),
             layouts: FxHashMap::default(),
+            marker_layouts: FxHashMap::default(),
         }
+    }
+
+    /// Shape a list item's marker (a single run) into a one-line `Layout` and
+    /// cache it under `taffy_id`, so paint can extract its glyphs and hang it to
+    /// the left of the item's content box. No wrap (markers are one line).
+    pub fn shape_marker(&mut self, run: &InlineRun, taffy_id: taffy::NodeId) {
+        let mut builder = self
+            .layout_ctx
+            .ranged_builder(&mut self.font_ctx, &run.text, 1.0, true);
+        builder.push_default(StyleProperty::FontSize(run.font_size));
+        builder.push_default(family_property(&run.font_family));
+        builder.push_default(StyleProperty::FontWeight(FontWeight::new(run.weight)));
+        builder.push_default(StyleProperty::Brush(ColorBrush(run.color)));
+        let mut layout: Layout<ColorBrush> = builder.build(&run.text);
+        layout.break_all_lines(None);
+        layout.align(Alignment::Start, AlignmentOptions::default());
+        self.marker_layouts.insert(taffy_id, layout);
     }
 }
 

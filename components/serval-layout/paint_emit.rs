@@ -678,6 +678,9 @@ pub(crate) fn walk<D>(
                         &mut em.images,
                         commands,
                     );
+                    // A list item's marker (bullet / ordinal) hangs to the left
+                    // of its content box; no-op for non-list-items.
+                    emit_list_marker(g, id, content_offset, &mut em.fonts, commands);
                 }
             }
             NodeKind::Text => {
@@ -753,6 +756,61 @@ pub(crate) fn walk<D>(
     }
     if pushed {
         commands.push(PaintCmd::PopTransform);
+    }
+}
+
+/// Emit a list item's marker, hanging to the left of its content box. The
+/// marker `Layout` was shaped after layout into `marker_layouts`; its right edge
+/// sits a small gap left of the content-box left edge, top-aligned with the
+/// content box (so a same-size first line shares the marker's baseline). No-op
+/// for a node with no cached marker layout (every non-list-item).
+fn emit_list_marker<NodeId: Copy + Eq + Hash>(
+    source: &GlyphSource<'_, NodeId>,
+    dom_id: NodeId,
+    content_offset: (f32, f32),
+    fonts: &mut FontCollector,
+    commands: &mut Vec<PaintCmd>,
+) {
+    let Some(taffy_id) = source.constructed.node_map.get(&dom_id) else {
+        return;
+    };
+    let Some(layout) = source.text_ctx.marker_layouts.get(taffy_id) else {
+        return;
+    };
+    let marker_width = layout.width();
+    let gap = layout.height() * 0.25;
+    let ox = content_offset.0 - gap - marker_width;
+    let oy = content_offset.1;
+    for line in layout.lines() {
+        for item in line.items() {
+            if let PositionedLayoutItem::GlyphRun(run) = item {
+                let parley_run = run.run();
+                let key = fonts.intern(parley_run.font());
+                let font_size = parley_run.font_size();
+                let [r, g, b, a] = run.style().brush.0;
+                let glyphs: Vec<GlyphInstance> = run
+                    .positioned_glyphs()
+                    .map(|gl| GlyphInstance {
+                        index: gl.id,
+                        point: LayoutPoint::new(ox + gl.x, oy + gl.y),
+                    })
+                    .collect();
+                if glyphs.is_empty() {
+                    continue;
+                }
+                commands.push(PaintCmd::DrawText(TextRunItem {
+                    placement: CommonPlacement::new(LayoutRect::new(
+                        LayoutPoint::new(ox, oy),
+                        LayoutPoint::new(ox + marker_width, oy + layout.height()),
+                    )),
+                    font_instance: key,
+                    font_size,
+                    color: ColorF::new(r, g, b, a),
+                    glyphs,
+                    options: TextOptions::default(),
+                }));
+            }
+        }
     }
 }
 

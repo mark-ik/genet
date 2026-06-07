@@ -321,6 +321,66 @@ fn text_decoration_color_of<NodeId: Copy + Eq + Hash>(
     Some(*srgb.raw_components())
 }
 
+/// The list marker string for a `<li>` element, or `None` for non-list-items.
+/// A `<li>` under the nearest `<ol>` ancestor gets its 1-based ordinal (`"1."`,
+/// `"2."`, …); under a `<ul>` (or with no ordered ancestor) it gets a disc
+/// bullet (`"•"`). The ordinal counts preceding `<li>` siblings under the same
+/// parent. `list-style-type` variants, `start` / `value`, and `list-style-image`
+/// are deferred.
+fn list_marker_text<D: LayoutDom>(dom: &D, id: D::NodeId) -> Option<String> {
+    if dom.element_name(id)?.local != html5ever::local_name!("li") {
+        return None;
+    }
+    // Nearest ol/ul ancestor decides ordered (numbered) vs unordered (bullet).
+    let mut anc = dom.parent(id);
+    let ordered = loop {
+        let p = anc?;
+        if let Some(name) = dom.element_name(p) {
+            if name.local == html5ever::local_name!("ol") {
+                break true;
+            }
+            if name.local == html5ever::local_name!("ul") {
+                break false;
+            }
+        }
+        anc = dom.parent(p);
+    };
+    if !ordered {
+        return Some("\u{2022}".to_string());
+    }
+    let parent = dom.parent(id)?;
+    let mut ordinal = 1usize;
+    for sib in dom.dom_children(parent) {
+        if sib == id {
+            break;
+        }
+        if dom.element_name(sib).is_some_and(|q| q.local == html5ever::local_name!("li")) {
+            ordinal += 1;
+        }
+    }
+    Some(format!("{ordinal}."))
+}
+
+/// The marker for a list item as single-run [`InlineContent`], styled by the
+/// `<li>`'s own font + color, ready to shape and hang to the left of the item.
+/// `None` for non-list-items. Decoration is cleared (a marker is never
+/// underlined / struck through by the item's own `text-decoration`).
+pub(crate) fn list_marker_content<NodeId, D>(
+    dom: &D,
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> Option<InlineContent<NodeId>>
+where
+    NodeId: Copy + Eq + Hash,
+    D: LayoutDom<NodeId = NodeId>,
+{
+    let text = list_marker_text(dom, id)?;
+    let mut run = run_for_element(styles, id, text);
+    run.underline = false;
+    run.strikethrough = false;
+    Some(InlineContent { runs: vec![run], boxes: Vec::new() })
+}
+
 /// Read an element's cascaded `font-size` in CSS px. Returns `None`
 /// when the cascade hasn't been applied to that element (hand-rolled
 /// style fixtures); the caller defaults to `DEFAULT_FONT_SIZE`.

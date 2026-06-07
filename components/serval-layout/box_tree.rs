@@ -40,7 +40,8 @@ use taffy::{
 
 use crate::adapter::NodeRef;
 use crate::construct::{
-    establishes_inline_context, gather_inline_content, is_replaced, replaced_px_size,
+    establishes_inline_context, gather_inline_content, is_replaced, list_marker_content,
+    replaced_px_size,
     run_for_element,
 };
 use crate::fragment::FragmentPlane;
@@ -81,6 +82,11 @@ struct BoxNode<Id> {
     /// `Some` => a measured leaf (inline formatting context / bare text);
     /// parley measures it via [`measure_inline_content`].
     inline_content: Option<InlineContent<Id>>,
+    /// `Some` for a list item (`<li>`): its hanging marker (a bullet or ordinal)
+    /// as single-run inline content. Shaped into
+    /// [`TextMeasureCtx::marker_layouts`](crate::text_measure::TextMeasureCtx)
+    /// after layout; paint hangs it to the left of the item's content box.
+    marker: Option<InlineContent<Id>>,
     /// `Some((w, h))` => a replaced leaf (`<img>`) measured to this size
     /// (intrinsic from the `ImagePlane`, overridden by definite CSS
     /// width/height). Mutually exclusive with `inline_content`.
@@ -96,6 +102,7 @@ impl<Id> BoxNode<Id> {
             style,
             children: Vec::new(),
             inline_content: None,
+            marker: None,
             replaced_size: None,
             cache: Cache::new(),
             unrounded_layout: Layout::new(),
@@ -204,6 +211,7 @@ where
     if establishes_inline_context(dom, styles, elem) {
         let mut node = BoxNode::new(style);
         node.inline_content = Some(gather_inline_content(dom, styles, images, elem));
+        node.marker = list_marker_content(dom, styles, elem.id());
         let i = tree.push(node);
         tree.node_map.insert(elem.id(), nid(i));
         return i;
@@ -234,6 +242,7 @@ where
     }
     let mut node = BoxNode::new(style);
     node.children = children;
+    node.marker = list_marker_content(dom, styles, elem.id());
     let i = tree.push(node);
     tree.node_map.insert(elem.id(), nid(i));
     i
@@ -656,6 +665,14 @@ where
         };
         taffy::compute_root_layout(&mut view, root, viewport);
         taffy::round_layout(&mut view, root);
+    }
+
+    // Shape each list item's marker into a one-line parley layout keyed by the
+    // item's Taffy id, so paint can hang it to the left of the content box.
+    for i in 0..tree.nodes.len() {
+        if let Some(run) = tree.nodes[i].marker.as_ref().and_then(|m| m.runs.first()) {
+            text_ctx.shape_marker(run, nid(i));
+        }
     }
 
     let mut fragments = FragmentPlane::new();
