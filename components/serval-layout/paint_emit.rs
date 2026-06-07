@@ -829,7 +829,9 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                     // distance from the baseline to the decoration top, measured
                     // upward / y-up), so the screen-space top is `baseline -
                     // offset`; thickness is `underline_size` (the run's Decoration
-                    // overrides the font metrics when set). Same color as glyphs.
+                    // overrides the font metrics when set). The color is the
+                    // decoration brush (`text-decoration-color`, `currentColor` by
+                    // default, so it matches the glyphs unless set otherwise).
                     if let Some(deco) = run.style().underline.as_ref() {
                         let m = parley_run.metrics();
                         let uo = deco.offset.unwrap_or(m.underline_offset);
@@ -837,18 +839,19 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                         let y = bounds.min.y + content_offset.1 + run.baseline() - uo;
                         let x0 = bounds.min.x + content_offset.0 + run.offset();
                         let x1 = x0 + run.advance();
+                        let [dr, dg, db, da] = deco.brush.0;
                         commands.push(PaintCmd::DrawRect(RectItem {
                             placement: CommonPlacement::new(LayoutRect::new(
                                 LayoutPoint::new(x0, y),
                                 LayoutPoint::new(x1, y + us),
                             )),
-                            color,
+                            color: ColorF::new(dr, dg, db, da),
                         }));
                     }
                     // `text-decoration: line-through` — same arrangement as the
-                    // underline (same y-up offset convention, so subtract). The
-                    // strikethrough offset sits well above the baseline, so the
-                    // line crosses the text middle.
+                    // underline (same y-up offset convention, so subtract; same
+                    // decoration-brush color). The strikethrough offset sits well
+                    // above the baseline, so the line crosses the text middle.
                     if let Some(deco) = run.style().strikethrough.as_ref() {
                         let m = parley_run.metrics();
                         let so = deco.offset.unwrap_or(m.strikethrough_offset);
@@ -856,12 +859,13 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                         let y = bounds.min.y + content_offset.1 + run.baseline() - so;
                         let x0 = bounds.min.x + content_offset.0 + run.offset();
                         let x1 = x0 + run.advance();
+                        let [dr, dg, db, da] = deco.brush.0;
                         commands.push(PaintCmd::DrawRect(RectItem {
                             placement: CommonPlacement::new(LayoutRect::new(
                                 LayoutPoint::new(x0, y),
                                 LayoutPoint::new(x1, y + ss),
                             )),
-                            color,
+                            color: ColorF::new(dr, dg, db, da),
                         }));
                     }
                     emitted = true;

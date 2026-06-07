@@ -664,6 +664,63 @@ mod tests {
         assert!(decoration_y("").is_none(), "no decoration -> no thin rect");
     }
 
+    /// `text-decoration-color` colors the decoration independently of the text:
+    /// blue text with a red underline emits a red decoration rect over blue glyphs.
+    #[test]
+    fn text_decoration_color_is_independent_of_text_color() {
+        use crate::image_decode::BackgroundImagePlane;
+        use crate::paint_emit::emit_paint_list_with_layouts;
+        use paint_list_api::{DeviceIntSize, PaintCmd, PaintList};
+        use rustc_hash::FxHashMap;
+
+        let doc = StaticDocument::parse("<html><body><p>link</p></body></html>");
+        let sheet = &["html, body, p { display: block; margin: 0; } \
+            p { font-size: 40px; color: rgb(0, 0, 255); \
+            text-decoration: underline; text-decoration-color: rgb(255, 0, 0); }"];
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&doc, &styles, &ImagePlane::new(), viewport);
+        let scroll = FxHashMap::default();
+        let plist = emit_paint_list_with_layouts(
+            &doc,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &scroll,
+            DeviceIntSize::new(800, 600),
+        );
+        // The thin DrawRect (height << font size) is the underline decoration.
+        let deco = plist
+            .commands()
+            .iter()
+            .find_map(|c| match c {
+                PaintCmd::DrawRect(r) => {
+                    let b = &r.placement.bounds;
+                    (b.height() > 0.0 && b.height() < 10.0).then_some(r.color)
+                },
+                _ => None,
+            })
+            .expect("underline emits a decoration rect");
+        assert!(deco.r > 0.9 && deco.b < 0.1, "decoration is red, got {deco:?}");
+        // The glyph text stays blue.
+        let text = plist
+            .commands()
+            .iter()
+            .find_map(|c| match c {
+                PaintCmd::DrawText(t) if !t.glyphs.is_empty() => Some(t.color),
+                _ => None,
+            })
+            .expect("text emits glyphs");
+        assert!(text.b > 0.9 && text.r < 0.1, "text is blue, got {text:?}");
+    }
+
     /// A cascaded `line-height` controls the line-box height: `line-height: 2`
     /// on 40px text gives a ~80px line box (2 × font-size), vs the ~46px
     /// font-metric default. Verifies the cascade → parley line-height plumbing

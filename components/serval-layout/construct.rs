@@ -231,6 +231,7 @@ pub(crate) fn run_for_element<NodeId: Copy + Eq + Hash>(
         color: text_color_of(styles, id).unwrap_or([0.0, 0.0, 0.0, 1.0]),
         underline: text_underline_of(styles, id).unwrap_or(false),
         strikethrough: text_strikethrough_of(styles, id).unwrap_or(false),
+        decoration_color: text_decoration_color_of(styles, id).unwrap_or([0.0, 0.0, 0.0, 1.0]),
         line_height: line_height_of(styles, id).unwrap_or_default(),
     }
 }
@@ -300,6 +301,22 @@ fn text_color_of<NodeId: Copy + Eq + Hash>(
     let entry = styles.get(id)?;
     let data = entry.borrow_data()?;
     let absolute = data.styles.primary().get_inherited_text().color;
+    let srgb = absolute.into_srgb_legacy();
+    Some(*srgb.raw_components())
+}
+
+/// Read an element's cascaded `text-decoration-color` as straight RGBA in
+/// `[0, 1]`, resolving the default `currentColor` against the element's own
+/// `color`. `None` when the cascade hasn't run.
+fn text_decoration_color_of<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> Option<[f32; 4]> {
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    let primary = data.styles.primary();
+    let current = primary.get_inherited_text().color;
+    let absolute = primary.get_text().text_decoration_color.resolve_to_absolute(&current);
     let srgb = absolute.into_srgb_legacy();
     Some(*srgb.raw_components())
 }

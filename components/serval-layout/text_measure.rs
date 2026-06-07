@@ -115,6 +115,11 @@ pub struct InlineRun {
     /// from parley's strikethrough geometry (parley supplies it but does not
     /// draw it).
     pub strikethrough: bool,
+    /// Cascaded `text-decoration-color` (straight RGBA), resolved from
+    /// `currentColor` against the run's `color`. Pushed to parley as the
+    /// underline / strikethrough brush, so the decoration can differ in color
+    /// from the glyphs.
+    pub decoration_color: [f32; 4],
     /// Cascaded `line-height`. Pushed to parley as `StyleProperty::LineHeight`
     /// (skipped when `Normal`, which is parley's default).
     pub line_height: LineHeightSpec,
@@ -133,6 +138,7 @@ impl InlineRun {
             color: [0.0, 0.0, 0.0, 1.0],
             underline: false,
             strikethrough: false,
+            decoration_color: [0.0, 0.0, 0.0, 1.0],
             line_height: LineHeightSpec::Normal,
         }
     }
@@ -192,6 +198,7 @@ impl<NodeId> InlineContent<NodeId> {
                 color: [0.0, 0.0, 0.0, 1.0],
                 underline: false,
                 strikethrough: false,
+                decoration_color: [0.0, 0.0, 0.0, 1.0],
                 line_height: LineHeightSpec::Normal,
             }],
             boxes: Vec::new(),
@@ -361,10 +368,18 @@ pub fn measure_inline_content<NodeId>(
         // the line, since parley supplies the geometry but does not draw it.
         if run.underline {
             builder.push(StyleProperty::Underline(true), range.clone());
+            builder.push(
+                StyleProperty::UnderlineBrush(Some(ColorBrush(run.decoration_color))),
+                range.clone(),
+            );
         }
         // `text-decoration: line-through` — same arrangement as underline.
         if run.strikethrough {
             builder.push(StyleProperty::Strikethrough(true), range.clone());
+            builder.push(
+                StyleProperty::StrikethroughBrush(Some(ColorBrush(run.decoration_color))),
+                range.clone(),
+            );
         }
         // Cascaded `line-height`. `Normal` is parley's default (font metrics), so
         // only a CSS `<number>` / `<length>` overrides it.
