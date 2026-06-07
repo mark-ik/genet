@@ -1018,6 +1018,59 @@ mod tests {
         assert_eq!(valued[2], plain[10], "item after value=10 `11.`");
     }
 
+    /// `<ol reversed>` counts the items down: a three-item list reads `3.`, `2.`,
+    /// `1.` (the reverse of a plain list's first three markers).
+    #[test]
+    fn ol_reversed_counts_down() {
+        use crate::image_decode::BackgroundImagePlane;
+        use crate::paint_emit::emit_paint_list_with_layouts;
+        use paint_list_api::{DeviceIntSize, PaintCmd, PaintList};
+        use rustc_hash::FxHashMap;
+
+        let all_markers = |html: &str| -> Vec<Vec<u32>> {
+            let doc = StaticDocument::parse(html);
+            let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+            run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), &[], None);
+            let viewport = taffy::Size {
+                width: taffy::AvailableSpace::Definite(800.0),
+                height: taffy::AvailableSpace::Definite(600.0),
+            };
+            let (fragments, built, text_ctx) = layout(&doc, &styles, &ImagePlane::new(), viewport);
+            let scroll = FxHashMap::default();
+            let plist = emit_paint_list_with_layouts(
+                &doc,
+                &styles,
+                &fragments,
+                &built,
+                &text_ctx,
+                &ImagePlane::new(),
+                &BackgroundImagePlane::new(),
+                &scroll,
+                DeviceIntSize::new(800, 600),
+            );
+            plist
+                .commands()
+                .iter()
+                .filter_map(|c| match c {
+                    PaintCmd::DrawText(t)
+                        if t.placement.bounds.min.x < 0.0 && !t.glyphs.is_empty() =>
+                    {
+                        Some(t.glyphs.iter().map(|g| g.index).collect())
+                    },
+                    _ => None,
+                })
+                .collect()
+        };
+
+        let plain = all_markers("<html><body><ol><li>a</li><li>b</li><li>c</li></ol></body></html>");
+        let rev =
+            all_markers("<html><body><ol reversed><li>a</li><li>b</li><li>c</li></ol></body></html>");
+        assert_eq!(rev.len(), 3, "three reversed markers");
+        assert_eq!(rev[0], plain[2], "first item counts down from 3 (`3.`)");
+        assert_eq!(rev[1], plain[1], "`2.`");
+        assert_eq!(rev[2], plain[0], "`1.`");
+    }
+
     /// `list-style-position: inside` flows the marker into the item's inline
     /// content (no hanging marker, and more inline glyphs since the bullet is
     /// prepended), where the default `outside` hangs it to the left.

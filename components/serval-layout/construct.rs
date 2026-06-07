@@ -421,19 +421,32 @@ where
     if let MarkerKind::Bullet(glyph) = kind {
         return Some(glyph.to_string());
     }
-    // Counter kinds: the item's ordinal, honoring the list `start` attribute and
-    // any `<li value>` (HTML's ordinal algorithm). The counter begins at `start`
-    // (default 1); each `<li value>` resets it for that item and the ones after.
+    // Counter kinds: the item's ordinal, honoring `start`, `<ol reversed>`, and
+    // any `<li value>` (HTML's ordinal algorithm). The counter steps by +1, or
+    // -1 when reversed; it begins at `start`, defaulting to 1 (or, when reversed
+    // without an explicit `start`, the item count). Each `<li value>` resets it
+    // for that item and the ones after.
     let parent = dom.parent(id)?;
     let no_ns: html5ever::Namespace = html5ever::ns!();
+    let is_li = |n| dom.element_name(n).is_some_and(|q| q.local == html5ever::local_name!("li"));
+    let reversed = dom
+        .attribute(parent, &no_ns, &html5ever::LocalName::from("reversed"))
+        .is_some();
+    let step: i64 = if reversed { -1 } else { 1 };
     let start: i64 = dom
         .attribute(parent, &no_ns, &html5ever::LocalName::from("start"))
         .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(1);
+        .unwrap_or_else(|| {
+            if reversed {
+                dom.dom_children(parent).filter(|n| is_li(*n)).count() as i64
+            } else {
+                1
+            }
+        });
     let mut counter = start;
     let mut ordinal = start;
     for sib in dom.dom_children(parent) {
-        if dom.element_name(sib).is_none_or(|q| q.local != html5ever::local_name!("li")) {
+        if !is_li(sib) {
             continue;
         }
         if let Some(v) = dom
@@ -446,7 +459,7 @@ where
             ordinal = counter;
             break;
         }
-        counter += 1;
+        counter += step;
     }
     // Alphabetic / roman counters are defined for positive ordinals; outside that
     // range (a 0 / negative `start` or `value`) they fall back to decimal.
