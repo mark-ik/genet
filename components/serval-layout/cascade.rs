@@ -211,14 +211,16 @@ pub fn build_stylist(
     let mut stylist = Stylist::new(device, QuirksMode::NoQuirks);
     let read = lock.read();
     // Prepend the baseline UA stylesheet (`<html>`/`<body>` → block + fill the
-    // viewport; structural block elements default to `display:block`), then the
-    // author sheets (also UA-origin for now; engine-vs-author origin is a
-    // follow-up). The Stylist resolves rule indices during flush, so all sheets
-    // must be present first.
-    let ua_sheet = parse_stylesheet(crate::ua_defaults::UA_DEFAULTS, lock, &url_data);
+    // viewport; structural block elements default to `display:block`) at
+    // UserAgent origin, then the page sheets at Author origin, so the cascade
+    // orders origins correctly (Author wins over UA for normal declarations; UA
+    // `!important` wins over Author normal, per CSS 2.1 §6.4.1). The Stylist
+    // resolves rule indices during flush, so all sheets must be present first.
+    let ua_sheet =
+        parse_stylesheet(crate::ua_defaults::UA_DEFAULTS, Origin::UserAgent, lock, &url_data);
     stylist.append_stylesheet(ua_sheet, &read);
     for css in stylesheets {
-        let sheet = parse_stylesheet(css, lock, &url_data);
+        let sheet = parse_stylesheet(css, Origin::Author, lock, &url_data);
         stylist.append_stylesheet(sheet, &read);
     }
     let guards = StylesheetGuards { author: &read, ua_or_user: &read };
@@ -600,16 +602,22 @@ fn make_url_data(base_url: Option<&str>) -> UrlExtraData {
     UrlExtraData::from(url)
 }
 
-/// Parse a single CSS source string as a UA-origin `DocumentStyleSheet`.
+/// Parse a single CSS source string into a `DocumentStyleSheet` at the given
+/// cascade `origin` (UA defaults are `UserAgent`, page sheets are `Author`).
 /// `url_data` is the base URL relative `url()`s resolve against (see
 /// [`make_url_data`]). No loader or error reporter (synthetic
 /// stylesheets don't @import; if they did we'd plumb a real loader).
-fn parse_stylesheet(css: &str, lock: &SharedRwLock, url_data: &UrlExtraData) -> DocumentStyleSheet {
+fn parse_stylesheet(
+    css: &str,
+    origin: Origin,
+    lock: &SharedRwLock,
+    url_data: &UrlExtraData,
+) -> DocumentStyleSheet {
     let media = ServoArc::new(lock.wrap(MediaList::empty()));
     let sheet = Stylesheet::from_str(
         css,
         url_data.clone(),
-        Origin::UserAgent,
+        origin,
         media,
         lock.clone(),
         None, // stylesheet loader
@@ -719,6 +727,34 @@ mod tests {
         assert!(g < 0.001, "green channel: {g}");
         assert!(b < 0.001, "blue channel: {b}");
         assert!((a - 1.0).abs() < 0.001, "alpha: {a}");
+    }
+
+    /// Cascade origin ordering: an **author** declaration beats a UA default even
+    /// at lower specificity. The UA sheet sets `strong { font-weight: bold }` (a
+    /// type selector, specificity 0,0,1); an author `* { font-weight: normal }`
+    /// (the universal selector, 0,0,0) still wins, because author origin outranks
+    /// UA origin before specificity is consulted. (Before author sheets carried
+    /// `Origin::Author`, both were UA-origin and the higher-specificity UA rule
+    /// won — this test would have read `bold`.)
+    #[test]
+    fn author_origin_beats_ua_default_below_specificity() {
+        let document = StaticDocument::parse("<html><body><strong>x</strong></body></html>");
+        let mut plane: StylePlane<_> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut plane,
+            euclid::Size2D::new(800.0, 600.0),
+            &["* { font-weight: normal; }"],
+            None,
+        );
+        let strong_id = find_element(&document, local_name!("strong")).expect("strong exists");
+        let entry = plane.get(strong_id).expect("strong StyleEntry exists");
+        let data = entry.borrow_data().expect("strong ElementData populated");
+        let weight = data.styles.primary().get_font().font_weight.value();
+        assert!(
+            (weight - 400.0).abs() < 0.5,
+            "author `* {{ font-weight: normal }}` beats UA `strong {{ bold }}`: got {weight}"
+        );
     }
 
     /// Probe class + id selector matching. Two rules in the same
