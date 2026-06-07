@@ -111,9 +111,15 @@ receives it) and returns it; thread it through `build_stylist` and the adapter.
 **Touch-points:** `layout_dom_api` (trait method + default), `serval-static-dom`
 (capture + return), `cascade.rs` + `adapter_stylo.rs` (use it).
 
-**Effort / risk:** Small, but cross-crate. Low value (almost all real content is
-standards mode); do it opportunistically, e.g. alongside another
-`layout_dom_api` change.
+**Effort / risk:** Small per site, but it fans out. Finding (2026-06-07):
+`StaticDocument` *already* captures and exposes the mode (`quirks_mode()` ->
+`StaticQuirksMode`, set by its tree sink), so the parse side is free. The
+remaining cost is the trait method + ~6 cascade/adapter sites that hardcode
+`NoQuirks` (`make_device`, `Stylist::new`, two `MatchingContext`s,
+`build_stylist`'s signature, and `adapter_stylo::quirks_mode` which would read
+the mode through the TLS cascade context). Near-zero real value (almost all
+content is standards mode), so it stays deferred until it rides along with
+another `layout_dom_api` / cascade change.
 
 **Done when:** a no-doctype document parses to quirks mode and a quirk-gated
 rule (e.g. the table font-size quirk) reflects it.
