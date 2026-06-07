@@ -37,8 +37,8 @@ use paint_list_api::{
     DeviceIntSize, EngineId, ExtendMode, FontInstanceKey, FontResource, GlyphInstance, GradientStop,
     IdNamespace, ImageItem, ImageKey, ImageRendering, ImageResource, LayoutPoint, LayoutRect,
     LayoutSideOffsets, LayoutSize, LayoutTransform, LayoutVector2D, LinearGradientItem,
-    LinearGradientPayload, NormalBorder, PaintCmd, PaintList, RectItem, RepeatingImageItem,
-    TextOptions, TextRunItem, TransformSpec,
+    LinearGradientPayload, NormalBorder, PaintCmd, PaintList, RadialGradientItem,
+    RadialGradientPayload, RectItem, RepeatingImageItem, TextOptions, TextRunItem, TransformSpec,
 };
 use paint_list_api::items::{BorderDetails, BorderItem, ShadowItem};
 use paint_list_api::specs::{ClipKind, ClipSpec, TransformKind};
@@ -542,8 +542,9 @@ pub(crate) fn walk<D>(
                     placement: CommonPlacement::new(local_bounds),
                     color: background_color_of(styles, id),
                 }));
-                // A linear-gradient background-image layer paints over the color,
-                // clipped to the same background box. Radial / conic are deferred.
+                // A gradient background-image layer paints over the color, over
+                // the same background box. Linear + radial are emitted; conic is
+                // deferred. Only the first background layer is read.
                 if let Some(grad) = linear_background_gradient_of(
                     styles,
                     id,
@@ -551,6 +552,13 @@ pub(crate) fn walk<D>(
                     local_bounds.height(),
                 ) {
                     commands.push(PaintCmd::DrawLinearGradient(grad));
+                } else if let Some(grad) = radial_background_gradient_of(
+                    styles,
+                    id,
+                    local_bounds.width(),
+                    local_bounds.height(),
+                ) {
+                    commands.push(PaintCmd::DrawRadialGradient(grad));
                 }
                 // CSS background-image paints over the background color,
                 // under content + border. Resolve background-size /
@@ -1078,8 +1086,7 @@ fn linear_background_gradient_of<NodeId: Copy + Eq + Hash>(
     w: f32,
     h: f32,
 ) -> Option<LinearGradientItem> {
-    use style::values::computed::Length;
-    use style::values::generics::image::{Gradient, GradientItem, Image};
+    use style::values::generics::image::{Gradient, Image};
 
     let entry = styles.get(id)?;
     let data = entry.borrow_data()?;
@@ -1101,10 +1108,42 @@ fn linear_background_gradient_of<NodeId: Copy + Eq + Hash>(
     let start = LayoutPoint::new(cx - dx * len / 2.0, cy - dy * len / 2.0);
     let end = LayoutPoint::new(cx + dx * len / 2.0, cy + dy * len / 2.0);
 
-    // Color stops -> 0..1 offsets along the line. Positioned stops resolve their
-    // length/percentage against the line; unpositioned (`auto`) stops fill in by
-    // even distribution between bracketing positioned ones; offsets clamp
-    // monotonic. Interpolation hints (midpoint biasing) are skipped for now.
+    // Color stops resolve to 0..1 offsets along the gradient line (length `len`).
+    let stops = resolve_gradient_stops(items, len, current)?;
+
+    Some(LinearGradientItem {
+        placement: CommonPlacement::new(LayoutRect::new(
+            LayoutPoint::new(0.0, 0.0),
+            LayoutPoint::new(w, h),
+        )),
+        gradient: LinearGradientPayload {
+            start_point: start,
+            end_point: end,
+            extend_mode: ExtendMode::Clamp,
+            stops,
+        },
+        tile_size: LayoutSize::new(w, h),
+        tile_spacing: LayoutSize::zero(),
+    })
+}
+
+/// Resolve a gradient's color stops to ascending 0..1 offsets along a gradient
+/// line of length `reference_len`. Positioned stops resolve their
+/// length/percentage against the line; unpositioned (`auto`) stops fill in by
+/// even distribution between bracketing positioned ones; offsets clamp monotonic.
+/// Interpolation hints (midpoint biasing) are skipped for now. `None` for fewer
+/// than two stops. Shared by the linear and radial emitters.
+fn resolve_gradient_stops(
+    items: &[style::values::generics::image::GradientItem<
+        style::values::computed::Color,
+        style::values::computed::LengthPercentage,
+    >],
+    reference_len: f32,
+    current: style::color::AbsoluteColor,
+) -> Option<Vec<GradientStop>> {
+    use style::values::computed::Length;
+    use style::values::generics::image::GradientItem;
+
     let mut raw: Vec<(Option<f32>, ColorF)> = Vec::new();
     for item in items.iter() {
         match item {
@@ -1112,7 +1151,8 @@ fn linear_background_gradient_of<NodeId: Copy + Eq + Hash>(
                 raw.push((None, stylo_color_to_paint(color, current)));
             },
             GradientItem::ComplexColorStop { color, position } => {
-                let off = (position.resolve(Length::new(len)).px() / len).clamp(0.0, 1.0);
+                let off =
+                    (position.resolve(Length::new(reference_len)).px() / reference_len).clamp(0.0, 1.0);
                 raw.push((Some(off), stylo_color_to_paint(color, current)));
             },
             GradientItem::InterpolationHint(_) => {},
@@ -1156,25 +1196,132 @@ fn linear_background_gradient_of<NodeId: Copy + Eq + Hash>(
         i = j;
     }
 
-    let stops = raw
-        .into_iter()
-        .map(|(off, color)| GradientStop { offset: off.unwrap(), color })
-        .collect();
+    Some(
+        raw.into_iter()
+            .map(|(off, color)| GradientStop { offset: off.unwrap(), color })
+            .collect(),
+    )
+}
 
-    Some(LinearGradientItem {
+/// The first `background-image` layer of `id`, if it is a **radial** gradient,
+/// resolved to a paint-list [`RadialGradientItem`] over a `w`x`h` border box in
+/// node-local coords (the paint walk's transform places it). Circle and ellipse
+/// shapes are supported, sized by explicit radii or any extent keyword
+/// (`closest`/`farthest-side`/`-corner`, `contain`, `cover`); `position` sets the
+/// center. Conic gradients are deferred. `None` when there is no cascade data, no
+/// background-image, or the first layer is not a radial gradient.
+fn radial_background_gradient_of<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+    w: f32,
+    h: f32,
+) -> Option<RadialGradientItem> {
+    use style::values::computed::Length;
+    use style::values::generics::image::{Circle, Ellipse, EndingShape, Gradient, Image};
+
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    let primary = data.styles.primary();
+    let current = primary.get_inherited_text().color;
+    let first = primary.get_background().background_image.0.iter().next()?;
+    let Image::Gradient(gradient) = first else { return None };
+    let Gradient::Radial { shape, position, items, .. } = &**gradient else { return None };
+
+    // Center: resolve the position against the box (percentages vs each axis).
+    let cx = position.horizontal.resolve(Length::new(w)).px();
+    let cy = position.vertical.resolve(Length::new(h)).px();
+
+    // Ending-shape radii (rx, ry) in box-local px.
+    let (rx, ry) = match shape {
+        EndingShape::Circle(Circle::Radius(r)) => {
+            let r = r.0.px();
+            (r, r)
+        },
+        EndingShape::Circle(Circle::Extent(ext)) => resolve_extent_radii(*ext, true, cx, cy, w, h),
+        EndingShape::Ellipse(Ellipse::Radii(rx_lp, ry_lp)) => (
+            rx_lp.0.resolve(Length::new(w)).px(),
+            ry_lp.0.resolve(Length::new(h)).px(),
+        ),
+        EndingShape::Ellipse(Ellipse::Extent(ext)) => resolve_extent_radii(*ext, false, cx, cy, w, h),
+    };
+    if rx <= 0.0 || ry <= 0.0 {
+        return None;
+    }
+
+    // Stops resolve along the horizontal radius: the renderer builds a unit-circle
+    // radial and scales it by (rx, ry), so offset 1.0 lands on the ending shape on
+    // every ray regardless of which radius the lengths were resolved against.
+    let stops = resolve_gradient_stops(items, rx, current)?;
+
+    Some(RadialGradientItem {
         placement: CommonPlacement::new(LayoutRect::new(
             LayoutPoint::new(0.0, 0.0),
             LayoutPoint::new(w, h),
         )),
-        gradient: LinearGradientPayload {
-            start_point: start,
-            end_point: end,
+        gradient: RadialGradientPayload {
+            center: LayoutPoint::new(cx, cy),
+            radius: LayoutSize::new(rx, ry),
             extend_mode: ExtendMode::Clamp,
             stops,
         },
         tile_size: LayoutSize::new(w, h),
         tile_spacing: LayoutSize::zero(),
     })
+}
+
+/// Resolve a radial gradient's ending-shape radii from an extent keyword. For a
+/// circle (`is_circle`) both radii are equal; for an ellipse they are computed
+/// per axis. `(cx, cy)` is the center and `(w, h)` the box, both in box-local px.
+/// `contain` aliases `closest-side`, `cover` aliases `farthest-corner`.
+fn resolve_extent_radii(
+    extent: style::values::generics::image::ShapeExtent,
+    is_circle: bool,
+    cx: f32,
+    cy: f32,
+    w: f32,
+    h: f32,
+) -> (f32, f32) {
+    use std::f32::consts::SQRT_2;
+
+    use style::values::generics::image::ShapeExtent as E;
+
+    // Distances from the center to each box edge.
+    let left = cx.max(0.0);
+    let right = (w - cx).max(0.0);
+    let top = cy.max(0.0);
+    let bottom = (h - cy).max(0.0);
+    let extent = match extent {
+        E::Contain => E::ClosestSide,
+        E::Cover => E::FarthestCorner,
+        other => other,
+    };
+    if is_circle {
+        let r = match extent {
+            E::ClosestSide => left.min(right).min(top).min(bottom),
+            E::FarthestSide => left.max(right).max(top).max(bottom),
+            E::ClosestCorner => {
+                let (dx, dy) = (left.min(right), top.min(bottom));
+                (dx * dx + dy * dy).sqrt()
+            },
+            E::FarthestCorner => {
+                let (dx, dy) = (left.max(right), top.max(bottom));
+                (dx * dx + dy * dy).sqrt()
+            },
+            E::Contain | E::Cover => unreachable!("aliased above"),
+        };
+        (r, r)
+    } else {
+        // Ellipse: a corner case keeps the aspect ratio of the matching side case,
+        // so the ellipse through the corner at (side_x, side_y) is a uniform
+        // sqrt(2) scale of those side radii.
+        match extent {
+            E::ClosestSide => (left.min(right), top.min(bottom)),
+            E::FarthestSide => (left.max(right), top.max(bottom)),
+            E::ClosestCorner => (left.min(right) * SQRT_2, top.min(bottom) * SQRT_2),
+            E::FarthestCorner => (left.max(right) * SQRT_2, top.max(bottom) * SQRT_2),
+            E::Contain | E::Cover => unreachable!("aliased above"),
+        }
+    }
 }
 
 /// Whether `id` clips its overflow on either axis — i.e. `overflow-x` or

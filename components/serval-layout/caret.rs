@@ -394,6 +394,113 @@ mod tests {
         );
     }
 
+    /// A default `radial-gradient(...)` is a centered farthest-corner ellipse:
+    /// the center sits at the box midpoint and the radii are the farthest-side
+    /// distances scaled by sqrt(2) (unequal on a non-square box -> an ellipse).
+    #[test]
+    fn radial_gradient_default_is_centered_ellipse() {
+        use crate::image_decode::BackgroundImagePlane;
+        use crate::paint_emit::emit_paint_list_with_layouts;
+        use paint_list_api::{DeviceIntSize, PaintCmd, PaintList};
+        use rustc_hash::FxHashMap;
+
+        let doc = StaticDocument::parse("<html><body><div></div></body></html>");
+        let sheet = &["html, body, div { display: block; margin: 0; border: 0; } \
+            div { width: 100px; height: 50px; \
+            background-image: radial-gradient(rgb(255, 0, 0), rgb(0, 0, 255)); }"];
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&doc, &styles, &ImagePlane::new(), viewport);
+        let scroll = FxHashMap::default();
+        let plist = emit_paint_list_with_layouts(
+            &doc,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &scroll,
+            DeviceIntSize::new(800, 600),
+        );
+        let grad = plist
+            .commands()
+            .iter()
+            .find_map(|c| match c {
+                PaintCmd::DrawRadialGradient(g) => Some(g),
+                _ => None,
+            })
+            .expect("a radial-gradient background emits a DrawRadialGradient");
+        assert!((grad.gradient.center.x - 50.0).abs() < 1e-3, "center x at box midpoint");
+        assert!((grad.gradient.center.y - 25.0).abs() < 1e-3, "center y at box midpoint");
+        let sqrt2 = std::f32::consts::SQRT_2;
+        assert!(
+            (grad.gradient.radius.width - 50.0 * sqrt2).abs() < 1e-2,
+            "rx = farthest-side x * sqrt(2)"
+        );
+        assert!(
+            (grad.gradient.radius.height - 25.0 * sqrt2).abs() < 1e-2,
+            "ry = farthest-side y * sqrt(2)"
+        );
+        assert_eq!(grad.gradient.stops.len(), 2, "two color stops");
+        assert!((grad.gradient.stops[0].offset - 0.0).abs() < 1e-3, "first stop at 0");
+        assert!((grad.gradient.stops[1].offset - 1.0).abs() < 1e-3, "last stop at 1");
+    }
+
+    /// `radial-gradient(circle <r> at <x> <y>, ...)` emits equal radii (a circle)
+    /// centered at the explicit position.
+    #[test]
+    fn radial_gradient_circle_uses_explicit_radius_and_position() {
+        use crate::image_decode::BackgroundImagePlane;
+        use crate::paint_emit::emit_paint_list_with_layouts;
+        use paint_list_api::{DeviceIntSize, PaintCmd, PaintList};
+        use rustc_hash::FxHashMap;
+
+        let doc = StaticDocument::parse("<html><body><div></div></body></html>");
+        let sheet = &["html, body, div { display: block; margin: 0; border: 0; } \
+            div { width: 100px; height: 50px; \
+            background-image: radial-gradient(circle 40px at 30px 10px, \
+            rgb(255, 0, 0), rgb(0, 0, 255)); }"];
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&doc, &styles, &ImagePlane::new(), viewport);
+        let scroll = FxHashMap::default();
+        let plist = emit_paint_list_with_layouts(
+            &doc,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &scroll,
+            DeviceIntSize::new(800, 600),
+        );
+        let grad = plist
+            .commands()
+            .iter()
+            .find_map(|c| match c {
+                PaintCmd::DrawRadialGradient(g) => Some(g),
+                _ => None,
+            })
+            .expect("a radial circle gradient emits a DrawRadialGradient");
+        assert!((grad.gradient.center.x - 30.0).abs() < 1e-3, "center x");
+        assert!((grad.gradient.center.y - 10.0).abs() < 1e-3, "center y");
+        assert!((grad.gradient.radius.width - 40.0).abs() < 1e-3, "circle rx");
+        assert!(
+            (grad.gradient.radius.height - grad.gradient.radius.width).abs() < 1e-3,
+            "circle ry = rx"
+        );
+    }
+
     /// A cascaded `line-height` controls the line-box height: `line-height: 2`
     /// on 40px text gives a ~80px line box (2 × font-size), vs the ~46px
     /// font-metric default. Verifies the cascade → parley line-height plumbing
