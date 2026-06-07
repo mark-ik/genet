@@ -661,6 +661,12 @@ mod tests {
             strike_y < underline_y,
             "line-through ({strike_y}) sits above the underline ({underline_y})"
         );
+        let overline_y =
+            decoration_y("text-decoration: overline;").expect("overline emits a rect");
+        assert!(
+            overline_y < strike_y,
+            "overline ({overline_y}) sits above line-through ({strike_y})"
+        );
         assert!(decoration_y("").is_none(), "no decoration -> no thin rect");
     }
 

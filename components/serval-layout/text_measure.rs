@@ -115,6 +115,10 @@ pub struct InlineRun {
     /// from parley's strikethrough geometry (parley supplies it but does not
     /// draw it).
     pub strikethrough: bool,
+    /// `text-decoration-line: overline` on the run's element. parley has no
+    /// overline decoration, so paint maps each glyph run back to its source run
+    /// and draws the line at the ascent from this flag.
+    pub overline: bool,
     /// Cascaded `text-decoration-color` (straight RGBA), resolved from
     /// `currentColor` against the run's `color`. Pushed to parley as the
     /// underline / strikethrough brush, so the decoration can differ in color
@@ -144,6 +148,7 @@ impl InlineRun {
             color: [0.0, 0.0, 0.0, 1.0],
             underline: false,
             strikethrough: false,
+            overline: false,
             decoration_color: [0.0, 0.0, 0.0, 1.0],
             letter_spacing: 0.0,
             word_spacing: 0.0,
@@ -206,6 +211,7 @@ impl<NodeId> InlineContent<NodeId> {
                 color: [0.0, 0.0, 0.0, 1.0],
                 underline: false,
                 strikethrough: false,
+                overline: false,
                 decoration_color: [0.0, 0.0, 0.0, 1.0],
                 letter_spacing: 0.0,
                 word_spacing: 0.0,

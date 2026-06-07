@@ -231,6 +231,7 @@ pub(crate) fn run_for_element<NodeId: Copy + Eq + Hash>(
         color: text_color_of(styles, id).unwrap_or([0.0, 0.0, 0.0, 1.0]),
         underline: text_underline_of(styles, id).unwrap_or(false),
         strikethrough: text_strikethrough_of(styles, id).unwrap_or(false),
+        overline: text_overline_of(styles, id).unwrap_or(false),
         decoration_color: text_decoration_color_of(styles, id).unwrap_or([0.0, 0.0, 0.0, 1.0]),
         letter_spacing: letter_spacing_of(styles, id).unwrap_or(0.0),
         word_spacing: word_spacing_of(styles, id).unwrap_or(0.0),
@@ -291,6 +292,24 @@ fn text_strikethrough_of<NodeId: Copy + Eq + Hash>(
             .get_text()
             .text_decoration_line
             .contains(TextDecorationLine::LINE_THROUGH),
+    )
+}
+
+/// Whether an element's cascaded `text-decoration-line` includes `overline`.
+/// `None` when the cascade hasn't run.
+fn text_overline_of<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> Option<bool> {
+    use style::values::computed::TextDecorationLine;
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    Some(
+        data.styles
+            .primary()
+            .get_text()
+            .text_decoration_line
+            .contains(TextDecorationLine::OVERLINE),
     )
 }
 

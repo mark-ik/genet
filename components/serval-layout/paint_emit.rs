@@ -859,6 +859,22 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
     // `<img>` nodes. Absent for a fixed-size leaf (no shaped content);
     // glyph runs still emit, boxes just won't resolve.
     let content = source.constructed.get_node_context(*taffy_id);
+    // Byte ranges of the source runs (concatenation order), so a glyph run can be
+    // mapped back to its `InlineRun` for `overline` (which parley does not carry
+    // on the run style, unlike underline / strikethrough).
+    let run_spans: Vec<(std::ops::Range<usize>, &crate::text_measure::InlineRun)> = content
+        .map(|c| {
+            let mut off = 0usize;
+            c.runs
+                .iter()
+                .map(|r| {
+                    let start = off;
+                    off += r.text.len();
+                    (start..off, r)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let mut emitted = false;
     for line in layout.lines() {
         for item in line.items() {
@@ -934,6 +950,30 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                             )),
                             color: ColorF::new(dr, dg, db, da),
                         }));
+                    }
+                    // `text-decoration: overline` — parley carries no overline, so
+                    // map this glyph run back to its source `InlineRun` and, when
+                    // set, draw a line at the ascent (top of the text) in the run's
+                    // decoration color.
+                    if let Some((_, src)) = run_spans
+                        .iter()
+                        .find(|(span, _)| span.contains(&parley_run.text_range().start))
+                    {
+                        if src.overline {
+                            let m = parley_run.metrics();
+                            let thickness = m.underline_size.max(1.0);
+                            let y = bounds.min.y + content_offset.1 + run.baseline() - m.ascent;
+                            let x0 = bounds.min.x + content_offset.0 + run.offset();
+                            let x1 = x0 + run.advance();
+                            let [dr, dg, db, da] = src.decoration_color;
+                            commands.push(PaintCmd::DrawRect(RectItem {
+                                placement: CommonPlacement::new(LayoutRect::new(
+                                    LayoutPoint::new(x0, y),
+                                    LayoutPoint::new(x1, y + thickness),
+                                )),
+                                color: ColorF::new(dr, dg, db, da),
+                            }));
+                        }
                     }
                     emitted = true;
                 },
