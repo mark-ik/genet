@@ -421,24 +421,43 @@ where
     if let MarkerKind::Bullet(glyph) = kind {
         return Some(glyph.to_string());
     }
-    // Counter kinds: the item's 1-based ordinal among its `<li>` siblings.
+    // Counter kinds: the item's ordinal, honoring the list `start` attribute and
+    // any `<li value>` (HTML's ordinal algorithm). The counter begins at `start`
+    // (default 1); each `<li value>` resets it for that item and the ones after.
     let parent = dom.parent(id)?;
-    let mut ordinal = 1usize;
+    let no_ns: html5ever::Namespace = html5ever::ns!();
+    let start: i64 = dom
+        .attribute(parent, &no_ns, &html5ever::LocalName::from("start"))
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(1);
+    let mut counter = start;
+    let mut ordinal = start;
     for sib in dom.dom_children(parent) {
+        if !dom.element_name(sib).is_some_and(|q| q.local == html5ever::local_name!("li")) {
+            continue;
+        }
+        if let Some(v) = dom
+            .attribute(sib, &no_ns, &html5ever::LocalName::from("value"))
+            .and_then(|s| s.trim().parse::<i64>().ok())
+        {
+            counter = v;
+        }
         if sib == id {
+            ordinal = counter;
             break;
         }
-        if dom.element_name(sib).is_some_and(|q| q.local == html5ever::local_name!("li")) {
-            ordinal += 1;
-        }
+        counter += 1;
     }
-    let body = match kind {
-        MarkerKind::Decimal => ordinal.to_string(),
-        MarkerKind::LowerAlpha => alpha_marker(ordinal, false),
-        MarkerKind::UpperAlpha => alpha_marker(ordinal, true),
-        MarkerKind::LowerRoman => roman_marker(ordinal, false),
-        MarkerKind::UpperRoman => roman_marker(ordinal, true),
-        MarkerKind::Bullet(_) => unreachable!("bullets returned above"),
+    // Alphabetic / roman counters are defined for positive ordinals; outside that
+    // range (a 0 / negative `start` or `value`) they fall back to decimal.
+    let positive = usize::try_from(ordinal).ok().filter(|n| *n >= 1);
+    let body = match (kind, positive) {
+        (MarkerKind::Decimal, _) | (_, None) => ordinal.to_string(),
+        (MarkerKind::LowerAlpha, Some(n)) => alpha_marker(n, false),
+        (MarkerKind::UpperAlpha, Some(n)) => alpha_marker(n, true),
+        (MarkerKind::LowerRoman, Some(n)) => roman_marker(n, false),
+        (MarkerKind::UpperRoman, Some(n)) => roman_marker(n, true),
+        (MarkerKind::Bullet(_), _) => unreachable!("bullets returned above"),
     };
     Some(format!("{body}."))
 }

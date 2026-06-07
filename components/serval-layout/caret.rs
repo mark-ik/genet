@@ -950,6 +950,74 @@ mod tests {
         assert!(!has_marker, "display:none list item must not paint a marker");
     }
 
+    /// `<ol start>` and `<li value>` offset the ordinals (HTML's counting): a
+    /// `start="5"` list begins at `5.`, and a `<li value="10">` resets the
+    /// counter so the items read `1.`, `10.`, `11.`. Verified structurally by
+    /// matching marker glyphs against the corresponding positions of a plain list.
+    #[test]
+    fn ol_start_and_li_value_offset_the_ordinals() {
+        use crate::image_decode::BackgroundImagePlane;
+        use crate::paint_emit::emit_paint_list_with_layouts;
+        use paint_list_api::{DeviceIntSize, PaintCmd, PaintList};
+        use rustc_hash::FxHashMap;
+
+        let all_markers = |html: &str| -> Vec<Vec<u32>> {
+            let doc = StaticDocument::parse(html);
+            let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+            run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), &[], None);
+            let viewport = taffy::Size {
+                width: taffy::AvailableSpace::Definite(800.0),
+                height: taffy::AvailableSpace::Definite(600.0),
+            };
+            let (fragments, built, text_ctx) = layout(&doc, &styles, &ImagePlane::new(), viewport);
+            let scroll = FxHashMap::default();
+            let plist = emit_paint_list_with_layouts(
+                &doc,
+                &styles,
+                &fragments,
+                &built,
+                &text_ctx,
+                &ImagePlane::new(),
+                &BackgroundImagePlane::new(),
+                &scroll,
+                DeviceIntSize::new(800, 600),
+            );
+            plist
+                .commands()
+                .iter()
+                .filter_map(|c| match c {
+                    PaintCmd::DrawText(t)
+                        if t.placement.bounds.min.x < 0.0 && !t.glyphs.is_empty() =>
+                    {
+                        Some(t.glyphs.iter().map(|g| g.index).collect())
+                    },
+                    _ => None,
+                })
+                .collect()
+        };
+
+        // A plain list: marker[n] renders "(n+1).".
+        let plain = all_markers(
+            "<html><body><ol><li>a</li><li>b</li><li>c</li><li>d</li><li>e</li>\
+             <li>f</li><li>g</li><li>h</li><li>i</li><li>j</li><li>k</li></ol></body></html>",
+        );
+        assert_eq!(plain.len(), 11, "plain list emits 11 markers");
+
+        // `start="5"`: the single item renders "5." == plain's 5th marker.
+        let started = all_markers("<html><body><ol start=\"5\"><li>x</li></ol></body></html>");
+        assert_eq!(started.len(), 1);
+        assert_eq!(started[0], plain[4], "start=5 first marker == plain `5.`");
+
+        // `<li value="10">` resets the counter: items read 1., 10., 11.
+        let valued = all_markers(
+            "<html><body><ol><li>a</li><li value=\"10\">b</li><li>c</li></ol></body></html>",
+        );
+        assert_eq!(valued.len(), 3);
+        assert_eq!(valued[0], plain[0], "first item `1.`");
+        assert_eq!(valued[1], plain[9], "value=10 item `10.`");
+        assert_eq!(valued[2], plain[10], "item after value=10 `11.`");
+    }
+
     /// A cascaded `line-height` controls the line-box height: `line-height: 2`
     /// on 40px text gives a ~80px line box (2 × font-size), vs the ~46px
     /// font-metric default. Verifies the cascade → parley line-height plumbing
