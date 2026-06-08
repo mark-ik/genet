@@ -56,6 +56,15 @@ state in a test, and `focus_target()` returns the host-focused node.
 
 ## 2. Cascade-time font system (font-relative units `ex` / `ch` / `cap` / `ic`)
 
+**Implemented (2026-06-07).** `font_metrics.rs` now resolves the element's font
+through a fontique `Collection` and reads metrics with `skrifa` (x-height /
+cap-height from OS/2, the `0` advance for `ch`, the U+6C34 advance for `ic`),
+scaled by font-size and cached per resolved font. fontique + skrifa were already
+transitive via parley, so this added no new crates. The collection + cache live
+in a `thread_local` (the cascade is sequential; the provider is a zero-size
+`Sync` handle). The rest of this section is the original scoping, kept for
+context.
+
 **Unblocks:** correct `ex` / `ch` / `cap` / `ic` units (today they resolve to
 Stylo's blind fallbacks, e.g. `ex = 0.5em`).
 
