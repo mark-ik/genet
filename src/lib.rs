@@ -46,6 +46,7 @@ mod hsts;
 mod referrer;
 mod request;
 mod response;
+mod sri;
 // WebSocket — native-only (tokio + tungstenite); a wasm build binds browser WS.
 #[cfg(not(target_arch = "wasm32"))]
 mod websocket;

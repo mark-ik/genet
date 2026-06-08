@@ -42,6 +42,9 @@ pub struct Request {
     /// Referrer policy governing the `Referer` header (a redirect's
     /// `Referrer-Policy` response header can override it mid-chain).
     pub referrer_policy: ReferrerPolicy,
+    /// Subresource Integrity metadata (`alg-base64 ...`), or empty for none. The
+    /// response body is verified against it; a mismatch is a network error.
+    pub integrity: String,
 }
 
 impl Request {
@@ -60,6 +63,7 @@ impl Request {
             cache: CacheMode::default(),
             referrer: None,
             referrer_policy: ReferrerPolicy::default(),
+            integrity: String::new(),
         }
     }
 

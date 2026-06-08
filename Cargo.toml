@@ -23,6 +23,10 @@ http-body-util = "0.1"
 # (routed through hyper-rustls's own feature so we don't pin webpki-roots's major).
 hyper-rustls = { version = "0.27", default-features = false, features = ["webpki-roots", "http1", "http2", "ring", "tls12"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# Subresource Integrity: SHA-2 digests (ring is already in the tree via rustls)
+# + base64 of the expected hashes.
+ring = "0.17"
+base64 = "0.22"
 
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "time", "macros"] }
 

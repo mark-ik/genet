@@ -970,6 +970,7 @@ name = "netfetcher"
 version = "0.0.0"
 dependencies = [
  "async-compression",
+ "base64",
  "bytes",
  "cookie",
  "flate2",
@@ -986,6 +987,7 @@ dependencies = [
  "psl",
  "quinn",
  "rcgen",
+ "ring",
  "rustls",
  "time",
  "tokio",

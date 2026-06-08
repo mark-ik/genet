@@ -20,6 +20,7 @@ use crate::decode::decode_stream;
 use crate::hsts;
 use crate::referrer;
 use crate::request::{CacheMode, Credentials, Method, RedirectMode, ReferrerPolicy, RequestMode};
+use crate::sri;
 use crate::response::{BodyStream, ResponseBody, ResponseType};
 use crate::{FetchContext, Request, Response, SameSiteContext};
 
@@ -456,6 +457,10 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
         // An opaque (cross-origin no-cors) response is filtered: status 0, no
         // headers, no exposed body — and never cached.
         if matches!(response_type, ResponseType::Opaque) {
+            // An opaque body can't be read, so an enforced integrity check fails.
+            if sri::is_enforced(&request.integrity) {
+                return Response::network_error();
+            }
             return Response {
                 status: 0,
                 headers: Vec::new(),
@@ -470,6 +475,26 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
             raw.headers
         };
         let body = decode_stream(content_encoding.as_deref(), raw.body);
+
+        // Subresource Integrity: buffer the body and verify it against the
+        // metadata; a mismatch is a network error. (Bypasses the streaming/cache
+        // paths — an integrity request needs the whole body anyway.)
+        if sri::is_enforced(&request.integrity) {
+            let bytes = match ResponseBody::new(body).bytes().await {
+                Ok(b) => b,
+                Err(_) => return Response::network_error(),
+            };
+            if !sri::verify(&request.integrity, &bytes) {
+                return Response::network_error();
+            }
+            return Response {
+                status,
+                headers,
+                body: ResponseBody::from_bytes(bytes),
+                url_list,
+                response_type,
+            };
+        }
 
         // Cacheable GET 200 → buffer the decoded body to store it, then hand the
         // caller that same buffer (a live stream can't be tee'd into the cache).
