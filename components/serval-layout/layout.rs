@@ -214,4 +214,31 @@ mod tests {
             "letter-spacing should widen measured text: plain={plain} spaced={spaced}"
         );
     }
+
+    /// Font-relative units resolve through the real font (skrifa metrics), not
+    /// Stylo's blind fallbacks: at `font-size: 100px`, `1em` is exactly 100px,
+    /// `1ex` is the font's x-height, `1cap` its cap-height (taller than the
+    /// x-height, shorter than the em), and `1ch` the advance of `0`. Needs system
+    /// fonts present (true on the dev machines).
+    #[test]
+    fn font_relative_units_use_real_font_metrics() {
+        let width_for = |w: &str| -> f32 {
+            let css = format!("div {{ display: block; font-size: 100px; height: 1px; width: {w}; }}");
+            let (doc, styles) = cascade("<html><body><div></div></body></html>", &[css.as_str()]);
+            let images = ImagePlane::new();
+            let (frags, _, _) = layout(&doc, &styles, &images, viewport());
+            let div = find_element(NodeRef::document(&doc), local_name!("div")).unwrap();
+            frags.rect_of(div.id()).expect("<div> fragment").size.width
+        };
+
+        let em = width_for("1em");
+        let ex = width_for("1ex");
+        let cap = width_for("1cap");
+        let ch = width_for("1ch");
+
+        assert!((em - 100.0).abs() < 0.5, "1em is exactly the font-size (100px): {em}");
+        assert!(ex > 30.0 && ex < 80.0, "1ex is the real x-height (~half an em): {ex}");
+        assert!(cap > ex && cap < em, "cap-height sits between x-height and em: cap={cap} ex={ex}");
+        assert!(ch > 20.0 && ch < em, "1ch is the real `0` advance: {ch}");
+    }
 }

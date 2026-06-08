@@ -17,8 +17,13 @@ app_units = { workspace = true }
 atomic_refcell = { workspace = true }
 data-url = { workspace = true }
 euclid = { workspace = true }
+# Font enumeration + family resolution (fontique) and font metrics reading
+# (skrifa) — the same stack parley uses, so the cascade's font-metrics provider
+# resolves fonts identically to text layout (font-relative units: ex/ch/cap/ic).
+fontique = { workspace = true, features = ["system"] }
 html5ever = { workspace = true }
 image = { workspace = true }
+skrifa = { workspace = true }
 # layout_api = { workspace = true }  # EXPERIMENT: serval-layout uses parley, not servo-fonts/layout-api
 layout_dom_api = { workspace = true }
 markup5ever = { workspace = true }

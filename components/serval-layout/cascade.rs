@@ -65,7 +65,7 @@ use style::traversal_flags::TraversalFlags;
 use style::Atom;
 
 use crate::adapter_stylo::{CascadeGuard, StyleNodeRef};
-use crate::font_metrics::StubFontMetricsProvider;
+use crate::font_metrics::SkrifaFontMetricsProvider;
 use crate::style::StylePlane;
 
 // =============================================================================
@@ -145,7 +145,7 @@ fn make_device(viewport: euclid::default::Size2D<f32>) -> Device {
         QuirksMode::NoQuirks,
         euclid::Size2D::from_untyped(viewport),
         euclid::Scale::new(1.0),
-        Box::new(StubFontMetricsProvider),
+        Box::new(SkrifaFontMetricsProvider),
         ComputedValues::initial_values_with_font_override(Font::initial_values()),
         PrefersColorScheme::Light,
     )
