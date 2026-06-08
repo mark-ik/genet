@@ -1289,6 +1289,7 @@ mod net {
             "include" => netfetcher::Credentials::Include,
             _ => netfetcher::Credentials::SameOrigin,
         };
+        request.integrity = req.integrity.clone();
 
         let cx = fetch_context();
         let mut resp = netfetcher::fetch(request, &cx).await;

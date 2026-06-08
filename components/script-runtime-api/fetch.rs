@@ -47,6 +47,9 @@ pub struct FetchRequest {
     /// The credentials mode name (`omit` / `same-origin` / `include`); the host maps
     /// it to whether cookies/auth travel with the request.
     pub credentials: String,
+    /// Subresource Integrity metadata (`alg-base64 ...`), or empty for none; the
+    /// host verifies the response body against it.
+    pub integrity: String,
 }
 
 /// The result handed back to script. A Fetch *network error* is
@@ -151,6 +154,8 @@ impl<E: ScriptEngine> NativeFn<E> for FetchStart {
         let referrer_policy = cx.value_to_string(&a9)?;
         let a10 = cx.arg(10);
         let credentials = cx.value_to_string(&a10)?;
+        let a11 = cx.arg(11);
+        let integrity = cx.value_to_string(&a11)?;
 
         let headers = parse_flat_headers(&headers_flat);
         // The body crosses as a lossless "binary string": each JS char code (0-255)
@@ -167,6 +172,7 @@ impl<E: ScriptEngine> NativeFn<E> for FetchStart {
             referrer,
             referrer_policy,
             credentials,
+            integrity,
         };
 
         // Clone the handler before calling it (no borrow held across `start`).
@@ -402,7 +408,7 @@ fn push_json_str(out: &mut String, s: &str) {
 /// Install the deferred fetch sinks (`__fetch_start` / `__fetch_abort`) and the
 /// `fetch()` / `Request` / `Response` / `Headers` bootstrap.
 pub(crate) fn install_fetch_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error> {
-    engine.set_function::<FetchStart>("__fetch_start", 11)?;
+    engine.set_function::<FetchStart>("__fetch_start", 12)?;
     engine.set_function::<FetchAbort>("__fetch_abort", 1)?;
     engine.set_function::<ResolveUrl>("__resolve_url", 1)?;
     engine.set_function::<UrlParse>("__url_parse", 2)?;
@@ -1398,7 +1404,7 @@ const FETCH_BOOTSTRAP: &str = r#"
       this.url = input.url; this.method = input.method; this.headers = new Headers(input.headers);
       this.__bytes = input.__bytes; this.__stream = input.__stream || null; this.mode = input.mode; this.credentials = input.credentials;
       this.redirect = input.redirect; this.cache = input.cache; this.destination = input.destination;
-      this.referrer = input.referrer; this.referrerPolicy = input.referrerPolicy;
+      this.referrer = input.referrer; this.referrerPolicy = input.referrerPolicy; this.integrity = input.integrity;
       this.signal = input.signal;
     } else {
       // Resolve leniently (relative URLs resolve at fetch when there is no base),
@@ -1417,7 +1423,7 @@ const FETCH_BOOTSTRAP: &str = r#"
       this.method = 'GET'; this.headers = new Headers(); this.__bytes = null; this.__stream = null;
       this.mode = 'cors'; this.credentials = 'same-origin'; this.redirect = 'follow'; this.cache = 'default'; this.destination = '';
       // Default referrer is the client (the document URL, resolved at fetch).
-      this.referrer = 'about:client'; this.referrerPolicy = '';
+      this.referrer = 'about:client'; this.referrerPolicy = ''; this.integrity = '';
       this.signal = makeSignal();
     }
     // The request's signal is a fresh dependent signal following a single source
@@ -1432,6 +1438,7 @@ const FETCH_BOOTSTRAP: &str = r#"
     if (init.cache !== undefined) this.cache = checkEnum('cache', init.cache);
     if (init.redirect !== undefined) this.redirect = checkEnum('redirect', init.redirect);
     if (init.referrerPolicy !== undefined) this.referrerPolicy = checkEnum('referrerPolicy', init.referrerPolicy);
+    if (init.integrity !== undefined) this.integrity = String(init.integrity);
     // referrer: "" = no referrer; "about:client" = default (the document); else a URL.
     if (init.referrer !== undefined) this.referrer = String(init.referrer);
     // no-cors restricts the method to GET/HEAD/POST.
@@ -1625,7 +1632,7 @@ const FETCH_BOOTSTRAP: &str = r#"
                                  req.__bytes != null ? bytesToBinaryString(req.__bytes) : "",
                                  req.cache || "default", req.redirect || "follow",
                                  req.mode || "cors", referrer, req.referrerPolicy || "",
-                                 req.credentials || "same-origin");
+                                 req.credentials || "same-origin", req.integrity || "");
       if (inline) {
         // Synchronous host answered in this tick (today's path; one pump drains).
         var e = __pending[id];
