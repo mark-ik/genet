@@ -186,7 +186,7 @@ p256 = { version = "0.13", features = ["ecdh"] }
 p384 = { version = "0.13", features = ["ecdh"] }
 p521 = { version = "0.13", features = ["ecdh"] }
 parking_lot = { version = "0.12", features = ["serde"] }
-parley = { version = "0.9.0", default-features = true }
+parley = { version = "0.10.0", default-features = true }
 pelt-core = { version = "=0.2.0", path = "ports/pelt-core" }
 pelt-desktop = { version = "=0.2.0", path = "ports/pelt-desktop" }
 pelt-viewer = { version = "=0.2.0", path = "ports/pelt-viewer" }
@@ -231,7 +231,7 @@ sha3 = "0.10"
 speexdsp-resampler = "0.1.0"
 # Font enumeration + family resolution, the same stack parley uses (so the
 # cascade's font-metrics provider resolves fonts identically to text layout).
-fontique = "0.9.0"
+fontique = "0.10.0"
 skrifa = "0.42.1"
 smallvec = { version = "1.15", features = ["serde", "union"] }
 string_cache = "0.9"
