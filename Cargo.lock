@@ -2067,28 +2067,6 @@ dependencies = [
 
 [[package]]
 name = "fontique"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c20b425addb8661e97fe1d51c4d8bcec3ec29ed6ad0db983976a7521276b8f7"
-dependencies = [
- "hashbrown 0.17.1",
- "linebender_resource_handle",
- "memmap2",
- "objc2 0.6.4",
- "objc2-core-foundation",
- "objc2-core-text",
- "objc2-foundation 0.3.2",
- "parlance",
- "read-fonts",
- "roxmltree 0.21.1",
- "smallvec",
- "windows 0.62.2",
- "windows-core 0.62.2",
- "yeslogic-fontconfig-sys",
-]
-
-[[package]]
-name = "fontique"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "274fa4f0f0a926ae182c7c076c078cce8a38471d15e61a102a02cac984be9813"
@@ -2949,19 +2927,6 @@ dependencies = [
  "freetype-sys",
  "pkg-config",
  "winapi",
-]
-
-[[package]]
-name = "harfrust"
-version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "551ed25397e4b444e89686602877d5cf3a7f6e3d548dcac37a8357d1e195f4df"
-dependencies = [
- "bitflags 2.11.1",
- "bytemuck",
- "core_maths",
- "read-fonts",
- "smallvec",
 ]
 
 [[package]]
@@ -4147,7 +4112,7 @@ dependencies = [
  "dpi",
  "imaging",
  "kurbo",
- "parley 0.9.0",
+ "parley",
  "peniko",
  "smallvec",
  "time",
@@ -5369,48 +5334,21 @@ checksum = "4b6937eda350acc1a5d05872c3cbf99fe78619c269096e2be3d4a350058639d5"
 
 [[package]]
 name = "parley"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fad031076f48f0d4d85ce1aea9b94b4e715a4d636a030a123038f8f5b5e4343"
-dependencies = [
- "accesskit",
- "fontique 0.9.0",
- "harfrust 0.6.2",
- "hashbrown 0.17.1",
- "icu_normalizer",
- "icu_properties 2.2.0",
- "icu_segmenter 2.2.0",
- "linebender_resource_handle",
- "parlance",
- "parley_data 0.9.0",
- "skrifa",
-]
-
-[[package]]
-name = "parley"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b1cfcf399c774719fb1fa51bc6b91e86bdf003b03202a0902f1827ba6750746"
 dependencies = [
- "fontique 0.10.0",
- "harfrust 0.8.4",
+ "accesskit",
+ "fontique",
+ "harfrust",
  "hashbrown 0.17.1",
  "icu_normalizer",
  "icu_properties 2.2.0",
  "icu_segmenter 2.2.0",
  "linebender_resource_handle",
  "parlance",
- "parley_data 0.10.0",
+ "parley_data",
  "skrifa",
-]
-
-[[package]]
-name = "parley_data"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19ab9ace3fad1b9ed603ddac5b595e69931fc50263d7e04e4055015b77b02da5"
-dependencies = [
- "icu_properties 2.2.0",
 ]
 
 [[package]]
@@ -6863,14 +6801,14 @@ dependencies = [
  "data-url",
  "engine-observables-api",
  "euclid",
- "fontique 0.10.0",
+ "fontique",
  "html5ever",
  "image",
  "layout-dom-api",
  "malloc_size_of_derive",
  "markup5ever",
  "paint_list_api",
- "parley 0.10.0",
+ "parley",
  "resvg",
  "rustc-hash 2.1.2",
  "selectors",
