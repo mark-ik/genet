@@ -364,9 +364,31 @@ baseline recorded — add to the running board going forward):
 
 | subset | 2026-06-09 | lands here |
 | --- | --- | --- |
-| `css/css-images` | **164 / 727** | gradients (7 errored) |
+| `css/css-images` | **164 / 713** (0 errored) | gradients |
 | `css/css-lists` | **123 / 347** | list markers |
 | `css/css-text-decor` | **203 / 631** | underline / overline / line-through / color |
+
+The css-images `7 errored` were `tools/*-template.html` files the runner was
+collecting as reftests (their `rel=match` points at a non-existent ref). Fixed
+in `serval-wpt collect` by excluding `tools/` and `support/` directories (WPT
+does not treat them as tests); 7 errored → 0, file count 727 → 713, pass count
+unchanged.
+
+**`background-size` / `-position` on gradients (scoped 2026-06-09).** Smaller
+lever than the gradient fail count suggests. Of css-images' 234 fails, 62 involve
+a gradient but only a handful (`tiled-radial-gradients`,
+`linear-gradient-body-sibling-index`, the css-backgrounds
+`background-position-right-in-body`) are genuine `background-size`/`-position`-on-
+gradient gaps; in css-backgrounds the grep also catches `background-repeat: round`
+/ `space` tests, a *separate* unimplemented feature. The bulk of the 62 gradient
+fails are gradient **color interpolation** (`gradient-*-hsl`/`lch`/`oklch`,
+`analogous-missing-components`, decreasing-hue) — CSS Color 4 interpolation, a
+deeper and higher-count lever than sizing. Pixel-confirmed shape: serval stretches
+one gradient ramp over the box where the reference *tiles* it
+(`tiled-radial-gradients` shows two ellipses vs serval's one). Honoring
+`background-size` therefore needs gradient **tiling**: the renderer fills one
+`placement` per gradient ramp, so a tiled layer emits N gradients (the image tile
+path is single-emit). Recorded as a bounded follow-up, not yet built.
 
 All subsets report **0 errored** on the three-subset board (the image-key crash
 is gone) and are now **deterministic** (identical re-runs) after the GPU-jitter
