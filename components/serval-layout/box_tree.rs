@@ -972,6 +972,27 @@ mod tests {
         );
     }
 
+    /// Two replaced `<img>`s in a div (no text) flow side by side: the div
+    /// establishes an inline context, so its width spans both imgs rather than
+    /// stacking them as block children. (CSS-sized so no decode is needed.)
+    #[test]
+    fn two_inline_images_flow_side_by_side() {
+        let (doc, frags) = lay(
+            "<html><body><div>\
+                <img style=\"width:16px;height:16px\"/>\
+                <img style=\"width:16px;height:16px\"/>\
+            </div></body></html>",
+            &[],
+        );
+        let div = find_all(&doc, html5ever::local_name!("div"))[0];
+        let r = frags.rect_of(div).expect("div fragment");
+        assert!(
+            r.size.width >= 32.0,
+            "two imgs flow side by side (width >= 2*16), got {}",
+            r.size.width
+        );
+    }
+
     /// A 16×16 blue PNG as a data-URI `<img>` document.
     fn img_html() -> String {
         use base64::Engine as _;

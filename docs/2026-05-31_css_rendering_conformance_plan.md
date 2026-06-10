@@ -353,11 +353,11 @@ GPU-jitter-floor column was measured on a different machine (`152`); the
 the last two columns as same-machine deltas, not the middle column against the
 last:
 
-| subset | after GPU-jitter floor | after canvas + gradient tiling | after block-whitespace-collapse | after inline-block + inline-whitespace (2026-06-10) |
+| subset | after canvas + gradient tiling | after block-whitespace-collapse | after inline-block + inline-ws | after multi-img inline flow (2026-06-10) |
 | --- | --- | --- | --- | --- |
-| `css/CSS2/floats` | 15 / 197 | 15 / 197 | 32 / 197 | **34 / 197** |
-| `css/CSS2/normal-flow` | 174 / 1045 | 174 / 1045 | 392 / 1044 | **400 / 1044** |
-| `css/css-backgrounds` | 152 / 1326 | 149 / 1325 | 287 / 1325 | **295 / 1325** |
+| `css/CSS2/floats` | 15 / 197 | 32 / 197 | 34 / 197 | **34 / 197** |
+| `css/CSS2/normal-flow` | 174 / 1045 | 392 / 1044 | 400 / 1044 | **442 / 1044** |
+| `css/css-backgrounds` | 149 / 1325 | 287 / 1325 | 295 / 1325 | **299 / 1325** |
 
 Subsets the 2026-06-07 paint series targeted (first measured 2026-06-09, no prior
 baseline recorded — add to the running board going forward):
@@ -413,6 +413,19 @@ normal-flow regression (`inline-block-non-replaced-width-002`, which needs
 inline-block `margin: auto` → 0). Follow-ups for the inline-block tail: margins,
 `vertical-align`, borders/padding on the box, and leading/trailing edge-whitespace
 trimming.
+
+**Multiple inline images flow side by side — another systematic lever
+(2026-06-10).** `establishes_inline_context` required inline *text*; a replaced
+`<img>` did not count, so a div of only imgs (`<div><img><img></div>`) fell to the
+block path and **stacked** the imgs vertically. The "lone img stays block"
+simplification over-applied to *two or more* imgs. This was the second systematic
+cause behind the `min`/`max-height` tail: those references compare against two
+side-by-side `black96x96.png` imgs, which serval was stacking — ~25 of the
+remaining fails sat at an identical `diff=3%`, the tell of one shared cause. Fix:
+establish an inline context when two or more replaced boxes are present (a single
+lone img still stays block for intrinsic sizing); also stop whitespace-only text
+from forcing an inline context. **normal-flow 400 → 442** (+42, zero regressions),
+css-backgrounds 295 → 299; floats / css-images unchanged.
 
 The css-images `7 errored` were `tools/*-template.html` files the runner was
 collecting as reftests (their `rel=match` points at a non-existent ref). Fixed

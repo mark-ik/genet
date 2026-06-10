@@ -58,14 +58,23 @@ where
     D::NodeId: Copy + Eq + Hash,
 {
     let mut has_inline_text = false;
+    let mut replaced_count = 0;
     for child in elem.dom_children() {
         match dom.kind(child.id()) {
-            NodeKind::Text => has_inline_text = true,
+            // Whitespace-only text is collapsible formatting, not real inline
+            // content — it must not by itself turn a block container into an
+            // inline context.
+            NodeKind::Text => {
+                if dom.text(child.id()).is_some_and(|t| !t.trim().is_empty()) {
+                    has_inline_text = true;
+                }
+            },
             NodeKind::Element => {
                 if is_replaced(dom, child.id()) {
-                    // A replaced element can flow as an inline box, but
-                    // doesn't itself count as the inline text that makes
-                    // this an inline context (so a lone img stays block).
+                    // A replaced element flows as an inline box. A *lone* img
+                    // with no other inline content stays on the block path
+                    // (intrinsic sizing); two or more flow inline, side by side.
+                    replaced_count += 1;
                     continue;
                 }
                 // `inline-block` is an atomic inline-level box: it participates
@@ -84,7 +93,10 @@ where
             _ => {}
         }
     }
-    has_inline_text
+    // Inline context when there is real inline text / an inline element /
+    // inline-block, or when two or more replaced boxes flow side by side. A
+    // single lone img with nothing else stays on the block path.
+    has_inline_text || replaced_count >= 2
 }
 
 /// Whether an element is replaced content we render as its own box
