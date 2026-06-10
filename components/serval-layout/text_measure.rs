@@ -157,18 +157,37 @@ impl InlineRun {
     }
 }
 
-/// A replaced inline box (an `<img>`) flowing among text runs. parley
-/// reserves `width`×`height` at byte `index` in the concatenated run
-/// text and reports its laid-out position; paint emission draws the
-/// image identified by `source` there.
+/// An atomic inline box flowing among text runs: a replaced `<img>` or an
+/// `inline-block`. parley reserves `width`×`height` at byte `index` in the
+/// concatenated run text and reports its laid-out position; paint emission
+/// draws the image (replaced) or the box + content (inline-block) there.
 #[derive(Clone, Debug)]
 pub struct InlineBoxItem<NodeId> {
     /// Byte offset into the concatenated run text where the box sits.
     pub index: usize,
+    /// Reserved size. For `<img>` it is the intrinsic/CSS size set at
+    /// construction; for an inline-block it is filled by the measure pass.
     pub width: f32,
     pub height: f32,
-    /// DOM node of the replaced element (the `<img>`), for image lookup.
+    /// DOM node of the source element (the `<img>` or the inline-block).
     pub source: NodeId,
+    /// `Some` for an `inline-block` (its content + box style); `None` for a
+    /// replaced `<img>` (sized intrinsically, painted as the image).
+    pub block: Option<Box<InlineBlockBox<NodeId>>>,
+}
+
+/// An `inline-block`'s own content and box style. Its size is measured from
+/// `content` (shrink-to-fit, clamped by any definite CSS `width`/`height`) and
+/// its content Layout cached for paint.
+#[derive(Clone, Debug)]
+pub struct InlineBlockBox<NodeId> {
+    /// The inline-block's own inline content (text runs / nested boxes).
+    pub content: InlineContent<NodeId>,
+    /// Definite CSS `width` / `height` in px, if set (else content size).
+    pub css_width: Option<f32>,
+    pub css_height: Option<f32>,
+    /// Box background color (straight RGBA), painted behind the content.
+    pub background: [f32; 4],
 }
 
 /// The inline content of a Taffy leaf — styled text runs plus replaced
@@ -279,6 +298,11 @@ pub struct TextMeasureCtx {
     /// `layouts` so an item's own inline text and its marker don't collide on
     /// the same key. Paint reads it to hang the marker left of the content box.
     pub marker_layouts: FxHashMap<taffy::NodeId, Layout<ColorBrush>>,
+    /// Cached content `Layout` for each inline-block, keyed by `(the enclosing
+    /// leaf's Taffy id, the box's index in that leaf's `InlineContent.boxes`)`.
+    /// Built by [`measure_inline_content`]; paint reads it to draw the
+    /// inline-block's glyphs at the box's parley-placed position.
+    pub inline_block_layouts: FxHashMap<(taffy::NodeId, usize), Layout<ColorBrush>>,
 }
 
 impl Default for TextMeasureCtx {
@@ -294,6 +318,7 @@ impl TextMeasureCtx {
             layout_ctx: LayoutContext::new(),
             layouts: FxHashMap::default(),
             marker_layouts: FxHashMap::default(),
+            inline_block_layouts: FxHashMap::default(),
         }
     }
 
@@ -350,19 +375,9 @@ pub fn measure_inline_content<NodeId>(
         return Size { width: w, height: h };
     }
 
-    // Concatenate run texts, tracking each run's byte range for the
-    // per-run style spans.
-    let mut text = String::with_capacity(content.total_len());
-    let mut ranges: Vec<(std::ops::Range<usize>, &InlineRun)> = Vec::new();
-    for run in &content.runs {
-        let start = text.len();
-        text.push_str(&run.text);
-        ranges.push((start..text.len(), run));
-    }
-
     // Empty content (no text and no inline boxes) measures as
     // zero-by-(font-size * 1.2) — a one-line baseline.
-    if text.is_empty() && content.boxes.is_empty() {
+    if content.runs.iter().all(|r| r.text.is_empty()) && content.boxes.is_empty() {
         return Size {
             width: known_dimensions.width.unwrap_or(0.0),
             height: known_dimensions
@@ -377,6 +392,74 @@ pub fn measure_inline_content<NodeId>(
         AvailableSpace::MinContent => Some(0.0),
         AvailableSpace::MaxContent => None,
     };
+
+    // Reserve each inline box's space. `<img>` uses its intrinsic/CSS size; an
+    // inline-block is measured from its own content (and its content Layout
+    // cached under (this leaf, box index) for paint).
+    let mut box_sizes: Vec<(f32, f32)> = Vec::with_capacity(content.boxes.len());
+    for (i, b) in content.boxes.iter().enumerate() {
+        let (w, h, layout) = measure_inline_box(ctx, b);
+        if let Some(l) = layout {
+            ctx.inline_block_layouts.insert((taffy_id, i), l);
+        }
+        box_sizes.push((w, h));
+    }
+
+    let layout = build_inline_layout(ctx, content, &box_sizes, max_advance);
+    let size = Size {
+        width: known_dimensions.width.unwrap_or_else(|| layout.width()),
+        height: known_dimensions.height.unwrap_or_else(|| layout.height()),
+    };
+    ctx.layouts.insert(taffy_id, layout);
+    size
+}
+
+/// Reserved size of one inline box, and (for an inline-block) its shaped
+/// content `Layout`. `<img>` reports its intrinsic/CSS size; an inline-block is
+/// shrink-to-fit-measured from its content, clamped by any definite CSS
+/// `width`/`height`.
+fn measure_inline_box<NodeId>(
+    ctx: &mut TextMeasureCtx,
+    b: &InlineBoxItem<NodeId>,
+) -> (f32, f32, Option<Layout<ColorBrush>>) {
+    let Some(ib) = &b.block else {
+        return (b.width, b.height, None); // replaced <img>
+    };
+    // Shrink-to-fit width: a definite CSS width caps the line, else max-content
+    // (no max_advance). Nested inline boxes get their own reserved sizes.
+    let inner_sizes: Vec<(f32, f32)> = ib
+        .content
+        .boxes
+        .iter()
+        .map(|bb| {
+            let (w, h, _) = measure_inline_box(ctx, bb);
+            (w, h)
+        })
+        .collect();
+    let layout = build_inline_layout(ctx, &ib.content, &inner_sizes, ib.css_width);
+    let w = ib.css_width.unwrap_or_else(|| layout.width());
+    let h = ib.css_height.unwrap_or_else(|| layout.height());
+    (w, h, Some(layout))
+}
+
+/// Shape `content` into a parley `Layout`, reserving each inline box at its
+/// matching `box_sizes` entry and wrapping at `max_advance`. Shared by the leaf
+/// measure and each inline-block's own measure.
+fn build_inline_layout<NodeId>(
+    ctx: &mut TextMeasureCtx,
+    content: &InlineContent<NodeId>,
+    box_sizes: &[(f32, f32)],
+    max_advance: Option<f32>,
+) -> Layout<ColorBrush> {
+    // Concatenate run texts, tracking each run's byte range for the
+    // per-run style spans.
+    let mut text = String::with_capacity(content.total_len());
+    let mut ranges: Vec<(std::ops::Range<usize>, &InlineRun)> = Vec::new();
+    for run in &content.runs {
+        let start = text.len();
+        text.push_str(&run.text);
+        ranges.push((start..text.len(), run));
+    }
 
     let mut builder = ctx
         .layout_ctx
@@ -442,31 +525,24 @@ pub fn measure_inline_content<NodeId>(
         }
     }
 
-    // Replaced inline boxes (`<img>`) — parley reserves their space
-    // and reports their laid-out position. `id` is the index into
-    // `content.boxes` so paint emission can recover the source node.
+    // Atomic inline boxes (`<img>` / inline-block) — parley reserves the
+    // `box_sizes[i]` space and reports the laid-out position. `id` is the index
+    // into `content.boxes` so paint emission can recover the source.
     for (i, b) in content.boxes.iter().enumerate() {
+        let (width, height) = box_sizes.get(i).copied().unwrap_or((b.width, b.height));
         builder.push_inline_box(InlineBox {
             id: i as u64,
             kind: InlineBoxKind::InFlow,
             index: b.index,
-            width: b.width,
-            height: b.height,
+            width,
+            height,
         });
     }
 
     let mut layout: Layout<ColorBrush> = builder.build(text.as_str());
     layout.break_all_lines(max_advance);
     layout.align(Alignment::Start, AlignmentOptions::default());
-
-    let size = Size {
-        width: known_dimensions.width.unwrap_or_else(|| layout.width()),
-        height: known_dimensions.height.unwrap_or_else(|| layout.height()),
-    };
-
-    // Cache the shaped Layout for paint emission.
-    ctx.layouts.insert(taffy_id, layout);
-    size
+    layout
 }
 
 #[cfg(test)]

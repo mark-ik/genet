@@ -23,7 +23,8 @@ use crate::adapter::NodeRef;
 use crate::image_decode::ImagePlane;
 use crate::style::StylePlane;
 use crate::text_measure::{
-    FontFamilySpec, GenericFamilyKind, InlineBoxItem, InlineContent, InlineRun, LineHeightSpec,
+    FontFamilySpec, GenericFamilyKind, InlineBlockBox, InlineBoxItem, InlineContent, InlineRun,
+    LineHeightSpec,
 };
 
 /// Default font size used for runs whose element has no cascaded
@@ -67,7 +68,13 @@ where
                     // this an inline context (so a lone img stays block).
                     continue;
                 }
-                if is_inline_element(styles, child.id()).unwrap_or(false) {
+                // `inline-block` is an atomic inline-level box: it participates
+                // in the line like inline content (so it keeps this an inline
+                // context), but `gather_runs` reserves it as an atomic
+                // `InlineBox` rather than recursing into its content.
+                if is_inline_block(styles, child.id()) {
+                    has_inline_text = true;
+                } else if is_inline_element(styles, child.id()).unwrap_or(false) {
                     has_inline_text = true;
                 } else {
                     // A block-level child forces block layout.
@@ -103,6 +110,40 @@ fn is_inline_element<NodeId: Copy + Eq + Hash>(
     let data = entry.borrow_data()?;
     let display = data.styles.primary().get_box().display;
     Some(matches!(display.outside(), DisplayOutside::Inline))
+}
+
+/// Collapse each maximal run of ASCII/Unicode whitespace in `s` to a single
+/// space (CSS `white-space: normal` collapsing). Source newlines + indentation
+/// become a single space rather than a literal run or a forced line break.
+fn collapse_whitespace(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_ws = false;
+    for c in s.chars() {
+        if c.is_whitespace() {
+            if !prev_ws {
+                out.push(' ');
+            }
+            prev_ws = true;
+        } else {
+            out.push(c);
+            prev_ws = false;
+        }
+    }
+    out
+}
+
+/// Whether `id` is `display: inline-block` — inline-level outside, but an
+/// independent (flow-root) formatting context inside.
+pub(crate) fn is_inline_block<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> bool {
+    use style::values::specified::box_::{DisplayInside, DisplayOutside};
+    let Some(entry) = styles.get(id) else { return false };
+    let Some(data) = entry.borrow_data() else { return false };
+    let display = data.styles.primary().get_box().display;
+    matches!(display.outside(), DisplayOutside::Inline)
+        && matches!(display.inside(), DisplayInside::FlowRoot)
 }
 
 /// Pixel size for a replaced `<img>`: the decoded intrinsic size from
@@ -189,20 +230,53 @@ fn gather_runs<'a, D>(
     for child in node.dom_children() {
         match dom.kind(child.id()) {
             NodeKind::Text => {
-                let text = dom.text(child.id()).unwrap_or("").to_string();
+                // CSS `white-space: normal` — collapse each run of whitespace
+                // (including source newlines + indentation) to a single space, so
+                // formatting whitespace does not force line breaks (parley breaks
+                // on `\n`) or render as literal runs. A real line break comes only
+                // from `<br>`. (Leading/trailing-edge trimming and `pre` are
+                // follow-ups.)
+                let text = collapse_whitespace(dom.text(child.id()).unwrap_or(""));
                 if !text.is_empty() {
                     *offset += text.len();
                     runs.push(run_for_element(styles, node.id(), text));
                 }
             }
             NodeKind::Element => {
-                if is_replaced(dom, child.id()) {
+                if dom
+                    .element_name(child.id())
+                    .is_some_and(|q| q.local == html5ever::local_name!("br"))
+                {
+                    // `<br>` is a forced line break: emit a newline run (parley
+                    // breaks lines at the mandatory `\n`).
+                    *offset += 1;
+                    runs.push(run_for_element(styles, node.id(), "\n".to_string()));
+                } else if is_replaced(dom, child.id()) {
                     let (width, height) = replaced_px_size(styles, images, child.id());
                     boxes.push(InlineBoxItem {
                         index: *offset,
                         width,
                         height,
                         source: child.id(),
+                        block: None,
+                    });
+                } else if is_inline_block(styles, child.id()) {
+                    // Atomic inline-block: gather its own inline content + box
+                    // style; the measure pass sizes it and parley places it as a
+                    // unit. Its content is not flowed into this line.
+                    let content = gather_inline_content(dom, styles, images, child);
+                    let (css_width, css_height) = inline_block_css_size(styles, child.id());
+                    boxes.push(InlineBoxItem {
+                        index: *offset,
+                        width: 0.0,
+                        height: 0.0,
+                        source: child.id(),
+                        block: Some(Box::new(InlineBlockBox {
+                            content,
+                            css_width,
+                            css_height,
+                            background: inline_block_bg_of(styles, child.id()),
+                        })),
                     });
                 } else {
                     gather_runs(dom, styles, images, child, runs, boxes, offset);
@@ -324,6 +398,35 @@ fn text_color_of<NodeId: Copy + Eq + Hash>(
     let absolute = data.styles.primary().get_inherited_text().color;
     let srgb = absolute.into_srgb_legacy();
     Some(*srgb.raw_components())
+}
+
+/// Definite CSS `width` / `height` (px) of an inline-block, or `None` per axis
+/// for `auto` / percentage / intrinsic (→ shrink-to-fit / content height).
+fn inline_block_css_size<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> (Option<f32>, Option<f32>) {
+    let Some(entry) = styles.get(id) else { return (None, None) };
+    let Some(data) = entry.borrow_data() else { return (None, None) };
+    let pos = data.styles.primary().get_position();
+    (definite_px(&pos.width), definite_px(&pos.height))
+}
+
+/// An inline-block's cascaded `background-color` as straight RGBA, resolving
+/// `currentColor` against its own `color`. Transparent when no cascade data.
+fn inline_block_bg_of<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> [f32; 4] {
+    let Some(entry) = styles.get(id) else { return [0.0; 4] };
+    let Some(data) = entry.borrow_data() else { return [0.0; 4] };
+    let primary = data.styles.primary();
+    let current = primary.get_inherited_text().color;
+    let absolute = primary
+        .get_background()
+        .background_color
+        .resolve_to_absolute(&current);
+    *absolute.into_srgb_legacy().raw_components()
 }
 
 /// Read an element's cascaded `text-decoration-color` as straight RGBA in

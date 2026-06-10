@@ -1005,37 +1005,84 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                     emitted = true;
                 },
                 PositionedLayoutItem::InlineBox(pbox) => {
-                    // Resolve the box id back to its source <img> via the
-                    // leaf's InlineContent, then look up its decoded
-                    // pixels and draw at the laid-out box rect.
+                    // Resolve the box id back to its source via the leaf's
+                    // InlineContent. An inline-block (`block: Some`) paints its
+                    // background + its own content glyphs; a replaced `<img>`
+                    // paints the decoded image. Both at the laid-out box rect.
                     let Some(content) = content else { continue };
                     let Some(item) = content.boxes.get(pbox.id as usize) else {
                         continue;
                     };
-                    let Some(decoded) = images_plane.get(item.source) else {
-                        continue;
-                    };
-                    let key = images.add(decoded);
-                    // Box position is relative to the leaf origin (same
-                    // space as glyph points); place in local coords.
-                    let rect = LayoutRect::new(
-                        LayoutPoint::new(
-                            bounds.min.x + content_offset.0 + pbox.x,
-                            bounds.min.y + content_offset.1 + pbox.y,
-                        ),
-                        LayoutPoint::new(
-                            bounds.min.x + content_offset.0 + pbox.x + pbox.width,
-                            bounds.min.y + content_offset.1 + pbox.y + pbox.height,
-                        ),
+                    // Box position is relative to the leaf origin (same space as
+                    // glyph points); place in local coords.
+                    let (ox, oy) = (
+                        bounds.min.x + content_offset.0 + pbox.x,
+                        bounds.min.y + content_offset.1 + pbox.y,
                     );
-                    commands.push(PaintCmd::DrawImage(ImageItem {
-                        placement: CommonPlacement::new(rect),
-                        image_key: key,
-                        image_rendering: ImageRendering::Auto,
-                        alpha_type: AlphaType::PremultipliedAlpha,
-                        color: ColorF::WHITE, // identity tint
-                    }));
-                    emitted = true;
+                    let rect = LayoutRect::new(
+                        LayoutPoint::new(ox, oy),
+                        LayoutPoint::new(ox + pbox.width, oy + pbox.height),
+                    );
+                    if let Some(block) = &item.block {
+                        // Background box.
+                        let [r, g, b, a] = block.background;
+                        if a > 0.0 {
+                            commands.push(PaintCmd::DrawRect(RectItem {
+                                placement: CommonPlacement::new(rect),
+                                color: ColorF::new(r, g, b, a),
+                            }));
+                        }
+                        // The inline-block's own content glyphs, placed at the box
+                        // origin (its Layout was cached under (this leaf, box id)).
+                        if let Some(ib_layout) = source
+                            .text_ctx
+                            .inline_block_layouts
+                            .get(&(*taffy_id, pbox.id as usize))
+                        {
+                            for ib_line in ib_layout.lines() {
+                                for ib_item in ib_line.items() {
+                                    let PositionedLayoutItem::GlyphRun(grun) = ib_item else {
+                                        continue;
+                                    };
+                                    let prun = grun.run();
+                                    let key = fonts.intern(prun.font());
+                                    let [gr, gg, gb, ga] = grun.style().brush.0;
+                                    let glyphs: Vec<GlyphInstance> = grun
+                                        .positioned_glyphs()
+                                        .map(|gl| GlyphInstance {
+                                            index: gl.id,
+                                            point: LayoutPoint::new(
+                                                content_offset.0 + pbox.x + gl.x,
+                                                content_offset.1 + pbox.y + gl.y,
+                                            ),
+                                        })
+                                        .collect();
+                                    if glyphs.is_empty() {
+                                        continue;
+                                    }
+                                    commands.push(PaintCmd::DrawText(TextRunItem {
+                                        placement: CommonPlacement::new(bounds),
+                                        font_instance: key,
+                                        font_size: prun.font_size(),
+                                        color: ColorF::new(gr, gg, gb, ga),
+                                        glyphs,
+                                        options: TextOptions::default(),
+                                    }));
+                                }
+                            }
+                        }
+                        emitted = true;
+                    } else if let Some(decoded) = images_plane.get(item.source) {
+                        let key = images.add(decoded);
+                        commands.push(PaintCmd::DrawImage(ImageItem {
+                            placement: CommonPlacement::new(rect),
+                            image_key: key,
+                            image_rendering: ImageRendering::Auto,
+                            alpha_type: AlphaType::PremultipliedAlpha,
+                            color: ColorF::WHITE, // identity tint
+                        }));
+                        emitted = true;
+                    }
                 },
             }
         }
@@ -2480,6 +2527,29 @@ mod tests {
             ),
             16
         );
+    }
+
+    #[test]
+    fn inline_block_emits_its_background_box() {
+        // An inline-block is an atomic inline box: it paints its own background
+        // (and content) at its measured/CSS size, rather than being recursed as
+        // transparent inline content (which dropped the box).
+        let document = StaticDocument::parse("<html><body><span>x</span></body></html>");
+        let plist = emit_with_sheet(
+            &document,
+            "span { display: inline-block; width: 50px; height: 20px; \
+                    background: rgb(0, 128, 0); }",
+        );
+        let green_box = plist.commands().iter().any(|c| match c {
+            PaintCmd::DrawRect(r) => {
+                r.color.g > 0.4
+                    && r.color.r < 0.1
+                    && r.color.b < 0.1
+                    && (r.placement.bounds.width() - 50.0).abs() < 2.0
+            },
+            _ => false,
+        });
+        assert!(green_box, "inline-block should emit a ~50px green background box");
     }
 
     #[test]

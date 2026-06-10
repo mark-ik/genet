@@ -353,11 +353,11 @@ GPU-jitter-floor column was measured on a different machine (`152`); the
 the last two columns as same-machine deltas, not the middle column against the
 last:
 
-| subset | Lever-1 baseline | after GPU-jitter floor | after canvas + gradient tiling | after whitespace-collapse (2026-06-09) |
+| subset | after GPU-jitter floor | after canvas + gradient tiling | after block-whitespace-collapse | after inline-block + inline-whitespace (2026-06-10) |
 | --- | --- | --- | --- | --- |
-| `css/CSS2/floats` | 7 / 197 | 15 / 197 | 15 / 197 | **32 / 197** |
-| `css/CSS2/normal-flow` | 1 / 1045 | 174 / 1045 | 174 / 1045 | **392 / 1044** |
-| `css/css-backgrounds` | 15 / 1326 | 152 / 1326 | 149 / 1325 | **287 / 1325** |
+| `css/CSS2/floats` | 15 / 197 | 15 / 197 | 32 / 197 | **34 / 197** |
+| `css/CSS2/normal-flow` | 174 / 1045 | 174 / 1045 | 392 / 1044 | **400 / 1044** |
+| `css/css-backgrounds` | 152 / 1326 | 149 / 1325 | 287 / 1325 | **295 / 1325** |
 
 Subsets the 2026-06-07 paint series targeted (first measured 2026-06-09, no prior
 baseline recorded — add to the running board going forward):
@@ -386,6 +386,33 @@ coincidental regressions, all in already-broken areas (block-in-inline anonymous
 boxes, SVG). The inline path (`gather_inline_content`) is untouched, so real
 spaces between words / inline elements are preserved. (`white-space: pre` is still
 unimplemented; this skip would need gating once it lands.)
+
+**inline-block (atomic inline boxes) + `<br>` + inline whitespace collapse
+(2026-06-10).** `inline-block` rendered fully blank: `gather_runs` recursed into
+it as transparent inline content, dropping its box (so e.g. white text landed on
+the white page). A quick "treat it as block-level" pass was rejected — it scored
++5 but rendered `margin: auto` (centers vs the correct `0`) and z-order wrong, so
+it baked in incorrect block semantics. Built properly instead: an inline-block is
+reserved as an atomic parley `InlineBox` (alongside `<img>`), its size measured
+from its own content during the layout pass (shrink-to-fit, clamped by definite
+CSS `width`/`height`) with its content `Layout` cached under `(leaf taffy id, box
+index)`, and painted as background box + content glyphs at the parley-placed rect.
+Two supporting gaps surfaced and were fixed:
+
+- **`<br>`** now emits a `\n` run (parley breaks on the mandatory newline).
+- **Inline whitespace collapse** (CSS `white-space: normal`): `gather_runs` kept
+  raw text, so source newlines + indentation around inline content became literal
+  `\n` runs — and since parley breaks on `\n`, a formatting newline before an
+  inline-block forced it onto a second line (a ~17px drop that was the real cause
+  of the "close but 1% off" inline-block fails). Collapsing each whitespace run to
+  a single space fixed it and lifted general text rendering too.
+
+Net (2026-06-10): normal-flow 392 → 400, css-backgrounds 287 → 295 (inline
+whitespace collapse helped text broadly), floats 32 → 34, css-images −1; one
+normal-flow regression (`inline-block-non-replaced-width-002`, which needs
+inline-block `margin: auto` → 0). Follow-ups for the inline-block tail: margins,
+`vertical-align`, borders/padding on the box, and leading/trailing edge-whitespace
+trimming.
 
 The css-images `7 errored` were `tools/*-template.html` files the runner was
 collecting as reftests (their `rel=match` points at a non-existent ref). Fixed
