@@ -529,11 +529,20 @@ pub(crate) fn walk<D>(
         let content_offset = (l.border.left + l.padding.left, l.border.top + l.padding.top);
         match dom.kind(id) {
             NodeKind::Element => {
+                // An anonymous block box (a mixed container's wrapped inline run)
+                // is keyed by a borrowed descendant node, so it must paint none of
+                // that node's box decorations — only its inline content (which
+                // paints e.g. an inline-block at its own size). Suppresses shadow,
+                // background, border-radius clip, and border below.
+                let is_anon = em
+                    .glyphs
+                    .as_ref()
+                    .is_some_and(|g| g.constructed.is_anonymous(id));
                 // Outset box-shadows paint behind the border-box, so
                 // emit them before the background. (Inset shadows,
                 // which paint over the background, are deferred —
                 // skipped here, warn-skipped in the translator.)
-                for shadow in box_shadows_of(styles, id) {
+                for shadow in box_shadows_of(styles, id).into_iter().filter(|_| !is_anon) {
                     if shadow.inset {
                         continue;
                     }
@@ -553,8 +562,11 @@ pub(crate) fn walk<D>(
                 // `radius` (border_of); replaced <img> content is not clipped
                 // here yet (a follow-up). Pushed only when a corner is non-zero,
                 // so square boxes keep a flat command stream.
-                let bg_radius =
-                    border_radius_of(styles, id, local_bounds.width(), local_bounds.height());
+                let bg_radius = if is_anon {
+                    None
+                } else {
+                    border_radius_of(styles, id, local_bounds.width(), local_bounds.height())
+                };
                 if let Some(radius) = bg_radius {
                     commands.push(PaintCmd::PushClip(ClipSpec {
                         kind: ClipKind::RoundedRect {
@@ -568,7 +580,7 @@ pub(crate) fn walk<D>(
                 // border — CSS paint order. The element whose background was
                 // propagated to the canvas (root / body) skips its own-box
                 // background — it has already been painted over the canvas.
-                let suppress_bg = em.canvas_bg_source == Some(id);
+                let suppress_bg = is_anon || em.canvas_bg_source == Some(id);
                 if !suppress_bg {
                     commands.push(PaintCmd::DrawRect(RectItem {
                         placement: CommonPlacement::new(local_bounds),
@@ -690,8 +702,9 @@ pub(crate) fn walk<D>(
                         color: ColorF::WHITE, // identity tint
                     }));
                 }
-                if let Some((widths, normal)) =
-                    border_of(styles, id, local_bounds.width(), local_bounds.height())
+                if let Some((widths, normal)) = (!is_anon)
+                    .then(|| border_of(styles, id, local_bounds.width(), local_bounds.height()))
+                    .flatten()
                 {
                     commands.push(PaintCmd::DrawBorder(BorderItem {
                         placement: CommonPlacement::new(local_bounds),
@@ -2550,6 +2563,32 @@ mod tests {
             _ => false,
         });
         assert!(green_box, "inline-block should emit a ~50px green background box");
+    }
+
+    #[test]
+    fn inline_block_among_blocks_paints_shrunk_background() {
+        // An inline-block among block siblings is wrapped in an anonymous block
+        // box and laid out as an atomic, shrink-to-fit inline box — so its
+        // background paints at its content width, not stretched to the container.
+        // (The anonymous wrapper itself paints no box decorations.)
+        let document = StaticDocument::parse("<html><body><p>x</p><span>x</span></body></html>");
+        let plist =
+            emit_with_sheet(&document, "span { display: inline-block; background: rgb(200, 0, 0); }");
+        let red_widths: Vec<f32> = plist
+            .commands()
+            .iter()
+            .filter_map(|c| match c {
+                PaintCmd::DrawRect(r) if r.color.r > 0.5 && r.color.g < 0.2 && r.color.b < 0.2 => {
+                    Some(r.placement.bounds.width())
+                },
+                _ => None,
+            })
+            .collect();
+        assert!(!red_widths.is_empty(), "inline-block red background should paint");
+        assert!(
+            red_widths.iter().all(|&w| w < 100.0),
+            "inline-block background shrink-to-fit, not full 800px width: {red_widths:?}"
+        );
     }
 
     #[test]

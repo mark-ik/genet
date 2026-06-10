@@ -40,9 +40,9 @@ use taffy::{
 
 use crate::adapter::NodeRef;
 use crate::construct::{
-    establishes_inline_context, gather_inline_content, is_replaced, list_marker_content,
-    list_marker_inline_run, list_marker_is_inside, replaced_px_size,
-    run_for_element,
+    establishes_inline_context, flows_inline, gather_inline_content, gather_inline_group,
+    is_replaced, list_marker_content, list_marker_inline_run, list_marker_is_inside,
+    replaced_px_size, run_for_element,
 };
 use crate::fragment::FragmentPlane;
 use crate::image_decode::ImagePlane;
@@ -91,6 +91,12 @@ struct BoxNode<Id> {
     /// (intrinsic from the `ImagePlane`, overridden by definite CSS
     /// width/height). Mutually exclusive with `inline_content`.
     replaced_size: Option<(f32, f32)>,
+    /// An anonymous block box (wrapping a run of a mixed container's inline-level
+    /// children). It has no DOM element of its own, so it paints no box
+    /// decorations — its `node_map` key is a borrowed descendant node whose style
+    /// (background / border) must not be painted on this box. Its inline content
+    /// (e.g. an inline-block as an `InlineBox`) still paints at its own size.
+    anonymous: bool,
     cache: Cache,
     unrounded_layout: Layout,
     final_layout: Layout,
@@ -104,6 +110,7 @@ impl<Id> BoxNode<Id> {
             inline_content: None,
             marker: None,
             replaced_size: None,
+            anonymous: false,
             cache: Cache::new(),
             unrounded_layout: Layout::new(),
             final_layout: Layout::new(),
@@ -135,6 +142,16 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
     /// leaves. Mirrors `TaffyTree::get_node_context` on the old oracle.
     pub fn get_node_context(&self, id: NodeId) -> Option<&InlineContent<Id>> {
         self.nodes.get(idx(id)).and_then(|n| n.inline_content.as_ref())
+    }
+
+    /// Whether the box for DOM `id` is an anonymous box (paints no box
+    /// decorations of its own — see [`BoxNode::anonymous`]). Paint emission
+    /// reads this to skip background / border / shadow on anonymous wrappers.
+    pub fn is_anonymous(&self, id: Id) -> bool {
+        self.node_map
+            .get(&id)
+            .and_then(|&t| self.nodes.get(idx(t)))
+            .is_some_and(|n| n.anonymous)
     }
 }
 
@@ -226,47 +243,68 @@ where
         return i;
     }
 
-    // Block / mixed: build child boxes, recursing into elements and
-    // turning bare text into one-run inline leaves (mirrors
-    // `construct::build_children`).
+    // Block / mixed children. Each run of (non-replaced) inline-level children —
+    // non-blank text, inline-blocks, and `display:inline` elements — is wrapped
+    // in an anonymous block box: a line carrying them as atomic inline content,
+    // so an inline-block is shrink-to-fit and flows rather than being laid out as
+    // a stretched block child. Block-level elements and replaced boxes (`<img>`)
+    // get their own box. Whitespace-only text between blocks is collapsible
+    // (CSS 2.1 §9.2.2.1).
     let mut children = Vec::new();
+    let mut group: Vec<NodeRef<'a, D>> = Vec::new();
     for child in elem.dom_children() {
         match dom.kind(child.id()) {
-            NodeKind::Element => children.push(build_node(dom, styles, images, child, tree)),
             NodeKind::Text => {
-                let text = dom.text(child.id()).unwrap_or("");
-                // Whitespace-only text between block-level boxes is collapsible
-                // and generates no box (CSS 2.1 §9.2.2.1 / white-space
-                // collapsing). This branch is the block/mixed path, reached only
-                // when the element has a block-level child, so any text here sits
-                // between or beside blocks. Without the skip, inter-element
-                // newlines + indentation in the source each become a stray line
-                // box (vertical space) — badly inflated in the blank-line-
-                // formatted CSS2 `.xht` corpus. (serval has no `white-space: pre`
-                // support yet, for which this would need gating.)
-                if text.chars().all(char::is_whitespace) {
-                    continue;
+                if dom.text(child.id()).is_some_and(|t| !t.chars().all(char::is_whitespace)) {
+                    group.push(child);
                 }
-                let content = InlineContent {
-                    runs: vec![run_for_element(styles, elem.id(), text.to_string())],
-                    boxes: Vec::new(),
-                };
-                let mut node = BoxNode::new(initial_style());
-                node.inline_content = Some(content);
-                let i = tree.push(node);
-                // Text nodes are addressable too (the oracle inserts them).
-                tree.node_map.insert(child.id(), nid(i));
-                children.push(i);
+            },
+            NodeKind::Element if flows_inline(dom, styles, child.id()) => group.push(child),
+            NodeKind::Element => {
+                flush_anon_group(dom, styles, images, elem.id(), &mut group, &mut children, tree);
+                children.push(build_node(dom, styles, images, child, tree));
             },
             _ => {},
         }
     }
+    flush_anon_group(dom, styles, images, elem.id(), &mut group, &mut children, tree);
     let mut node = BoxNode::new(style);
     node.children = children;
     node.marker = list_marker_content(dom, styles, elem.id());
     let i = tree.push(node);
     tree.node_map.insert(elem.id(), nid(i));
     i
+}
+
+/// Flush a pending run of inline-level children (`group`) into one anonymous
+/// block box: a measured inline leaf carrying them as atomic inline content,
+/// flagged `anonymous` so paint skips its (DOM-key's) box decorations. The box
+/// is keyed in `node_map` by its first member, so the DOM-driven paint walk
+/// reaches it; the other members have no box of their own (their content lives
+/// in this box's `InlineContent`). No-op for an empty group; clears it.
+#[allow(clippy::too_many_arguments)]
+fn flush_anon_group<'a, D>(
+    dom: &'a D,
+    styles: &StylePlane<D::NodeId>,
+    images: &ImagePlane<D::NodeId>,
+    styling: D::NodeId,
+    group: &mut Vec<NodeRef<'a, D>>,
+    children: &mut Vec<usize>,
+    tree: &mut BoxTree<D::NodeId>,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let Some(first) = group.first() else { return };
+    let key = first.id();
+    let content = gather_inline_group(dom, styles, images, styling, group);
+    let mut node = BoxNode::new(initial_style());
+    node.inline_content = Some(content);
+    node.anonymous = true;
+    let i = tree.push(node);
+    tree.node_map.insert(key, nid(i));
+    children.push(i);
+    group.clear();
 }
 
 /// Clone the cascaded primary style for `id`, or the shared initial

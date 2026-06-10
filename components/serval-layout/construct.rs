@@ -275,63 +275,132 @@ fn gather_runs<'a, D>(
     D::NodeId: Copy + Eq + Hash,
 {
     for child in node.dom_children() {
-        match dom.kind(child.id()) {
-            NodeKind::Text => {
-                // CSS `white-space: normal` — collapse each run of whitespace
-                // (including source newlines + indentation) to a single space, so
-                // formatting whitespace does not force line breaks (parley breaks
-                // on `\n`) or render as literal runs. A real line break comes only
-                // from `<br>`. (Leading/trailing-edge trimming and `pre` are
-                // follow-ups.)
-                let text = collapse_whitespace(dom.text(child.id()).unwrap_or(""));
-                if !text.is_empty() {
-                    *offset += text.len();
-                    runs.push(run_for_element(styles, node.id(), text));
-                }
-            }
-            NodeKind::Element => {
-                if dom
-                    .element_name(child.id())
-                    .is_some_and(|q| q.local == html5ever::local_name!("br"))
-                {
-                    // `<br>` is a forced line break: emit a newline run (parley
-                    // breaks lines at the mandatory `\n`).
-                    *offset += 1;
-                    runs.push(run_for_element(styles, node.id(), "\n".to_string()));
-                } else if is_replaced(dom, child.id()) {
-                    let (width, height) = replaced_px_size(dom, styles, images, child.id());
-                    boxes.push(InlineBoxItem {
-                        index: *offset,
-                        width,
-                        height,
-                        source: child.id(),
-                        block: None,
-                    });
-                } else if is_inline_block(styles, child.id()) {
-                    // Atomic inline-block: gather its own inline content + box
-                    // style; the measure pass sizes it and parley places it as a
-                    // unit. Its content is not flowed into this line.
-                    let content = gather_inline_content(dom, styles, images, child);
-                    let (css_width, css_height) = inline_block_css_size(styles, child.id());
-                    boxes.push(InlineBoxItem {
-                        index: *offset,
-                        width: 0.0,
-                        height: 0.0,
-                        source: child.id(),
-                        block: Some(Box::new(InlineBlockBox {
-                            content,
-                            css_width,
-                            css_height,
-                            background: inline_block_bg_of(styles, child.id()),
-                        })),
-                    });
-                } else {
-                    gather_runs(dom, styles, images, child, runs, boxes, offset);
-                }
-            }
-            _ => {}
-        }
+        gather_child(dom, styles, images, node.id(), child, runs, boxes, offset);
     }
+}
+
+/// Gather one inline-level `child` into the running `runs` / `boxes`. `styling`
+/// is the element whose cascade styles bare text (the enclosing inline element,
+/// or — for an anonymous block box — the block container). Shared by
+/// [`gather_runs`] (an element's own children) and [`gather_inline_group`] (a
+/// run of a block container's inline-level children).
+#[allow(clippy::too_many_arguments)]
+fn gather_child<'a, D>(
+    dom: &'a D,
+    styles: &StylePlane<D::NodeId>,
+    images: &ImagePlane<D::NodeId>,
+    styling: D::NodeId,
+    child: NodeRef<'a, D>,
+    runs: &mut Vec<InlineRun>,
+    boxes: &mut Vec<InlineBoxItem<D::NodeId>>,
+    offset: &mut usize,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    match dom.kind(child.id()) {
+        NodeKind::Text => {
+            // CSS `white-space: normal` — collapse each run of whitespace
+            // (including source newlines + indentation) to a single space, so
+            // formatting whitespace does not force line breaks (parley breaks
+            // on `\n`) or render as literal runs. A real line break comes only
+            // from `<br>`. (Leading/trailing-edge trimming and `pre` are
+            // follow-ups.)
+            let text = collapse_whitespace(dom.text(child.id()).unwrap_or(""));
+            if !text.is_empty() {
+                *offset += text.len();
+                runs.push(run_for_element(styles, styling, text));
+            }
+        }
+        NodeKind::Element => {
+            if dom
+                .element_name(child.id())
+                .is_some_and(|q| q.local == html5ever::local_name!("br"))
+            {
+                // `<br>` is a forced line break: emit a newline run (parley
+                // breaks lines at the mandatory `\n`).
+                *offset += 1;
+                runs.push(run_for_element(styles, styling, "\n".to_string()));
+            } else if is_replaced(dom, child.id()) {
+                let (width, height) = replaced_px_size(dom, styles, images, child.id());
+                boxes.push(InlineBoxItem {
+                    index: *offset,
+                    width,
+                    height,
+                    source: child.id(),
+                    block: None,
+                });
+            } else if is_inline_block(styles, child.id()) {
+                // Atomic inline-block: gather its own inline content + box
+                // style; the measure pass sizes it and parley places it as a
+                // unit. Its content is not flowed into this line.
+                let content = gather_inline_content(dom, styles, images, child);
+                let (css_width, css_height) = inline_block_css_size(styles, child.id());
+                boxes.push(InlineBoxItem {
+                    index: *offset,
+                    width: 0.0,
+                    height: 0.0,
+                    source: child.id(),
+                    block: Some(Box::new(InlineBlockBox {
+                        content,
+                        css_width,
+                        css_height,
+                        background: inline_block_bg_of(styles, child.id()),
+                    })),
+                });
+            } else {
+                // A non-replaced inline element flows transparently: its own
+                // children join this line, styled by it.
+                gather_runs(dom, styles, images, child, runs, boxes, offset);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether `id` is a non-replaced inline-level *element* whose content flows as
+/// inline runs and can join an anonymous block box on a line: a `display:inline`
+/// element or an `inline-block`. Excludes replaced boxes (`<img>` etc.) and the
+/// atomic inline-level layout boxes (`inline-table` / `-flex` / `-grid`), which
+/// keep their own block-path box rather than having their content flattened into
+/// runs. Element-only (text is grouped separately, after whitespace handling).
+pub(crate) fn flows_inline<D>(dom: &D, styles: &StylePlane<D::NodeId>, id: D::NodeId) -> bool
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    use style::values::specified::box_::{DisplayInside, DisplayOutside};
+    if !matches!(dom.kind(id), NodeKind::Element) || is_replaced(dom, id) {
+        return false;
+    }
+    let Some(entry) = styles.get(id) else { return false };
+    let Some(data) = entry.borrow_data() else { return false };
+    let display = data.styles.primary().get_box().display;
+    matches!(display.outside(), DisplayOutside::Inline)
+        && matches!(display.inside(), DisplayInside::Flow | DisplayInside::FlowRoot)
+}
+
+/// Gather a run of a block container's inline-level children (`group`) into one
+/// [`InlineContent`] for an anonymous block box. Bare text is styled by
+/// `styling` (the container).
+pub(crate) fn gather_inline_group<'a, D>(
+    dom: &'a D,
+    styles: &StylePlane<D::NodeId>,
+    images: &ImagePlane<D::NodeId>,
+    styling: D::NodeId,
+    group: &[NodeRef<'a, D>],
+) -> InlineContent<D::NodeId>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut runs = Vec::new();
+    let mut boxes = Vec::new();
+    let mut offset = 0usize;
+    for &child in group {
+        gather_child(dom, styles, images, styling, child, &mut runs, &mut boxes, &mut offset);
+    }
+    InlineContent { runs, boxes }
 }
 
 /// Build an [`InlineRun`] for `text` styled by element `id`'s cascade

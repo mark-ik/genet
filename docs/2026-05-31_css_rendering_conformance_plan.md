@@ -353,11 +353,11 @@ GPU-jitter-floor column was measured on a different machine (`152`); the
 the last two columns as same-machine deltas, not the middle column against the
 last:
 
-| subset | after inline-block + inline-ws | after multi-img inline flow | after iframe/canvas replaced | after Ahem test font (2026-06-10) |
+| subset | after multi-img inline flow | after iframe/canvas replaced | after Ahem test font | after anonymous block boxes (2026-06-10) |
 | --- | --- | --- | --- | --- |
-| `css/CSS2/floats` | 34 / 197 | 34 / 197 | 34 / 197 | **34 / 197** |
-| `css/CSS2/normal-flow` | 400 / 1044 | 442 / 1044 | 451 / 1044 | **454 / 1044** |
-| `css/css-backgrounds` | 295 / 1325 | 299 / 1325 | 299 / 1325 | **303 / 1325** |
+| `css/CSS2/floats` | 34 / 197 | 34 / 197 | 34 / 197 | **40 / 197** |
+| `css/CSS2/normal-flow` | 442 / 1044 | 451 / 1044 | 454 / 1044 | **462 / 1044** |
+| `css/css-backgrounds` | 299 / 1325 | 299 / 1325 | 303 / 1325 | **310 / 1325** |
 
 Subsets the 2026-06-07 paint series targeted (first measured 2026-06-09, no prior
 baseline recorded — add to the running board going forward):
@@ -413,6 +413,31 @@ normal-flow regression (`inline-block-non-replaced-width-002`, which needs
 inline-block `margin: auto` → 0). Follow-ups for the inline-block tail: margins,
 `vertical-align`, borders/padding on the box, and leading/trailing edge-whitespace
 trimming.
+
+**Anonymous block boxes — required a paint-walk fix to land (2026-06-10).** A
+block container that mixes block-level and inline-level children must wrap each
+run of inline-level children (text, inline-blocks, `display:inline` elements) in
+an *anonymous block box* carrying a line. Without it, an inline-block among
+blocks was laid out as a *stretched block child* — its `width: auto` filled the
+container instead of shrinking to fit (a full-width background where only the
+content should show). Two earlier attempts regressed 60–66 tests; the blocker was
+**paint architecture, not construction**: the paint walk is DOM-driven and paints
+each box's background/border from `background_color_of(styles, dom_node)`. An
+anonymous box has to be keyed by *some* real node (so the walk reaches it), so it
+painted that node's background at the anon box's full-width fragment — the
+persistent full-width bug. Fix: a `BoxNode::anonymous` flag (queried via
+`BoxTree::is_anonymous`); the walk skips *all* box decorations (shadow /
+background / gradients / bg-image / border-radius / border) for anonymous boxes,
+so only their inline content paints — the inline-block as an atomic `InlineBox`
+at its own shrink-to-fit size. The wrapping is scoped by `construct::flows_inline`
+to `inline` + `inline-block` only; replaced boxes (`<img>`) and the atomic inline
+layout boxes (`inline-table` / `-flex` / `-grid`) keep their own block-path box
+(wrapping them regressed the replaced-height / `*-applies-to` corpus). Net **+21
+across subsets** — normal-flow 454 → 462, css-backgrounds 303 → 310, floats 34 →
+40, css-images steady — for one regression (`block-in-inline-margins-005`, the
+hardest block-in-inline case with negative margins). Remaining inline-block tail:
+margins, `vertical-align`; and true block-in-inline (a *block* inside an inline)
+is its own axis.
 
 **Multiple inline images flow side by side — another systematic lever
 (2026-06-10).** `establishes_inline_context` required inline *text*; a replaced
