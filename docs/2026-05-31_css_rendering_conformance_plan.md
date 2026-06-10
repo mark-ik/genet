@@ -353,20 +353,39 @@ GPU-jitter-floor column was measured on a different machine (`152`); the
 the last two columns as same-machine deltas, not the middle column against the
 last:
 
-| subset | Lever-1 baseline | after url()/head/key fixes | after GPU-jitter floor | after canvas + gradient tiling (2026-06-09) |
+| subset | Lever-1 baseline | after GPU-jitter floor | after canvas + gradient tiling | after whitespace-collapse (2026-06-09) |
 | --- | --- | --- | --- | --- |
-| `css/CSS2/floats` | 7 / 197 | 7 / 197 | 15 / 197 | **15 / 197** |
-| `css/CSS2/normal-flow` | 1 / 1045 | 8 / 1045 | 174 / 1045 | **174 / 1045** |
-| `css/css-backgrounds` | 15 / 1326 | ~95 / 1326 (±2) | 152 / 1326 | **149 / 1325** |
+| `css/CSS2/floats` | 7 / 197 | 15 / 197 | 15 / 197 | **32 / 197** |
+| `css/CSS2/normal-flow` | 1 / 1045 | 174 / 1045 | 174 / 1045 | **392 / 1044** |
+| `css/css-backgrounds` | 15 / 1326 | 152 / 1326 | 149 / 1325 | **287 / 1325** |
 
 Subsets the 2026-06-07 paint series targeted (first measured 2026-06-09, no prior
 baseline recorded — add to the running board going forward):
 
 | subset | 2026-06-09 | lands here |
 | --- | --- | --- |
-| `css/css-images` | **164 / 713** (0 errored) | gradients |
+| `css/css-images` | **175 / 713** (post-whitespace) | gradients |
 | `css/css-lists` | **123 / 347** | list markers |
 | `css/css-text-decor` | **203 / 631** | underline / overline / line-through / color |
+
+**Whitespace-collapse between blocks — the single biggest lever to date
+(2026-06-09).** `box_tree::build_node`'s block/mixed path turned *every* text
+child into an inline-content box, including whitespace-only text (the
+newlines + indentation between block elements). Each became a stray line box, so
+every document gained vertical space proportional to its inter-element
+whitespace — and the heavily blank-line-formatted CSS2 `.xht` corpus gained a
+*lot*, differently between a test and its reference, which poisoned the reference
+renders across whole axes (this is the `y=74` gremlin from the gradient work).
+The cause was found by measuring one `max-height` test: identical structure to
+its reference, but the reference's content sat 54px lower purely from extra
+blank lines. Fix: skip whitespace-only text in the block path (it sits between or
+beside blocks, so it is collapsible and generates no box; CSS 2.1 §9.2.2.1). One
+change moved **+384 reftests** across four subsets — normal-flow 174 → 392,
+css-backgrounds 149 → 287, floats 15 → 32, css-images 164 → 175 — for 6
+coincidental regressions, all in already-broken areas (block-in-inline anonymous
+boxes, SVG). The inline path (`gather_inline_content`) is untouched, so real
+spaces between words / inline elements are preserved. (`white-space: pre` is still
+unimplemented; this skip would need gating once it lands.)
 
 The css-images `7 errored` were `tools/*-template.html` files the runner was
 collecting as reftests (their `rel=match` points at a non-existent ref). Fixed

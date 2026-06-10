@@ -234,9 +234,21 @@ where
         match dom.kind(child.id()) {
             NodeKind::Element => children.push(build_node(dom, styles, images, child, tree)),
             NodeKind::Text => {
-                let text = dom.text(child.id()).unwrap_or("").to_string();
+                let text = dom.text(child.id()).unwrap_or("");
+                // Whitespace-only text between block-level boxes is collapsible
+                // and generates no box (CSS 2.1 §9.2.2.1 / white-space
+                // collapsing). This branch is the block/mixed path, reached only
+                // when the element has a block-level child, so any text here sits
+                // between or beside blocks. Without the skip, inter-element
+                // newlines + indentation in the source each become a stray line
+                // box (vertical space) — badly inflated in the blank-line-
+                // formatted CSS2 `.xht` corpus. (serval has no `white-space: pre`
+                // support yet, for which this would need gating.)
+                if text.chars().all(char::is_whitespace) {
+                    continue;
+                }
                 let content = InlineContent {
-                    runs: vec![run_for_element(styles, elem.id(), text)],
+                    runs: vec![run_for_element(styles, elem.id(), text.to_string())],
                     boxes: Vec::new(),
                 };
                 let mut node = BoxNode::new(initial_style());
@@ -937,6 +949,27 @@ mod tests {
         assert!(approx(right.location.x, 380.0), ".right left:380 → x=380, got {}", right.location.x);
         assert!(approx(left.location.y, 0.0), ".left static y=0, got {}", left.location.y);
         assert!(approx(right.location.y, 0.0), ".right static y=0 (not stacked), got {}", right.location.y);
+    }
+
+    /// Whitespace-only text between block children is collapsible and generates
+    /// no box: two stacked 50px blocks land at y=0 and y=50 even with newlines +
+    /// indentation between them in the source. Without the skip, the inter-block
+    /// whitespace would add a stray line box and push the second block down.
+    #[test]
+    fn whitespace_between_blocks_generates_no_box() {
+        let (doc, frags) = lay(
+            "<html><body><div class=\"a\"></div>\n   \n  <div class=\"b\"></div></body></html>",
+            &[".a, .b { display: block; height: 50px; width: 50px; }"],
+        );
+        let divs = find_all(&doc, html5ever::local_name!("div"));
+        let a = frags.rect_of(divs[0]).expect(".a fragment");
+        let b = frags.rect_of(divs[1]).expect(".b fragment");
+        assert!(approx(a.location.y, 0.0), ".a at y=0, got {}", a.location.y);
+        assert!(
+            approx(b.location.y, 50.0),
+            ".b directly after .a, no whitespace gap, got {}",
+            b.location.y
+        );
     }
 
     /// A 16×16 blue PNG as a data-URI `<img>` document.
