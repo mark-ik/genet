@@ -53,7 +53,7 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
     // A `data:` URL is decoded in place (no network): the body and media type come
     // straight from the URL. Always a basic response.
     if request.url.scheme() == "data" {
-        return data_url_response(&request.url, vec![request.url.clone()]);
+        return crate::data_url::process(&request.url, vec![request.url.clone()]);
     }
     let mut current_url = request.url.clone();
     // A secure (https-origin) context drives mixed-content auto-upgrade; together
@@ -716,84 +716,6 @@ async fn run_preflight(
     }
     let headers = collect_headers(resp.headers());
     cors::preflight_verdict(origin, credentials, method, requested_headers, &headers)
-}
-
-/// Decode a `data:` URL into a basic 200 response (WHATWG data: URL processor):
-/// `data:[<mediatype>][;base64],<data>`. The data is percent-decoded, then
-/// base64-decoded if `;base64`; the media type defaults to
-/// `text/plain;charset=US-ASCII`.
-fn data_url_response(url: &Url, url_list: Vec<Url>) -> Response {
-    let full = url.as_str();
-    let rest = match full.strip_prefix("data:") {
-        Some(r) => r,
-        None => return Response::network_error(),
-    };
-    let Some(comma) = rest.find(',') else {
-        return Response::network_error();
-    };
-    let mut media_type = rest[..comma].trim().to_owned();
-    let data = percent_decode(&rest[comma + 1..]);
-
-    let is_base64 = media_type.to_ascii_lowercase().trim_end().ends_with(";base64");
-    let body = if is_base64 {
-        let cut = media_type.len() - ";base64".len();
-        media_type.truncate(cut);
-        let s: String = data.iter().map(|&b| b as char).collect(); // isomorphic
-        match base64_decode_forgiving(&s) {
-            Some(b) => b,
-            None => return Response::network_error(),
-        }
-    } else {
-        data
-    };
-    if media_type.is_empty() {
-        media_type = "text/plain;charset=US-ASCII".to_owned();
-    } else if media_type.starts_with(';') {
-        media_type = format!("text/plain{media_type}");
-    }
-    Response {
-        status: 200,
-        headers: vec![("content-type".to_owned(), media_type)],
-        body: ResponseBody::from_bytes(Bytes::from(body)),
-        url_list,
-        response_type: ResponseType::Basic,
-    }
-}
-
-fn percent_decode(s: &str) -> Vec<u8> {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let (Some(h), Some(l)) = (hex_nibble(b[i + 1]), hex_nibble(b[i + 2])) {
-                out.push((h << 4) | l);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(b[i]);
-        i += 1;
-    }
-    out
-}
-
-fn hex_nibble(c: u8) -> Option<u8> {
-    match c {
-        b'0'..=b'9' => Some(c - b'0'),
-        b'a'..=b'f' => Some(c - b'a' + 10),
-        b'A'..=b'F' => Some(c - b'A' + 10),
-        _ => None,
-    }
-}
-
-/// Forgiving base64 decode (whitespace stripped, padding optional).
-fn base64_decode_forgiving(s: &str) -> Option<Vec<u8>> {
-    use base64::Engine;
-    let stripped: String = s.chars().filter(|c| !c.is_ascii_whitespace()).collect();
-    base64::engine::general_purpose::STANDARD_NO_PAD
-        .decode(stripped.trim_end_matches('=').as_bytes())
-        .ok()
 }
 
 fn http_method(method: &Method) -> http::Method {

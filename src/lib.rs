@@ -37,6 +37,7 @@ mod client;
 mod context;
 mod cookie_jar;
 mod cors;
+mod data_url;
 mod decode;
 mod fetch;
 // HTTP/3 transport — native-only (QUIC over UDP); excluded from wasm builds.
