@@ -200,7 +200,7 @@ where
     // inline-context leaf and are handled there, not here).
     if is_replaced(dom, elem.id()) {
         let mut node = BoxNode::new(style);
-        node.replaced_size = Some(replaced_px_size(styles, images, elem.id()));
+        node.replaced_size = Some(replaced_px_size(dom, styles, images, elem.id()));
         let i = tree.push(node);
         tree.node_map.insert(elem.id(), nid(i));
         return i;
@@ -991,6 +991,17 @@ mod tests {
             "two imgs flow side by side (width >= 2*16), got {}",
             r.size.width
         );
+    }
+
+    /// An `<iframe>` with no intrinsic content + no CSS size takes the CSS
+    /// default object size, 300×150 (it is a replaced element).
+    #[test]
+    fn iframe_uses_default_object_size() {
+        let (doc, frags) = lay("<html><body><iframe></iframe></body></html>", &[]);
+        let iframe = find_all(&doc, html5ever::local_name!("iframe"))[0];
+        let r = frags.rect_of(iframe).expect("iframe fragment");
+        assert!(approx(r.size.width, 300.0), "iframe default width 300, got {}", r.size.width);
+        assert!(approx(r.size.height, 150.0), "iframe default height 150, got {}", r.size.height);
     }
 
     /// A 16×16 blue PNG as a data-URI `<img>` document.

@@ -353,11 +353,11 @@ GPU-jitter-floor column was measured on a different machine (`152`); the
 the last two columns as same-machine deltas, not the middle column against the
 last:
 
-| subset | after canvas + gradient tiling | after block-whitespace-collapse | after inline-block + inline-ws | after multi-img inline flow (2026-06-10) |
+| subset | after block-whitespace-collapse | after inline-block + inline-ws | after multi-img inline flow | after iframe/canvas replaced (2026-06-10) |
 | --- | --- | --- | --- | --- |
-| `css/CSS2/floats` | 15 / 197 | 32 / 197 | 34 / 197 | **34 / 197** |
-| `css/CSS2/normal-flow` | 174 / 1045 | 392 / 1044 | 400 / 1044 | **442 / 1044** |
-| `css/css-backgrounds` | 149 / 1325 | 287 / 1325 | 295 / 1325 | **299 / 1325** |
+| `css/CSS2/floats` | 32 / 197 | 34 / 197 | 34 / 197 | **34 / 197** |
+| `css/CSS2/normal-flow` | 392 / 1044 | 400 / 1044 | 442 / 1044 | **451 / 1044** |
+| `css/css-backgrounds` | 287 / 1325 | 295 / 1325 | 299 / 1325 | **299 / 1325** |
 
 Subsets the 2026-06-07 paint series targeted (first measured 2026-06-09, no prior
 baseline recorded — add to the running board going forward):
@@ -426,6 +426,17 @@ establish an inline context when two or more replaced boxes are present (a singl
 lone img still stays block for intrinsic sizing); also stop whitespace-only text
 from forcing an inline context. **normal-flow 400 → 442** (+42, zero regressions),
 css-backgrounds 295 → 299; floats / css-images unchanged.
+
+**`<iframe>` / `<canvas>` are replaced elements (2026-06-10).** `is_replaced` was
+`<img>`-only, so the `*-replaced-height/width` "no red" tests — which place an
+`<iframe>` (a replaced element with the CSS default object size **300×150**) under
+a same-sized green cover — left the iframe unsized, exposing its red border. Treat
+`<iframe>` / `<canvas>` as replaced, defaulting to 300×150 when they have no
+intrinsic / CSS size. `<video>` / `<object>` / `<embed>` were tried but **reverted
+from the set**: they are image-like, and a 300×150 placeholder (their content is
+not decoded) regressed the `object-fit` / `object-position` corpus by 60 in
+css-images — far more than it helped. **normal-flow 442 → 451** (+9, zero
+regressions); css-backgrounds / css-images / floats unchanged.
 
 The css-images `7 errored` were `tools/*-template.html` files the runner was
 collecting as reftests (their `rel=match` points at a non-existent ref). Fixed

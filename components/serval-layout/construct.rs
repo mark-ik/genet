@@ -99,15 +99,36 @@ where
     has_inline_text || replaced_count >= 2
 }
 
-/// Whether an element is replaced content we render as its own box
-/// rather than as flowed inline text. Currently just `<img>`.
+/// Whether an element is replaced content we render as its own box rather than
+/// as flowed inline text: `<img>`, plus `<iframe>` / `<canvas>`, which size to
+/// the 300×150 default object size when they have no intrinsic / CSS size.
+///
+/// `<video>` / `<object>` / `<embed>` are deliberately excluded: their content
+/// is image-like, and without decoding it a 300×150 placeholder mis-renders the
+/// `object-fit` / `object-position` corpus more than a 300×150 default helps.
 pub(crate) fn is_replaced<D>(dom: &D, id: D::NodeId) -> bool
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    use html5ever::local_name;
+    dom.element_name(id).is_some_and(|q| {
+        q.local == local_name!("img")
+            || q.local == local_name!("iframe")
+            || q.local == local_name!("canvas")
+    })
+}
+
+/// Whether `id` is a replaced element that, lacking intrinsic content, falls
+/// back to the CSS default object size (300×150) — every replaced element except
+/// `<img>` (which sizes to its decoded pixels, or 0 when undecoded).
+fn uses_default_object_size<D>(dom: &D, id: D::NodeId) -> bool
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
     dom.element_name(id)
-        .is_some_and(|q| q.local == html5ever::local_name!("img"))
+        .is_some_and(|q| q.local != html5ever::local_name!("img"))
 }
 
 /// Read an element's cascaded outer display: `Some(true)` for
@@ -158,21 +179,35 @@ pub(crate) fn is_inline_block<NodeId: Copy + Eq + Hash>(
         && matches!(display.inside(), DisplayInside::FlowRoot)
 }
 
-/// Pixel size for a replaced `<img>`: the decoded intrinsic size from
-/// `images`, with each axis overridden by a definite CSS `width`/`height`
-/// if the cascade set one. Shared by the block-level replaced leaf
-/// ([`crate::box_tree`]) and the inline replaced box (below). Non-length
-/// dimensions (`auto`, percentages) leave the intrinsic size in place;
-/// an undecoded image with no CSS size reserves 0×0.
-pub(crate) fn replaced_px_size<NodeId: Copy + Eq + Hash>(
-    styles: &StylePlane<NodeId>,
-    images: &ImagePlane<NodeId>,
-    id: NodeId,
-) -> (f32, f32) {
+/// Pixel size for a replaced element: the decoded intrinsic size from `images`
+/// (for `<img>`), or the CSS default object size 300×150 for the embedded-content
+/// elements (`<iframe>` etc.) that have no intrinsic content, with each axis then
+/// overridden by a definite CSS `width`/`height`. Shared by the block-level
+/// replaced leaf ([`crate::box_tree`]) and the inline replaced box. Non-length
+/// dimensions (`auto`, percentages) leave the base size in place; an undecoded
+/// `<img>` with no CSS size reserves 0×0.
+pub(crate) fn replaced_px_size<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    images: &ImagePlane<D::NodeId>,
+    id: D::NodeId,
+) -> (f32, f32)
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
     let (mut w, mut h) = images
         .get(id)
         .map(|d| (d.width as f32, d.height as f32))
-        .unwrap_or((0.0, 0.0));
+        .unwrap_or_else(|| {
+            // No decoded pixels: embedded content defaults to 300×150; an
+            // undecoded <img> reserves 0×0.
+            if uses_default_object_size(dom, id) {
+                (300.0, 150.0)
+            } else {
+                (0.0, 0.0)
+            }
+        });
 
     if let Some(entry) = styles.get(id) {
         if let Some(data) = entry.borrow_data() {
@@ -264,7 +299,7 @@ fn gather_runs<'a, D>(
                     *offset += 1;
                     runs.push(run_for_element(styles, node.id(), "\n".to_string()));
                 } else if is_replaced(dom, child.id()) {
-                    let (width, height) = replaced_px_size(styles, images, child.id());
+                    let (width, height) = replaced_px_size(dom, styles, images, child.id());
                     boxes.push(InlineBoxItem {
                         index: *offset,
                         width,
