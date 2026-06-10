@@ -183,6 +183,22 @@ fn collect(root: &Path, out: &mut Vec<PathBuf>) {
     entries.sort();
     for path in entries {
         if path.is_dir() {
+            // WPT excludes `tools/` and `support/` directories from test
+            // collection: they hold test-generation templates and helper
+            // resources (images, fragments referenced by path), not tests. A
+            // `tools/*-template.html` carries a `rel=match` to a ref that does
+            // not exist, so collecting it produces a spurious `ref-missing`
+            // error. Hidden dirs (`.git`, …) are skipped too.
+            if matches!(
+                path.file_name().and_then(|n| n.to_str()),
+                Some("tools" | "support")
+            ) || path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with('.'))
+            {
+                continue;
+            }
             collect(&path, out);
         } else if is_html(&path) || is_any_js(&path) {
             out.push(path);
