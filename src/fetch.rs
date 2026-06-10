@@ -505,10 +505,20 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
         // caller that same buffer (a live stream can't be tee'd into the cache).
         if let Some(key) = &cache_key {
             if cache::is_cacheable(status, &headers) {
-                let bytes = match ResponseBody::new(body).bytes().await {
-                    Ok(bytes) => bytes,
-                    Err(_) => return Response::network_error(),
-                };
+                let (bytes, decode_err) = ResponseBody::new(body).collect_lossy().await;
+                // A `Content-Encoding` decode failure does not fail the response
+                // (its status/headers are valid); it must surface when the body is
+                // read. Skip caching the corrupt body and hand back one that yields
+                // the decoded prefix then errors.
+                if let Some(err) = decode_err {
+                    return Response {
+                        status,
+                        headers,
+                        body: ResponseBody::from_bytes_then_error(bytes, err),
+                        url_list,
+                        response_type,
+                    };
+                }
                 let mut stored_headers = headers;
                 strip_body_encoding_headers(&mut stored_headers);
                 cx.cache.put(
