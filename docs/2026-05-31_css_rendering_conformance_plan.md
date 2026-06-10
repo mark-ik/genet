@@ -388,7 +388,34 @@ one gradient ramp over the box where the reference *tiles* it
 (`tiled-radial-gradients` shows two ellipses vs serval's one). Honoring
 `background-size` therefore needs gradient **tiling**: the renderer fills one
 `placement` per gradient ramp, so a tiled layer emits N gradients (the image tile
-path is single-emit). Recorded as a bounded follow-up, not yet built.
+path is single-emit).
+
+**Built, measured net-negative, reverted (2026-06-09).** A full implementation
+(per-layer `background-size`/`-position`/`-repeat`, a positioning-area-vs-painting-
+area split so the canvas tiles the root box across the viewport, a tile cap with
+an area-fill fallback, the `gradient_tile_cmd` per-tile emitter) was written and
+worked per spec — `background-position-right-in-body` reached `diff=0` mid-way and
+`tiled-radial-gradients` rendered the correct two ellipses. But on the full
+css-backgrounds subset it scored **net −5 to −7 with zero gains**, so it was
+reverted (back to 147). Why it does not pay off yet:
+
+- **The intended wins are blocked elsewhere.** `tiled-radial-gradients` fails on a
+  *separate layout bug*: serval stacks two absolutely-positioned siblings (the
+  reference fixture) instead of placing both at the static `y=0`, so serval's own
+  ref render is wrong, not the tiling. `background-position-right-in-body` lands a
+  near-miss (`maxδ=255` on a sub-1% region).
+- **It regresses the `background-repeat: round` / `space` corpus.** Those tests put
+  an explicit `background-size` + `round`/`space` on a gradient; `round` rescales
+  the tile to a whole-number fit, which serval does not implement. They passed at
+  147 only because the un-tiled stretch happened to match; *any* tiling treatment
+  (approximate-as-`repeat`, or fall back to stretch) diverges from the correct
+  round/space result and regresses 4–6 of them.
+- **Coupling through the reference renders.** Because reftests compare serval's
+  test render against serval's *reference* render, teaching gradients to tile also
+  changes how the (gradient-bearing) reference fixtures render, which shifts the
+  target. The feature cannot land cleanly until `round`/`space` are implemented and
+  the abs-pos static-position layout bug is fixed. Revisit then; the implementation
+  is in the git history (reverted from `paint_emit.rs`).
 
 All subsets report **0 errored** on the three-subset board (the image-key crash
 is gone) and are now **deterministic** (identical re-runs) after the GPU-jitter
