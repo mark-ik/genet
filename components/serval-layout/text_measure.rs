@@ -313,8 +313,18 @@ impl Default for TextMeasureCtx {
 
 impl TextMeasureCtx {
     pub fn new() -> Self {
+        let mut font_ctx = FontContext::new();
+        // Register the Ahem test font (`font-family: Ahem`). Ahem renders every
+        // glyph as a solid square of the em size, so the CSS test suite uses it
+        // pervasively to assert exact box geometry; without it those tests fall
+        // back to a proportional font and mis-measure. The face self-names
+        // "Ahem", so `font-family: Ahem` resolves once registered.
+        const AHEM: &[u8] = include_bytes!("Ahem.ttf");
+        font_ctx
+            .collection
+            .register_fonts(parley::fontique::Blob::from(AHEM.to_vec()), None);
         Self {
-            font_ctx: FontContext::new(),
+            font_ctx,
             layout_ctx: LayoutContext::new(),
             layouts: FxHashMap::default(),
             marker_layouts: FxHashMap::default(),

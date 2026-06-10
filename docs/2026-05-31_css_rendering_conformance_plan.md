@@ -353,11 +353,11 @@ GPU-jitter-floor column was measured on a different machine (`152`); the
 the last two columns as same-machine deltas, not the middle column against the
 last:
 
-| subset | after block-whitespace-collapse | after inline-block + inline-ws | after multi-img inline flow | after iframe/canvas replaced (2026-06-10) |
+| subset | after inline-block + inline-ws | after multi-img inline flow | after iframe/canvas replaced | after Ahem test font (2026-06-10) |
 | --- | --- | --- | --- | --- |
-| `css/CSS2/floats` | 32 / 197 | 34 / 197 | 34 / 197 | **34 / 197** |
-| `css/CSS2/normal-flow` | 392 / 1044 | 400 / 1044 | 442 / 1044 | **451 / 1044** |
-| `css/css-backgrounds` | 287 / 1325 | 295 / 1325 | 299 / 1325 | **299 / 1325** |
+| `css/CSS2/floats` | 34 / 197 | 34 / 197 | 34 / 197 | **34 / 197** |
+| `css/CSS2/normal-flow` | 400 / 1044 | 442 / 1044 | 451 / 1044 | **454 / 1044** |
+| `css/css-backgrounds` | 295 / 1325 | 299 / 1325 | 299 / 1325 | **303 / 1325** |
 
 Subsets the 2026-06-07 paint series targeted (first measured 2026-06-09, no prior
 baseline recorded — add to the running board going forward):
@@ -437,6 +437,21 @@ from the set**: they are image-like, and a 300×150 placeholder (their content i
 not decoded) regressed the `object-fit` / `object-position` corpus by 60 in
 css-images — far more than it helped. **normal-flow 442 → 451** (+9, zero
 regressions); css-backgrounds / css-images / floats unchanged.
+
+**Ahem test font registered (2026-06-10).** ~59 of the normal-flow fails declare
+`font-family: Ahem` — the CSS test font that renders every glyph as a solid em
+square, used pervasively to assert exact box geometry. serval registered only
+system fonts, so those tests fell back to a proportional font and mis-measured.
+`TextMeasureCtx::new` now registers a bundled `Ahem.ttf` (the face self-names
+"Ahem"). Immediate lift is modest — **normal-flow 451 → 454, css-backgrounds 299 →
+303** — because most Ahem tests have a *second* blocker (e.g. inline-block
+`width: auto` shrink-to-fit, which serval stretches to the container when the
+inline-block sits among block siblings — an anonymous-block-box gap). But it is
+foundational: the corpus now renders against the correct font, so every later
+sizing fix lands against true geometry. The 3 normal-flow regressions all use Ahem
+(passing on a coincidental fallback metric before). Next for the inline-block
+tail: shrink-to-fit width for inline-blocks among block siblings (anonymous block
+boxes), then `vertical-align` and margins.
 
 The css-images `7 errored` were `tools/*-template.html` files the runner was
 collecting as reftests (their `rel=match` points at a non-existent ref). Fixed
