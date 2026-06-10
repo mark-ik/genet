@@ -238,6 +238,11 @@ pub(crate) struct Emitter<'a, NodeId: Copy + Eq + Hash> {
     scroll_offsets: &'a FxHashMap<NodeId, (f32, f32)>,
     fonts: FontCollector,
     images: ImageCollector,
+    /// The element whose background was propagated to the canvas (the root, or
+    /// the body when the root's background is transparent — CSS Backgrounds-3
+    /// §root-background). That element must *not* paint the background on its
+    /// own box: it has been lifted to the canvas. `None` ⇒ no propagation.
+    canvas_bg_source: Option<NodeId>,
 }
 
 /// Walk the DOM in pre-order, emitting paint commands for each
@@ -332,7 +337,14 @@ where
         scroll_offsets,
         fonts: FontCollector::default(),
         images: ImageCollector::default(),
+        canvas_bg_source: None,
     };
+    // CSS Backgrounds-3 §root-background: the root element's background (or, when
+    // the root is transparent, the body's) is painted over the *entire* canvas,
+    // not just the element's own box, positioned against the root's background
+    // positioning area. Emitted first (behind all content); the source element is
+    // then recorded so `walk` suppresses the duplicate paint on its own box.
+    emitter.canvas_bg_source = emit_canvas_background(dom, styles, viewport, &mut commands);
     // Paint the document as the root stacking context. The recursive painter
     // (crate::paint_stacking) walks each context's own tree for in-flow content,
     // collects its positioned/z-index layers, and orders them per CSS 2.1
@@ -552,18 +564,24 @@ pub(crate) fn walk<D>(
                     }));
                 }
                 // Background, then replaced content (image), then
-                // border — CSS paint order.
-                commands.push(PaintCmd::DrawRect(RectItem {
-                    placement: CommonPlacement::new(local_bounds),
-                    color: background_color_of(styles, id),
-                }));
-                // Background-image gradient layers paint over the color. CSS lists
-                // the topmost layer first, so they emit back-to-front; each gradient
-                // layer (linear / radial / conic) becomes its draw command. url()
-                // image layers are handled by the block below (first layer only).
-                let (gw, gh) = (local_bounds.width(), local_bounds.height());
-                for cmd in background_gradient_layers(styles, id, gw, gh) {
-                    commands.push(cmd);
+                // border — CSS paint order. The element whose background was
+                // propagated to the canvas (root / body) skips its own-box
+                // background — it has already been painted over the canvas.
+                let suppress_bg = em.canvas_bg_source == Some(id);
+                if !suppress_bg {
+                    commands.push(PaintCmd::DrawRect(RectItem {
+                        placement: CommonPlacement::new(local_bounds),
+                        color: background_color_of(styles, id),
+                    }));
+                    // Background-image gradient layers paint over the color. CSS
+                    // lists the topmost layer first, so they emit back-to-front;
+                    // each gradient layer (linear / radial / conic) becomes its
+                    // draw command. url() image layers are handled by the block
+                    // below (first layer only).
+                    let (gw, gh) = (local_bounds.width(), local_bounds.height());
+                    for cmd in background_gradient_layers(styles, id, gw, gh) {
+                        commands.push(cmd);
+                    }
                 }
                 // CSS background-image paints over the background color,
                 // under content + border. Resolve background-size /
@@ -573,7 +591,7 @@ pub(crate) fn walk<D>(
                 // / clip=border-box) match CSS; with zero borders +
                 // padding the origin/clip boxes collapse to the border box
                 // and this reduces to the prior behavior.
-                if let Some(decoded) = em.bg_images_plane.get(id) {
+                if let Some(decoded) = em.bg_images_plane.get(id).filter(|_| !suppress_bg) {
                     let int_w = decoded.width as f32;
                     let int_h = decoded.height as f32;
                     let key = em.images.add(decoded);
@@ -1222,6 +1240,123 @@ fn repeating_period(stops: &[GradientStop]) -> Option<(f32, f32, Vec<GradientSto
         })
         .collect();
     Some((first, last, renormalized))
+}
+
+/// Find the canvas background source and paint it over the whole viewport.
+///
+/// CSS Backgrounds-3 §root-background: a background set on the root element is
+/// painted over the *entire* canvas (the viewport), not merely the element's own
+/// box, positioned against the root's background positioning area (its padding
+/// box, which carries any root margin offset). HTML adds the body→canvas special
+/// case: when the root element's own background is transparent, the background is
+/// taken from `<body>` instead (and `<body>` then paints none on its own box).
+///
+/// Returns the source element (root or body) so [`walk`] can suppress the
+/// duplicate paint on its box; `None` when neither carries a background.
+///
+/// Paint model: serval renders a gradient/image background stretched over its
+/// element's box (it does not yet honor `background-size`/`-position` on
+/// gradients). Applied to the canvas, the source's background is stretched over
+/// the whole viewport — which matches how serval renders the §root-background
+/// reference fixtures (a viewport-filling `position:absolute; inset:0` element
+/// with the same gradient). The root's margin offset is therefore not modeled
+/// here; it will be once the normal gradient path honors `background-position`,
+/// at which point both paths move together.
+fn emit_canvas_background<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    viewport: DeviceIntSize,
+    commands: &mut Vec<PaintCmd>,
+) -> Option<D::NodeId>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    use html5ever::local_name;
+
+    // Root element = the first element child of the document node.
+    let root = dom
+        .dom_children(dom.document())
+        .find(|&c| dom.kind(c) == NodeKind::Element)?;
+
+    // The root must generate a principal box at all: `display: none` on the root
+    // hides the whole document, so there is no canvas background to propagate
+    // (the *-propagation negative tests).
+    if !generates_box(styles, root) {
+        return None;
+    }
+    // Source: the root if it carries a background, else (root transparent) the
+    // body — the HTML body→canvas propagation special case. A `display: none` /
+    // `display: contents` body generates no principal box and so does not
+    // propagate either.
+    let source = if has_canvas_background(styles, root) {
+        root
+    } else {
+        let body = dom.dom_children(root).find(|&c| {
+            dom.kind(c) == NodeKind::Element
+                && dom.element_name(c).is_some_and(|q| q.local == local_name!("body"))
+        })?;
+        if generates_box(styles, body) && has_canvas_background(styles, body) {
+            body
+        } else {
+            return None;
+        }
+    };
+
+    let cw = viewport.width as f32;
+    let ch = viewport.height as f32;
+    let canvas = LayoutRect::new(LayoutPoint::new(0.0, 0.0), LayoutPoint::new(cw, ch));
+
+    // Background color first (behind the image layers), over the whole canvas.
+    let color = background_color_of(styles, source);
+    if color.a > 0.0 {
+        commands.push(PaintCmd::DrawRect(RectItem {
+            placement: CommonPlacement::new(canvas),
+            color,
+        }));
+    }
+    // Gradient layers stretched over the viewport, back-to-front — same builder
+    // the element path uses, sized to the canvas instead of the element box.
+    for cmd in background_gradient_layers(styles, source, cw, ch) {
+        commands.push(cmd);
+    }
+
+    Some(source)
+}
+
+/// Whether `id` carries a background that participates in canvas propagation: a
+/// non-transparent background color, or any non-`none` background-image layer.
+fn has_canvas_background<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> bool {
+    use style::values::generics::image::Image;
+    let has_image = styles
+        .get(id)
+        .and_then(|e| e.borrow_data())
+        .is_some_and(|d| {
+            d.styles
+                .primary()
+                .get_background()
+                .background_image
+                .0
+                .iter()
+                .any(|img| !matches!(img, Image::None))
+        });
+    has_image || background_color_of(styles, id).a > 0.0
+}
+
+/// Whether `id` generates a principal box — i.e. is not `display: none` or
+/// `display: contents`. Only a box-generating element propagates its background
+/// to the canvas (CSS Backgrounds-3 §special-backgrounds).
+fn generates_box<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId) -> bool {
+    styles
+        .get(id)
+        .and_then(|e| e.borrow_data())
+        .is_some_and(|d| {
+            let display = d.styles.primary().get_box().display;
+            !display.is_none() && !display.is_contents()
+        })
 }
 
 /// All `background-image` gradient layers of `id`, as paint commands in paint
@@ -1920,6 +2055,85 @@ mod tests {
         assert!(
             text_count >= 1,
             "expected at least 1 DrawText, got {text_count}"
+        );
+    }
+
+    /// Emit a paint list for `document` cascaded with `sheet`, at 800×600.
+    fn emit_with_sheet(
+        document: &StaticDocument,
+        sheet: &str,
+    ) -> ServalPaintList {
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(document, &mut styles, euclid::Size2D::new(800.0, 600.0), &[sheet], None);
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(document, &styles, &ImagePlane::new(), viewport);
+        emit_paint_list_with_layouts(
+            document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &FxHashMap::default(),
+            DeviceIntSize::new(800, 600),
+        )
+    }
+
+    /// A full-viewport (800×600) `DrawRect`'s color, if one was emitted — the
+    /// shape of a propagated canvas background.
+    fn viewport_fill(plist: &ServalPaintList) -> Option<ColorF> {
+        plist.commands().iter().find_map(|c| match c {
+            PaintCmd::DrawRect(r) => {
+                let b = r.placement.bounds;
+                (b.min.x == 0.0 && b.min.y == 0.0 && b.max.x == 800.0 && b.max.y == 600.0)
+                    .then_some(r.color)
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn canvas_background_propagates_root_color_over_viewport() {
+        // CSS Backgrounds-3 §root-background: the root element's background is
+        // painted over the whole canvas, not just the (small, content-sized)
+        // root box. The root's own-box paint is suppressed, so the only
+        // viewport-sized fill is the propagated canvas background.
+        let document = StaticDocument::parse("<html><body></body></html>");
+        let plist = emit_with_sheet(&document, "html { background-color: rgb(0, 128, 0); }");
+        let color = viewport_fill(&plist).expect("canvas background over the viewport");
+        assert!(
+            color.g > 0.4 && color.r < 0.1 && color.b < 0.1,
+            "expected a green canvas background, got {color:?}"
+        );
+    }
+
+    #[test]
+    fn canvas_background_suppressed_for_display_none_root() {
+        // `display: none` on the root hides the whole document — no canvas
+        // background propagates (the *-propagation negative reftests).
+        let document = StaticDocument::parse("<html><body></body></html>");
+        let plist =
+            emit_with_sheet(&document, "html { background-color: green; display: none; }");
+        assert!(
+            viewport_fill(&plist).is_none(),
+            "display:none root must not propagate a canvas background"
+        );
+    }
+
+    #[test]
+    fn canvas_background_propagates_from_body_when_root_transparent() {
+        // HTML body→canvas special case: a transparent root takes its canvas
+        // background from <body>.
+        let document = StaticDocument::parse("<html><body></body></html>");
+        let plist = emit_with_sheet(&document, "body { background-color: rgb(0, 0, 200); }");
+        let color = viewport_fill(&plist).expect("body background propagated to the canvas");
+        assert!(
+            color.b > 0.6 && color.r < 0.1,
+            "expected a blue canvas background from <body>, got {color:?}"
         );
     }
 

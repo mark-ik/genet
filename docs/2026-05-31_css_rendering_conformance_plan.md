@@ -257,8 +257,64 @@ some SVG-background fails — a cosmetic diagnostic-label bug, not a match bug.)
 
 **Also clarified the `local` ranking:** ~185 of the apparent "background-size"
 fails are actually **SVG background images** (`vector/`, `*-svg*`) — the `image`
-crate is raster-only, so SVGs never decode. That's a separate capability (an SVG
-rasterizer), not a background-size gap; set aside as its own axis.
+crate is raster-only, so SVGs never decode. The gap is an SVG **decode/lower**
+front-end (parse the SVG document to paths, e.g. `usvg`, then feed the existing
+vello rasterizer), not the rasterizer itself (vello already fills Bézier paths).
+A separate capability, not a background-size gap; set aside as its own axis.
+
+**Status: gradient-series regression found + root/canvas propagation landed
+(2026-06-09).** A re-measure after the 2026-06-07 serval-layout paint series (the
+linear/radial/conic gradient emitters, list markers, the text-decoration trio,
+letter/word-spacing) showed css-backgrounds had *regressed*. On this machine the
+pre-series baseline is **147** (the doc's earlier `152` was a different GPU; the
+number is GPU-dependent, so the regression was re-measured against a fresh local
+baseline, not the recorded figure), and the series dropped it to **141**. A
+`git bisect` pinned the first bad commit to `af5d042` ("emit CSS linear-gradient
+backgrounds").
+
+Pixel dumps overturned the obvious read (again the lesson holds: the `whole`
+diff-bucket label said "layout/UA shift", the pixels said otherwise). `af5d042`
+is the *first commit to paint any `background-image`*, and it paints correctly —
+at the element's own box. The six regressed tests are all root-element gradients
+with a margin (`html { background: linear-gradient(...); margin: 50px }`), where
+CSS Backgrounds-3 §root-background requires the background to **cover the whole
+canvas**, not the margin-offset root box. Before `af5d042` the gradient was not
+painted at all, so test and reference rendered identically blank and *matched
+spuriously*; painting it converted six fake passes into honest fails by exposing
+a missing feature. This is the same "rendering makes it measurable, spurious pass
+becomes genuine fail" shape Lever 1 recorded for the XHTML floats dip.
+
+Fix: **root/canvas background propagation** (`paint_emit::emit_canvas_background`).
+The root element's background (or, when the root is transparent, the body's, per
+the HTML body→canvas special case) is painted over the whole viewport before the
+content walk, and the source element's own-box background is suppressed.
+`display: none` / `display: contents` on the source generates no box and so does
+not propagate (the `*-propagation` negative reftests). Paint model: serval
+stretches a gradient over its element box (it does not yet honor
+`background-size` / `-position` on gradients), so the canvas paint stretches the
+source background over the viewport, which is exactly how serval renders the
+§root-background reference fixtures (a viewport-filling `inset: 0` element with
+the same gradient). The two paths therefore agree; when the normal gradient path
+later honors `background-position` / `-size`, both move together.
+
+Result: **css-backgrounds 141 → 147** (the full regression healed; `whole` bucket
+17 → 11, back to the pre-series level). Five of the six regressed tests pass
+(`background-margin-root`, `-transformed-root`, `-will-change-root`,
+`background-attachment-margin-root-001`/`-002`) plus `box-shadow-body` as a bonus.
+`background-position/background-position-right-in-body` stays red: it is a
+body-source case with two layers, `no-repeat`, and `right`-edge
+`background-position`, which needs `background-position` / `-size` on gradients
+(the next per-feature step). floats / normal-flow / css-images are unchanged (the
+canvas pass runs for every document but only emits when a root/body background
+exists). Three unit tests lock the propagate / suppress / body-source behavior.
+
+**Measured the subsets the recent work actually targeted.** The three-subset
+board above cannot see the 2026-06-07 paint series, because gradients, markers,
+and text-decoration land in *other* directories. Measured 2026-06-09 (GPU,
+`--tests-root tests/wpt/tests`): `css/css-images` **164 / 727** (gradients; 7
+errored, worth a look), `css/css-lists` **123 / 347** (markers), `css/css-text-decor`
+**203 / 631** (the decoration trio). These should join the scoreboard so this
+class of work stays visible.
 
 ## Sequencing
 
@@ -278,21 +334,45 @@ rasterizer), not a background-size gap; set aside as its own axis.
    non-solid border styles, `border-radius` background clipping, box-shadow
    detail, then gradients / `opacity` / `transform`, and the Layout tail
    (`inline-block`, `table`, overflow, writing-modes). SVG backgrounds are their
-   own axis (needs a vector rasterizer).
+   own axis (needs an SVG decode/lower front-end, not a rasterizer — vello
+   already fills vector paths).
+4. **Gradient emitters + root/canvas propagation done (2026-06-07 / 06-09).**
+   Linear / radial / conic gradients emit (landing in `css-images`); list markers
+   and the text-decoration trio landed alongside. The gradient series regressed
+   css-backgrounds by exposing a missing feature (root/canvas background
+   propagation), now fixed. Next per-feature step on the backgrounds axis:
+   `background-position` / `-size` on gradients (unblocks the multi-layer /
+   `no-repeat` body-source cases like `background-position-right-in-body`).
 
 ## Scoreboard
 
 Per-subset reftest pass rate, re-measured after each lever, published like the
-testharness per-directory numbers (GPU, `--tests-root tests/wpt/tests`):
+testharness per-directory numbers (GPU, `--tests-root tests/wpt/tests`). The
+GPU-jitter-floor column was measured on a different machine (`152`); the
+2026-06-09 column re-baselines on the current machine (pre-series `147`), so read
+the last two columns as same-machine deltas, not the middle column against the
+last:
 
-| subset | Lever-1 baseline | after url()/head/key fixes | after GPU-jitter floor (stable) |
-| --- | --- | --- | --- |
-| `css/CSS2/floats` | 7 / 197 | 7 / 197 | **15 / 197** |
-| `css/CSS2/normal-flow` | 1 / 1045 | 8 / 1045 | **174 / 1045** |
-| `css/css-backgrounds` | 15 / 1326 | ~95 / 1326 (±2) | **152 / 1326** |
+| subset | Lever-1 baseline | after url()/head/key fixes | after GPU-jitter floor | after canvas propagation (2026-06-09) |
+| --- | --- | --- | --- | --- |
+| `css/CSS2/floats` | 7 / 197 | 7 / 197 | 15 / 197 | **15 / 197** |
+| `css/CSS2/normal-flow` | 1 / 1045 | 8 / 1045 | 174 / 1045 | **174 / 1045** |
+| `css/css-backgrounds` | 15 / 1326 | ~95 / 1326 (±2) | 152 / 1326 | **147 / 1326** |
 
-All subsets report **0 errored** (the image-key crash is gone) and are now
-**deterministic** (3/3 identical runs) after the GPU-jitter floor. The floor was
+Subsets the 2026-06-07 paint series targeted (first measured 2026-06-09, no prior
+baseline recorded — add to the running board going forward):
+
+| subset | 2026-06-09 | lands here |
+| --- | --- | --- |
+| `css/css-images` | **164 / 727** | gradients (7 errored) |
+| `css/css-lists` | **123 / 347** | list markers |
+| `css/css-text-decor` | **203 / 631** | underline / overline / line-through / color |
+
+All subsets report **0 errored** on the three-subset board (the image-key crash
+is gone) and are now **deterministic** (identical re-runs) after the GPU-jitter
+floor. css-backgrounds `147` is below the recorded `152` only because of the
+machine re-baseline (pre-series `147`): the gradient-series regression that
+dropped it to `141` is healed back to the `147` local baseline. The floor was
 the single largest lever — not because matching was loosened past correctness
 (an unimplemented `border-image` still fails δ=255), but because zero-tolerance
 exact-match had been systematically rejecting visually-correct renders whose only
