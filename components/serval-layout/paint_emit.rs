@@ -344,7 +344,8 @@ where
     // not just the element's own box, positioned against the root's background
     // positioning area. Emitted first (behind all content); the source element is
     // then recorded so `walk` suppresses the duplicate paint on its own box.
-    emitter.canvas_bg_source = emit_canvas_background(dom, styles, viewport, &mut commands);
+    emitter.canvas_bg_source =
+        emit_canvas_background(dom, styles, fragments, viewport, &mut commands);
     // Paint the document as the root stacking context. The recursive painter
     // (crate::paint_stacking) walks each context's own tree for in-flow content,
     // collects its positioned/z-index layers, and orders them per CSS 2.1
@@ -576,10 +577,18 @@ pub(crate) fn walk<D>(
                     // Background-image gradient layers paint over the color. CSS
                     // lists the topmost layer first, so they emit back-to-front;
                     // each gradient layer (linear / radial / conic) becomes its
-                    // draw command. url() image layers are handled by the block
-                    // below (first layer only).
-                    let (gw, gh) = (local_bounds.width(), local_bounds.height());
-                    for cmd in background_gradient_layers(styles, id, gw, gh) {
+                    // draw command(s), tiled per background-size/-position/-repeat.
+                    // url() image layers are handled by the block below (first
+                    // layer only). Each layer positions against its
+                    // `background-origin` box (border box inset by border /
+                    // padding); the painting area is the border box
+                    // (`background-clip: border-box`).
+                    let border = [l.border.left, l.border.top, l.border.right, l.border.bottom];
+                    let padding =
+                        [l.padding.left, l.padding.top, l.padding.right, l.padding.bottom];
+                    for cmd in
+                        background_gradient_layers(styles, id, local_bounds, border, padding, local_bounds)
+                    {
                         commands.push(cmd);
                     }
                 }
@@ -1254,17 +1263,16 @@ fn repeating_period(stops: &[GradientStop]) -> Option<(f32, f32, Vec<GradientSto
 /// Returns the source element (root or body) so [`walk`] can suppress the
 /// duplicate paint on its box; `None` when neither carries a background.
 ///
-/// Paint model: serval renders a gradient/image background stretched over its
-/// element's box (it does not yet honor `background-size`/`-position` on
-/// gradients). Applied to the canvas, the source's background is stretched over
-/// the whole viewport — which matches how serval renders the §root-background
-/// reference fixtures (a viewport-filling `position:absolute; inset:0` element
-/// with the same gradient). The root's margin offset is therefore not modeled
-/// here; it will be once the normal gradient path honors `background-position`,
-/// at which point both paths move together.
+/// Paint model: the gradient layers tile against the root's positioning area
+/// (its box, carrying the margin offset and size) and paint across the whole
+/// viewport. With `background-size: auto` the tile is the root box, repeated to
+/// fill the canvas, matching how serval renders the §root-background reference
+/// fixtures (a sized/positioned element over the canvas). `background-origin` /
+/// `-clip` insets are not modeled (the positioning area is the border box).
 fn emit_canvas_background<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
     viewport: DeviceIntSize,
     commands: &mut Vec<PaintCmd>,
 ) -> Option<D::NodeId>
@@ -1315,9 +1323,30 @@ where
             color,
         }));
     }
-    // Gradient layers stretched over the viewport, back-to-front — same builder
-    // the element path uses, sized to the canvas instead of the element box.
-    for cmd in background_gradient_layers(styles, source, cw, ch) {
+    // The positioning area is the *root's* border box (its margin offset and
+    // size carry through to where the gradient tiles), even when the source is
+    // the body. Tiles paint across the whole canvas. With `background-size: auto`
+    // the tile is the root box, repeated to fill the viewport — matching the
+    // §root-background reference fixtures (a sized/positioned element over the
+    // canvas). taffy does not fold the *root's* margin into its `location` (the
+    // root has no parent to offset against), so add it here to land the border
+    // box at the margin offset. A root with no fragment falls back to the canvas.
+    let (root_box, border, padding) = fragments
+        .rect_of(root)
+        .map(|l| {
+            let x = l.location.x + l.margin.left;
+            let y = l.location.y + l.margin.top;
+            (
+                LayoutRect::new(
+                    LayoutPoint::new(x, y),
+                    LayoutPoint::new(x + l.size.width, y + l.size.height),
+                ),
+                [l.border.left, l.border.top, l.border.right, l.border.bottom],
+                [l.padding.left, l.padding.top, l.padding.right, l.padding.bottom],
+            )
+        })
+        .unwrap_or((canvas, [0.0; 4], [0.0; 4]));
+    for cmd in background_gradient_layers(styles, source, root_box, border, padding, canvas) {
         commands.push(cmd);
     }
 
@@ -1359,33 +1388,302 @@ fn generates_box<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: Node
         })
 }
 
+/// Cap on tiles emitted for one gradient layer (per axis the count is also
+/// bounded by extent / tile). A layer that would exceed it falls back to a single
+/// area-filling gradient, so a pathological `background-size: 1px` cannot flood
+/// the command stream.
+const MAX_GRADIENT_TILES: usize = 4096;
+
+/// The `background-origin` box: `border_box` inset by `border` (padding-box) or
+/// `border + padding` (content-box), or `border_box` itself (border-box). Insets
+/// are `[left, top, right, bottom]`.
+fn origin_box(border_box: LayoutRect, border: [f32; 4], padding: [f32; 4], which: BgBox) -> LayoutRect {
+    let inset = |l: f32, t: f32, r: f32, b: f32| {
+        LayoutRect::new(
+            LayoutPoint::new(border_box.min.x + l, border_box.min.y + t),
+            LayoutPoint::new(border_box.max.x - r, border_box.max.y - b),
+        )
+    };
+    match which {
+        BgBox::BorderBox => border_box,
+        BgBox::PaddingBox => inset(border[0], border[1], border[2], border[3]),
+        BgBox::ContentBox => inset(
+            border[0] + padding[0],
+            border[1] + padding[1],
+            border[2] + padding[2],
+            border[3] + padding[3],
+        ),
+    }
+}
+
 /// All `background-image` gradient layers of `id`, as paint commands in paint
-/// order. CSS lists the topmost layer first, so this iterates the layers in
-/// reverse (back-to-front). Each gradient layer (linear / radial / conic) becomes
-/// its draw command. Non-gradient layers (`url()` images) are emitted separately
-/// by the background-image block, which currently decodes only the first such
-/// layer; additional image layers are deferred.
+/// order. Each layer's tile is sized/positioned against `pos_area` (the
+/// background positioning area) and tiled across `paint_area` (the painting area,
+/// where the tiles are clipped). The two coincide for an element (both the border
+/// box); they differ for canvas propagation, where the positioning area is the
+/// root box and the painting area is the whole viewport.
+///
+/// CSS lists the topmost layer first, so layers emit back-to-front. Each honors
+/// `background-size` (the tile), `background-position` (the tile anchor within
+/// the positioning area), and `background-repeat` (`repeat`, `no-repeat`,
+/// `round` — which rescales the tile to a whole-number fit — and `space` — whole
+/// tiles distributed with gaps). `auto` size fills the positioning area, so the
+/// common default reduces to one area-filling gradient identical to the un-tiled
+/// emit. Each layer's positioning area is its `background-origin` box, derived
+/// from `border_box` inset by `border` / `padding` ([l, t, r, b] each); the
+/// painting area `paint_area` is the clip. Non-gradient layers (`url()` images)
+/// are emitted separately.
 fn background_gradient_layers<NodeId: Copy + Eq + Hash>(
     styles: &StylePlane<NodeId>,
     id: NodeId,
-    w: f32,
-    h: f32,
+    border_box: LayoutRect,
+    border: [f32; 4],
+    padding: [f32; 4],
+    paint_area: LayoutRect,
 ) -> Vec<PaintCmd> {
     let Some(entry) = styles.get(id) else { return Vec::new() };
     let Some(data) = entry.borrow_data() else { return Vec::new() };
     let primary = data.styles.primary();
+    let bg = primary.get_background();
     let current = primary.get_inherited_text().color;
-    let mut cmds = Vec::new();
-    for image in primary.get_background().background_image.0.iter().rev() {
-        if let Some(g) = linear_gradient_layer(image, current, w, h) {
-            cmds.push(PaintCmd::DrawLinearGradient(g));
-        } else if let Some(g) = radial_gradient_layer(image, current, w, h) {
-            cmds.push(PaintCmd::DrawRadialGradient(g));
-        } else if let Some(g) = conic_gradient_layer(image, current, w, h) {
-            cmds.push(PaintCmd::DrawConicGradient(g));
+    let layers = &bg.background_image.0;
+    // Per-axis tile placement. Returns the tile positions (absolute coords on the
+    // axis) and the *effective* tile size (`round` rescales it). `pos0` / `ext`
+    // are the positioning-area origin / extent on this axis (where `round` /
+    // `space` fit their tiles); `[lo, hi]` is the painting extent (where `repeat`
+    // tiles); `off` is the resolved `background-position` offset. `None` ⇒ caller
+    // falls back to a single area-filling gradient.
+    let axis = |pos0: f32, ext: f32, lo: f32, hi: f32, tile: f32, off: f32, repeat: BgRepeat, cap: usize|
+     -> Option<(Vec<f32>, f32)> {
+        if tile <= 0.0 || ext <= 0.0 {
+            return None;
         }
+        let tiled = |start: f32, step: f32| -> Option<Vec<f32>> {
+            if step <= 0.0 {
+                return None;
+            }
+            let k0 = ((lo - start) / step).floor() as i64;
+            let k1 = ((hi - start) / step).ceil() as i64;
+            let count = (k1 - k0).max(0) as usize;
+            (count != 0 && count <= cap).then(|| (k0..k1).map(|k| start + k as f32 * step).collect())
+        };
+        match repeat {
+            BgRepeat::NoRepeat => Some((vec![pos0 + off], tile)),
+            BgRepeat::Repeat => tiled(pos0 + off, tile).map(|v| (v, tile)),
+            // Rescale the tile so a whole number fills the positioning area, then
+            // tile that across the painting extent from the area origin.
+            BgRepeat::Round => {
+                let n = (ext / tile).round().max(1.0);
+                let eff = ext / n;
+                tiled(pos0, eff).map(|v| (v, eff))
+            },
+            // Whole tiles spaced with gaps so the first and last touch the
+            // positioning-area edges (so `background-position` is ignored), then
+            // continued at that period across the painting area — the tiles
+            // repeat into a larger clip box (e.g. behind a transparent border).
+            // A single fitting tile is positioned like `no-repeat`.
+            BgRepeat::Space => {
+                let n = (ext / tile).floor() as i64;
+                if n <= 1 {
+                    return Some((vec![pos0 + off], tile));
+                }
+                let period = tile + (ext - n as f32 * tile) / (n as f32 - 1.0);
+                tiled(pos0, period).map(|v| (v, tile))
+            },
+        }
+    };
+    // Forward index drives the per-layer property lookup (the size / position /
+    // repeat lists cycle to the layer count); emission is back-to-front, so
+    // collect per layer then reverse.
+    let mut per_layer: Vec<Vec<PaintCmd>> = Vec::new();
+    for (i, image) in layers.iter().enumerate() {
+        let style = gradient_layer_tile_style(bg, i);
+        // The positioning area is this layer's background-origin box (default
+        // padding-box), `border_box` inset by the border (and padding for
+        // content-box). `background-attachment: fixed` instead positions against
+        // the painting area, which for canvas propagation is the viewport (a
+        // fixed canvas layer is viewport-anchored, not root-box-anchored).
+        let origin = style.as_ref().map(|s| s.origin).unwrap_or(BgBox::PaddingBox);
+        let pos_area = if style.as_ref().is_some_and(|s| s.fixed) {
+            paint_area
+        } else {
+            origin_box(border_box, border, padding, origin)
+        };
+        let (aw, ah) = (pos_area.width(), pos_area.height());
+        let (tw, th, ox, oy) = match &style {
+            Some(s) => resolve_gradient_tile(s, aw, ah),
+            None => (aw, ah, 0.0, 0.0),
+        };
+        let (rx, ry) = style
+            .as_ref()
+            .map(|s| (s.repeat_x, s.repeat_y))
+            .unwrap_or((BgRepeat::Repeat, BgRepeat::Repeat));
+        let cap = (MAX_GRADIENT_TILES as f64).sqrt() as usize;
+        let xs = axis(pos_area.min.x, aw, paint_area.min.x, paint_area.max.x, tw, ox, rx, cap);
+        let ys = axis(pos_area.min.y, ah, paint_area.min.y, paint_area.max.y, th, oy, ry, cap);
+        let mut cmds = Vec::new();
+        match (xs, ys) {
+            // A tile grid within the cap: one gradient per cell at the per-axis
+            // effective tile size, clipped to the painting area.
+            (Some((xs, etw)), Some((ys, eth))) if xs.len() * ys.len() <= MAX_GRADIENT_TILES => {
+                for &ty in &ys {
+                    for &tx in &xs {
+                        if let Some(cmd) =
+                            gradient_tile_cmd(image, current, etw, eth, tx, ty, paint_area)
+                        {
+                            cmds.push(cmd);
+                        }
+                    }
+                }
+            },
+            // Over-cap or degenerate: stretch one gradient over the positioning
+            // area, clipped to the painting area (the un-tiled behavior).
+            _ => {
+                if let Some(cmd) = gradient_tile_cmd(
+                    image,
+                    current,
+                    aw,
+                    ah,
+                    pos_area.min.x,
+                    pos_area.min.y,
+                    paint_area,
+                ) {
+                    cmds.push(cmd);
+                }
+            },
+        }
+        per_layer.push(cmds);
     }
-    cmds
+    per_layer.into_iter().rev().flatten().collect()
+}
+
+/// Per-layer `background-size` / `-position` / `-repeat` for gradient layer `i`,
+/// cycling each list to the layer count (CSS list repetition). `None` when the
+/// cascade carries no entries (hand-rolled styles).
+fn gradient_layer_tile_style(
+    bg: &style::properties::style_structs::Background,
+    i: usize,
+) -> Option<GradientTileStyle> {
+    use style::values::specified::background::BackgroundRepeatKeyword as K;
+    let sizes = &bg.background_size.0;
+    let xs = &bg.background_position_x.0;
+    let ys = &bg.background_position_y.0;
+    let reps = &bg.background_repeat.0;
+    if sizes.is_empty() || xs.is_empty() || ys.is_empty() || reps.is_empty() {
+        return None;
+    }
+    let map = |k: K| match k {
+        K::Repeat => BgRepeat::Repeat,
+        K::NoRepeat => BgRepeat::NoRepeat,
+        K::Space => BgRepeat::Space,
+        K::Round => BgRepeat::Round,
+    };
+    use style::computed_values::background_origin::single_value::T as Origin;
+    let origin = match bg.background_origin.0.get(i % bg.background_origin.0.len().max(1)) {
+        Some(Origin::ContentBox) => BgBox::ContentBox,
+        Some(Origin::BorderBox) => BgBox::BorderBox,
+        _ => BgBox::PaddingBox, // CSS default
+    };
+    use style::computed_values::background_attachment::single_value::T as Attach;
+    let fixed = matches!(
+        bg.background_attachment.0.get(i % bg.background_attachment.0.len().max(1)),
+        Some(Attach::Fixed)
+    );
+    let repeat = &reps[i % reps.len()];
+    Some(GradientTileStyle {
+        size: sizes[i % sizes.len()].clone(),
+        pos_x: xs[i % xs.len()].clone(),
+        pos_y: ys[i % ys.len()].clone(),
+        repeat_x: map(repeat.0),
+        repeat_y: map(repeat.1),
+        origin,
+        fixed,
+    })
+}
+
+/// A gradient layer's `background-size` / `-position` / `-repeat` / `-origin`
+/// (the positioning box) and whether `background-attachment: fixed`.
+struct GradientTileStyle {
+    size: style::values::computed::background::BackgroundSize,
+    pos_x: style::values::computed::LengthPercentage,
+    pos_y: style::values::computed::LengthPercentage,
+    repeat_x: BgRepeat,
+    repeat_y: BgRepeat,
+    origin: BgBox,
+    fixed: bool,
+}
+
+/// Resolve a gradient layer's tile against a `w`×`h` positioning area:
+/// `(tile_w, tile_h, offset_x, offset_y)`. A gradient has no intrinsic size, so
+/// each `auto` axis (and `cover` / `contain`, which have no ratio to preserve)
+/// fills the area; explicit lengths/percentages resolve against the area.
+/// `background-position` anchors the tile within `area - tile`.
+fn resolve_gradient_tile(s: &GradientTileStyle, w: f32, h: f32) -> (f32, f32, f32, f32) {
+    use style::values::computed::length::NonNegativeLengthPercentageOrAuto as Lpa;
+    use style::values::computed::Length;
+    use style::values::generics::background::BackgroundSize as Bs;
+    use style::values::generics::length::GenericLengthPercentageOrAuto as Loa;
+
+    let (tw, th) = match s.size {
+        Bs::Cover | Bs::Contain => (w, h),
+        Bs::ExplicitSize { ref width, ref height } => {
+            let axis = |v: &Lpa, area: f32| match v {
+                Loa::Auto => area,
+                Loa::LengthPercentage(npl) => npl.0.resolve(Length::new(area.max(0.0))).px().max(0.0),
+            };
+            (axis(width, w), axis(height, h))
+        },
+    };
+    let ox = s.pos_x.resolve(Length::new((w - tw).max(0.0))).px();
+    let oy = s.pos_y.resolve(Length::new((h - th).max(0.0))).px();
+    (tw, th, ox, oy)
+}
+
+/// One gradient tile of `image` at offset (`tx`, `ty`), size (`tw`, `th`),
+/// clipped to the `clip` painting area. The gradient ramp is built over the
+/// tile, then translated into place; `placement` is the tile rect intersected
+/// with `clip`, so a partial edge tile shows the correct slice. `None` when the
+/// layer is not a gradient or the clipped tile is empty.
+fn gradient_tile_cmd(
+    image: &style::values::computed::image::Image,
+    current: style::color::AbsoluteColor,
+    tw: f32,
+    th: f32,
+    tx: f32,
+    ty: f32,
+    clip: LayoutRect,
+) -> Option<PaintCmd> {
+    let px0 = tx.max(clip.min.x);
+    let py0 = ty.max(clip.min.y);
+    let px1 = (tx + tw).min(clip.max.x);
+    let py1 = (ty + th).min(clip.max.y);
+    if px1 <= px0 || py1 <= py0 {
+        return None;
+    }
+    let place = CommonPlacement::new(LayoutRect::new(
+        LayoutPoint::new(px0, py0),
+        LayoutPoint::new(px1, py1),
+    ));
+    if let Some(mut g) = linear_gradient_layer(image, current, tw, th) {
+        g.gradient.start_point.x += tx;
+        g.gradient.start_point.y += ty;
+        g.gradient.end_point.x += tx;
+        g.gradient.end_point.y += ty;
+        g.placement = place;
+        Some(PaintCmd::DrawLinearGradient(g))
+    } else if let Some(mut g) = radial_gradient_layer(image, current, tw, th) {
+        g.gradient.center.x += tx;
+        g.gradient.center.y += ty;
+        g.placement = place;
+        Some(PaintCmd::DrawRadialGradient(g))
+    } else if let Some(mut g) = conic_gradient_layer(image, current, tw, th) {
+        g.gradient.center.x += tx;
+        g.gradient.center.y += ty;
+        g.placement = place;
+        Some(PaintCmd::DrawConicGradient(g))
+    } else {
+        None
+    }
 }
 
 /// A single `background-image` layer `image`, if it is a **linear** gradient,
@@ -2135,6 +2433,79 @@ mod tests {
             color.b > 0.6 && color.r < 0.1,
             "expected a blue canvas background from <body>, got {color:?}"
         );
+    }
+
+    /// Count emitted linear-gradient draw commands for `div` with `decl`.
+    fn gradient_tile_count(decl: &str) -> usize {
+        let document = StaticDocument::parse("<html><body><div></div></body></html>");
+        let plist = emit_with_sheet(
+            &document,
+            &format!("div {{ display: block; width: 72px; height: 72px; {decl} }}"),
+        );
+        plist
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, PaintCmd::DrawLinearGradient(_)))
+            .count()
+    }
+
+    #[test]
+    fn gradient_auto_size_emits_single_area_fill() {
+        // The default (`background-size: auto`) fills the positioning area with
+        // one gradient — identical to the pre-tiling emit.
+        assert_eq!(
+            gradient_tile_count("background-image: linear-gradient(red, green);"),
+            1
+        );
+    }
+
+    #[test]
+    fn gradient_no_repeat_emits_single_tile() {
+        assert_eq!(
+            gradient_tile_count(
+                "background-image: linear-gradient(red, green); \
+                 background-size: 20px 20px; background-repeat: no-repeat;"
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn gradient_repeat_tiles_to_fill_the_box() {
+        // 20px tiles across a 72px box → ceil(72/20) = 4 per axis → 16 tiles.
+        assert_eq!(
+            gradient_tile_count(
+                "background-image: linear-gradient(red, green); \
+                 background-size: 20px 20px; background-repeat: repeat;"
+            ),
+            16
+        );
+    }
+
+    #[test]
+    fn gradient_round_repeat_emits_rescaled_tile_grid() {
+        // `round` rescales the 32px tile so a whole number fits 72px:
+        // round(72/32) = 2 → a 2×2 grid of 36×36 tiles.
+        let document = StaticDocument::parse("<html><body><div></div></body></html>");
+        let plist = emit_with_sheet(
+            &document,
+            "div { display: block; width: 72px; height: 72px; \
+                   background-image: linear-gradient(red, green); \
+                   background-size: 32px 32px; background-repeat: round; }",
+        );
+        let grads: Vec<_> = plist
+            .commands()
+            .iter()
+            .filter_map(|c| match c {
+                PaintCmd::DrawLinearGradient(g) => Some(g),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(grads.len(), 4, "round → 2×2 rescaled tiles");
+        // Each tile is rescaled from 32 to 72/2 = 36 (the first, unclipped, is
+        // exactly 36 wide).
+        let w = grads[0].placement.bounds.width();
+        assert!((w - 36.0).abs() < 0.5, "round rescales 32→36, tile width {w}");
     }
 
     #[test]

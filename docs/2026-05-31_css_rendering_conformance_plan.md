@@ -289,13 +289,13 @@ The root element's background (or, when the root is transparent, the body's, per
 the HTML body→canvas special case) is painted over the whole viewport before the
 content walk, and the source element's own-box background is suppressed.
 `display: none` / `display: contents` on the source generates no box and so does
-not propagate (the `*-propagation` negative reftests). Paint model: serval
-stretches a gradient over its element box (it does not yet honor
-`background-size` / `-position` on gradients), so the canvas paint stretches the
-source background over the viewport, which is exactly how serval renders the
-§root-background reference fixtures (a viewport-filling `inset: 0` element with
-the same gradient). The two paths therefore agree; when the normal gradient path
-later honors `background-position` / `-size`, both move together.
+not propagate (the `*-propagation` negative reftests). Paint model: the gradient
+layers tile against the root's positioning area (its box, carrying the margin
+offset and size) and paint across the whole viewport — with `background-size:
+auto` the tile is the root box, repeated to fill the canvas, matching the
+§root-background reference fixtures. (This rode on top of the gradient-tiling work
+below; before that the canvas simply stretched the source gradient over the
+viewport.)
 
 Result: **css-backgrounds 141 → 147** (the full regression healed; `whole` bucket
 17 → 11, back to the pre-series level). Five of the six regressed tests pass
@@ -353,11 +353,11 @@ GPU-jitter-floor column was measured on a different machine (`152`); the
 the last two columns as same-machine deltas, not the middle column against the
 last:
 
-| subset | Lever-1 baseline | after url()/head/key fixes | after GPU-jitter floor | after canvas propagation (2026-06-09) |
+| subset | Lever-1 baseline | after url()/head/key fixes | after GPU-jitter floor | after canvas + gradient tiling (2026-06-09) |
 | --- | --- | --- | --- | --- |
 | `css/CSS2/floats` | 7 / 197 | 7 / 197 | 15 / 197 | **15 / 197** |
 | `css/CSS2/normal-flow` | 1 / 1045 | 8 / 1045 | 174 / 1045 | **174 / 1045** |
-| `css/css-backgrounds` | 15 / 1326 | ~95 / 1326 (±2) | 152 / 1326 | **147 / 1326** |
+| `css/css-backgrounds` | 15 / 1326 | ~95 / 1326 (±2) | 152 / 1326 | **149 / 1325** |
 
 Subsets the 2026-06-07 paint series targeted (first measured 2026-06-09, no prior
 baseline recorded — add to the running board going forward):
@@ -390,32 +390,43 @@ one gradient ramp over the box where the reference *tiles* it
 `placement` per gradient ramp, so a tiled layer emits N gradients (the image tile
 path is single-emit).
 
-**Built, measured net-negative, reverted (2026-06-09).** A full implementation
-(per-layer `background-size`/`-position`/`-repeat`, a positioning-area-vs-painting-
-area split so the canvas tiles the root box across the viewport, a tile cap with
-an area-fill fallback, the `gradient_tile_cmd` per-tile emitter) was written and
-worked per spec — `background-position-right-in-body` reached `diff=0` mid-way and
-`tiled-radial-gradients` rendered the correct two ellipses. But on the full
-css-backgrounds subset it scored **net −5 to −7 with zero gains**, so it was
-reverted (back to 147). Why it does not pay off yet:
+**Built, reverted once, then re-landed correctly net-positive (2026-06-09).**
+The first attempt (per-layer `background-size`/`-position`/`-repeat`, a
+positioning-area-vs-painting-area split so the canvas tiles the root box across
+the viewport, a tile cap with an area-fill fallback, the `gradient_tile_cmd`
+per-tile emitter) was correct for `repeat` / `no-repeat` but scored **net −5 to
+−7** and was reverted. The losses were not the tiling itself; they were
+*unfinished prerequisites* it exposed. A second pass finished them and the
+feature landed **+2 with zero regressions** (css-backgrounds 147 → 149,
+css-images steady at 164, floats/normal-flow unchanged). What the prerequisites
+were:
 
-- **The intended wins are blocked elsewhere.** `tiled-radial-gradients` fails on a
-  *separate layout bug*: serval stacks two absolutely-positioned siblings (the
-  reference fixture) instead of placing both at the static `y=0`, so serval's own
-  ref render is wrong, not the tiling. `background-position-right-in-body` lands a
-  near-miss (`maxδ=255` on a sub-1% region).
-- **It regresses the `background-repeat: round` / `space` corpus.** Those tests put
-  an explicit `background-size` + `round`/`space` on a gradient; `round` rescales
-  the tile to a whole-number fit, which serval does not implement. They passed at
-  147 only because the un-tiled stretch happened to match; *any* tiling treatment
-  (approximate-as-`repeat`, or fall back to stretch) diverges from the correct
-  round/space result and regresses 4–6 of them.
-- **Coupling through the reference renders.** Because reftests compare serval's
-  test render against serval's *reference* render, teaching gradients to tile also
-  changes how the (gradient-bearing) reference fixtures render, which shifts the
-  target. The feature cannot land cleanly until `round`/`space` are implemented and
-  the abs-pos static-position layout bug is fixed. Revisit then; the implementation
-  is in the git history (reverted from `paint_emit.rs`).
+- **`background-repeat: round` / `space`.** The first pass mis-tiled them as
+  plain `repeat` (or fell back to stretch); both diverge from the reference,
+  which pre-computes the rounded tile. Implemented properly: `round` rescales the
+  tile so a whole number fills the positioning area (e.g. `32px` → `36px` in a
+  `72px` box); `space` distributes whole tiles with gaps, the first/last touching
+  the area edges, continued at that period across a larger clip box (so a spaced
+  gradient repeats behind a transparent border). This recovered
+  `background-repeat-round-1c…3` and the `space` tests and *gained*
+  `background-size-041` / `-042`.
+- **`background-origin`.** The tile must size/position against the origin box
+  (default padding-box, but `border-box` / `content-box` per the property), not
+  the border box. Hardcoding padding-box regressed `gradient-border-box` /
+  `gradient-content-box`; reading `background-origin` per layer fixed both.
+- **`background-attachment: fixed`.** A fixed canvas layer is viewport-anchored,
+  not root-box-anchored; positioning fixed layers against the painting area (the
+  viewport, for canvas propagation) recovered `background-attachment-margin-root-002`.
+
+Two originally-named targets stay red for reasons *outside* the tiling, now
+understood: `tiled-radial-gradients` renders correctly under tiling but its
+reference is mis-rendered by serval — and the cause is **not** the abs-pos
+static-position bug guessed earlier (a unit test confirms two abs-pos siblings
+share static `y=0`); it is a discrepancy between the unit layout path and the
+full render pipeline (the rendered box lands at `y=74` and the blobs stack),
+recorded as a separate render-path follow-up. `background-position-right-in-body`
+is a sub-pixel near-miss. Four unit tests lock auto-fill / no-repeat / repeat /
+round in `paint_emit.rs`.
 
 All subsets report **0 errored** on the three-subset board (the image-key crash
 is gone) and are now **deterministic** (identical re-runs) after the GPU-jitter

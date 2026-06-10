@@ -912,6 +912,33 @@ mod tests {
         assert!(approx(r.size.height, 16.0), "intrinsic height 16, got {}", r.size.height);
     }
 
+    /// Two absolutely-positioned siblings with `top: auto` both resolve to the
+    /// same static position (the top of their containing block), since each is
+    /// out of flow and contributes no height to the other — they overlap rather
+    /// than stack. The structure of the `tiled-radial-gradients` reference.
+    #[test]
+    fn two_absolute_siblings_share_static_position() {
+        let (doc, frags) = lay(
+            "<html><body><div class=\"outer\">\
+                <div class=\"left\"></div><div class=\"right\"></div>\
+            </div></body></html>",
+            &[
+                ".outer { position: absolute; width: 600px; height: 200px; }",
+                ".left, .right { position: absolute; width: 300px; height: 200px; }",
+                ".left { left: 80px; }",
+                ".right { left: 380px; }",
+            ],
+        );
+        let divs = find_all(&doc, html5ever::local_name!("div"));
+        // [.outer, .left, .right]
+        let left = frags.rect_of(divs[1]).expect(".left fragment");
+        let right = frags.rect_of(divs[2]).expect(".right fragment");
+        assert!(approx(left.location.x, 80.0), ".left left:80 → x=80, got {}", left.location.x);
+        assert!(approx(right.location.x, 380.0), ".right left:380 → x=380, got {}", right.location.x);
+        assert!(approx(left.location.y, 0.0), ".left static y=0, got {}", left.location.y);
+        assert!(approx(right.location.y, 0.0), ".right static y=0 (not stacked), got {}", right.location.y);
+    }
+
     /// A 16×16 blue PNG as a data-URI `<img>` document.
     fn img_html() -> String {
         use base64::Engine as _;
