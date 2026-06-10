@@ -1,6 +1,8 @@
 # serval-layout: infrastructure scope (post emit-feature push)
 
-**Status (2026-06-07):** scoping, for review.
+**Status (2026-06-07, refreshed 2026-06-09):** scoping, for review. The
+reftest scoreboard has not been updated here; record the next `serval-wpt`
+measurement in the conformance plan once it lands.
 
 The recent serval-layout work (gradients incl. repeating-linear, the
 text-decoration trio, letter/word-spacing, the cascade-origin fix, and the full
@@ -18,15 +20,18 @@ high value), **font system** (self-contained), **quirks mode** (small), then
 ## 1. Interaction state (`:hover` / `:focus` / selection / focus queries)
 
 **Unblocks:** dynamic pseudo-classes (`:hover`, `:focus`, `:active`,
-`:focus-within`, `:checked`, …) actually changing style; the `ServalLaneView`
-`InteractionQuery` stubs (`focus_target`, `selection`, `affordances_at`,
-`activation_target`); selection-range geometry.
+`:focus-within`, `:checked`, …) actually changing style; full
+`ServalLaneView` interaction state read-back; selection-range geometry.
 
 **Current state (already built):** `StyleEntry` carries a `state: ElementState`
 field, and `adapter_stylo`'s `match_non_ts_pseudo_class` already matches the
 state-backed pseudo-classes against it (`adapter_stylo.rs` ~563, `state()` at
-~727). So the *matching* half is done. What is missing is the *source* of that
-state and the *read-back* of it.
+~727). So the *matching* half is done. `ServalLaneView` also now has partial
+read-back: `affordances_at` / `activation_target` derive from the DOM at the hit
+point, and `focus_target` / `selection` return host-supplied state from
+`with_interaction`. What is still missing is the *cascade source* of interaction
+state: populating `StyleEntry::state` from host hover/focus/active state and
+running the corresponding restyle/invalidation path.
 
 **Approach:**
 - A host-owned `InteractionState` (focused node, hover/active node chain,
@@ -34,73 +39,48 @@ state and the *read-back* of it.
   each affected `StyleEntry::state` from it (set/clear `HOVER` / `FOCUS` /
   `ACTIVE` / `FOCUS_WITHIN` on the right nodes), then let Stylo's existing
   state-change invalidation restyle the minimum.
-- `ServalLaneView` gains a borrow of the same `InteractionState` so
-  `focus_target` / `selection` / `activation_target` answer from it instead of
-  returning `None`. `activation_target` walks the hit node up to the nearest
-  focusable/`<a>` ancestor.
+- Extend the current `ServalLaneView::with_interaction` path, or replace it with
+  the shared `InteractionState`, so read-back and cascade consume the same
+  snapshot. `activation_target` already walks the hit node up to the nearest
+  activatable ancestor; richer inline hit-testing can refine it later.
 - Selection-range geometry (`rects_for_selection`) is a separate, larger sub-task
   (needs line-box rects threaded into the `FragmentPlane`); split it out.
 
 **Touch-points:** `cascade.rs` (state population + invalidation), `serval_lane.rs`
-(query answers), a new `InteractionState` type (likely in `engine_observables_api`
-so the host and the lane share it).
+(shared snapshot plumbing, not basic query implementation), a new
+`InteractionState` type (likely in `engine_observables_api` so the host and the
+lane share it).
 
 **Effort / risk:** Medium. The matching machinery and state-change invalidation
 already exist, so this is plumbing, not new cascade work. Selection geometry is
 the one piece that grows into `FragmentPlane` changes.
 
 **Done when:** a `:hover { color: red }` rule recolors on a host-driven hover
-state in a test, and `focus_target()` returns the host-focused node.
+state in a test, `focus_target()` still returns the host-focused node, and the
+same state snapshot drives both query read-back and dynamic pseudo-class restyle.
 
 ---
 
 ## 2. Cascade-time font system (font-relative units `ex` / `ch` / `cap` / `ic`)
 
-**Implemented (2026-06-07).** `font_metrics.rs` now resolves the element's font
+**Implemented (2026-06-07).** `font_metrics.rs` resolves the element's font
 through a fontique `Collection` and reads metrics with `skrifa` (x-height /
 cap-height from OS/2, the `0` advance for `ch`, the U+6C34 advance for `ic`),
-scaled by font-size and cached per resolved font. fontique + skrifa were already
-transitive via parley, so this added no new crates. The collection + cache live
-in a `thread_local` (the cascade is sequential; the provider is a zero-size
-`Sync` handle). The rest of this section is the original scoping, kept for
-context.
+scaled by font-size and cached per resolved font. `cascade.rs` wires
+`SkrifaFontMetricsProvider` into `Device::new`, so `ex` / `ch` / `cap` / `ic`
+now resolve through the matched font rather than Stylo's blind fallbacks. The
+collection + cache live in a `thread_local` because the cascade is sequential;
+the provider itself is a zero-size `Sync` handle.
 
-**Unblocks:** correct `ex` / `ch` / `cap` / `ic` units (today they resolve to
-Stylo's blind fallbacks, e.g. `ex = 0.5em`).
+**Remaining note:** this uses a cascade-local fontique collection. The next
+possible refinement is sharing a single font collection/context with
+`TextMeasureCtx` so cascade metrics and text shaping resolve from exactly the
+same font registry instance. That is a consistency cleanup, not a blocker for
+font-relative units.
 
-**Current blocker:** `cascade.rs` builds the device with the stub provider:
-`Device::new(..., Box::new(StubFontMetricsProvider), ...)` (~line 148), which
-returns `FontMetrics::default()` for every query. Approximating from `font_size`
-alone reproduces Stylo's existing fallbacks, so it adds nothing; real metrics
-require the actual matched font.
-
-**Approach:** back the provider with a font collection (the same fontique
-`Collection` parley uses, shared so both agree). `query_font_metrics` resolves
-the `font_styles` + size to a font and reads swash metrics (x-height, cap-height,
-the advance of `0` for `ch`, the advance of the CJK water ideograph for `ic`),
-scaled to the size. Thread the provider into `make_device` / `build_stylist` /
-`run_cascade`.
-
-**Touch-points:** `font_metrics.rs` (real provider), `cascade.rs` (thread it),
-shared font collection (parley's `FontContext` is created later in
-`TextMeasureCtx`; the cascade would need its own or a shared handle).
-
-**Effort / risk:** Medium. Two findings from a closer look (2026-06-07):
-
-- The cascade is **sequential** (`cascade.rs` ~157, `driver::traverse_dom` with
-  no thread pool), so the thread-safety concern is moot for now: the provider is
-  used single-threaded.
-- serval-layout depends only on `parley`, which does **not** re-export `swash`
-  or the fontique `Collection`. So this needs a new font-parsing dependency
-  (`swash` / `skrifa` / `read-fonts`) plus access to a fontique `Collection` to
-  resolve a family and read its metrics. That is a dependency decision, and the
-  value (font-relative units are rare in real CSS) is low, so it was deferred
-  rather than adding a font-parser unprompted. The natural shape is to construct
-  one shared `FontContext` up front and hand it to both the cascade provider and
-  `TextMeasureCtx`, so they agree and the collection is built once.
-
-**Done when:** `width: 2ch` on a monospace element measures ~2 glyph advances,
-not `1em`.
+**Done when:** covered by the live provider path; keep/extend tests around
+`width: 2ch` on a monospace element measuring near two glyph advances rather
+than `1em`.
 
 ---
 

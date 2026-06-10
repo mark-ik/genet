@@ -1,7 +1,7 @@
 # serval as host: the `xilem_serval` reactive backend
 
-Status: **implemented through Stage 2 + on-screen demo, and most of
-Stage 3 (2026-05-28); remaining Stage 3 breadth open.** Scopes using
+Status: **strong through Stages 0-7; the previously named host-backend blockers
+are now landed.** Scopes using
 serval as the application host (chrome and content rendered by one engine),
 and the reactive authoring layer that requires. The finding held: that
 layer is mostly *reuse* of `xilem_core` (a third backend beside Masonry and
@@ -9,9 +9,13 @@ layer is mostly *reuse* of `xilem_core` (a third backend beside Masonry and
 `xilem_core` diff → serval DOM → layout → paint → netrender → present, with
 input routed back through serval's hit-test + faithful xilem message
 dispatch — is validated on screen (`pelt-live-counter`), serval the sole
-engine. Stage 3 has since added component composition, keyboard/focus, a
-caret-aware text field, capture-phase events, and `DOM → AccessKit`
-emission; the demo now also has a typeable field with a moving caret.
+engine. Stages 0 through 7 have since added component composition,
+keyboard/focus, capture-phase events, overlays + inline style, erased views,
+scrolling, z-index Tier 1, `DOM → AccessKit` emission, a real caret-aware text
+field with selection + clipboard, select, radio, textarea, and complete IME.
+Pointer-drag (`pointerdown`/`move`/`up` + capture), slider, Tab/Shift+Tab focus
+traversal, and clip-aware scroll hit-testing are also present in the current
+tree and covered by focused tests.
 Sibling to the
 [scripted render loop](#relationship-to-existing-docs): both share that
 native dispatch substrate, which wires serval's *existing* hit-test query
@@ -343,13 +347,11 @@ already exposes (`run_microtasks`, `run_event_loop`).
   - **Host wheel + scrollbar (`d3606eb`, `1709ef6`).** `pelt-live` wheel input →
     clamped offset (vs `content_size` from the fragment); a scrollbar thumb on
     the right edge (height ∝ visible/content, pos ∝ offset/scrollable).
-  - **Known gap — clip-aware hit-testing (`52de93f`).** A naive scroll hit-test
-    offset (map a click through the scroll offset on the global, unclipped
-    layout) leaks: a point inside the scroller can fall past its clipped content
-    onto the element below it. The demo first shipped it, then reverted it
-    (scroller content is display-only) once that surfaced. Hit-testing
-    *interactive* scrolled content needs `ServalLaneView` to respect clips +
-    per-node scroll — a follow-up alongside Tier 2 stacking.
+  - **Clip-aware hit-testing — done.** The first naive scroll hit-test leaked
+    through clipped content. `ServalLaneView::hit_test` now respects overflow
+    clips and per-node `ScrollOffsets`, and the `pelt-live` demo passes the same
+    offsets to hit-testing that it passes to paint. `hit_test_is_clip_and_scroll_aware`
+    pins the behavior.
   - **Known gap — no `z-index`.** (Closed by Stage 7 Tier 1 below.) Stacking was
     document order, so an overlay (the `select` dropdown) was covered by a later
     sibling (the scroller); the demo worked around it by ordering the select
@@ -372,9 +374,10 @@ already exposes (`run_microtasks`, `run_event_loop`).
     raw text to parley (which breaks at `\n`), so newlines render with no engine
     work. Hard-line nav (Tier 1); soft-wrap visual-line nav is a later layout-fed
     refinement.
-  - **Still open — slider.** Gated on a pointer-drag foundation
-    (`pointerdown`/`move`/`up` + capture) the runner does not yet have; that
-    foundation also unlocks scrollbar-thumb drag, resize handles, and drag-tab-out.
+  - **pointer-drag + slider — done.** `on_pointer` plus runner pointer capture
+    route `pointerdown`/`move`/`up` to the captured element, and `slider` sits on
+    that foundation. The same primitive is reusable for scrollbar-thumb drag,
+    resize handles, and drag-tab-out.
 
 ## Toward the Mere flip gate: IME + form-control breadth
 
@@ -423,12 +426,14 @@ What the backend needs, in tiers:
   underline is solid.)
 
 **IME is complete** — all three tiers plus the underline-styled preedit —
-closing the backend's half of the Mere-flip gate. The gate's other pieces are
-form-control breadth (done) and the Mere-side orrery decision.
+closing the old long pole in the backend's half of the Mere-flip gate. The
+remaining blocker list from this section is also closed in the current tree:
+pointer-drag, slider, Tab traversal, and clip-aware scroll hit-testing are
+implemented and covered by tests.
 
 IME pays once for the whole engine: serval needs it for content text entry
 regardless, so the host chrome gets it for free once content has it (the
-brief's §4 framing). It is the one interactive gap not yet in the backend.
+brief's §4 framing).
 
 ### Form-control breadth
 
@@ -439,16 +444,14 @@ set, each a reusable `xilem_serval` component over a tiny state model (the
 - **T1 — the chrome essentials.** `button` (have, as `on_click` on an
   element), `checkbox`/`toggle` (a bool over `on_click`), single-line text
   input (have), and **focus traversal** — `Tab`/`Shift+Tab` moving focus
-  across focusable elements in document order (the `Tab` key already arrives
-  as `NamedKey::Tab`, currently ignored; the runner has the focus model and
-  the key registry to walk).
+  across focusable elements in document order. The runner implements traversal
+  over the key-handler focusable set, including wraparound.
 - **T2 — the common rest.** `select`/dropdown — **done** (`31deed6`): a
   self-positioning control over a `SelectState { selected, open }`, its option
   list `position: absolute; top: 100%` inside the relative select box (so it
-  needs no host anchor, unlike `overlay_at`). Still: `radio` group,
-  `slider`/range (pointer drag over a track — needs `pointermove`/`pointerup`,
-  the "more events" item), and multi-line `textarea` (the `text_field` model
-  with line breaks).
+  needs no host anchor, unlike `overlay_at`). `radio` group, multi-line
+  `textarea`, `slider`/range, and focus traversal are also done. Slider rides
+  pointer drag over a track (`pointerdown`/`move`/`up` + capture).
 - **T3 — text-editing depth.** Selection (caret → anchor+focus range, shown
   as a highlight), and clipboard (cut/copy/paste via winit's clipboard +
   the selection). Selection geometry shares the caret-rect capability.
