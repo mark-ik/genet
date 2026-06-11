@@ -27,10 +27,11 @@ use engine_observables_api::{FragmentQuery, Point};
 use layout_dom_api::LayoutDom;
 use paint_list_api::{ColorF, DeviceIntSize};
 use serval_layout::{
-    BackgroundImagePlane, BoxTree, FragmentPlane, ImageLoader, ImagePlane, ScrollOffsets,
-    ServalLaneView, ServalPaintList, StylePlane, TextMeasureCtx, caret_byte_at_point,
+    BackgroundImagePlane, BoxTree, FragmentPlane, ImageLoader, ImagePlane, IncrementalLayout,
+    ScrollOffsets, ServalLaneView, ServalPaintList, StylePlane, TextMeasureCtx, caret_byte_at_point,
     caret_byte_vertical, caret_rect, emit_paint_list_with_layouts, layout,
-    paint_list_from_layout_dom, run_cascade, selection_rects, selection_style,
+    paint_list_from_layout_dom, range_rects, run_cascade, selection_rects, selection_style,
+    TextRange,
 };
 use serval_scripted_dom::{NodeId, ScriptedDom};
 
@@ -172,10 +173,22 @@ pub fn paint_list_from_scripted_dom(
         }
     }
 
-    // A scrollbar thumb for each scrolled container: a bar on the box's right
-    // edge, height ∝ visible/content, position ∝ offset/scrollable. Absolute
-    // coords (the scroller's parent-relative box ≈ absolute for a top-level
-    // container; nested scrollers would need origin accumulation).
+    push_scrollbars(&mut plist, &fragments, scroll_offsets);
+    plist
+}
+
+/// Append a scrollbar thumb onto `plist` for each scrolled container in
+/// `scroll_offsets`: a bar on the box's right edge, height ∝ visible/content,
+/// position ∝ offset/scrollable. Absolute coords (the scroller's parent-relative
+/// box ≈ absolute for a top-level container; nested scrollers would need origin
+/// accumulation). Shared by the stateless ([`paint_list_from_scripted_dom`]) and
+/// session ([`paint_list_from_session`]) chrome paths so both draw identical
+/// scrollbars from the same fragment geometry.
+fn push_scrollbars(
+    plist: &mut ServalPaintList,
+    fragments: &FragmentPlane<NodeId>,
+    scroll_offsets: &ScrollOffsets<NodeId>,
+) {
     for (&node, &(_ox, oy)) in scroll_offsets {
         let Some(r) = fragments.rect_of(node) else { continue };
         let inner_h =
@@ -190,7 +203,64 @@ pub fn paint_list_from_scripted_dom(
         let thumb_x = r.location.x + r.size.width - SCROLLBAR_WIDTH;
         plist.push_fill(thumb_x, thumb_y, SCROLLBAR_WIDTH, thumb_h, SCROLLBAR_COLOR);
     }
+}
 
+/// `IncrementalLayout` session → `netrender::Scene`: the C3 chrome path. The
+/// session retains cascade + layout across frames, so a steady (attribute-only)
+/// frame skips the cascade+layout the stateless [`scene_from_scripted_dom`] redoes
+/// every time — the cheap-path plan's halved chrome frame. Same overlays (focused
+/// field selection + caret, scrollbars) as the stateless path, sourced from the
+/// session's retained artifacts so the output is identical for a given DOM.
+///
+/// The caller owns the session (rebuilding it on a structural / resize / theme
+/// change, applying the attribute-only batch otherwise) and guarantees it is on
+/// the emittable path before calling. `cursor` paints a focused field's
+/// selection + caret; `None` paints neither.
+pub fn scene_from_session(
+    session: &IncrementalLayout<NodeId>,
+    dom: &ScriptedDom,
+    cursor: Option<TextCursor>,
+    scroll_offsets: &ScrollOffsets<NodeId>,
+    width: u32,
+    height: u32,
+) -> netrender::Scene {
+    let plist = paint_list_from_session(session, dom, cursor, scroll_offsets, width, height);
+    paint::translate_paint_list(&plist)
+}
+
+/// The [`ServalPaintList`] half of [`scene_from_session`] — emit from the session
+/// plus the focused-field + scrollbar overlays, before lowering to a Scene. The
+/// session companion to [`paint_list_from_scripted_dom`], for a host that
+/// composites the chrome list with another producer's stream.
+pub fn paint_list_from_session(
+    session: &IncrementalLayout<NodeId>,
+    dom: &ScriptedDom,
+    cursor: Option<TextCursor>,
+    scroll_offsets: &ScrollOffsets<NodeId>,
+    width: u32,
+    height: u32,
+) -> ServalPaintList {
+    let mut plist =
+        session.emit_paint_list(dom, scroll_offsets, DeviceIntSize::new(width as i32, height as i32));
+
+    // Same overlay order as the stateless path: selection highlight (under) then
+    // caret (over), both at absolute coords, sourced from the session's retained
+    // layout so a session-rendered field matches the stateless render byte for byte.
+    if let Some(c) = cursor {
+        if let Some((start, end)) = c.selection {
+            let rects = session.selection_rects(dom, c.node, start, end);
+            let highlight = session
+                .selection_style(dom, c.node)
+                .map(|(bg, _fg)| ColorF { r: bg[0], g: bg[1], b: bg[2], a: bg[3] })
+                .unwrap_or(SELECTION_COLOR);
+            plist.push_selection(&rects, highlight);
+        }
+        if let Some(rect) = session.caret_rect(dom, c.node, c.caret, CARET_WIDTH) {
+            plist.push_caret(rect, CARET_COLOR);
+        }
+    }
+
+    push_scrollbars(&mut plist, session.fragments(), scroll_offsets);
     plist
 }
 
@@ -244,6 +314,20 @@ pub fn caret_byte_at(
     y: f32,
 ) -> Option<usize> {
     LaidOutDocument::compute(dom, stylesheets, width, height).caret_byte_at(node, x, y)
+}
+
+/// Highlight rects `(x, y, w, h)` for a multi-leaf selection `range` over `dom`
+/// — the §3 selection-range geometry as a compute-once wrapper. Prefer
+/// [`LaidOutDocument::range_rects`] when also running other queries on the same
+/// frame; this is the thin one-shot for a host that only needs the highlight.
+pub fn range_rects_from_scripted_dom(
+    dom: &ScriptedDom,
+    stylesheets: &[&str],
+    width: u32,
+    height: u32,
+    range: TextRange<NodeId>,
+) -> Vec<(f32, f32, f32, f32)> {
+    LaidOutDocument::compute(dom, stylesheets, width, height).range_rects(range)
 }
 
 /// Run only the cascade → layout half (no paint emission) over `dom`, returning
@@ -361,6 +445,18 @@ impl<'a> LaidOutDocument<'a> {
         caret_byte_at_point(self.dom, node, x, y, &self.built, &self.text_ctx, &self.fragments)
     }
 
+    /// Highlight rects `(x, y, w, h)` for a selection `range` that may span several
+    /// inline leaves across block boundaries — the multi-node selection geometry
+    /// (pseudo follow-ups §3), served off this one layout. Endpoints are
+    /// `(inline-formatting-leaf, byte offset)` pairs in the caller's selection
+    /// order (a backwards drag is fine). Empty when the range is collapsed.
+    pub fn range_rects(&self, range: TextRange<NodeId>) -> Vec<(f32, f32, f32, f32)> {
+        range_rects(self.dom, range, &self.built, &self.text_ctx, &self.fragments)
+            .into_iter()
+            .map(|r| (r.x, r.y, r.width, r.height))
+            .collect()
+    }
+
     /// The accesskit accessibility tree derived from this layout.
     pub fn accesskit_tree(&self, focus: Option<NodeId>) -> accesskit::TreeUpdate {
         crate::a11y::accesskit_tree(self.dom, &self.fragments, focus)
@@ -409,5 +505,55 @@ mod tests {
             Some(div),
             "hit-test finds the div from the same layout"
         );
+    }
+
+    /// First element named `name` in `node`'s subtree (pre-order), or `None`.
+    fn first_named(dom: &ScriptedDom, node: NodeId, name: &str) -> Option<NodeId> {
+        if dom.element_name(node).is_some_and(|q| q.local.as_ref() == name) {
+            return Some(node);
+        }
+        dom.dom_children(node).find_map(|c| first_named(dom, c, name))
+    }
+
+    /// C3 parity fixture: the chrome rendered through an `IncrementalLayout`
+    /// session ([`scene_from_session`]) is op-for-op identical to the stateless
+    /// per-frame [`scene_from_scripted_dom`], across focused-field states (plain,
+    /// caret, selection). The session may skip cascade+layout on a steady frame,
+    /// but its Scene must match the stateless render byte for byte — the cheap-path
+    /// plan's parity guard for swapping the chrome onto a session.
+    #[test]
+    fn session_render_matches_stateless_render() {
+        const SHEET: &[&str] = &[
+            "html, body, div { display: block; margin: 0; }",
+            "body { padding: 8px; }",
+            "#field { font-size: 20px; color: rgb(20, 20, 30); }",
+        ];
+        let (w, h) = (400u32, 200u32);
+
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        dom.set_inner_html(root, "<div id=\"field\">hello world</div>");
+        let field = first_named(&dom, root, "div").expect("a <div> with text");
+
+        let scroll = ScrollOffsets::<NodeId>::default();
+        // The session a C3 frame builds for this DOM: one full cascade + layout.
+        let session = IncrementalLayout::new(&dom, SHEET, w as f32, h as f32);
+
+        // (caret byte, optional selection range) per case; a fresh `TextCursor` per
+        // call since it is `!Copy`.
+        let cur = |c: Option<(usize, Option<(usize, usize)>)>| {
+            c.map(|(caret, selection)| TextCursor { node: field, caret, selection })
+        };
+        let cases = [None, Some((3, None)), Some((6, Some((0, 5))))];
+
+        for (i, case) in cases.into_iter().enumerate() {
+            let stateless = scene_from_scripted_dom(&dom, SHEET, w, h, cur(case), &scroll);
+            let sessioned = scene_from_session(&session, &dom, cur(case), &scroll, w, h);
+            assert_eq!(
+                format!("{:?}", stateless.ops),
+                format!("{:?}", sessioned.ops),
+                "case {i}: session render must match the stateless render op-for-op",
+            );
+        }
     }
 }

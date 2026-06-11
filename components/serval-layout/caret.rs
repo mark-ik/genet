@@ -180,6 +180,95 @@ where
         .collect()
 }
 
+/// A DOM text range: anchor and focus as `(inline-formatting-leaf, byte offset)`
+/// pairs, in the caller's selection order — the anchor may sit after the focus in
+/// document order (a backwards drag). Each node is an inline-formatting leaf (an
+/// element with a cached `parley::Layout`, the unit [`selection_rects`] takes),
+/// and the offset is a byte index into *that leaf's* concatenated inline text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextRange<N> {
+    pub anchor_node: N,
+    pub anchor_offset: usize,
+    pub focus_node: N,
+    pub focus_offset: usize,
+}
+
+/// The highlight rectangles for a selection `range` that may span several inline
+/// leaves (across block boundaries), in absolute (scene) coordinates — the
+/// multi-node generalisation of [`selection_rects`]. Empty when the range is
+/// collapsed or neither endpoint resolves to a laid-out leaf.
+///
+/// The walk: enumerate the laid-out inline leaves in document order, order the two
+/// endpoints by that order (same leaf → by offset), then for each leaf in the
+/// span collect its per-line rects via [`selection_rects`] — the first leaf from
+/// its start offset to its end, interior leaves whole, the last leaf to its end
+/// offset. `usize::MAX` rides parley's index clamp to mean "to the end of this
+/// leaf", so no per-leaf text length is needed. (Pseudo follow-ups §3.)
+pub fn range_rects<D>(
+    dom: &D,
+    range: TextRange<D::NodeId>,
+    built: &BoxTree<D::NodeId>,
+    text_ctx: &TextMeasureCtx,
+    fragments: &FragmentPlane<D::NodeId>,
+) -> Vec<CaretRect>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    // Document-order list of the leaves that actually have a cached text layout.
+    let mut leaves: Vec<D::NodeId> = Vec::new();
+    collect_text_leaves(dom, built, text_ctx, dom.document(), &mut leaves);
+
+    let pos = |n: D::NodeId| leaves.iter().position(|&l| l == n);
+    let (Some(ai), Some(fi)) = (pos(range.anchor_node), pos(range.focus_node)) else {
+        return Vec::new();
+    };
+
+    // Order the endpoints in document order: by leaf position, then (same leaf) by
+    // offset, so a backwards drag highlights the same span as a forwards one.
+    let ((si, soff), (ei, eoff)) =
+        if ai < fi || (ai == fi && range.anchor_offset <= range.focus_offset) {
+            ((ai, range.anchor_offset), (fi, range.focus_offset))
+        } else {
+            ((fi, range.focus_offset), (ai, range.anchor_offset))
+        };
+
+    let mut rects = Vec::new();
+    for i in si..=ei {
+        let node = leaves[i];
+        let (start, end) = match (i == si, i == ei) {
+            (true, true) => (soff, eoff), // single leaf
+            (true, false) => (soff, usize::MAX), // first leaf: to its end
+            (false, true) => (0, eoff), // last leaf: from its start
+            (false, false) => (0, usize::MAX), // interior leaf: whole
+        };
+        rects.extend(selection_rects(dom, node, start, end, built, text_ctx, fragments));
+    }
+    rects
+}
+
+/// Pre-order (document-order) walk collecting nodes that own a cached
+/// `parley::Layout` — the inline-formatting leaves selection geometry addresses.
+fn collect_text_leaves<D>(
+    dom: &D,
+    built: &BoxTree<D::NodeId>,
+    text_ctx: &TextMeasureCtx,
+    node: D::NodeId,
+    out: &mut Vec<D::NodeId>,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    if let Some(taffy_id) = built.node_map.get(&node) {
+        if text_ctx.layouts.contains_key(taffy_id) {
+            out.push(node);
+        }
+    }
+    for child in dom.dom_children(node) {
+        collect_text_leaves(dom, built, text_ctx, child, out);
+    }
+}
+
 /// The caret byte after moving `delta` visual lines (−1 = up, +1 = down) from
 /// `byte_offset` within `node`'s laid-out text, keeping the horizontal position
 /// — soft-wrap-aware ArrowUp / ArrowDown. `None` if `node` has no cached layout.
@@ -345,6 +434,75 @@ mod tests {
         let mut bare: StylePlane<StaticNodeId> = StylePlane::new();
         run_cascade(&doc, &mut bare, euclid::Size2D::new(800.0, 600.0), &[], None);
         assert!(selection_style(&doc, &bare, p).is_none(), "no ::selection rule → None");
+    }
+
+    /// A selection range spanning two block paragraphs highlights text in both
+    /// inline leaves: rects land in the first paragraph's band and in the second's
+    /// (lower) band. Reversing anchor/focus (a backwards drag) yields the same
+    /// rects, and a collapsed range yields none. (Pseudo follow-ups §3.)
+    #[test]
+    fn range_rects_span_two_paragraphs() {
+        let doc = StaticDocument::parse(
+            "<html><body><p>first para</p><p>second para</p></body></html>",
+        );
+        let sheet = &["html, body, p { display: block; margin: 0; font-size: 20px; }"];
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&doc, &styles, &ImagePlane::new(), viewport);
+
+        let mut ps = Vec::new();
+        let mut q = vec![doc.document()];
+        while let Some(id) = q.pop() {
+            if doc.element_name(id).is_some_and(|n| n.local == LocalName::from("p")) {
+                ps.push(id);
+            }
+            q.extend(doc.dom_children(id));
+        }
+        assert_eq!(ps.len(), 2, "two paragraphs");
+        let y0 = fragments.rect_of(ps[0]).unwrap().location.y;
+        let y1 = fragments.rect_of(ps[1]).unwrap().location.y;
+        let (top_p, bot_p) = if y0 <= y1 { (ps[0], ps[1]) } else { (ps[1], ps[0]) };
+        let mid = (fragments.rect_of(top_p).unwrap().location.y
+            + fragments.rect_of(bot_p).unwrap().location.y)
+            / 2.0;
+
+        let range = TextRange {
+            anchor_node: top_p,
+            anchor_offset: 2,
+            focus_node: bot_p,
+            focus_offset: 3,
+        };
+        let rects = range_rects(&doc, range, &built, &text_ctx, &fragments);
+        assert!(!rects.is_empty(), "spanning range highlights something");
+        assert!(rects.iter().any(|r| r.y < mid), "highlight in the first paragraph");
+        assert!(rects.iter().any(|r| r.y >= mid), "highlight in the second paragraph");
+
+        // A backwards drag (anchor after focus in document order) is normalised
+        // to the same span.
+        let reversed = TextRange {
+            anchor_node: bot_p,
+            anchor_offset: 3,
+            focus_node: top_p,
+            focus_offset: 2,
+        };
+        let rev_rects = range_rects(&doc, reversed, &built, &text_ctx, &fragments);
+        assert_eq!(rev_rects, rects, "backwards drag highlights the same rects");
+
+        // A collapsed range (same leaf, same offset) highlights nothing.
+        let collapsed = TextRange {
+            anchor_node: top_p,
+            anchor_offset: 2,
+            focus_node: top_p,
+            focus_offset: 2,
+        };
+        assert!(
+            range_rects(&doc, collapsed, &built, &text_ctx, &fragments).is_empty(),
+            "collapsed range → no rects"
+        );
     }
 
     /// Padded inline text and the caret share the content-box origin: the

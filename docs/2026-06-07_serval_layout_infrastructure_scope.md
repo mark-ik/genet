@@ -117,6 +117,15 @@ rule (e.g. the table font-size quirk) reflects it.
 
 ## 4. Pseudo-element cascade (`::before` / `::after` / `::marker` / `::selection` / `::first-line`)
 
+**Status (2026-06-11): the tractable slice shipped; remainders re-scoped.**
+Inline `::before`/`::after` content (`0694833a3ed`) and `:checked`
+(`e1fb3680db9`) landed — the cascade resolves eager pseudos for free, as this
+section predicted. The five remainders (::marker lazy resolution, ::selection
+host wiring, block-display generated content, ::first-letter, selection-range
+geometry) each hit a verified wall and are scoped individually in
+[`2026-06-11_pseudo_element_followups_scope.md`](2026-06-11_pseudo_element_followups_scope.md),
+which supersedes the approach sketch below for pseudo-elements.
+
 **Unblocks:** generated content (`::before` / `::after` with `content`),
 `::marker` styling (closes a list-feature deferral), `::selection`,
 `::first-line` / `::first-letter`.

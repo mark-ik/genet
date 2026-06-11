@@ -21,6 +21,7 @@
 
 use std::hash::Hash;
 
+use engine_observables_api::{FragmentQuery, Point};
 use layout_dom_api::{DomMutation, LayoutDom};
 use paint_list_api::DeviceIntSize;
 use style::selector_parser::RestyleDamage;
@@ -34,6 +35,7 @@ use crate::fragment::FragmentPlane;
 use crate::image_decode::{BackgroundImagePlane, ImagePlane};
 use crate::invalidate::{classify, coalesce};
 use crate::paint_emit::{emit_paint_list_with_layouts, ScrollOffsets, ServalPaintList};
+use crate::serval_lane::ServalLaneView;
 use crate::style::StylePlane;
 use crate::subtree::SubtreeView;
 use crate::text_measure::TextMeasureCtx;
@@ -136,6 +138,29 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
     /// The current per-node fragment plane.
     pub fn fragments(&self) -> &FragmentPlane<Id> {
         &self.fragments
+    }
+
+    /// The current cascaded style plane — the other half (with [`fragments`](Self::fragments))
+    /// a `ServalLaneView` hit-test reads, so a host can serve point queries off the
+    /// session's retained layout instead of re-cascading.
+    pub fn styles(&self) -> &StylePlane<Id> {
+        &self.styles
+    }
+
+    /// The topmost (paint-order) DOM node containing scene point `(x, y)`, served
+    /// from the session's retained planes through the `engine_observables_api`
+    /// query surface — no re-cascade. The session companion to
+    /// `LaidOutDocument::hit_test` / the stateless `hit_test_node`, so a host routes
+    /// click and region hit-tests through the same session it renders. Clip- and
+    /// scroll-aware via `scroll`. `None` if the point falls outside every fragment.
+    pub fn hit_test<D>(&self, dom: &D, x: f32, y: f32, scroll: &ScrollOffsets<Id>) -> Option<Id>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let view =
+            ServalLaneView::new(dom, &self.styles, &self.fragments).with_scroll_offsets(scroll);
+        let hit = view.hit_test(Point::new(x, y))?;
+        view.find_by_source_id(hit.source_node)
     }
 
     /// The aggregate `RestyleDamage` from the most recent attribute-only
@@ -247,6 +272,74 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
             scroll_offsets,
             viewport,
         )
+    }
+
+    /// The caret rectangle for `byte_offset` within `node`'s laid-out text, in
+    /// absolute scene coordinates, served from the session's **retained** layout
+    /// (the same `built` / `text_ctx` / `fragments` [`emit_paint_list`](Self::emit_paint_list)
+    /// paints from) — no re-cascade. `None` if `node` has no cached text layout.
+    /// The session companion to `LaidOutDocument::caret_screen_rect`: a host that
+    /// overlays a focused field's caret reads it from the same session it renders
+    /// through. Valid whenever `emit_paint_list` is (post full layout / the
+    /// `RepaintOnly` path); a structural splice invalidates the box-tree side-table.
+    pub fn caret_rect<D>(
+        &self,
+        dom: &D,
+        node: Id,
+        byte_offset: usize,
+        width: f32,
+    ) -> Option<crate::caret::CaretRect>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        crate::caret::caret_rect(
+            dom,
+            node,
+            byte_offset,
+            &self.built,
+            &self.text_ctx,
+            &self.fragments,
+            width,
+        )
+    }
+
+    /// The selection-highlight rectangles for the byte range `[start, end)` within
+    /// `node`'s laid-out text, in absolute scene coordinates, served from the
+    /// session's retained layout. Empty when collapsed or `node` has no cached
+    /// text layout. The selection companion to [`caret_rect`](Self::caret_rect),
+    /// for the same focused-field overlay.
+    pub fn selection_rects<D>(
+        &self,
+        dom: &D,
+        node: Id,
+        start: usize,
+        end: usize,
+    ) -> Vec<crate::caret::CaretRect>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        crate::caret::selection_rects(
+            dom,
+            node,
+            start,
+            end,
+            &self.built,
+            &self.text_ctx,
+            &self.fragments,
+        )
+    }
+
+    /// The `::selection` background / foreground colors in effect at `node`
+    /// (walking to the nearest ancestor that sets them), resolved from the
+    /// session's retained [`StylePlane`] — `None` when no `::selection` rule
+    /// applies, so the caller falls back to its theme default highlight. The
+    /// session companion to the stateless overlay's `selection_style`, so a
+    /// session-rendered field highlights selection the same as the stateless path.
+    pub fn selection_style<D>(&self, dom: &D, node: Id) -> Option<([f32; 4], [f32; 4])>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        crate::caret::selection_style(dom, &self.styles, node)
     }
 
     /// Structural batch: re-cascade styles (full — structural
