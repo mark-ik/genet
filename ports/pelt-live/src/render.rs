@@ -27,9 +27,10 @@ use engine_observables_api::{FragmentQuery, Point};
 use layout_dom_api::LayoutDom;
 use paint_list_api::{ColorF, DeviceIntSize};
 use serval_layout::{
-    BackgroundImagePlane, FragmentPlane, ImageLoader, ImagePlane, ScrollOffsets, ServalLaneView,
-    ServalPaintList, StylePlane, caret_byte_at_point, caret_byte_vertical, caret_rect,
-    emit_paint_list_with_layouts, layout, paint_list_from_layout_dom, run_cascade, selection_rects,
+    BackgroundImagePlane, BoxTree, FragmentPlane, ImageLoader, ImagePlane, ScrollOffsets,
+    ServalLaneView, ServalPaintList, StylePlane, TextMeasureCtx, caret_byte_at_point,
+    caret_byte_vertical, caret_rect, emit_paint_list_with_layouts, layout,
+    paint_list_from_layout_dom, run_cascade, selection_rects,
 };
 use serval_scripted_dom::{NodeId, ScriptedDom};
 
@@ -200,22 +201,7 @@ pub fn caret_screen_rect(
     node: NodeId,
     caret_byte: usize,
 ) -> Option<(f32, f32, f32, f32)> {
-    let mut styles: StylePlane<NodeId> = StylePlane::new();
-    run_cascade(
-        dom,
-        &mut styles,
-        euclid::Size2D::new(width as f32, height as f32),
-        stylesheets,
-        None,
-    );
-    let images = ImagePlane::new();
-    let viewport = taffy::Size {
-        width: taffy::AvailableSpace::Definite(width as f32),
-        height: taffy::AvailableSpace::Definite(height as f32),
-    };
-    let (fragments, built, text_ctx) = layout(dom, &styles, &images, viewport);
-    let r = caret_rect(dom, node, caret_byte, &built, &text_ctx, &fragments, CARET_WIDTH)?;
-    Some((r.x, r.y, r.width, r.height))
+    LaidOutDocument::compute(dom, stylesheets, width, height).caret_screen_rect(node, caret_byte)
 }
 
 /// The caret byte after moving one visual line — `delta` is `-1` (up) or `+1`
@@ -232,21 +218,11 @@ pub fn soft_wrap_caret_byte(
     caret_byte: usize,
     delta: isize,
 ) -> Option<usize> {
-    let mut styles: StylePlane<NodeId> = StylePlane::new();
-    run_cascade(
-        dom,
-        &mut styles,
-        euclid::Size2D::new(width as f32, height as f32),
-        stylesheets,
-        None,
-    );
-    let images = ImagePlane::new();
-    let viewport = taffy::Size {
-        width: taffy::AvailableSpace::Definite(width as f32),
-        height: taffy::AvailableSpace::Definite(height as f32),
-    };
-    let (_fragments, built, text_ctx) = layout(dom, &styles, &images, viewport);
-    caret_byte_vertical::<ScriptedDom>(node, caret_byte, &built, &text_ctx, delta)
+    LaidOutDocument::compute(dom, stylesheets, width, height).soft_wrap_caret_byte(
+        node,
+        caret_byte,
+        delta,
+    )
 }
 
 /// The caret byte nearest scene point `(x, y)` within `node`'s laid-out text —
@@ -262,21 +238,7 @@ pub fn caret_byte_at(
     x: f32,
     y: f32,
 ) -> Option<usize> {
-    let mut styles: StylePlane<NodeId> = StylePlane::new();
-    run_cascade(
-        dom,
-        &mut styles,
-        euclid::Size2D::new(width as f32, height as f32),
-        stylesheets,
-        None,
-    );
-    let images = ImagePlane::new();
-    let viewport = taffy::Size {
-        width: taffy::AvailableSpace::Definite(width as f32),
-        height: taffy::AvailableSpace::Definite(height as f32),
-    };
-    let (fragments, built, text_ctx) = layout(dom, &styles, &images, viewport);
-    caret_byte_at_point(dom, node, x, y, &built, &text_ctx, &fragments)
+    LaidOutDocument::compute(dom, stylesheets, width, height).caret_byte_at(node, x, y)
 }
 
 /// Run only the cascade → layout half (no paint emission) over `dom`, returning
@@ -291,21 +253,7 @@ pub fn fragments_from_scripted_dom(
     width: u32,
     height: u32,
 ) -> FragmentPlane<NodeId> {
-    let mut styles: StylePlane<NodeId> = StylePlane::new();
-    run_cascade(
-        dom,
-        &mut styles,
-        euclid::Size2D::new(width as f32, height as f32),
-        stylesheets,
-        None,
-    );
-    let images = ImagePlane::new();
-    let viewport = taffy::Size {
-        width: taffy::AvailableSpace::Definite(width as f32),
-        height: taffy::AvailableSpace::Definite(height as f32),
-    };
-    let (fragments, _built, _text_ctx) = layout(dom, &styles, &images, viewport);
-    fragments
+    LaidOutDocument::compute(dom, stylesheets, width, height).into_fragments()
 }
 
 /// Lay out `dom` and hit-test the point `(x, y)`, returning the topmost
@@ -327,22 +275,134 @@ pub fn hit_test_node(
     y: f32,
     scroll_offsets: &ScrollOffsets<NodeId>,
 ) -> Option<NodeId> {
-    let mut styles: StylePlane<NodeId> = StylePlane::new();
-    run_cascade(
-        dom,
-        &mut styles,
-        euclid::Size2D::new(width as f32, height as f32),
-        stylesheets,
-        None,
-    );
-    let images = ImagePlane::new();
-    let viewport = taffy::Size {
-        width: taffy::AvailableSpace::Definite(width as f32),
-        height: taffy::AvailableSpace::Definite(height as f32),
-    };
-    let (fragments, _built, _text_ctx) = layout(dom, &styles, &images, viewport);
+    LaidOutDocument::compute(dom, stylesheets, width, height).hit_test(x, y, scroll_offsets)
+}
 
-    let view = ServalLaneView::new(dom, &styles, &fragments).with_scroll_offsets(scroll_offsets);
-    view.hit_test(Point::new(x, y))
-        .map(|hit| NodeId::from_raw(hit.source_node.0 as usize))
+/// A laid-out document: one cascade + layout, with every point query served
+/// from the retained artifacts (styles + fragments + box tree + text context).
+/// Build once per dirty frame and run many queries, instead of each query
+/// re-running cascade+layout. This is the stateless companion to
+/// `IncrementalLayout` (which retains the same fields); the cheap-path plan's
+/// C1 seam. The free `*_from_scripted_dom` / `hit_test_node` / caret functions
+/// are thin compute-once-then-query wrappers over it.
+pub struct LaidOutDocument<'a> {
+    dom: &'a ScriptedDom,
+    styles: StylePlane<NodeId>,
+    fragments: FragmentPlane<NodeId>,
+    built: BoxTree<NodeId>,
+    text_ctx: TextMeasureCtx,
+}
+
+impl<'a> LaidOutDocument<'a> {
+    /// Cascade + lay out `dom` against `width`×`height`, once.
+    pub fn compute(dom: &'a ScriptedDom, stylesheets: &[&str], width: u32, height: u32) -> Self {
+        let mut styles: StylePlane<NodeId> = StylePlane::new();
+        run_cascade(
+            dom,
+            &mut styles,
+            euclid::Size2D::new(width as f32, height as f32),
+            stylesheets,
+            None,
+        );
+        let images = ImagePlane::new();
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(width as f32),
+            height: taffy::AvailableSpace::Definite(height as f32),
+        };
+        let (fragments, built, text_ctx) = layout(dom, &styles, &images, viewport);
+        Self { dom, styles, fragments, built, text_ctx }
+    }
+
+    /// The per-node fragment plane (borrowed; `into_fragments` to own it).
+    pub fn fragments(&self) -> &FragmentPlane<NodeId> {
+        &self.fragments
+    }
+
+    /// Consume into the owned fragment plane.
+    pub fn into_fragments(self) -> FragmentPlane<NodeId> {
+        self.fragments
+    }
+
+    /// Topmost (paint-order) node containing `(x, y)`, or `None`.
+    pub fn hit_test(&self, x: f32, y: f32, scroll_offsets: &ScrollOffsets<NodeId>) -> Option<NodeId> {
+        let view = ServalLaneView::new(self.dom, &self.styles, &self.fragments)
+            .with_scroll_offsets(scroll_offsets);
+        view.hit_test(Point::new(x, y))
+            .map(|hit| NodeId::from_raw(hit.source_node.0 as usize))
+    }
+
+    /// Screen rect `(x, y, w, h)` of the caret at `caret_byte` within `node`.
+    pub fn caret_screen_rect(&self, node: NodeId, caret_byte: usize) -> Option<(f32, f32, f32, f32)> {
+        let r = caret_rect(
+            self.dom,
+            node,
+            caret_byte,
+            &self.built,
+            &self.text_ctx,
+            &self.fragments,
+            CARET_WIDTH,
+        )?;
+        Some((r.x, r.y, r.width, r.height))
+    }
+
+    /// Caret byte one soft-wrapped line `delta` (up `-1` / down `+1`) from
+    /// `caret_byte` within `node`.
+    pub fn soft_wrap_caret_byte(&self, node: NodeId, caret_byte: usize, delta: isize) -> Option<usize> {
+        caret_byte_vertical::<ScriptedDom>(node, caret_byte, &self.built, &self.text_ctx, delta)
+    }
+
+    /// Caret byte nearest scene point `(x, y)` within `node`'s laid-out text.
+    pub fn caret_byte_at(&self, node: NodeId, x: f32, y: f32) -> Option<usize> {
+        caret_byte_at_point(self.dom, node, x, y, &self.built, &self.text_ctx, &self.fragments)
+    }
+
+    /// The accesskit accessibility tree derived from this layout.
+    pub fn accesskit_tree(&self, focus: Option<NodeId>) -> accesskit::TreeUpdate {
+        crate::a11y::accesskit_tree(self.dom, &self.fragments, focus)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use layout_dom_api::{LayoutDomMut, LocalName, Namespace, QualName};
+
+    fn html(local: &str) -> QualName {
+        QualName::new(None, Namespace::from("http://www.w3.org/1999/xhtml"), LocalName::from(local))
+    }
+
+    fn attr(local: &str) -> QualName {
+        QualName::new(None, Namespace::from(""), LocalName::from(local))
+    }
+
+    /// One `LaidOutDocument::compute` serves several queries (fragment rect and
+    /// hit-test) off a single cascade+layout, instead of each query re-running
+    /// the pipeline. The C1 seam.
+    #[test]
+    fn laid_out_document_serves_queries_from_one_layout() {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let div = dom.create_element(html("div"));
+        dom.set_attribute(div, attr("class"), "x");
+        dom.append_child(root, div);
+
+        let doc = LaidOutDocument::compute(
+            &dom,
+            &["div { display: block; }", ".x { width: 40px; height: 20px; }"],
+            200,
+            100,
+        );
+
+        // Fragment query.
+        let rect = doc.fragments().rect_of(div).expect("div fragment");
+        assert!((rect.size.width - 40.0).abs() < 0.5, "div width 40, got {}", rect.size.width);
+
+        // Hit-test query off the same computed layout.
+        let offsets = ScrollOffsets::default();
+        assert_eq!(
+            doc.hit_test(5.0, 5.0, &offsets),
+            Some(div),
+            "hit-test finds the div from the same layout"
+        );
+    }
 }
