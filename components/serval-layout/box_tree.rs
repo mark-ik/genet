@@ -71,6 +71,23 @@ fn idx(n: NodeId) -> usize {
     u64::from(n) as usize
 }
 
+/// What a box's identity is — its style already lives on the node, so this is
+/// for *paint / hit-test* routing: it carries the originating DOM node for the
+/// `dom_id`-keyed concerns (scroll offsets, replaced/background images, canvas
+/// background propagation, hit-test target) and marks boxes that own no DOM
+/// element of their own. A box-tree-driven paint walk reads this instead of
+/// assuming every box maps 1:1 to a DOM node.
+#[derive(Clone, Copy)]
+enum BoxSource<Id> {
+    /// A real DOM element or text node; `Id` is that node.
+    Element(Id),
+    /// An anonymous block box wrapping a run of inline-level children. `Id` is the
+    /// borrowed first-member key it is stored under; it paints no box decorations
+    /// of its own.
+    Anonymous(Id),
+    // `Pseudo(Id, PseudoKind)` for block generated content arrives with §5 slice 3.
+}
+
 /// One box in the arena.
 struct BoxNode<Id> {
     /// Cascaded style, read by `TaffyStyloStyle`. A cheap refcount clone
@@ -91,26 +108,27 @@ struct BoxNode<Id> {
     /// (intrinsic from the `ImagePlane`, overridden by definite CSS
     /// width/height). Mutually exclusive with `inline_content`.
     replaced_size: Option<(f32, f32)>,
-    /// An anonymous block box (wrapping a run of a mixed container's inline-level
-    /// children). It has no DOM element of its own, so it paints no box
-    /// decorations — its `node_map` key is a borrowed descendant node whose style
-    /// (background / border) must not be painted on this box. Its inline content
-    /// (e.g. an inline-block as an `InlineBox`) still paints at its own size.
-    anonymous: bool,
+    /// Paint/hit-test identity (see [`BoxSource`]). An [`BoxSource::Anonymous`]
+    /// box wraps a run of a mixed container's inline-level children: it has no DOM
+    /// element of its own, so it paints no box decorations — its `node_map` key is
+    /// a borrowed descendant node whose style (background / border) must not be
+    /// painted on this box. Its inline content (e.g. an inline-block as an
+    /// `InlineBox`) still paints at its own size.
+    source: BoxSource<Id>,
     cache: Cache,
     unrounded_layout: Layout,
     final_layout: Layout,
 }
 
 impl<Id> BoxNode<Id> {
-    fn new(style: ServoArc<ComputedValues>) -> Self {
+    fn new(style: ServoArc<ComputedValues>, source: BoxSource<Id>) -> Self {
         Self {
             style,
             children: Vec::new(),
             inline_content: None,
             marker: None,
             replaced_size: None,
-            anonymous: false,
+            source,
             cache: Cache::new(),
             unrounded_layout: Layout::new(),
             final_layout: Layout::new(),
@@ -151,7 +169,7 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
         self.node_map
             .get(&id)
             .and_then(|&t| self.nodes.get(idx(t)))
-            .is_some_and(|n| n.anonymous)
+            .is_some_and(|n| matches!(n.source, BoxSource::Anonymous(_)))
     }
 }
 
@@ -191,7 +209,7 @@ where
             .find(|c| matches!(dom.kind(c.id()), NodeKind::Element))
         {
             Some(elem) => build_node(dom, styles, images, elem, &mut tree),
-            None => tree.push(BoxNode::new(initial_style())),
+            None => tree.push(BoxNode::new(initial_style(), BoxSource::Element(doc.id()))),
         }
     };
     tree.root = root;
@@ -216,7 +234,7 @@ where
     // Replaced leaf: a lone <img> (mixed-with-text <img>s flow inside an
     // inline-context leaf and are handled there, not here).
     if is_replaced(dom, elem.id()) {
-        let mut node = BoxNode::new(style);
+        let mut node = BoxNode::new(style, BoxSource::Element(elem.id()));
         node.replaced_size = Some(replaced_px_size(dom, styles, images, elem.id()));
         let i = tree.push(node);
         tree.node_map.insert(elem.id(), nid(i));
@@ -226,7 +244,7 @@ where
     // Inline formatting context: one measured leaf gathering the inline
     // subtree's runs + boxes; inline children get no boxes of their own.
     if establishes_inline_context(dom, styles, elem) {
-        let mut node = BoxNode::new(style);
+        let mut node = BoxNode::new(style, BoxSource::Element(elem.id()));
         let mut content = gather_inline_content(dom, styles, images, elem);
         // List marker: `inside` flows as the item's first inline run; `outside`
         // (the default) hangs to the left as a separate shaped layout.
@@ -268,7 +286,7 @@ where
         }
     }
     flush_anon_group(dom, styles, images, elem.id(), &mut group, &mut children, tree);
-    let mut node = BoxNode::new(style);
+    let mut node = BoxNode::new(style, BoxSource::Element(elem.id()));
     node.children = children;
     node.marker = list_marker_content(dom, styles, elem.id());
     let i = tree.push(node);
@@ -298,9 +316,8 @@ fn flush_anon_group<'a, D>(
     let Some(first) = group.first() else { return };
     let key = first.id();
     let content = gather_inline_group(dom, styles, images, styling, group);
-    let mut node = BoxNode::new(initial_style());
+    let mut node = BoxNode::new(initial_style(), BoxSource::Anonymous(key));
     node.inline_content = Some(content);
-    node.anonymous = true;
     let i = tree.push(node);
     tree.node_map.insert(key, nid(i));
     children.push(i);
