@@ -672,9 +672,28 @@ fn cascade_traverse<D>(
         }
     }
 
+    // 5b. Resolve lazy `::marker` pseudo styles (not in the eager pseudo map)
+    //     for list items, against each item's just-cascaded primary style, while
+    //     the TLS guard + Stylist are live. `context`'s guards moved into the
+    //     traversal, so rebuild them from the still-open `read`. Collect here
+    //     (the plane is borrowed immutably under the guard) and write after it
+    //     drops.
+    let marker_guards = StylesheetGuards {
+        author: &read,
+        ua_or_user: &read,
+    };
+    let resolved_markers = collect_marker_styles(dom, &*plane, stylist, &marker_guards);
+
     // 6. Drop guard (clears TLS), then exit thread state.
     drop(_guard);
     thread_state::exit(ThreadState::LAYOUT);
+
+    // 6b. Write the resolved `::marker` styles (the plane is mutable again).
+    //     Clear first so a removed `::marker` rule does not linger across passes.
+    plane.clear_marker_styles();
+    for (id, style) in resolved_markers {
+        plane.set_marker_style(id, style);
+    }
 
     // 7. GC the rule tree's free list. A persistent Stylist accumulates
     //    dropped rule nodes (e.g. each replaced style-attribute level) on a
@@ -683,6 +702,57 @@ fn cascade_traverse<D>(
     //    done and we are single-threaded (no other accessor of the tree). A
     //    no-op on a throwaway one-shot Stylist (nothing freed yet).
     stylist.rule_tree().maybe_gc();
+}
+
+/// Probe-resolve the lazy `::marker` pseudo style for every `<li>`, against its
+/// just-cascaded primary style, returning `(id, style)` for those that match a
+/// `::marker` rule. Must be called inside the cascade's TLS [`CascadeGuard`]
+/// scope (the lazy resolution invokes `TElement` methods on the element, which
+/// read `dom`/`plane` from TLS) with guards rebuilt from the cascade's lock.
+fn collect_marker_styles<D>(
+    dom: &D,
+    plane: &StylePlane<D::NodeId>,
+    stylist: &Stylist,
+    guards: &StylesheetGuards,
+) -> Vec<(D::NodeId, ServoArc<ComputedValues>)>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + 'static,
+{
+    use style::selector_parser::PseudoElement;
+    use style::stylist::RuleInclusion;
+
+    let mut out = Vec::new();
+    let mut queue = vec![dom.document()];
+    while let Some(id) = queue.pop() {
+        let is_li = dom
+            .element_name(id)
+            .is_some_and(|n| n.local == html5ever::local_name!("li"));
+        if is_li {
+            // The item's primary style; clone the `Arc` out so the `borrow_data`
+            // guard drops before the TLS-using lazy resolution below.
+            let primary = plane
+                .get(id)
+                .and_then(|e| e.borrow_data())
+                .map(|d| d.styles.primary().clone());
+            if let Some(primary) = primary {
+                let el = StyleNodeRef::<D>::new(id);
+                if let Some(marker) = stylist.lazily_compute_pseudo_element_style(
+                    guards,
+                    el,
+                    &PseudoElement::Marker,
+                    RuleInclusion::All,
+                    &primary,
+                    true, // is_probe: returns None when no `::marker` rule matches
+                    None,
+                ) {
+                    out.push((id, marker));
+                }
+            }
+        }
+        queue.extend(dom.dom_children(id));
+    }
+    out
 }
 
 /// Parse each element's inline `style="…"` attribute into an Author-origin

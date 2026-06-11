@@ -861,6 +861,32 @@ mod tests {
         assert!(hi.color[2] > 0.99 && hi.color[0] < 0.01, "element text is blue, got {:?}", hi.color);
     }
 
+    /// A list marker takes its `::marker` pseudo's cascade when present, so
+    /// `li::marker { color }` recolors the bullet (not the item's own color) —
+    /// the lazy `::marker` is resolved into the plane during the cascade.
+    #[test]
+    fn marker_uses_marker_pseudo_style() {
+        use crate::construct::list_marker_content;
+
+        let document = StaticDocument::parse("<html><body><ul><li>item</li></ul></body></html>");
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(VIEWPORT, VIEWPORT),
+            &["li { color: rgb(0, 0, 255); }", "li::marker { color: rgb(255, 0, 0); }"],
+            None,
+        );
+        let li = find_all(&document, html5ever::local_name!("li"))[0];
+        let content = list_marker_content(&document, &styles, li).expect("li has a marker");
+        let run = &content.runs[0];
+        assert!(
+            run.color[0] > 0.99 && run.color[2] < 0.01,
+            "::marker recolors the bullet red, got {:?}",
+            run.color
+        );
+    }
+
     /// One persistent `TextMeasureCtx` lays out two distinct documents
     /// correctly: `layout_via_box_tree` resets the per-pass caches each call, so
     /// the second pass is not corrupted by the first's stale Taffy-keyed layouts

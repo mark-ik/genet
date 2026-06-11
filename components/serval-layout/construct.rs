@@ -821,10 +821,27 @@ where
     Some(format!("{body}."))
 }
 
-/// The marker for a list item as single-run [`InlineContent`], styled by the
-/// `<li>`'s own font + color, ready to shape and hang to the left of the item.
-/// `None` for non-list-items. Decoration is cleared (a marker is never
-/// underlined / struck through by the item's own `text-decoration`).
+/// Build a list item's marker run with `text`, styled by its `::marker` pseudo
+/// when the cascade resolved one (`li::marker { color/font-* }`), else by the
+/// item's own font + color. Decoration is always cleared (a marker is never
+/// underlined / struck through by the item's `text-decoration`).
+fn marker_run<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+    text: String,
+) -> InlineRun {
+    let mut run = match styles.marker_style(id) {
+        Some(cv) => run_from_computed(cv, text),
+        None => run_for_element(styles, id, text),
+    };
+    run.underline = false;
+    run.strikethrough = false;
+    run
+}
+
+/// The marker for a list item as single-run [`InlineContent`], styled by its
+/// `::marker` pseudo (or the `<li>`'s own font + color), ready to shape and hang
+/// to the left of the item. `None` for non-list-items.
 pub(crate) fn list_marker_content<NodeId, D>(
     dom: &D,
     styles: &StylePlane<NodeId>,
@@ -835,9 +852,7 @@ where
     D: LayoutDom<NodeId = NodeId>,
 {
     let text = list_marker_text(dom, styles, id)?;
-    let mut run = run_for_element(styles, id, text);
-    run.underline = false;
-    run.strikethrough = false;
+    let run = marker_run(styles, id, text);
     Some(InlineContent { runs: vec![run], boxes: Vec::new() })
 }
 
@@ -867,10 +882,7 @@ where
     D: LayoutDom<NodeId = NodeId>,
 {
     let text = list_marker_text(dom, styles, id)?;
-    let mut run = run_for_element(styles, id, format!("{text} "));
-    run.underline = false;
-    run.strikethrough = false;
-    Some(run)
+    Some(marker_run(styles, id, format!("{text} ")))
 }
 
 /// Read an element's cascaded `font-size` in CSS px. Returns `None`

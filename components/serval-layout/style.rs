@@ -23,7 +23,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use selectors::matching::ElementSelectorFlags;
 use servo_arc::Arc;
 use style::data::{ElementDataMut, ElementDataRef, ElementDataWrapper};
-use style::properties::PropertyDeclarationBlock;
+use style::properties::{ComputedValues, PropertyDeclarationBlock};
 use style::selector_parser::RestyleDamage;
 use style::shared_lock::{Locked, SharedRwLock};
 use stylo_dom::ElementState;
@@ -218,6 +218,12 @@ pub struct StylePlane<NodeId: Copy + Eq + Hash> {
     /// so the next apply can clear those bits from nodes that have left the
     /// hover / focus / active chains.
     interaction_nodes: Vec<NodeId>,
+    /// Lazily-cascaded `::marker` pseudo styles, keyed by the list item's id.
+    /// `::marker` is a *lazy* pseudo (not in `ElementData`'s eager pseudo map),
+    /// so the cascade resolves it on demand against the item's primary style and
+    /// stashes it here; the marker-construction path reads it back to style the
+    /// marker run. Empty when no element has a matching `::marker` rule.
+    marker_styles: FxHashMap<NodeId, Arc<ComputedValues>>,
     /// One `SharedRwLock` for the lifetime of this plane. Stylesheet contents and
     /// inline-`style` blocks are wrapped under it, and the cascade reads them
     /// under guards from it. It MUST be stable across cascade passes: incremental
@@ -232,6 +238,7 @@ impl<NodeId: Copy + Eq + Hash> Default for StylePlane<NodeId> {
         Self {
             entries: FxHashMap::default(),
             interaction_nodes: Vec::new(),
+            marker_styles: FxHashMap::default(),
             lock: SharedRwLock::new(),
         }
     }
@@ -327,6 +334,24 @@ impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
     /// attribute path.)
     pub fn set_element_state(&mut self, id: NodeId, state: ElementState) {
         self.ensure_entry(id).state = state;
+    }
+
+    /// Stash a lazily-resolved `::marker` pseudo style for a list item (see the
+    /// `marker_styles` field). Replaces any prior entry for `id`.
+    pub fn set_marker_style(&mut self, id: NodeId, style: Arc<ComputedValues>) {
+        self.marker_styles.insert(id, style);
+    }
+
+    /// The lazily-resolved `::marker` style for a list item, if the cascade
+    /// matched a `::marker` rule against it.
+    pub fn marker_style(&self, id: NodeId) -> Option<&Arc<ComputedValues>> {
+        self.marker_styles.get(&id)
+    }
+
+    /// Drop all stashed `::marker` styles, so a re-resolve does not leave a
+    /// stale entry behind for an item whose `::marker` rule was removed.
+    pub fn clear_marker_styles(&mut self) {
+        self.marker_styles.clear();
     }
 
     /// An element's current [`ElementState`], or empty if it has no entry yet.
