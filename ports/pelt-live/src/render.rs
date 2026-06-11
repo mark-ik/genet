@@ -30,7 +30,7 @@ use serval_layout::{
     BackgroundImagePlane, BoxTree, FragmentPlane, ImageLoader, ImagePlane, ScrollOffsets,
     ServalLaneView, ServalPaintList, StylePlane, TextMeasureCtx, caret_byte_at_point,
     caret_byte_vertical, caret_rect, emit_paint_list_with_layouts, layout,
-    paint_list_from_layout_dom, run_cascade, selection_rects,
+    paint_list_from_layout_dom, run_cascade, selection_rects, selection_style,
 };
 use serval_scripted_dom::{NodeId, ScriptedDom};
 
@@ -158,7 +158,12 @@ pub fn paint_list_from_scripted_dom(
     if let Some(c) = cursor {
         if let Some((start, end)) = c.selection {
             let rects = selection_rects(dom, c.node, start, end, &built, &text_ctx, &fragments);
-            plist.push_selection(&rects, SELECTION_COLOR);
+            // `::selection { background }` when the field (or an ancestor) sets
+            // one, else the theme default highlight.
+            let highlight = selection_style(dom, &styles, c.node)
+                .map(|(bg, _fg)| ColorF { r: bg[0], g: bg[1], b: bg[2], a: bg[3] })
+                .unwrap_or(SELECTION_COLOR);
+            plist.push_selection(&rects, highlight);
         }
         if let Some(rect) =
             caret_rect(dom, c.node, c.caret, &built, &text_ctx, &fragments, CARET_WIDTH)

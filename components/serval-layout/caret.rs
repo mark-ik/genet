@@ -24,7 +24,47 @@ use parley::layout::{Affinity, Cluster, Cursor, Selection};
 
 use crate::box_tree::BoxTree;
 use crate::fragment::FragmentPlane;
+use crate::style::StylePlane;
 use crate::text_measure::{ColorBrush, TextMeasureCtx};
+
+/// The `::selection` highlight colors for `node` as `(background, foreground)`
+/// straight RGBA, from the nearest ancestor (including `node`) whose cascade
+/// resolved a `::selection` pseudo with a non-transparent background. `None`
+/// when no ancestor carries a `::selection` background, so the host falls back
+/// to its theme default highlight. `::selection` is eager, so it is in the
+/// pseudo style map. The foreground (selected-glyph recolor) is returned for
+/// callers that can repaint the range; background-only painting ignores it.
+pub fn selection_style<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    node: D::NodeId,
+) -> Option<([f32; 4], [f32; 4])>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    use style::selector_parser::PseudoElement;
+    let mut cur = Some(node);
+    while let Some(id) = cur {
+        if let Some(data) = styles.get(id).and_then(|e| e.borrow_data()) {
+            if let Some(cv) = data.styles.pseudos.get(&PseudoElement::Selection) {
+                let current = cv.get_inherited_text().color;
+                let bg = *cv
+                    .get_background()
+                    .background_color
+                    .resolve_to_absolute(&current)
+                    .into_srgb_legacy()
+                    .raw_components();
+                if bg[3] > 0.0 {
+                    let fg = *current.into_srgb_legacy().raw_components();
+                    return Some((bg, fg));
+                }
+            }
+        }
+        cur = dom.parent(id);
+    }
+    None
+}
 
 /// A caret rectangle in absolute layout (scene) coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -281,6 +321,30 @@ mod tests {
             q.extend(doc.dom_children(id));
         }
         panic!("no <p>")
+    }
+
+    /// `::selection { background-color }` is read back from the eager pseudo by
+    /// `selection_style`; absent a rule it returns `None` so the host keeps its
+    /// theme default. (Pseudo follow-ups §1.)
+    #[test]
+    fn selection_style_reads_selection_background() {
+        let doc = StaticDocument::parse("<html><body><p>abc</p></body></html>");
+        let p = find_p(&doc);
+
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &["p::selection { background-color: rgb(0, 255, 0); }"],
+            None,
+        );
+        let (bg, _fg) = selection_style(&doc, &styles, p).expect("::selection background");
+        assert!(bg[1] > 0.99 && bg[0] < 0.01, "::selection bg green, got {bg:?}");
+
+        let mut bare: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&doc, &mut bare, euclid::Size2D::new(800.0, 600.0), &[], None);
+        assert!(selection_style(&doc, &bare, p).is_none(), "no ::selection rule → None");
     }
 
     /// Padded inline text and the caret share the content-box origin: the
