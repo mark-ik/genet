@@ -288,6 +288,15 @@ impl<E: ScriptEngine> Runtime<E> {
         self.engine.pump_microtasks();
     }
 
+    /// Error a streaming response started with [`start_stream`](Self::start_stream):
+    /// the body's `ReadableStream` errors so pending/future reads reject with a
+    /// `TypeError`. The response itself stays resolved (the failure is mid-body,
+    /// e.g. a `Content-Encoding` decode error), so only body consumption rejects.
+    pub fn error_stream(&mut self, id: u64) {
+        let _ = self.engine.eval(&format!("globalThis.__fetchError({});", id));
+        self.engine.pump_microtasks();
+    }
+
     /// Reject every still-pending `fetch()` Promise with `message` (a `TypeError`).
     /// The host drive loop calls this at its wall-clock deadline so a test that
     /// awaits a never-settling fetch records a failure rather than hanging.

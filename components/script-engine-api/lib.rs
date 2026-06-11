@@ -27,6 +27,46 @@ use std::rc::Rc;
 /// this crate stays DOM-neutral).
 pub type ReflectorData = u64;
 
+/// Opaque token for a pending host-created ("deferred") promise. Neutral, like
+/// [`ReflectorData`]: the engine keeps the real resolve/reject machinery in its own
+/// side table keyed by this token, so the neutral host layer can hold and pass the
+/// token across the boundary without naming an engine type.
+///
+/// This is the async-host bridge. A native callback (`fetch`, `callModel`) mints a
+/// pending promise with [`CallCx::new_host_promise`], returns it so JS can `await`,
+/// and stashes the token in host state; when the backing Rust future completes, the
+/// host calls [`ScriptEngine::settle_host_promise`] and then drains the reaction
+/// jobs with [`ScriptEngine::pump_microtasks`]. Without it the trait can only *drain*
+/// the job queue ([`pump_microtasks`]), never *create* a promise the host resolves.
+///
+/// [`pump_microtasks`]: ScriptEngine::pump_microtasks
+pub type PromiseToken = u64;
+
+/// A bound on how much work one [`ScriptEngine::pump`] call may do, as a runaway
+/// guard. The unit is **coarse and backend-defined** (Nova counts reaction *jobs*, a
+/// fuel-metered VM counts VM *steps*), so `Steps(n)` is a "stop a script that never
+/// settles" cap, not precise accounting. `Unbounded` drains to quiescence (the
+/// classic microtask checkpoint).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Budget {
+    /// Drain the queue fully (a job storm can hang the caller; use only on trusted
+    /// scripts or after their work is known-bounded).
+    Unbounded,
+    /// Run at most this many coarse steps, then return control even if work remains.
+    Steps(u64),
+}
+
+/// The result of a [`ScriptEngine::pump`] call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PumpOutcome {
+    /// The queue drained; no pending microtask work remains.
+    Quiescent,
+    /// The [`Budget`] was exhausted with work still pending. Call `pump` again to make
+    /// more progress (a runaway script keeps returning this, which is how the caller
+    /// detects and abandons it).
+    Pending,
+}
+
 /// Host state shared with native callbacks. A refcounted `Any` the host downcasts
 /// (typically `Rc<RefCell<…>>` over the live DOM). Engine-neutral: each backend
 /// stashes it in its own host-defined-data slot (Nova realm `[[HostDefined]]`, Boa
@@ -85,12 +125,52 @@ pub trait ScriptEngine: Sized {
         length: usize,
     ) -> Result<(), Self::Error>;
 
-    /// Run pending microtasks (Promise reaction jobs) to quiescence: drain the job
-    /// queue, including jobs enqueued while draining. The host calls this at task
-    /// boundaries (after the initial script, between timer tasks) so Promise
-    /// continuations resolve. Errors thrown by a job are swallowed (an unhandled
-    /// rejection is not the host's failure).
-    fn pump_microtasks(&mut self);
+    /// Run pending microtasks (Promise reaction jobs) up to `budget`, including jobs
+    /// enqueued while running. Returns [`PumpOutcome::Quiescent`] if the queue drained
+    /// or [`PumpOutcome::Pending`] if `budget` ran out with work remaining. The host
+    /// calls this at task boundaries (after the initial script, between timer tasks) so
+    /// Promise continuations resolve; passing a [`Budget::Steps`] bound lets it cap a
+    /// runaway script instead of hanging. Errors thrown by a job are swallowed (an
+    /// unhandled rejection is not the host's failure).
+    ///
+    /// Backends honor the budget to the degree their job machinery allows: a
+    /// fuel-metered VM bounds by VM step, Nova bounds by job count, and Boa drains
+    /// fully (its `SimpleJobExecutor` has no sub-drain) and so always returns
+    /// `Quiescent`. The contract a caller can rely on everywhere is "`Quiescent` means
+    /// done"; only `Steps`-honoring backends return `Pending`.
+    fn pump(&mut self, budget: Budget) -> PumpOutcome;
+
+    /// Drain pending microtasks to quiescence: [`pump`] with [`Budget::Unbounded`]. The
+    /// common case at a task boundary; callers that must not hang on a runaway script
+    /// use [`pump`] with a [`Budget::Steps`] bound and loop on [`PumpOutcome::Pending`].
+    ///
+    /// [`pump`]: ScriptEngine::pump
+    fn pump_microtasks(&mut self) {
+        let _ = self.pump(Budget::Unbounded);
+    }
+
+    /// Mint a pending ("deferred") promise at the engine level: the between-tasks
+    /// mirror of [`CallCx::new_host_promise`], for a promise the host installs (as a
+    /// global, say) before running script. Returns the JS promise value and a
+    /// [`PromiseToken`] to settle it later with [`settle_host_promise`].
+    ///
+    /// [`settle_host_promise`]: ScriptEngine::settle_host_promise
+    fn new_host_promise(&mut self) -> Result<(Self::Value, PromiseToken), Self::Error>;
+
+    /// Settle a pending host promise: resolve it with `Ok(value)` or reject it with
+    /// `Err(error)`. This enqueues the promise's reaction jobs but does not run them;
+    /// the host drains them with [`pump_microtasks`]. The token is consumed: a token
+    /// not in the table (already settled, or never minted here) is a silent no-op, so
+    /// double-settle is safe. The async-host bridge's resolving half — call it when
+    /// the Rust future behind a [`new_host_promise`] completes.
+    ///
+    /// [`pump_microtasks`]: ScriptEngine::pump_microtasks
+    /// [`new_host_promise`]: ScriptEngine::new_host_promise
+    fn settle_host_promise(
+        &mut self,
+        token: PromiseToken,
+        outcome: Result<&Self::Value, &Self::Value>,
+    ) -> Result<(), Self::Error>;
 }
 
 /// A native (Rust) callback exposed to JS, implemented by a zero-sized type so the
@@ -155,6 +235,14 @@ pub trait CallCx {
 
     /// The `undefined` value (the usual callback return).
     fn undefined(&mut self) -> Self::Value;
+
+    /// Mint a pending ("deferred") promise mid-call. Returns the JS promise value
+    /// (the native callback returns it so JS can `await`) and a [`PromiseToken`] the
+    /// host stashes (in host data) to settle the promise once the backing Rust future
+    /// completes, via [`ScriptEngine::settle_host_promise`]. The in-callback mirror of
+    /// [`ScriptEngine::new_host_promise`], and the primitive an async host call
+    /// (`fetch`, `callModel`) is built from: return a promise now, resolve it later.
+    fn new_host_promise(&mut self) -> Result<(Self::Value, PromiseToken), Self::Error>;
 }
 
 /// Live-DOM extension: native-data reflectors (plan Part 3 / Appendix A Finding 2).

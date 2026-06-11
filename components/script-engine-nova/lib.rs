@@ -13,18 +13,18 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use std::any::Any;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, VecDeque};
     use std::rc::Rc;
 
     use nova_vm::{
         ecmascript::{
             Agent, AgentOptions, ArgumentsList, Behaviour, BuiltinFunctionArgs, EmbedderObject,
-            ExceptionType, GcAgent, HostHooks, InternalMethods, Job, PropertyDescriptor,
-            PropertyKey, RealmRoot, String as JsString, Value, create_builtin_function,
-            parse_script, script_evaluation,
+            ExceptionType, GcAgent, HostHooks, InternalMethods, Job, PromiseCapability,
+            PropertyDescriptor, PropertyKey, RealmRoot, String as JsString, Value,
+            create_builtin_function, parse_script, script_evaluation,
         },
-        engine::{Bindable, GcScope, Global},
+        engine::{Bindable, GcScope, Global, NoGcScope},
     };
 
     /// Host hooks that capture promise/generic/timeout jobs into a shared queue the
@@ -60,22 +60,60 @@ mod native {
         }
     }
     use script_engine_api::{
-        CallCx, HostData, NativeFn, ReflectorData, ScriptEngine, ScriptEngineLive,
+        Budget, CallCx, HostData, NativeFn, PromiseToken, PumpOutcome, ReflectorData, ScriptEngine,
+        ScriptEngineLive,
     };
 
     /// Nova's realm `[[HostDefined]]` slot: the neutral [`HostData`] (the DOM, set by
-    /// the host) plus the canonical-reflector cache. The cached `Global`s are
-    /// permanent roots in `agent.heap.globals`, so they survive collection without
-    /// the slot itself being traced. Both engine-side, off the neutral wall.
+    /// the host) plus the canonical-reflector cache and the pending-host-promise table.
+    /// The cached `Global`s (reflectors, and the promise values awaiting settlement)
+    /// are permanent roots in `agent.heap.globals`, so they survive collection without
+    /// the slot itself being traced. All engine-side, off the neutral wall.
     struct NovaHostSlot {
         neutral: RefCell<Option<HostData>>,
         reflectors: RefCell<HashMap<u64, Global<Value<'static>>>>,
+        /// `PromiseToken → rooted promise value`. We store only the promise (not the
+        /// resolve/reject functions): Nova's `PromiseCapability` is reconstructable
+        /// from the promise via `from_promise`, so settling rebuilds the capability and
+        /// drives it. `must_be_unresolved` is always `true` (every promise here is
+        /// minted by `PromiseCapability::new`).
+        promises: RefCell<HashMap<u64, Global<Value<'static>>>>,
+        next_token: Cell<u64>,
     }
 
     impl NovaHostSlot {
         fn new() -> Self {
-            Self { neutral: RefCell::new(None), reflectors: RefCell::new(HashMap::new()) }
+            Self {
+                neutral: RefCell::new(None),
+                reflectors: RefCell::new(HashMap::new()),
+                promises: RefCell::new(HashMap::new()),
+                next_token: Cell::new(0),
+            }
         }
+    }
+
+    /// Mint a pending promise, root it, and register it in the realm's host slot.
+    /// Shared by the engine-level and in-callback `new_host_promise` (both hold an
+    /// `&mut Agent` already inside the realm). Returns the rooted promise value to hand
+    /// to JS and the [`PromiseToken`] to settle it later.
+    fn mint_and_store(
+        agent: &mut Agent,
+        gc: NoGcScope,
+    ) -> Result<(Global<Value<'static>>, PromiseToken), String> {
+        let capability = PromiseCapability::new(agent, gc);
+        let promise_value = Value::from(capability.promise()).unbind();
+        let returned = Global::new(agent, promise_value);
+        let stored = Global::new(agent, promise_value);
+        let hd = agent
+            .current_realm(gc)
+            .host_defined(agent)
+            .ok_or_else(|| "host slot missing".to_string())?;
+        let slot =
+            hd.downcast_ref::<NovaHostSlot>().ok_or_else(|| "host slot wrong type".to_string())?;
+        let token = slot.next_token.get();
+        slot.next_token.set(token + 1);
+        slot.promises.borrow_mut().insert(token, stored);
+        Ok((returned, token))
     }
 
     /// The call context handed to a native callback. Nova's `RegularFn` gives
@@ -175,6 +213,12 @@ mod native {
 
         fn undefined(&mut self) -> Self::Value {
             Global::new(self.agent, Value::Undefined)
+        }
+
+        fn new_host_promise(&mut self) -> Result<(Self::Value, PromiseToken), Self::Error> {
+            // Mid-call: the trampoline holds the `Agent` and we are already in the
+            // realm, so mint directly (mirrors `make_reflector`'s in-call path).
+            mint_and_store(self.agent, self.gc.nogc())
         }
     }
 
@@ -334,15 +378,78 @@ mod native {
             out
         }
 
-        fn pump_microtasks(&mut self) {
-            // Drain to quiescence: a job may enqueue more (chained `.then`), so loop
-            // until the queue empties. Each job consumes itself in `run`.
+        fn pump(&mut self, budget: Budget) -> PumpOutcome {
+            // A job may enqueue more (chained `.then`), so loop. Each job consumes
+            // itself in `run`. `Steps(n)` bounds by job count (coarse: one job is one
+            // step); when the budget is spent we return `Pending` iff the queue still
+            // has work, so a caller can detect a runaway script and stop pumping.
+            let mut remaining = match budget {
+                Budget::Unbounded => None,
+                Budget::Steps(n) => Some(n),
+            };
             loop {
-                let Some(job) = self.jobs.borrow_mut().pop_front() else { break };
+                if remaining == Some(0) {
+                    return if self.jobs.borrow().is_empty() {
+                        PumpOutcome::Quiescent
+                    } else {
+                        PumpOutcome::Pending
+                    };
+                }
+                let Some(job) = self.jobs.borrow_mut().pop_front() else {
+                    return PumpOutcome::Quiescent;
+                };
                 self.agent.run_in_realm(&self.realm, |agent, gc| {
                     let _ = job.run(agent, gc);
                 });
+                if let Some(r) = remaining.as_mut() {
+                    *r -= 1;
+                }
             }
+        }
+
+        fn new_host_promise(&mut self) -> Result<(Self::Value, PromiseToken), Self::Error> {
+            let mut out = Err("new_host_promise did not run".to_string());
+            self.agent.run_in_realm(&self.realm, |agent, gc| {
+                out = mint_and_store(agent, gc.nogc());
+            });
+            out
+        }
+
+        fn settle_host_promise(
+            &mut self,
+            token: PromiseToken,
+            outcome: Result<&Self::Value, &Self::Value>,
+        ) -> Result<(), Self::Error> {
+            self.agent.run_in_realm(&self.realm, |agent, gc| {
+                // Consume the token: pull the rooted promise out of the slot. An
+                // unknown/already-settled token leaves nothing to do.
+                let stored = {
+                    let Some(hd) = agent.current_realm(gc.nogc()).host_defined(agent) else {
+                        return;
+                    };
+                    let Some(slot) = hd.downcast_ref::<NovaHostSlot>() else { return };
+                    let removed = slot.promises.borrow_mut().remove(&token);
+                    removed
+                };
+                let Some(stored) = stored else { return };
+                let Value::Promise(promise) = stored.get(agent, gc.nogc()).unbind() else {
+                    return;
+                };
+                let capability = PromiseCapability::from_promise(promise, true);
+                // Resolving enqueues the reaction jobs (Nova hands them to our
+                // `HostHooks`); the caller drains them via `pump_microtasks`.
+                match outcome {
+                    Ok(value) => {
+                        let value = value.get(agent, gc.nogc()).unbind();
+                        capability.resolve(agent, value, gc);
+                    },
+                    Err(error) => {
+                        let error = error.get(agent, gc.nogc()).unbind();
+                        capability.reject(agent, error, gc.nogc());
+                    },
+                }
+            });
+            Ok(())
         }
     }
 
@@ -434,6 +541,78 @@ mod native {
             engine.eval("setText(node, 'hello from JS')").unwrap();
 
             assert_eq!(*sink.borrow(), vec![(0x42, "hello from JS".to_string())]);
+        }
+
+        #[test]
+        fn host_promise_bridges_js_await() {
+            let mut engine = NovaEngine::new().unwrap();
+
+            // Resolve path: a parked `await` resumes when the host settles the promise.
+            let (promise, token) = engine.new_host_promise().unwrap();
+            engine.set_global("p", &promise).unwrap();
+            engine
+                .eval("globalThis.out = 'pending'; (async () => { globalThis.out = await p; })();")
+                .unwrap();
+            // Drain the script's own microtasks so the async fn reaches its parked
+            // `await` (Nova attaches the fulfill reaction via a job, not synchronously).
+            engine.pump_microtasks();
+            // The await is parked until the host settles; the post-await line has not run.
+            let parked = engine.eval("out").unwrap();
+            assert_eq!(engine.value_to_string(&parked).unwrap(), "pending");
+
+            // Parenthesized so the literal is an expression, not a directive prologue
+            // (a bare string statement has no completion value, per spec).
+            let resolution = engine.eval("('resolved!')").unwrap();
+            engine.settle_host_promise(token, Ok(&resolution)).unwrap();
+            engine.pump_microtasks();
+            let resumed = engine.eval("out").unwrap();
+            assert_eq!(engine.value_to_string(&resumed).unwrap(), "resolved!");
+
+            // Reject path: the awaiting `catch` sees the host's error value.
+            let (promise2, token2) = engine.new_host_promise().unwrap();
+            engine.set_global("q", &promise2).unwrap();
+            engine
+                .eval(
+                    "globalThis.err = 'none'; \
+                     (async () => { try { await q; } catch (e) { globalThis.err = e; } })();",
+                )
+                .unwrap();
+            let reason = engine.eval("('boom')").unwrap();
+            engine.settle_host_promise(token2, Err(&reason)).unwrap();
+            engine.pump_microtasks();
+            let caught = engine.eval("err").unwrap();
+            assert_eq!(engine.value_to_string(&caught).unwrap(), "boom");
+
+            // Survives collection while pending, and double-settle is a silent no-op.
+            engine.settle_host_promise(token, Ok(&resolution)).unwrap();
+        }
+
+        #[test]
+        fn budgeted_pump_bounds_a_microtask_chain() {
+            let mut engine = NovaEngine::new().unwrap();
+            // A chain of `.then` continuations, each bumping a global counter. The chain
+            // is lazy (each `.then` enqueues the next reaction only as the prior resolves),
+            // so it is a run of distinct jobs Nova can step through one at a time.
+            engine
+                .eval(
+                    "globalThis.n = 0; \
+                     Promise.resolve() \
+                       .then(() => { globalThis.n++; }) \
+                       .then(() => { globalThis.n++; }) \
+                       .then(() => { globalThis.n++; });",
+                )
+                .unwrap();
+
+            // One job at a time: the queue stays non-empty until the chain is exhausted,
+            // so the first bounded pump reports `Pending`, not `Quiescent`.
+            assert_eq!(engine.pump(Budget::Steps(1)), PumpOutcome::Pending);
+            let after_one = engine.eval("n").unwrap();
+            assert_eq!(engine.value_to_string(&after_one).unwrap(), "1");
+
+            // Drain the rest one step at a time; the loop ends when pump goes Quiescent.
+            while engine.pump(Budget::Steps(1)) == PumpOutcome::Pending {}
+            let done = engine.eval("n").unwrap();
+            assert_eq!(engine.value_to_string(&done).unwrap(), "3");
         }
     }
 }

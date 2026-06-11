@@ -185,7 +185,9 @@ real — see the perf-ceiling pitfall.
   before.
 - **Prototype** — instrument Boa's bytecode loop with weval intrinsics on a
   small JS program; measure speedup vs plain Boa-in-wasm. (Mirrors the
-  `nova-probe` pattern: a standalone probe before committing the fork.)
+  `nova-probe` pattern: a standalone probe before committing the fork. The probe
+  crates themselves were removed 2026-06-10 once the real `components/script-engine-*`
+  crates subsumed their proofs as live tests; the pattern stands.)
 - **Name the scripting-domain split** — Rhai (app) vs Boa/Nova (content JS)
   — explicitly, so the "Rhai on wasm" memory and this note stop reading as
   contradictory.

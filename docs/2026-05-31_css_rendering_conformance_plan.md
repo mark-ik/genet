@@ -353,11 +353,34 @@ GPU-jitter-floor column was measured on a different machine (`152`); the
 the last two columns as same-machine deltas, not the middle column against the
 last:
 
-| subset | after multi-img inline flow | after iframe/canvas replaced | after Ahem test font | after anonymous block boxes (2026-06-10) |
-| --- | --- | --- | --- | --- |
-| `css/CSS2/floats` | 34 / 197 | 34 / 197 | 34 / 197 | **40 / 197** |
-| `css/CSS2/normal-flow` | 442 / 1044 | 451 / 1044 | 454 / 1044 | **462 / 1044** |
-| `css/css-backgrounds` | 299 / 1325 | 299 / 1325 | 303 / 1325 | **310 / 1325** |
+| subset | after multi-img inline flow | after iframe/canvas replaced | after Ahem test font | after anonymous block boxes (2026-06-10) | after taffy `find_content_slot` fix (2026-06-11) |
+| --- | --- | --- | --- | --- | --- |
+| `css/CSS2/floats` | 34 / 197 | 34 / 197 | 34 / 197 | 40 / 197 | **41 / 197** |
+| `css/CSS2/normal-flow` | 442 / 1044 | 451 / 1044 | 454 / 1044 | **462 / 1044** | — |
+| `css/css-backgrounds` | 299 / 1325 | 299 / 1325 | 303 / 1325 | **310 / 1325** | — |
+
+The 2026-06-11 column re-measures floats only; the patch is confined to taffy's
+float-slot selection (`#[cfg(feature = "float_layout")]`), so float-free subsets
+are provably unaffected and were not re-run.
+
+**taffy `find_content_slot` width-fit (2026-06-11).** taffy's experimental
+`float_layout` placed a fixed-width BFC child (e.g. `overflow: hidden`) into the
+first vertical band below its `min_y` without checking the band was wide enough,
+so a full-width float yielded a zero-width slot at its right edge and the child
+overflowed there instead of dropping below the float. The bug is on taffy `main`
+too and there is no released fix (serval is already on the newest publish), so we
+now carry a vendored fork at `support/patches/taffy/` (wired via
+`[patch.crates-io]`) as the home for the layout patches we will accumulate as
+float / table / BFC conformance climbs; each is `git apply`-able and upstreamed
+(see `support/patches/taffy/SERVAL_PATCHES.md` + `UPSTREAM_PR.md`). This first
+patch threads the content's outer width through `find_content_slot`; auto-width /
+shrink-to-fit children pass `0.0` and keep prior behaviour. It lands
+`floats-wrap-bfc-008`. The honest scope: the broader `floats-wrap-bfc-*` cluster
+is *not* this bug — their slot selection is already correct (e.g.
+`001-left-overflow` is an auto-width BFC that correctly stretches beside the
+float; its diff is child/overflow rendering), so this is a +1, not the cluster
+clear. Remaining float fails are diverse (tables, margins, `new-fc-*`, auto-width
+shrink-to-fit clearing).
 
 Subsets the 2026-06-07 paint series targeted (first measured 2026-06-09, no prior
 baseline recorded — add to the running board going forward):

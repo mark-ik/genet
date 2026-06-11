@@ -1239,8 +1239,10 @@ mod net {
     /// Run a deferred fetch and report it to the test's channel: a network error is
     /// `Fail`; otherwise `StartStream` once the headers are in (so `await fetch()`
     /// resolves before the body finishes, which is what lets a mid-flight abort run),
-    /// then a `Chunk` per body chunk as it decodes, then `Close`. Dropping this task
-    /// (Job::Cancel) drops the in-flight body future, cancelling the request.
+    /// then a `Chunk` per body chunk as it decodes, then `Close` (or `Error` if a
+    /// chunk fails to decode, which errors the already-resolved response's body).
+    /// Dropping this task (Job::Cancel) drops the in-flight body future, cancelling
+    /// the request.
     async fn run_fetch_streaming(id: u64, req: FetchRequest, reply: std::sync::mpsc::Sender<FetchEvent>) {
         let Ok(url) = url::Url::parse(&req.url) else {
             let _ = reply.send(FetchEvent::Fail(id, "Failed to fetch".to_string()));
@@ -1333,7 +1335,12 @@ mod net {
                         return; // the test's channel is gone (run ended)
                     }
                 }
-                Err(_) => break, // body decode error: end the stream
+                Err(_) => {
+                    // Body decode error (e.g. a bad Content-Encoding): error the
+                    // body stream so reads reject, rather than closing it cleanly.
+                    let _ = reply.send(FetchEvent::Error(id));
+                    return;
+                }
             }
         }
         let _ = reply.send(FetchEvent::Close(id));
@@ -1350,12 +1357,15 @@ mod net {
 
     /// A deferred fetch event, routed to the originating test's channel by the JS
     /// `id` (not the global abort key). A response streams as `StartStream` (status +
-    /// headers) -> `Chunk`* (body, as it arrives) -> `Close`; a network error before
-    /// the headers is `Fail` (rejected as a `TypeError`).
+    /// headers) -> `Chunk`* (body, as it arrives) -> `Close`, or `Error` if the body
+    /// fails partway (e.g. a `Content-Encoding` decode error: the response already
+    /// resolved, so its body stream errors and body reads reject). A network error
+    /// before the headers is `Fail` (the `fetch()` Promise rejects as a `TypeError`).
     pub enum FetchEvent {
         StartStream(u64, FetchOutcome),
         Chunk(u64, Vec<u8>),
         Close(u64),
+        Error(u64),
         Fail(u64, String),
     }
 
@@ -1443,6 +1453,7 @@ mod net {
             FetchEvent::StartStream(id, o) => crate::harness::FetchCompletion::StartStream(id, o),
             FetchEvent::Chunk(id, b) => crate::harness::FetchCompletion::Chunk(id, b),
             FetchEvent::Close(id) => crate::harness::FetchCompletion::Close(id),
+            FetchEvent::Error(id) => crate::harness::FetchCompletion::Error(id),
             FetchEvent::Fail(id, m) => crate::harness::FetchCompletion::Fail(id, m),
         }
     }

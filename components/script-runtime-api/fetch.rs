@@ -1688,5 +1688,12 @@ const FETCH_BOOTSTRAP: &str = r#"
     var e = __pending[id]; if (!e) return; delete __pending[id];
     if (e.controller) { try { e.controller.close(); } catch (x) {} }
   };
+  // The response already resolved at __fetchStartStream; a mid-body failure (e.g. a
+  // Content-Encoding decode error) errors the LIVE body stream so pending/future
+  // reads (arrayBuffer/text/...) reject with a TypeError, while the Response stays.
+  globalThis.__fetchError = function(id) {
+    var e = __pending[id]; if (!e) return; delete __pending[id];
+    if (e.controller) { try { e.controller.error(new TypeError('Failed to read response body')); } catch (x) {} }
+  };
 })();
 "#;

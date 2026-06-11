@@ -32,11 +32,14 @@ use serval_static_dom::StaticDocument;
 
 /// A deferred `fetch()` completion, applied to the runtime by the drive loop. A
 /// response streams as `StartStream` (status + headers) -> `Chunk`* (body) ->
-/// `Close`; `Fail` is a network error before the headers.
+/// `Close`, or `Error` if the body fails partway (e.g. a `Content-Encoding`
+/// decode error: the response resolved, but body reads reject). `Fail` is a
+/// network error before the headers.
 pub enum FetchCompletion {
     StartStream(u64, FetchOutcome),
     Chunk(u64, Vec<u8>),
     Close(u64),
+    Error(u64),
     Fail(u64, String),
 }
 
@@ -234,6 +237,7 @@ fn run_with<E: ScriptEngine>(
             FetchCompletion::StartStream(id, o) => rt.start_stream(id, o),
             FetchCompletion::Chunk(id, b) => rt.push_chunk(id, &b),
             FetchCompletion::Close(id) => rt.close_stream(id),
+            FetchCompletion::Error(id) => rt.error_stream(id),
             FetchCompletion::Fail(id, m) => rt.fail_fetch(id, &m),
         });
         let fired = rt.run_timers(TIMER_BUDGET, elapsed_ms(start));
@@ -256,6 +260,7 @@ fn run_with<E: ScriptEngine>(
                     FetchCompletion::StartStream(id, o) => rt.start_stream(id, o),
                     FetchCompletion::Chunk(id, b) => rt.push_chunk(id, &b),
                     FetchCompletion::Close(id) => rt.close_stream(id),
+                    FetchCompletion::Error(id) => rt.error_stream(id),
                     FetchCompletion::Fail(id, m) => rt.fail_fetch(id, &m),
                 });
             } else if wait_ms > 0.0 {

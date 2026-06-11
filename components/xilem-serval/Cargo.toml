@@ -14,11 +14,15 @@ name = "xilem_serval"
 path = "src/lib.rs"
 
 # Third reactive backend beside Masonry (`xilem`) and the browser DOM
-# (`xilem_web`), pointed at serval's `LayoutDomMut`. Path-dep on the local
-# Linebender fork's `xilem_core` (the same fork pelt-viewer consumes via
-# `xilem = { workspace = true }`); we take only the diff/message core, not the
+# (`xilem_web`), pointed at serval's `LayoutDomMut`. Git-dep on the Linebender
+# fork's `xilem_core` (the same fork pelt-viewer consumes for `xilem`/`masonry`,
+# branch `mere-wgpu-29-vello-0-9`); we take only the diff/message core, not the
 # Masonry renderer, so we depend on `xilem_core` directly rather than `xilem`.
+# A git dep (not the old repo-escaping `../../../../crates/xilem` path) so a bare
+# serval clone resolves it without the personal `crates/` fork tree as a sibling.
+# `xilem_core` carries none of the branch's vello/wgpu/parley bumps (it is
+# byte-identical to upstream main), so tracking the branch head is divergence-free.
 [dependencies]
-xilem_core = { path = "../../../../crates/xilem/xilem_core" }
+xilem_core = { git = "https://github.com/mark-ik/xilem.git", branch = "mere-wgpu-29-vello-0-9" }
 serval-scripted-dom = { path = "../serval-scripted-dom" }
 layout_dom_api = { package = "layout-dom-api", path = "../shared/layout-dom" }

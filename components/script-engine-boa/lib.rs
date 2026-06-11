@@ -6,16 +6,20 @@
 //! backend, and the native conformance oracle. Engine-native types (`JsValue`,
 //! `Context`, the reflector `Class`) stay confined to this crate.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use boa_engine::{
     Context, JsData, JsError, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction,
     Source,
     class::{Class, ClassBuilder},
+    object::builtins::{JsFunction, JsPromise},
 };
 use boa_gc::{Finalize, GcRefCell, Trace};
-use script_engine_api::{CallCx, HostData, NativeFn, ReflectorData, ScriptEngine, ScriptEngineLive};
+use script_engine_api::{
+    Budget, CallCx, HostData, NativeFn, PromiseToken, PumpOutcome, ReflectorData, ScriptEngine,
+    ScriptEngineLive,
+};
 
 /// Native-data reflector (Appendix A Finding 2): a JS object carrying only the host
 /// [`ReflectorData`]. The DOM node's data lives in the host arena, never the JS heap.
@@ -40,22 +44,58 @@ impl Class for Reflector {
     }
 }
 
+/// The resolve/reject functions of a pending host promise, held until the host
+/// settles it. Traced: the `JsFunction`s are live JS objects that must survive
+/// collection while the promise is pending.
+#[derive(Trace, Finalize)]
+struct PendingPromise {
+    resolve: JsFunction,
+    reject: JsFunction,
+}
+
 /// Host-data slot stored in Boa's `Context` host-defined data. Holds the
 /// engine-neutral [`HostData`] (the `Rc<dyn Any>` is not traced — it holds host
 /// state, never JS values) plus the canonical-reflector cache (`NodeId →
 /// reflector`), which **is** traced: the cached `JsValue`s are live JS objects and
-/// must survive collection. Both engine-side, never in neutral host state.
+/// must survive collection. The `pending` table is the same: live resolving
+/// functions for host promises awaiting settlement, keyed by [`PromiseToken`]. All
+/// engine-side, never in neutral host state.
 #[derive(Trace, Finalize, JsData)]
 struct HostCell {
     #[unsafe_ignore_trace]
     data: RefCell<Option<HostData>>,
     reflectors: GcRefCell<HashMap<u64, JsValue>>,
+    pending: GcRefCell<HashMap<u64, PendingPromise>>,
+    #[unsafe_ignore_trace]
+    next_token: Cell<u64>,
 }
 
 impl HostCell {
     fn new() -> Self {
-        Self { data: RefCell::new(None), reflectors: GcRefCell::new(HashMap::new()) }
+        Self {
+            data: RefCell::new(None),
+            reflectors: GcRefCell::new(HashMap::new()),
+            pending: GcRefCell::new(HashMap::new()),
+            next_token: Cell::new(0),
+        }
     }
+}
+
+/// Mint a pending promise and register its resolving functions in the host cell.
+/// Shared by the engine-level and in-callback `new_host_promise`, both of which hold
+/// a `&mut Context`.
+fn make_pending(ctx: &mut Context) -> JsResult<(JsValue, PromiseToken)> {
+    let (promise, resolvers) = JsPromise::new_pending(ctx);
+    let Some(cell) = ctx.get_data::<HostCell>() else {
+        return Err(JsNativeError::typ().with_message("host cell missing").into());
+    };
+    let token = cell.next_token.get();
+    cell.next_token.set(token + 1);
+    cell.pending.borrow_mut().insert(
+        token,
+        PendingPromise { resolve: resolvers.resolve, reject: resolvers.reject },
+    );
+    Ok((promise.into(), token))
 }
 
 /// A Boa-backed scripting engine.
@@ -124,6 +164,10 @@ impl CallCx for BoaCallCx<'_> {
     fn undefined(&mut self) -> JsValue {
         JsValue::undefined()
     }
+
+    fn new_host_promise(&mut self) -> Result<(JsValue, PromiseToken), JsError> {
+        make_pending(self.ctx)
+    }
 }
 
 impl ScriptEngine for BoaEngine {
@@ -180,10 +224,45 @@ impl ScriptEngine for BoaEngine {
         )
     }
 
-    fn pump_microtasks(&mut self) {
+    fn pump(&mut self, _budget: Budget) -> PumpOutcome {
         // Boa's default executor (SimpleJobExecutor) runs the promise-job queue to
-        // completion, including jobs enqueued while running.
+        // completion and exposes no sub-drain, so the budget cannot be honored: drain
+        // fully and report `Quiescent`. Step-bounding is a Nova/piccolo capability; on
+        // Boa a runaway microtask loop still hangs here (acceptable: Boa is the
+        // wasm/oracle backend, the runaway-sensitive actors run on native Nova).
         let _ = self.ctx.run_jobs();
+        PumpOutcome::Quiescent
+    }
+
+    fn new_host_promise(&mut self) -> Result<(Self::Value, PromiseToken), Self::Error> {
+        make_pending(&mut self.ctx)
+    }
+
+    fn settle_host_promise(
+        &mut self,
+        token: PromiseToken,
+        outcome: Result<&Self::Value, &Self::Value>,
+    ) -> Result<(), Self::Error> {
+        // Take the resolving functions out of the table (consume the token), then call
+        // the matching one. Calling enqueues the reaction jobs; the host drains them
+        // with `pump_microtasks`. An unknown/already-settled token is a no-op.
+        let pending = self
+            .ctx
+            .get_data::<HostCell>()
+            .and_then(|cell| cell.pending.borrow_mut().remove(&token));
+        let Some(pending) = pending else {
+            return Ok(());
+        };
+        let undefined = JsValue::undefined();
+        match outcome {
+            Ok(value) => {
+                pending.resolve.call(&undefined, &[value.clone()], &mut self.ctx)?;
+            },
+            Err(error) => {
+                pending.reject.call(&undefined, &[error.clone()], &mut self.ctx)?;
+            },
+        }
+        Ok(())
     }
 }
 
@@ -267,5 +346,60 @@ mod tests {
         engine.eval("setText(node, 'hello from JS')").unwrap();
 
         assert_eq!(*sink.borrow(), vec![(0x42, "hello from JS".to_string())]);
+    }
+
+    #[test]
+    fn host_promise_bridges_js_await() {
+        let mut engine = BoaEngine::new().unwrap();
+
+        // Resolve path: a parked `await` resumes when the host settles the promise.
+        let (promise, token) = engine.new_host_promise().unwrap();
+        engine.set_global("p", &promise).unwrap();
+        engine
+            .eval("globalThis.out = 'pending'; (async () => { globalThis.out = await p; })();")
+            .unwrap();
+        // Drain the script's own microtasks so the async fn reaches its parked `await`.
+        engine.pump_microtasks();
+        // The await is parked until the host settles; the post-await line has not run.
+        let parked = engine.eval("out").unwrap();
+        assert_eq!(engine.value_to_string(&parked).unwrap(), "pending");
+
+        // Parenthesized so the literal is an expression, not a directive prologue
+        // (a bare string statement has no completion value, per spec).
+        let resolution = engine.eval("('resolved!')").unwrap();
+        engine.settle_host_promise(token, Ok(&resolution)).unwrap();
+        engine.pump_microtasks();
+        let resumed = engine.eval("out").unwrap();
+        assert_eq!(engine.value_to_string(&resumed).unwrap(), "resolved!");
+
+        // Reject path: the awaiting `catch` sees the host's error value.
+        let (promise2, token2) = engine.new_host_promise().unwrap();
+        engine.set_global("q", &promise2).unwrap();
+        engine
+            .eval(
+                "globalThis.err = 'none'; \
+                 (async () => { try { await q; } catch (e) { globalThis.err = e; } })();",
+            )
+            .unwrap();
+        let reason = engine.eval("('boom')").unwrap();
+        engine.settle_host_promise(token2, Err(&reason)).unwrap();
+        engine.pump_microtasks();
+        let caught = engine.eval("err").unwrap();
+        assert_eq!(engine.value_to_string(&caught).unwrap(), "boom");
+
+        // Double-settle is a silent no-op (the token was consumed), not an error.
+        engine.settle_host_promise(token, Ok(&resolution)).unwrap();
+    }
+
+    #[test]
+    fn pump_drains_fully_regardless_of_budget() {
+        let mut engine = BoaEngine::new().unwrap();
+        engine
+            .eval("globalThis.n = 0; Promise.resolve().then(() => { globalThis.n++; });")
+            .unwrap();
+        // Boa cannot sub-drain, so even a tight `Steps` budget drains to quiescence.
+        assert_eq!(engine.pump(Budget::Steps(1)), PumpOutcome::Quiescent);
+        let n = engine.eval("n").unwrap();
+        assert_eq!(engine.value_to_string(&n).unwrap(), "1");
     }
 }

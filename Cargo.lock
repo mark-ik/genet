@@ -720,6 +720,7 @@ dependencies = [
 [[package]]
 name = "boa_ast"
 version = "1.0.0-dev"
+source = "git+https://github.com/mark-ik/boa.git?branch=serval#85272bf9c8d17c2609aaeb06f3dee88e7f865e77"
 dependencies = [
  "bitflags 2.11.1",
  "boa_interner",
@@ -734,6 +735,7 @@ dependencies = [
 [[package]]
 name = "boa_engine"
 version = "1.0.0-dev"
+source = "git+https://github.com/mark-ik/boa.git?branch=serval#85272bf9c8d17c2609aaeb06f3dee88e7f865e77"
 dependencies = [
  "aligned-vec",
  "arrayvec",
@@ -788,6 +790,7 @@ dependencies = [
 [[package]]
 name = "boa_gc"
 version = "1.0.0-dev"
+source = "git+https://github.com/mark-ik/boa.git?branch=serval#85272bf9c8d17c2609aaeb06f3dee88e7f865e77"
 dependencies = [
  "arrayvec",
  "boa_macros",
@@ -799,6 +802,7 @@ dependencies = [
 [[package]]
 name = "boa_interner"
 version = "1.0.0-dev"
+source = "git+https://github.com/mark-ik/boa.git?branch=serval#85272bf9c8d17c2609aaeb06f3dee88e7f865e77"
 dependencies = [
  "boa_gc",
  "boa_macros",
@@ -813,6 +817,7 @@ dependencies = [
 [[package]]
 name = "boa_macros"
 version = "1.0.0-dev"
+source = "git+https://github.com/mark-ik/boa.git?branch=serval#85272bf9c8d17c2609aaeb06f3dee88e7f865e77"
 dependencies = [
  "cfg-if",
  "cow-utils",
@@ -825,6 +830,7 @@ dependencies = [
 [[package]]
 name = "boa_parser"
 version = "1.0.0-dev"
+source = "git+https://github.com/mark-ik/boa.git?branch=serval#85272bf9c8d17c2609aaeb06f3dee88e7f865e77"
 dependencies = [
  "bitflags 2.11.1",
  "boa_ast",
@@ -841,6 +847,7 @@ dependencies = [
 [[package]]
 name = "boa_string"
 version = "1.0.0-dev"
+source = "git+https://github.com/mark-ik/boa.git?branch=serval#85272bf9c8d17c2609aaeb06f3dee88e7f865e77"
 dependencies = [
  "fast-float2",
  "itoa",
@@ -3964,6 +3971,7 @@ dependencies = [
 [[package]]
 name = "linebender_include_doc_path"
 version = "0.1.0"
+source = "git+https://github.com/mark-ik/xilem.git?branch=mere-wgpu-29-vello-0-9#f8014ddaaf83fa95af66a1a6a19ddb4695c60a38"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4091,6 +4099,7 @@ dependencies = [
 [[package]]
 name = "masonry"
 version = "0.4.0"
+source = "git+https://github.com/mark-ik/xilem.git?branch=mere-wgpu-29-vello-0-9#f8014ddaaf83fa95af66a1a6a19ddb4695c60a38"
 dependencies = [
  "accesskit",
  "linebender_include_doc_path",
@@ -4103,6 +4112,7 @@ dependencies = [
 [[package]]
 name = "masonry_core"
 version = "0.4.0"
+source = "git+https://github.com/mark-ik/xilem.git?branch=mere-wgpu-29-vello-0-9#f8014ddaaf83fa95af66a1a6a19ddb4695c60a38"
 dependencies = [
  "accesskit",
  "anymap3",
@@ -4129,6 +4139,7 @@ dependencies = [
 [[package]]
 name = "masonry_imaging"
 version = "0.4.0"
+source = "git+https://github.com/mark-ik/xilem.git?branch=mere-wgpu-29-vello-0-9#f8014ddaaf83fa95af66a1a6a19ddb4695c60a38"
 dependencies = [
  "imaging",
  "imaging_vello",
@@ -4141,6 +4152,7 @@ dependencies = [
 [[package]]
 name = "masonry_winit"
 version = "0.4.0"
+source = "git+https://github.com/mark-ik/xilem.git?branch=mere-wgpu-29-vello-0-9#f8014ddaaf83fa95af66a1a6a19ddb4695c60a38"
 dependencies = [
  "accesskit_winit",
  "copypasta",
@@ -4429,6 +4441,7 @@ checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 [[package]]
 name = "nova_vm"
 version = "1.0.0"
+source = "git+https://github.com/mark-ik/nova?branch=serval-embedder#f16a746b5f7471c473a9a8f9d2b4f6eee9bd2f73"
 dependencies = [
  "ahash",
  "ecmascript_atomics",
@@ -7892,6 +7905,7 @@ dependencies = [
 [[package]]
 name = "small_btree"
 version = "0.1.0"
+source = "git+https://github.com/mark-ik/boa.git?branch=serval#85272bf9c8d17c2609aaeb06f3dee88e7f865e77"
 dependencies = [
  "arrayvec",
 ]
@@ -7899,6 +7913,7 @@ dependencies = [
 [[package]]
 name = "small_string"
 version = "1.0.0"
+source = "git+https://github.com/mark-ik/nova?branch=serval-embedder#f16a746b5f7471c473a9a8f9d2b4f6eee9bd2f73"
 dependencies = [
  "wtf8",
 ]
@@ -8386,8 +8401,6 @@ dependencies = [
 [[package]]
 name = "taffy"
 version = "0.11.0-experimental-cache-fix.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e87b88128d417cd7c2c75b8a398177fb9efcb2ae5cddad22bcec106ba9c8e1c3"
 dependencies = [
  "arrayvec",
  "grid",
@@ -8398,6 +8411,7 @@ dependencies = [
 [[package]]
 name = "tag_ptr"
 version = "0.1.0"
+source = "git+https://github.com/mark-ik/boa.git?branch=serval#85272bf9c8d17c2609aaeb06f3dee88e7f865e77"
 
 [[package]]
 name = "tap"
@@ -8968,6 +8982,7 @@ dependencies = [
 [[package]]
 name = "tree_arena"
 version = "0.2.0"
+source = "git+https://github.com/mark-ik/xilem.git?branch=mere-wgpu-29-vello-0-9#f8014ddaaf83fa95af66a1a6a19ddb4695c60a38"
 dependencies = [
  "hashbrown 0.17.1",
 ]
@@ -10577,6 +10592,7 @@ checksum = "bec9e4a500ca8864c5b47b8b482a73d62e4237670e5b5f1d6b9e3cae50f28f2b"
 [[package]]
 name = "xilem"
 version = "0.4.0"
+source = "git+https://github.com/mark-ik/xilem.git?branch=mere-wgpu-29-vello-0-9#f8014ddaaf83fa95af66a1a6a19ddb4695c60a38"
 dependencies = [
  "masonry",
  "masonry_winit",
@@ -10599,6 +10615,7 @@ dependencies = [
 [[package]]
 name = "xilem_core"
 version = "0.4.0"
+source = "git+https://github.com/mark-ik/xilem.git?branch=mere-wgpu-29-vello-0-9#f8014ddaaf83fa95af66a1a6a19ddb4695c60a38"
 dependencies = [
  "anymore",
  "hashbrown 0.17.1",
@@ -10608,6 +10625,7 @@ dependencies = [
 [[package]]
 name = "xilem_masonry"
 version = "0.4.0"
+source = "git+https://github.com/mark-ik/xilem.git?branch=mere-wgpu-29-vello-0-9#f8014ddaaf83fa95af66a1a6a19ddb4695c60a38"
 dependencies = [
  "masonry",
  "smallvec",

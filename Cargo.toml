@@ -192,12 +192,14 @@ pelt-desktop = { version = "=0.2.0", path = "ports/pelt-desktop" }
 pelt-viewer = { version = "=0.2.0", path = "ports/pelt-viewer" }
 netrender = { path = "../netrender/netrender" }
 netrender_device = { path = "../netrender/netrender_device" }
-# Linebender UI stack — local fork on branch mere-wgpu-29-vello-0-9
+# Linebender UI stack — git dep on the fork's branch mere-wgpu-29-vello-0-9
 # (vello 0.9 / wgpu 29 / parley 0.9, matching netrender). Same fork
-# Strophe + Woodshed consume.
-xilem = { path = "../../crates/xilem/xilem" }
-masonry = { path = "../../crates/xilem/masonry" }
-masonry_winit = { path = "../../crates/xilem/masonry_winit" }
+# Strophe + Woodshed consume. Git (not the old repo-escaping `../../crates/xilem`
+# path) so a bare serval clone resolves it without the personal `crates/` fork
+# tree as a sibling; the branch carries the vello/wgpu/parley bumps, so track it.
+xilem = { git = "https://github.com/mark-ik/xilem.git", branch = "mere-wgpu-29-vello-0-9" }
+masonry = { git = "https://github.com/mark-ik/xilem.git", branch = "mere-wgpu-29-vello-0-9" }
+masonry_winit = { git = "https://github.com/mark-ik/xilem.git", branch = "mere-wgpu-29-vello-0-9" }
 peniko = "0.6"
 percent-encoding = "2.3"
 pkcs8 = { version = "0.10", features = ["rand_core"] }
@@ -434,19 +436,31 @@ codegen-units = 1
 # xml5ever = { path = "../html5ever/xml5ever" }
 # tendril = { path = "../html5ever/tendril" }
 gpu-allocator = { path = "support/patches/gpu-allocator" }
+# taffy fork carrying one fix to experimental float layout: `find_content_slot`
+# ignored the placed content's width, so a full-width float yielded a zero-width
+# slot at its right edge and a fixed-width BFC child was placed there (overflowing)
+# instead of dropping below the float. The bug is present on taffy's `main` too
+# (no released fix exists; serval is already on the newest experimental publish),
+# so we carry a minimal width-fit patch here and upstream it. Only the
+# 0.11.0-experimental-cache-fix.3 requirement (serval-layout + stylo_taffy) is
+# redirected; the workspace's taffy 0.10.1 is unaffected. See
+# docs/2026-05-31_css_rendering_conformance_plan.md (floats × BFC).
+taffy = { path = "support/patches/taffy" }
 # Nova fork (serval-embedder branch) carrying the EmbedderObject native-data patch
-# that script-engine-nova relies on. Local path for dev; the shippable form is the
-# git branch: nova_vm = { git = "https://github.com/mark-ik/nova", branch = "serval-embedder" }
-nova_vm = { path = "../../crates/nova/nova_vm" }
-# Boa: crates/boa mirrors boa-upstream main verbatim (synced 2026-06-01, the
-# 1.0.0-dev line). No serval patch — the old icu-family widen is obsolete now that
-# upstream pins the icu 2.2.x line serval's graph already forces. We carry the path
-# patch only to build boa from the local checkout (so a boa source change is picked
-# up without a publish); boa_engine pulls its sibling boa_* crates via boa's own
-# path deps, so only boa_engine + boa_gc are named from crates.io (by
-# script-engine-boa) and need patching. See docs/2026-05-20_serval_script_engine_plan.md.
-boa_engine = { path = "../../crates/boa/core/engine" }
-boa_gc = { path = "../../crates/boa/core/gc" }
+# that script-engine-nova relies on. Git (not the old repo-escaping
+# `../../crates/nova` path) so a bare serval clone resolves it without the personal
+# `crates/` fork tree as a sibling.
+nova_vm = { git = "https://github.com/mark-ik/nova", branch = "serval-embedder" }
+# Boa fork (serval branch) tracking boa-upstream main (the 1.0.0-dev line). No
+# serval source patch — the old icu-family widen is obsolete now that upstream pins
+# the icu 2.2.x line serval's graph already forces. We patch crates.io's boa only to
+# build from the fork (so a boa source change is picked up without a publish);
+# boa_engine pulls its sibling boa_* crates via boa's own intra-repo path deps, so
+# only boa_engine + boa_gc are named from crates.io (by script-engine-boa) and need
+# patching. Git (not the old `../../crates/boa` path) so a bare clone resolves it.
+# See docs/2026-05-20_serval_script_engine_plan.md.
+boa_engine = { git = "https://github.com/mark-ik/boa.git", branch = "serval" }
+boa_gc = { git = "https://github.com/mark-ik/boa.git", branch = "serval" }
 # stylo_taffy (serval-layout) depends on crates.io `stylo`/`stylo_atoms`
 # `^0.17`. serval pins the same crates from the servo/stylo git rev, and
 # `stylo` declares `links = "servo_style_crate"` (only one Stylo allowed
