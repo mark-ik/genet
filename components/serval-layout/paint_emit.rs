@@ -2249,6 +2249,33 @@ mod tests {
         )
     }
 
+    /// A block-`display` `::before` paints its own box: its background `DrawRect`
+    /// appears in the stream, sized to its laid-out block box (full container
+    /// width, its own height) — the box-tree-rooted walk renders the synthetic
+    /// pseudo box with no DOM node behind it. (Pseudo follow-ups §5 slice 3.)
+    #[test]
+    fn block_before_pseudo_paints_its_box() {
+        let document = StaticDocument::parse("<html><body><p>hi</p></body></html>");
+        let plist = emit_with_sheet(
+            &document,
+            "html, body, p { display: block; margin: 0; width: 100px; } \
+             p::before { content: \"X\"; display: block; height: 20px; \
+             background-color: rgb(255, 0, 0); }",
+        );
+        // The red ::before background, sized to its 100×20 block box.
+        let before = plist.commands().iter().find_map(|c| match c {
+            PaintCmd::DrawRect(r)
+                if (r.color.r - 1.0).abs() < 0.05 && r.color.g < 0.05 && r.color.b < 0.05 =>
+            {
+                Some(r.placement.bounds)
+            }
+            _ => None,
+        });
+        let b = before.expect("block ::before paints a red background box");
+        assert!((b.max.x - b.min.x - 100.0).abs() < 1.0, "::before spans the 100px width, got {b:?}");
+        assert!((b.max.y - b.min.y - 20.0).abs() < 1.0, "::before is 20px tall, got {b:?}");
+    }
+
     /// A full-viewport (800×600) `DrawRect`'s color, if one was emitted — the
     /// shape of a propagated canvas background.
     fn viewport_fill(plist: &ServalPaintList) -> Option<ColorF> {

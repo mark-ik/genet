@@ -40,9 +40,9 @@ use taffy::{
 
 use crate::adapter::NodeRef;
 use crate::construct::{
-    establishes_inline_context, flows_inline, gather_inline_content, gather_inline_group,
-    is_replaced, list_marker_content, list_marker_inline_run, list_marker_is_inside,
-    replaced_px_size, run_for_element,
+    block_pseudo_content, establishes_inline_context, flows_inline, gather_inline_content,
+    gather_inline_group, is_replaced, list_marker_content, list_marker_inline_run,
+    list_marker_is_inside, replaced_px_size, run_for_element,
 };
 use crate::fragment::FragmentPlane;
 use crate::image_decode::ImagePlane;
@@ -77,6 +77,13 @@ fn idx(n: NodeId) -> usize {
 /// background propagation, hit-test target) and marks boxes that own no DOM
 /// element of their own. A box-tree-driven paint walk reads this instead of
 /// assuming every box maps 1:1 to a DOM node.
+/// Which generated-content pseudo a [`BoxSource::Pseudo`] box realizes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PseudoKind {
+    Before,
+    After,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum BoxSource<Id> {
     /// A real DOM element or text node; `Id` is that node.
@@ -85,21 +92,27 @@ pub(crate) enum BoxSource<Id> {
     /// borrowed first-member key it is stored under; it paints no box decorations
     /// of its own.
     Anonymous(Id),
-    // `Pseudo(Id, PseudoKind)` for block generated content arrives with §5 slice 3.
+    /// Block-level generated content (`::before` / `::after`). `Id` is the
+    /// originating element; the box is not script-visible (no `node_map` entry, no
+    /// `FragmentPlane` identity), and a hit on it routes back to `Id`.
+    Pseudo(Id, PseudoKind),
 }
 
 impl<Id: Copy> BoxSource<Id> {
     /// The DOM node this box's `dom_id`-keyed paint concerns (scroll, images,
     /// canvas-bg, hit-test) resolve against: the element for a real box, the
     /// borrowed key for an anonymous wrapper (matching the legacy DOM walk, which
-    /// reached the anonymous box under that key).
+    /// reached the anonymous box under that key), the originating element for a
+    /// pseudo (so a hit routes there).
     pub(crate) fn dom_id(self) -> Id {
         match self {
-            BoxSource::Element(id) | BoxSource::Anonymous(id) => id,
+            BoxSource::Element(id) | BoxSource::Anonymous(id) | BoxSource::Pseudo(id, _) => id,
         }
     }
 
-    /// Whether this box paints no box decorations of its own.
+    /// Whether this box paints no box decorations of its own. A pseudo box *does*
+    /// paint its decorations (its own padding / background / border), so only an
+    /// anonymous wrapper is decoration-less.
     pub(crate) fn is_anonymous(self) -> bool {
         matches!(self, BoxSource::Anonymous(_))
     }
@@ -264,9 +277,17 @@ where
 {
     let style = style_of(styles, elem.id());
 
+    // Block-level `::before` / `::after` generated content becomes a synthetic
+    // block box child (first / last). Building them first means an element that
+    // would otherwise be a replaced or inline-formatting leaf is instead a block
+    // container holding the pseudo box(es) around its content.
+    let before = build_block_pseudo(styles, elem.id(), PseudoKind::Before, tree);
+    let after = build_block_pseudo(styles, elem.id(), PseudoKind::After, tree);
+    let has_block_pseudo = before.is_some() || after.is_some();
+
     // Replaced leaf: a lone <img> (mixed-with-text <img>s flow inside an
     // inline-context leaf and are handled there, not here).
-    if is_replaced(dom, elem.id()) {
+    if !has_block_pseudo && is_replaced(dom, elem.id()) {
         let mut node = BoxNode::new(style, BoxSource::Element(elem.id()));
         node.replaced_size = Some(replaced_px_size(dom, styles, images, elem.id()));
         let i = tree.push(node);
@@ -276,7 +297,7 @@ where
 
     // Inline formatting context: one measured leaf gathering the inline
     // subtree's runs + boxes; inline children get no boxes of their own.
-    if establishes_inline_context(dom, styles, elem) {
+    if !has_block_pseudo && establishes_inline_context(dom, styles, elem) {
         let mut node = BoxNode::new(style, BoxSource::Element(elem.id()));
         let mut content = gather_inline_content(dom, styles, images, elem);
         // List marker: `inside` flows as the item's first inline run; `outside`
@@ -302,6 +323,8 @@ where
     // get their own box. Whitespace-only text between blocks is collapsible
     // (CSS 2.1 §9.2.2.1).
     let mut children = Vec::new();
+    // A block `::before` is the first in-flow child.
+    children.extend(before);
     let mut group: Vec<NodeRef<'a, D>> = Vec::new();
     for child in elem.dom_children() {
         match dom.kind(child.id()) {
@@ -319,12 +342,32 @@ where
         }
     }
     flush_anon_group(dom, styles, images, elem.id(), &mut group, &mut children, tree);
+    // A block `::after` is the last in-flow child.
+    children.extend(after);
     let mut node = BoxNode::new(style, BoxSource::Element(elem.id()));
     node.children = children;
     node.marker = list_marker_content(dom, styles, elem.id());
     let i = tree.push(node);
     tree.node_map.insert(elem.id(), nid(i));
     i
+}
+
+/// Build a synthetic block box for the element's block-level `::before` /
+/// `::after` generated content, returning its arena index, or `None` when there
+/// is no such pseudo (see [`block_pseudo_content`]). The box is a measured leaf
+/// carrying the generated run as inline content, styled by the pseudo cascade; it
+/// has no `node_map` entry (not script-visible) and routes hits to `elem` via
+/// [`BoxSource::Pseudo`].
+fn build_block_pseudo<Id: Copy + Eq + Hash>(
+    styles: &StylePlane<Id>,
+    elem: Id,
+    kind: PseudoKind,
+    tree: &mut BoxTree<Id>,
+) -> Option<usize> {
+    let (style, content) = block_pseudo_content(styles, elem, kind)?;
+    let mut node = BoxNode::new(style, BoxSource::Pseudo(elem, kind));
+    node.inline_content = Some(content);
+    Some(tree.push(node))
 }
 
 /// Flush a pending run of inline-level children (`group`) into one anonymous
@@ -995,6 +1038,72 @@ mod tests {
             "::marker recolors the bullet red, got {:?}",
             run.color
         );
+    }
+
+    /// A block-`display` `::before` / `::after` becomes a synthetic block box
+    /// child (first / last), laid out in block flow: each stretches to the
+    /// container width and stacks vertically, with the element's own text between.
+    /// The boxes carry [`BoxSource::Pseudo`] (routing hits to the element) and no
+    /// `node_map` entry. (Pseudo follow-ups §5.)
+    #[test]
+    fn block_before_after_pseudo_become_block_children() {
+        let document = StaticDocument::parse("<html><body><p>hi</p></body></html>");
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(VIEWPORT, VIEWPORT),
+            &[
+                "html, body, p { display: block; margin: 0; width: 100px; }",
+                "p::before { content: \"X\"; display: block; height: 20px; }",
+                "p::after { content: \"Y\"; display: block; height: 10px; }",
+            ],
+            None,
+        );
+        let images = ImagePlane::decode_from_dom(&document);
+        let viewport = Size {
+            width: AvailableSpace::Definite(VIEWPORT),
+            height: AvailableSpace::Definite(VIEWPORT),
+        };
+        let mut text_ctx = TextMeasureCtx::new();
+        let (_fragments, built) =
+            layout_via_box_tree(&document, &styles, &images, viewport, &mut text_ctx);
+
+        let p = find_all(&document, html5ever::local_name!("p"))[0];
+        let p_node = built.node(idx(*built.node_map.get(&p).expect("p box")));
+        assert_eq!(p_node.children.len(), 3, "::before + anon(text) + ::after");
+
+        let before = built.node(p_node.children[0]);
+        let after = built.node(p_node.children[2]);
+        assert!(
+            matches!(before.source, BoxSource::Pseudo(_, PseudoKind::Before)),
+            "first child is the ::before pseudo box"
+        );
+        assert!(
+            matches!(after.source, BoxSource::Pseudo(_, PseudoKind::After)),
+            "last child is the ::after pseudo box"
+        );
+
+        // Block flow: each pseudo box stretches to the 100px container width and
+        // takes its own height; ::before is at the top, ::after below the text.
+        assert!(approx(before.final_layout.size.width, 100.0), "::before stretches to width");
+        assert!(approx(before.final_layout.size.height, 20.0), "::before is 20px tall");
+        assert!(approx(before.final_layout.location.y, 0.0), "::before at the top");
+        assert!(
+            after.final_layout.location.y > before.final_layout.location.y,
+            "::after ({}) sits below ::before ({})",
+            after.final_layout.location.y,
+            before.final_layout.location.y
+        );
+
+        // Not script-visible: the pseudo boxes have no node_map entry.
+        let pseudo_arenas = [p_node.children[0], p_node.children[2]];
+        for (_, taffy) in built.node_map.iter() {
+            assert!(
+                !pseudo_arenas.contains(&idx(*taffy)),
+                "pseudo box must not be in node_map"
+            );
+        }
     }
 
     /// One persistent `TextMeasureCtx` lays out two distinct documents

@@ -19,9 +19,11 @@ use std::hash::Hash;
 
 use layout_dom_api::{LayoutDom, NodeKind};
 
+use servo_arc::Arc as ServoArc;
 use style::properties::ComputedValues;
 
 use crate::adapter::NodeRef;
+use crate::box_tree::PseudoKind;
 use crate::image_decode::ImagePlane;
 use crate::style::StylePlane;
 use crate::text_measure::{
@@ -349,10 +351,45 @@ fn push_pseudo_content<NodeId: Copy + Eq + Hash>(
     let Some(entry) = styles.get(id) else { return };
     let Some(data) = entry.borrow_data() else { return };
     let Some(cv) = data.styles.pseudos.get(&pseudo) else { return };
+    // A block-level pseudo is realized as its own block box (see
+    // [`block_pseudo_content`]), not an inline run in the flow.
+    use style::values::specified::box_::DisplayOutside;
+    if matches!(cv.get_box().display.outside(), DisplayOutside::Block) {
+        return;
+    }
     if let Some(text) = pseudo_content_text(cv) {
         *offset += text.len();
         runs.push(run_from_computed(cv, text));
     }
+}
+
+/// The style + generated inline content of a *block-level* `::before` / `::after`
+/// pseudo, or `None` when the element has no such pseudo, its `content` is not a
+/// string, or its computed `display` is inline-level (handled by the inline-run
+/// path in [`push_pseudo_content`]). The box tree realizes the result as a
+/// synthetic block box child of the element (§5 slice 3), so it participates in
+/// block layout and paints its own decorations from the pseudo cascade.
+pub(crate) fn block_pseudo_content<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+    kind: PseudoKind,
+) -> Option<(ServoArc<ComputedValues>, InlineContent<NodeId>)> {
+    use style::selector_parser::PseudoElement;
+    use style::values::specified::box_::DisplayOutside;
+
+    let pseudo = match kind {
+        PseudoKind::Before => PseudoElement::Before,
+        PseudoKind::After => PseudoElement::After,
+    };
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    let cv = data.styles.pseudos.get(&pseudo)?;
+    if !matches!(cv.get_box().display.outside(), DisplayOutside::Block) {
+        return None;
+    }
+    let text = pseudo_content_text(cv)?;
+    let content = InlineContent { runs: vec![run_from_computed(cv, text)], boxes: Vec::new() };
+    Some((cv.clone(), content))
 }
 
 /// Recursive helper for [`gather_inline_content`]. `node`'s direct
