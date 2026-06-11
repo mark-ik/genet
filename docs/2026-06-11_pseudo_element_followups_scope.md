@@ -136,6 +136,16 @@ styled first letter inline, punctuation handled per spec, in a reftest.
 
 ## 5. Block-display generated content (the structural one)
 
+**Status (2026-06-11): DONE.** Shipped across four slices —
+`d0ee4dd494c` (CV-pure decoration helpers), `1a1d68ddc83` (`BoxSource`
+identity), `37233436774` (re-root paint emission + the stacking painter on the
+box-tree arena), `b226aefd05e` (synthesize block `::before`/`::after` boxes).
+Slice 4 (hit-test routing) needed no code: a block pseudo lays out *inside* its
+element's box and has no DOM node, so a hit on it resolves to the element
+structurally (guard test `hit_on_block_before_pseudo_routes_to_element`).
+Remaining follow-ups: url() `background-image` on a pseudo (needs an ImagePlane
+key), and a mixed inline-one-side / block-other-side pseudo pair.
+
 **Unblocks:** `::before`/`::after` with `display: block` (and eventually
 `list-style-image` via a block-ish marker), i.e. generated content that
 participates in block layout.

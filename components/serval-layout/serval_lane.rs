@@ -548,6 +548,45 @@ mod tests {
         assert!(view.hit_test(Point::new(10_000.0, 10_000.0)).is_none());
     }
 
+    /// A hit on a block `::before`'s region routes to the originating element
+    /// (browser-faithful). The pseudo box has no DOM node, so hit-testing never
+    /// visits it — but it is laid out *inside* the element's enclosing box, so the
+    /// point falls in the element's fragment and resolves to it. (Pseudo
+    /// follow-ups §5 slice 4: routing is structural, no extra plumbing.)
+    #[test]
+    fn hit_on_block_before_pseudo_routes_to_element() {
+        let document = StaticDocument::parse("<html><body><p>hi</p></body></html>");
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        crate::cascade::run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[
+                "html, body, p { display: block; margin: 0; }",
+                "p::before { content: \"X\"; display: block; height: 20px; }",
+            ],
+            None,
+        );
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let view = ServalLaneView::new(&document, &styles, &fragments);
+
+        let p = find_element(NodeRef::document(&document), local_name!("p")).expect("<p>");
+        let p_origin = absolute_origin(&document, &fragments, p.id()).expect("<p> origin");
+        // A point 10px down — inside the ::before band (top 20px of <p>).
+        let point = Point::new(p_origin.x + 5.0, p_origin.y + 10.0);
+
+        let hit = view.hit_test(point).expect("hit something");
+        assert_eq!(
+            hit.source_node.0,
+            document.opaque_id(p.id()),
+            "a hit on the block ::before region routes to <p>, not a phantom pseudo node"
+        );
+    }
+
     #[test]
     fn box_model_returns_rect_for_known_source_id() {
         let document = StaticDocument::parse("<html><body><p>x</p></body></html>");
