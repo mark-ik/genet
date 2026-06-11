@@ -117,7 +117,8 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
         let stylist =
             build_stylist(euclid::Size2D::new(width, height), stylesheets, None, &lock, quirks);
         run_cascade_with_stylist(dom, &mut styles, &stylist);
-        let (fragments, built, text_ctx) = full_layout(dom, &styles, width, height);
+        let mut text_ctx = TextMeasureCtx::new();
+        let (fragments, built) = full_layout(dom, &styles, width, height, &mut text_ctx);
         Self {
             styles,
             stylist,
@@ -197,11 +198,10 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
         let outcome = restyle_with_snapshots(dom, &mut self.styles, &self.stylist, mutations);
         self.last_damage = outcome.damage;
         if outcome.needs_relayout {
-            let (fragments, built, text_ctx) =
-                full_layout(dom, &self.styles, self.width, self.height);
+            let (fragments, built) =
+                full_layout(dom, &self.styles, self.width, self.height, &mut self.text_ctx);
             self.fragments = fragments;
             self.built = built;
-            self.text_ctx = text_ctx;
             self.paint_side_valid = true;
             Applied::Restyled
         } else {
@@ -322,10 +322,10 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
     where
         D: LayoutDom<NodeId = Id>,
     {
-        let (fragments, built, text_ctx) = full_layout(dom, &self.styles, self.width, self.height);
+        let (fragments, built) =
+            full_layout(dom, &self.styles, self.width, self.height, &mut self.text_ctx);
         self.fragments = fragments;
         self.built = built;
-        self.text_ctx = text_ctx;
         self.paint_side_valid = true;
         Applied::FullRecompute
     }
@@ -346,19 +346,23 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    full_layout(dom, styles, width, height).0
+    // Scoped-splice fallback path (fragments only): a throwaway context is fine
+    // here; the session's persistent one rides the `full_layout` relayout paths.
+    let mut text_ctx = TextMeasureCtx::new();
+    full_layout(dom, styles, width, height, &mut text_ctx).0
 }
 
-/// Full layout returning all three products — fragments **and** the box tree +
-/// text-measure context the paint-emit pass needs. `lay_out` keeps just the
-/// fragments (the scoped-splice path's need); the session retains the triple so
-/// it can emit without re-laying-out.
+/// Full layout into the session's retained `text_ctx` (reset per pass, font
+/// context reused), returning fragments **and** the box tree the paint-emit pass
+/// needs. The session keeps both plus `text_ctx` so it can emit without
+/// re-laying-out, and reuses one font context for its whole life.
 fn full_layout<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
     width: f32,
     height: f32,
-) -> (FragmentPlane<D::NodeId>, BoxTree<D::NodeId>, TextMeasureCtx)
+    text_ctx: &mut TextMeasureCtx,
+) -> (FragmentPlane<D::NodeId>, BoxTree<D::NodeId>)
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -368,7 +372,7 @@ where
         width: taffy::AvailableSpace::Definite(width),
         height: taffy::AvailableSpace::Definite(height),
     };
-    crate::layout::layout(dom, styles, &images, viewport)
+    crate::box_tree::layout_via_box_tree(dom, styles, &images, viewport, text_ctx)
 }
 
 #[cfg(test)]

@@ -700,27 +700,30 @@ impl<Id: Copy + Eq + Hash> LayoutGridContainer for BoxTreeView<'_, Id> {
     }
 }
 
-/// Lay out `dom` via the box tree against `viewport`, returning the
-/// per-node [`FragmentPlane`] and the `TextMeasureCtx` (cached parley
-/// layouts, for paint emission — same outputs as [`crate::layout::layout`]).
+/// Lay out `dom` via the box tree against `viewport`, into the caller-held
+/// `text_ctx` (reset per pass; its persistent font context is reused so a
+/// steady-state frame runs no font discovery). Returns the per-node
+/// [`FragmentPlane`] and the [`BoxTree`]; the cached parley layouts for paint
+/// emission live in `text_ctx`.
 pub fn layout_via_box_tree<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
     images: &ImagePlane<D::NodeId>,
     viewport: Size<AvailableSpace>,
-) -> (FragmentPlane<D::NodeId>, BoxTree<D::NodeId>, TextMeasureCtx)
+    text_ctx: &mut TextMeasureCtx,
+) -> (FragmentPlane<D::NodeId>, BoxTree<D::NodeId>)
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    text_ctx.reset();
     let mut tree = build_box_tree(dom, styles, images);
-    let mut text_ctx = TextMeasureCtx::new();
     let root = nid(tree.root);
 
     {
         let mut view = BoxTreeView {
             tree: &mut tree,
-            text_ctx: &mut text_ctx,
+            text_ctx,
         };
         taffy::compute_root_layout(&mut view, root, viewport);
         taffy::round_layout(&mut view, root);
@@ -739,7 +742,7 @@ where
         fragments.insert(*dom_id, tree.nodes[idx(*taffy_id)].final_layout);
     }
 
-    (fragments, tree, text_ctx)
+    (fragments, tree)
 }
 
 #[cfg(test)]
@@ -769,7 +772,9 @@ mod tests {
             width: AvailableSpace::Definite(VIEWPORT),
             height: AvailableSpace::Definite(VIEWPORT),
         };
-        let (fragments, _tree, _ctx) = layout_via_box_tree(&document, &styles, &images, viewport);
+        let mut text_ctx = TextMeasureCtx::new();
+        let (fragments, _tree) =
+            layout_via_box_tree(&document, &styles, &images, viewport, &mut text_ctx);
         (document, fragments)
     }
 
@@ -854,6 +859,40 @@ mod tests {
         );
         let hi = content.runs.iter().find(|r| r.text.contains("hi")).expect("text run");
         assert!(hi.color[2] > 0.99 && hi.color[0] < 0.01, "element text is blue, got {:?}", hi.color);
+    }
+
+    /// One persistent `TextMeasureCtx` lays out two distinct documents
+    /// correctly: `layout_via_box_tree` resets the per-pass caches each call, so
+    /// the second pass is not corrupted by the first's stale Taffy-keyed layouts
+    /// — the reuse that lets a session skip per-frame font discovery (C2).
+    #[test]
+    fn persistent_text_ctx_reused_across_distinct_layouts() {
+        let viewport = Size {
+            width: AvailableSpace::Definite(VIEWPORT),
+            height: AvailableSpace::Definite(VIEWPORT),
+        };
+        let mut text_ctx = TextMeasureCtx::new();
+
+        let lay_one = |w: u32, ctx: &mut TextMeasureCtx| -> f32 {
+            let doc = StaticDocument::parse("<html><body><div class=\"x\">hi</div></body></html>");
+            let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+            let sheet = format!(".x {{ width: {w}px; height: 20px; }}");
+            run_cascade(
+                &doc,
+                &mut styles,
+                euclid::Size2D::new(VIEWPORT, VIEWPORT),
+                &[sheet.as_str()],
+                None,
+            );
+            let images = ImagePlane::decode_from_dom(&doc);
+            let (frags, _tree) = layout_via_box_tree(&doc, &styles, &images, viewport, ctx);
+            let d = find_all(&doc, html5ever::local_name!("div"))[0];
+            frags.rect_of(d).expect("div fragment").size.width
+        };
+
+        // Two passes through the SAME context, different widths.
+        assert!(approx(lay_one(30, &mut text_ctx), 30.0), "first pass width 30");
+        assert!(approx(lay_one(50, &mut text_ctx), 50.0), "reused-ctx second pass width 50");
     }
 
     /// Block-level floats: two `float: left` divs sit side by side on one

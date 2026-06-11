@@ -44,7 +44,12 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    layout_via_box_tree(dom, styles, images, viewport)
+    // Stateless entry: a fresh context per call (back-compat for callers that
+    // do not yet hold a persistent one). Session / host callers should hold a
+    // `TextMeasureCtx` and call [`layout_via_box_tree`] to skip font discovery.
+    let mut text_ctx = TextMeasureCtx::new();
+    let (fragments, tree) = layout_via_box_tree(dom, styles, images, viewport, &mut text_ctx);
+    (fragments, tree, text_ctx)
 }
 
 #[cfg(test)]

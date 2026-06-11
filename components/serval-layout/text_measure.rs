@@ -332,6 +332,17 @@ impl TextMeasureCtx {
         }
     }
 
+    /// Clear the per-pass `parley::Layout` caches (keyed by Taffy ids, which are
+    /// stale across layouts) while keeping the persistent `font_ctx` /
+    /// `layout_ctx`. This lets one context be reused across layout passes
+    /// without re-running font discovery — the host or session holds the
+    /// context for its life and the layout entry points `reset` it per pass.
+    pub fn reset(&mut self) {
+        self.layouts.clear();
+        self.marker_layouts.clear();
+        self.inline_block_layouts.clear();
+    }
+
     /// Shape a list item's marker (a single run) into a one-line `Layout` and
     /// cache it under `taffy_id`, so paint can extract its glyphs and hang it to
     /// the left of the item's content box. No wrap (markers are one line).
