@@ -1,0 +1,27 @@
+# Piccolo (stackless Lua) backend for `script-engine-api` — the seam's third
+# backend and the piccolo fork's first in-tree consumer (see
+# docs/2026-06-11_gc_arena_dom_plan.md, G4). An *option module*: a pluggable
+# Lua backend for mod-scripting, not a third first-party substrate (the Rust+JS
+# decision stands). Clean surface only for now — eval, value, globals, native
+# host-fns, and native-data reflectors. The host-promise bridge is a documented
+# deviation (Lua has no Promise) deferred to a later pass.
+[package]
+name = "script-engine-piccolo"
+version = "0.0.0"
+edition = "2021"
+license = "MPL-2.0"
+publish = false
+
+[lib]
+name = "script_engine_piccolo"
+path = "lib.rs"
+
+[dependencies]
+script-engine-api = { path = "../script-engine-api" }
+# The vendored piccolo fork (Code/crates/piccolo, 0.3.3, MIT).
+piccolo = { path = "../../../../crates/piccolo" }
+# gc-arena, pinned to the *same* rev piccolo uses (no skew), for the in-arena
+# weak reflector cache (`GcWeak`). This is the only direct gc-arena dep in
+# serval before G3, and it is local to the piccolo backend; the workspace-wide
+# pin (rule 3) is still resolved at G3 against this same rev.
+gc-arena = { git = "https://github.com/kyren/gc-arena", rev = "5a7534b883b703f23cfb8c3cfdf033460aa77ea9" }

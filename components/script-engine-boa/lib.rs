@@ -13,7 +13,10 @@ use boa_engine::{
     Context, JsData, JsError, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction,
     Source,
     class::{Class, ClassBuilder},
-    object::builtins::{JsFunction, JsPromise},
+    object::{
+        WeakJsObject,
+        builtins::{JsFunction, JsPromise},
+    },
 };
 use boa_gc::{Finalize, GcRefCell, Trace};
 use script_engine_api::{
@@ -56,15 +59,19 @@ struct PendingPromise {
 /// Host-data slot stored in Boa's `Context` host-defined data. Holds the
 /// engine-neutral [`HostData`] (the `Rc<dyn Any>` is not traced — it holds host
 /// state, never JS values) plus the canonical-reflector cache (`NodeId →
-/// reflector`), which **is** traced: the cached `JsValue`s are live JS objects and
-/// must survive collection. The `pending` table is the same: live resolving
-/// functions for host promises awaiting settlement, keyed by [`PromiseToken`]. All
-/// engine-side, never in neutral host state.
+/// reflector`). The cache holds each reflector **weakly** (a [`WeakJsObject`]):
+/// it pins canonical identity (`document.body === document.body`) only while
+/// script still references the reflector, and reports the death once script
+/// drops it (G1 reflector liveness — see
+/// [`drain_dead_reflectors`](ScriptEngine::drain_dead_reflectors)). The `pending`
+/// table is traced: live resolving functions for host promises awaiting
+/// settlement, keyed by [`PromiseToken`]. All engine-side, never in neutral host
+/// state.
 #[derive(Trace, Finalize, JsData)]
 struct HostCell {
     #[unsafe_ignore_trace]
     data: RefCell<Option<HostData>>,
-    reflectors: GcRefCell<HashMap<u64, JsValue>>,
+    reflectors: GcRefCell<HashMap<u64, WeakJsObject>>,
     pending: GcRefCell<HashMap<u64, PendingPromise>>,
     #[unsafe_ignore_trace]
     next_token: Cell<u64>,
@@ -123,14 +130,19 @@ impl CallCx for BoaCallCx<'_> {
     }
 
     fn reflector_for(&mut self, data: ReflectorData) -> Result<JsValue, JsError> {
+        // Cache hit *and still alive*: return the same object so reflectors compare
+        // `===`. A dead weak (script dropped it) falls through to a fresh mint.
         if let Some(cell) = self.ctx.get_data::<HostCell>() {
-            if let Some(v) = cell.reflectors.borrow().get(&data) {
-                return Ok(v.clone());
+            if let Some(obj) = cell.reflectors.borrow().get(&data).and_then(WeakJsObject::upgrade)
+            {
+                return Ok(obj.into());
             }
         }
         let v = self.make_reflector(data)?;
         if let Some(cell) = self.ctx.get_data::<HostCell>() {
-            cell.reflectors.borrow_mut().insert(data, v.clone());
+            if let Some(obj) = v.as_object() {
+                cell.reflectors.borrow_mut().insert(data, obj.downgrade());
+            }
         }
         Ok(v)
     }
@@ -264,6 +276,26 @@ impl ScriptEngine for BoaEngine {
         }
         Ok(())
     }
+
+    fn drain_dead_reflectors(&mut self) -> Vec<ReflectorData> {
+        // Real death-reporting: sweep the weak canonical cache and report (and
+        // forget) the reflectors whose JS objects have been collected since the
+        // last call. Backed by the vendored boa patch (`JsObject::downgrade` /
+        // `WeakJsObject::upgrade`). The host unpins each returned id, freeing the
+        // underlying detached node for collection (G3).
+        let mut dead = Vec::new();
+        if let Some(cell) = self.ctx.get_data::<HostCell>() {
+            cell.reflectors.borrow_mut().retain(|&data, weak| {
+                if weak.upgrade().is_some() {
+                    true
+                } else {
+                    dead.push(data);
+                    false
+                }
+            });
+        }
+        dead
+    }
 }
 
 impl ScriptEngineLive for BoaEngine {
@@ -389,6 +421,36 @@ mod tests {
 
         // Double-settle is a silent no-op (the token was consumed), not an error.
         engine.settle_host_promise(token, Ok(&resolution)).unwrap();
+    }
+
+    #[test]
+    fn reflector_for_reports_death_after_gc() {
+        let mut engine = BoaEngine::new().unwrap();
+
+        // A callback handing JS the *canonical* reflector for node 0x42.
+        struct Canonical;
+        impl NativeFn<BoaEngine> for Canonical {
+            fn call(cx: &mut BoaCallCx<'_>) -> JsResult<JsValue> {
+                cx.reflector_for(0x42)
+            }
+        }
+        engine.set_function::<Canonical>("canonical", 0).unwrap();
+
+        // Hold the reflector from JS: while reachable, no death is reported, and
+        // the canonical identity holds (=== the same object).
+        let same = engine
+            .eval("globalThis.x = canonical(); globalThis.x === canonical()")
+            .unwrap();
+        assert_eq!(engine.value_to_string(&same).unwrap(), "true");
+        assert!(engine.drain_dead_reflectors().is_empty());
+
+        // Drop the last JS reference and collect: the weak cache reports the death.
+        engine.eval("globalThis.x = null;").unwrap();
+        boa_gc::force_collect();
+        assert_eq!(engine.drain_dead_reflectors(), vec![0x42]);
+
+        // The dead entry was swept, so a second drain is empty.
+        assert!(engine.drain_dead_reflectors().is_empty());
     }
 
     #[test]

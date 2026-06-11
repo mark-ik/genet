@@ -34,6 +34,24 @@ pub trait LayoutDom {
     /// The document root.
     fn document(&self) -> Self::NodeId;
 
+    /// Whether `id` still resolves to a live node — the **dangle contract**.
+    ///
+    /// Contract: an id for an **attached** node is always live. An id for a node
+    /// that was dropped (by [`LayoutDomMut::remove`], or — once a backend
+    /// collects detached nodes — orphaned, unpinned, and collected) is **dead**.
+    /// `is_live` is the only read that is safe to call on a possibly-dead id; it
+    /// never panics. The other accessors assume a live id and may panic on a
+    /// dead one (the same "not found" outcome a removed slot gives). A caller
+    /// that holds an id across frames (a handler registry, a layout side-table,
+    /// a query result, an undrained mutation log) must treat it as possibly dead
+    /// and guard reads with `is_live`.
+    ///
+    /// Default: `true`. Immutable backends (a parsed [`LayoutDom`] with no
+    /// removal) never produce dead ids; a mutable backend overrides this.
+    fn is_live(&self, _id: Self::NodeId) -> bool {
+        true
+    }
+
     /// The document's quirks mode, as selected by the parser (presence/absence
     /// of a `<!DOCTYPE>`). Drives quirk-gated cascade behaviour (Stylo's
     /// `QuirksMode`-conditional UA rules, e.g. the table font-size quirk).

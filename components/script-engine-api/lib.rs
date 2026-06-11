@@ -171,6 +171,24 @@ pub trait ScriptEngine: Sized {
         token: PromiseToken,
         outcome: Result<&Self::Value, &Self::Value>,
     ) -> Result<(), Self::Error>;
+
+    /// Report the reflectors whose JS objects have been collected since the last
+    /// call, returning their [`ReflectorData`] and forgetting them from the
+    /// canonical-reflector cache. The host drains this at the same cadence as
+    /// [`pump_microtasks`] and unpins each returned id from its reflector-pin
+    /// table, so a detached ("orphaned") node whose last JS reference has died
+    /// becomes collectable (the prerequisite for the gc-arena refit, G3).
+    ///
+    /// The **default is the fallback / epoch-pin mode**: it reports nothing, so
+    /// reflector-held ids stay pinned until document teardown. That is today's
+    /// behavior and the correct mode for a backend whose GC cannot report object
+    /// deaths; navigation-bounded documents lose nothing by it. A backend that
+    /// *can* observe deaths (a weakly-held canonical cache) overrides this.
+    ///
+    /// [`pump_microtasks`]: ScriptEngine::pump_microtasks
+    fn drain_dead_reflectors(&mut self) -> Vec<ReflectorData> {
+        Vec::new()
+    }
 }
 
 /// A native (Rust) callback exposed to JS, implemented by a zero-sized type so the

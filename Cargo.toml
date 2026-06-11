@@ -22,6 +22,7 @@ members = [
     # chain forces, and which parley accepts. Patched in via [patch.crates-io] below.
     "components/script-engine-boa",
     "components/script-engine-nova",
+    "components/script-engine-piccolo",
     "components/script-runtime-api",
     "ports/pelt-core",
     "ports/pelt-desktop",
@@ -446,21 +447,31 @@ gpu-allocator = { path = "support/patches/gpu-allocator" }
 # redirected; the workspace's taffy 0.10.1 is unaffected. See
 # docs/2026-05-31_css_rendering_conformance_plan.md (floats × BFC).
 taffy = { path = "support/patches/taffy" }
-# Nova fork (serval-embedder branch) carrying the EmbedderObject native-data patch
-# that script-engine-nova relies on. Git (not the old repo-escaping
-# `../../crates/nova` path) so a bare serval clone resolves it without the personal
-# `crates/` fork tree as a sibling.
-nova_vm = { git = "https://github.com/mark-ik/nova", branch = "serval-embedder" }
-# Boa fork (serval branch) tracking boa-upstream main (the 1.0.0-dev line). No
-# serval source patch — the old icu-family widen is obsolete now that upstream pins
-# the icu 2.2.x line serval's graph already forces. We patch crates.io's boa only to
-# build from the fork (so a boa source change is picked up without a publish);
-# boa_engine pulls its sibling boa_* crates via boa's own intra-repo path deps, so
-# only boa_engine + boa_gc are named from crates.io (by script-engine-boa) and need
-# patching. Git (not the old `../../crates/boa` path) so a bare clone resolves it.
-# See docs/2026-05-20_serval_script_engine_plan.md.
-boa_engine = { git = "https://github.com/mark-ik/boa.git", branch = "serval" }
-boa_gc = { git = "https://github.com/mark-ik/boa.git", branch = "serval" }
+# Nova fork (serval-embedder branch), vendored locally at `Code/crates/nova`
+# (same HEAD as the mark-ik/nova serval-embedder branch). Carries the
+# EmbedderObject native-data patch plus the reflector-liveness weak-ref API
+# (`EmbedderObject::into_weak_ref`/`from_weak_ref` + `clear_weak_ref_kept_objects`,
+# G1 in docs/2026-06-11_gc_arena_dom_plan.md). Local path (like the vendored boa
+# and piccolo forks) so the patch builds without a push. Same bare-clone
+# trade-off as boa: a bare serval clone needs the sibling `Code/crates/nova`
+# checkout; to restore bare-clone resolution, push the patch to mark-ik/nova
+# `serval-embedder` and switch back to `{ git = ..., branch = "serval-embedder" }`.
+nova_vm = { path = "../../crates/nova/nova_vm" }
+# Boa fork (serval branch) tracking boa-upstream main (the 1.0.0-dev line),
+# vendored locally at `Code/crates/boa` (same HEAD as the mark-ik/boa serval
+# branch) so serval can carry an additive source patch — `JsObject::downgrade()`
+# + `WeakJsObject`, for the reflector-liveness weak cache (G1 in
+# docs/2026-06-11_gc_arena_dom_plan.md). Local path (like the vendored piccolo
+# fork) so the patch builds without a publish/push; boa_engine pulls its sibling
+# boa_* crates via boa's own intra-repo path deps, so only boa_engine + boa_gc
+# are named from crates.io (by script-engine-boa) and need patching.
+# Trade-off vs the old git pin: a *bare* clone of serval alone no longer
+# resolves boa — it needs the sibling `Code/crates/boa` checkout (already true
+# for `Code/crates/piccolo`). To restore bare-clone resolution, push the patch
+# to mark-ik/boa `serval` and switch these two back to `{ git = ..., branch =
+# "serval" }`. See docs/2026-05-20_serval_script_engine_plan.md.
+boa_engine = { path = "../../crates/boa/core/engine" }
+boa_gc = { path = "../../crates/boa/core/gc" }
 # stylo_taffy (serval-layout) depends on crates.io `stylo`/`stylo_atoms`
 # `^0.17`. serval pins the same crates from the servo/stylo git rev, and
 # `stylo` declares `links = "servo_style_crate"` (only one Stylo allowed

@@ -20,7 +20,10 @@
 
 #![cfg_attr(target_arch = "wasm32", allow(unused_crate_dependencies))]
 
+use std::collections::HashSet;
+
 use layout_dom_api::LayoutDomMut;
+use script_engine_api::{ReflectorData, ScriptEngine};
 use serval_layout::{render, FragmentPlane};
 use serval_scripted_dom::{NodeId, ScriptedDom};
 
@@ -59,6 +62,90 @@ pub fn relayout_if_dirty(
 // restyle (via Stylo invalidation, skipping layout for paint-only changes) and
 // structural splice, superseding the earlier stateless `relayout_incremental`
 // here. `relayout_if_dirty` stays as the coarse oracle it's diff-tested against.
+
+/// Per-document table of node ids currently pinned by a live JS reflector (G1,
+/// reflector liveness through the seam).
+///
+/// A scripted node JS can still reach must survive collection even after it is
+/// detached from the tree (`removeChild` orphans rather than frees, because
+/// script may re-insert it). This table records which node ids are so held: the
+/// host [`pin`](Self::pin)s on minting a reflector and [`unpin`](Self::unpin)s
+/// on a reflector death drained from the engine via
+/// [`ScriptEngine::drain_dead_reflectors`]. G3's gc-arena collector treats the
+/// pinned set as roots, so an orphan with no pins becomes collectable.
+///
+/// On a backend that cannot report deaths (today: both Nova and Boa, pending a
+/// fork hook), `drain_dead_reflectors` is empty, so nothing unpins until
+/// [`clear`](Self::clear) at document teardown — the **epoch-pin fallback**
+/// (today's lifetime, named). Engine-agnostic: it traffics only in
+/// [`ReflectorData`] (`u64`), naming no engine type, so it lives at the crate
+/// root and applies to every backend.
+#[derive(Debug, Default, Clone)]
+pub struct ReflectorPins {
+    pinned: HashSet<ReflectorData>,
+}
+
+impl ReflectorPins {
+    /// An empty table.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record that `data`'s node is now held by a live reflector. Idempotent.
+    pub fn pin(&mut self, data: ReflectorData) {
+        self.pinned.insert(data);
+    }
+
+    /// Drop the pin for a node whose reflector the engine reported dead. Returns
+    /// `true` if it had been pinned; a drained id never pinned here is a
+    /// harmless no-op (`false`).
+    pub fn unpin(&mut self, data: ReflectorData) -> bool {
+        self.pinned.remove(&data)
+    }
+
+    /// Retire a batch of dead reflectors (the [`ScriptEngine::drain_dead_reflectors`]
+    /// output), unpinning each. Returns how many were actually pinned.
+    pub fn retire_dead(&mut self, dead: impl IntoIterator<Item = ReflectorData>) -> usize {
+        dead.into_iter().filter(|d| self.pinned.remove(d)).count()
+    }
+
+    /// Whether `data` is currently pinned (a G3 collector root check).
+    pub fn is_pinned(&self, data: ReflectorData) -> bool {
+        self.pinned.contains(&data)
+    }
+
+    /// The pinned ids, for the collector to root over.
+    pub fn iter(&self) -> impl Iterator<Item = ReflectorData> + '_ {
+        self.pinned.iter().copied()
+    }
+
+    /// Number of pinned ids.
+    pub fn len(&self) -> usize {
+        self.pinned.len()
+    }
+
+    /// Whether nothing is pinned.
+    pub fn is_empty(&self) -> bool {
+        self.pinned.is_empty()
+    }
+
+    /// Epoch-pin teardown: drop every pin (the document is going away). The only
+    /// thing that unpins on the fallback backends.
+    pub fn clear(&mut self) {
+        self.pinned.clear();
+    }
+}
+
+/// Pump the engine's microtasks, then retire into `pins` any reflectors it
+/// reported dead. The host calls this at task boundaries (the
+/// [`pump_microtasks`](ScriptEngine::pump_microtasks) cadence). On a fallback
+/// backend the drain is empty, so this is pump + a no-op retire (epoch-pin
+/// mode); on a death-reporting backend it unpins the freshly collected nodes,
+/// the signal G3's collector acts on. Returns the number of nodes unpinned.
+pub fn pump_and_retire<E: ScriptEngine>(engine: &mut E, pins: &mut ReflectorPins) -> usize {
+    engine.pump_microtasks();
+    pins.retire_dead(engine.drain_dead_reflectors())
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
@@ -150,6 +237,83 @@ mod native {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::run_script;
+
+#[cfg(test)]
+mod pin_tests {
+    use super::*;
+
+    #[test]
+    fn pin_unpin_and_retire() {
+        let mut pins = ReflectorPins::new();
+        assert!(pins.is_empty());
+
+        pins.pin(0x10);
+        pins.pin(0x20);
+        pins.pin(0x10); // idempotent
+        assert_eq!(pins.len(), 2);
+        assert!(pins.is_pinned(0x10));
+
+        // A single death drained from the engine unpins exactly that id.
+        assert!(pins.unpin(0x20));
+        assert!(!pins.is_pinned(0x20));
+        // Unpinning a never-pinned id is a harmless no-op.
+        assert!(!pins.unpin(0xAA));
+
+        // Batch retire (the drain_dead_reflectors shape): only pinned ids count.
+        pins.pin(0x30);
+        let retired = pins.retire_dead([0x10, 0x30, 0xBB]);
+        assert_eq!(retired, 2);
+        assert!(pins.is_empty());
+    }
+
+    #[test]
+    fn clear_is_the_epoch_pin_teardown() {
+        // On a fallback backend nothing unpins mid-life; teardown clears all.
+        let mut pins = ReflectorPins::new();
+        pins.pin(1);
+        pins.pin(2);
+        pins.pin(3);
+        assert_eq!(pins.len(), 3);
+        pins.clear();
+        assert!(pins.is_empty());
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod drain_tests {
+    use super::*;
+    use script_engine_api::ScriptEngineLive;
+    use script_engine_nova::NovaEngine;
+
+    /// Only *canonical* reflectors (minted through `reflector_for` and weakly
+    /// cached) are death-tracked by `drain_dead_reflectors`. A one-off
+    /// `make_reflector` value is not in the canonical cache, so the drain never
+    /// reports it and `pump_and_retire` leaves its pin intact until teardown.
+    /// (The real canonical-reflector reclamation is exercised end-to-end in
+    /// each backend crate's `reflector_for_reports_death_after_gc` — Nova, Boa,
+    /// and piccolo all report deaths now; this guards the host pin-table seam.)
+    #[test]
+    fn non_canonical_reflector_pin_survives_until_teardown() {
+        let mut engine = NovaEngine::new().unwrap();
+        let mut pins = ReflectorPins::new();
+
+        // Mint a non-canonical reflector for node 0x42 and pin it.
+        let reflector = engine.make_reflector(0x42).unwrap();
+        pins.pin(0x42);
+        // Drop the only host handle to the reflector.
+        drop(reflector);
+
+        // Pump + drain: 0x42 is not in the canonical cache, so the drain reports
+        // no death and the pin survives.
+        let unpinned = pump_and_retire(&mut engine, &mut pins);
+        assert_eq!(unpinned, 0);
+        assert!(pins.is_pinned(0x42));
+
+        // Teardown clears it.
+        pins.clear();
+        assert!(pins.is_empty());
+    }
+}
 
 #[cfg(test)]
 mod relayout_tests {

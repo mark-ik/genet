@@ -22,7 +22,7 @@ mod native {
             Agent, AgentOptions, ArgumentsList, Behaviour, BuiltinFunctionArgs, EmbedderObject,
             ExceptionType, GcAgent, HostHooks, InternalMethods, Job, PromiseCapability,
             PropertyDescriptor, PropertyKey, RealmRoot, String as JsString, Value,
-            create_builtin_function, parse_script, script_evaluation,
+            clear_weak_ref_kept_objects, create_builtin_function, parse_script, script_evaluation,
         },
         engine::{Bindable, GcScope, Global, NoGcScope},
     };
@@ -174,32 +174,47 @@ mod native {
         }
 
         fn reflector_for(&mut self, data: ReflectorData) -> Result<Self::Value, Self::Error> {
-            // Cache hit: return a fresh `Global` to the *same* heap object, so the
-            // returned reflectors compare `===`.
+            // The canonical cache holds a `WeakRef` to each reflector (rooted via
+            // `Global`, target weak), so a cached reflector pins `===` identity
+            // only while script still references it, and reports its death once
+            // collected (G1). Extract the cached `WeakRef` value first (it ends
+            // the host-slot borrow before we deref through `&mut Agent`).
+            let cached: Option<Value> = {
+                let agent: &Agent = self.agent;
+                agent
+                    .current_realm(self.gc.nogc())
+                    .host_defined(agent)
+                    .and_then(|hd| {
+                        hd.downcast_ref::<NovaHostSlot>().and_then(|slot| {
+                            slot.reflectors
+                                .borrow()
+                                .get(&data)
+                                .map(|g| g.get(self.agent, self.gc.nogc()).unbind())
+                        })
+                    })
+            };
+            // Cache hit *and still alive*: hand back the same embedder object.
+            if let Some(Value::WeakRef(weak_ref)) = cached {
+                if let Some(eo) = EmbedderObject::from_weak_ref(self.agent, weak_ref) {
+                    return Ok(Global::new(self.agent, Value::EmbedderObject(eo).unbind()));
+                }
+            }
+            // Miss/dead: mint the reflector, cache a `WeakRef` to it, return it.
+            let eo = EmbedderObject::create_with_data(self.agent, data);
+            let weak_ref = eo.into_weak_ref(self.agent);
             {
+                let cached = Global::new(self.agent, Value::WeakRef(weak_ref).unbind());
                 let agent: &Agent = self.agent;
                 if let Some(hd) = agent.current_realm(self.gc.nogc()).host_defined(agent) {
                     if let Some(slot) = hd.downcast_ref::<NovaHostSlot>() {
-                        if let Some(g) = slot.reflectors.borrow().get(&data) {
-                            let v = g.get(self.agent, self.gc.nogc()).unbind();
-                            return Ok(Global::new(self.agent, v));
+                        // Drop any superseded (dead) entry's root before inserting.
+                        if let Some(old) = slot.reflectors.borrow_mut().insert(data, cached) {
+                            old.take(self.agent);
                         }
                     }
                 }
             }
-            // Miss: mint once, cache a `Global` to it, return another to the same object.
-            let canonical = self.make_reflector(data)?;
-            {
-                let v = canonical.get(self.agent, self.gc.nogc()).unbind();
-                let cached = Global::new(self.agent, v);
-                let agent: &Agent = self.agent;
-                if let Some(hd) = agent.current_realm(self.gc.nogc()).host_defined(agent) {
-                    if let Some(slot) = hd.downcast_ref::<NovaHostSlot>() {
-                        slot.reflectors.borrow_mut().insert(data, cached);
-                    }
-                }
-            }
-            Ok(canonical)
+            Ok(Global::new(self.agent, Value::EmbedderObject(eo).unbind()))
         }
 
         fn make_string(&mut self, s: &str) -> Result<Self::Value, Self::Error> {
@@ -233,16 +248,27 @@ mod native {
     ) -> nova_vm::ecmascript::JsResult<'gc, Value<'gc>> {
         let rooted: Vec<Global<Value<'static>>> =
             (0..args.len()).map(|i| Global::new(agent, args.get(i).unbind())).collect();
-        let result = {
+        let (result, args_to_release) = {
             let mut cx = NovaCallCx { agent: &mut *agent, gc: gc.reborrow(), args: rooted };
-            F::call(&mut cx)
+            let r = F::call(&mut cx);
+            // Reclaim the rooted argument handles (ends the `&mut agent` reborrow).
+            let NovaCallCx { args, .. } = cx;
+            (r, args)
         };
+        // Release the rooted argument handles: a `Global` has no `Drop`, so
+        // dropping them would leak a permanent heap-globals root (and pin any
+        // reflector passed as an argument, defeating G1 collection).
+        for arg in args_to_release {
+            arg.take(agent);
+        }
         match result {
             Ok(global) => {
                 // `into_nogc` carries the full `'gc` lifetime, so the bound value can
-                // be returned (unlike a `nogc()` borrow, which is local).
+                // be returned (unlike a `nogc()` borrow, which is local). `take`
+                // (not `get`) frees the return value's root; the VM stack keeps it
+                // alive from here.
                 let nogc = gc.into_nogc();
-                Ok(global.get(agent, nogc).bind(nogc))
+                Ok(global.take(agent).bind(nogc))
             },
             Err(msg) => Err(agent.throw_exception(ExceptionType::Error, msg, gc.into_nogc())),
         }
@@ -387,16 +413,16 @@ mod native {
                 Budget::Unbounded => None,
                 Budget::Steps(n) => Some(n),
             };
-            loop {
+            let outcome = loop {
                 if remaining == Some(0) {
-                    return if self.jobs.borrow().is_empty() {
+                    break if self.jobs.borrow().is_empty() {
                         PumpOutcome::Quiescent
                     } else {
                         PumpOutcome::Pending
                     };
                 }
                 let Some(job) = self.jobs.borrow_mut().pop_front() else {
-                    return PumpOutcome::Quiescent;
+                    break PumpOutcome::Quiescent;
                 };
                 self.agent.run_in_realm(&self.realm, |agent, gc| {
                     let _ = job.run(agent, gc);
@@ -404,7 +430,15 @@ mod native {
                 if let Some(r) = remaining.as_mut() {
                     *r -= 1;
                 }
-            }
+            };
+            // Microtask checkpoint complete: ClearKeptObjects (spec 9.10), so
+            // reflectors only observed through the weak canonical cache since the
+            // last pump become collectable again. This is also what makes
+            // `drain_dead_reflectors` able to ever observe a death.
+            self.agent.run_in_realm(&self.realm, |agent, _gc| {
+                clear_weak_ref_kept_objects(agent);
+            });
+            outcome
         }
 
         fn new_host_promise(&mut self) -> Result<(Self::Value, PromiseToken), Self::Error> {
@@ -450,6 +484,52 @@ mod native {
                 }
             });
             Ok(())
+        }
+
+        fn drain_dead_reflectors(&mut self) -> Vec<ReflectorData> {
+            // Real death-reporting: deref each cached `WeakRef`; a target that
+            // has been collected (deref → `None`) is a dead reflector. Backed by
+            // the vendored `EmbedderObject::into_weak_ref`/`from_weak_ref` patch.
+            // The host unpins each returned id, freeing the detached node (G3).
+            let mut dead = Vec::new();
+            self.agent.run_in_realm(&self.realm, |agent, gc| {
+                // Snapshot the cached (id, WeakRef value) pairs, ending the
+                // host-slot borrow before derefing through `&mut Agent`.
+                let entries: Vec<(u64, Value)> = {
+                    let Some(hd) = agent.current_realm(gc.nogc()).host_defined(agent) else {
+                        return;
+                    };
+                    let Some(slot) = hd.downcast_ref::<NovaHostSlot>() else { return };
+                    let collected: Vec<(u64, Value)> = slot
+                        .reflectors
+                        .borrow()
+                        .iter()
+                        .map(|(&d, g)| (d, g.get(agent, gc.nogc()).unbind()))
+                        .collect();
+                    collected
+                };
+                for (d, value) in entries {
+                    let alive = matches!(value, Value::WeakRef(weak_ref)
+                        if EmbedderObject::from_weak_ref(agent, weak_ref).is_some());
+                    if !alive {
+                        dead.push(d);
+                    }
+                }
+                if !dead.is_empty() {
+                    let Some(hd) = agent.current_realm(gc.nogc()).host_defined(agent) else {
+                        return;
+                    };
+                    let Some(slot) = hd.downcast_ref::<NovaHostSlot>() else { return };
+                    let mut map = slot.reflectors.borrow_mut();
+                    for d in &dead {
+                        if let Some(g) = map.remove(d) {
+                            // Release the `WeakRef`'s root now that it is dead.
+                            g.take(agent);
+                        }
+                    }
+                }
+            });
+            dead
         }
     }
 
@@ -613,6 +693,40 @@ mod native {
             while engine.pump(Budget::Steps(1)) == PumpOutcome::Pending {}
             let done = engine.eval("n").unwrap();
             assert_eq!(engine.value_to_string(&done).unwrap(), "3");
+        }
+
+        #[test]
+        fn reflector_for_reports_death_after_gc() {
+            let mut engine = NovaEngine::new().unwrap();
+
+            // A callback handing JS the *canonical* reflector for node 0x42.
+            struct Canonical;
+            impl NativeFn<NovaEngine> for Canonical {
+                fn call(cx: &mut NovaCallCx<'_>) -> Result<Global<Value<'static>>, String> {
+                    cx.reflector_for(0x42)
+                }
+            }
+            engine.set_function::<Canonical>("canonical", 0).unwrap();
+
+            // Hold the reflector from JS; canonical identity holds (=== same object)
+            // and no death is reported while it is referenced.
+            engine
+                .eval("globalThis.x = canonical(); globalThis.same = (canonical() === x);")
+                .unwrap();
+            let same = engine.eval("same").unwrap();
+            assert_eq!(engine.value_to_string(&same).unwrap(), "true");
+            assert!(engine.drain_dead_reflectors().is_empty());
+
+            // Drop the last JS reference, run the microtask checkpoint (ClearKeptObjects)
+            // and the GC: the weak cache now reports the death.
+            engine.eval("globalThis.x = null;").unwrap();
+            engine.pump_microtasks();
+            engine.agent.gc();
+            engine.agent.gc();
+            assert_eq!(engine.drain_dead_reflectors(), vec![0x42]);
+
+            // The dead entry was swept, so a second drain is empty.
+            assert!(engine.drain_dead_reflectors().is_empty());
         }
     }
 }
