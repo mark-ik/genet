@@ -1129,6 +1129,42 @@ mod tests {
         assert!(div_c[1] > 0.99 && div_c[0] < 0.01, "ancestor <div> → green (:focus-within), got {div_c:?}");
     }
 
+    /// `:checked` matches a checked checkbox `<input>` (from its `checked`
+    /// content attribute) but not an unchecked sibling.
+    #[test]
+    fn checked_attribute_matches_checked_pseudo() {
+        let document = StaticDocument::parse(
+            "<html><body><input type=\"checkbox\" checked><input type=\"checkbox\"></body></html>",
+        );
+        let inputs: Vec<_> = {
+            let mut out = Vec::new();
+            let mut q = vec![document.document()];
+            while let Some(id) = q.pop() {
+                if document.element_name(id).is_some_and(|n| n.local == local_name!("input")) {
+                    out.push(id);
+                }
+                let mut kids: Vec<_> = document.dom_children(id).collect();
+                kids.reverse();
+                q.extend(kids);
+            }
+            out
+        };
+        assert_eq!(inputs.len(), 2);
+
+        let mut plane: StylePlane<_> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut plane,
+            euclid::Size2D::new(800.0, 600.0),
+            &["input:checked { color: rgb(255, 0, 0); }"],
+            None,
+        );
+        let checked = color_of::<StaticDocument>(&plane, inputs[0]);
+        let unchecked = color_of::<StaticDocument>(&plane, inputs[1]);
+        assert!(checked[0] > 0.99 && checked[1] < 0.01, "checked input → red, got {checked:?}");
+        assert!(unchecked[0] < 0.01, "unchecked input stays default, got {unchecked:?}");
+    }
+
     /// The parser's quirks-mode selection flows through `LayoutDom::quirks_mode`
     /// into the cascade: a no-doctype document is quirks mode, a `<!DOCTYPE html>`
     /// one is standards, and `build_stylist` carries it into the `Stylist`.

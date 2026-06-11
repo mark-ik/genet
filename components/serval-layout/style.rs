@@ -184,6 +184,30 @@ impl std::fmt::Debug for StyleEntry {
     }
 }
 
+/// DOM-derived `:checked`: a checked checkbox/radio `<input>` or a selected
+/// `<option>`. Reflects the *content* attribute (static); the live IDL
+/// `checked` property after user toggles is the host's to supply.
+fn dom_checked<D>(dom: &D, id: D::NodeId) -> bool
+where
+    D: layout_dom_api::LayoutDom,
+{
+    use html5ever::{ns, LocalName};
+    let no_ns = ns!();
+    let Some(name) = dom.element_name(id) else { return false };
+    let has = |a: &str| dom.attribute(id, &no_ns, &LocalName::from(a)).is_some();
+    match name.local.as_ref() {
+        "input" => {
+            let ty = dom
+                .attribute(id, &no_ns, &LocalName::from("type"))
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            matches!(ty.as_str(), "checkbox" | "radio") && has("checked")
+        }
+        "option" => has("selected"),
+        _ => false,
+    }
+}
+
 /// Sparse storage of computed style keyed by `D::NodeId`. A dense `IndexVec`
 /// backing (when `D::NodeId` is dense, per `NodeIdSpace` in the planes doc) is
 /// a possible future optimization.
@@ -263,8 +287,15 @@ impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
                 let id_atom = dom
                     .attribute(id, &no_ns, &id_local)
                     .map(style::Atom::from);
+                let checked = dom_checked(dom, id);
                 let entry = self.ensure_entry(id);
                 entry.id_atom = id_atom;
+                // DOM-derived `:checked`: a checked checkbox/radio `<input>` or a
+                // selected `<option>`. Static reflection of the content
+                // attribute (the live IDL `checked` property is the host's).
+                // `set` preserves interaction bits (HOVER/FOCUS/…) and re-syncs
+                // both directions across populate passes.
+                entry.state.set(ElementState::CHECKED, checked);
             }
             queue.extend(dom.dom_children(id));
         }
