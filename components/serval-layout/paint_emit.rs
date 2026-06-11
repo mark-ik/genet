@@ -241,8 +241,6 @@ impl ImageCollector {
 /// sources, so the recursive `walk` takes one `&mut Emitter` rather
 /// than a half-dozen separate parameters.
 pub(crate) struct Emitter<'a, NodeId: Copy + Eq + Hash> {
-    /// Shaped-glyph source (None on the cache-less probe path).
-    glyphs: Option<GlyphSource<'a, NodeId>>,
     /// Decoded `<img>` images keyed by NodeId.
     images_plane: &'a ImagePlane<NodeId>,
     /// Decoded CSS `background-image`s keyed by NodeId.
@@ -276,6 +274,7 @@ pub fn emit_paint_list<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
+    constructed: &BoxTree<D::NodeId>,
     viewport: DeviceIntSize,
 ) -> ServalPaintList
 where
@@ -285,7 +284,11 @@ where
     let empty_images = ImagePlane::new();
     let empty_bg = BackgroundImagePlane::new();
     let no_scroll: FxHashMap<D::NodeId, (f32, f32)> = FxHashMap::default();
-    emit_inner(dom, styles, fragments, None, &empty_images, &empty_bg, &no_scroll, viewport)
+    // Cache-less: the laid-out box tree drives structure + position + style, but
+    // `text_ctx` is `None`, so text leaves emit empty (un-shaped) glyph runs.
+    emit_inner(
+        dom, styles, fragments, constructed, None, &empty_images, &empty_bg, &no_scroll, viewport,
+    )
 }
 
 /// Variant of [`emit_paint_list`] that consumes the cached text
@@ -315,7 +318,8 @@ where
         dom,
         styles,
         fragments,
-        Some(GlyphSource { constructed, text_ctx }),
+        constructed,
+        Some(text_ctx),
         images,
         bg_images,
         scroll_offsets,
@@ -323,18 +327,13 @@ where
     )
 }
 
-/// Source for shaped-glyph lookup during emission. Borrowed view over
-/// the box tree's node_map + the text measure cache.
-struct GlyphSource<'a, NodeId: Copy + Eq + Hash> {
-    constructed: &'a BoxTree<NodeId>,
-    text_ctx: &'a TextMeasureCtx,
-}
-
+#[allow(clippy::too_many_arguments)]
 fn emit_inner<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
-    glyphs: Option<GlyphSource<'_, D::NodeId>>,
+    constructed: &BoxTree<D::NodeId>,
+    text_ctx: Option<&TextMeasureCtx>,
     images_plane: &ImagePlane<D::NodeId>,
     bg_images_plane: &BackgroundImagePlane<D::NodeId>,
     scroll_offsets: &FxHashMap<D::NodeId, (f32, f32)>,
@@ -346,7 +345,6 @@ where
 {
     let mut commands = Vec::new();
     let mut emitter = Emitter {
-        glyphs,
         images_plane,
         bg_images_plane,
         scroll_offsets,
@@ -358,21 +356,20 @@ where
     // the root is transparent, the body's) is painted over the *entire* canvas,
     // not just the element's own box, positioned against the root's background
     // positioning area. Emitted first (behind all content); the source element is
-    // then recorded so `walk` suppresses the duplicate paint on its own box.
+    // then recorded so `walk` suppresses the duplicate paint on its own box. This
+    // stays DOM-driven (it is about the real root / body elements).
     emitter.canvas_bg_source =
         emit_canvas_background(dom, styles, fragments, viewport, &mut commands);
-    // Paint the document as the root stacking context. The recursive painter
-    // (crate::paint_stacking) walks each context's own tree for in-flow content,
-    // collects its positioned/z-index layers, and orders them per CSS 2.1
-    // Appendix E (negative-z behind, then in-flow, then zero/positive on top),
-    // scoped to that context — so a nested context sorts its own layers rather
-    // than all layers sharing one global z-order (the Tier 1 limitation).
+    // Paint the document as the root stacking context, driven by the box-tree
+    // arena. The recursive painter (crate::paint_stacking) walks each context's
+    // own subtree for in-flow content, collects its positioned/z-index layers, and
+    // orders them per CSS 2.1 Appendix E (negative-z behind, then in-flow, then
+    // zero/positive on top), scoped to that context.
     crate::paint_stacking::paint_context(
-        dom,
-        styles,
-        fragments,
         &mut emitter,
-        dom.document(),
+        constructed,
+        text_ctx,
+        constructed.root_arena(),
         (0.0, 0.0),
         &mut commands,
     );
@@ -390,8 +387,9 @@ where
 /// `origin` is the parent's accumulated absolute origin (where the layer's
 /// parent-relative location is measured from); `z` is its paint-bucket z-index
 /// (`auto` → 0); `seq` is document order (the z tiebreak).
-pub(crate) struct Deferred<NodeId> {
-    pub(crate) node: NodeId,
+pub(crate) struct Deferred {
+    /// The lifted layer's box-tree arena index (the painter re-enters `walk` here).
+    pub(crate) node: usize,
     pub(crate) origin: (f32, f32),
     pub(crate) z: i32,
     pub(crate) seq: usize,
@@ -412,21 +410,9 @@ pub(crate) struct Deferred<NodeId> {
 /// elements are always lifted into a stacking layer; in-flow positioned elements
 /// (`relative`/`sticky`) are lifted only when they carry an explicit `z-index`
 /// (see [`crate::paint_stacking::defers_to_stacking`]).
-pub(crate) fn is_out_of_flow<NodeId: Copy + Eq + Hash>(
-    styles: &StylePlane<NodeId>,
-    id: NodeId,
-) -> bool {
+pub(crate) fn is_out_of_flow(cv: &ComputedValues) -> bool {
     use style::values::computed::PositionProperty;
-    let Some(entry) = styles.get(id) else {
-        return false;
-    };
-    let Some(data) = entry.borrow_data() else {
-        return false;
-    };
-    matches!(
-        data.styles.primary().get_box().position,
-        PositionProperty::Absolute | PositionProperty::Fixed
-    )
+    matches!(cv.get_box().position, PositionProperty::Absolute | PositionProperty::Fixed)
 }
 
 /// Recursive paint-order walk emitting compositor-model commands:
@@ -443,15 +429,14 @@ pub(crate) fn is_out_of_flow<NodeId: Copy + Eq + Hash>(
 ///
 /// Nodes without fragments (synthetic / skipped) don't push or pop,
 /// but children still descend in the current coord space.
-pub(crate) fn walk<D>(
-    dom: &D,
-    styles: &StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
-    em: &mut Emitter<'_, D::NodeId>,
-    id: D::NodeId,
+pub(crate) fn walk<Id>(
+    em: &mut Emitter<'_, Id>,
+    tree: &BoxTree<Id>,
+    text_ctx: Option<&TextMeasureCtx>,
+    arena: usize,
     origin: (f32, f32),
     commands: &mut Vec<PaintCmd>,
-    deferred: &mut Vec<Deferred<D::NodeId>>,
+    deferred: &mut Vec<Deferred>,
     is_root: bool,
     // Cumulative CSS transform of transform-bearing ancestors within this stacking
     // context (identity at the context root). Read only when a descendant defers,
@@ -461,370 +446,264 @@ pub(crate) fn walk<D>(
     // transform for content painted in place.
     ancestor_transform: LayoutTransform,
 ) where
-    D: LayoutDom,
-    D::NodeId: Copy + Eq + Hash,
+    Id: Copy + Eq + Hash,
 {
+    let node = tree.node(arena);
+    let cv: &ComputedValues = &node.style;
+
     // A positioned / z-index descendant is lifted out of this context's in-flow
     // walk into a stacking layer (recorded with its parent's absolute origin +
     // paint-bucket z, skipped here); the recursive stacking painter places it.
     // `is_root` is the one node we always emit — the context root the painter
     // entered on, which would otherwise re-defer itself into an infinite loop.
-    if !is_root && crate::paint_stacking::defers_to_stacking(styles, id) {
+    if !is_root && crate::paint_stacking::defers_to_stacking(cv) {
         deferred.push(Deferred {
-            node: id,
+            node: arena,
             origin,
-            z: crate::paint_stacking::bucket_z(styles, id),
+            z: crate::paint_stacking::bucket_z(cv),
             seq: deferred.len(),
             ancestor_transform,
         });
         return;
     }
 
-    // `display: none` paints nothing — skip the node and its whole subtree.
-    // In-flow content stays invisible via a zero-size box, but a list marker
-    // hangs outside the box, so display:none must be suppressed explicitly.
-    if dom.kind(id) == NodeKind::Element
-        && styles
-            .get(id)
-            .and_then(|e| e.borrow_data())
-            .is_some_and(|d| d.styles.primary().get_box().display.is_none())
-    {
+    // `display: none` paints nothing — skip the node and its whole subtree (the
+    // box is built but laid out hidden; its marker would otherwise still hang).
+    if cv.get_box().display.is_none() {
         return;
     }
 
-    // An overflow container clips its descendants to its padding box; captured
-    // here (while the layout is in scope) and applied around the children below.
-    let mut clip_rect: Option<LayoutRect> = None;
-    // Absolute origin to pass to children (this node's origin + its location),
-    // so a deferred descendant records where to place itself.
-    let mut child_origin = origin;
-    // Cumulative ancestor transform to pass to children: this node's transform
-    // (conjugated by its absolute origin) composed onto the inherited one, so a
-    // deferred descendant carries the transforms it would have inherited in flow.
-    let mut child_transform = ancestor_transform;
-    let pushed = if let Some(l) = fragments.rect_of(id) {
-        // This node's cascaded style, resolved once and shared by every decoration
-        // read below (DOM-keyed here; a box-tree-driven walk would hand the box's
-        // own `node.style`). `None` for the borrowed-key edge / un-cascaded nodes —
-        // each read falls back to its prior no-data default.
-        let cv = primary_cv(styles, id);
-        // Children push their own parent-relative location, composing with this
-        // node's transform. The context root has no enclosing transform on the
-        // stack (the stacking painter emits each layer on a clean stack), so it
-        // folds its absolute `origin` into its own push — its body is then
-        // absolute without an extra wrapper transform.
-        let push_origin = if is_root {
-            LayoutPoint::new(origin.0 + l.location.x, origin.1 + l.location.y)
-        } else {
-            LayoutPoint::new(l.location.x, l.location.y)
-        };
-        // Fold the element's computed CSS transform into its push, so a
-        // `transform: translate(x,y)` moves the painted node (the orrery's
-        // per-frame motion). `origin` is the box-model position; `transform` is
-        // the CSS transform layered on top.
-        let node_transform =
-            cv.as_deref().map(compute_transform_matrix).unwrap_or_else(LayoutTransform::identity);
-        commands.push(PaintCmd::PushTransform(TransformSpec {
-            origin: push_origin,
-            transform: node_transform,
-            kind: TransformKind::Standard,
-        }));
-        child_origin = (origin.0 + l.location.x, origin.1 + l.location.y);
-        // Accumulate for deferred descendants: a CSS transform applies around the
-        // element's absolute box top-left (`child_origin`), so conjugate it there
-        // (`T(O)·M·T(-O)`) and compose onto the inherited transform. Skip the
-        // identity (the common no-transform case) to keep it clean + cheap.
-        if node_transform != LayoutTransform::identity() {
-            child_transform = conjugate_at(child_origin, node_transform).then(&ancestor_transform);
-        }
-        let local_bounds = LayoutRect::new(
-            LayoutPoint::new(0.0, 0.0),
-            LayoutPoint::new(l.size.width, l.size.height),
-        );
-        // The content-box top-left in local (border-box) coords. Inline content
-        // (glyphs, underlines, inline boxes) lays out within the content box, so
-        // it is offset by border + padding — matching `caret_rect`'s `content_x`,
-        // so the painted text and the caret share one origin (a padded field's
-        // text was previously drawn at the border box while the caret used the
-        // content box, leaving the caret a padding-width to the right).
-        let content_offset = (l.border.left + l.padding.left, l.border.top + l.padding.top);
-        match dom.kind(id) {
-            NodeKind::Element => {
-                // An anonymous block box (a mixed container's wrapped inline run)
-                // is keyed by a borrowed descendant node, so it must paint none of
-                // that node's box decorations — only its inline content (which
-                // paints e.g. an inline-block at its own size). Suppresses shadow,
-                // background, border-radius clip, and border below.
-                let is_anon = em
-                    .glyphs
-                    .as_ref()
-                    .is_some_and(|g| g.constructed.is_anonymous(id));
-                // Outset box-shadows paint behind the border-box, so
-                // emit them before the background. (Inset shadows,
-                // which paint over the background, are deferred —
-                // skipped here, warn-skipped in the translator.)
-                for shadow in cv
-                    .as_deref()
-                    .map(box_shadows_of)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|_| !is_anon)
-                {
-                    if shadow.inset {
-                        continue;
-                    }
-                    commands.push(PaintCmd::DrawShadow(ShadowItem {
-                        placement: CommonPlacement::new(local_bounds),
-                        box_bounds: local_bounds,
-                        offset: LayoutVector2D::new(shadow.h, shadow.v),
-                        color: shadow.color,
-                        blur_radius: shadow.blur,
-                        spread_radius: shadow.spread,
-                        border_radius: BorderRadius::zero(),
-                        clip_mode: BoxShadowClipMode::Outset,
-                    }));
-                }
-                // border-radius: clip the background (color + image) to the
-                // rounded border-box. The border itself rounds via its own
-                // `radius` (border_of); replaced <img> content is not clipped
-                // here yet (a follow-up). Pushed only when a corner is non-zero,
-                // so square boxes keep a flat command stream.
-                let bg_radius = if is_anon {
-                    None
-                } else {
-                    cv.as_deref()
-                        .and_then(|c| border_radius_of(c, local_bounds.width(), local_bounds.height()))
-                };
-                if let Some(radius) = bg_radius {
-                    commands.push(PaintCmd::PushClip(ClipSpec {
-                        kind: ClipKind::RoundedRect {
-                            rect: local_bounds,
-                            radius,
-                            clip_out: false,
-                        },
-                    }));
-                }
-                // Background, then replaced content (image), then
-                // border — CSS paint order. The element whose background was
-                // propagated to the canvas (root / body) skips its own-box
-                // background — it has already been painted over the canvas.
-                let suppress_bg = is_anon || em.canvas_bg_source == Some(id);
-                if !suppress_bg {
-                    commands.push(PaintCmd::DrawRect(RectItem {
-                        placement: CommonPlacement::new(local_bounds),
-                        color: cv
-                            .as_deref()
-                            .map(background_color_of)
-                            .unwrap_or(ColorF::TRANSPARENT),
-                    }));
-                    // Background-image gradient layers paint over the color. CSS
-                    // lists the topmost layer first, so they emit back-to-front;
-                    // each gradient layer (linear / radial / conic) becomes its
-                    // draw command(s), tiled per background-size/-position/-repeat.
-                    // url() image layers are handled by the block below (first
-                    // layer only). Each layer positions against its
-                    // `background-origin` box (border box inset by border /
-                    // padding); the painting area is the border box
-                    // (`background-clip: border-box`).
-                    let border = [l.border.left, l.border.top, l.border.right, l.border.bottom];
-                    let padding =
-                        [l.padding.left, l.padding.top, l.padding.right, l.padding.bottom];
-                    for cmd in cv
-                        .as_deref()
-                        .map(|c| {
-                            background_gradient_layers(c, local_bounds, border, padding, local_bounds)
-                        })
-                        .unwrap_or_default()
-                    {
-                        commands.push(cmd);
-                    }
-                }
-                // CSS background-image paints over the background color,
-                // under content + border. Resolve background-size /
-                // -position / -repeat for the first layer against the
-                // background-origin box, then clip to the background-clip
-                // box. Defaults (auto / 0 0 / repeat / origin=padding-box
-                // / clip=border-box) match CSS; with zero borders +
-                // padding the origin/clip boxes collapse to the border box
-                // and this reduces to the prior behavior.
-                if let Some(decoded) = em.bg_images_plane.get(id).filter(|_| !suppress_bg) {
-                    let int_w = decoded.width as f32;
-                    let int_h = decoded.height as f32;
-                    let key = em.images.add(decoded);
-                    let bg_style = cv.as_deref().and_then(bg_tile_style_of);
-                    // The three reference boxes in this node's local
-                    // (border-box) coords. `l.border` / `l.padding` are the
-                    // resolved insets; (x, y, w, h) per box.
-                    let bw = local_bounds.width();
-                    let bh = local_bounds.height();
-                    let box_for = |which: BgBox| -> (f32, f32, f32, f32) {
-                        match which {
-                            BgBox::BorderBox => (0.0, 0.0, bw, bh),
-                            BgBox::PaddingBox => (
-                                l.border.left,
-                                l.border.top,
-                                bw - l.border.left - l.border.right,
-                                bh - l.border.top - l.border.bottom,
-                            ),
-                            BgBox::ContentBox => (
-                                l.border.left + l.padding.left,
-                                l.border.top + l.padding.top,
-                                bw - l.border.left - l.border.right
-                                    - l.padding.left - l.padding.right,
-                                bh - l.border.top - l.border.bottom
-                                    - l.padding.top - l.padding.bottom,
-                            ),
-                        }
-                    };
-                    let origin_box = bg_style.as_ref().map(|s| s.origin).unwrap_or(BgBox::PaddingBox);
-                    let clip_box = bg_style.as_ref().map(|s| s.clip).unwrap_or(BgBox::BorderBox);
-                    let (orx, ory, aw, ah) = box_for(origin_box);
-                    // Tile geometry resolves against the positioning area (origin box).
-                    let (tw, th, ox, oy) = match (&bg_style, int_w > 0.0 && int_h > 0.0) {
-                        (Some(s), true) => resolve_bg_tile(s, aw, ah, int_w, int_h),
-                        _ => (int_w, int_h, 0.0, 0.0),
-                    };
-                    let (rx, ry) = bg_style
-                        .as_ref()
-                        .map(|s| (s.repeat_x, s.repeat_y))
-                        .unwrap_or((BgRepeat::Repeat, BgRepeat::Repeat));
-                    // Per axis, in origin-box-local coords: `repeat` tiles across
-                    // the full positioning area (phase 0, exact at position 0,
-                    // the common case); `no-repeat` paints one tile at the
-                    // resolved offset.
-                    let (x0, sw) = match rx {
-                        BgRepeat::NoRepeat => (ox, tw),
-                        _ => (0.0, aw),
-                    };
-                    let (y0, sh) = match ry {
-                        BgRepeat::NoRepeat => (oy, th),
-                        _ => (0.0, ah),
-                    };
-                    // Translate to node-local (border-box) coords (add the origin
-                    // box offset), then intersect with the clip box — the region
-                    // the paint is allowed in.
-                    let (cx, cy, cw, ch) = box_for(clip_box);
-                    let px0 = (orx + x0).max(cx);
-                    let py0 = (ory + y0).max(cy);
-                    let px1 = (orx + x0 + sw).min(cx + cw);
-                    let py1 = (ory + y0 + sh).min(cy + ch);
-                    if tw > 0.0 && th > 0.0 && px1 > px0 && py1 > py0 {
-                        commands.push(PaintCmd::DrawRepeatingImage(RepeatingImageItem {
-                            placement: CommonPlacement::new(LayoutRect::new(
-                                LayoutPoint::new(px0, py0),
-                                LayoutPoint::new(px1, py1),
-                            )),
-                            image_key: key,
-                            stretch_size: LayoutSize::new(tw, th),
-                            tile_spacing: LayoutSize::zero(),
-                            image_rendering: ImageRendering::Auto,
-                            alpha_type: AlphaType::PremultipliedAlpha,
-                            color: ColorF::WHITE, // identity tint
-                        }));
-                    }
-                }
-                // Close the border-radius clip around the background layers.
-                if bg_radius.is_some() {
-                    commands.push(PaintCmd::PopClip);
-                }
-                if let Some(decoded) = em.images_plane.get(id) {
-                    let key = em.images.add(decoded);
-                    commands.push(PaintCmd::DrawImage(ImageItem {
-                        placement: CommonPlacement::new(local_bounds),
-                        image_key: key,
-                        image_rendering: ImageRendering::Auto,
-                        alpha_type: AlphaType::PremultipliedAlpha,
-                        color: ColorF::WHITE, // identity tint
-                    }));
-                }
-                if let Some((widths, normal)) = (!is_anon)
-                    .then(|| {
-                        cv.as_deref()
-                            .and_then(|c| border_of(c, local_bounds.width(), local_bounds.height()))
-                    })
-                    .flatten()
-                {
-                    commands.push(PaintCmd::DrawBorder(BorderItem {
-                        placement: CommonPlacement::new(local_bounds),
-                        widths,
-                        details: BorderDetails::Normal(normal),
-                    }));
-                }
-                // An element establishing an inline formatting context
-                // carries its text + replaced boxes as the leaf's
-                // InlineContent — emit its glyph runs and inline-box
-                // images (paints over background/image, under the
-                // border conceptually; border is rare on inline
-                // contexts). Non-inline elements have no cached layout,
-                // so emit_inline_content no-ops.
-                if let Some(g) = em.glyphs.as_ref() {
-                    emit_inline_content(
-                        g,
-                        id,
-                        local_bounds,
-                        content_offset,
-                        em.images_plane,
-                        &mut em.fonts,
-                        &mut em.images,
-                        commands,
-                    );
-                    // A list item's marker (bullet / ordinal) hangs to the left
-                    // of its content box; no-op for non-list-items.
-                    emit_list_marker(g, id, content_offset, &mut em.fonts, commands);
-                }
-            }
-            NodeKind::Text => {
-                let emitted = match em.glyphs.as_ref() {
-                    Some(g) => emit_inline_content(
-                        g,
-                        id,
-                        local_bounds,
-                        content_offset,
-                        em.images_plane,
-                        &mut em.fonts,
-                        &mut em.images,
-                        commands,
-                    ),
-                    None => false,
-                };
-                if !emitted {
-                    // Cache-less path (no layout cache, or no glyphs):
-                    // emit one empty text run so the command structure
-                    // still reflects the text node.
-                    commands.push(PaintCmd::DrawText(TextRunItem {
-                        placement: CommonPlacement::new(local_bounds),
-                        font_instance: FontInstanceKey::default(),
-                        // No shaped run to read a size from; 16 px is
-                        // the CSS/UA default.
-                        font_size: 16.0,
-                        color: text_color_of(dom, styles, id),
-                        glyphs: Vec::new(),
-                        options: TextOptions::default(),
-                    }));
-                }
-            }
-            _ => {}
-        }
-        if dom.kind(id) == NodeKind::Element && cv.as_deref().is_some_and(clips_overflow) {
-            clip_rect = Some(LayoutRect::new(
-                LayoutPoint::new(l.border.left, l.border.top),
-                LayoutPoint::new(l.size.width - l.border.right, l.size.height - l.border.bottom),
-            ));
-        }
-        true
-    } else {
-        false
-    };
+    // Every box has a laid-out position + size (its `final_layout`); style + DOM
+    // identity come off the box node, not a DOM lookup. `dom_id` keys the
+    // remaining DOM-keyed concerns (scroll / images / canvas-bg).
+    let l = node.final_layout;
+    let dom_id = node.source.dom_id();
+    let is_anon = node.source.is_anonymous();
+    let taffy_id = tree.arena_node_id(arena);
 
+    // An overflow container clips its descendants to its padding box; captured
+    // here and applied around the children below.
+    let mut clip_rect: Option<LayoutRect> = None;
+    // Children push their own parent-relative location, composing with this node's
+    // transform. The context root has no enclosing transform on the stack (the
+    // stacking painter emits each layer on a clean stack), so it folds its absolute
+    // `origin` into its own push — its body is then absolute without an extra
+    // wrapper transform.
+    let push_origin = if is_root {
+        LayoutPoint::new(origin.0 + l.location.x, origin.1 + l.location.y)
+    } else {
+        LayoutPoint::new(l.location.x, l.location.y)
+    };
+    // Fold the element's computed CSS transform into its push, so a
+    // `transform: translate(x,y)` moves the painted node (the orrery's per-frame
+    // motion). `origin` is the box-model position; `transform` is the CSS
+    // transform layered on top.
+    let node_transform = compute_transform_matrix(cv);
+    commands.push(PaintCmd::PushTransform(TransformSpec {
+        origin: push_origin,
+        transform: node_transform,
+        kind: TransformKind::Standard,
+    }));
+    // Absolute origin to pass to children (this node's origin + its location), so a
+    // deferred descendant records where to place itself.
+    let child_origin = (origin.0 + l.location.x, origin.1 + l.location.y);
+    // Cumulative ancestor transform to pass to children: a CSS transform applies
+    // around the element's absolute box top-left, so conjugate it there
+    // (`T(O)·M·T(-O)`) and compose onto the inherited transform. Skip the identity
+    // (the common no-transform case).
+    let child_transform = if node_transform != LayoutTransform::identity() {
+        conjugate_at(child_origin, node_transform).then(&ancestor_transform)
+    } else {
+        ancestor_transform
+    };
+    let local_bounds = LayoutRect::new(
+        LayoutPoint::new(0.0, 0.0),
+        LayoutPoint::new(l.size.width, l.size.height),
+    );
+    // The content-box top-left in local (border-box) coords. Inline content
+    // (glyphs, underlines, inline boxes) lays out within the content box, so it is
+    // offset by border + padding — matching `caret_rect`'s `content_x`.
+    let content_offset = (l.border.left + l.padding.left, l.border.top + l.padding.top);
+
+    // Outset box-shadows paint behind the border-box, so emit them before the
+    // background. (Inset shadows are deferred — skipped here.) An anonymous box
+    // paints none of its (borrowed-key's) box decorations.
+    for shadow in box_shadows_of(cv).into_iter().filter(|_| !is_anon) {
+        if shadow.inset {
+            continue;
+        }
+        commands.push(PaintCmd::DrawShadow(ShadowItem {
+            placement: CommonPlacement::new(local_bounds),
+            box_bounds: local_bounds,
+            offset: LayoutVector2D::new(shadow.h, shadow.v),
+            color: shadow.color,
+            blur_radius: shadow.blur,
+            spread_radius: shadow.spread,
+            border_radius: BorderRadius::zero(),
+            clip_mode: BoxShadowClipMode::Outset,
+        }));
+    }
+    // border-radius: clip the background (color + image) to the rounded border-box.
+    let bg_radius = if is_anon {
+        None
+    } else {
+        border_radius_of(cv, local_bounds.width(), local_bounds.height())
+    };
+    if let Some(radius) = bg_radius {
+        commands.push(PaintCmd::PushClip(ClipSpec {
+            kind: ClipKind::RoundedRect { rect: local_bounds, radius, clip_out: false },
+        }));
+    }
+    // Background, then replaced content (image), then border — CSS paint order. The
+    // element whose background was propagated to the canvas (root / body) skips its
+    // own-box background — already painted over the canvas.
+    let suppress_bg = is_anon || em.canvas_bg_source == Some(dom_id);
+    if !suppress_bg {
+        commands.push(PaintCmd::DrawRect(RectItem {
+            placement: CommonPlacement::new(local_bounds),
+            color: background_color_of(cv),
+        }));
+        // Background-image gradient layers paint over the color (back-to-front).
+        let border = [l.border.left, l.border.top, l.border.right, l.border.bottom];
+        let padding = [l.padding.left, l.padding.top, l.padding.right, l.padding.bottom];
+        for cmd in background_gradient_layers(cv, local_bounds, border, padding, local_bounds) {
+            commands.push(cmd);
+        }
+    }
+    // CSS background-image (url()) paints over the color, under content + border.
+    if let Some(decoded) = em.bg_images_plane.get(dom_id).filter(|_| !suppress_bg) {
+        let int_w = decoded.width as f32;
+        let int_h = decoded.height as f32;
+        let key = em.images.add(decoded);
+        let bg_style = bg_tile_style_of(cv);
+        // The three reference boxes in this node's local (border-box) coords.
+        let bw = local_bounds.width();
+        let bh = local_bounds.height();
+        let box_for = |which: BgBox| -> (f32, f32, f32, f32) {
+            match which {
+                BgBox::BorderBox => (0.0, 0.0, bw, bh),
+                BgBox::PaddingBox => (
+                    l.border.left,
+                    l.border.top,
+                    bw - l.border.left - l.border.right,
+                    bh - l.border.top - l.border.bottom,
+                ),
+                BgBox::ContentBox => (
+                    l.border.left + l.padding.left,
+                    l.border.top + l.padding.top,
+                    bw - l.border.left - l.border.right - l.padding.left - l.padding.right,
+                    bh - l.border.top - l.border.bottom - l.padding.top - l.padding.bottom,
+                ),
+            }
+        };
+        let origin_box = bg_style.as_ref().map(|s| s.origin).unwrap_or(BgBox::PaddingBox);
+        let clip_box = bg_style.as_ref().map(|s| s.clip).unwrap_or(BgBox::BorderBox);
+        let (orx, ory, aw, ah) = box_for(origin_box);
+        let (tw, th, ox, oy) = match (&bg_style, int_w > 0.0 && int_h > 0.0) {
+            (Some(s), true) => resolve_bg_tile(s, aw, ah, int_w, int_h),
+            _ => (int_w, int_h, 0.0, 0.0),
+        };
+        let (rx, ry) = bg_style
+            .as_ref()
+            .map(|s| (s.repeat_x, s.repeat_y))
+            .unwrap_or((BgRepeat::Repeat, BgRepeat::Repeat));
+        let (x0, sw) = match rx {
+            BgRepeat::NoRepeat => (ox, tw),
+            _ => (0.0, aw),
+        };
+        let (y0, sh) = match ry {
+            BgRepeat::NoRepeat => (oy, th),
+            _ => (0.0, ah),
+        };
+        let (cx, cy, cw, ch) = box_for(clip_box);
+        let px0 = (orx + x0).max(cx);
+        let py0 = (ory + y0).max(cy);
+        let px1 = (orx + x0 + sw).min(cx + cw);
+        let py1 = (ory + y0 + sh).min(cy + ch);
+        if tw > 0.0 && th > 0.0 && px1 > px0 && py1 > py0 {
+            commands.push(PaintCmd::DrawRepeatingImage(RepeatingImageItem {
+                placement: CommonPlacement::new(LayoutRect::new(
+                    LayoutPoint::new(px0, py0),
+                    LayoutPoint::new(px1, py1),
+                )),
+                image_key: key,
+                stretch_size: LayoutSize::new(tw, th),
+                tile_spacing: LayoutSize::zero(),
+                image_rendering: ImageRendering::Auto,
+                alpha_type: AlphaType::PremultipliedAlpha,
+                color: ColorF::WHITE, // identity tint
+            }));
+        }
+    }
+    // Close the border-radius clip around the background layers.
+    if bg_radius.is_some() {
+        commands.push(PaintCmd::PopClip);
+    }
+    if let Some(decoded) = em.images_plane.get(dom_id) {
+        let key = em.images.add(decoded);
+        commands.push(PaintCmd::DrawImage(ImageItem {
+            placement: CommonPlacement::new(local_bounds),
+            image_key: key,
+            image_rendering: ImageRendering::Auto,
+            alpha_type: AlphaType::PremultipliedAlpha,
+            color: ColorF::WHITE, // identity tint
+        }));
+    }
+    if let Some((widths, normal)) = (!is_anon)
+        .then(|| border_of(cv, local_bounds.width(), local_bounds.height()))
+        .flatten()
+    {
+        commands.push(PaintCmd::DrawBorder(BorderItem {
+            placement: CommonPlacement::new(local_bounds),
+            widths,
+            details: BorderDetails::Normal(normal),
+        }));
+    }
+    // A measured leaf (inline formatting context) carries its text + replaced
+    // boxes as `InlineContent` — emit its glyph runs and inline-box images. Block
+    // boxes have no inline content, so this no-ops.
+    let emitted = emit_inline_content(
+        taffy_id,
+        text_ctx,
+        node.inline_content.as_ref(),
+        local_bounds,
+        content_offset,
+        em.images_plane,
+        &mut em.fonts,
+        &mut em.images,
+        commands,
+    );
+    if !emitted && node.inline_content.is_some() {
+        // Cache-less path (no shaped layout): emit one empty text run so the
+        // command structure still reflects the leaf's text.
+        let [r, g, b, a] = *cv.get_inherited_text().color.into_srgb_legacy().raw_components();
+        commands.push(PaintCmd::DrawText(TextRunItem {
+            placement: CommonPlacement::new(local_bounds),
+            font_instance: FontInstanceKey::default(),
+            font_size: 16.0,
+            color: ColorF::new(r, g, b, a),
+            glyphs: Vec::new(),
+            options: TextOptions::default(),
+        }));
+    }
+    // A list item's marker (bullet / ordinal) hangs to the left of its content
+    // box; no-op for non-list-items.
+    emit_list_marker(taffy_id, text_ctx, content_offset, &mut em.fonts, commands);
+
+    if clips_overflow(cv) {
+        clip_rect = Some(LayoutRect::new(
+            LayoutPoint::new(l.border.left, l.border.top),
+            LayoutPoint::new(l.size.width - l.border.right, l.size.height - l.border.bottom),
+        ));
+    }
     // Clip the descendants of an overflow container to its padding box. The
     // container's own background/border (emitted above) are outside the clip.
     if let Some(rect) = clip_rect {
         commands.push(PaintCmd::PushClip(ClipSpec { kind: ClipKind::Rect(rect) }));
     }
-
     // Scroll: inside the clip, translate the content by `-offset` so it scrolls
     // under the fixed clip window. Only a clipping (overflow) container scrolls.
-    let scroll = clip_rect.and_then(|_| em.scroll_offsets.get(&id).copied());
+    let scroll = clip_rect.and_then(|_| em.scroll_offsets.get(&dom_id).copied());
     if let Some((ox, oy)) = scroll {
         commands.push(PaintCmd::PushTransform(TransformSpec {
             origin: LayoutPoint::new(-ox, -oy),
@@ -833,8 +712,8 @@ pub(crate) fn walk<D>(
         }));
     }
 
-    for child in dom.dom_children(id) {
-        walk(dom, styles, fragments, em, child, child_origin, commands, deferred, false, child_transform);
+    for &child in &node.children {
+        walk(em, tree, text_ctx, child, child_origin, commands, deferred, false, child_transform);
     }
 
     // Unwind in reverse: scroll transform, then clip, then the origin transform.
@@ -844,9 +723,7 @@ pub(crate) fn walk<D>(
     if clip_rect.is_some() {
         commands.push(PaintCmd::PopClip);
     }
-    if pushed {
-        commands.push(PaintCmd::PopTransform);
-    }
+    commands.push(PaintCmd::PopTransform);
 }
 
 /// Emit a list item's marker, hanging to the left of its content box. The
@@ -854,17 +731,17 @@ pub(crate) fn walk<D>(
 /// sits a small gap left of the content-box left edge, top-aligned with the
 /// content box (so a same-size first line shares the marker's baseline). No-op
 /// for a node with no cached marker layout (every non-list-item).
-fn emit_list_marker<NodeId: Copy + Eq + Hash>(
-    source: &GlyphSource<'_, NodeId>,
-    dom_id: NodeId,
+fn emit_list_marker(
+    taffy_id: taffy::NodeId,
+    text_ctx: Option<&TextMeasureCtx>,
     content_offset: (f32, f32),
     fonts: &mut FontCollector,
     commands: &mut Vec<PaintCmd>,
 ) {
-    let Some(taffy_id) = source.constructed.node_map.get(&dom_id) else {
+    let Some(text_ctx) = text_ctx else {
         return;
     };
-    let Some(layout) = source.text_ctx.marker_layouts.get(taffy_id) else {
+    let Some(layout) = text_ctx.marker_layouts.get(&taffy_id) else {
         return;
     };
     let marker_width = layout.width();
@@ -918,8 +795,9 @@ fn emit_list_marker<NodeId: Copy + Eq + Hash>(
 /// Returns whether any command was emitted (false → no cached layout,
 /// or empty content; caller falls back to an empty run).
 fn emit_inline_content<NodeId: Copy + Eq + Hash>(
-    source: &GlyphSource<'_, NodeId>,
-    dom_id: NodeId,
+    taffy_id: taffy::NodeId,
+    text_ctx: Option<&TextMeasureCtx>,
+    content: Option<&crate::text_measure::InlineContent<NodeId>>,
     bounds: LayoutRect,
     content_offset: (f32, f32),
     images_plane: &ImagePlane<NodeId>,
@@ -927,16 +805,12 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
     images: &mut ImageCollector,
     commands: &mut Vec<PaintCmd>,
 ) -> bool {
-    let Some(taffy_id) = source.constructed.node_map.get(&dom_id) else {
+    let Some(text_ctx) = text_ctx else {
         return false;
     };
-    let Some(layout) = source.text_ctx.layouts.get(taffy_id) else {
+    let Some(layout) = text_ctx.layouts.get(&taffy_id) else {
         return false;
     };
-    // The leaf's inline content, for mapping inline-box ids → source
-    // `<img>` nodes. Absent for a fixed-size leaf (no shaped content);
-    // glyph runs still emit, boxes just won't resolve.
-    let content = source.constructed.get_node_context(*taffy_id);
     // Byte ranges of the source runs (concatenation order), so a glyph run can be
     // mapped back to its `InlineRun` for `overline` (which parley does not carry
     // on the run style, unlike underline / strikethrough).
@@ -1085,10 +959,8 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                         }
                         // The inline-block's own content glyphs, placed at the box
                         // origin (its Layout was cached under (this leaf, box id)).
-                        if let Some(ib_layout) = source
-                            .text_ctx
-                            .inline_block_layouts
-                            .get(&(*taffy_id, pbox.id as usize))
+                        if let Some(ib_layout) =
+                            text_ctx.inline_block_layouts.get(&(taffy_id, pbox.id as usize))
                         {
                             for ib_line in ib_layout.lines() {
                                 for ib_item in ib_line.items() {
@@ -2073,41 +1945,6 @@ pub(crate) fn clips_overflow(cv: &ComputedValues) -> bool {
         || !matches!(box_style.overflow_y, Overflow::Visible)
 }
 
-/// Resolve a text node's effective color: walk to its parent
-/// element, read that element's `color` from `ComputedValues`
-/// (a `color` value resolves to an `AbsoluteColor` directly —
-/// `inherited_text.color` is already `AbsoluteColor`, not the
-/// `Color` complex enum). Falls back to opaque black.
-fn text_color_of<D>(dom: &D, styles: &StylePlane<D::NodeId>, text_id: D::NodeId) -> ColorF
-where
-    D: LayoutDom,
-    D::NodeId: Copy + Eq + std::hash::Hash,
-{
-    match dom.parent(text_id) {
-        Some(parent_id) => element_text_color(styles, parent_id),
-        None => ColorF::BLACK,
-    }
-}
-
-/// An element's own cascaded text `color` as a `ColorF`. Used by the cache-less
-/// text path ([`emit_paint_list`]) to color an inline-context element's text
-/// uniformly. The live path ([`emit_paint_list_with_layouts`]) instead reads
-/// each glyph run's parley brush, so colored `<span>` / `<a>` runs inside the
-/// flow already get their own color (set per styling element in
-/// `construct::gather_inline_content`). Falls back to opaque black when the
-/// cascade hasn't run.
-fn element_text_color<NodeId: Copy + Eq + std::hash::Hash>(
-    styles: &StylePlane<NodeId>,
-    id: NodeId,
-) -> ColorF {
-    let Some(entry) = styles.get(id) else { return ColorF::BLACK; };
-    let Some(data) = entry.borrow_data() else { return ColorF::BLACK; };
-    let absolute = data.styles.primary().get_inherited_text().color;
-    let srgb = absolute.into_srgb_legacy();
-    let [r, g, b, a] = *srgb.raw_components();
-    ColorF::new(r, g, b, a)
-}
-
 /// Convert Stylo's `computed::Color` to a PaintList `ColorF`.
 /// Resolves `currentColor` via the provided `current_color`, then
 /// flattens to sRGB and reads the raw `[r, g, b, a]` components.
@@ -2592,7 +2429,7 @@ mod tests {
     fn emit_round_trips_through_serde() {
         let document = StaticDocument::parse("<html><body><p>x</p></body></html>");
         let styles = build_style_plane(&document);
-        let (fragments, _, _) = layout(
+        let (fragments, built, _) = layout(
             &document,
             &styles,
             &ImagePlane::new(),
@@ -2605,6 +2442,7 @@ mod tests {
             &document,
             &styles,
             &fragments,
+            &built,
             DeviceIntSize::new(800, 600),
         );
 
@@ -2720,11 +2558,12 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let (fragments, built, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
         let plist = emit_paint_list(
             &document,
             &styles,
             &fragments,
+            &built,
             DeviceIntSize::new(800, 600),
         );
 
@@ -2763,8 +2602,8 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
-        let plist = emit_paint_list(&document, &styles, &fragments, DeviceIntSize::new(800, 600));
+        let (fragments, built, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let plist = emit_paint_list(&document, &styles, &fragments, &built, DeviceIntSize::new(800, 600));
         let cmds = plist.commands();
 
         let pushes = cmds.iter().filter(|c| matches!(c, PaintCmd::PushClip(_))).count();
@@ -2882,8 +2721,8 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
-        let plist = emit_paint_list(&document, &styles, &fragments, DeviceIntSize::new(800, 600));
+        let (fragments, built, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let plist = emit_paint_list(&document, &styles, &fragments, &built, DeviceIntSize::new(800, 600));
         let cmds = plist.commands();
 
         let red = cmds.iter().position(|c| {
@@ -3021,11 +2860,12 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let (fragments, built, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
         let plist = emit_paint_list(
             &document,
             &styles,
             &fragments,
+            &built,
             DeviceIntSize::new(800, 600),
         );
 
@@ -3079,8 +2919,8 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
-        let plist = emit_paint_list(&document, &styles, &fragments, DeviceIntSize::new(800, 600));
+        let (fragments, built, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let plist = emit_paint_list(&document, &styles, &fragments, &built, DeviceIntSize::new(800, 600));
 
         let border_radius = plist.commands().iter().find_map(|c| match c {
             PaintCmd::DrawBorder(BorderItem { details: BorderDetails::Normal(n), .. }) => {
@@ -3127,11 +2967,12 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let (fragments, built, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
         let plist = emit_paint_list(
             &document,
             &styles,
             &fragments,
+            &built,
             DeviceIntSize::new(800, 600),
         );
 
@@ -3163,11 +3004,12 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let (fragments, built, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
         let plist = emit_paint_list(
             &document,
             &styles,
             &fragments,
+            &built,
             DeviceIntSize::new(800, 600),
         );
 
@@ -3258,7 +3100,7 @@ mod tests {
             "<html><body><p>a</p><p>b</p></body></html>",
         );
         let styles = build_style_plane(&document);
-        let (fragments, _, _) = layout(
+        let (fragments, built, _) = layout(
             &document,
             &styles,
             &ImagePlane::new(),
@@ -3271,6 +3113,7 @@ mod tests {
             &document,
             &styles,
             &fragments,
+            &built,
             DeviceIntSize::new(800, 600),
         );
 

@@ -40,37 +40,36 @@
 
 use std::hash::Hash;
 
-use layout_dom_api::LayoutDom;
 use paint_list_api::specs::TransformKind;
 use paint_list_api::{LayoutPoint, LayoutTransform, PaintCmd, TransformSpec};
+use style::properties::ComputedValues;
 
-use crate::fragment::FragmentPlane;
+use crate::box_tree::BoxTree;
 use crate::paint_emit::{is_out_of_flow, walk, Deferred, Emitter};
-use crate::style::StylePlane;
+use crate::text_measure::TextMeasureCtx;
 
-/// Paint `node` and its subtree as a stacking context rooted at absolute
-/// `origin`, appending commands to `out`. See the module docs for the order.
-pub(crate) fn paint_context<D>(
-    dom: &D,
-    styles: &StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
-    em: &mut Emitter<'_, D::NodeId>,
-    node: D::NodeId,
+/// Paint the box at arena index `node` and its subtree as a stacking context
+/// rooted at absolute `origin`, appending commands to `out`. See the module docs
+/// for the order.
+pub(crate) fn paint_context<Id>(
+    em: &mut Emitter<'_, Id>,
+    tree: &BoxTree<Id>,
+    text_ctx: Option<&TextMeasureCtx>,
+    node: usize,
     origin: (f32, f32),
     out: &mut Vec<PaintCmd>,
 ) where
-    D: LayoutDom,
-    D::NodeId: Copy + Eq + Hash,
+    Id: Copy + Eq + Hash,
 {
     // This context's own box + in-flow descendants -> `body`; the positioned /
     // z-index layers belonging to this context -> `layers` (each recorded with
     // its absolute origin + bucket z; `walk` does not descend into them).
     let mut body = Vec::new();
-    let mut layers: Vec<Deferred<D::NodeId>> = Vec::new();
+    let mut layers: Vec<Deferred> = Vec::new();
     // Each context root starts a fresh ancestor-transform accumulation: any
     // transform on an ancestor *of this context* is re-established by the
     // `paint_layer` wrap that placed this context (so it composes, not doubles).
-    walk(dom, styles, fragments, em, node, origin, &mut body, &mut layers, true, LayoutTransform::identity());
+    walk(em, tree, text_ctx, node, origin, &mut body, &mut layers, true, LayoutTransform::identity());
     // Stable sort by (z, document order): same-z layers keep document order, the
     // Appendix E tiebreak.
     layers.sort_by_key(|d| (d.z, d.seq));
@@ -79,7 +78,7 @@ pub(crate) fn paint_context<D>(
     // sorted, so the split point is the first non-negative.
     let split = layers.iter().position(|d| d.z >= 0).unwrap_or(layers.len());
     for d in &layers[..split] {
-        paint_layer(dom, styles, fragments, em, d, out);
+        paint_layer(em, tree, text_ctx, d, out);
     }
     // This context's own content. `walk` folded the absolute `origin` into the
     // root node's own transform (it entered with `is_root`), so `body` is already
@@ -89,7 +88,7 @@ pub(crate) fn paint_context<D>(
     // `transform`ed element (the orrery camera container) paints transformed.
     out.append(&mut body);
     for d in &layers[split..] {
-        paint_layer(dom, styles, fragments, em, d, out);
+        paint_layer(em, tree, text_ctx, d, out);
     }
 }
 
@@ -98,16 +97,14 @@ pub(crate) fn paint_context<D>(
 /// stack at its absolute layout origin, dropping any `transform` on an ancestor
 /// (e.g. the orrery's camera container) — see [`Deferred::ancestor_transform`].
 /// Identity ancestor transform (the common case) paints with no extra wrapper.
-fn paint_layer<D>(
-    dom: &D,
-    styles: &StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
-    em: &mut Emitter<'_, D::NodeId>,
-    d: &Deferred<D::NodeId>,
+fn paint_layer<Id>(
+    em: &mut Emitter<'_, Id>,
+    tree: &BoxTree<Id>,
+    text_ctx: Option<&TextMeasureCtx>,
+    d: &Deferred,
     out: &mut Vec<PaintCmd>,
 ) where
-    D: LayoutDom,
-    D::NodeId: Copy + Eq + Hash,
+    Id: Copy + Eq + Hash,
 {
     let wrap = d.ancestor_transform != LayoutTransform::identity();
     if wrap {
@@ -117,46 +114,35 @@ fn paint_layer<D>(
             kind: TransformKind::Standard,
         }));
     }
-    paint_context(dom, styles, fragments, em, d.node, d.origin, out);
+    paint_context(em, tree, text_ctx, d.node, d.origin, out);
     if wrap {
         out.push(PaintCmd::PopTransform);
     }
 }
 
-/// Whether `id` is lifted out of its context's in-flow walk into a stacking
-/// layer: any out-of-flow element (`absolute`/`fixed`), or an in-flow positioned
-/// element (`relative`/`sticky`) carrying an explicit `z-index`. An unpositioned
-/// element, or a positioned one with `z-index: auto`, keeps flowing.
-pub(crate) fn defers_to_stacking<NodeId: Copy + Eq + Hash>(
-    styles: &StylePlane<NodeId>,
-    id: NodeId,
-) -> bool {
-    is_out_of_flow(styles, id) || (is_positioned(styles, id) && z_index_value(styles, id).is_some())
+/// Whether a box is lifted out of its context's in-flow walk into a stacking
+/// layer: any out-of-flow box (`absolute`/`fixed`), or an in-flow positioned box
+/// (`relative`/`sticky`) carrying an explicit `z-index`. An unpositioned box, or a
+/// positioned one with `z-index: auto`, keeps flowing.
+pub(crate) fn defers_to_stacking(cv: &ComputedValues) -> bool {
+    is_out_of_flow(cv) || (is_positioned(cv) && z_index_value(cv).is_some())
 }
 
 /// The paint-bucket z-index for a lifted layer: its `z-index`, or `0` for `auto`
 /// (an out-of-flow `z-index: auto` element paints in the zero group).
-pub(crate) fn bucket_z<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId) -> i32 {
-    z_index_value(styles, id).unwrap_or(0)
+pub(crate) fn bucket_z(cv: &ComputedValues) -> i32 {
+    z_index_value(cv).unwrap_or(0)
 }
 
-/// Whether `id`'s `position` is anything other than `static`.
-fn is_positioned<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId) -> bool {
+/// Whether the box's `position` is anything other than `static`.
+fn is_positioned(cv: &ComputedValues) -> bool {
     use style::values::computed::PositionProperty;
-    let Some(entry) = styles.get(id) else {
-        return false;
-    };
-    let Some(data) = entry.borrow_data() else {
-        return false;
-    };
-    !matches!(data.styles.primary().get_box().position, PositionProperty::Static)
+    !matches!(cv.get_box().position, PositionProperty::Static)
 }
 
-/// The element's `z-index` as `Some(i32)`, or `None` for `auto`.
-fn z_index_value<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId) -> Option<i32> {
-    let entry = styles.get(id)?;
-    let data = entry.borrow_data()?;
-    let z = data.styles.primary().get_position().z_index;
+/// The box's `z-index` as `Some(i32)`, or `None` for `auto`.
+fn z_index_value(cv: &ComputedValues) -> Option<i32> {
+    let z = cv.get_position().z_index;
     if z.is_auto() {
         None
     } else {
@@ -198,8 +184,8 @@ mod tests {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
-        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
-        emit_paint_list(&document, &styles, &fragments, DeviceIntSize::new(800, 600))
+        let (fragments, built, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        emit_paint_list(&document, &styles, &fragments, &built, DeviceIntSize::new(800, 600))
             .commands()
             .to_vec()
     }

@@ -78,7 +78,7 @@ fn idx(n: NodeId) -> usize {
 /// element of their own. A box-tree-driven paint walk reads this instead of
 /// assuming every box maps 1:1 to a DOM node.
 #[derive(Clone, Copy)]
-enum BoxSource<Id> {
+pub(crate) enum BoxSource<Id> {
     /// A real DOM element or text node; `Id` is that node.
     Element(Id),
     /// An anonymous block box wrapping a run of inline-level children. `Id` is the
@@ -88,36 +88,53 @@ enum BoxSource<Id> {
     // `Pseudo(Id, PseudoKind)` for block generated content arrives with §5 slice 3.
 }
 
+impl<Id: Copy> BoxSource<Id> {
+    /// The DOM node this box's `dom_id`-keyed paint concerns (scroll, images,
+    /// canvas-bg, hit-test) resolve against: the element for a real box, the
+    /// borrowed key for an anonymous wrapper (matching the legacy DOM walk, which
+    /// reached the anonymous box under that key).
+    pub(crate) fn dom_id(self) -> Id {
+        match self {
+            BoxSource::Element(id) | BoxSource::Anonymous(id) => id,
+        }
+    }
+
+    /// Whether this box paints no box decorations of its own.
+    pub(crate) fn is_anonymous(self) -> bool {
+        matches!(self, BoxSource::Anonymous(_))
+    }
+}
+
 /// One box in the arena.
-struct BoxNode<Id> {
-    /// Cascaded style, read by `TaffyStyloStyle`. A cheap refcount clone
-    /// of the cascade's primary `Arc<ComputedValues>` (or the shared
-    /// initial values for anonymous leaves).
-    style: ServoArc<ComputedValues>,
+pub(crate) struct BoxNode<Id> {
+    /// Cascaded style, read by `TaffyStyloStyle` (and paint, post box-tree
+    /// re-root). A cheap refcount clone of the cascade's primary
+    /// `Arc<ComputedValues>` (or the shared initial values for anonymous leaves).
+    pub(crate) style: ServoArc<ComputedValues>,
     /// Arena indices of child boxes, in document order.
-    children: Vec<usize>,
+    pub(crate) children: Vec<usize>,
     /// `Some` => a measured leaf (inline formatting context / bare text);
     /// parley measures it via [`measure_inline_content`].
-    inline_content: Option<InlineContent<Id>>,
+    pub(crate) inline_content: Option<InlineContent<Id>>,
     /// `Some` for a list item (`<li>`): its hanging marker (a bullet or ordinal)
     /// as single-run inline content. Shaped into
     /// [`TextMeasureCtx::marker_layouts`](crate::text_measure::TextMeasureCtx)
     /// after layout; paint hangs it to the left of the item's content box.
-    marker: Option<InlineContent<Id>>,
+    pub(crate) marker: Option<InlineContent<Id>>,
     /// `Some((w, h))` => a replaced leaf (`<img>`) measured to this size
     /// (intrinsic from the `ImagePlane`, overridden by definite CSS
     /// width/height). Mutually exclusive with `inline_content`.
-    replaced_size: Option<(f32, f32)>,
+    pub(crate) replaced_size: Option<(f32, f32)>,
     /// Paint/hit-test identity (see [`BoxSource`]). An [`BoxSource::Anonymous`]
     /// box wraps a run of a mixed container's inline-level children: it has no DOM
     /// element of its own, so it paints no box decorations — its `node_map` key is
     /// a borrowed descendant node whose style (background / border) must not be
     /// painted on this box. Its inline content (e.g. an inline-block as an
     /// `InlineBox`) still paints at its own size.
-    source: BoxSource<Id>,
+    pub(crate) source: BoxSource<Id>,
     cache: Cache,
     unrounded_layout: Layout,
-    final_layout: Layout,
+    pub(crate) final_layout: Layout,
 }
 
 impl<Id> BoxNode<Id> {
@@ -160,6 +177,22 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
     /// leaves. Mirrors `TaffyTree::get_node_context` on the old oracle.
     pub fn get_node_context(&self, id: NodeId) -> Option<&InlineContent<Id>> {
         self.nodes.get(idx(id)).and_then(|n| n.inline_content.as_ref())
+    }
+
+    /// The root box's arena index — the entry point for the box-tree paint walk.
+    pub(crate) fn root_arena(&self) -> usize {
+        self.root
+    }
+
+    /// The box node at arena index `arena`.
+    pub(crate) fn node(&self, arena: usize) -> &BoxNode<Id> {
+        &self.nodes[arena]
+    }
+
+    /// The arena `NodeId` for `arena` — the key under which this box's shaped
+    /// text / marker `parley::Layout` is cached in [`TextMeasureCtx`].
+    pub(crate) fn arena_node_id(&self, arena: usize) -> NodeId {
+        nid(arena)
     }
 
     /// Whether the box for DOM `id` is an anonymous box (paints no box
