@@ -815,6 +815,47 @@ mod tests {
         assert!(approx(b.location.y, 40.0), ".b stacks below .a (y=40), got y={}", b.location.y);
     }
 
+    /// `::before` / `::after` with string `content` generate inline runs around
+    /// the element's own content, ordered before/after it, each carrying the
+    /// pseudo's *own* cascaded style (not the element's).
+    #[test]
+    fn pseudo_before_after_generate_styled_runs() {
+        use crate::construct::gather_inline_content;
+
+        let document = StaticDocument::parse("<html><body><p>hi</p></body></html>");
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(VIEWPORT, VIEWPORT),
+            &[
+                "p { color: rgb(0, 0, 255); }",
+                "p::before { content: \"X\"; color: rgb(255, 0, 0); }",
+                "p::after { content: \"Z\"; }",
+            ],
+            None,
+        );
+        let images = ImagePlane::decode_from_dom(&document);
+        let p = find_all(&document, html5ever::local_name!("p"))[0];
+        let content = gather_inline_content(&document, &styles, &images, NodeRef::new(&document, p));
+
+        let texts: Vec<&str> = content.runs.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(texts.first().copied(), Some("X"), "::before run first, got {texts:?}");
+        assert_eq!(texts.last().copied(), Some("Z"), "::after run last, got {texts:?}");
+        assert!(texts.iter().any(|t| t.contains("hi")), "element text present, got {texts:?}");
+
+        // The ::before run uses the pseudo's own red color, the text run the
+        // element's blue — proving run_from_computed reads the pseudo cascade.
+        let before = content.runs.iter().find(|r| r.text == "X").expect("::before run");
+        assert!(
+            before.color[0] > 0.99 && before.color[2] < 0.01,
+            "::before is its own red, got {:?}",
+            before.color
+        );
+        let hi = content.runs.iter().find(|r| r.text.contains("hi")).expect("text run");
+        assert!(hi.color[2] > 0.99 && hi.color[0] < 0.01, "element text is blue, got {:?}", hi.color);
+    }
+
     /// Block-level floats: two `float: left` divs sit side by side on one
     /// line (where plain blocks would stack). This is the box tree's
     /// float path through the `CssStyle` float/clear forwarding.

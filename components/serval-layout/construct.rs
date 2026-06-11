@@ -19,6 +19,8 @@ use std::hash::Hash;
 
 use layout_dom_api::{LayoutDom, NodeKind};
 
+use style::properties::ComputedValues;
+
 use crate::adapter::NodeRef;
 use crate::image_decode::ImagePlane;
 use crate::style::StylePlane;
@@ -249,11 +251,37 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    use style::selector_parser::PseudoElement;
+
     let mut runs = Vec::new();
     let mut boxes = Vec::new();
     let mut offset = 0usize;
+    // `::before` generated content, prepended; then the element's own content;
+    // then `::after`, appended. Both are inline text runs here (the common case
+    // — block-`display` generated content is a later slice), so they style and
+    // paint through the existing run path with the pseudo's own cascade.
+    push_pseudo_content(styles, elem.id(), PseudoElement::Before, &mut runs, &mut offset);
     gather_runs(dom, styles, images, elem, &mut runs, &mut boxes, &mut offset);
+    push_pseudo_content(styles, elem.id(), PseudoElement::After, &mut runs, &mut offset);
     InlineContent { runs, boxes }
+}
+
+/// Push a run for `elem`'s `pseudo` (`::before` / `::after`) generated content,
+/// if the cascade resolved that pseudo with string `content`.
+fn push_pseudo_content<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+    pseudo: style::selector_parser::PseudoElement,
+    runs: &mut Vec<InlineRun>,
+    offset: &mut usize,
+) {
+    let Some(entry) = styles.get(id) else { return };
+    let Some(data) = entry.borrow_data() else { return };
+    let Some(cv) = data.styles.pseudos.get(&pseudo) else { return };
+    if let Some(text) = pseudo_content_text(cv) {
+        *offset += text.len();
+        runs.push(run_from_computed(cv, text));
+    }
 }
 
 /// Recursive helper for [`gather_inline_content`]. `node`'s direct
@@ -426,6 +454,86 @@ pub(crate) fn run_for_element<NodeId: Copy + Eq + Hash>(
         letter_spacing: letter_spacing_of(styles, id).unwrap_or(0.0),
         word_spacing: word_spacing_of(styles, id).unwrap_or(0.0),
         line_height: line_height_of(styles, id).unwrap_or_default(),
+    }
+}
+
+/// Build an [`InlineRun`] from an explicit [`ComputedValues`] (a `::before` /
+/// `::after` pseudo-element style) rather than a DOM node's primary style.
+///
+/// Mirrors [`run_for_element`]'s field reads against `cv` directly. The two
+/// don't share code today because `run_for_element`'s per-field helpers key off
+/// `(styles, id)` and read `.primary()`; unify them (helpers taking
+/// `&ComputedValues`) if a third caller appears.
+pub(crate) fn run_from_computed(cv: &ComputedValues, text: String) -> InlineRun {
+    use style::values::computed::font::{FontStyle, GenericFontFamily, SingleFontFamily};
+    use style::values::computed::{Length, LineHeight, TextDecorationLine};
+
+    let font = cv.get_font();
+    let fs = font.font_size.computed_size().px();
+    let itext = cv.get_inherited_text();
+
+    let font_family = match font.font_family.families.iter().next() {
+        Some(SingleFontFamily::FamilyName(name)) => FontFamilySpec::Named(name.name.to_string()),
+        Some(SingleFontFamily::Generic(g)) => FontFamilySpec::Generic(match g {
+            GenericFontFamily::Serif => GenericFamilyKind::Serif,
+            GenericFontFamily::SansSerif => GenericFamilyKind::SansSerif,
+            GenericFontFamily::Monospace => GenericFamilyKind::Monospace,
+            GenericFontFamily::Cursive => GenericFamilyKind::Cursive,
+            GenericFontFamily::Fantasy => GenericFamilyKind::Fantasy,
+            _ => GenericFamilyKind::SansSerif,
+        }),
+        None => FontFamilySpec::default(),
+    };
+
+    let line_height = match &font.line_height {
+        LineHeight::Normal => LineHeightSpec::Normal,
+        LineHeight::Number(num) => LineHeightSpec::Factor(num.0),
+        LineHeight::Length(l) => LineHeightSpec::Px(l.px()),
+        #[allow(unreachable_patterns)]
+        _ => LineHeightSpec::Normal,
+    };
+
+    let text_style = cv.get_text();
+    let decoration = text_style.text_decoration_line;
+    let color = *itext.color.into_srgb_legacy().raw_components();
+    let decoration_color = *text_style
+        .text_decoration_color
+        .resolve_to_absolute(&itext.color)
+        .into_srgb_legacy()
+        .raw_components();
+
+    InlineRun {
+        text,
+        font_size: fs,
+        font_family,
+        weight: font.font_weight.value(),
+        italic: font.font_style != FontStyle::NORMAL,
+        color,
+        underline: decoration.contains(TextDecorationLine::UNDERLINE),
+        strikethrough: decoration.contains(TextDecorationLine::LINE_THROUGH),
+        overline: decoration.contains(TextDecorationLine::OVERLINE),
+        decoration_color,
+        letter_spacing: itext.letter_spacing.0.resolve(Length::new(fs)).px(),
+        word_spacing: itext.word_spacing.resolve(Length::new(fs)).px(),
+        line_height,
+    }
+}
+
+/// The string a pseudo-element's `content` generates, or `None` for `normal` /
+/// `none` / non-string content (counters, images, quotes — later slices).
+pub(crate) fn pseudo_content_text(cv: &ComputedValues) -> Option<String> {
+    use style::values::generics::counters::{Content, ContentItem};
+    match &cv.get_counters().content {
+        Content::Items(items) => {
+            let mut out = String::new();
+            for item in items.items.iter() {
+                if let ContentItem::String(s) = item {
+                    out.push_str(s);
+                }
+            }
+            (!out.is_empty()).then_some(out)
+        }
+        _ => None,
     }
 }
 
