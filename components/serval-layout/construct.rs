@@ -263,7 +263,78 @@ where
     push_pseudo_content(styles, elem.id(), PseudoElement::Before, &mut runs, &mut offset);
     gather_runs(dom, styles, images, elem, &mut runs, &mut boxes, &mut offset);
     push_pseudo_content(styles, elem.id(), PseudoElement::After, &mut runs, &mut offset);
+    // `::first-letter` restyles the first typographic letter of the block's
+    // content. Applied after the runs are gathered (so it sees `::before`'s
+    // generated text as the first letter when present), and only here at the
+    // inline-formatting-context root — a child `span::first-letter` never reaches
+    // this path, matching the spec's block-container restriction.
+    apply_first_letter(styles, elem.id(), &mut runs);
     InlineContent { runs, boxes }
+}
+
+/// Split the first content run at the `::first-letter` boundary, restyling the
+/// first typographic letter with the element's eager `::first-letter` cascade. A
+/// no-op when no `::first-letter` rule applies or the first content run has no
+/// letter (whitespace / punctuation only). Text bytes are preserved exactly (the
+/// run is split, never rewritten), so run-relative box indices and selection
+/// offsets stay valid.
+fn apply_first_letter<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+    runs: &mut Vec<InlineRun>,
+) {
+    use style::selector_parser::PseudoElement;
+
+    let Some(entry) = styles.get(id) else { return };
+    let Some(data) = entry.borrow_data() else { return };
+    let Some(cv) = data.styles.pseudos.get(&PseudoElement::FirstLetter) else { return };
+
+    // The first run carrying non-whitespace content owns the first letter (a
+    // leading whitespace-only run, e.g. from `::before { content: " " }`, stays).
+    let Some(ri) = runs.iter().position(|r| !r.text.trim().is_empty()) else { return };
+    let Some((a, b)) = first_letter_boundary(&runs[ri].text) else { return };
+
+    let original = runs[ri].clone();
+    let prefix = original.text[..a].to_string();
+    let letter = original.text[a..b].to_string();
+    let remainder = original.text[b..].to_string();
+
+    let mut replacement = Vec::with_capacity(3);
+    if !prefix.is_empty() {
+        let mut p = original.clone();
+        p.text = prefix;
+        replacement.push(p);
+    }
+    replacement.push(run_from_computed(cv, letter));
+    if !remainder.is_empty() {
+        let mut r = original.clone();
+        r.text = remainder;
+        replacement.push(r);
+    }
+    runs.splice(ri..=ri, replacement);
+}
+
+/// The byte span `(a, b)` of the CSS first typographic letter unit in `text`:
+/// `a` is the first non-whitespace byte, `b` the byte after the first letter (or
+/// digit), with any punctuation between them included (`"(A` → `(A`). `None` when
+/// the run has no letter — whitespace-only, or symbols/punctuation with no
+/// following letter — so the run carries no `::first-letter`.
+///
+/// Tier-1 boundary: leading whitespace excluded, leading punctuation included,
+/// the unit ends at the first letter. Combining marks *after* that letter are not
+/// yet folded in (the documented §4 edge).
+fn first_letter_boundary(text: &str) -> Option<(usize, usize)> {
+    let a = text.char_indices().find(|(_, c)| !c.is_whitespace()).map(|(i, _)| i)?;
+    for (rel, c) in text[a..].char_indices() {
+        if c.is_whitespace() {
+            return None; // whitespace before any letter: no unit on this run
+        }
+        if c.is_alphanumeric() {
+            return Some((a, a + rel + c.len_utf8()));
+        }
+        // Punctuation / symbol preceding the first letter: include and continue.
+    }
+    None
 }
 
 /// Push a run for `elem`'s `pseudo` (`::before` / `::after`) generated content,

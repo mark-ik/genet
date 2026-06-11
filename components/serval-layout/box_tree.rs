@@ -861,6 +861,66 @@ mod tests {
         assert!(hi.color[2] > 0.99 && hi.color[0] < 0.01, "element text is blue, got {:?}", hi.color);
     }
 
+    /// `::first-letter` splits the block's first run at the first typographic
+    /// letter, giving that letter its own cascaded style (here red on otherwise
+    /// blue text). The remainder keeps the element's style, and leading
+    /// punctuation rides with the letter. (Pseudo follow-ups §4.)
+    #[test]
+    fn first_letter_splits_and_styles_the_opening_letter() {
+        use crate::construct::gather_inline_content;
+
+        let document = StaticDocument::parse("<html><body><p>(Hello world</p></body></html>");
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(VIEWPORT, VIEWPORT),
+            &[
+                "p { color: rgb(0, 0, 255); }",
+                "p::first-letter { color: rgb(255, 0, 0); }",
+            ],
+            None,
+        );
+        let images = ImagePlane::decode_from_dom(&document);
+        let p = find_all(&document, html5ever::local_name!("p"))[0];
+        let content = gather_inline_content(&document, &styles, &images, NodeRef::new(&document, p));
+
+        let texts: Vec<&str> = content.runs.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(texts.first().copied(), Some("(H"), "leading punct rides the letter, got {texts:?}");
+        assert_eq!(
+            content.runs.iter().map(|r| r.text.as_str()).collect::<String>(),
+            "(Hello world",
+            "split preserves the text exactly"
+        );
+
+        let first = &content.runs[0];
+        assert!(
+            first.color[0] > 0.99 && first.color[2] < 0.01,
+            "::first-letter is red, got {:?}",
+            first.color
+        );
+        let rest = &content.runs[1];
+        assert!(
+            rest.color[2] > 0.99 && rest.color[0] < 0.01,
+            "remainder keeps the element's blue, got {:?}",
+            rest.color
+        );
+    }
+
+    /// No `::first-letter` rule → the run is not split (one run for the text).
+    #[test]
+    fn no_first_letter_rule_leaves_one_run() {
+        use crate::construct::gather_inline_content;
+
+        let document = StaticDocument::parse("<html><body><p>Hello</p></body></html>");
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&document, &mut styles, euclid::Size2D::new(VIEWPORT, VIEWPORT), &[], None);
+        let images = ImagePlane::decode_from_dom(&document);
+        let p = find_all(&document, html5ever::local_name!("p"))[0];
+        let content = gather_inline_content(&document, &styles, &images, NodeRef::new(&document, p));
+        assert_eq!(content.runs.len(), 1, "no split without a ::first-letter rule");
+    }
+
     /// A list marker takes its `::marker` pseudo's cascade when present, so
     /// `li::marker { color }` recolors the bullet (not the item's own color) —
     /// the lazy `::marker` is resolved into the plane during the cascade.
