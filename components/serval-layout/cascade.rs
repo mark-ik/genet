@@ -67,7 +67,7 @@ use style::traversal::{DomTraversal, PerLevelTraversalData, recalc_style_at};
 use style::traversal_flags::TraversalFlags;
 use style::Atom;
 
-use crate::adapter_stylo::{CascadeGuard, StyleNodeRef};
+use crate::adapter_stylo::{selectors_quirks_mode, CascadeGuard, StyleNodeRef};
 use crate::font_metrics::SkrifaFontMetricsProvider;
 use crate::style::StylePlane;
 
@@ -139,13 +139,13 @@ where
 
 /// Build a default Stylo `Device` suitable for the cascade runner.
 ///
-/// Uses screen media, no-quirks mode, the given viewport size at 1.0x
-/// device-pixel ratio, the stub `FontMetricsProvider`, default initial
-/// `ComputedValues`, and `Light` color-scheme preference.
-fn make_device(viewport: euclid::default::Size2D<f32>) -> Device {
+/// Uses screen media, the document's `quirks` mode, the given viewport size at
+/// 1.0x device-pixel ratio, the live skrifa `FontMetricsProvider`, default
+/// initial `ComputedValues`, and `Light` color-scheme preference.
+fn make_device(viewport: euclid::default::Size2D<f32>, quirks: QuirksMode) -> Device {
     Device::new(
         MediaType::screen(),
-        QuirksMode::NoQuirks,
+        quirks,
         euclid::Size2D::from_untyped(viewport),
         euclid::Scale::new(1.0),
         Box::new(SkrifaFontMetricsProvider),
@@ -186,7 +186,8 @@ pub fn run_cascade<D>(
     // because a full cascade builds fresh rule nodes and never reuses a prior
     // pass's — only the incremental replacement path needs a persistent tree.
     let lock = plane.shared_lock().clone();
-    let stylist = build_stylist(viewport, stylesheets, base_url, &lock);
+    let quirks = selectors_quirks_mode(dom.quirks_mode());
+    let stylist = build_stylist(viewport, stylesheets, base_url, &lock, quirks);
     cascade_traverse(dom, plane, &stylist, base_url, None);
 }
 
@@ -208,10 +209,11 @@ pub fn build_stylist(
     stylesheets: &[&str],
     base_url: Option<&str>,
     lock: &SharedRwLock,
+    quirks: QuirksMode,
 ) -> Stylist {
     let url_data = make_url_data(base_url);
-    let device = make_device(viewport);
-    let mut stylist = Stylist::new(device, QuirksMode::NoQuirks);
+    let device = make_device(viewport, quirks);
+    let mut stylist = Stylist::new(device, quirks);
     let read = lock.read();
     // Prepend the baseline UA stylesheet (`<html>`/`<body>` → block + fill the
     // viewport; structural block elements default to `display:block`) at
@@ -219,11 +221,16 @@ pub fn build_stylist(
     // orders origins correctly (Author wins over UA for normal declarations; UA
     // `!important` wins over Author normal, per CSS 2.1 §6.4.1). The Stylist
     // resolves rule indices during flush, so all sheets must be present first.
-    let ua_sheet =
-        parse_stylesheet(crate::ua_defaults::UA_DEFAULTS, Origin::UserAgent, lock, &url_data);
+    let ua_sheet = parse_stylesheet(
+        crate::ua_defaults::UA_DEFAULTS,
+        Origin::UserAgent,
+        lock,
+        &url_data,
+        quirks,
+    );
     stylist.append_stylesheet(ua_sheet, &read);
     for css in stylesheets {
-        let sheet = parse_stylesheet(css, Origin::Author, lock, &url_data);
+        let sheet = parse_stylesheet(css, Origin::Author, lock, &url_data, quirks);
         stylist.append_stylesheet(sheet, &read);
     }
     let guards = StylesheetGuards { author: &read, ua_or_user: &read };
@@ -699,6 +706,7 @@ fn parse_inline_styles<D>(
     use html5ever::{ns, LocalName, Namespace};
     let no_ns: Namespace = ns!();
     let style_local = LocalName::from("style");
+    let quirks = selectors_quirks_mode(dom.quirks_mode());
 
     let mut queue = vec![dom.document()];
     while let Some(id) = queue.pop() {
@@ -709,7 +717,7 @@ fn parse_inline_styles<D>(
                         css,
                         url_data,
                         None, // no error reporter
-                        QuirksMode::NoQuirks,
+                        quirks,
                         CssRuleType::Style,
                     );
                     plane.ensure_entry(id).inline_style = Some(ServoArc::new(lock.wrap(pdb)));
@@ -745,6 +753,7 @@ fn parse_stylesheet(
     origin: Origin,
     lock: &SharedRwLock,
     url_data: &UrlExtraData,
+    quirks: QuirksMode,
 ) -> DocumentStyleSheet {
     let media = ServoArc::new(lock.wrap(MediaList::empty()));
     let sheet = Stylesheet::from_str(
@@ -755,7 +764,7 @@ fn parse_stylesheet(
         lock.clone(),
         None, // stylesheet loader
         None, // error reporter
-        QuirksMode::NoQuirks,
+        quirks,
         AllowImportRules::Yes,
     );
     DocumentStyleSheet(ServoArc::new(sheet))
@@ -1120,6 +1129,30 @@ mod tests {
         assert!(div_c[1] > 0.99 && div_c[0] < 0.01, "ancestor <div> → green (:focus-within), got {div_c:?}");
     }
 
+    /// The parser's quirks-mode selection flows through `LayoutDom::quirks_mode`
+    /// into the cascade: a no-doctype document is quirks mode, a `<!DOCTYPE html>`
+    /// one is standards, and `build_stylist` carries it into the `Stylist`.
+    #[test]
+    fn quirks_mode_flows_from_parser_to_stylist() {
+        // `StaticDocument` has an inherent `quirks_mode() -> StaticQuirksMode`,
+        // so reach the `LayoutDom` trait method (the cascade's source) explicitly.
+        use layout_dom_api::LayoutDom;
+
+        // No doctype → quirks mode.
+        let quirks_doc = StaticDocument::parse("<html><body><table></table></body></html>");
+        let qm = LayoutDom::quirks_mode(&quirks_doc);
+        assert_eq!(qm, layout_dom_api::QuirksMode::Quirks);
+
+        let lock = SharedRwLock::new();
+        let stylist =
+            build_stylist(euclid::Size2D::new(800.0, 600.0), &[], None, &lock, selectors_quirks_mode(qm));
+        assert_eq!(stylist.quirks_mode(), QuirksMode::Quirks, "stylist carries quirks mode");
+
+        // `<!DOCTYPE html>` → standards mode.
+        let std_doc = StaticDocument::parse("<!DOCTYPE html><html><body></body></html>");
+        assert_eq!(LayoutDom::quirks_mode(&std_doc), layout_dom_api::QuirksMode::NoQuirks);
+    }
+
     /// The text `color` an element's cascade resolved to, as straight RGBA.
     fn color_of<D>(plane: &StylePlane<D::NodeId>, id: D::NodeId) -> [f32; 4]
     where
@@ -1145,7 +1178,8 @@ mod tests {
         D::NodeId: Copy + Eq + std::hash::Hash + 'static,
     {
         let lock = plane.shared_lock().clone();
-        let stylist = build_stylist(euclid::Size2D::new(800.0, 600.0), sheets, None, &lock);
+        let quirks = selectors_quirks_mode(dom.quirks_mode());
+        let stylist = build_stylist(euclid::Size2D::new(800.0, 600.0), sheets, None, &lock, quirks);
         run_cascade_with_stylist(dom, plane, &stylist);
         stylist
     }

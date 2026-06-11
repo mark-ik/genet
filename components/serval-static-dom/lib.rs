@@ -182,6 +182,14 @@ impl LayoutDom for StaticDocument {
         self.document
     }
 
+    fn quirks_mode(&self) -> QuirksMode {
+        match self.quirks_mode {
+            StaticQuirksMode::NoQuirks => QuirksMode::NoQuirks,
+            StaticQuirksMode::LimitedQuirks => QuirksMode::LimitedQuirks,
+            StaticQuirksMode::Quirks => QuirksMode::Quirks,
+        }
+    }
+
     fn parent(&self, id: StaticNodeId) -> Option<StaticNodeId> {
         self.nodes[id.0].parent
     }

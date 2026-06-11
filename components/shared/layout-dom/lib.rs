@@ -18,6 +18,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::ops::ControlFlow;
 
+pub use markup5ever::interface::QuirksMode;
 pub use markup5ever::{LocalName, Namespace, QualName};
 
 /// Profile-neutral DOM. Implementors expose opaque `NodeId`s and a small set
@@ -32,6 +33,15 @@ pub trait LayoutDom {
 
     /// The document root.
     fn document(&self) -> Self::NodeId;
+
+    /// The document's quirks mode, as selected by the parser (presence/absence
+    /// of a `<!DOCTYPE>`). Drives quirk-gated cascade behaviour (Stylo's
+    /// `QuirksMode`-conditional UA rules, e.g. the table font-size quirk).
+    /// Defaults to standards mode; a backend that parses a real document
+    /// overrides it.
+    fn quirks_mode(&self) -> QuirksMode {
+        QuirksMode::NoQuirks
+    }
 
     /// Parent node, if any.
     fn parent(&self, id: Self::NodeId) -> Option<Self::NodeId>;

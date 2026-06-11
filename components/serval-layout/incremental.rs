@@ -113,7 +113,9 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
         // sheets here, the inline-style blocks parsed each pass, and the cascade
         // guards all share one `SharedRwLock` (Stylo's `same_lock_as`).
         let lock = styles.shared_lock().clone();
-        let stylist = build_stylist(euclid::Size2D::new(width, height), stylesheets, None, &lock);
+        let quirks = crate::adapter_stylo::selectors_quirks_mode(dom.quirks_mode());
+        let stylist =
+            build_stylist(euclid::Size2D::new(width, height), stylesheets, None, &lock, quirks);
         run_cascade_with_stylist(dom, &mut styles, &stylist);
         let (fragments, built, text_ctx) = full_layout(dom, &styles, width, height);
         Self {

@@ -310,6 +310,16 @@ impl<'a, D: LayoutDom> NodeInfo for StyleNodeRef<'a, D> {
 // TDocument
 // =============================================================================
 
+/// Map the parser-native quirks mode (`layout_dom_api::QuirksMode`, re-exported
+/// from markup5ever) to the `selectors` crate's `QuirksMode` Stylo matches with.
+pub(crate) fn selectors_quirks_mode(mode: layout_dom_api::QuirksMode) -> QuirksMode {
+    match mode {
+        layout_dom_api::QuirksMode::NoQuirks => QuirksMode::NoQuirks,
+        layout_dom_api::QuirksMode::LimitedQuirks => QuirksMode::LimitedQuirks,
+        layout_dom_api::QuirksMode::Quirks => QuirksMode::Quirks,
+    }
+}
+
 impl<'a, D: LayoutDom> TDocument for StyleNodeRef<'a, D> {
     type ConcreteNode = StyleNodeRef<'a, D>;
 
@@ -324,9 +334,7 @@ impl<'a, D: LayoutDom> TDocument for StyleNodeRef<'a, D> {
     }
 
     fn quirks_mode(&self) -> QuirksMode {
-        // LayoutDom doesn't currently expose quirks mode; defaults to
-        // standards mode. Will be threaded through when needed.
-        QuirksMode::NoQuirks
+        selectors_quirks_mode(self.dom().quirks_mode())
     }
 
     fn shared_lock(&self) -> &SharedRwLock {
