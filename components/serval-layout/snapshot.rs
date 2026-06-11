@@ -33,6 +33,7 @@ use style::dom::OpaqueNode;
 use style::selector_parser::{Snapshot, SnapshotMap};
 use style::servo::attr::{AttrIdentifier, AttrValue};
 use style::values::GenericAtomIdent;
+use stylo_dom::ElementState;
 
 /// Build a Stylo [`SnapshotMap`] from a drained `DomMutation` stream.
 ///
@@ -61,6 +62,28 @@ where
         let snap = build_snapshot(dom, node, &changes);
         // `SnapshotMap` derefs to `FxHashMap<OpaqueNode, Snapshot>`.
         map.insert(OpaqueNode(dom.opaque_id(node) as usize), snap);
+    }
+    map
+}
+
+/// Build a Stylo [`SnapshotMap`] recording each node's *old* [`ElementState`].
+///
+/// The state twin of [`build_snapshot_map`]: where that snapshots attribute
+/// mutations, this snapshots interaction-state changes (`:hover` / `:active` /
+/// `:focus` / `:focus-within`). The invalidator compares the recorded old
+/// state against the element's current `state()` and restyles only the
+/// elements whose state-dependent selectors are affected. `changed` is the
+/// `(node, old_state)` list returned by `StylePlane::apply_interaction_bits`.
+pub fn state_snapshot_map<D>(dom: &D, changed: &[(D::NodeId, ElementState)]) -> SnapshotMap
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut map = SnapshotMap::new();
+    for (node, old_state) in changed {
+        let mut snap = Snapshot::new();
+        snap.state = Some(*old_state);
+        map.insert(OpaqueNode(dom.opaque_id(*node) as usize), snap);
     }
     map
 }

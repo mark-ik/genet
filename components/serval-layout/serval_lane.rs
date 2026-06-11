@@ -41,8 +41,8 @@
 use std::hash::Hash;
 
 use engine_observables_api::{
-    Affordance, AffordanceKind, BoxModel, FragmentHit, FragmentQuery, InteractionQuery, Point,
-    Rect, Selection, SourceNodeId, SourceRange,
+    Affordance, AffordanceKind, BoxModel, FragmentHit, FragmentQuery, InteractionQuery,
+    InteractionState, Point, Rect, Selection, SourceNodeId, SourceRange,
 };
 use layout_dom_api::LayoutDom;
 
@@ -107,6 +107,17 @@ impl<'a, D: LayoutDom> ServalLaneView<'a, D> {
     ) -> Self {
         self.focused = focused;
         self.selection = selection;
+        self
+    }
+
+    /// Supply the host's full [`InteractionState`] snapshot, so query read-back
+    /// (`focus_target` / `selection`) and the dynamic-pseudo-class cascade
+    /// (via [`crate::cascade::restyle_for_interaction`], fed the same snapshot)
+    /// share one source of truth. The hover / active fields drive the cascade
+    /// only; the query surface exposes focus and selection.
+    pub fn with_interaction_state(mut self, state: &InteractionState) -> Self {
+        self.focused = state.focused;
+        self.selection = state.selection;
         self
     }
 
@@ -731,6 +742,14 @@ mod tests {
         // Host focus flows through `with_interaction`.
         let focused = view.with_interaction(Some(a_src), None);
         assert_eq!(focused.focus_target(), Some(a_src));
+
+        // The same focus, supplied as a full `InteractionState` snapshot — the
+        // identical source the cascade's `restyle_for_interaction` consumes, so
+        // read-back and dynamic-pseudo-class restyle share one snapshot.
+        let snapshot = InteractionState { focused: Some(a_src), ..Default::default() };
+        let via_state =
+            ServalLaneView::new(&document, &styles, &fragments).with_interaction_state(&snapshot);
+        assert_eq!(via_state.focus_target(), Some(a_src));
     }
 
     /// Collect every `<div>` in document (pre-)order. The clip test builds a

@@ -35,6 +35,36 @@ pub trait InteractionQuery {
     fn activation_target(&self, point: Point) -> Option<SourceNodeId>;
 }
 
+/// The host's current interaction snapshot, fed *into* the lane to drive
+/// dynamic pseudo-classes and answered back by [`InteractionQuery`].
+///
+/// This is the input twin of the read-only [`InteractionQuery`] trait: the
+/// host owns input state (which node the pointer is over, which is pressed,
+/// which is focused, the active selection) and hands a snapshot to the lane,
+/// which (a) populates each affected element's cascade state so `:hover` /
+/// `:active` / `:focus` / `:focus-within` rules match and restyle, and (b)
+/// answers `focus_target()` / `selection()` from the same snapshot — one
+/// source for both the cascade and the queries.
+///
+/// CSS scoping is applied when the snapshot is resolved to element state:
+/// `:hover` / `:active` match the target *and its ancestors* (you hover a
+/// button by hovering its label), `:focus` matches only the focused element,
+/// and `:focus-within` matches the focused element and its ancestors.
+#[derive(Clone, Copy, Debug, Default, Deserialize, MallocSizeOf, PartialEq, Serialize)]
+pub struct InteractionState {
+    /// The node the pointer is currently over (the deepest one), or `None`.
+    /// Drives `:hover` on it and every ancestor.
+    pub hovered: Option<SourceNodeId>,
+    /// The node currently being pressed (the deepest one), or `None`.
+    /// Drives `:active` on it and every ancestor.
+    pub active: Option<SourceNodeId>,
+    /// The focused node, or `None`. Drives `:focus` on it and `:focus-within`
+    /// on it and every ancestor.
+    pub focused: Option<SourceNodeId>,
+    /// The active selection, if any. Answered back by [`InteractionQuery::selection`].
+    pub selection: Option<Selection>,
+}
+
 /// One active selection range.
 #[derive(Clone, Copy, Debug, Default, Deserialize, MallocSizeOf, PartialEq, Serialize)]
 pub struct Selection {

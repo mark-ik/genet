@@ -19,7 +19,7 @@
 use std::cell::{Cell, UnsafeCell};
 use std::hash::Hash;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use selectors::matching::ElementSelectorFlags;
 use servo_arc::Arc;
 use style::data::{ElementDataMut, ElementDataRef, ElementDataWrapper};
@@ -189,6 +189,11 @@ impl std::fmt::Debug for StyleEntry {
 /// a possible future optimization.
 pub struct StylePlane<NodeId: Copy + Eq + Hash> {
     entries: FxHashMap<NodeId, StyleEntry>,
+    /// Nodes carrying host interaction bits (`:hover` / `:active` / `:focus` /
+    /// `:focus-within`) as of the last [`apply_interaction_bits`](StylePlane::apply_interaction_bits),
+    /// so the next apply can clear those bits from nodes that have left the
+    /// hover / focus / active chains.
+    interaction_nodes: Vec<NodeId>,
     /// One `SharedRwLock` for the lifetime of this plane. Stylesheet contents and
     /// inline-`style` blocks are wrapped under it, and the cascade reads them
     /// under guards from it. It MUST be stable across cascade passes: incremental
@@ -202,6 +207,7 @@ impl<NodeId: Copy + Eq + Hash> Default for StylePlane<NodeId> {
     fn default() -> Self {
         Self {
             entries: FxHashMap::default(),
+            interaction_nodes: Vec::new(),
             lock: SharedRwLock::new(),
         }
     }
@@ -290,6 +296,47 @@ impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
     /// attribute path.)
     pub fn set_element_state(&mut self, id: NodeId, state: ElementState) {
         self.ensure_entry(id).state = state;
+    }
+
+    /// An element's current [`ElementState`], or empty if it has no entry yet.
+    pub fn element_state(&self, id: NodeId) -> ElementState {
+        self.get(id).map(|e| e.state).unwrap_or_else(ElementState::empty)
+    }
+
+    /// Apply a resolved interaction-bit map (`node -> the HOVER / ACTIVE /
+    /// FOCUS / FOCUS_WITHIN bits it should now carry`) to the plane.
+    ///
+    /// Clears those four bits from nodes that carried them last apply but are
+    /// absent from `desired` (they left the hover / focus / active chains), and
+    /// preserves every non-interaction state bit (e.g. a future DOM-derived
+    /// `CHECKED`). Returns `(node, old_state)` for each node whose state
+    /// actually changed, so the caller can snapshot the old state and drive a
+    /// minimal state-change restyle. See [`crate::cascade::restyle_for_interaction`].
+    pub fn apply_interaction_bits(
+        &mut self,
+        desired: &FxHashMap<NodeId, ElementState>,
+    ) -> Vec<(NodeId, ElementState)> {
+        let mask = ElementState::HOVER
+            | ElementState::ACTIVE
+            | ElementState::FOCUS
+            | ElementState::FOCUS_WITHIN;
+
+        // Every node touched last time or this time may need a state change.
+        let mut touched: FxHashSet<NodeId> = self.interaction_nodes.iter().copied().collect();
+        touched.extend(desired.keys().copied());
+
+        let mut changed = Vec::new();
+        for node in touched {
+            let cur = self.element_state(node);
+            let want = desired.get(&node).copied().unwrap_or_else(ElementState::empty);
+            let new = (cur & !mask) | (want & mask);
+            if new != cur {
+                changed.push((node, cur));
+                self.ensure_entry(node).state = new;
+            }
+        }
+        self.interaction_nodes = desired.keys().copied().collect();
+        changed
     }
 
     /// The union of `RestyleDamage` across all entries. After

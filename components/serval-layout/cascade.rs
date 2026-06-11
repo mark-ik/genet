@@ -37,8 +37,11 @@
 
 use std::hash::Hash;
 
+use engine_observables_api::{InteractionState, SourceNodeId};
 use layout_dom_api::LayoutDom;
+use rustc_hash::FxHashMap;
 use selectors::matching::QuirksMode;
+use stylo_dom::ElementState;
 use style::animation::DocumentAnimationSet;
 use style::context::{
     RegisteredSpeculativePainter, RegisteredSpeculativePainters, SharedStyleContext, StyleContext,
@@ -375,6 +378,136 @@ pub struct RestyleOutcome {
     /// `transform` change registered `RECALCULATE_OVERFLOW` rather than being a
     /// silent no-op that would also produce a (misleading) repaint-only result.
     pub damage: RestyleDamage,
+}
+
+// =============================================================================
+// Interaction-state restyle (`:hover` / `:active` / `:focus` / `:focus-within`)
+// =============================================================================
+
+/// Set `bits` on `from` and every ancestor up to the document root.
+fn add_interaction_chain<D>(
+    dom: &D,
+    desired: &mut FxHashMap<D::NodeId, ElementState>,
+    from: D::NodeId,
+    bits: ElementState,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut cur = Some(from);
+    while let Some(id) = cur {
+        *desired.entry(id).or_insert_with(ElementState::empty) |= bits;
+        cur = dom.parent(id);
+    }
+}
+
+/// Reverse-map a [`SourceNodeId`] (an opaque node id) to a `D::NodeId`.
+/// O(n) over the DOM; the interaction snapshot resolves at most three ids per
+/// input event, off the hot path.
+fn resolve_source<D>(dom: &D, source: SourceNodeId) -> Option<D::NodeId>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut queue = vec![dom.document()];
+    while let Some(id) = queue.pop() {
+        if dom.opaque_id(id) == source.0 {
+            return Some(id);
+        }
+        queue.extend(dom.dom_children(id));
+    }
+    None
+}
+
+/// Resolve a host [`InteractionState`] to the per-node interaction
+/// [`ElementState`] bits it implies, with CSS scoping: `:hover` / `:active` on
+/// the target and every ancestor, `:focus` on the focused node only, and
+/// `:focus-within` on the focused node and every ancestor.
+fn interaction_desired<D>(dom: &D, state: &InteractionState) -> FxHashMap<D::NodeId, ElementState>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut desired: FxHashMap<D::NodeId, ElementState> = FxHashMap::default();
+    if let Some(node) = state.hovered.and_then(|s| resolve_source(dom, s)) {
+        add_interaction_chain(dom, &mut desired, node, ElementState::HOVER);
+    }
+    if let Some(node) = state.active.and_then(|s| resolve_source(dom, s)) {
+        add_interaction_chain(dom, &mut desired, node, ElementState::ACTIVE);
+    }
+    if let Some(node) = state.focused.and_then(|s| resolve_source(dom, s)) {
+        *desired.entry(node).or_insert_with(ElementState::empty) |= ElementState::FOCUS;
+        add_interaction_chain(dom, &mut desired, node, ElementState::FOCUS_WITHIN);
+    }
+    desired
+}
+
+/// Apply a host [`InteractionState`] to the plane's element state without
+/// restyling. Use before an initial [`run_cascade`] (the cascade reads the
+/// state as it matches selectors); use [`restyle_for_interaction`] for later
+/// changes. Returns `(node, old_state)` for each node whose state changed.
+pub fn apply_interaction<D>(
+    dom: &D,
+    plane: &mut StylePlane<D::NodeId>,
+    state: &InteractionState,
+) -> Vec<(D::NodeId, ElementState)>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let desired = interaction_desired(dom, state);
+    plane.apply_interaction_bits(&desired)
+}
+
+/// Restyle for a host interaction change: apply the [`InteractionState`] to
+/// element state, then run Stylo's state-change invalidation so only the
+/// elements whose state-dependent selectors (`:hover` / `:active` / `:focus` /
+/// `:focus-within`) are affected re-cascade. Reuses the persistent `stylist`
+/// exactly like [`restyle_with_snapshots`]; returns whether the change needs a
+/// relayout or is paint-only.
+pub fn restyle_for_interaction<D>(
+    dom: &D,
+    plane: &mut StylePlane<D::NodeId>,
+    stylist: &Stylist,
+    state: &InteractionState,
+) -> RestyleOutcome
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + 'static,
+{
+    plane.reset_damage();
+
+    let changed = apply_interaction(dom, plane, state);
+    if changed.is_empty() {
+        return RestyleOutcome::default();
+    }
+
+    let snapshots = crate::snapshot::state_snapshot_map(dom, &changed);
+
+    // Same per-changed-element prep as the attribute path: clear the stale
+    // `handled_snapshot` so this pass's snapshot is consumed, and mark the dirty
+    // path up every ancestor so the traversal descends to the element's parent
+    // (Stylo processes a child's snapshot while traversing the parent).
+    for (node, _) in &changed {
+        if let Some(entry) = plane.get(*node) {
+            entry.handled_snapshot.set(false);
+        }
+        let mut cur = dom.parent(*node);
+        while let Some(ancestor) = cur {
+            if let Some(entry) = plane.get(ancestor) {
+                entry.dirty_descendants.set(true);
+            }
+            cur = dom.parent(ancestor);
+        }
+    }
+
+    cascade_traverse(dom, plane, stylist, None, Some(&snapshots));
+
+    let damage = plane.aggregate_damage();
+    RestyleOutcome {
+        needs_relayout: damage.contains(RestyleDamage::RELAYOUT),
+        damage,
+    }
 }
 
 /// Partial cascade for a **structural** change: re-cascade only the
@@ -902,6 +1035,89 @@ mod tests {
         let plain = color_of::<StaticDocument>(&plane, ps[1]);
         assert!(hovered[0] > 0.99 && hovered[1] < 0.01, ":hover <p> should be red, got {hovered:?}");
         assert!(plain[0] < 0.01, "non-hovered <p> should stay default, got {plain:?}");
+    }
+
+    /// A host [`InteractionState`] hover drives a `:hover` restyle, and moving
+    /// the hover reverts the old element and recolors the new one — through the
+    /// minimal snapshot path, not a full re-cascade. (Item 1 done-condition.)
+    #[test]
+    fn interaction_hover_drives_restyle() {
+        use engine_observables_api::{InteractionState, SourceNodeId};
+        use html5ever::ns;
+        use layout_dom_api::{LayoutDomMut, QualName};
+        use serval_scripted_dom::ScriptedDom;
+
+        const SHEET: &[&str] = &["p:hover { color: rgb(255, 0, 0); }"];
+        let html = |l: &str| QualName::new(None, ns!(html), l.into());
+
+        // html > body > (p, p)
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p0 = dom.create_element(html("p"));
+        dom.append_child(body, p0);
+        let p1 = dom.create_element(html("p"));
+        dom.append_child(body, p1);
+
+        let mut plane: StylePlane<_> = StylePlane::new();
+        let stylist = cascade_persistent(&dom, &mut plane, SHEET);
+        assert!(color_of::<ScriptedDom>(&plane, p0)[0] < 0.01, "p0 starts non-red");
+
+        // Hover p0 → red; p1 untouched.
+        let hover0 =
+            InteractionState { hovered: Some(SourceNodeId(dom.opaque_id(p0))), ..Default::default() };
+        restyle_for_interaction(&dom, &mut plane, &stylist, &hover0);
+        assert!(color_of::<ScriptedDom>(&plane, p0)[0] > 0.99, "hovered p0 → red");
+        assert!(color_of::<ScriptedDom>(&plane, p1)[0] < 0.01, "p1 stays default");
+
+        // Move hover to p1 → p1 red, p0 reverts.
+        let hover1 =
+            InteractionState { hovered: Some(SourceNodeId(dom.opaque_id(p1))), ..Default::default() };
+        restyle_for_interaction(&dom, &mut plane, &stylist, &hover1);
+        assert!(color_of::<ScriptedDom>(&plane, p1)[0] > 0.99, "now-hovered p1 → red");
+        assert!(color_of::<ScriptedDom>(&plane, p0)[0] < 0.01, "p0 reverts to default");
+    }
+
+    /// `:focus` matches only the focused element while `:focus-within` matches
+    /// it *and its ancestors* — the host snapshot resolves both with correct
+    /// CSS scoping.
+    #[test]
+    fn interaction_focus_within_walks_ancestors() {
+        use engine_observables_api::{InteractionState, SourceNodeId};
+        use html5ever::ns;
+        use layout_dom_api::{LayoutDomMut, QualName};
+        use serval_scripted_dom::ScriptedDom;
+
+        const SHEET: &[&str] =
+            &["div:focus-within { color: rgb(0, 255, 0); } p:focus { color: rgb(255, 0, 0); }"];
+        let html = |l: &str| QualName::new(None, ns!(html), l.into());
+
+        // html > body > div > p
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let div = dom.create_element(html("div"));
+        dom.append_child(body, div);
+        let p = dom.create_element(html("p"));
+        dom.append_child(div, p);
+
+        let mut plane: StylePlane<_> = StylePlane::new();
+        let stylist = cascade_persistent(&dom, &mut plane, SHEET);
+
+        let focus =
+            InteractionState { focused: Some(SourceNodeId(dom.opaque_id(p))), ..Default::default() };
+        restyle_for_interaction(&dom, &mut plane, &stylist, &focus);
+
+        let p_c = color_of::<ScriptedDom>(&plane, p);
+        let div_c = color_of::<ScriptedDom>(&plane, div);
+        assert!(p_c[0] > 0.99 && p_c[1] < 0.01, "focused <p> → red (:focus), got {p_c:?}");
+        assert!(div_c[1] > 0.99 && div_c[0] < 0.01, "ancestor <div> → green (:focus-within), got {div_c:?}");
     }
 
     /// The text `color` an element's cascade resolved to, as straight RGBA.
