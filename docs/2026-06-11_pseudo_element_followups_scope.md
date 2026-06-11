@@ -140,28 +140,42 @@ styled first letter inline, punctuation handled per spec, in a reftest.
 `list-style-image` via a block-ish marker), i.e. generated content that
 participates in block layout.
 
-**Current blocker (verified):** the box tree styles boxes by DOM id
-(`TaffyStyloStyle` reads `StylePlane[dom_id]`); a block pseudo needs a
-synthetic box whose style comes from a pseudo slot, not a DOM node.
+**Current blocker (re-verified 2026-06-11 against the code):** the *layout*
+side is already per-box, not per-DOM-id. `BoxNode` carries its own
+`style: ServoArc<ComputedValues>` (cloned at construction via `style_of`),
+and the Taffy adapter reads it directly (`css_style` builds
+`TaffyStyloStyle(node.style.clone())`). So a synthetic pseudo box only needs
+to carry the pseudo's cascade in that field — **no `StyleSource` enum is
+required for layout.** The doc's original blocker (a `StylePlane[dom_id]`
+read) is stale.
 
-**Approach:** a style *source* on the box node —
-`StyleSource::Element(NodeId) | Pseudo(NodeId, PseudoKind)` — resolved by
-the Taffy adapter; construct synthesizes block children for Before/After
-when the pseudo's computed display is block-level. Pseudo boxes take no
-`FragmentPlane` identity of their own (not script-visible): paint walks the
-box tree so painting is natural, and hit-testing skips them. Incremental
-note: pseudo boxes are construct-time derivatives of their element's style,
-so they regenerate with the element's restyle and add no new `Spliced`
-semantics.
+The real blocker is *paint*. `paint_emit::walk` is **DOM-driven**: it reads
+per-node style from `StylePlane` keyed by `dom_id` (`styles.get(id)`) and
+consults the box tree only for inline content via `node_map`. A synthetic
+pseudo box has no `dom_id` and no `StylePlane` entry, so the DOM walk never
+visits it and its box decorations (padding / background / border) never
+paint. Hit-testing (`serval_lane`) is DOM-driven the same way.
 
-**Touch-points:** box_tree.rs (BoxNode style source + construction),
-construct.rs (`push_pseudo_content` branches on computed display),
-adapter / TaffyStyloStyle, paint_emit (style lookups via source),
-serval_lane (skip pseudo boxes).
+**Approach (revised):** the cost is re-rooting paint emission onto a
+box-tree walk that reads `node.style` (so pseudo boxes paint naturally),
+*or* threading explicit pseudo-box visits into the DOM walk. construct
+synthesizes block children for Before/After when the pseudo's computed
+display is block-level (the layout half is cheap given per-box style).
+Pseudo boxes take no `FragmentPlane` identity of their own (not
+script-visible); hit-testing skips them. Incremental note: pseudo boxes are
+construct-time derivatives of their element's style, so they regenerate with
+the element's restyle and add no new `Spliced` semantics.
 
-**Effort / risk:** Large — the one genuine architectural change here, as the
-infra scope predicted. Land it in slices: the `StyleSource` plumbing first
-(behavior-identical), then block Before/After.
+**Touch-points:** construct.rs (`push_pseudo_content` branches on computed
+display, synthesizes a block box node), box_tree.rs (hold the pseudo box +
+its style), **paint_emit (the real work: visit pseudo boxes / box-tree
+walk)**, serval_lane (skip pseudo boxes in hit-test).
+
+**Effort / risk:** Large, concentrated in paint emission (the layout side is
+already done). Land it in slices: block-box *layout* synthesis first (lays
+out, invisible until paint lands), then the paint-emission visit, then
+hit-test exclusion. Gated on a content lane actually needing block-level
+generated content — none does today.
 
 **Done when:** `p::before { content: "x"; display: block; padding: … }`
 lays out and paints as a block child; inline behavior unchanged; hit-tests
