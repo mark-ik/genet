@@ -156,26 +156,46 @@ pseudo box has no `dom_id` and no `StylePlane` entry, so the DOM walk never
 visits it and its box decorations (padding / background / border) never
 paint. Hit-testing (`serval_lane`) is DOM-driven the same way.
 
-**Approach (revised):** the cost is re-rooting paint emission onto a
-box-tree walk that reads `node.style` (so pseudo boxes paint naturally),
-*or* threading explicit pseudo-box visits into the DOM walk. construct
-synthesizes block children for Before/After when the pseudo's computed
-display is block-level (the layout half is cheap given per-box style).
-Pseudo boxes take no `FragmentPlane` identity of their own (not
-script-visible); hit-testing skips them. Incremental note: pseudo boxes are
-construct-time derivatives of their element's style, so they regenerate with
-the element's restyle and add no new `Spliced` semantics.
+**Decision (2026-06-11):** a content lane now needs block-level generated
+content, so this is greenlit. Chosen shape: **re-root paint emission onto the
+box tree** (the clean end state, not the incremental DOM-walk splice), and
+**pseudo boxes are hit-testable**, routing a hit to the originating element
+(browser-faithful), not skipped.
 
-**Touch-points:** construct.rs (`push_pseudo_content` branches on computed
-display, synthesizes a block box node), box_tree.rs (hold the pseudo box +
-its style), **paint_emit (the real work: visit pseudo boxes / box-tree
-walk)**, serval_lane (skip pseudo boxes in hit-test).
+**Approach:** paint's three DOM couplings come off independently. *Style*:
+convert every decoration + stacking helper from `(styles, dom_id)` to take a
+`&ComputedValues` — they already funnel through `primary().get_X()`, so this
+is mechanical and behavior-identical. *Structure + position*: re-root `walk`
+to recurse the box-tree arena's `children` and read `node.final_layout`
+instead of `dom.dom_children` + `fragments.rect_of`. *Identity*: add a
+`BoxSource::{Element(id) | Pseudo(elem, kind) | Anonymous(id)}` to `BoxNode`
+to carry the remaining `dom_id`-keyed concerns (scroll offsets, canvas-bg
+propagation, stacking defer) and hit-test routing. construct then synthesizes
+block children for Before/After when the pseudo's computed display is
+block-level — paint renders them for free once it walks the tree. Pseudo
+boxes take no `FragmentPlane` identity (not script-visible); hit-testing maps
+`Pseudo(elem, _)` back to `elem`. url() background-image on a pseudo (needs an
+ImagePlane key) is a follow-up; color/gradient backgrounds work day one.
 
-**Effort / risk:** Large, concentrated in paint emission (the layout side is
-already done). Land it in slices: block-box *layout* synthesis first (lays
-out, invisible until paint lands), then the paint-emission visit, then
-hit-test exclusion. Gated on a content lane actually needing block-level
-generated content — none does today.
+**Slices:**
+
+1. **CV-pure helpers** — `background_color_of` / `border_of` / `box_shadows_of`
+   / `border_radius_of` / `clips_overflow` / `compute_transform_matrix` /
+   `text_color_of` / `bg_tile_style_of` / `defers_to_stacking` / `bucket_z`
+   take `&ComputedValues`; the walk resolves the CV once. Behavior-identical.
+2. **Re-root `walk` on the box tree** — recurse arena children, position from
+   `final_layout`, style from `node.style`, identity from `BoxSource`. The
+   riskiest slice; the existing suite must stay green (output equivalent for
+   today's DOMs, since the tree already holds every painted box).
+3. **Block pseudo synthesis** — construct emits block `BoxNode`s for block
+   `::before`/`::after` (source `Pseudo`, style = pseudo CV, inline_content =
+   generated run) as first/last children of the element box.
+4. **Hit-test routing** — `serval_lane` resolves a pseudo-box hit to its
+   originating element.
+
+**Effort / risk:** Large; the one genuine architectural change. The layout
+side is already per-box, so the work is concentrated in paint emission (slice
+2) with slice 1 as the safe, well-tested foundation.
 
 **Done when:** `p::before { content: "x"; display: block; padding: … }`
 lays out and paints as a block child; inline behavior unchanged; hit-tests
