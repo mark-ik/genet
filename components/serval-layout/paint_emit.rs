@@ -49,11 +49,26 @@ use parley::PositionedLayoutItem;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
+use servo_arc::Arc as ServoArc;
+use style::properties::ComputedValues;
+
 use crate::box_tree::BoxTree;
 use crate::fragment::FragmentPlane;
 use crate::image_decode::{BackgroundImagePlane, DecodedImage, ImagePlane};
 use crate::style::StylePlane;
 use crate::text_measure::TextMeasureCtx;
+
+/// Clone the primary cascaded style (`ComputedValues`) for `id`, or `None` when
+/// the cascade has no data (hand-rolled style fixtures, text nodes). A cheap
+/// refcount bump on the cascade's `Arc`. The decoration helpers below read a
+/// `&ComputedValues` directly (so a box-tree-driven walk can hand them
+/// `node.style`); this is the DOM-keyed resolution at their call sites.
+pub(crate) fn primary_cv<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> Option<ServoArc<ComputedValues>> {
+    styles.get(id).and_then(|e| e.borrow_data().map(|d| d.styles.primary().clone()))
+}
 
 /// Per-node scroll offsets (device px), keyed by DOM node. An overflow
 /// container with an entry here has its clipped content translated by
@@ -488,6 +503,11 @@ pub(crate) fn walk<D>(
     // deferred descendant carries the transforms it would have inherited in flow.
     let mut child_transform = ancestor_transform;
     let pushed = if let Some(l) = fragments.rect_of(id) {
+        // This node's cascaded style, resolved once and shared by every decoration
+        // read below (DOM-keyed here; a box-tree-driven walk would hand the box's
+        // own `node.style`). `None` for the borrowed-key edge / un-cascaded nodes —
+        // each read falls back to its prior no-data default.
+        let cv = primary_cv(styles, id);
         // Children push their own parent-relative location, composing with this
         // node's transform. The context root has no enclosing transform on the
         // stack (the stacking painter emits each layer on a clean stack), so it
@@ -502,7 +522,8 @@ pub(crate) fn walk<D>(
         // `transform: translate(x,y)` moves the painted node (the orrery's
         // per-frame motion). `origin` is the box-model position; `transform` is
         // the CSS transform layered on top.
-        let node_transform = compute_transform_matrix(styles, id);
+        let node_transform =
+            cv.as_deref().map(compute_transform_matrix).unwrap_or_else(LayoutTransform::identity);
         commands.push(PaintCmd::PushTransform(TransformSpec {
             origin: push_origin,
             transform: node_transform,
@@ -542,7 +563,13 @@ pub(crate) fn walk<D>(
                 // emit them before the background. (Inset shadows,
                 // which paint over the background, are deferred —
                 // skipped here, warn-skipped in the translator.)
-                for shadow in box_shadows_of(styles, id).into_iter().filter(|_| !is_anon) {
+                for shadow in cv
+                    .as_deref()
+                    .map(box_shadows_of)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|_| !is_anon)
+                {
                     if shadow.inset {
                         continue;
                     }
@@ -565,7 +592,8 @@ pub(crate) fn walk<D>(
                 let bg_radius = if is_anon {
                     None
                 } else {
-                    border_radius_of(styles, id, local_bounds.width(), local_bounds.height())
+                    cv.as_deref()
+                        .and_then(|c| border_radius_of(c, local_bounds.width(), local_bounds.height()))
                 };
                 if let Some(radius) = bg_radius {
                     commands.push(PaintCmd::PushClip(ClipSpec {
@@ -584,7 +612,10 @@ pub(crate) fn walk<D>(
                 if !suppress_bg {
                     commands.push(PaintCmd::DrawRect(RectItem {
                         placement: CommonPlacement::new(local_bounds),
-                        color: background_color_of(styles, id),
+                        color: cv
+                            .as_deref()
+                            .map(background_color_of)
+                            .unwrap_or(ColorF::TRANSPARENT),
                     }));
                     // Background-image gradient layers paint over the color. CSS
                     // lists the topmost layer first, so they emit back-to-front;
@@ -598,8 +629,12 @@ pub(crate) fn walk<D>(
                     let border = [l.border.left, l.border.top, l.border.right, l.border.bottom];
                     let padding =
                         [l.padding.left, l.padding.top, l.padding.right, l.padding.bottom];
-                    for cmd in
-                        background_gradient_layers(styles, id, local_bounds, border, padding, local_bounds)
+                    for cmd in cv
+                        .as_deref()
+                        .map(|c| {
+                            background_gradient_layers(c, local_bounds, border, padding, local_bounds)
+                        })
+                        .unwrap_or_default()
                     {
                         commands.push(cmd);
                     }
@@ -616,7 +651,7 @@ pub(crate) fn walk<D>(
                     let int_w = decoded.width as f32;
                     let int_h = decoded.height as f32;
                     let key = em.images.add(decoded);
-                    let bg_style = bg_tile_style_of(styles, id);
+                    let bg_style = cv.as_deref().and_then(bg_tile_style_of);
                     // The three reference boxes in this node's local
                     // (border-box) coords. `l.border` / `l.padding` are the
                     // resolved insets; (x, y, w, h) per box.
@@ -703,7 +738,10 @@ pub(crate) fn walk<D>(
                     }));
                 }
                 if let Some((widths, normal)) = (!is_anon)
-                    .then(|| border_of(styles, id, local_bounds.width(), local_bounds.height()))
+                    .then(|| {
+                        cv.as_deref()
+                            .and_then(|c| border_of(c, local_bounds.width(), local_bounds.height()))
+                    })
                     .flatten()
                 {
                     commands.push(PaintCmd::DrawBorder(BorderItem {
@@ -767,7 +805,7 @@ pub(crate) fn walk<D>(
             }
             _ => {}
         }
-        if dom.kind(id) == NodeKind::Element && clips_overflow(styles, id) {
+        if dom.kind(id) == NodeKind::Element && cv.as_deref().is_some_and(clips_overflow) {
             clip_rect = Some(LayoutRect::new(
                 LayoutPoint::new(l.border.left, l.border.top),
                 LayoutPoint::new(l.size.width - l.border.right, l.size.height - l.border.bottom),
@@ -1145,16 +1183,11 @@ struct BgTileStyle {
 
 /// Read the first background layer's size / repeat / position from an
 /// element's `ComputedValues`. `None` when the cascade has not run.
-fn bg_tile_style_of<NodeId: Copy + Eq + std::hash::Hash>(
-    styles: &StylePlane<NodeId>,
-    id: NodeId,
-) -> Option<BgTileStyle> {
+fn bg_tile_style_of(cv: &ComputedValues) -> Option<BgTileStyle> {
     use style::computed_values::background_clip::single_value::T as Clip;
     use style::computed_values::background_origin::single_value::T as Origin;
     use style::values::specified::background::BackgroundRepeatKeyword as K;
-    let entry = styles.get(id)?;
-    let data = entry.borrow_data()?;
-    let bg = data.styles.primary().get_background();
+    let bg = cv.get_background();
     let size = bg.background_size.0.first()?.clone();
     let repeat = bg.background_repeat.0.first()?;
     let pos_x = bg.background_position_x.0.first()?.clone();
@@ -1247,15 +1280,9 @@ fn resolve_bg_tile(
 /// Returns transparent when no cascade data is present (hand-rolled
 /// styles bypass the cascade) — that matches CSS semantics for
 /// "background-color: initial".
-fn background_color_of<NodeId: Copy + Eq + std::hash::Hash>(
-    styles: &StylePlane<NodeId>,
-    id: NodeId,
-) -> ColorF {
-    let Some(entry) = styles.get(id) else { return ColorF::TRANSPARENT; };
-    let Some(data) = entry.borrow_data() else { return ColorF::TRANSPARENT; };
-    let primary = data.styles.primary();
-    let bg = &primary.get_background().background_color;
-    let current = primary.get_inherited_text().color;
+fn background_color_of(cv: &ComputedValues) -> ColorF {
+    let bg = &cv.get_background().background_color;
+    let current = cv.get_inherited_text().color;
     stylo_color_to_paint(bg, current)
 }
 
@@ -1350,22 +1377,24 @@ where
     // The root must generate a principal box at all: `display: none` on the root
     // hides the whole document, so there is no canvas background to propagate
     // (the *-propagation negative tests).
-    if !generates_box(styles, root) {
+    let root_cv = primary_cv(styles, root)?;
+    if !generates_box(&root_cv) {
         return None;
     }
     // Source: the root if it carries a background, else (root transparent) the
     // body — the HTML body→canvas propagation special case. A `display: none` /
     // `display: contents` body generates no principal box and so does not
     // propagate either.
-    let source = if has_canvas_background(styles, root) {
-        root
+    let (source, source_cv) = if has_canvas_background(&root_cv) {
+        (root, root_cv)
     } else {
         let body = dom.dom_children(root).find(|&c| {
             dom.kind(c) == NodeKind::Element
                 && dom.element_name(c).is_some_and(|q| q.local == local_name!("body"))
         })?;
-        if generates_box(styles, body) && has_canvas_background(styles, body) {
-            body
+        let body_cv = primary_cv(styles, body)?;
+        if generates_box(&body_cv) && has_canvas_background(&body_cv) {
+            (body, body_cv)
         } else {
             return None;
         }
@@ -1376,7 +1405,7 @@ where
     let canvas = LayoutRect::new(LayoutPoint::new(0.0, 0.0), LayoutPoint::new(cw, ch));
 
     // Background color first (behind the image layers), over the whole canvas.
-    let color = background_color_of(styles, source);
+    let color = background_color_of(&source_cv);
     if color.a > 0.0 {
         commands.push(PaintCmd::DrawRect(RectItem {
             placement: CommonPlacement::new(canvas),
@@ -1406,7 +1435,7 @@ where
             )
         })
         .unwrap_or((canvas, [0.0; 4], [0.0; 4]));
-    for cmd in background_gradient_layers(styles, source, root_box, border, padding, canvas) {
+    for cmd in background_gradient_layers(&source_cv, root_box, border, padding, canvas) {
         commands.push(cmd);
     }
 
@@ -1415,37 +1444,23 @@ where
 
 /// Whether `id` carries a background that participates in canvas propagation: a
 /// non-transparent background color, or any non-`none` background-image layer.
-fn has_canvas_background<NodeId: Copy + Eq + Hash>(
-    styles: &StylePlane<NodeId>,
-    id: NodeId,
-) -> bool {
+fn has_canvas_background(cv: &ComputedValues) -> bool {
     use style::values::generics::image::Image;
-    let has_image = styles
-        .get(id)
-        .and_then(|e| e.borrow_data())
-        .is_some_and(|d| {
-            d.styles
-                .primary()
-                .get_background()
-                .background_image
-                .0
-                .iter()
-                .any(|img| !matches!(img, Image::None))
-        });
-    has_image || background_color_of(styles, id).a > 0.0
+    let has_image = cv
+        .get_background()
+        .background_image
+        .0
+        .iter()
+        .any(|img| !matches!(img, Image::None));
+    has_image || background_color_of(cv).a > 0.0
 }
 
 /// Whether `id` generates a principal box — i.e. is not `display: none` or
 /// `display: contents`. Only a box-generating element propagates its background
 /// to the canvas (CSS Backgrounds-3 §special-backgrounds).
-fn generates_box<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId) -> bool {
-    styles
-        .get(id)
-        .and_then(|e| e.borrow_data())
-        .is_some_and(|d| {
-            let display = d.styles.primary().get_box().display;
-            !display.is_none() && !display.is_contents()
-        })
+fn generates_box(cv: &ComputedValues) -> bool {
+    let display = cv.get_box().display;
+    !display.is_none() && !display.is_contents()
 }
 
 /// Cap on tiles emitted for one gradient layer (per axis the count is also
@@ -1493,19 +1508,15 @@ fn origin_box(border_box: LayoutRect, border: [f32; 4], padding: [f32; 4], which
 /// from `border_box` inset by `border` / `padding` ([l, t, r, b] each); the
 /// painting area `paint_area` is the clip. Non-gradient layers (`url()` images)
 /// are emitted separately.
-fn background_gradient_layers<NodeId: Copy + Eq + Hash>(
-    styles: &StylePlane<NodeId>,
-    id: NodeId,
+fn background_gradient_layers(
+    cv: &ComputedValues,
     border_box: LayoutRect,
     border: [f32; 4],
     padding: [f32; 4],
     paint_area: LayoutRect,
 ) -> Vec<PaintCmd> {
-    let Some(entry) = styles.get(id) else { return Vec::new() };
-    let Some(data) = entry.borrow_data() else { return Vec::new() };
-    let primary = data.styles.primary();
-    let bg = primary.get_background();
-    let current = primary.get_inherited_text().color;
+    let bg = cv.get_background();
+    let current = cv.get_inherited_text().color;
     let layers = &bg.background_image.0;
     // Per-axis tile placement. Returns the tile positions (absolute coords on the
     // axis) and the *effective* tile size (`round` rescales it). `pos0` / `ext`
@@ -2055,14 +2066,9 @@ fn conic_gradient_layer(
 /// the scrollable values, is a scroll container). `false` when the cascade
 /// hasn't run. `pub(crate)` so hit-testing ([`crate::serval_lane`]) clips the
 /// same boxes the paint does.
-pub(crate) fn clips_overflow<NodeId: Copy + Eq + std::hash::Hash>(
-    styles: &StylePlane<NodeId>,
-    id: NodeId,
-) -> bool {
+pub(crate) fn clips_overflow(cv: &ComputedValues) -> bool {
     use style::values::computed::Overflow;
-    let Some(entry) = styles.get(id) else { return false; };
-    let Some(data) = entry.borrow_data() else { return false; };
-    let box_style = data.styles.primary().get_box();
+    let box_style = cv.get_box();
     !matches!(box_style.overflow_x, Overflow::Visible)
         || !matches!(box_style.overflow_y, Overflow::Visible)
 }
@@ -2122,16 +2128,9 @@ fn stylo_color_to_paint(
 /// cascade has not run or every corner is zero (the common case — keeps
 /// the paint stream free of no-op rounded clips). Independent of
 /// [`border_of`]: a rounded box need not have a border.
-fn border_radius_of<NodeId: Copy + Eq + std::hash::Hash>(
-    styles: &StylePlane<NodeId>,
-    id: NodeId,
-    w: f32,
-    h: f32,
-) -> Option<BorderRadius> {
+fn border_radius_of(cv: &ComputedValues, w: f32, h: f32) -> Option<BorderRadius> {
     use style::values::computed::Length;
-    let entry = styles.get(id)?;
-    let data = entry.borrow_data()?;
-    let b = data.styles.primary().get_border();
+    let b = cv.get_border();
     // A `BorderCornerRadius` is a Size2D of NonNegativeLengthPercentage:
     // `.0.width` is the horizontal radius, `.0.height` the vertical.
     let corner = |c: &style::values::computed::BorderCornerRadius| -> LayoutSize {
@@ -2158,17 +2157,9 @@ fn border_radius_of<NodeId: Copy + Eq + std::hash::Hash>(
 /// `ComputedValues`. Returns `None` if no side has a renderable
 /// border (all widths zero or all sides are `none`/`hidden`) — keeps
 /// the paint stream uncluttered for un-bordered elements.
-fn border_of<NodeId: Copy + Eq + std::hash::Hash>(
-    styles: &StylePlane<NodeId>,
-    id: NodeId,
-    w: f32,
-    h: f32,
-) -> Option<(LayoutSideOffsets, NormalBorder)> {
-    let entry = styles.get(id)?;
-    let data = entry.borrow_data()?;
-    let primary = data.styles.primary();
-    let border = primary.get_border();
-    let current_color = primary.get_inherited_text().color;
+fn border_of(cv: &ComputedValues, w: f32, h: f32) -> Option<(LayoutSideOffsets, NormalBorder)> {
+    let border = cv.get_border();
+    let current_color = cv.get_inherited_text().color;
 
     let top_w = border.border_top_width.0.to_f32_px();
     let right_w = border.border_right_width.0.to_f32_px();
@@ -2210,7 +2201,7 @@ fn border_of<NodeId: Copy + Eq + std::hash::Hash>(
             color: stylo_color_to_paint(&border.border_left_color, current_color),
             style: left_style,
         },
-        radius: border_radius_of(styles, id, w, h).unwrap_or_else(BorderRadius::zero),
+        radius: border_radius_of(cv, w, h).unwrap_or_else(BorderRadius::zero),
         do_aa: true,
     };
     Some((widths, details))
@@ -2231,20 +2222,9 @@ struct ShadowData {
 /// paints first; the producer emits in list order and the renderer's
 /// later-paints-on-top handles depth). Empty when no cascade data or
 /// no shadows.
-fn box_shadows_of<NodeId: Copy + Eq + std::hash::Hash>(
-    styles: &StylePlane<NodeId>,
-    id: NodeId,
-) -> Vec<ShadowData> {
-    let Some(entry) = styles.get(id) else {
-        return Vec::new();
-    };
-    let Some(data) = entry.borrow_data() else {
-        return Vec::new();
-    };
-    let primary = data.styles.primary();
-    let current = primary.get_inherited_text().color;
-    primary
-        .get_effects()
+fn box_shadows_of(cv: &ComputedValues) -> Vec<ShadowData> {
+    let current = cv.get_inherited_text().color;
+    cv.get_effects()
         .box_shadow
         .0
         .iter()
@@ -2279,20 +2259,11 @@ fn conjugate_at(origin: (f32, f32), m: LayoutTransform) -> LayoutTransform {
 /// absolute px (the orrery's `transform:translate(px,px)`) is exact; a
 /// fragment-rect reference box for `%` is a follow-up. `rotate`/`scale` longhands
 /// and 3D (preserve-3d/perspective) are out of scope.
-fn compute_transform_matrix<NodeId: Copy + Eq + std::hash::Hash>(
-    styles: &StylePlane<NodeId>,
-    id: NodeId,
-) -> LayoutTransform {
+fn compute_transform_matrix(cv: &ComputedValues) -> LayoutTransform {
     use app_units::Au;
     use style::values::generics::transform::GenericTranslate as Tr;
 
-    let Some(entry) = styles.get(id) else {
-        return LayoutTransform::identity();
-    };
-    let Some(data) = entry.borrow_data() else {
-        return LayoutTransform::identity();
-    };
-    let box_style = data.styles.primary().get_box();
+    let box_style = cv.get_box();
 
     // `translate` longhand (the separate `translate:` property).
     let translate = match &box_style.translate {

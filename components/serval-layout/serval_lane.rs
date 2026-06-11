@@ -47,7 +47,7 @@ use engine_observables_api::{
 use layout_dom_api::LayoutDom;
 
 use crate::fragment::FragmentPlane;
-use crate::paint_emit::{clips_overflow, ScrollOffsets};
+use crate::paint_emit::{clips_overflow, primary_cv, ScrollOffsets};
 use crate::style::StylePlane;
 
 /// Borrowed view over Serval's planes, exposing the engine_observables_api
@@ -131,7 +131,9 @@ impl<'a, D: LayoutDom> ServalLaneView<'a, D> {
 
     /// Reverse-lookup a `D::NodeId` for a given `SourceNodeId`.
     /// O(n) over the DOM; acceptable for probe-stage. Cf. module doc.
-    fn find_by_source_id(&self, source_id: SourceNodeId) -> Option<D::NodeId>
+    /// `pub(crate)` so the `IncrementalLayout` session can serve a hit-test
+    /// (`SourceNodeId` → `D::NodeId`) off its retained planes.
+    pub(crate) fn find_by_source_id(&self, source_id: SourceNodeId) -> Option<D::NodeId>
     where
         D::NodeId: Copy + Eq + Hash,
     {
@@ -240,7 +242,7 @@ where
                     source_node: SourceNodeId(self.dom.opaque_id(id)),
                     label: affordance_label(self.dom, id, kind),
                 });
-            } else if clips_overflow(self.styles, id) {
+            } else if primary_cv(self.styles, id).as_deref().is_some_and(clips_overflow) {
                 out.push(Affordance {
                     kind: AffordanceKind::Scrollable,
                     source_node: SourceNodeId(self.dom.opaque_id(id)),
@@ -360,7 +362,7 @@ fn walk_for_hit<D>(
         // Clip: an overflow container clips its descendants to its padding box.
         // A point outside that box can't hit them — skip the subtree (this is
         // what stops a scrolled box's clicks leaking onto the element below it).
-        if clips_overflow(styles, id) {
+        if primary_cv(styles, id).as_deref().is_some_and(clips_overflow) {
             let pad = Rect::new(
                 Point::new(origin.x + l.border.left, origin.y + l.border.top),
                 l.size.width - l.border.left - l.border.right,
