@@ -15,8 +15,9 @@ path = "src/lib.rs"
 
 # Third reactive backend beside Masonry (`xilem`) and the browser DOM
 # (`xilem_web`), pointed at serval's `LayoutDomMut`. Git-dep on the Linebender
-# fork's `xilem_core` (the same fork pelt-viewer consumes for `xilem`/`masonry`,
-# branch `mere-wgpu-29-vello-0-9`); we take only the diff/message core, not the
+# fork's `xilem_core` (branch `mere-wgpu-29-vello-0-9`; the fork's only serval
+# consumer since pelt-viewer's 2026-06-12 retirement); we take only the
+# diff/message core, not the
 # Masonry renderer, so we depend on `xilem_core` directly rather than `xilem`.
 # A git dep (not the old repo-escaping `../../../../crates/xilem` path) so a bare
 # serval clone resolves it without the personal `crates/` fork tree as a sibling.
