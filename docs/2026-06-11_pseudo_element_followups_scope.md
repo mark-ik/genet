@@ -230,23 +230,20 @@ block nothing today — pick up when a corpus / lane pulls on it. F4 was a
 host-visible regression from the slice-2 re-root, found and fixed on discovery
 (2026-06-11).
 
-### F1 — url() `background-image` on a pseudo box (small)
+### F1 — url() `background-image` on a pseudo box (DONE 2026-06-11, `4249db8bae8`)
 
-**Now**: a block `::before`/`::after` box paints color + gradient backgrounds
-(read CV-pure from the pseudo cascade), but **not** a `background-image: url(…)`
-layer. The DOM-driven `BackgroundImagePlane` is keyed by DOM node id; a pseudo
-box has no DOM id (`BoxSource::Pseudo`), so `em.bg_images_plane.get(dom_id)`
-resolves against the *originating element*, not the pseudo — wrong image (or
-none).
+**Was**: a block `::before`/`::after` box painted color + gradient backgrounds
+but not a `background-image: url(…)` layer — the DOM-keyed `BackgroundImagePlane`
+had no slot for a box with no DOM id.
 
-**Do**: key decoded pseudo background-images by `(originating element, kind)` (or
-by arena id) so the pseudo box's url() layer resolves to its own image. The
-gather already runs per box; the plane key is the gap.
+**Did**: `BackgroundImagePlane` now decodes block-pseudo url() backgrounds too,
+keyed by `(originating element, kind)`; the box-tree walk fetches via the box's
+`BoxSource::Pseudo`. Folded in a related fix: `block_pseudo_content` now
+generates a box for `content: ""` (any string content, empty included — only
+`normal`/`none` suppress it), so a decorative no-text bg pseudo lays out + paints.
+Guard: `block_pseudo_paints_its_url_background_image`.
 
-**Done when**: `p::before { content:""; display:block; background-image:url(x) }`
-paints `x` in the pseudo box.
-
-### F2 — Mixed inline-one-side / block-other-side pseudo pair (small)
+### F2 — Mixed inline-one-side / block-other-side pseudo pair (medium — re-estimated)
 
 **Now**: when an element has a block `::before` and an *inline* `::after` (or
 vice-versa), the block pseudo forces the element onto the block/mixed
@@ -254,12 +251,23 @@ construction path, where the inline-context branch (which runs
 `push_pseudo_content`) is never taken — so the inline pseudo's run is dropped.
 (Both-inline and both-block already work.)
 
-**Do**: emit the inline-side pseudo run into the element's anonymous inline
-wrapper on the block path (or hoist `push_pseudo_content` so it runs regardless
-of which construction branch the element takes).
+**Why it's medium, not small (2026-06-11):** the inline pseudo's run is not just
+"emitted somewhere" — to render correctly it must **merge into the adjacent
+text's anonymous line box** (an inline `::after` shares the text's *last line*,
+not its own line below it), with a **create-a-box fallback** when the element has
+no adjacent inline content (block-only children → the inline pseudo is correctly
+on its own line). And the merge target is an *anonymous* wrapper, so the
+element's own background/border must stay on the element box, not leak onto the
+inner run. Tractable, but it touches the anonymous-group construction in
+`build_node` / `flush_anon_group`, not a one-line hoist.
+
+**Do**: gather the element's inline `::before`/`::after` run; prepend/append it to
+the first/last anonymous inline box among the block-path children, creating a
+dedicated anonymous box only when there is none adjacent.
 
 **Done when**: `p::before{content:"x";display:block} p::after{content:"y"}`
-shows both the block `x` box and the inline `y` after the text.
+shows the block `x` box and the inline `y` sharing the text's last line; a
+block-only container's inline `::after` lands on its own line after the blocks.
 
 ### F3 — Retire the test-only cache-less `emit_paint_list` (cleanup)
 
