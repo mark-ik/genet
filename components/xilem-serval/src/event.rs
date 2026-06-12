@@ -219,8 +219,11 @@ where
             // re-register on the same node is a harmless no-op we skip.
             let node = *element.node;
             if node != prev_node {
-                ctx.unregister_click(prev_node);
+                // The captured path is the same for both nodes (it is structural,
+                // not node-dependent), so it both identifies the old node's entry
+                // to drop and keys the new one.
                 let path = ctx.view_path().to_vec();
+                ctx.unregister_click(prev_node, &path);
                 ctx.register_click(node, path, self.capture);
                 view_state.node = node;
             }
@@ -234,7 +237,8 @@ where
         element: Mut<'_, Self::Element>,
     ) {
         ctx.with_id(ON_CLICK_ID, |ctx| {
-            ctx.unregister_click(view_state.node);
+            let path = ctx.view_path().to_vec();
+            ctx.unregister_click(view_state.node, &path);
             self.child
                 .teardown(&mut view_state.child_state, ctx, element);
         });

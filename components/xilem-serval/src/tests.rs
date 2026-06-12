@@ -501,12 +501,17 @@ mod keyboard {
 
     use crate::{
         DomHandle, El, Key, KeyEvent, Modifiers, NamedKey, OnClick, OnKey, PointerClick,
-        ServalAppRunner, el, on_click, on_key,
+        ServalAppRunner, ServalCtx, ServalElement, View, el, focusable, on_click, on_key,
     };
 
     /// The app state: a text buffer a key handler edits.
     struct Editor {
         text: String,
+    }
+
+    /// An activation counter — the state a plain button's click handler bumps.
+    struct Clicks {
+        count: u32,
     }
 
     /// Append the typed character / apply the editing key to `text`. A free
@@ -794,6 +799,101 @@ mod keyboard {
             "z",
             "key on the focused child bubbles to the parent div's handler"
         );
+    }
+
+    // --- focusable() marker + Enter/Space activation (G2.3) --------------------
+
+    /// `focusable(on_click(button))`: a plain button (a click handler, no key
+    /// handler) made keyboard-operable by `focusable`. Without the marker it would
+    /// be tab-unreachable and un-activatable.
+    fn focusable_button_view(
+        _s: &Clicks,
+    ) -> impl View<Clicks, (), ServalCtx, Element = ServalElement> + use<> {
+        focusable(on_click(
+            el::<_, Clicks, ()>("button", "+"),
+            |s: &mut Clicks, _ev: PointerClick| s.count += 1,
+        ))
+    }
+
+    /// `focusable` puts the plain button in the Tab order, and Enter/Space activate
+    /// it by synthesizing a click; a character key does not.
+    #[test]
+    fn enter_and_space_activate_a_focusable_button() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            focusable_button_view,
+            Clicks { count: 0 },
+        );
+        let button = runner.root(); // `focusable` wraps the button, passing it through
+
+        // Tab reaches it even though it carries no key handler — `focusable` put it
+        // in the focusable set.
+        assert_eq!(runner.focus(), None);
+        runner.dispatch_key(tab(false));
+        assert_eq!(runner.focus(), Some(button), "focusable() puts the plain button in the Tab order");
+
+        // Enter and Space each activate it (a synthesized click runs the on_click).
+        runner.dispatch_key(named(NamedKey::Enter));
+        assert_eq!(runner.state().count, 1, "Enter activates the focused button");
+        runner.dispatch_key(named(NamedKey::Space));
+        assert_eq!(runner.state().count, 2, "Space activates the focused button");
+
+        // A character key is not an activation.
+        runner.dispatch_key(ch("x"));
+        assert_eq!(runner.state().count, 2, "a character key does not activate the button");
+    }
+
+    // --- Tab is overridable per-view (G2.3) -----------------------------------
+
+    /// Tab is delivered to the focused element's `on_key` first; a handler that
+    /// inserts a tab character and calls `prevent_default` keeps focus put (the
+    /// textarea case), where an ordinary focusable lets the runner traverse.
+    #[test]
+    fn tab_is_overridable_by_a_handler() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        // The first field captures Tab: insert '\t' and prevent the traversal.
+        let trap: fn(&mut Editor, KeyEvent) = |s, ev| {
+            if matches!(ev.key, Key::Named(NamedKey::Tab)) {
+                s.text.push('\t');
+                ev.prevent_default();
+            }
+        };
+        let plain: fn(&mut Editor, KeyEvent) = |_, _| {};
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            move |_: &Editor| {
+                el::<_, Editor, ()>(
+                    "div",
+                    (
+                        on_key(el::<_, Editor, ()>("input", ""), trap),
+                        on_key(el::<_, Editor, ()>("textarea", ""), plain),
+                    ),
+                )
+            },
+            Editor { text: String::new() },
+        );
+        let (input, textarea) = {
+            let d = dom.borrow();
+            let root = runner.root();
+            (
+                find_element_by_name(&d, root, "input").expect("<input>"),
+                find_element_by_name(&d, root, "textarea").expect("<textarea>"),
+            )
+        };
+
+        // Focus the trap field, press Tab: the handler consumes it (a tab char) and
+        // prevents the default, so focus stays — the override.
+        runner.set_focus(Some(input));
+        runner.dispatch_key(tab(false));
+        assert_eq!(runner.focus(), Some(input), "a Tab handler that prevents default keeps focus put");
+        assert_eq!(runner.state().text, "\t", "the overriding handler inserted a tab character");
+
+        // The plain field does not prevent: Tab there still traverses (wrapping to
+        // the first focusable), proving the default survives where unoverridden.
+        runner.set_focus(Some(textarea));
+        runner.dispatch_key(tab(false));
+        assert_eq!(runner.focus(), Some(input), "an un-prevented Tab still traverses the focusable set");
     }
 }
 
@@ -1660,6 +1760,44 @@ mod capture {
             runner.state().events,
             vec!["capture-parent".to_string(), "bubble-child".to_string()],
             "capture ancestor fires before the bubble target (capture → target → bubble)"
+        );
+    }
+
+    // --- stacked listeners: a node carries several of one kind ----------------
+
+    /// `on_click(on_click(el("button"), inner), outer)`: two click listeners stack
+    /// on one element. Both must fire — a second `on_click` no longer silently
+    /// clobbers the first (the Vec-per-node registry, G2.3). Within the shared
+    /// bubble phase they fire in registration order, and `build` registers the
+    /// inner before the outer.
+    fn stacked_click_view(_s: &Log) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+        on_click(
+            on_click(el::<_, Log, ()>("button", "+"), |s: &mut Log, _ev| {
+                s.events.push("inner".to_string());
+            }),
+            |s: &mut Log, _ev| s.events.push("outer".to_string()),
+        )
+    }
+
+    #[test]
+    fn stacked_click_listeners_all_fire() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            stacked_click_view,
+            Log { events: Vec::new() },
+        );
+        let button = {
+            let d = dom.borrow();
+            find_element_by_name(&d, runner.root(), "button").expect("a <button>")
+        };
+
+        runner.dispatch_click(button, PointerClick::at((0.0, 0.0)));
+
+        assert_eq!(
+            runner.state().events,
+            vec!["inner".to_string(), "outer".to_string()],
+            "both stacked click listeners fire in registration order; neither clobbers the other",
         );
     }
 
