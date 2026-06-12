@@ -36,14 +36,17 @@ use std::hash::Hash;
 use layout_dom_api::{LayoutDom, NodeKind};
 use paint_list_api::{
     AlphaType, BorderRadius, BorderSide, BorderStyle, BoxShadowClipMode, ColorF, CommonPlacement,
-    ConicGradientItem, ConicGradientPayload,
+    ConicGradientItem, ConicGradientPayload, DeviceIntSideOffsets,
     DeviceIntSize, EngineId, ExtendMode, FontInstanceKey, FontResource, GlyphInstance, GradientStop,
     IdNamespace, ImageItem, ImageKey, ImageRendering, ImageResource, LayoutPoint, LayoutRect,
     LayoutSideOffsets, LayoutSize, LayoutTransform, LayoutVector2D, LinearGradientItem,
     LinearGradientPayload, NormalBorder, PaintCmd, PaintList, RadialGradientItem,
-    RadialGradientPayload, RectItem, RepeatingImageItem, TextOptions, TextRunItem, TransformSpec,
+    RadialGradientPayload, RectItem, RepeatMode, RepeatingImageItem, TextOptions, TextRunItem,
+    TransformSpec,
 };
-use paint_list_api::items::{BorderDetails, BorderItem, ShadowItem};
+use paint_list_api::items::{
+    BorderDetails, BorderItem, NinePatchBorder, NinePatchSource, ShadowItem,
+};
 use paint_list_api::specs::{ClipKind, ClipSpec, TransformKind};
 use parley::PositionedLayoutItem;
 use rustc_hash::FxHashMap;
@@ -2170,126 +2173,38 @@ fn emit_border_image(
         wb *= f;
     }
 
-    // Emit one region: crop the source sub-rect, draw it stretched to the dest
-    // rect. Skips empty source/dest. Coordinates are local (border-box) px.
-    let mut emit_region =
-        |images: &mut ImageCollector,
-         commands: &mut Vec<PaintCmd>,
-         (sx, sy, sws, shs): (f32, f32, f32, f32),
-         (dx, dy, dw, dh): (f32, f32, f32, f32)| {
-            if sws <= 0.0 || shs <= 0.0 || dw <= 0.0 || dh <= 0.0 {
-                return;
-            }
-            let Some(sub) = src.crop(sx as u32, sy as u32, sws.ceil() as u32, shs.ceil() as u32)
-            else {
-                return;
-            };
-            let key = images.add(&sub);
-            commands.push(PaintCmd::DrawImage(ImageItem {
-                placement: CommonPlacement::new(LayoutRect::new(
-                    LayoutPoint::new(dx, dy),
-                    LayoutPoint::new(dx + dw, dy + dh),
-                )),
-                image_key: key,
-                image_rendering: ImageRendering::Auto,
-                alpha_type: AlphaType::PremultipliedAlpha,
-                color: ColorF::WHITE,
-            }));
-        };
-
-    let (icw, ich) = (sw - sl - sr, sh - st - sb); // inner source (center) extents
-    let (dcw, dch) = (aw - wl - wr, ah - wt - wb); // inner dest extents
-
-    // Emit one edge, tiled per `border-image-repeat`. `horizontal` = the edge runs
-    // along x (top/bottom); else along y (left/right). The source strip is scaled
-    // so its cross axis fills the dest border width, then laid along the dest
-    // length per the keyword: stretch (one scaled tile), repeat (tiled from the
-    // start), round (tile rescaled to a whole count), space (whole tiles with
-    // equal gaps; none if not even one fits).
-    let mut emit_edge =
-        |images: &mut ImageCollector,
-         commands: &mut Vec<PaintCmd>,
-         (sx, sy, sws, shs): (f32, f32, f32, f32),
-         (dx, dy, dw, dh): (f32, f32, f32, f32),
-         horizontal: bool,
-         kw: RepKw| {
-            if sws <= 0.0 || shs <= 0.0 || dw <= 0.0 || dh <= 0.0 {
-                return;
-            }
-            let Some(sub) = src.crop(sx as u32, sy as u32, sws.ceil() as u32, shs.ceil() as u32)
-            else {
-                return;
-            };
-            let dest = LayoutRect::new(LayoutPoint::new(dx, dy), LayoutPoint::new(dx + dw, dy + dh));
-            // `stretch` is just one scaled DrawImage over the whole edge rect.
-            if matches!(kw, RepKw::Stretch) {
-                let key = images.add(&sub);
-                commands.push(PaintCmd::DrawImage(ImageItem {
-                    placement: CommonPlacement::new(dest),
-                    image_key: key,
-                    image_rendering: ImageRendering::Auto,
-                    alpha_type: AlphaType::PremultipliedAlpha,
-                    color: ColorF::WHITE,
-                }));
-                return;
-            }
-            // Along/cross dest extents, and the natural tile length after scaling
-            // the source strip's cross axis to the dest border width.
-            let (length, cross) = if horizontal { (dw, dh) } else { (dh, dw) };
-            let (s_along, s_cross) = if horizontal { (sws, shs) } else { (shs, sws) };
-            let scale = if s_cross > 0.0 { cross / s_cross } else { 1.0 };
-            let natural = (s_along * scale).max(1.0);
-            // Tile length + per-axis spacing per the keyword.
-            let (tile, spacing) = match kw {
-                RepKw::Round => {
-                    let n = (length / natural).round().max(1.0);
-                    (length / n, 0.0)
-                }
-                RepKw::Space => {
-                    let n = (length / natural).floor();
-                    if n < 1.0 {
-                        return; // no whole tile fits → paint nothing
-                    }
-                    let gap = if n > 1.0 { (length - n * natural) / (n - 1.0) } else { 0.0 };
-                    (natural, gap)
-                }
-                _ => (natural, 0.0), // Repeat
-            };
-            let key = images.add(&sub);
-            let (stretch_size, tile_spacing) = if horizontal {
-                (LayoutSize::new(tile, cross), LayoutSize::new(spacing, 0.0))
-            } else {
-                (LayoutSize::new(cross, tile), LayoutSize::new(0.0, spacing))
-            };
-            commands.push(PaintCmd::DrawRepeatingImage(RepeatingImageItem {
-                placement: CommonPlacement::new(dest),
-                image_key: key,
-                stretch_size,
-                tile_spacing,
-                image_rendering: ImageRendering::Auto,
-                alpha_type: AlphaType::PremultipliedAlpha,
-                color: ColorF::WHITE,
-            }));
-        };
-
-    // `border-image-repeat` is (horizontal, vertical): the horizontal keyword
-    // tiles the top/bottom edges, the vertical keyword the left/right edges.
-    let (rep_h, rep_v) = (b.border_image_repeat.0, b.border_image_repeat.1);
-
-    // Corners — always scaled (no repeat).
-    emit_region(images, commands, (0.0, 0.0, sl, st), (ax0, ay0, wl, wt));
-    emit_region(images, commands, (sw - sr, 0.0, sr, st), (ax0 + aw - wr, ay0, wr, wt));
-    emit_region(images, commands, (0.0, sh - sb, sl, sb), (ax0, ay0 + ah - wb, wl, wb));
-    emit_region(images, commands, (sw - sr, sh - sb, sr, sb), (ax0 + aw - wr, ay0 + ah - wb, wr, wb));
-    // Edges — tiled per repeat.
-    emit_edge(images, commands, (sl, 0.0, icw, st), (ax0 + wl, ay0, dcw, wt), true, rep_h);
-    emit_edge(images, commands, (sl, sh - sb, icw, sb), (ax0 + wl, ay0 + ah - wb, dcw, wb), true, rep_h);
-    emit_edge(images, commands, (0.0, st, sl, ich), (ax0, ay0 + wt, wl, dch), false, rep_v);
-    emit_edge(images, commands, (sw - sr, st, sr, ich), (ax0 + aw - wr, ay0 + wt, wr, dch), false, rep_v);
-    // Center (only with `fill`) — stretched for now (repeat is a later refinement).
-    if b.border_image_slice.fill {
-        emit_region(images, commands, (sl, st, icw, ich), (ax0 + wl, ay0 + wt, dcw, dch));
-    }
+    // Emit one nine-patch border command: the rasterizer slices the source and
+    // draws the corners / edges / fill, UV-sampled from this single image — no
+    // producer-side cropping or tiling. The border-image area (border box +
+    // outset) is the placement; `widths` are the resolved dest border widths.
+    let map_repeat = |kw: RepKw| match kw {
+        RepKw::Stretch => RepeatMode::Stretch,
+        RepKw::Repeat => RepeatMode::Repeat,
+        RepKw::Round => RepeatMode::Round,
+        RepKw::Space => RepeatMode::Space,
+    };
+    let key = images.add(src);
+    commands.push(PaintCmd::DrawBorder(BorderItem {
+        placement: CommonPlacement::new(LayoutRect::new(
+            LayoutPoint::new(ax0, ay0),
+            LayoutPoint::new(ax0 + aw, ay0 + ah),
+        )),
+        widths: LayoutSideOffsets::new(wt, wr, wb, wl),
+        details: BorderDetails::NinePatch(NinePatchBorder {
+            source: NinePatchSource::Image(key, ImageRendering::Auto),
+            width: src.width as i32,
+            height: src.height as i32,
+            slice: DeviceIntSideOffsets::new(
+                st.round() as i32,
+                sr.round() as i32,
+                sb.round() as i32,
+                sl.round() as i32,
+            ),
+            fill: b.border_image_slice.fill,
+            repeat_horizontal: map_repeat(b.border_image_repeat.0),
+            repeat_vertical: map_repeat(b.border_image_repeat.1),
+        }),
+    }));
     true
 }
 
@@ -2622,12 +2537,29 @@ mod tests {
             DeviceIntSize::new(800, 600),
         );
 
-        let draw_images =
-            plist.commands().iter().filter(|c| matches!(c, PaintCmd::DrawImage(_))).count();
-        let draw_borders =
-            plist.commands().iter().filter(|c| matches!(c, PaintCmd::DrawBorder(_))).count();
-        assert!(draw_images >= 4, "border-image emits its corner regions, got {draw_images} DrawImage");
-        assert_eq!(draw_borders, 0, "a loaded border-image replaces the normal border");
+        // border-image now emits a single nine-patch DrawBorder (the rasterizer
+        // slices it), replacing the normal border — not pre-sliced DrawImages.
+        let borders: Vec<_> = plist
+            .commands()
+            .iter()
+            .filter_map(|c| match c {
+                PaintCmd::DrawBorder(b) => Some(b),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(borders.len(), 1, "one DrawBorder for the border-image, got {}", borders.len());
+        match &borders[0].details {
+            BorderDetails::NinePatch(np) => {
+                assert!(matches!(np.source, NinePatchSource::Image(..)), "nine-patch image source");
+                // slice:1 → a 1px slice on every side of the 4×4 source.
+                assert_eq!((np.slice.top, np.slice.left), (1, 1), "1px slice, got {:?}", np.slice);
+            },
+            BorderDetails::Normal(_) => panic!("a loaded border-image must emit a nine-patch border"),
+        }
+        assert!(
+            !plist.commands().iter().any(|c| matches!(c, PaintCmd::DrawImage(_))),
+            "no pre-sliced DrawImages — the rasterizer owns the slicing"
+        );
     }
 
     /// A full-viewport (800×600) `DrawRect`'s color, if one was emitted — the
