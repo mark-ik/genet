@@ -32,7 +32,7 @@ use xilem_core::{DynMessage, Environment, MessageCtx, MessageResult, View, ViewI
 
 use crate::{
     DomHandle, Key, KeyEvent, NamedKey, PointerClick, PointerEvent, ServalCtx, ServalElement,
-    ServalElementMut,
+    ServalElementMut, WheelEvent,
 };
 
 /// Owns the app state, the view-producing logic, and the retained view tree,
@@ -607,6 +607,77 @@ where
     /// mirrors [`dispatch_click`](Self::dispatch_click).
     fn route_pointer(&mut self, node: NodeId, event: PointerEvent) -> Vec<Action> {
         let Some(path) = self.ctx.pointer_handler(node).map(<[ViewId]>::to_vec) else {
+            return Vec::new();
+        };
+        let mut actions = Vec::new();
+        {
+            let Self { state, view, view_state, root, dom, .. } = self;
+            let mut msg =
+                MessageCtx::new(Environment::new(), path, DynMessage::new(event));
+            let mut_ref = ServalElementMut {
+                node: &mut root.node,
+                dom: dom.clone(),
+                parent: Some(dom.borrow().document()),
+            };
+            if let MessageResult::Action(a) = view.message(view_state, &mut msg, mut_ref, state) {
+                actions.push(a);
+            }
+        }
+        self.rebuild();
+        actions
+    }
+
+    /// Route a wheel/scroll notch to the nearest ancestor of `target` (including
+    /// itself) carrying an [`on_wheel`](crate::on_wheel) handler. Unlike a
+    /// pointer drag there is no capture: each notch resolves its own target by
+    /// the ancestor walk (the scroll routes to the innermost scroll-handling
+    /// element under the cursor). Returns the actions that bubbled to the root.
+    ///
+    /// `event.local` / `event.size` are the cursor point + element box in the
+    /// resolved element's coordinate space; the host computes them from the
+    /// laid-out rect (the headless view layer has no layout).
+    pub fn dispatch_wheel(&mut self, target: NodeId, event: WheelEvent) -> Vec<Action> {
+        let resolved = {
+            let dom = self.dom.borrow();
+            let mut current = Some(target);
+            let mut found = None;
+            while let Some(node) = current {
+                if self.ctx.wheel_handler(node).is_some() {
+                    found = Some(node);
+                    break;
+                }
+                current = dom.parent(node);
+            }
+            found
+        };
+        match resolved {
+            Some(node) => self.route_wheel(node, event),
+            None => Vec::new(),
+        }
+    }
+
+    /// The nearest ancestor of `hit` (including itself) carrying an
+    /// [`on_wheel`](crate::on_wheel) handler — the element a wheel there would
+    /// scroll, resolved *without* dispatching. The host calls this to measure
+    /// that element's rect for the event's local coords before
+    /// [`dispatch_wheel`](Self::dispatch_wheel).
+    pub fn wheel_target(&self, hit: NodeId) -> Option<NodeId> {
+        let dom = self.dom.borrow();
+        let mut current = Some(hit);
+        while let Some(node) = current {
+            if self.ctx.wheel_handler(node).is_some() {
+                return Some(node);
+            }
+            current = dom.parent(node);
+        }
+        None
+    }
+
+    /// Route a [`WheelEvent`] down `node`'s registered wheel path through the
+    /// faithful message cycle, then rebuild. Mirrors
+    /// [`route_pointer`](Self::route_pointer).
+    fn route_wheel(&mut self, node: NodeId, event: WheelEvent) -> Vec<Action> {
+        let Some(path) = self.ctx.wheel_handler(node).map(<[ViewId]>::to_vec) else {
             return Vec::new();
         };
         let mut actions = Vec::new();

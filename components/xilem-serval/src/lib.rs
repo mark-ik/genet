@@ -73,6 +73,7 @@ mod slider;
 mod splice;
 mod tags;
 mod text;
+mod wheel;
 
 #[cfg(test)]
 mod tests;
@@ -100,6 +101,7 @@ pub use splice::ServalChildrenSplice;
 // button view, with a handler.)
 pub use tags::*;
 pub use text::text;
+pub use wheel::{on_wheel, OnWheel, WheelEvent};
 
 // The generic, backend-agnostic composition vocabulary from `xilem_core`. These
 // views are parametric over any `Context: ViewPathTracker`, so they work over

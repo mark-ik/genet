@@ -818,8 +818,8 @@ mod controls {
     use crate::{
         AnyView, DomHandle, Key, KeyEvent, Modifiers, NamedKey, PointerClick, PointerEvent,
         PointerPhase, RadioGroup, SelectState, ServalAppRunner, ServalCtx, ServalElement, Slider,
-        TextInput, View, button, checkbox, el, lens, on_pointer, overlay_at, radio_group, select,
-        slider, text_field,
+        TextInput, View, WheelEvent, button, checkbox, el, lens, on_pointer, on_wheel, overlay_at,
+        radio_group, select, slider, text_field,
     };
 
     /// The text data of the single text child under `node`, if any.
@@ -1358,6 +1358,62 @@ mod controls {
             vec![PointerPhase::Down, PointerPhase::Move, PointerPhase::Up]
         );
         assert_eq!(runner.state().last_x, 40.0, "the captured handler saw the move's local x");
+    }
+
+    /// Wheel: a notch routes to the nearest ancestor (including the hit node)
+    /// carrying an `on_wheel` handler, with no capture — each notch resolves its
+    /// own target and accumulates. A notch whose ancestors carry no handler is a
+    /// no-op. The scroll foundation parallel to `on_pointer`.
+    #[test]
+    fn wheel_routes_to_nearest_handler_no_capture() {
+        #[derive(Default)]
+        struct Scroll {
+            total_y: f32,
+            last_local: (f32, f32),
+            notches: u32,
+        }
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            |_: &Scroll| {
+                on_wheel(el::<_, Scroll, ()>("div", "scroller"), |s: &mut Scroll, e: WheelEvent| {
+                    s.total_y += e.delta.1;
+                    s.last_local = e.local;
+                    s.notches += 1;
+                })
+            },
+            Scroll::default(),
+        );
+        let scroller = runner.root();
+        assert_eq!(runner.wheel_target(scroller), Some(scroller), "the scroller is its own target");
+
+        // A notch on the handler node routes to it, carrying delta + cursor-local.
+        runner.dispatch_wheel(
+            scroller,
+            WheelEvent { delta: (0.0, -30.0), local: (5.0, 8.0), size: (100.0, 50.0) },
+        );
+        assert_eq!(runner.state().notches, 1, "the wheel reached the handler");
+        assert_eq!(runner.state().total_y, -30.0);
+        assert_eq!(runner.state().last_local, (5.0, 8.0), "the handler saw the cursor-local point");
+
+        // A second notch accumulates — no leftover capture state between notches.
+        runner.dispatch_wheel(
+            scroller,
+            WheelEvent { delta: (0.0, -12.0), local: (5.0, 8.0), size: (100.0, 50.0) },
+        );
+        assert_eq!(runner.state().notches, 2);
+        assert_eq!(runner.state().total_y, -42.0, "successive notches accumulate");
+
+        // A notch whose ancestor chain has no handler (the document, above the
+        // scroller) resolves nothing and mutates nothing.
+        let doc = dom.borrow().document();
+        assert_eq!(runner.wheel_target(doc), None, "no handler above the scroller");
+        runner.dispatch_wheel(
+            doc,
+            WheelEvent { delta: (0.0, -99.0), local: (0.0, 0.0), size: (0.0, 0.0) },
+        );
+        assert_eq!(runner.state().notches, 2, "a handler-less notch is a no-op");
+        assert_eq!(runner.state().total_y, -42.0);
     }
 
     /// `slider`: a press sets the value to the pointer fraction, and a drag

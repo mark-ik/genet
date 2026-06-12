@@ -85,6 +85,13 @@ pub struct ServalCtx {
     /// hit node's ancestor chain through this on `pointerdown` to find the
     /// element that captures the drag.
     pointer_handlers: HashMap<NodeId, Vec<ViewId>>,
+    /// `NodeId → routing path` for wheel/scroll handlers
+    /// ([`OnWheel`](crate::OnWheel)). Like pointer there is no capture/bubble
+    /// phase: a wheel routes to the nearest scroll-handling ancestor of the hit
+    /// node, so the value is just the path (ending in `ON_WHEEL_ID`). The runner
+    /// walks the hit node's ancestor chain through this on a wheel event to find
+    /// the element that handles the scroll.
+    wheel_handlers: HashMap<NodeId, Vec<ViewId>>,
 }
 
 impl ServalCtx {
@@ -97,6 +104,7 @@ impl ServalCtx {
             click_handlers: HashMap::new(),
             key_handlers: HashMap::new(),
             pointer_handlers: HashMap::new(),
+            wheel_handlers: HashMap::new(),
         }
     }
 
@@ -186,6 +194,25 @@ impl ServalCtx {
     /// this to find the drag-capturing element.
     pub fn pointer_handler(&self, node: NodeId) -> Option<&[ViewId]> {
         self.pointer_handlers.get(&node).map(Vec::as_slice)
+    }
+
+    /// Register `path` as the wheel handler for `node`
+    /// ([`OnWheel`](crate::OnWheel) build/rebuild). The path ends in
+    /// `ON_WHEEL_ID` and routes straight to the handler's `message`.
+    pub fn register_wheel(&mut self, node: NodeId, path: Vec<ViewId>) {
+        self.wheel_handlers.insert(node, path);
+    }
+
+    /// Drop the wheel handler for `node` (teardown / re-key on node swap).
+    pub fn unregister_wheel(&mut self, node: NodeId) {
+        self.wheel_handlers.remove(&node);
+    }
+
+    /// The wheel routing path on `node`, if one is registered. The runner's
+    /// `dispatch_wheel` walks the hit node's ancestors through this to find the
+    /// scroll-handling element.
+    pub fn wheel_handler(&self, node: NodeId) -> Option<&[ViewId]> {
+        self.wheel_handlers.get(&node).map(Vec::as_slice)
     }
 }
 
