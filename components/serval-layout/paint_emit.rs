@@ -1422,9 +1422,10 @@ fn has_canvas_background(cv: &ComputedValues) -> bool {
 }
 
 /// Whether `id` generates a principal box — i.e. is not `display: none` or
-/// `display: contents`. Only a box-generating element propagates its background
-/// to the canvas (CSS Backgrounds-3 §special-backgrounds).
-fn generates_box(cv: &ComputedValues) -> bool {
+/// `display: contents`. The root/body source of both canvas-background
+/// propagation (CSS Backgrounds-3 §special-backgrounds) and viewport-overflow
+/// propagation ([`crate::viewport`], CSS Overflow §3.3) must generate a box.
+pub(crate) fn generates_box(cv: &ComputedValues) -> bool {
     let display = cv.get_box().display;
     !display.is_none() && !display.is_contents()
 }
