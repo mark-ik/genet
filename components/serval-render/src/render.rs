@@ -229,6 +229,31 @@ pub fn scene_from_session(
     paint::translate_paint_list(&plist)
 }
 
+/// An [`IncrementalLayout`] session over **any** [`LayoutDom`] → [`netrender::Scene`],
+/// a plain display surface (no caret / selection / scrollbar overlays). The session
+/// owns the document viewport, so this paints at its current document scroll
+/// ([`IncrementalLayout::scroll_by`](serval_layout::IncrementalLayout::scroll_by)) —
+/// the render-first path pelt's static viewer draws through (lay out once, re-emit
+/// per scroll). The `ScriptedDom`-bound [`scene_from_session`] adds focused-field
+/// overlays; this is the bare content surface for a document viewer.
+pub fn scene_from_session_dom<D>(
+    session: &IncrementalLayout<D::NodeId>,
+    dom: &D,
+    width: u32,
+    height: u32,
+) -> netrender::Scene
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + 'static,
+{
+    let plist = session.emit_paint_list(
+        dom,
+        &ScrollOffsets::default(),
+        DeviceIntSize::new(width as i32, height as i32),
+    );
+    paint::translate_paint_list(&plist)
+}
+
 /// The [`ServalPaintList`] half of [`scene_from_session`] — emit from the session
 /// plus the focused-field + scrollbar overlays, before lowering to a Scene. The
 /// session companion to [`paint_list_from_scripted_dom`], for a host that
@@ -556,5 +581,31 @@ mod tests {
                 "case {i}: session render must match the stateless render op-for-op",
             );
         }
+    }
+
+    /// C2: a display surface rendered through `scene_from_session_dom` paints at the
+    /// session's document scroll — scrolling the viewport changes the scene, so the
+    /// session→scene path threads the document offset (the render-first viewer path).
+    #[test]
+    fn scene_from_session_paints_at_the_document_scroll() {
+        const SHEET: &[&str] =
+            &["html, body, div { display: block; margin: 0; }", ".tall { height: 2000px; }"];
+        let (w, h) = (400u32, 300u32);
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        dom.set_inner_html(root, "<div class=\"tall\">scroll me</div>");
+
+        let mut session = IncrementalLayout::new(&dom, SHEET, w as f32, h as f32);
+        let still = scene_from_session_dom(&session, &dom, w, h);
+        assert!(!still.ops.is_empty(), "the document renders a non-empty scene");
+
+        // Scroll the document; the session repaints translated, so the scene differs.
+        session.set_viewport_scroll(&dom, (0.0, 400.0));
+        let scrolled = scene_from_session_dom(&session, &dom, w, h);
+        assert_ne!(
+            format!("{:?}", still.ops),
+            format!("{:?}", scrolled.ops),
+            "scrolling the session viewport moves the rendered content",
+        );
     }
 }

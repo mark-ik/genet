@@ -25,6 +25,7 @@
 use std::sync::Arc;
 
 use netrender::{ColorLoad, NetrenderOptions, Renderer, Scene};
+use winit::event::MouseScrollDelta;
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey as WinitNamedKey};
 use winit::window::Window;
 use xilem_serval::{Key, KeyEvent, Modifiers, NamedKey};
@@ -310,5 +311,49 @@ pub fn modifiers_from_winit(state: ModifiersState) -> Modifiers {
         ctrl: state.control_key(),
         alt: state.alt_key(),
         meta: state.super_key(),
+    }
+}
+
+/// Device px per wheel "line" step, for `MouseScrollDelta::LineDelta` events
+/// (mouse wheels report lines, trackpads report pixels). One notch ≈ a few lines.
+pub const WHEEL_LINE_PX: f32 = 48.0;
+
+/// Map a winit wheel event to a device-px delta to **add** to a document's
+/// viewport scroll (`viewport.scroll += delta`). A line step scales by
+/// [`WHEEL_LINE_PX`]; a pixel step (trackpad) passes through. The sign is flipped
+/// from winit's "positive = content moves up / away", so rolling the wheel down
+/// advances the document toward its end (a larger offset). The shared wheel default
+/// action (scope doc rule 5): pelt and meerkat map the wheel through this one
+/// helper, not two hand-rolled copies.
+pub fn wheel_delta_from_winit(delta: MouseScrollDelta) -> (f32, f32) {
+    match delta {
+        MouseScrollDelta::LineDelta(x, y) => (-x * WHEEL_LINE_PX, -y * WHEEL_LINE_PX),
+        MouseScrollDelta::PixelDelta(p) => (-(p.x as f32), -(p.y as f32)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use winit::dpi::PhysicalPosition;
+
+    use super::*;
+
+    /// A line step scales to `WHEEL_LINE_PX` with the sign flipped: rolling the
+    /// wheel down (winit y < 0) advances the document (positive dy), up reverses it.
+    #[test]
+    fn wheel_line_delta_maps_to_document_scroll() {
+        let (dx, down) = wheel_delta_from_winit(MouseScrollDelta::LineDelta(0.0, -1.0));
+        assert_eq!(dx, 0.0);
+        assert!((down - WHEEL_LINE_PX).abs() < 0.01, "one line down = +{WHEEL_LINE_PX}px, got {down}");
+        let (_, up) = wheel_delta_from_winit(MouseScrollDelta::LineDelta(0.0, 1.0));
+        assert!((up + WHEEL_LINE_PX).abs() < 0.01, "one line up = -{WHEEL_LINE_PX}px, got {up}");
+    }
+
+    /// Pixel deltas (trackpads) pass through unscaled, sign-flipped.
+    #[test]
+    fn wheel_pixel_delta_passes_through() {
+        let got =
+            wheel_delta_from_winit(MouseScrollDelta::PixelDelta(PhysicalPosition::new(3.0, -10.0)));
+        assert_eq!(got, (-3.0, 10.0));
     }
 }
