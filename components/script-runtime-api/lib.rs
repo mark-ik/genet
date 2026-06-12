@@ -67,6 +67,14 @@ pub struct HostState {
     /// out-of-range value sees the unclamped value until the host reconciles — the
     /// script/layout split's one fidelity gap.
     pub viewport_scroll: (f32, f32),
+    /// A pending `Element.scrollIntoView()` target, or `None`. The runtime cannot
+    /// compute the element's laid-out position (it does not lay out), so it records
+    /// the node; after the run the host resolves it (`IncrementalLayout::scroll_to_element`,
+    /// block-start), updating the viewport scroll, and clears this. Set by the latest
+    /// `scrollIntoView` in a run and cleared by any `scrollTo` / `scrollBy` (so the
+    /// last scroll command wins); the host applies this when set, else
+    /// [`viewport_scroll`](Self::viewport_scroll).
+    pub scroll_into_view: Option<NodeId>,
     /// The live document the `document`/`Node` surface mutates. Native DOM
     /// callbacks reach it through `CallCx::host_data` (a `RefCell<HostState>`).
     pub dom: ScriptedDom,
@@ -432,6 +440,9 @@ fn install_host_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error>
     engine.set_function::<ScrollBy>("__scrollBy", 2)?;
     engine.set_function::<ScrollX>("__scrollX", 0)?;
     engine.set_function::<ScrollY>("__scrollY", 0)?;
+    // Element.scrollIntoView records a pending target the host resolves; the JS glue
+    // lives in the DOM bootstrap (Element.prototype), which runs below.
+    engine.set_function::<ScrollIntoView>("__scrollIntoView", 1)?;
     engine.eval(SCROLL_BOOTSTRAP)?;
 
     // Event loop and EventTarget are pure-JS bootstraps over the global. Callbacks
@@ -771,12 +782,34 @@ fn read_scroll<E: ScriptEngine>(cx: &mut E::CallCx<'_>) -> (f32, f32) {
         .unwrap_or((0.0, 0.0))
 }
 
-/// Store the document scroll script set, for the host to clamp + apply.
+/// Store the document scroll script set, for the host to clamp + apply. Clears any
+/// pending `scrollIntoView` (an absolute scroll command supersedes it — last wins).
 fn write_scroll<E: ScriptEngine>(cx: &mut E::CallCx<'_>, scroll: (f32, f32)) {
     if let Some(data) = cx.host_data() {
         if let Some(host) = data.downcast_ref::<RefCell<HostState>>() {
-            host.borrow_mut().viewport_scroll = scroll;
+            let mut host = host.borrow_mut();
+            host.viewport_scroll = scroll;
+            host.scroll_into_view = None;
         }
+    }
+}
+
+/// `__scrollIntoView(elementRef)` → record the element as the host's pending
+/// scroll-into-view target (`Element.scrollIntoView`); the host resolves it after
+/// the run.
+struct ScrollIntoView;
+impl<E: ScriptEngine> NativeFn<E> for ScrollIntoView {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let el = cx.arg(0);
+        if let Some(raw) = cx.reflector_data(&el) {
+            let node = NodeId::from_raw(raw as usize);
+            if let Some(data) = cx.host_data() {
+                if let Some(host) = data.downcast_ref::<RefCell<HostState>>() {
+                    host.borrow_mut().scroll_into_view = Some(node);
+                }
+            }
+        }
+        Ok(cx.undefined())
     }
 }
 
@@ -1045,6 +1078,39 @@ mod tests {
     #[test]
     fn window_scroll_on_boa() {
         window_scroll_works::<script_engine_boa::BoaEngine>();
+    }
+
+    /// `Element.scrollIntoView`, against any backend: it records the element as the
+    /// host's pending scroll-into-view target (the host resolves it to a viewport
+    /// scroll after the run, since the runtime cannot lay out). The latest target
+    /// wins, and an absolute `scrollTo` supersedes a pending one.
+    fn scroll_into_view_works<E: ScriptEngine>() {
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        let src = serval_static_dom::StaticDocument::parse(
+            "<html><body><div id=\"a\"></div><div id=\"b\"></div></body></html>",
+        );
+        rt.load_dom(&src);
+
+        // Nothing pending initially.
+        assert!(rt.host().borrow().scroll_into_view.is_none());
+
+        // scrollIntoView records the element as the host's pending target.
+        rt.eval("document.getElementById('a').scrollIntoView();").expect("scrollIntoView a");
+        let a = rt.host().borrow().scroll_into_view.expect("a recorded");
+
+        // A later call records a different element (element-specific, last wins).
+        rt.eval("document.getElementById('b').scrollIntoView();").expect("scrollIntoView b");
+        let b = rt.host().borrow().scroll_into_view.expect("b recorded");
+        assert_ne!(a, b, "scrollIntoView records the specific element");
+
+        // An absolute scroll supersedes a pending scrollIntoView (last command wins).
+        rt.eval("window.scrollTo(0, 0);").expect("scrollTo");
+        assert!(rt.host().borrow().scroll_into_view.is_none(), "scrollTo clears the pending target");
+    }
+
+    #[test]
+    fn scroll_into_view_on_boa() {
+        scroll_into_view_works::<script_engine_boa::BoaEngine>();
     }
 
     /// postMessage, against any backend: delivery is async (nothing until the loop

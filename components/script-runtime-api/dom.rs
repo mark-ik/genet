@@ -1459,6 +1459,10 @@ const DOM_BOOTSTRAP: &str = r#"
     __setAttribute(this.__ref, name, String(value));
   };
   Element.prototype.getAttribute = function(name) { return __getAttribute(this.__ref, String(name)); };
+  // scrollIntoView: record this element as the host's pending scroll-into-view
+  // target (the host resolves it to a viewport scroll after the run). Options
+  // (alignToTop / { block, inline, behavior }) are ignored for now: block-start.
+  Element.prototype.scrollIntoView = function() { __scrollIntoView(this.__ref); };
   Element.prototype.setAttributeNS = function(ns, qname, value) {
     ns = (ns === null || ns === undefined) ? null : String(ns);
     qname = String(qname); validateNS(ns, qname);
