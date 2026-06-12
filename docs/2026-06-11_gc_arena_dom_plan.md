@@ -312,13 +312,19 @@ engine + the `ScriptedDom` in `HostState`, runs `run_microtasks` /
 `run_event_loop` / `run_timers`). The pin table was moved down to
 `serval-scripted-dom` as `Pins` (keyed on `NodeId`) so `Runtime` can use it
 through its existing dep — *not* via a dep on the Nova-specific, layout-dragging
-`serval-scripted`. What remains is the tick itself: a `reflect_pinned` helper
-pinning every node a `dom.rs` binding hands to script (pin-on-mint, ~10
-`reflector_for` sites — **must be complete or `collect` can UAF a node JS still
-holds**, so it wants a reflector-surface audit), a `Runtime::collect_garbage`
-(retire dead reflectors → `dom.collect(pins)`), and a decision on auto-firing it
-inside `run_microtasks` (real cadence, also hits the conformance path) vs an
-explicit embedder call. (2) *Soak*: the
+`serval-scripted`. **The tick is now wired (2026-06-12).** Audited the reflector surface: **19**
+`reflector_for` handoffs in `dom.rs`, **zero** `make_reflector` — all 19 now
+route through `reflect_pinned` (pin the node in `HostState.pins`, then
+`reflector_for`), so pin-on-mint is complete (no unpinned handoff that
+`collect` could UAF). `Runtime::collect_garbage` retires the engine's reported
+deaths → `dom.collect(pins)`. Tested via `gc_tick_on_boa` (a detached node is
+pinned-on-mint and spared, then reaped once unpinned). **Deliberately not
+auto-fired** inside `run_microtasks` yet — it's an explicit embedder call for
+now; flipping it to the microtask-checkpoint cadence is a one-line change, left
+until the live webview driver exercises it (so the conformance path isn't
+silently collecting mid-campaign). That live driver — `Runtime` fed by a real
+rendered scripted page in pelt (frames, input) — is the only piece genuinely
+still ahead. (2) *Soak*: the
 orrery 400-frame A4-timing soak is a runtime perf check not run here; `collect`
 is O(live nodes) and called at cadence, so it's algorithmically cheap, but the
 empirical no-regression confirmation waits on that harness.
@@ -614,3 +620,13 @@ front-loads visible wins.
   Identified the live host loop as `script-runtime-api::Runtime`; the GC-tick
   wiring (pin-on-mint + `collect_garbage`) is the next step (see G3 carve-out
   #1), pending a pin-on-mint completeness audit.
+- **2026-06-12** — **GC tick wired into `Runtime`.** Audited the reflector
+  surface (19 `reflector_for` handoffs in `dom.rs`, no `make_reflector`); routed
+  all 19 through a new `reflect_pinned` helper so every node handed to script is
+  pinned in `HostState.pins` (pin-on-mint, complete — no path can hand out an
+  unpinned reflector `collect` would UAF). Added `Runtime::collect_garbage`
+  (retire reported deaths → `dom.collect(pins)`), tested by `gc_tick_on_boa`.
+  Left non-auto-firing (explicit embedder call) until the live webview driver
+  exercises it; that driver (Runtime fed by a real rendered scripted page in
+  pelt) is the last piece genuinely ahead. 56 script-runtime-api lib tests
+  green.

@@ -161,6 +161,25 @@ fn with_dom<E: ScriptEngine, R>(
     Some(f(&mut host.dom))
 }
 
+/// Hand script the **canonical** reflector for the node with raw id `raw`, and
+/// **pin** that node (G1/G3). Every place a binding returns a node to script
+/// routes through here: the node is now script-reachable, so the host pins it
+/// until [`Runtime::collect_garbage`](crate::Runtime::collect_garbage) sees the
+/// engine report the reflector dead. Pinning must be complete — a node handed
+/// out unpinned could be swept while script still holds it — which is why this
+/// is the sole node-handoff path (no binding calls `reflector_for` directly).
+fn reflect_pinned<E: ScriptEngine>(
+    cx: &mut E::CallCx<'_>,
+    raw: u64,
+) -> Result<E::Value, E::Error> {
+    if let Some(data) = cx.host_data() {
+        if let Some(cell) = data.downcast_ref::<RefCell<HostState>>() {
+            cell.borrow_mut().pins.pin(NodeId::from_raw(raw as usize));
+        }
+    }
+    cx.reflector_for(raw)
+}
+
 /// Depth-first search under `root` for the first element whose null-namespace `id`
 /// equals `target`. `root` lets queries scope to a created document, not just the
 /// primary one.
@@ -184,7 +203,7 @@ struct DocumentRoot;
 impl<E: ScriptEngine> NativeFn<E> for DocumentRoot {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
         match with_dom::<E, _>(cx, |dom| dom.document()) {
-            Some(root) => cx.reflector_for(root.raw() as u64),
+            Some(root) => reflect_pinned::<E>(cx,root.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -197,7 +216,7 @@ impl<E: ScriptEngine> NativeFn<E> for CreateElement {
         let arg = cx.arg(0);
         let tag = cx.value_to_string(&arg)?;
         match with_dom::<E, _>(cx, |dom| dom.create_element(html_qual(&tag))) {
-            Some(id) => cx.reflector_for(id.raw() as u64),
+            Some(id) => reflect_pinned::<E>(cx,id.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -210,7 +229,7 @@ impl<E: ScriptEngine> NativeFn<E> for CreateTextNode {
         let arg = cx.arg(0);
         let data = cx.value_to_string(&arg)?;
         match with_dom::<E, _>(cx, |dom| dom.create_text(&data)) {
-            Some(id) => cx.reflector_for(id.raw() as u64),
+            Some(id) => reflect_pinned::<E>(cx,id.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -277,7 +296,7 @@ impl<E: ScriptEngine> NativeFn<E> for GetElementById {
         let arg = cx.arg(1);
         let id = cx.value_to_string(&arg)?;
         match with_dom::<E, _>(cx, |dom| find_by_id(dom, NodeId::from_raw(root as usize), &id)).flatten() {
-            Some(node) => cx.reflector_for(node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -426,7 +445,7 @@ impl<E: ScriptEngine> NativeFn<E> for ElementsByTagNameItem {
         match with_dom::<E, _>(cx, |dom| collect_by_tag(dom, NodeId::from_raw(root as usize), &tag).get(i).copied())
             .flatten()
         {
-            Some(node) => cx.reflector_for(node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -442,7 +461,7 @@ impl<E: ScriptEngine> NativeFn<E> for ParentNode {
             return Ok(cx.undefined());
         };
         match with_dom::<E, _>(cx, |dom| dom.parent(NodeId::from_raw(id as usize))).flatten() {
-            Some(p) => cx.reflector_for(p.raw() as u64),
+            Some(p) => reflect_pinned::<E>(cx,p.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -458,7 +477,7 @@ impl<E: ScriptEngine> NativeFn<E> for DocumentElement {
             return Ok(cx.undefined());
         };
         match with_dom::<E, _>(cx, |dom| first_element_child(dom, NodeId::from_raw(root as usize))).flatten() {
-            Some(node) => cx.reflector_for(node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -475,7 +494,7 @@ impl<E: ScriptEngine> NativeFn<E> for DocumentBody {
         match with_dom::<E, _>(cx, |dom| collect_by_tag(dom, NodeId::from_raw(root as usize), "body").first().copied())
             .flatten()
         {
-            Some(node) => cx.reflector_for(node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -492,7 +511,7 @@ impl<E: ScriptEngine> NativeFn<E> for DocumentHead {
         match with_dom::<E, _>(cx, |dom| collect_by_tag(dom, NodeId::from_raw(root as usize), "head").first().copied())
             .flatten()
         {
-            Some(node) => cx.reflector_for(node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -504,7 +523,7 @@ struct CreateDocument;
 impl<E: ScriptEngine> NativeFn<E> for CreateDocument {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
         match with_dom::<E, _>(cx, |dom| dom.create_document()) {
-            Some(node) => cx.reflector_for(node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -517,7 +536,7 @@ impl<E: ScriptEngine> NativeFn<E> for CreateComment {
         let arg = cx.arg(0);
         let data = cx.value_to_string(&arg)?;
         match with_dom::<E, _>(cx, |dom| dom.create_comment(&data)) {
-            Some(node) => cx.reflector_for(node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -528,7 +547,7 @@ struct CreateFragment;
 impl<E: ScriptEngine> NativeFn<E> for CreateFragment {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
         match with_dom::<E, _>(cx, |dom| dom.create_fragment()) {
-            Some(node) => cx.reflector_for(node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -609,7 +628,7 @@ impl<E: ScriptEngine> NativeFn<E> for QuerySelector {
         })
         .flatten()
         {
-            Some(node) => cx.reflector_for(node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
             None => Ok(cx.make_null()),
         }
     }
@@ -652,7 +671,7 @@ impl<E: ScriptEngine> NativeFn<E> for QuerySelectorAllItem {
         })
         .flatten()
         {
-            Some(node) => cx.reflector_for(node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -701,7 +720,7 @@ fn child_at<E: ScriptEngine>(
         return Ok(cx.undefined());
     };
     match with_dom::<E, _>(cx, |dom| pick(dom, NodeId::from_raw(id as usize))).flatten() {
-        Some(n) => cx.reflector_for(n.raw() as u64),
+        Some(n) => reflect_pinned::<E>(cx,n.raw() as u64),
         None => Ok(cx.undefined()),
     }
 }
@@ -734,7 +753,7 @@ impl<E: ScriptEngine> NativeFn<E> for ChildNodesItem {
         match with_dom::<E, _>(cx, |dom| dom.dom_children(NodeId::from_raw(id as usize)).nth(i))
             .flatten()
         {
-            Some(n) => cx.reflector_for(n.raw() as u64),
+            Some(n) => reflect_pinned::<E>(cx,n.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -898,7 +917,7 @@ impl<E: ScriptEngine> NativeFn<E> for CreateElementNS {
         };
         let qual = QualName::new(prefix, Namespace::from(ns.as_str()), LocalName::from(local.as_str()));
         match with_dom::<E, _>(cx, |dom| dom.create_element(qual)) {
-            Some(node) => cx.reflector_for(node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }

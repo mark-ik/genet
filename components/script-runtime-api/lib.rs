@@ -37,7 +37,7 @@ use std::rc::Rc;
 
 use layout_dom_api::LayoutDom;
 use script_engine_api::{CallCx, NativeFn, ScriptEngine};
-use serval_scripted_dom::ScriptedDom;
+use serval_scripted_dom::{NodeId, ScriptedDom};
 
 mod dom;
 mod fetch;
@@ -60,6 +60,12 @@ pub struct HostState {
     /// The live document the `document`/`Node` surface mutates. Native DOM
     /// callbacks reach it through `CallCx::host_data` (a `RefCell<HostState>`).
     pub dom: ScriptedDom,
+    /// Nodes pinned by a live reflector (G1/G3). The DOM surface pins a node
+    /// when it hands script a reflector (pin-on-mint); [`Runtime::collect_garbage`]
+    /// retires the ids the engine reports dead and passes the survivors to
+    /// [`ScriptedDom::collect`] as extra roots, so an orphan script can no longer
+    /// reach is reaped.
+    pub pins: serval_scripted_dom::Pins,
     /// Per-subtest results collected from `testharness.js` via the completion
     /// callback (the results bridge). Populated by [`Runtime::run_testharness`].
     pub results: Vec<TestResult>,
@@ -128,6 +134,28 @@ impl<E: ScriptEngine> Runtime<E> {
     /// checkpoint. Run it after evaluating script so Promise continuations resolve.
     pub fn run_microtasks(&mut self) {
         self.engine.pump_microtasks();
+    }
+
+    /// The scripted-tier GC tick (G3): retire the reflectors the engine reports
+    /// dead (unpinning their nodes), then mark-sweep the live document with the
+    /// surviving pins as extra roots. An orphan script can no longer reach is
+    /// reaped; a pinned one (and its whole component) is spared. Returns
+    /// `(reflectors_unpinned, nodes_collected)`.
+    ///
+    /// **Not** auto-fired by [`run_microtasks`](Self::run_microtasks) yet — the
+    /// embedder calls it at a GC cadence (a frame/idle tick). Auto-firing at the
+    /// microtask checkpoint is a one-line flip, safe because pin-on-mint is
+    /// complete: every node handoff in the `document`/`Node` surface goes through
+    /// `dom::reflect_pinned`, and there is no `make_reflector` (unpinned) path.
+    pub fn collect_garbage(&mut self) -> (usize, usize) {
+        let dead = self.engine.drain_dead_reflectors();
+        let mut host = self.host.borrow_mut();
+        let unpinned = host
+            .pins
+            .retire_dead(dead.into_iter().map(|d| NodeId::from_raw(d as usize)));
+        let HostState { dom, pins, .. } = &mut *host;
+        let collected = dom.collect(pins.iter());
+        (unpinned, collected)
     }
 
     /// Drive the event loop: fire pending timers in `(delay, insertion-order)`
@@ -901,6 +929,37 @@ mod tests {
     #[test]
     fn microtasks_on_boa() {
         microtasks_work::<script_engine_boa::BoaEngine>();
+    }
+
+    /// The G3 GC tick, against any backend: a detached node script holds is
+    /// pinned on mint and spared by `collect_garbage`; once its reflector is
+    /// reported dead it is reaped. The drain→retire path is covered in the engine
+    /// crates (`reflector_for_reports_death_after_gc`); here we simulate the death
+    /// by clearing the pin set, to test pin-on-mint + collect's pin-aware reaping.
+    fn gc_tick_collects_unpinned_nodes<E: ScriptEngine>() {
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        let base = rt.host().borrow().dom.live_node_count();
+
+        // `createElement` hands script a reflector → pin-on-mint pins the node.
+        rt.eval("globalThis.d = document.createElement('div');").expect("create");
+        rt.run_microtasks();
+        assert_eq!(rt.host().borrow().dom.live_node_count(), base + 1);
+
+        // Pinned + detached → collect_garbage spares it.
+        let (_, collected) = rt.collect_garbage();
+        assert_eq!(collected, 0, "a pinned detached node is spared");
+        assert_eq!(rt.host().borrow().dom.live_node_count(), base + 1);
+
+        // Reflector reported dead (simulated): unpin, then collect reaps the orphan.
+        rt.host().borrow_mut().pins.clear();
+        let (_, collected) = rt.collect_garbage();
+        assert_eq!(collected, 1, "an unpinned detached node is reaped");
+        assert_eq!(rt.host().borrow().dom.live_node_count(), base);
+    }
+
+    #[test]
+    fn gc_tick_on_boa() {
+        gc_tick_collects_unpinned_nodes::<script_engine_boa::BoaEngine>();
     }
 
     /// Milestone: the real WPT `testharness.js` loads on the host surface and
