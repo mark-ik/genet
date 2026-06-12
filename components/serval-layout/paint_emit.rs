@@ -655,15 +655,25 @@ pub(crate) fn walk<Id>(
             color: ColorF::WHITE, // identity tint
         }));
     }
-    if let Some((widths, normal)) = (!is_anon)
-        .then(|| border_of(cv, local_bounds.width(), local_bounds.height()))
-        .flatten()
-    {
-        commands.push(PaintCmd::DrawBorder(BorderItem {
-            placement: CommonPlacement::new(local_bounds),
-            widths,
-            details: BorderDetails::Normal(normal),
-        }));
+    // A loaded `border-image` replaces the normal border (CSS Backgrounds-3 §6):
+    // paint the 9-slice and skip the regular border below. Anonymous boxes never
+    // carry a border-image.
+    let painted_border_image = !is_anon
+        && em
+            .bg_images_plane
+            .get_border_image(dom_id)
+            .is_some_and(|src| emit_border_image(cv, src, &l, &mut em.images, commands));
+    if !painted_border_image {
+        if let Some((widths, normal)) = (!is_anon)
+            .then(|| border_of(cv, local_bounds.width(), local_bounds.height()))
+            .flatten()
+        {
+            commands.push(PaintCmd::DrawBorder(BorderItem {
+                placement: CommonPlacement::new(local_bounds),
+                widths,
+                details: BorderDetails::Normal(normal),
+            }));
+        }
     }
     // A measured leaf (inline formatting context) carries its text + replaced
     // boxes as `InlineContent` — emit its glyph runs and inline-box images. Block
@@ -2050,6 +2060,162 @@ fn border_of(cv: &ComputedValues, w: f32, h: f32) -> Option<(LayoutSideOffsets, 
     Some((widths, details))
 }
 
+/// Paint a `border-image` over the element's border area as a 9-slice: the source
+/// is carved into four corners, four edges, and an optional center (`fill`), each
+/// drawn to its destination region in the node's local (border-box) coords.
+/// Returns `true` when it emitted, so the caller suppresses the normal border (a
+/// loaded border-image replaces it, CSS Backgrounds-3 §6).
+///
+/// v1 scope: `url()` source (decoded into `src`); `border-image-slice`
+/// (number = source px, percentage of the source, `fill` for the center);
+/// `border-image-width` (number × the side's border-width, length, or `auto` =
+/// the intrinsic slice); `border-image-outset` (length, or number × border-width).
+/// **Every region is *stretched* to its destination** — `border-image-repeat`
+/// `repeat`/`round`/`space` are a follow-up (BI-3); until then they stretch.
+fn emit_border_image(
+    cv: &ComputedValues,
+    src: &DecodedImage,
+    l: &taffy::Layout,
+    images: &mut ImageCollector,
+    commands: &mut Vec<PaintCmd>,
+) -> bool {
+    use style::values::computed::{NonNegativeNumberOrPercentage as NoP, NumberOrPercentage};
+    use style::values::generics::border::BorderImageSideWidth as SideW;
+    use style::values::generics::length::GenericLengthOrNumber as LoN;
+
+    let b = cv.get_border();
+    let (sw, sh) = (src.width as f32, src.height as f32);
+    if sw <= 0.0 || sh <= 0.0 {
+        return false;
+    }
+    // The element's own border widths (px) per side — the `<number>` basis for
+    // border-image-width / -outset.
+    let (bw_t, bw_r, bw_b, bw_l) = (l.border.top, l.border.right, l.border.bottom, l.border.left);
+
+    // --- Source slices (px into the source image). number = px, % of the source
+    // dimension (top/bottom against height, left/right against width). ---
+    let slice_px = |v: &NoP, dim: f32| -> f32 {
+        match v.0 {
+            NumberOrPercentage::Number(n) => n,
+            NumberOrPercentage::Percentage(p) => p.0 * dim,
+        }
+        .clamp(0.0, dim)
+    };
+    let off = &b.border_image_slice.offsets;
+    let mut st = slice_px(&off.0, sh);
+    let mut sr = slice_px(&off.1, sw);
+    let mut sb = slice_px(&off.2, sh);
+    let mut sl = slice_px(&off.3, sw);
+    // Opposite slices may not overlap; if they do, both become 0 (spec: the
+    // resulting edge/center has zero size and the slice is treated as 0).
+    if sl + sr > sw {
+        sl = 0.0;
+        sr = 0.0;
+    }
+    if st + sb > sh {
+        st = 0.0;
+        sb = 0.0;
+    }
+
+    // --- Destination border widths (px) per side. ---
+    let width_px = |v: &style::values::computed::BorderImageSideWidth,
+                    border_w: f32,
+                    intrinsic: f32,
+                    area_dim: f32|
+     -> f32 {
+        match v {
+            SideW::Number(n) => n.0 * border_w,
+            SideW::LengthPercentage(lp) => {
+                lp.0.resolve(style::values::computed::Length::new(area_dim)).px()
+            }
+            SideW::Auto => intrinsic,
+        }
+        .max(0.0)
+    };
+    // --- Outset (px) per side: length, or number × border-width. ---
+    let outset_px = |v: &style::values::computed::NonNegativeLengthOrNumber, border_w: f32| -> f32 {
+        match v {
+            LoN::Number(n) => n.0 * border_w,
+            LoN::Length(len) => len.0.px(),
+        }
+        .max(0.0)
+    };
+    let ow = &b.border_image_outset;
+    let (ot, or, ob, ol) =
+        (outset_px(&ow.0, bw_t), outset_px(&ow.1, bw_r), outset_px(&ow.2, bw_b), outset_px(&ow.3, bw_l));
+
+    // The border-image area is the border box expanded outward by outset. `l.size`
+    // is the border-box size; local coords have its top-left at (0, 0).
+    let ax0 = -ol;
+    let ay0 = -ot;
+    let aw = l.size.width + ol + or;
+    let ah = l.size.height + ot + ob;
+
+    let bi = &b.border_image_width;
+    let mut wt = width_px(&bi.0, bw_t, st, ah);
+    let mut wr = width_px(&bi.1, bw_r, sr, aw);
+    let mut wb = width_px(&bi.2, bw_b, sb, ah);
+    let mut wl = width_px(&bi.3, bw_l, sl, aw);
+    // Clamp so opposite widths fit the area (CSS: scale both down by the same
+    // factor when they exceed the area).
+    if wl + wr > aw && wl + wr > 0.0 {
+        let f = aw / (wl + wr);
+        wl *= f;
+        wr *= f;
+    }
+    if wt + wb > ah && wt + wb > 0.0 {
+        let f = ah / (wt + wb);
+        wt *= f;
+        wb *= f;
+    }
+
+    // Emit one region: crop the source sub-rect, draw it stretched to the dest
+    // rect. Skips empty source/dest. Coordinates are local (border-box) px.
+    let mut emit_region =
+        |images: &mut ImageCollector,
+         commands: &mut Vec<PaintCmd>,
+         (sx, sy, sws, shs): (f32, f32, f32, f32),
+         (dx, dy, dw, dh): (f32, f32, f32, f32)| {
+            if sws <= 0.0 || shs <= 0.0 || dw <= 0.0 || dh <= 0.0 {
+                return;
+            }
+            let Some(sub) = src.crop(sx as u32, sy as u32, sws.ceil() as u32, shs.ceil() as u32)
+            else {
+                return;
+            };
+            let key = images.add(&sub);
+            commands.push(PaintCmd::DrawImage(ImageItem {
+                placement: CommonPlacement::new(LayoutRect::new(
+                    LayoutPoint::new(dx, dy),
+                    LayoutPoint::new(dx + dw, dy + dh),
+                )),
+                image_key: key,
+                image_rendering: ImageRendering::Auto,
+                alpha_type: AlphaType::PremultipliedAlpha,
+                color: ColorF::WHITE,
+            }));
+        };
+
+    let (icw, ich) = (sw - sl - sr, sh - st - sb); // inner source (center) extents
+    let (dcw, dch) = (aw - wl - wr, ah - wt - wb); // inner dest extents
+
+    // Corners.
+    emit_region(images, commands, (0.0, 0.0, sl, st), (ax0, ay0, wl, wt));
+    emit_region(images, commands, (sw - sr, 0.0, sr, st), (ax0 + aw - wr, ay0, wr, wt));
+    emit_region(images, commands, (0.0, sh - sb, sl, sb), (ax0, ay0 + ah - wb, wl, wb));
+    emit_region(images, commands, (sw - sr, sh - sb, sr, sb), (ax0 + aw - wr, ay0 + ah - wb, wr, wb));
+    // Edges (stretched in v1).
+    emit_region(images, commands, (sl, 0.0, icw, st), (ax0 + wl, ay0, dcw, wt));
+    emit_region(images, commands, (sl, sh - sb, icw, sb), (ax0 + wl, ay0 + ah - wb, dcw, wb));
+    emit_region(images, commands, (0.0, st, sl, ich), (ax0, ay0 + wt, wl, dch));
+    emit_region(images, commands, (sw - sr, st, sr, ich), (ax0 + aw - wr, ay0 + wt, wr, dch));
+    // Center (only with `fill`).
+    if b.border_image_slice.fill {
+        emit_region(images, commands, (sl, st, icw, ich), (ax0 + wl, ay0 + wt, dcw, dch));
+    }
+    true
+}
+
 /// Resolved box-shadow params for one shadow (cascade → paint units).
 struct ShadowData {
     color: ColorF,
@@ -2330,6 +2496,61 @@ mod tests {
             plist.commands().iter().any(|c| matches!(c, PaintCmd::DrawRepeatingImage(_))),
             "block ::before with a url() background-image paints a repeating image"
         );
+    }
+
+    /// A `border-image` paints its 9-slice — the four corners (at least) emit as
+    /// `DrawImage` regions — and *replaces* the normal border (no `DrawBorder`).
+    /// (Pseudo-unrelated, but the same box-tree paint path: border-image, BI-2.)
+    #[test]
+    fn border_image_paints_nine_slice_and_replaces_border() {
+        use base64::Engine as _;
+        // 4×4 source: a 1px frame so slice:1 carves a real border ring.
+        let mut img = image::RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 255, 255]));
+        for x in 0..4 {
+            img.put_pixel(x, 0, image::Rgba([0, 255, 0, 255]));
+            img.put_pixel(x, 3, image::Rgba([0, 255, 0, 255]));
+        }
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        let sheet = format!(
+            "html, body, div {{ display: block; margin: 0; }} \
+             div {{ width: 100px; height: 100px; border: 10px solid red; \
+             border-image-source: url(\"data:image/png;base64,{b64}\"); \
+             border-image-slice: 1; }}"
+        );
+
+        let document = StaticDocument::parse("<html><body><div></div></body></html>");
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&document, &mut styles, euclid::Size2D::new(800.0, 600.0), &[sheet.as_str()], None);
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let bg = BackgroundImagePlane::decode_from_cascade(
+            &document,
+            &styles,
+            &crate::image_decode::NoImageLoader,
+        );
+        let plist = emit_paint_list_with_layouts(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &bg,
+            &FxHashMap::default(),
+            DeviceIntSize::new(800, 600),
+        );
+
+        let draw_images =
+            plist.commands().iter().filter(|c| matches!(c, PaintCmd::DrawImage(_))).count();
+        let draw_borders =
+            plist.commands().iter().filter(|c| matches!(c, PaintCmd::DrawBorder(_))).count();
+        assert!(draw_images >= 4, "border-image emits its corner regions, got {draw_images} DrawImage");
+        assert_eq!(draw_borders, 0, "a loaded border-image replaces the normal border");
     }
 
     /// A full-viewport (800×600) `DrawRect`'s color, if one was emitted — the
