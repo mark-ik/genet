@@ -11,6 +11,9 @@
 mod profile;
 mod static_viewer;
 
+#[cfg(feature = "viewer")]
+mod document;
+
 #[cfg(feature = "macos-present")]
 mod smoke_macos;
 #[cfg(feature = "netrender")]
@@ -41,3 +44,5 @@ pub use smoke_wayland::{
     run_wayland_subsurface_present_smoke, WaylandPresentSmokeConfig, WaylandPresentSmokeOutcome,
 };
 pub use static_viewer::{StaticViewerConfig, StaticViewerOutcome, run_static_viewer};
+#[cfg(feature = "viewer")]
+pub use document::{LoadedDocument, LocalFetcher};

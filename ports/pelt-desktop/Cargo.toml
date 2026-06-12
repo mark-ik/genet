@@ -15,7 +15,12 @@ path = "lib.rs"
 bench = false
 
 [features]
-default = []
+default = ["viewer"]
+# The on-screen static-document viewer (V1): load a document via a
+# `ResourceFetcher`, render it through `serval-render`, present it through
+# `serval-winit-host`. Default-on so `pelt --engine static <file>` works out of
+# the box; `--no-default-features` keeps the light contracts + smoke build.
+viewer = ["dep:netrender", "dep:serval-render", "dep:serval-static-dom", "dep:serval-layout", "dep:serval-winit-host", "dep:percent-encoding"]
 netrender = ["dep:netrender", "dep:webgl_wgpu", "dep:wgpu"]
 # Headed presentation through serval's `WindowsDxgiBackend`. Drives
 # the netrender renderer through the C4 DCOMP composition swapchain
@@ -62,6 +67,15 @@ raw-window-handle = { workspace = true, optional = true }
 webgl_wgpu = { workspace = true, optional = true }
 wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"], optional = true }
 winit = { workspace = true }
+
+# V1 viewer (behind the `viewer` feature): the serval render-driver + present
+# core, the static-document parser, and serval-layout's convenience entries.
+serval-render = { path = "../../components/serval-render", optional = true }
+serval-static-dom = { path = "../../components/serval-static-dom", optional = true }
+serval-layout = { path = "../../components/serval-layout", optional = true }
+serval-winit-host = { path = "../../components/serval-winit-host", optional = true }
+# data: URL payload decoding for the LocalFetcher.
+percent-encoding = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Windows-only types (HWND) used by the `windows-present` feature's
