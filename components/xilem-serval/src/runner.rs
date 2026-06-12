@@ -188,18 +188,19 @@ where
     ///   * **Bubble pass** — `chain` as given (`target → root`), keeping only
     ///     handlers whose `capture == false`.
     ///
-    /// Each node's lone listener matches exactly one phase, so it contributes at
-    /// most one path and never double-fires. Collected entirely under a shared
+    /// Each listener matches exactly one phase, so it contributes one path and
+    /// never double-fires; a node carrying several listeners contributes each, in
+    /// registration order within the phase. Collected entirely under a shared
     /// `&self` borrow (clones the paths) so the borrow releases before routing.
     fn phase_ordered_paths(
         &self,
         chain: &[NodeId],
-        lookup: impl Fn(&ServalCtx, NodeId) -> Option<&crate::context::Handler>,
+        lookup: impl Fn(&ServalCtx, NodeId) -> &[crate::context::Handler],
     ) -> Vec<Vec<ViewId>> {
         let mut paths = Vec::new();
         // Capture pass: root → target (chain reversed), capture listeners only.
         for &node in chain.iter().rev() {
-            if let Some(handler) = lookup(&self.ctx, node) {
+            for handler in lookup(&self.ctx, node) {
                 if handler.capture {
                     paths.push(handler.path.clone());
                 }
@@ -207,7 +208,7 @@ where
         }
         // Bubble pass: target → root (chain order), bubble listeners only.
         for &node in chain {
-            if let Some(handler) = lookup(&self.ctx, node) {
+            for handler in lookup(&self.ctx, node) {
                 if !handler.capture {
                     paths.push(handler.path.clone());
                 }
@@ -287,7 +288,7 @@ where
         //    (chain reversed → root → target, capture==true handlers only), then
         //    bubble pass (chain as-is → target → root, capture==false only). A
         //    node's lone listener is in exactly one phase, so it routes once.
-        let paths = self.phase_ordered_paths(&chain, |ctx, node| ctx.click_handler(node));
+        let paths = self.phase_ordered_paths(&chain, |ctx, node| ctx.click_handlers_at(node));
 
         if paths.is_empty() {
             // No click handler anywhere on the chain: nothing routed, no rebuild.
@@ -424,41 +425,48 @@ where
         self.rebuild();
     }
 
-    /// Dispatch a native key event to the focused node.
+    /// Dispatch a native key event to the focused node, then apply the
+    /// runner-level keyboard defaults (Tab traversal, Enter/Space activation) the
+    /// model leaves to the host.
     ///
-    /// If [`focus`](Self::focus) is `None`, this is a no-op: it returns an empty
-    /// `Vec` and runs no routing or rebuild (no focused node = nowhere to send
-    /// keys). Otherwise it mirrors [`dispatch_click`](Self::dispatch_click)
-    /// exactly, but rooted at the *focused* node rather than a hit-test target:
-    /// it collects the chain `focus → … → document` over `dom.parent`, then
-    /// routes a [`KeyEvent`] in **capture → target → bubble** order through the
-    /// faithful `MessageCtx`/`View::message` cycle, then rebuilds — returning the
-    /// actions that reached the root.
+    /// With nothing focused this is a near-no-op: only Tab does anything (it enters
+    /// the focusable set), since there is no element to route to. With a focused
+    /// node it mirrors [`dispatch_click`](Self::dispatch_click) — collect the chain
+    /// `focus → … → document`, route the [`KeyEvent`] in **capture → target →
+    /// bubble** order through the faithful `MessageCtx`/`View::message` cycle — then
+    /// applies the defaults and rebuilds, returning the actions that reached the
+    /// root. A key handler on a parent fires when the focused descendant has none
+    /// (DOM key bubbling); a capture handler on an ancestor fires first.
     ///
-    /// The two passes match [`dispatch_click`](Self::dispatch_click): the capture
-    /// pass walks the chain reversed (`root → focus`, capture listeners), the
-    /// bubble pass walks it as-is (`focus → root`, bubble listeners). A key
-    /// handler on a parent fires when the focused descendant has none, matching
-    /// DOM key bubbling; a capture key handler on an ancestor fires first.
+    /// **Keyboard-model escape hatches (G2.3), each overridable by a handler that
+    /// calls `prevent_default`:**
+    ///   * **Tab / Shift+Tab** is now delivered to the focused element's handlers
+    ///     *first* (it used to be swallowed pre-routing), then — unless prevented —
+    ///     traverses focus across the focusable set. So a `textarea` can insert a
+    ///     tab character (handle Tab and `prevent_default`) or a view impose a
+    ///     custom order, while the default stays free tab traversal.
+    ///   * **Enter / Space** on a focusable control that carries a click handler but
+    ///     no key handler of its own (a plain [`focusable`](crate::focusable)
+    ///     button) synthesizes a click — the keyboard equivalent of a pointer
+    ///     activation — unless a handler prevented it. A control with its own
+    ///     `on_key` owns the key instead (so a text field's Space inserts a space,
+    ///     never "clicks").
     ///
     /// As in `dispatch_click`, paths are collected **before** any routing so the
     /// immutable `ctx`/`dom` borrows release before the `&mut self` message +
     /// rebuild borrows.
     pub fn dispatch_key(&mut self, event: KeyEvent) -> Vec<Action> {
-        // Reset the cancellation flag; the routing tail records the real value, the
-        // early returns (Tab traversal, no focus, no handler) leave it false.
+        // A fresh pass: the routing tail records the real cancellation value; a
+        // pass that routes nothing leaves it false.
         self.last_default_prevented = false;
-        // Tab / Shift+Tab is focus traversal — a runner-level default, because a
-        // document engine has no built-in tab order. Intercept it before routing
-        // (so it works even with nothing focused) and move focus across the
-        // focusable set; Tab is not delivered to the focused element's handlers.
-        if matches!(event.key, Key::Named(NamedKey::Tab)) {
-            self.focus_traverse(!event.mods.shift);
-            return Vec::new();
-        }
 
-        // No focus: nothing to route to, nothing to do.
+        // With nothing focused, the only key carrying a runner default is Tab,
+        // which enters the focusable set (no element to route to). Everything else
+        // no-ops — no focused node means nowhere to send keys.
         let Some(focus) = self.focus else {
+            if matches!(event.key, Key::Named(NamedKey::Tab)) {
+                self.focus_traverse(!event.mods.shift);
+            }
             return Vec::new();
         };
 
@@ -474,62 +482,90 @@ where
             chain
         };
 
-        // 2. Build the routing paths in propagation order (capture then bubble),
-        //    exactly as `dispatch_click` does for clicks.
-        let paths = self.phase_ordered_paths(&chain, |ctx, node| ctx.key_handler(node));
-
-        if paths.is_empty() {
-            // The focused node (and its ancestors) carry no key handler — e.g.
-            // focus was aimed at a non-focusable node via `set_focus`. Nothing
-            // routed, no rebuild.
-            return Vec::new();
-        }
-
-        // 3. Route the event down each collected path through the faithful
-        //    message cycle, the same disjoint-field destructure as `rebuild` /
-        //    `dispatch_click`. Any action that reaches the root is collected.
-        // Thread the real environment through the cycle (G2.2), as dispatch_click:
-        // take it, hand it to each path, reclaim via `finish`, restore below.
-        let mut env = self.ctx.take_environment();
+        // 2. Route the key to the focused element's handlers in propagation order
+        //    (capture then bubble), exactly as `dispatch_click`. Tab is delivered
+        //    here too now (no longer swallowed pre-routing), so a view can handle
+        //    it and `prevent_default` to override the traversal in step 3. `paths`
+        //    is empty for a focusable node with no `on_key` — a plain
+        //    `focusable(button(..))`.
+        let paths = self.phase_ordered_paths(&chain, |ctx, node| ctx.key_handlers_at(node));
+        let routed = !paths.is_empty();
         let mut actions = Vec::new();
-        {
-            let Self {
-                state,
-                view,
-                view_state,
-                root,
-                dom,
-                ..
-            } = self;
+        if routed {
+            // Thread the real environment through the cycle (G2.2): take it, hand it
+            // to each path, reclaim via `finish`, restore after.
+            let mut env = self.ctx.take_environment();
+            {
+                let Self {
+                    state,
+                    view,
+                    view_state,
+                    root,
+                    dom,
+                    ..
+                } = self;
 
-            for path in paths {
-                let mut msg = MessageCtx::new(env, path, DynMessage::new(event.clone()));
-                let mut_ref = ServalElementMut {
-                    node: &mut root.node,
-                    dom: dom.clone(),
-                    parent: Some(dom.borrow().document()),
-                };
-                if let MessageResult::Action(a) =
-                    view.message(view_state, &mut msg, mut_ref, state)
-                {
-                    actions.push(a);
-                }
-                // Reclaim the environment for the next path before any break.
-                env = msg.finish().0;
-                // stopPropagation halts the bubble walk (shared Propagation cell),
-                // matching dispatch_click and the JS dispatcher.
-                if event.prop.stopped() {
-                    break;
+                for path in paths {
+                    let mut msg = MessageCtx::new(env, path, DynMessage::new(event.clone()));
+                    let mut_ref = ServalElementMut {
+                        node: &mut root.node,
+                        dom: dom.clone(),
+                        parent: Some(dom.borrow().document()),
+                    };
+                    if let MessageResult::Action(a) =
+                        view.message(view_state, &mut msg, mut_ref, state)
+                    {
+                        actions.push(a);
+                    }
+                    // Reclaim the environment for the next path before any break.
+                    env = msg.finish().0;
+                    // stopPropagation halts the bubble walk (shared Propagation
+                    // cell), matching dispatch_click and the JS dispatcher.
+                    if event.prop.stopped() {
+                        break;
+                    }
                 }
             }
+            self.ctx.set_environment(env);
+            // Record whether a handler prevented the default (gates step 3 + host).
+            self.last_default_prevented = event.prop.default_prevented();
         }
-        self.ctx.set_environment(env);
 
-        // Record whether a handler prevented the default (host gates on it).
-        self.last_default_prevented = event.prop.default_prevented();
+        // 3. Runner-level key defaults, each suppressed when a handler prevented it
+        //    (the escape hatches, G2.3).
+        if !event.prop.default_prevented() {
+            match event.key {
+                // Tab traverses focus across the focusable set, the runner-level
+                // default a document engine otherwise lacks.
+                Key::Named(NamedKey::Tab) => {
+                    self.focus_traverse(!event.mods.shift);
+                    return actions; // focus_traverse rebuilt
+                }
+                // Enter/Space activate a focusable control that has a click handler
+                // but no key handler of its own (a plain button) by synthesizing a
+                // click at the element-local origin. A control with an `on_key`
+                // owns the key, so it is excluded — a text field's Space inserts a
+                // space, it does not "click".
+                Key::Named(NamedKey::Enter | NamedKey::Space)
+                    if !self.ctx.click_handlers_at(focus).is_empty()
+                        && self.ctx.key_handlers_at(focus).is_empty() =>
+                {
+                    actions.extend(self.dispatch_click(focus, PointerClick::at((0.0, 0.0))));
+                    // The key was consumed as activation: tell the host not to run
+                    // its own default (e.g. Space scrolling the page).
+                    self.last_default_prevented = true;
+                    return actions; // dispatch_click rebuilt
+                }
+                _ => {}
+            }
+        }
 
-        // 4. Rebuild so the handler's state mutation reaches the DOM.
-        self.rebuild();
+        // 4. A handler ran but no runner default fired: rebuild so the handler's
+        //    state change reaches the DOM. When nothing routed and no default
+        //    fired, nothing changed, so the rebuild is skipped.
+        if routed {
+            self.rebuild();
+        }
 
         actions
     }

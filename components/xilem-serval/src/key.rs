@@ -284,8 +284,11 @@ where
             // no-op we skip — exactly as `OnClick::rebuild`.
             let node = *element.node;
             if node != prev_node {
-                ctx.unregister_key(prev_node);
+                // The captured path is the same for both nodes (structural, not
+                // node-dependent), so it identifies the old node's entry to drop
+                // and keys the new one.
                 let path = ctx.view_path().to_vec();
+                ctx.unregister_key(prev_node, &path);
                 ctx.register_key(node, path, self.capture);
                 view_state.node = node;
             }
@@ -299,7 +302,8 @@ where
         element: Mut<'_, Self::Element>,
     ) {
         ctx.with_id(ON_KEY_ID, |ctx| {
-            ctx.unregister_key(view_state.node);
+            let path = ctx.view_path().to_vec();
+            ctx.unregister_key(view_state.node, &path);
             self.child
                 .teardown(&mut view_state.child_state, ctx, element);
         });

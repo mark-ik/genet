@@ -60,6 +60,7 @@ mod context;
 mod controls;
 mod element;
 mod event;
+mod focusable;
 mod key;
 mod optional_action;
 mod overlay;
@@ -85,6 +86,7 @@ pub use controls::{
 };
 pub use element::{El, Element, ElementView, el};
 pub use event::{OnClick, OnClickState, PointerClick, on_click};
+pub use focusable::{Focusable, FocusableState, focusable};
 pub use key::{Key, KeyEvent, Modifiers, NamedKey, OnKey, OnKeyState, on_key};
 pub use optional_action::{Action, OptionalAction};
 pub use overlay::{anchor_point, overlay_at, Placement};
