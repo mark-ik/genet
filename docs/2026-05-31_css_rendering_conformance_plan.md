@@ -660,6 +660,26 @@ serval's BI-2/BI-3 pre-sliced `DrawImage` workaround — but it is a meatier
 netrender task than the tweak tried here. border-image stays at **+24** (BI-1/2/3)
 until that lands.
 
+**NinePatch landed — border-image done the right way, +24 held (2026-06-12).**
+Built the real primitive: `paint_list_render` now implements
+`BorderDetails::NinePatch` (netrender `26e082107`) — `emit_nine_patch` slices one
+source image into corners / edges / fill, UV-sampled per region, with edges
+stretched / tiled per `repeat_*` (including the `space` gaps the old
+`DrawRepeatingImage` never modelled). The seam bleed that a naive sub-rect blit
+has (bilinear reading the neighbour's source pixel — it cost −2 on a first cut)
+is fixed by a new **clamp-to-uv** sampling primitive (`Scene::push_image_clamped`
+→ `SceneImage.clamp_to_uv` → `crop_to_uv` crops the source to the sub-rect and
+pads at its edges), which is reusable by any sub-rect / sprite-sheet draw. serval
+now emits **one** `BorderItem{NinePatch}` (`01f0ca59658`), dropping the nine
+pre-sliced `DrawImage` commands and `DecodedImage::crop`. **css-backgrounds stays
+334** — a *behaviour-identical* swap (diffed: 0 regressions, 0 wins, the exact
+same pass set as the pre-slice) but via the correct architecture: the shared
+rasterizer owns slicing, it is bleed-free, and the slicing benefits every
+producer on the `paint_list_api` boundary, not just serval. The remaining
+`border-image-repeat` near-misses stay AA-bound (tile-seam exactness, the same
+ceiling the centered-repeat attempt hit) — a runner GPU-fuzz-floor question, not a
+slicing one.
+
 ## Non-goals (for now)
 
 - CSS animations/transitions (their own axis; the alphabetically-first
