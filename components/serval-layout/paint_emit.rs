@@ -2082,6 +2082,7 @@ fn emit_border_image(
     use style::values::computed::{NonNegativeNumberOrPercentage as NoP, NumberOrPercentage};
     use style::values::generics::border::BorderImageSideWidth as SideW;
     use style::values::generics::length::GenericLengthOrNumber as LoN;
+    use style::values::specified::border::BorderImageRepeatKeyword as RepKw;
 
     let b = cv.get_border();
     let (sw, sh) = (src.width as f32, src.height as f32);
@@ -2199,17 +2200,93 @@ fn emit_border_image(
     let (icw, ich) = (sw - sl - sr, sh - st - sb); // inner source (center) extents
     let (dcw, dch) = (aw - wl - wr, ah - wt - wb); // inner dest extents
 
-    // Corners.
+    // Emit one edge, tiled per `border-image-repeat`. `horizontal` = the edge runs
+    // along x (top/bottom); else along y (left/right). The source strip is scaled
+    // so its cross axis fills the dest border width, then laid along the dest
+    // length per the keyword: stretch (one scaled tile), repeat (tiled from the
+    // start), round (tile rescaled to a whole count), space (whole tiles with
+    // equal gaps; none if not even one fits).
+    let mut emit_edge =
+        |images: &mut ImageCollector,
+         commands: &mut Vec<PaintCmd>,
+         (sx, sy, sws, shs): (f32, f32, f32, f32),
+         (dx, dy, dw, dh): (f32, f32, f32, f32),
+         horizontal: bool,
+         kw: RepKw| {
+            if sws <= 0.0 || shs <= 0.0 || dw <= 0.0 || dh <= 0.0 {
+                return;
+            }
+            let Some(sub) = src.crop(sx as u32, sy as u32, sws.ceil() as u32, shs.ceil() as u32)
+            else {
+                return;
+            };
+            let dest = LayoutRect::new(LayoutPoint::new(dx, dy), LayoutPoint::new(dx + dw, dy + dh));
+            // `stretch` is just one scaled DrawImage over the whole edge rect.
+            if matches!(kw, RepKw::Stretch) {
+                let key = images.add(&sub);
+                commands.push(PaintCmd::DrawImage(ImageItem {
+                    placement: CommonPlacement::new(dest),
+                    image_key: key,
+                    image_rendering: ImageRendering::Auto,
+                    alpha_type: AlphaType::PremultipliedAlpha,
+                    color: ColorF::WHITE,
+                }));
+                return;
+            }
+            // Along/cross dest extents, and the natural tile length after scaling
+            // the source strip's cross axis to the dest border width.
+            let (length, cross) = if horizontal { (dw, dh) } else { (dh, dw) };
+            let (s_along, s_cross) = if horizontal { (sws, shs) } else { (shs, sws) };
+            let scale = if s_cross > 0.0 { cross / s_cross } else { 1.0 };
+            let natural = (s_along * scale).max(1.0);
+            // Tile length + per-axis spacing per the keyword.
+            let (tile, spacing) = match kw {
+                RepKw::Round => {
+                    let n = (length / natural).round().max(1.0);
+                    (length / n, 0.0)
+                }
+                RepKw::Space => {
+                    let n = (length / natural).floor();
+                    if n < 1.0 {
+                        return; // no whole tile fits → paint nothing
+                    }
+                    let gap = if n > 1.0 { (length - n * natural) / (n - 1.0) } else { 0.0 };
+                    (natural, gap)
+                }
+                _ => (natural, 0.0), // Repeat
+            };
+            let key = images.add(&sub);
+            let (stretch_size, tile_spacing) = if horizontal {
+                (LayoutSize::new(tile, cross), LayoutSize::new(spacing, 0.0))
+            } else {
+                (LayoutSize::new(cross, tile), LayoutSize::new(0.0, spacing))
+            };
+            commands.push(PaintCmd::DrawRepeatingImage(RepeatingImageItem {
+                placement: CommonPlacement::new(dest),
+                image_key: key,
+                stretch_size,
+                tile_spacing,
+                image_rendering: ImageRendering::Auto,
+                alpha_type: AlphaType::PremultipliedAlpha,
+                color: ColorF::WHITE,
+            }));
+        };
+
+    // `border-image-repeat` is (horizontal, vertical): the horizontal keyword
+    // tiles the top/bottom edges, the vertical keyword the left/right edges.
+    let (rep_h, rep_v) = (b.border_image_repeat.0, b.border_image_repeat.1);
+
+    // Corners — always scaled (no repeat).
     emit_region(images, commands, (0.0, 0.0, sl, st), (ax0, ay0, wl, wt));
     emit_region(images, commands, (sw - sr, 0.0, sr, st), (ax0 + aw - wr, ay0, wr, wt));
     emit_region(images, commands, (0.0, sh - sb, sl, sb), (ax0, ay0 + ah - wb, wl, wb));
     emit_region(images, commands, (sw - sr, sh - sb, sr, sb), (ax0 + aw - wr, ay0 + ah - wb, wr, wb));
-    // Edges (stretched in v1).
-    emit_region(images, commands, (sl, 0.0, icw, st), (ax0 + wl, ay0, dcw, wt));
-    emit_region(images, commands, (sl, sh - sb, icw, sb), (ax0 + wl, ay0 + ah - wb, dcw, wb));
-    emit_region(images, commands, (0.0, st, sl, ich), (ax0, ay0 + wt, wl, dch));
-    emit_region(images, commands, (sw - sr, st, sr, ich), (ax0 + aw - wr, ay0 + wt, wr, dch));
-    // Center (only with `fill`).
+    // Edges — tiled per repeat.
+    emit_edge(images, commands, (sl, 0.0, icw, st), (ax0 + wl, ay0, dcw, wt), true, rep_h);
+    emit_edge(images, commands, (sl, sh - sb, icw, sb), (ax0 + wl, ay0 + ah - wb, dcw, wb), true, rep_h);
+    emit_edge(images, commands, (0.0, st, sl, ich), (ax0, ay0 + wt, wl, dch), false, rep_v);
+    emit_edge(images, commands, (sw - sr, st, sr, ich), (ax0 + aw - wr, ay0 + wt, wr, dch), false, rep_v);
+    // Center (only with `fill`) — stretched for now (repeat is a later refinement).
     if b.border_image_slice.fill {
         emit_region(images, commands, (sl, st, icw, ich), (ax0 + wl, ay0 + wt, dcw, dch));
     }
