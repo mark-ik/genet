@@ -206,6 +206,11 @@ pub struct InlineBlockBox<NodeId> {
 pub struct InlineContent<NodeId> {
     pub runs: Vec<InlineRun>,
     pub boxes: Vec<InlineBoxItem<NodeId>>,
+    /// `white-space: nowrap` (CSS `text-wrap-mode: nowrap`): the content is laid
+    /// out on a single line — parley does not soft-wrap it to the available
+    /// width; only a `<br>` / `\n` breaks. Set from the element's cascade in
+    /// `construct`; read by the measure pass to drop `max_advance`.
+    pub no_wrap: bool,
 }
 
 impl<NodeId> InlineContent<NodeId> {
@@ -214,6 +219,7 @@ impl<NodeId> InlineContent<NodeId> {
         Self {
             runs: vec![InlineRun::new(text)],
             boxes: Vec::new(),
+            no_wrap: false,
         }
     }
 
@@ -237,6 +243,7 @@ impl<NodeId> InlineContent<NodeId> {
                 line_height: LineHeightSpec::Normal,
             }],
             boxes: Vec::new(),
+            no_wrap: false,
         }
     }
 
@@ -407,11 +414,17 @@ pub fn measure_inline_content<NodeId>(
         };
     }
 
-    // Translate Taffy's available_space into parley's max_advance.
-    let max_advance: Option<f32> = match available_space.width {
-        AvailableSpace::Definite(w) => Some(w),
-        AvailableSpace::MinContent => Some(0.0),
-        AvailableSpace::MaxContent => None,
+    // Translate Taffy's available_space into parley's max_advance. `white-space:
+    // nowrap` forces a single line (no soft wrap) regardless of available width —
+    // `None` lets parley break only on mandatory `\n` / `<br>`.
+    let max_advance: Option<f32> = if content.no_wrap {
+        None
+    } else {
+        match available_space.width {
+            AvailableSpace::Definite(w) => Some(w),
+            AvailableSpace::MinContent => Some(0.0),
+            AvailableSpace::MaxContent => None,
+        }
     };
 
     // Reserve each inline box's space. `<img>` uses its intrinsic/CSS size; an
@@ -654,6 +667,7 @@ mod tests {
         let combined = InlineContent::<u64> {
             runs: vec![InlineRun::new("Hello "), InlineRun::new("world")],
             boxes: Vec::new(),
+            no_wrap: false,
         };
         let just_hello = InlineContent::<u64>::new("Hello ");
         let avail = Size {

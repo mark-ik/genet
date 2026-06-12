@@ -1065,6 +1065,40 @@ mod tests {
         );
     }
 
+    /// `white-space: nowrap` lays the text on a single line even when it overflows
+    /// a narrow box — the same text without it wraps to several lines. (Chrome-UI
+    /// truncated-label support.)
+    #[test]
+    fn white_space_nowrap_stays_one_line() {
+        let line_count = |nowrap: bool| {
+            let document =
+                StaticDocument::parse("<html><body><p>one two three four five six</p></body></html>");
+            let ws = if nowrap { "white-space: nowrap;" } else { "" };
+            let sheet = format!("p {{ display: block; width: 40px; font-size: 16px; {ws} }}");
+            let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+            run_cascade(
+                &document,
+                &mut styles,
+                euclid::Size2D::new(VIEWPORT, VIEWPORT),
+                &[sheet.as_str()],
+                None,
+            );
+            let images = ImagePlane::decode_from_dom(&document);
+            let viewport = Size {
+                width: AvailableSpace::Definite(VIEWPORT),
+                height: AvailableSpace::Definite(VIEWPORT),
+            };
+            let mut text_ctx = TextMeasureCtx::new();
+            let (_f, built) =
+                layout_via_box_tree(&document, &styles, &images, viewport, &mut text_ctx);
+            let p = find_all(&document, html5ever::local_name!("p"))[0];
+            let taffy_id = *built.node_map.get(&p).expect("p box");
+            text_ctx.layouts.get(&taffy_id).expect("p text laid out").len()
+        };
+        assert_eq!(line_count(true), 1, "nowrap → a single line");
+        assert!(line_count(false) > 1, "wrapping → multiple lines in a 40px box");
+    }
+
     /// A block-`display` `::before` / `::after` becomes a synthetic block box
     /// child (first / last), laid out in block flow: each stretches to the
     /// container width and stacks vertically, with the element's own text between.

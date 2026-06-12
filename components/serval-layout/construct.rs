@@ -135,6 +135,17 @@ where
         .is_some_and(|q| q.local != html5ever::local_name!("img"))
 }
 
+/// Whether `id` has `white-space: nowrap` (CSS `text-wrap-mode: nowrap`) — its
+/// inline content lays out on a single line, not soft-wrapped to the available
+/// width. `false` (wrap) when the cascade has not run.
+fn no_wrap_of<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId) -> bool {
+    use style::properties::longhands::text_wrap_mode::computed_value::T as Mode;
+    styles
+        .get(id)
+        .and_then(|e| e.borrow_data())
+        .is_some_and(|d| matches!(d.styles.primary().get_inherited_text().text_wrap_mode, Mode::Nowrap))
+}
+
 /// Read an element's cascaded outer display: `Some(true)` for
 /// `display:inline`, `Some(false)` for block-level, `None` when the
 /// cascade hasn't run for this element.
@@ -271,7 +282,7 @@ where
     // inline-formatting-context root — a child `span::first-letter` never reaches
     // this path, matching the spec's block-container restriction.
     apply_first_letter(styles, elem.id(), &mut runs);
-    InlineContent { runs, boxes }
+    InlineContent { runs, boxes, no_wrap: no_wrap_of(styles, elem.id()) }
 }
 
 /// Split the first content run at the `::first-letter` boundary, restyling the
@@ -401,7 +412,8 @@ pub(crate) fn block_pseudo_content<NodeId: Copy + Eq + Hash>(
             text.push_str(s);
         }
     }
-    let content = InlineContent { runs: vec![run_from_computed(cv, text)], boxes: Vec::new() };
+    let content =
+        InlineContent { runs: vec![run_from_computed(cv, text)], boxes: Vec::new(), no_wrap: false };
     Some((cv.clone(), content))
 }
 
@@ -549,7 +561,7 @@ where
     for &child in group {
         gather_child(dom, styles, images, styling, child, &mut runs, &mut boxes, &mut offset);
     }
-    InlineContent { runs, boxes }
+    InlineContent { runs, boxes, no_wrap: no_wrap_of(styles, styling) }
 }
 
 /// Build an [`InlineRun`] for `text` styled by element `id`'s cascade
@@ -974,7 +986,7 @@ where
 {
     let text = list_marker_text(dom, styles, id)?;
     let run = marker_run(styles, id, text);
-    Some(InlineContent { runs: vec![run], boxes: Vec::new() })
+    Some(InlineContent { runs: vec![run], boxes: Vec::new(), no_wrap: false })
 }
 
 /// Whether an element's cascaded `list-style-position` is `inside` (the marker
