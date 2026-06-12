@@ -57,6 +57,16 @@ pub use webgl::{WebGlFactory, WebGlHandler};
 pub struct HostState {
     /// `console.log` / `console.error` output, in call order.
     pub console: Vec<String>,
+    /// The document (viewport) scroll offset in CSS px, the script side of
+    /// `window.scrollX|Y` / `scrollTo` / `scrollBy`. The host owns the real
+    /// viewport (it lays out and knows the scroll range): each frame it syncs the
+    /// current clamped scroll *in* before running script, and after the run reads
+    /// back the value script set, clamps it against its scroll range, and applies
+    /// it (`IncrementalLayout::set_viewport_scroll`). The runtime never clamps (it
+    /// does not lay out), so a `scrollX` read within the same run that set an
+    /// out-of-range value sees the unclamped value until the host reconciles — the
+    /// script/layout split's one fidelity gap.
+    pub viewport_scroll: (f32, f32),
     /// The live document the `document`/`Node` surface mutates. Native DOM
     /// callbacks reach it through `CallCx::host_data` (a `RefCell<HostState>`).
     pub dom: ScriptedDom,
@@ -413,6 +423,17 @@ fn install_host_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error>
     engine.set_function::<ConsoleError>("__console_error", 1)?;
     engine.eval("globalThis.console = { log: __console_log, error: __console_error };")?;
 
+    // window.scrollTo / scrollBy / scrollX|Y over the host's document scroll
+    // (V4 of the viewport standards). Numbers cross the native boundary as strings
+    // (the CallCx surface has no number marshalling); the JS getters `Number()`
+    // them back. The host clamps + applies the value script sets (see
+    // `HostState::viewport_scroll`).
+    engine.set_function::<ScrollTo>("__scrollTo", 2)?;
+    engine.set_function::<ScrollBy>("__scrollBy", 2)?;
+    engine.set_function::<ScrollX>("__scrollX", 0)?;
+    engine.set_function::<ScrollY>("__scrollY", 0)?;
+    engine.eval(SCROLL_BOOTSTRAP)?;
+
     // Event loop and EventTarget are pure-JS bootstraps over the global. Callbacks
     // live JS-side; the only Rust entry is `run_event_loop` (evals `__runTimers`).
     // ES5-style (function constructors, no arrows/classes) for the widest backend
@@ -733,6 +754,94 @@ impl<E: ScriptEngine> NativeFn<E> for ConsoleError {
     }
 }
 
+/// Read argument `i` as an `f64`. JS numbers cross the native boundary as strings
+/// (the `CallCx` surface marshals no numbers), so this stringifies then parses;
+/// a non-numeric or absent argument is `0.0`.
+fn scroll_arg<E: ScriptEngine>(cx: &mut E::CallCx<'_>, i: usize) -> Result<f64, E::Error> {
+    let v = cx.arg(i);
+    let s = cx.value_to_string(&v)?;
+    Ok(s.trim().parse::<f64>().unwrap_or(0.0))
+}
+
+/// The document scroll the host last synced into [`HostState`] (`(0, 0)` if host
+/// data is unavailable).
+fn read_scroll<E: ScriptEngine>(cx: &mut E::CallCx<'_>) -> (f32, f32) {
+    cx.host_data()
+        .and_then(|d| d.downcast_ref::<RefCell<HostState>>().map(|h| h.borrow().viewport_scroll))
+        .unwrap_or((0.0, 0.0))
+}
+
+/// Store the document scroll script set, for the host to clamp + apply.
+fn write_scroll<E: ScriptEngine>(cx: &mut E::CallCx<'_>, scroll: (f32, f32)) {
+    if let Some(data) = cx.host_data() {
+        if let Some(host) = data.downcast_ref::<RefCell<HostState>>() {
+            host.borrow_mut().viewport_scroll = scroll;
+        }
+    }
+}
+
+/// `__scrollTo(x, y)` → set the document scroll absolutely (`window.scrollTo`).
+struct ScrollTo;
+impl<E: ScriptEngine> NativeFn<E> for ScrollTo {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let x = scroll_arg::<E>(cx, 0)? as f32;
+        let y = scroll_arg::<E>(cx, 1)? as f32;
+        write_scroll::<E>(cx, (x, y));
+        Ok(cx.undefined())
+    }
+}
+
+/// `__scrollBy(dx, dy)` → offset the document scroll (`window.scrollBy`).
+struct ScrollBy;
+impl<E: ScriptEngine> NativeFn<E> for ScrollBy {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let dx = scroll_arg::<E>(cx, 0)? as f32;
+        let dy = scroll_arg::<E>(cx, 1)? as f32;
+        let (x, y) = read_scroll::<E>(cx);
+        write_scroll::<E>(cx, (x + dx, y + dy));
+        Ok(cx.undefined())
+    }
+}
+
+/// `__scrollX()` → the document scroll x as a string (`window.scrollX` `Number()`s it).
+struct ScrollX;
+impl<E: ScriptEngine> NativeFn<E> for ScrollX {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let x = read_scroll::<E>(cx).0;
+        cx.make_string(&x.to_string())
+    }
+}
+
+/// `__scrollY()` → the document scroll y as a string (`window.scrollY` `Number()`s it).
+struct ScrollY;
+impl<E: ScriptEngine> NativeFn<E> for ScrollY {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let y = read_scroll::<E>(cx).1;
+        cx.make_string(&y.to_string())
+    }
+}
+
+/// `window.scrollTo` / `scrollBy` (the `(x, y)` and `{ left, top }` forms) plus the
+/// `scrollX` / `scrollY` / `pageXOffset` / `pageYOffset` getters, over the `__scroll*`
+/// natives. `window` is the global, so these define on `globalThis`.
+const SCROLL_BOOTSTRAP: &str = r#"
+(function() {
+  function coords(a, b) {
+    if (a && typeof a === 'object') { return [a.left || 0, a.top || 0]; }
+    return [a || 0, b || 0];
+  }
+  globalThis.scrollTo = function(a, b) { var c = coords(a, b); __scrollTo(c[0], c[1]); };
+  globalThis.scrollBy = function(a, b) { var c = coords(a, b); __scrollBy(c[0], c[1]); };
+  function getter(name, fn) {
+    Object.defineProperty(globalThis, name, { configurable: true, get: fn });
+  }
+  getter('scrollX', function() { return Number(__scrollX()); });
+  getter('scrollY', function() { return Number(__scrollY()); });
+  getter('pageXOffset', function() { return Number(__scrollX()); });
+  getter('pageYOffset', function() { return Number(__scrollY()); });
+})();
+"#;
+
 /// `postMessage` (async `message` delivery to the global) plus minimal `location`
 /// and `navigator` stubs the harness touches at load. Async delivery rides the
 /// event loop, so a `postMessage` only arrives after `run_event_loop`.
@@ -908,6 +1017,34 @@ mod tests {
     #[test]
     fn host_surface_on_boa() {
         host_surface_works::<script_engine_boa::BoaEngine>();
+    }
+
+    /// The window scroll API (`scrollTo` / `scrollBy` / `scrollX|Y`), against any
+    /// backend: the host syncs the current document scroll into `HostState`, script
+    /// reads it as numbers and sets it (absolute + relative + the `{left, top}`
+    /// form), and the host reads back the value to clamp + apply.
+    fn window_scroll_works<E: ScriptEngine>() {
+        let mut rt = Runtime::<E>::new().expect("runtime");
+
+        // The host syncs the current document scroll in before running script.
+        rt.host().borrow_mut().viewport_scroll = (0.0, 120.0);
+        // Script reads it through window.scrollX / scrollY as numbers (not strings).
+        rt.eval("console.log((window.scrollX === 0) + ',' + (window.scrollY === 120));")
+            .expect("read scroll");
+        assert_eq!(rt.host().borrow().console, vec!["true,true"]);
+
+        // scrollTo sets absolutely, scrollBy offsets; the host reads the value back.
+        rt.eval("window.scrollTo(0, 500); window.scrollBy(0, 50);").expect("set scroll");
+        assert_eq!(rt.host().borrow().viewport_scroll, (0.0, 550.0));
+
+        // The options form scrollTo({ left, top }) works too.
+        rt.eval("window.scrollTo({ left: 10, top: 700 });").expect("scroll options");
+        assert_eq!(rt.host().borrow().viewport_scroll, (10.0, 700.0));
+    }
+
+    #[test]
+    fn window_scroll_on_boa() {
+        window_scroll_works::<script_engine_boa::BoaEngine>();
     }
 
     /// postMessage, against any backend: delivery is async (nothing until the loop
