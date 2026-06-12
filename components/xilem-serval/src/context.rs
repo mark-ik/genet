@@ -113,6 +113,24 @@ impl ServalCtx {
         self.dom.clone()
     }
 
+    /// Take the environment out (leaving a fresh empty one) to thread the *real*
+    /// environment through the dispatch message cycle: hand it to
+    /// [`MessageCtx::new`](xilem_core::MessageCtx::new), then return what
+    /// `MessageCtx::finish` gives back via [`set_environment`](Self::set_environment).
+    /// `Environment` is not `Clone`, so this take / restore is how dispatch shares
+    /// one environment with build (which reads `self.environment` directly through
+    /// the [`ViewPathTracker`] accessor) rather than routing against a throwaway
+    /// `Environment::new()`. (Grab-bag G2.2.)
+    pub fn take_environment(&mut self) -> Environment {
+        std::mem::replace(&mut self.environment, Environment::new())
+    }
+
+    /// Restore the environment after a dispatch message cycle (see
+    /// [`take_environment`](Self::take_environment)).
+    pub fn set_environment(&mut self, environment: Environment) {
+        self.environment = environment;
+    }
+
     /// Register `path` (in phase `capture`) as the click handler for `node`.
     ///
     /// Called by [`OnClick::build`](crate::OnClick) (and on rebuild when the
