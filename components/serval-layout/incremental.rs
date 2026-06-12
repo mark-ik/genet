@@ -267,7 +267,16 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
     /// `scroll-into-view`), clamped to the scroll range — the shared mechanism behind
     /// anchor-fragment navigation (`url#id` / in-page `#id` links) and focus-into-view
     /// (scope doc rule 5). Returns whether the offset moved; a no-op if `node` has no
-    /// fragment. (No `scroll-margin` / fixed-header offset yet — a refinement.)
+    /// fragment.
+    ///
+    /// Block-start only, so an anchored target lands *under* a fixed header. The spec
+    /// offset for that (`scroll-padding` on the viewport, `scroll-margin` on the
+    /// target) is **deferred, blocked on stylo**: serval's stylo build does not
+    /// compile the CSS Scroll Snap `scroll-padding` / `scroll-margin` longhands (they
+    /// are absent from the `Position` / `Padding` / `Margin` / `Box` computed
+    /// structs), so there is no value to read. Bare block-start is the spec *default*
+    /// regardless (a page with no `scroll-padding` behaves identically). Revisit when
+    /// stylo gains the properties.
     pub fn scroll_to_element<D>(&mut self, dom: &D, node: Id) -> bool
     where
         D: LayoutDom<NodeId = Id>,
