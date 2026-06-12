@@ -91,7 +91,7 @@ mod windowed {
     use serval_winit_host::{wheel_delta_from_winit, SurfaceHost};
     use winit::application::ApplicationHandler;
     use winit::dpi::PhysicalSize;
-    use winit::event::{ElementState, WindowEvent};
+    use winit::event::{ElementState, MouseButton, WindowEvent};
     use winit::event_loop::ActiveEventLoop;
     use winit::keyboard::{Key, NamedKey};
     use winit::window::{Window, WindowId};
@@ -136,6 +136,9 @@ mod windowed {
         redraws: u32,
         /// Shift state, tracked from `ModifiersChanged`, so `Shift+Space` pages up.
         shift: bool,
+        /// Last cursor position in physical px (winit's `MouseInput` carries none),
+        /// so a click can hit-test the document for in-page link navigation.
+        cursor: (f32, f32),
     }
 
     impl ViewerApp {
@@ -149,6 +152,7 @@ mod windowed {
                 height: 600,
                 redraws: 0,
                 shift: false,
+                cursor: (0.0, 0.0),
             }
         }
 
@@ -262,6 +266,19 @@ mod windowed {
                 },
                 WindowEvent::ModifiersChanged(mods) => {
                     self.shift = mods.state().shift_key();
+                },
+                WindowEvent::CursorMoved { position, .. } => {
+                    self.cursor = (position.x as f32, position.y as f32);
+                },
+                WindowEvent::MouseInput { state, button, .. } => {
+                    // A left click on an in-page link (`<a href="#id">`) scrolls its
+                    // target into view (anchor-fragment navigation, scope doc rule 5).
+                    if state == ElementState::Pressed && button == MouseButton::Left {
+                        let (x, y) = self.cursor;
+                        if self.doc.click_at(x, y) {
+                            self.request_redraw();
+                        }
+                    }
                 },
                 WindowEvent::KeyboardInput { event, .. } => {
                     // The keyboard scroll defaults (scope doc rule 5): map the key to

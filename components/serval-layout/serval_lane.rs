@@ -480,10 +480,11 @@ fn outset_rect(rect: Rect, outsets: taffy::Rect<f32>) -> Rect {
 }
 
 /// Walk from the document root to `target`, accumulating origins.
-/// Returns the absolute origin of `target`, or None if not reachable.
-/// O(n) — adequate for probe; a cached parent_id map would make this
-/// O(depth).
-fn absolute_origin<D>(
+/// Returns the absolute (layout-space, unscrolled) origin of `target`, or None if
+/// not reachable. O(n) — adequate for probe; a cached parent_id map would make this
+/// O(depth). `pub(crate)` so the session's scroll-into-view can read an element's
+/// document position.
+pub(crate) fn absolute_origin<D>(
     dom: &D,
     fragments: &FragmentPlane<D::NodeId>,
     target: D::NodeId,

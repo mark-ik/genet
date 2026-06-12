@@ -11,7 +11,7 @@
 
 use netrender::Scene;
 use pelt_core::ResourceFetcher;
-use serval_layout::{inline_stylesheets, IncrementalLayout, ScrollKey};
+use serval_layout::{inline_stylesheets, IncrementalLayout, ScrollKey, ScrollOffsets};
 use serval_render::scene_from_session_dom;
 use serval_static_dom::{StaticDocument, StaticNodeId};
 
@@ -93,16 +93,28 @@ pub struct LoadedDocument {
     session: Option<IncrementalLayout<StaticNodeId>>,
     /// The size `session` was laid out at, to detect a resize.
     size: (u32, u32),
+    /// A `url#id` fragment to scroll to once, applied on the first frame after the
+    /// session exists (anchor-fragment navigation on load). Cleared after applying.
+    pending_fragment: Option<String>,
 }
 
 impl LoadedDocument {
     /// Fetch `url` through `fetcher`, parse the bytes as HTML, and resolve its
     /// stylesheets. `Err` when the fetch fails (missing file, unsupported scheme).
     pub fn load(fetcher: &impl ResourceFetcher, url: &str) -> Result<Self, String> {
+        // Split a `url#id` fragment off before fetching (the fetcher takes the
+        // resource, not the fragment); a non-empty fragment scrolls into view on the
+        // first frame (anchor-fragment navigation on load).
+        let (resource, fragment) = match url.split_once('#') {
+            Some((res, frag)) => (res, (!frag.is_empty()).then(|| frag.to_string())),
+            None => (url, None),
+        };
         let bytes = fetcher
-            .fetch(url)
-            .ok_or_else(|| format!("could not load {url}"))?;
-        Ok(Self::parse(&String::from_utf8_lossy(&bytes)))
+            .fetch(resource)
+            .ok_or_else(|| format!("could not load {resource}"))?;
+        let mut me = Self::parse(&String::from_utf8_lossy(&bytes));
+        me.pending_fragment = fragment;
+        Ok(me)
     }
 
     /// Parse already-loaded HTML (the fetch-free half, for tests and inline
@@ -111,7 +123,7 @@ impl LoadedDocument {
         let doc = StaticDocument::parse(html);
         let mut sheets: Vec<String> = DEFAULT_SHEET.iter().map(|s| s.to_string()).collect();
         sheets.extend(inline_stylesheets(&doc));
-        Self { doc, sheets, session: None, size: (0, 0) }
+        Self { doc, sheets, session: None, size: (0, 0), pending_fragment: None }
     }
 
     /// Build (or rebuild, on a size change) the layout session for `width`×`height`.
@@ -129,6 +141,13 @@ impl LoadedDocument {
     /// (re-resolving `%`-height and viewport units against the new viewport).
     pub fn frame(&mut self, width: u32, height: u32) -> Scene {
         self.ensure_session(width, height);
+        // One-shot anchor-fragment scroll: now that the session / layout exists, bring
+        // a `url#id` target into view so the document opens scrolled to it.
+        if let Some(fragment) = self.pending_fragment.take() {
+            if let Some(session) = self.session.as_mut() {
+                session.scroll_to_id(&self.doc, &fragment);
+            }
+        }
         let session = self.session.as_ref().expect("session built by ensure_session");
         scene_from_session_dom(session, &self.doc, width, height)
     }
@@ -155,6 +174,25 @@ impl LoadedDocument {
             return false;
         };
         session.scroll_for_key(&self.doc, key)
+    }
+
+    /// Handle a click at scene point `(x, y)`: if it lands on an in-page link
+    /// (`<a href="#id">`), scroll its target into view. Returns whether the document
+    /// scrolled (so the host redraws). A no-op before the first frame, or off a link.
+    pub fn click_at(&mut self, x: f32, y: f32) -> bool {
+        let fragment = {
+            let Some(session) = self.session.as_ref() else {
+                return false;
+            };
+            session.link_fragment_at(&self.doc, x, y, &ScrollOffsets::default())
+        };
+        let Some(fragment) = fragment else {
+            return false;
+        };
+        let Some(session) = self.session.as_mut() else {
+            return false;
+        };
+        session.scroll_to_id(&self.doc, &fragment)
     }
 
     /// The current document scroll offset in device px (`(0, 0)` before the first
@@ -223,6 +261,50 @@ mod tests {
         let bottom = doc.scroll().1;
         assert!(bottom > 250.0, "scrolled near the bottom: {bottom}");
         assert!(!doc.scroll_by(0.0, 100.0), "already at the bottom edge → no change");
+    }
+
+    /// A `url#id` fragment scrolls the target into view on the first frame: the
+    /// document opens scrolled so the `#mark` element's top is at the viewport top.
+    #[test]
+    fn url_fragment_scrolls_into_view_on_load() {
+        // A tall spacer, the target (id="mark"), then more height so the target's
+        // top (1000px) sits within the scroll range. Body box zeroed so the target's
+        // top is exactly 1000 (no UA padding offset).
+        let html = "<style>body { margin: 0; padding: 0; } \
+            .tall { height: 1000px; } .t { height: 60px; }</style>\
+            <div class=\"tall\"></div><div id=\"mark\" class=\"t\">target</div>\
+            <div class=\"tall\"></div>";
+        let url = format!("data:text/html,{html}#mark");
+        let mut doc = LoadedDocument::load(&LocalFetcher, &url).expect("loads with a fragment");
+        let _ = doc.frame(400, 300);
+        assert!(
+            (doc.scroll().1 - 1000.0).abs() < 1.0,
+            "opens scrolled to #mark at y=1000: {:?}",
+            doc.scroll(),
+        );
+    }
+
+    /// Clicking an in-page link (`<a href="#id">`) scrolls its target into view;
+    /// a click that lands on no link is a no-op.
+    #[test]
+    fn in_page_link_click_scrolls_to_target() {
+        let html = "<style>body { margin: 0; padding: 0; } a { display: block; height: 40px; } \
+            .tall { height: 1000px; } .t { height: 60px; }</style>\
+            <a href=\"#mark\">go</a><div class=\"tall\"></div>\
+            <div id=\"mark\" class=\"t\">target</div><div class=\"tall\"></div>";
+        let mut doc = LoadedDocument::parse(html);
+        let _ = doc.frame(400, 300);
+
+        // The link is a 40px block at the top; click inside it.
+        assert!(doc.click_at(10.0, 20.0), "clicking the in-page link scrolls to its target");
+        // #mark sits at y = 40 (link) + 1000 (spacer) = 1040.
+        assert!((doc.scroll().1 - 1040.0).abs() < 1.0, "scrolled to #mark: {:?}", doc.scroll());
+
+        // The point now shows the target (a div, not a link), so a click there is a
+        // no-op.
+        let before = doc.scroll();
+        assert!(!doc.click_at(10.0, 20.0), "no link under the point now → no-op");
+        assert_eq!(doc.scroll(), before, "scroll unchanged off a link");
     }
 
     /// Keyboard scroll defaults reach the document viewport through the session:

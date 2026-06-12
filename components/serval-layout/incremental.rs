@@ -263,6 +263,62 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
         self.viewport.scroll != before
     }
 
+    /// Scroll the document so `node`'s top aligns with the viewport top (block-start
+    /// `scroll-into-view`), clamped to the scroll range — the shared mechanism behind
+    /// anchor-fragment navigation (`url#id` / in-page `#id` links) and focus-into-view
+    /// (scope doc rule 5). Returns whether the offset moved; a no-op if `node` has no
+    /// fragment. (No `scroll-margin` / fixed-header offset yet — a refinement.)
+    pub fn scroll_to_element<D>(&mut self, dom: &D, node: Id) -> bool
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let Some(origin) = crate::serval_lane::absolute_origin(dom, &self.fragments, node) else {
+            return false;
+        };
+        let before = self.viewport.scroll;
+        self.set_viewport_scroll(dom, (before.0, origin.y));
+        self.viewport.scroll != before
+    }
+
+    /// Scroll to the element whose `id` attribute is `id` (anchor-fragment
+    /// navigation: `url#id` and in-page `#id` links), via
+    /// [`scroll_to_element`](Self::scroll_to_element). Returns whether the offset
+    /// moved; a no-op if no element has that id.
+    pub fn scroll_to_id<D>(&mut self, dom: &D, id: &str) -> bool
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        match element_by_id(dom, id) {
+            Some(node) => self.scroll_to_element(dom, node),
+            None => false,
+        }
+    }
+
+    /// The in-page anchor fragment (`#id` → `"id"`) of a link under scene point
+    /// `(x, y)`, or `None`. Hit-tests the point (document- and element-scroll aware)
+    /// and walks hit → root for the nearest `<a href="#...">`. The host feeds a click
+    /// position to this and, on `Some`, calls [`scroll_to_id`](Self::scroll_to_id) —
+    /// in-page link navigation (scope doc rule 5).
+    pub fn link_fragment_at<D>(
+        &self,
+        dom: &D,
+        x: f32,
+        y: f32,
+        scroll: &ScrollOffsets<Id>,
+    ) -> Option<String>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let mut cur = self.hit_test(dom, x, y, scroll);
+        while let Some(node) = cur {
+            if let Some(fragment) = anchor_fragment(dom, node) {
+                return Some(fragment);
+            }
+            cur = dom.parent(node);
+        }
+        None
+    }
+
     /// Recompute the viewport's propagated overflow + size after a relayout,
     /// preserving the host's scroll re-clamped to the new content (a relayout can
     /// shrink the page under the current offset). Called on every layout-changing
@@ -564,6 +620,32 @@ fn collect_subtree<D: LayoutDom>(dom: &D, root: D::NodeId, out: &mut Vec<D::Node
     for child in dom.dom_children(root) {
         collect_subtree(dom, child, out);
     }
+}
+
+/// The first element (pre-order) whose `id` attribute equals `id`, or `None` — the
+/// anchor-fragment target lookup behind [`IncrementalLayout::scroll_to_id`].
+fn element_by_id<D: LayoutDom>(dom: &D, id: &str) -> Option<D::NodeId> {
+    use html5ever::{local_name, ns};
+    let mut stack = vec![dom.document()];
+    while let Some(node) = stack.pop() {
+        if dom.attribute(node, &ns!(), &local_name!("id")) == Some(id) {
+            return Some(node);
+        }
+        stack.extend(dom.dom_children(node));
+    }
+    None
+}
+
+/// The fragment of an in-page link: `node`'s `#id` href without the `#`, or `None`
+/// when `node` is not an `<a>` with an in-page (`#…`) href. Behind
+/// [`IncrementalLayout::link_fragment_at`].
+fn anchor_fragment<D: LayoutDom>(dom: &D, node: D::NodeId) -> Option<String> {
+    use html5ever::{local_name, ns};
+    if dom.element_name(node)?.local != local_name!("a") {
+        return None;
+    }
+    let href = dom.attribute(node, &ns!(), &local_name!("href"))?;
+    href.strip_prefix('#').filter(|f| !f.is_empty()).map(str::to_string)
 }
 
 /// Lay out over an already-cascaded plane (no images in the scripted
@@ -1310,5 +1392,41 @@ mod tests {
         assert!(layout.scroll_for_key(&dom, ScrollKey::Home));
         assert_eq!(layout.viewport_scroll(), (0.0, 0.0), "Home = top");
         assert!(!layout.scroll_for_key(&dom, ScrollKey::Up), "no movement above the top");
+    }
+
+    /// V2 — `scroll_to_element` brings an element's top to the viewport top
+    /// (block-start scroll-into-view), clamped: a target 1000px down scrolls the
+    /// document to y=1000.
+    #[test]
+    fn scroll_to_element_aligns_its_top_to_the_viewport() {
+        const SHEET: &[&str] =
+            &["html,body,div{display:block;margin:0}.tall{height:1000px}.target{height:50px}"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let top = dom.create_element(html("div"));
+        dom.set_attribute(top, attr("class"), "tall");
+        dom.append_child(body, top);
+        let target = dom.create_element(html("div"));
+        dom.set_attribute(target, attr("class"), "target");
+        dom.append_child(body, target);
+        let bottom = dom.create_element(html("div"));
+        dom.set_attribute(bottom, attr("class"), "tall");
+        dom.append_child(body, bottom);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        // Content = 1000 + 50 + 1000 = 2050; range.y = 2050 - 600 = 1450. The target
+        // top sits at y=1000 (after the first tall spacer), within range.
+        assert!(layout.scroll_to_element(&dom, target));
+        assert!(
+            (layout.viewport_scroll().1 - 1000.0).abs() < 1.0,
+            "the target's top is brought to the viewport top: {:?}",
+            layout.viewport_scroll(),
+        );
+        // Scrolling to it again is a no-op (already in position).
+        assert!(!layout.scroll_to_element(&dom, target), "already in position");
     }
 }
