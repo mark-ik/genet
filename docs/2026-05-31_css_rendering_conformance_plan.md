@@ -608,6 +608,24 @@ stand) — only the mechanism moved, which is what made block-pseudo paint and
 pseudo hit-routing fall out for free. Read those sections for the conformance
 history, not the current paint structure.
 
+**`border-image` 9-slice (stretch) — +24 css-backgrounds (2026-06-11).** Ranked
+the css-backgrounds `local` fails by test stem after the §5 re-baseline: the raw
+top was `background-size` (118) but **110 of those are SVG** (the separate
+decode axis — and note SVG *does* now raster-decode via a resvg fallback, so that
+axis is partly unblocked; revisit), leaving `border-image` as the true #1 raster
+paint lever at **55 fails**. Implemented it serval-side (no netrender vocabulary
+change): `BackgroundImagePlane` decodes `border-image-source`,
+`DecodedImage::crop` carves the source, and `emit_border_image` draws the
+4-corner / 4-edge / fill-center 9-slice — honoring `border-image-slice`
+(number/%/fill), `-width` (number×border-width / length / auto), and `-outset`,
+each region **stretched** to its dest. A loaded border-image replaces the normal
+border. **css-backgrounds 310 → 334** (+24, `local` 269 → 245), 0 errored, no
+regressions (`636ac8fb51a`, infra `d15cbdd4ebe`). **Next (BI-3):**
+`border-image-repeat` `repeat`/`round`/`space` edge tiling (the remaining ~31
+border-image fails are mostly non-stretch repeat modes + width-% / outset edges),
+then the css-backgrounds tail moves on to `background-clip` (`clip-border-area-*`,
+~42) and box-shadow `inset`.
+
 ## Non-goals (for now)
 
 - CSS animations/transitions (their own axis; the alphabetically-first
