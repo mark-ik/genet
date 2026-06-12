@@ -681,12 +681,19 @@ pub(crate) fn walk<Id>(
     // A measured leaf (inline formatting context) carries its text + replaced
     // boxes as `InlineContent` — emit its glyph runs and inline-box images. Block
     // boxes have no inline content, so this no-ops.
+    // `text-overflow: ellipsis`: pass the content-box width so a single
+    // overflowing line is truncated with a `…` (the leaf's ellipsis was shaped at
+    // layout time). `None` = no truncation.
+    let ellipsis = text_ellipsis(cv).then(|| {
+        l.size.width - l.border.left - l.border.right - l.padding.left - l.padding.right
+    });
     let emitted = emit_inline_content(
         taffy_id,
         text_ctx,
         node.inline_content.as_ref(),
         local_bounds,
         content_offset,
+        ellipsis,
         em.images_plane,
         &mut em.fonts,
         &mut em.images,
@@ -819,6 +826,7 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
     content: Option<&crate::text_measure::InlineContent<NodeId>>,
     bounds: LayoutRect,
     content_offset: (f32, f32),
+    ellipsis: Option<f32>,
     images_plane: &ImagePlane<NodeId>,
     fonts: &mut FontCollector,
     images: &mut ImageCollector,
@@ -846,6 +854,15 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                 .collect()
         })
         .unwrap_or_default();
+    // `text-overflow: ellipsis`: when the laid-out content is wider than its
+    // content box, drop glyphs past `content_width - ellipsis_width` and draw a
+    // trailing `…` at that cutoff. The ellipsis was shaped at layout time in the
+    // leaf's font/size (cached under `taffy_id`), so its ascent — and therefore
+    // baseline — matches the run it follows. `None` keep = no truncation.
+    let truncate: Option<(f32, &parley::Layout<crate::text_measure::ColorBrush>)> = ellipsis.and_then(|cw| {
+        let ell = text_ctx.ellipsis_layouts.get(&taffy_id)?;
+        (layout.width() > cw).then_some((cw - ell.width(), ell))
+    });
     let mut emitted = false;
     for line in layout.lines() {
         for item in line.items() {
@@ -861,6 +878,7 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                     let color = ColorF::new(r, g, b, a);
                     let glyphs: Vec<GlyphInstance> = run
                         .positioned_glyphs()
+                        .filter(|g| truncate.is_none_or(|(cutoff, _)| g.x < cutoff))
                         .map(|g| GlyphInstance {
                             index: g.id,
                             point: LayoutPoint::new(content_offset.0 + g.x, content_offset.1 + g.y),
@@ -1026,6 +1044,44 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                         emitted = true;
                     }
                 },
+            }
+        }
+    }
+    // Draw the trailing `…` at the cutoff. Its glyph y-positions ride the
+    // ellipsis line's baseline, which equals the truncated text's baseline
+    // (same font/size, both layouts top-aligned at y=0), so no extra alignment
+    // math is needed.
+    if let Some((cutoff, ell)) = truncate {
+        for el_line in ell.lines() {
+            for el_item in el_line.items() {
+                let PositionedLayoutItem::GlyphRun(grun) = el_item else {
+                    continue;
+                };
+                let prun = grun.run();
+                let key = fonts.intern(prun.font());
+                let [r, g, b, a] = grun.style().brush.0;
+                let glyphs: Vec<GlyphInstance> = grun
+                    .positioned_glyphs()
+                    .map(|gl| GlyphInstance {
+                        index: gl.id,
+                        point: LayoutPoint::new(
+                            content_offset.0 + cutoff + gl.x,
+                            content_offset.1 + gl.y,
+                        ),
+                    })
+                    .collect();
+                if glyphs.is_empty() {
+                    continue;
+                }
+                commands.push(PaintCmd::DrawText(TextRunItem {
+                    placement: CommonPlacement::new(bounds),
+                    font_instance: key,
+                    font_size: prun.font_size(),
+                    color: ColorF::new(r, g, b, a),
+                    glyphs,
+                    options: TextOptions::default(),
+                }));
+                emitted = true;
             }
         }
     }
@@ -2361,6 +2417,49 @@ mod tests {
         };
         let cv = primary_cv(&styles, p).expect("p cascade");
         assert!(text_ellipsis(&cv), "text-overflow: ellipsis + overflow:hidden must be active");
+    }
+
+    /// `text-overflow: ellipsis` truncates an overflowing single line: glyphs past
+    /// the content edge are dropped and a trailing `…` is drawn. A narrow box with
+    /// ellipsis emits fewer glyphs than the same text laid out wide (untruncated),
+    /// and every emitted glyph sits within the content box. (Chrome-UI labels.)
+    #[test]
+    fn text_overflow_ellipsis_truncates_overflowing_line() {
+        // All glyph x-positions emitted across the paint list (text leaves only).
+        let glyph_xs = |sheet: &str| -> Vec<f32> {
+            let document = StaticDocument::parse(
+                "<html><body><p>aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</p></body></html>",
+            );
+            let plist = emit_with_sheet(&document, sheet);
+            plist
+                .commands()
+                .iter()
+                .filter_map(|c| match c {
+                    PaintCmd::DrawText(t) => Some(t.glyphs.iter().map(|g| g.point.x)),
+                    _ => None,
+                })
+                .flatten()
+                .collect()
+        };
+
+        let base = "html, body, p { display: block; margin: 0; font-size: 16px; } \
+                    p { white-space: nowrap; overflow: hidden; ";
+        // Wide box: the whole string fits, no truncation.
+        let wide = glyph_xs(&format!("{base} width: 800px; }}"));
+        // Narrow box with ellipsis: the line overflows and is truncated.
+        let narrow = glyph_xs(&format!("{base} width: 60px; text-overflow: ellipsis; }}"));
+
+        assert!(
+            narrow.len() < wide.len(),
+            "ellipsis drops glyphs: narrow {} should be fewer than wide {}",
+            narrow.len(),
+            wide.len()
+        );
+        assert!(!narrow.is_empty(), "some glyphs (incl. the ellipsis) still draw");
+        // Every emitted glyph — the kept run plus the trailing `…` — sits within
+        // the 60px content box (a small epsilon for the ellipsis glyph advance).
+        let max_x = narrow.iter().copied().fold(f32::MIN, f32::max);
+        assert!(max_x <= 60.0 + 2.0, "all glyphs stay within the content box, max_x = {max_x}");
     }
 
     /// Cascade-driven style plane sizing block elements 200×50 (no

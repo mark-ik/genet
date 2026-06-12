@@ -853,6 +853,22 @@ where
         if let Some(run) = tree.nodes[i].marker.as_ref().and_then(|m| m.runs.first()) {
             text_ctx.shape_marker(run, nid(i));
         }
+        // `text-overflow: ellipsis` leaves: shape `…` in the leaf's own font so
+        // paint can draw it where it truncates an overflowing line. Keyed by the
+        // leaf's Taffy id, alongside its text layout.
+        let ellipsis_style = tree.nodes[i]
+            .inline_content
+            .as_ref()
+            .and_then(|c| c.runs.first())
+            .filter(|_| {
+                crate::paint_emit::primary_cv(styles, tree.nodes[i].source.dom_id())
+                    .as_deref()
+                    .is_some_and(crate::paint_emit::text_ellipsis)
+            })
+            .cloned();
+        if let Some(run) = ellipsis_style {
+            text_ctx.shape_ellipsis(&run, nid(i));
+        }
     }
 
     let mut fragments = FragmentPlane::new();

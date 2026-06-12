@@ -305,6 +305,11 @@ pub struct TextMeasureCtx {
     /// `layouts` so an item's own inline text and its marker don't collide on
     /// the same key. Paint reads it to hang the marker left of the content box.
     pub marker_layouts: FxHashMap<taffy::NodeId, Layout<ColorBrush>>,
+    /// Cached `…` (ellipsis) `Layout` per `text-overflow: ellipsis` leaf, keyed by
+    /// the leaf's Taffy id and shaped in the leaf's own font by
+    /// [`TextMeasureCtx::shape_ellipsis`]. Paint reads it to truncate an
+    /// overflowing line and draw the ellipsis at the cut.
+    pub ellipsis_layouts: FxHashMap<taffy::NodeId, Layout<ColorBrush>>,
     /// Cached content `Layout` for each inline-block, keyed by `(the enclosing
     /// leaf's Taffy id, the box's index in that leaf's `InlineContent.boxes`)`.
     /// Built by [`measure_inline_content`]; paint reads it to draw the
@@ -335,6 +340,7 @@ impl TextMeasureCtx {
             layout_ctx: LayoutContext::new(),
             layouts: FxHashMap::default(),
             marker_layouts: FxHashMap::default(),
+            ellipsis_layouts: FxHashMap::default(),
             inline_block_layouts: FxHashMap::default(),
         }
     }
@@ -347,6 +353,7 @@ impl TextMeasureCtx {
     pub fn reset(&mut self) {
         self.layouts.clear();
         self.marker_layouts.clear();
+        self.ellipsis_layouts.clear();
         self.inline_block_layouts.clear();
     }
 
@@ -365,6 +372,26 @@ impl TextMeasureCtx {
         layout.break_all_lines(None);
         layout.align(Alignment::Start, AlignmentOptions::default());
         self.marker_layouts.insert(taffy_id, layout);
+    }
+
+    /// Shape an ellipsis (`…`) in `style`'s font / size / color into a one-line
+    /// `Layout` cached under `taffy_id`, for a `text-overflow: ellipsis` leaf.
+    /// Paint reads it to draw the ellipsis where it truncates the overflowing
+    /// text. `style` is the leaf's representative run (its first), so the ellipsis
+    /// matches the text's typography and baseline.
+    pub fn shape_ellipsis(&mut self, style: &InlineRun, taffy_id: taffy::NodeId) {
+        const ELLIPSIS: &str = "\u{2026}";
+        let mut builder = self
+            .layout_ctx
+            .ranged_builder(&mut self.font_ctx, ELLIPSIS, 1.0, true);
+        builder.push_default(StyleProperty::FontSize(style.font_size));
+        builder.push_default(family_property(&style.font_family));
+        builder.push_default(StyleProperty::FontWeight(FontWeight::new(style.weight)));
+        builder.push_default(StyleProperty::Brush(ColorBrush(style.color)));
+        let mut layout: Layout<ColorBrush> = builder.build(ELLIPSIS);
+        layout.break_all_lines(None);
+        layout.align(Alignment::Start, AlignmentOptions::default());
+        self.ellipsis_layouts.insert(taffy_id, layout);
     }
 }
 
