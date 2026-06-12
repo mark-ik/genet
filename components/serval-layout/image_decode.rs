@@ -65,6 +65,31 @@ pub struct DecodedImage {
     pub rgba: Vec<u8>,
 }
 
+impl DecodedImage {
+    /// A sub-image of the `(sx, sy, sw, sh)` source rect (clamped to bounds), as
+    /// its own tightly-packed `DecodedImage`. Used by border-image's 9-slice to
+    /// carve the source into corner / edge / center regions, each then drawn
+    /// (stretched or tiled) to its destination rect via the existing image
+    /// commands. `None` if the requested rect has zero area after clamping.
+    pub fn crop(&self, sx: u32, sy: u32, sw: u32, sh: u32) -> Option<DecodedImage> {
+        let sx = sx.min(self.width);
+        let sy = sy.min(self.height);
+        let sw = sw.min(self.width - sx);
+        let sh = sh.min(self.height - sy);
+        if sw == 0 || sh == 0 {
+            return None;
+        }
+        let mut rgba = Vec::with_capacity((sw * sh * 4) as usize);
+        for row in 0..sh {
+            let src_y = sy + row;
+            let start = (((src_y * self.width) + sx) * 4) as usize;
+            let end = start + (sw * 4) as usize;
+            rgba.extend_from_slice(&self.rgba[start..end]);
+        }
+        Some(DecodedImage { width: sw, height: sh, rgba })
+    }
+}
+
 /// Decoded `<img>` images keyed by their DOM `NodeId`. Built by
 /// [`ImagePlane::decode_from_dom`] before layout.
 pub struct ImagePlane<NodeId: Copy + Eq + Hash> {
@@ -165,6 +190,10 @@ pub struct BackgroundImagePlane<NodeId: Copy + Eq + Hash> {
     /// boxes, keyed by `(originating element, kind)` — the pseudo box has no DOM
     /// id of its own, so it cannot share the element's `images` slot.
     pseudo_images: FxHashMap<(NodeId, PseudoKind), DecodedImage>,
+    /// Decoded `border-image-source` `url()` images, keyed by element. A separate
+    /// slot from `images` because an element can carry both a background-image and
+    /// a border-image; paint's 9-slice carves this source into edge/corner regions.
+    border_images: FxHashMap<NodeId, DecodedImage>,
 }
 
 impl<NodeId: Copy + Eq + Hash> Default for BackgroundImagePlane<NodeId> {
@@ -172,6 +201,7 @@ impl<NodeId: Copy + Eq + Hash> Default for BackgroundImagePlane<NodeId> {
         Self {
             images: FxHashMap::default(),
             pseudo_images: FxHashMap::default(),
+            border_images: FxHashMap::default(),
         }
     }
 }
@@ -198,6 +228,7 @@ impl<NodeId: Copy + Eq + Hash> BackgroundImagePlane<NodeId> {
         };
         let mut images = FxHashMap::default();
         let mut pseudo_images = FxHashMap::default();
+        let mut border_images = FxHashMap::default();
         let mut queue = vec![dom.document()];
         while let Some(id) = queue.pop() {
             if let Some(decoded) = background_image_url(styles, id).and_then(decode) {
@@ -211,9 +242,12 @@ impl<NodeId: Copy + Eq + Hash> BackgroundImagePlane<NodeId> {
                     pseudo_images.insert((id, kind), decoded);
                 }
             }
+            if let Some(decoded) = border_image_url(styles, id).and_then(decode) {
+                border_images.insert(id, decoded);
+            }
             queue.extend(dom.dom_children(id));
         }
-        Self { images, pseudo_images }
+        Self { images, pseudo_images, border_images }
     }
 
     pub fn get(&self, id: NodeId) -> Option<&DecodedImage> {
@@ -226,12 +260,17 @@ impl<NodeId: Copy + Eq + Hash> BackgroundImagePlane<NodeId> {
         self.pseudo_images.get(&(element, kind))
     }
 
+    /// The decoded `border-image-source` `url()` image for `element`, if any.
+    pub fn get_border_image(&self, id: NodeId) -> Option<&DecodedImage> {
+        self.border_images.get(&id)
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.images.is_empty() && self.pseudo_images.is_empty()
+        self.images.is_empty() && self.pseudo_images.is_empty() && self.border_images.is_empty()
     }
 
     pub fn len(&self) -> usize {
-        self.images.len() + self.pseudo_images.len()
+        self.images.len() + self.pseudo_images.len() + self.border_images.len()
     }
 }
 
@@ -276,6 +315,22 @@ fn pseudo_background_image_url<NodeId: Copy + Eq + Hash>(
 fn first_url_background(cv: &style::properties::ComputedValues) -> Option<String> {
     use style::values::generics::image::Image;
     match cv.get_background().background_image.0.iter().next()? {
+        Image::Url(url) => url.url().map(|u| u.as_str().to_string()),
+        _ => None,
+    }
+}
+
+/// An element's `border-image-source` as a `url()` string. `None` when there is
+/// no border-image, or the source is not a `url()` (a gradient border-image is a
+/// later slice — gradients emit directly, not through this decode pass).
+fn border_image_url<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> Option<String> {
+    use style::values::generics::image::Image;
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    match &data.styles.primary().get_border().border_image_source {
         Image::Url(url) => url.url().map(|u| u.as_str().to_string()),
         _ => None,
     }
@@ -355,6 +410,27 @@ mod tests {
         let (r, g, b, a) = (decoded.rgba[i], decoded.rgba[i + 1], decoded.rgba[i + 2], decoded.rgba[i + 3]);
         assert_eq!(a, 255, "opaque");
         assert!(r < 40 && g > 100 && b < 40, "green center, got ({r},{g},{b})");
+    }
+
+    /// `DecodedImage::crop` carves a sub-rect (border-image's 9-slice primitive):
+    /// it copies the right pixels and clamps an out-of-bounds rect to `None`.
+    #[test]
+    fn crop_extracts_subimage_and_clamps() {
+        // 4×2: left half red, right half blue.
+        let mut rgba = Vec::new();
+        for _y in 0..2 {
+            for x in 0..4 {
+                rgba.extend_from_slice(if x < 2 { &[255, 0, 0, 255] } else { &[0, 0, 255, 255] });
+            }
+        }
+        let img = DecodedImage { width: 4, height: 2, rgba };
+
+        let right = img.crop(2, 0, 2, 2).expect("non-empty crop");
+        assert_eq!((right.width, right.height), (2, 2));
+        assert_eq!(&right.rgba[0..4], &[0, 0, 255, 255], "crop top-left is blue");
+        assert_eq!(right.rgba.len(), 2 * 2 * 4, "tightly packed");
+
+        assert!(img.crop(4, 0, 2, 2).is_none(), "rect at the right edge clamps to zero width → None");
     }
 
     #[test]
