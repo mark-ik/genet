@@ -306,17 +306,29 @@ tests green; downstream stays green (serval-layout 55, xilem-serval 48,
 pelt-live 21 **incl. `cascade_is_deterministic`**, script-runtime-api 159);
 **serval-scripted-dom compiles for wasm32**.
 
-Two honest carve-outs. (1) *Cadence wiring*: the collector and its host
-drivers exist and are tested, but the live scripted host is still one-shot
-`run_script` — there's no persistent run loop yet to call
-`pump_retire_collect` at the drain/idle/post-unpin moments. That wiring lands
-with the persistent host loop; the mechanism is ready for it. (2) *Soak*: the
+Two carve-outs remain. (1) *Cadence wiring* — **correction (2026-06-12)**: the
+persistent host loop *does* exist — it's `script-runtime-api::Runtime` (owns the
+engine + the `ScriptedDom` in `HostState`, runs `run_microtasks` /
+`run_event_loop` / `run_timers`). The pin table was moved down to
+`serval-scripted-dom` as `Pins` (keyed on `NodeId`) so `Runtime` can use it
+through its existing dep — *not* via a dep on the Nova-specific, layout-dragging
+`serval-scripted`. What remains is the tick itself: a `reflect_pinned` helper
+pinning every node a `dom.rs` binding hands to script (pin-on-mint, ~10
+`reflector_for` sites — **must be complete or `collect` can UAF a node JS still
+holds**, so it wants a reflector-surface audit), a `Runtime::collect_garbage`
+(retire dead reflectors → `dom.collect(pins)`), and a decision on auto-firing it
+inside `run_microtasks` (real cadence, also hits the conformance path) vs an
+explicit embedder call. (2) *Soak*: the
 orrery 400-frame A4-timing soak is a runtime perf check not run here; `collect`
 is O(live nodes) and called at cadence, so it's algorithmically cheap, but the
-empirical no-regression confirmation waits on that harness. (3) *Secondary-doc
-auto-collect*: a `create_document` whose JS reference is dropped stays pinned
-as a permanent root for now (safe; never wrongly collected) — auto-collecting
-it (treat as pin-kept) is a later refinement.
+empirical no-regression confirmation waits on that harness.
+
+*Resolved 2026-06-12*: the former secondary-doc carve-out is done — a
+`create_document` secondary is now **pin-kept**, not a permanent root, so a
+dropped `createHTMLDocument` collects like any other orphan (no leak). This
+also collapsed the roots list to just the primary root (`collect` seeds from
+`self.root` + the pins). Safe because the host pins a secondary's reflector
+while script holds it; test `secondary_document_is_pin_kept`.
 
 ### G4 — Piccolo as a seam backend (CLEAN SURFACE DONE 2026-06-11; promise bridge deferred)
 
@@ -584,7 +596,21 @@ front-loads visible wins.
   tests (bounded-memory plateau, undirected pin-component, idle reap,
   secondary-root safety, host pin-roots) + all prior green; downstream green
   (serval-layout / xilem-serval / pelt-live incl. determinism /
-  script-runtime-api); compiles for wasm32. Carve-outs: live-loop cadence
-  wiring waits on the persistent scripted host loop; the orrery soak is the
-  remaining empirical perf check; dropped-secondary-doc auto-collect is a
-  later refinement. **All of G0–G4 are now done.**
+  script-runtime-api); compiles for wasm32. Then **did carve-out #3**:
+  secondary documents are pin-kept, not permanent roots, so a dropped
+  `createHTMLDocument` auto-collects (no leak) and the roots list collapses to
+  the primary root. Remaining carve-outs (need other pieces, not serval-layout):
+  live-loop cadence wiring (waits on the persistent scripted host loop) and the
+  orrery perf soak (runtime harness). **All of G0–G4 are now done.**
+- **2026-06-12** — **Pin table relocated (G3 cadence prep).** Moved the
+  reflector-pin table from `serval-scripted` down to `serval-scripted-dom` as
+  `Pins`, keyed on `NodeId` (was `ReflectorData`/`u64`) so it lives next to the
+  `collect` it feeds and carries no engine-type coupling; `serval-scripted`
+  re-exports it as `ReflectorPins` and keeps the engine-coupled helpers
+  (`pump_and_retire`/`collect_dom`). Chosen over making the *generic*
+  `script-runtime-api` depend on the Nova-specific, `serval-layout`-dragging
+  `serval-scripted` (which would invert the layering and pull `nova_vm` into the
+  generic host). 16 scripted-dom + 5 scripted tests green; no other consumers.
+  Identified the live host loop as `script-runtime-api::Runtime`; the GC-tick
+  wiring (pin-on-mint + `collect_garbage`) is the next step (see G3 carve-out
+  #1), pending a pin-on-mint completeness audit.

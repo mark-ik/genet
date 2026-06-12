@@ -140,12 +140,11 @@ pub struct ScriptedDom {
     /// Monotonic id counter. The next node's untagged value; never decremented,
     /// so ids are never reused even as the store is pruned.
     next_id: usize,
-    /// The primary document root (returned by `document()`).
+    /// The primary document root (returned by `document()`) — the sole permanent
+    /// mark root for `collect`. Everything else (secondary documents, fragments,
+    /// detached subtrees) survives only via reachability from here or the host's
+    /// pins, so a dropped secondary document collects like any other orphan.
     root: NodeId,
-    /// All document roots — permanent mark roots for `collect` (the primary plus
-    /// any `create_document` secondaries). A node reachable from one of these is
-    /// never collected; orphans survive only via the host's pins.
-    roots: Vec<NodeId>,
     mutations: Vec<DomMutation<NodeId>>,
     /// Process-unique document tag (G0 fence). Only present where the fence is
     /// active; elsewhere ids are untagged and this field would be dead weight.
@@ -159,6 +158,69 @@ impl Default for ScriptedDom {
     }
 }
 
+/// A set of node ids to treat as **extra mark roots** for
+/// [`ScriptedDom::collect`] — nodes the document tree no longer reaches but that
+/// must survive anyway. The host pins a node while script can still reach it (it
+/// holds a reflector), so a pinned orphan and its whole connected component are
+/// spared; unpinning it makes it collectable. The DOM only sees a pin set; the
+/// host's word for these is "reflector pins" (it `pin`s on minting a reflector
+/// and `retire`s the ones the engine reports dead). Engine-agnostic — it traffics
+/// only in [`NodeId`], naming no engine type.
+#[derive(Debug, Default, Clone)]
+pub struct Pins {
+    pinned: std::collections::HashSet<NodeId>,
+}
+
+impl Pins {
+    /// An empty pin set.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Pin `id` (script can still reach it). Idempotent.
+    pub fn pin(&mut self, id: NodeId) {
+        self.pinned.insert(id);
+    }
+
+    /// Drop the pin for `id`. Returns `true` if it had been pinned (an id never
+    /// pinned here is a harmless no-op).
+    pub fn unpin(&mut self, id: NodeId) -> bool {
+        self.pinned.remove(&id)
+    }
+
+    /// Retire a batch of now-dead ids (the host maps the engine's
+    /// `drain_dead_reflectors` output through `NodeId::from_raw` first),
+    /// unpinning each. Returns how many were actually pinned.
+    pub fn retire_dead(&mut self, dead: impl IntoIterator<Item = NodeId>) -> usize {
+        dead.into_iter().filter(|id| self.pinned.remove(id)).count()
+    }
+
+    /// Whether `id` is currently pinned.
+    pub fn is_pinned(&self, id: NodeId) -> bool {
+        self.pinned.contains(&id)
+    }
+
+    /// The pinned ids — pass to [`ScriptedDom::collect`] as the extra roots.
+    pub fn iter(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.pinned.iter().copied()
+    }
+
+    /// Number of pinned ids.
+    pub fn len(&self) -> usize {
+        self.pinned.len()
+    }
+
+    /// Whether nothing is pinned.
+    pub fn is_empty(&self) -> bool {
+        self.pinned.is_empty()
+    }
+
+    /// Drop every pin (document teardown).
+    pub fn clear(&mut self) {
+        self.pinned.clear();
+    }
+}
+
 impl ScriptedDom {
     /// A fresh document with an empty `Document` root.
     pub fn new() -> Self {
@@ -168,13 +230,11 @@ impl ScriptedDom {
             // Placeholder; overwritten by the `push` below so the root id
             // carries this document's tag like every other node.
             root: NodeId(0),
-            roots: Vec::new(),
             mutations: Vec::new(),
             #[cfg(all(debug_assertions, target_pointer_width = "64"))]
             doc_tag: fence::next_doc_tag(),
         };
         dom.root = dom.push(Node::new(NodeKind::Document));
-        dom.roots.push(dom.root);
         dom
     }
 
@@ -239,14 +299,14 @@ impl ScriptedDom {
         }
     }
 
-    /// Create a detached `Document` node (a second document root, for
+    /// Create a detached `Document` node (a second document, for
     /// `DOMImplementation.createDocument` / `createHTMLDocument`). Lives in the same
-    /// store as the primary document, so `NodeId`s stay globally unique. Registered
-    /// as a permanent mark root (G3): its attached subtree must stay live.
+    /// store as the primary document, so `NodeId`s stay globally unique. It is
+    /// **pin-kept**, not a permanent root (G3): while script holds a reflector to
+    /// it (or anything in it) the host pins it and `collect` spares the whole
+    /// component; once script drops it, it collects like any other orphan.
     pub fn create_document(&mut self) -> NodeId {
-        let id = self.push(Node::new(NodeKind::Document));
-        self.roots.push(id);
-        id
+        self.push(Node::new(NodeKind::Document))
     }
 
     /// Create a detached `Comment` node carrying `data`.
@@ -321,12 +381,11 @@ impl ScriptedDom {
     /// Idempotent and cheap to call often: the host drives it at the
     /// `drain_mutations` boundary, on an idle tick, and right after an unpin.
     pub fn collect(&mut self, extra_roots: impl IntoIterator<Item = NodeId>) -> usize {
-        // Mark: undirected reachability from the document roots + extra roots.
+        // Mark: undirected reachability from the primary document root + extra
+        // roots (secondary documents and fragments survive only via the pins).
         let mut marked: std::collections::HashSet<usize> = std::collections::HashSet::new();
         let mut stack: Vec<usize> = Vec::new();
-        for r in self.roots.clone() {
-            self.seed_mark(r, &mut marked, &mut stack);
-        }
+        self.seed_mark(self.root, &mut marked, &mut stack);
         for r in extra_roots {
             self.seed_mark(r, &mut marked, &mut stack);
         }
@@ -965,16 +1024,52 @@ mod tests {
         assert!(!dom.is_live(o));
     }
 
-    /// A `create_document` secondary is a permanent root: its attached subtree
-    /// survives `collect` even with no pins.
+    /// A `create_document` secondary is pin-kept (G3 carve-out #3): while pinned
+    /// its whole subtree survives `collect`; once the pin drops, it collects like
+    /// any other orphan (a dropped `createHTMLDocument` no longer leaks).
     #[test]
-    fn secondary_document_subtree_survives_collect() {
+    fn secondary_document_is_pin_kept() {
         let mut dom = ScriptedDom::new();
         let secondary = dom.create_document();
         let body = dom.create_element(qual("body"));
         dom.append_child(secondary, body);
 
-        assert_eq!(dom.collect(NO_PINS), 0, "secondary root keeps its subtree");
+        // Pinned (script holds it) → the whole secondary component survives.
+        assert_eq!(dom.collect([secondary]), 0);
         assert!(dom.is_live(secondary) && dom.is_live(body));
+
+        // Dropped (no pin) → it collects.
+        assert_eq!(dom.collect(NO_PINS), 2);
+        assert!(!dom.is_live(secondary) && !dom.is_live(body));
+    }
+
+    #[test]
+    fn pins_pin_unpin_and_retire() {
+        let id = NodeId::from_raw;
+        let mut pins = Pins::new();
+        assert!(pins.is_empty());
+
+        pins.pin(id(0x10));
+        pins.pin(id(0x20));
+        pins.pin(id(0x10)); // idempotent
+        assert_eq!(pins.len(), 2);
+        assert!(pins.is_pinned(id(0x10)));
+
+        assert!(pins.unpin(id(0x20)));
+        assert!(!pins.unpin(id(0xAA))); // never pinned → no-op
+
+        pins.pin(id(0x30));
+        assert_eq!(pins.retire_dead([id(0x10), id(0x30), id(0xBB)]), 2);
+        assert!(pins.is_empty());
+    }
+
+    #[test]
+    fn pins_clear() {
+        let mut pins = Pins::new();
+        pins.pin(NodeId::from_raw(1));
+        pins.pin(NodeId::from_raw(2));
+        assert_eq!(pins.len(), 2);
+        pins.clear();
+        assert!(pins.is_empty());
     }
 }
