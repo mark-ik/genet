@@ -14,6 +14,7 @@ members = [
     "components/serval-static-html",
     "components/xilem-serval",
     "components/serval-winit-host",
+    "components/serval-render",
     "components/shared/layout-dom",
     "components/script-engine-api",
     # script-engine-boa joined the workspace 2026-05-25. The old blocker (boa
@@ -27,7 +28,6 @@ members = [
     "components/script-runtime-api",
     "ports/pelt-core",
     "ports/pelt-desktop",
-    "ports/pelt-live",
     "ports/pelt",
     "ports/serval-wpt",
     "tests/unit/*",

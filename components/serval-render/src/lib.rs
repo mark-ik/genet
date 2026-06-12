@@ -2,24 +2,30 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! `pelt-live`: a headless Xilem-on-serval host probe.
+//! `serval-render`: the serval host render-driver.
 //!
-//! Stage 1b of `docs/2026-05-27_serval_as_host_xilem_serval_plan.md`. It pairs
-//! [`xilem_serval::ServalAppRunner`] (state → view tree → DOM diff) with a
-//! headless render driver ([`render::scene_from_scripted_dom`]: `ScriptedDom` →
-//! `netrender::Scene`) and proves the whole spine end to end, offline:
+//! The thin assembly that turns a serval DOM into a presentable
+//! [`netrender::Scene`] and answers the host's spatial / a11y queries against the
+//! same layout:
 //!
 //! ```text
-//! app state --(ServalAppRunner)--> ScriptedDom diff --(serval-layout)--> layout
-//!                                                    --(paint emit)----> PaintList
-//!                                                    --(paint)---------> netrender::Scene
+//! ScriptedDom / LayoutDom --(serval-layout: cascade → layout)--> fragments
+//!                         --(paint emit)----------------------> PaintList
+//!                         --(paint::translate_paint_list)------> netrender::Scene
+//!           + queries:    hit_test_node, fragments_*, caret/selection rects
+//!           + a11y:       accesskit_tree (DOM → accesskit::TreeUpdate)
 //! ```
 //!
-//! No window and no input yet (input is Stage 2). The render side is GPU-free —
-//! a `pelt` host binary would feed the produced `Scene` to netrender/wgpu, but
-//! the probe asserts on the `Scene`/layout directly. This is `xilem-serval`'s
-//! consumer; `xilem-serval` itself stays thin (no serval-layout/netrender dep),
-//! and this crate carries the engine stack.
+//! GPU-free by construction: scene *production* lives here, presentation in
+//! [`serval-winit-host`] (the two serval host cores). The heavy, tested engine
+//! logic stays single-source in `serval-layout` + `paint_list_render`; this crate
+//! is only the convenience signatures and overlays (caret, selection, scrollbars)
+//! a host composes a frame from, so serval-side shells (pelt, the orrery) share
+//! one render path. It was extracted from the retired `pelt-live` probe (whose
+//! `ServalAppRunner` counter the lib tests below still exercise as the host-spine
+//! regression).
+//!
+//! [`serval-winit-host`]: https://docs.rs/serval-winit-host
 
 pub mod a11y;
 pub mod render;
