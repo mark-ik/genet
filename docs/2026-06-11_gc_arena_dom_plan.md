@@ -322,12 +322,18 @@ pinned-on-mint and spared, then reaped once unpinned). **Deliberately not
 auto-fired** inside `run_microtasks` yet — it's an explicit embedder call for
 now; flipping it to the microtask-checkpoint cadence is a one-line change, left
 until the live webview driver exercises it (so the conformance path isn't
-silently collecting mid-campaign). That live driver — `Runtime` fed by a real
-rendered scripted page in pelt (frames, input) — is the only piece genuinely
-still ahead. (2) *Soak*: the
-orrery 400-frame A4-timing soak is a runtime perf check not run here; `collect`
-is O(live nodes) and called at cadence, so it's algorithmically cheap, but the
-empirical no-regression confirmation waits on that harness.
+silently collecting mid-campaign). **That live driver is pelt V4** — the
+scripted profile (`pelt --engine scripted`) in
+`docs/2026-06-12_pelt_development_plan.md`, which the pelt plan already names as
+"the gc-arena DOM plan's first real scripted workload." It's the only consumer
+that calls `collect_garbage` at a frame cadence, and it's a few phases out (V0
+done, V1 next), so the explicit-call shape is the right resting state until
+then. (2) *Soak*: the orrery 400-frame A4-timing soak is a runtime perf check
+not run here; `collect` is O(live nodes) and called at cadence, so it's
+algorithmically cheap, but the empirical no-regression confirmation **is pelt
+V4's "soak page that churns nodes under script"** — the same workload that flips
+carve-out #1's cadence. So both remaining carve-outs land together, in pelt V4;
+the collector itself is mechanism-complete.
 
 *Resolved 2026-06-12*: the former secondary-doc carve-out is done — a
 `create_document` secondary is now **pin-kept**, not a permanent root, so a

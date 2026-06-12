@@ -6,21 +6,31 @@
 render-driver extracted into `components/serval-render` and `pelt-live` retired
 (the V0-shaped move that cleared V1's foundation; see Progress). **V1** (the static
 viewer) is next.
-**Role statement (the decision this plan rests on):** pelt is **serval's
-servoshell** — the minimal reference browser that proves the engine
-standalone, drives engine development without mere's graph machinery, and is
-what an outside contributor clones and runs. meerkat remains the product
-shell; pelt deliberately stays thin so it keeps demonstrating that browsers
-are cheap to assemble on serval. The role just became reachable: the xilem
-fork is a git dep (bare clones build), Masonry left the tree with
-pelt-viewer's retirement (2026-06-12, workspace audit snapshot), and the
-smoke suite already makes pelt the validation entrypoint.
+**Role statement (revised 2026-06-12, with Mark):** pelt is two things over
+one lib. (a) **serval's servoshell** — the minimal reference browser that
+proves the engine standalone, drives engine development without mere's graph
+machinery, and is what an outside contributor clones and runs. (b) **The
+standalone-capable browsing surface mere embeds**: a tile-tree browser
+(splits + tab-stacks of serval documents) built as a host-loop-sheddable
+*surface lib*, so the same surface runs under pelt's own winit loop or as
+meerkat's workbench pane — the orrery-host pattern's second instance, and
+the pressure vessel where the browsing surface hardens standalone before
+mere consumes it (the Strophe-for-audio shape). meerkat remains the product
+shell (graph, sessions, comms); the pelt *bin* stays thin so the
+browsers-are-cheap-to-assemble demonstration survives the module growing
+underneath it. The roles just became reachable: the xilem fork is a git dep
+(bare clones build), Masonry left the tree with pelt-viewer's retirement
+(2026-06-12, workspace audit snapshot), the render/present cores are both
+serval components, and the smoke suite already makes pelt the validation
+entrypoint.
 **Related**: the pelt-viewer retirement note
 (`2026-05-16_workspace_audit_snapshot.md`, 2026-06-12 update); mere's host
 cheap-path plan (C1's laid-out-document query object is pelt's eventual query
 seam too); the gc-arena DOM plan (V4 is its first real scripted workload);
 the pseudo-element follow-ups (every done-condition there wants V3's reftest
-harness).
+harness); mere's window-composition plan (its P2-companion input spine and
+pane model are what V6 plugs into, and its workbench pane is V6's
+destination).
 
 ---
 
@@ -49,14 +59,33 @@ harness).
   only), and nothing drives full-page `<script>` end to end
   (script-runtime-api + Nova/Boa exist; no full-document consumer).
 
-## Non-goals (hold these)
+## Non-goals (hold these; revised 2026-06-12 with the module charter)
 
-- **No product features.** Tabs, sessions, settings, panes are meerkat's.
-  Pelt chrome is an omnibar and back/forward, full stop.
-- **No new render glue.** Pelt consumes pelt-live's lib today and the
-  cheap-path C1 query object when it lands, like every other host.
+- **No graph, no sessions, no comms, no product chrome.** Those are
+  meerkat's. *(Revision: tabs and splits are now in pelt's charter — V5's
+  tile tree — superseding the original "tabs/panes are meerkat's" line. The
+  line moves, the principle stays: pelt presents documents; mere owns
+  meaning.)*
+- **No new render glue.** Pelt consumes `components/serval-render` today and
+  the cheap-path C1 query object when it lands, like every other host.
+- **No papering over engine gaps.** When pelt hits a rendering gap, the fix
+  lands in serval-layout as the spec's mechanism and the host change is
+  limited to feeding inputs to it — see the
+  [viewport & root standards scope](2026-06-12_viewport_root_standards_scope.md)
+  (the document-scroll family, fixed-positioning attachment, UA default
+  actions). If a fix only works for pelt, it isn't the fix.
 - **No Masonry, ever again.** The viewer mode returns on the direct-present
   stack only.
+
+## Design rule (added 2026-06-12): lib-first, bin-as-shell
+
+V1 onward, the viewer is built as a **surface lib** from the first commit —
+the orrery-host contract shape (`frame(w, h) -> (Scene, needs_redraw)` +
+semantic input + resize), with the pelt bin a thin winit shell over it via
+`serval-winit-host`. This is what makes V6's host-loop shedding a
+non-event instead of a retrofit: meerkat hosts the same lib the bin wraps,
+exactly as it hosts the `Orrery`. Costs nothing now; expensive to bolt on
+later.
 
 ## Phases (done-conditions, not dates)
 
@@ -87,8 +116,20 @@ back: `file://` and `data:` first-party; http(s) behind a returning
 dropped with pelt-viewer — this time wired to a fetcher the contract was
 designed for). Scroll wheel + resize; no chrome yet (URL from argv).
 
+**V1's engine prerequisite (found 2026-06-12): document scroll is a
+serval-layout feature, not host code.** A page taller than the window must
+scroll with zero CSS via root → viewport overflow propagation (both halves,
+the canvas-background sibling), with `position: fixed` gaining real viewport
+attachment in the same change (today `Fixed` ≡ `Absolute`,
+`paint_emit.rs:418`, a loud regression once scroll exists). Wheel input
+routes through the shared default-action helper, not pelt-local scroll math.
+Full case family + the engine model rules:
+[viewport & root standards scope](2026-06-12_viewport_root_standards_scope.md).
+
 **Done when** `pelt --engine static <local file>` renders and scrolls a real
-document in a window on the modern present path, `--engine static
+document in a window on the modern present path **with document scroll
+implemented engine-side per the standards scope (no root-overflow-container
+hack)**, `--engine static
 https://…` works under `--features netfetch`, and the capabilities printout
 matches what the profile actually wires (no aspirational flags).
 
@@ -120,7 +161,11 @@ tests.
 **Done when** a fixture directory runs green in one command, a deliberate
 layout change turns exactly the affected fixtures red with a scene diff
 named, and the pseudo-element follow-ups' shipped slices (`::before`
-content, `:checked`) land as the first fixtures.
+content, `:checked`) land as the first fixtures — followed by the
+viewport-family fixtures from the standards scope (document scroll
+root- and body-propagated, `overflow: hidden` on root, fixed-vs-absolute
+under scroll, the %-height chain, scrollable-overflow with an abs-pos
+overhang).
 
 ### V4 — The scripted profile (the content tier's proving ground)
 
@@ -128,15 +173,68 @@ content, `:checked`) land as the first fixtures.
 the selected engine (Nova native / Boa wasm-oracle, the serval-wpt
 selection pattern) against a `ScriptedDom` document, with the engine's DOM
 bindings and the reflector bridge live on a real page. Nothing exercises
-full-page scripting end to end today, and the gc-arena plan's G1-G3
-(reflector liveness, the dangle contract, collection) want exactly this
-workload — a real page holding real reflectors over a long-lived document —
-before meerkat's content lane inherits it.
+full-page scripting end to end today, and the gc-arena plan's G1-G3 (reflector
+liveness, the dangle contract, the mark-sweep collector) are **landed
+mechanism-complete (2026-06-12), tested, and waiting on exactly this workload
+to validate them** — a real page holding real reflectors over a long-lived
+document — before meerkat's content lane inherits it. V4 is specifically where
+the GC tick (`Runtime::collect_garbage`) gets its first real frame-cadence
+caller (today it's an explicit, not-yet-auto-fired call by design) and where
+the collection soak runs.
 
 **Done when** a local page with inline script mutates its own DOM and the
 mutation renders; `--engine` selects Nova or Boa for the same page; and a
-soak page that churns nodes under script runs long enough to feed the
-gc-arena plan's G1 liveness probe with real data.
+soak page that churns nodes under script drives `Runtime::collect_garbage` at
+the frame cadence (the moment to flip the GC tick from its explicit call to
+auto-firing — gc-arena plan carve-out #1) and confirms the gc-arena plan's
+bounded-memory + no-collect-pause done-condition under a real workload (its
+carve-out #2 soak). Both of that plan's remaining carve-outs close here.
+
+### V5 — The tile tree (the surface grows; logically follows V2, may interleave with V3/V4)
+
+The surface lib gains splits + tab-stacks of documents: per-tile document
+lifecycle (N documents live at once), per-tile history, tab activation /
+close / drag-between-stacks, divider resize — rendered as xilem-serval flex
+DOM (platen-view already proved the rendering shape; the *model* is the new
+work). The model is defined against a **plan-shaped tile-tree input
+contract** that lives serval-side (near pelt-core): "here is a tree of
+splits and tab-stacks; here is each tile's content source" in, tile events
+(activated / closed / dragged / resized) out. Standalone pelt populates the
+contract from its own simple state. Deliberately *presentation-grade*: no
+graph-capable arrangement, no persistence beyond the running shell — forme
+remains the arrangement truth on the mere side, and maps onto this contract
+rather than being duplicated by it (platen's `tree_projection` already
+compiles forme → `WorkbenchPlan` = splits of tab-stacks, so the mapping is a
+projection, not a second authority).
+
+**Done when** pelt standalone can split the window, open documents in tabs
+per pane, drag a tab between stacks, and close tiles — with the tile tree
+driven entirely through the contract (the bin holds no tile logic the lib
+doesn't expose).
+
+### V6 — Shed the loop: pelt-surface as meerkat's workbench pane (the module)
+
+The embedding step. meerkat hosts the V5 surface lib as a pane: mere's
+platen maps the forme arrangement through `tree_projection` onto the V5
+contract; per-tile content arrives as either a **serval content-root
+subtree** (documents) or an **`external_texture(key)` element** (constellation
+actor textures, scrying WebViews — the routing distinction
+`SurfaceContractMode::CompositedTexture` already names). The pelt bin and the
+meerkat pane wrap the *same lib*; neither knows the other exists.
+
+**Gated on** mere's window-composition P2+ (panes resolve everywhere) and
+the external-texture element view in xilem-serval (the same missing
+primitive the scrying plan and the input-spine companion already point at —
+this is now the fourth consumer waiting on it). This phase is also the
+second instance of the orrery-host pattern, which is the moment to write
+down the **pane-module contract** generally (standalone-or-hosted surface:
+frame / input / resize / content-source), since roster/gloss/apparatus want
+the same shape under the window-composition pane model.
+
+**Done when** meerkat's workbench pane renders through the pelt surface lib
+with forme-projected tiles and mixed content (a serval document tile beside
+an actor-texture tile), the standalone pelt bin still works unchanged from
+the same lib, and the tile-tree contract is the only seam between them.
 
 ## Open questions
 
@@ -154,6 +252,16 @@ gc-arena plan's G1 liveness probe with real data.
    per profile rather than the static table.
 4. **`static_viewer` scaffold fate (pelt-desktop)** — fold into V1's viewer
    or keep as the smoke-shaped probe; decide when V1 touches it.
+5. **The tile-tree contract's home and owner (V5/V6)** — serval-side, near
+   pelt-core, defined *before* a second implementation exists. platen maps
+   onto it; pelt-surface implements it; drift between them is the risk to
+   guard (the contract is presentation vocabulary only — if it starts
+   wanting graph concepts, it is drifting toward forme and should stop).
+6. **The dual-role tension** — the thin-demo bin and the capable module will
+   tug in review. The lib/bin split absorbs most of it; the tell to watch
+   for is bin-side logic the lib doesn't expose (forbidden by V5's
+   done-condition) or lib features only meerkat could ever use (those
+   belong mere-side).
 
 ## Progress
 
@@ -165,6 +273,19 @@ gc-arena plan's G1 liveness probe with real data.
 - **2026-06-12** — **V0 done.** `serval-winit-host` relocated mere → serval
   (`components/serval-winit-host`); meerkat + the orrery bin re-point; all build
   clean, zero behavior change. serval `e075cc5c9c5`, mere `41cb7c6`.
+- **2026-06-12** — **Charter revised (with Mark): pelt grows the module role.**
+  pelt's ideal end-state is a self-sufficient evolution of the workbench for
+  mere/meerkat — a tile-tree browser that sheds its host loop to plug into
+  meerkat. Distance assessed as three gaps: host-loop shedding ≈ zero (the
+  orrery-host pattern + the now-componentized render/present cores; adopted as
+  the lib-first design rule), the tile tree = modest (V5, presentation-grade
+  model over a serval-side plan-shaped contract; forme stays truth, platen's
+  `tree_projection` maps onto it), content unification = the external-texture
+  element again (V6's gate, now its fourth waiting consumer). Non-goals
+  revised: tabs/splits enter the charter; graph/sessions/comms stay meerkat's.
+  V6 is also where the generalizable pane-module contract (standalone-or-
+  hosted surface) gets written down, since roster/gloss/apparatus want the
+  same shape.
 - **2026-06-12** — **Render-driver reform done** (the V1 foundation, V0-shaped).
   Prompted mid-V1-planning by "shouldn't pelt-live be reformed?": making
   `pelt-desktop` consume `pelt-live`'s lib would have been a third consumer of a
