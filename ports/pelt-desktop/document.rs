@@ -11,9 +11,9 @@
 
 use netrender::Scene;
 use pelt_core::ResourceFetcher;
-use serval_layout::{NoImageLoader, ScrollOffsets, inline_stylesheets};
-use serval_render::scene_from_layout_dom;
-use serval_static_dom::StaticDocument;
+use serval_layout::{inline_stylesheets, IncrementalLayout};
+use serval_render::scene_from_session_dom;
+use serval_static_dom::{StaticDocument, StaticNodeId};
 
 /// Structural display defaults a minimal viewer layers over serval's UA cascade,
 /// so a plain HTML document lays out as a stack of blocks rather than one inline
@@ -78,12 +78,21 @@ fn file_url_to_path(after_scheme: &str) -> String {
     path
 }
 
-/// A parsed static document plus its resolved author stylesheets, rendered to a
-/// [`netrender::Scene`] on demand (the viewer re-renders on resize / scroll).
+/// A parsed static document plus its resolved author stylesheets, rendered through
+/// a retained layout session that owns the document viewport. The viewer lays out
+/// once per size (rebuilding on resize) and re-emits per scroll — the render-first
+/// path — so wheel scrolling never re-runs layout.
 pub struct LoadedDocument {
     doc: StaticDocument,
     /// The structural UA defaults plus the document's own inline `<style>` sheets.
     sheets: Vec<String>,
+    /// The retained cascade + layout session, owner of the document viewport (size
+    /// + propagated overflow + scroll). Built lazily at the first render size and
+    /// rebuilt on a resize (which re-resolves `%`-height and viewport units);
+    /// `None` before the first frame.
+    session: Option<IncrementalLayout<StaticNodeId>>,
+    /// The size `session` was laid out at, to detect a resize.
+    size: (u32, u32),
 }
 
 impl LoadedDocument {
@@ -102,22 +111,46 @@ impl LoadedDocument {
         let doc = StaticDocument::parse(html);
         let mut sheets: Vec<String> = DEFAULT_SHEET.iter().map(|s| s.to_string()).collect();
         sheets.extend(inline_stylesheets(&doc));
-        Self { doc, sheets }
+        Self { doc, sheets, session: None, size: (0, 0) }
     }
 
-    /// Render the document to a [`netrender::Scene`] at `width`×`height`. (V1
-    /// paints with no images, `NoImageLoader`, and unscrolled; the present loop's
-    /// scroll arrives in step 2.)
-    pub fn scene(&self, width: u32, height: u32) -> Scene {
+    /// Build (or rebuild, on a size change) the layout session for `width`×`height`.
+    fn ensure_session(&mut self, width: u32, height: u32) {
+        if self.session.is_some() && self.size == (width, height) {
+            return;
+        }
         let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
-        scene_from_layout_dom(
-            &self.doc,
-            &sheets,
-            &NoImageLoader,
-            width,
-            height,
-            &ScrollOffsets::default(),
-        )
+        self.session = Some(IncrementalLayout::new(&self.doc, &sheets, width as f32, height as f32));
+        self.size = (width, height);
+    }
+
+    /// Render the document to a [`netrender::Scene`] at `width`×`height`, painting
+    /// at the current document scroll. Rebuilds the layout session on a size change
+    /// (re-resolving `%`-height and viewport units against the new viewport).
+    pub fn frame(&mut self, width: u32, height: u32) -> Scene {
+        self.ensure_session(width, height);
+        let session = self.session.as_ref().expect("session built by ensure_session");
+        scene_from_session_dom(session, &self.doc, width, height)
+    }
+
+    /// Scroll the document by a device-px wheel delta, clamped to the
+    /// scrollable-overflow range and the propagated overflow (a short page, or
+    /// `overflow: hidden` on the root, does not scroll). Returns whether the offset
+    /// changed, so the host can skip a redraw at an edge. A no-op before the first
+    /// [`frame`](Self::frame) builds the session.
+    pub fn scroll_by(&mut self, dx: f32, dy: f32) -> bool {
+        let Some(session) = self.session.as_mut() else {
+            return false;
+        };
+        let before = session.viewport_scroll();
+        let after = session.scroll_by(&self.doc, dx, dy);
+        before != after
+    }
+
+    /// The current document scroll offset in device px (`(0, 0)` before the first
+    /// frame).
+    pub fn scroll(&self) -> (f32, f32) {
+        self.session.as_ref().map_or((0.0, 0.0), |s| s.viewport_scroll())
     }
 }
 
@@ -129,9 +162,10 @@ mod tests {
     /// scene) -- the whole load -> parse -> serval-render path, no window.
     #[test]
     fn data_url_loads_and_renders_text() {
-        let doc = LoadedDocument::load(&LocalFetcher, "data:text/html,<h1>Hello</h1><p>World</p>")
-            .expect("a data: URL loads");
-        let scene = doc.scene(400, 300);
+        let mut doc =
+            LoadedDocument::load(&LocalFetcher, "data:text/html,<h1>Hello</h1><p>World</p>")
+                .expect("a data: URL loads");
+        let scene = doc.frame(400, 300);
         assert!(
             scene.ops.iter().any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
             "the rendered document paints text",
@@ -142,9 +176,9 @@ mod tests {
     #[test]
     fn percent_encoded_data_url_decodes() {
         // "<h1>Hi</h1>" percent-encoded.
-        let doc = LoadedDocument::load(&LocalFetcher, "data:text/html,%3Ch1%3EHi%3C%2Fh1%3E")
+        let mut doc = LoadedDocument::load(&LocalFetcher, "data:text/html,%3Ch1%3EHi%3C%2Fh1%3E")
             .expect("a percent-encoded data: URL loads");
-        assert!(!doc.scene(400, 300).ops.is_empty(), "the decoded document renders");
+        assert!(!doc.frame(400, 300).ops.is_empty(), "the decoded document renders");
     }
 
     /// A bare filesystem path reads from disk (the primary CLI case).
@@ -154,9 +188,46 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("doc.html");
         std::fs::write(&path, "<h1>From disk</h1>").expect("write temp html");
-        let doc = LoadedDocument::load(&LocalFetcher, path.to_str().expect("utf8 path"))
+        let mut doc = LoadedDocument::load(&LocalFetcher, path.to_str().expect("utf8 path"))
             .expect("a bare path loads from disk");
-        assert!(!doc.scene(400, 300).ops.is_empty(), "the on-disk document renders");
+        assert!(!doc.frame(400, 300).ops.is_empty(), "the on-disk document renders");
+    }
+
+    /// A document taller than the viewport scrolls: the offset advances on a wheel
+    /// delta and clamps at the bottom edge (the session owns the viewport, so
+    /// `scroll_by` routes through `IncrementalLayout` + `Viewport::clamp_scroll`).
+    #[test]
+    fn tall_document_scrolls_and_clamps() {
+        let mut doc = LoadedDocument::parse(
+            "<style>.tall { height: 2000px; }</style><div class=\"tall\">tall</div>",
+        );
+        // The first frame builds the session at 400×300.
+        let _ = doc.frame(400, 300);
+        assert_eq!(doc.scroll(), (0.0, 0.0), "starts at the top");
+
+        assert!(doc.scroll_by(0.0, 250.0), "scrolling a tall document moves the offset");
+        assert!((doc.scroll().1 - 250.0).abs() < 0.5, "offset advanced by 250: {:?}", doc.scroll());
+
+        // Jump past the bottom: the offset clamps, and a further scroll is a no-op.
+        let _ = doc.scroll_by(0.0, 100_000.0);
+        let bottom = doc.scroll().1;
+        assert!(bottom > 250.0, "scrolled near the bottom: {bottom}");
+        assert!(!doc.scroll_by(0.0, 100.0), "already at the bottom edge → no change");
+    }
+
+    /// A document with no scrollable overflow does not scroll. (The pelt UA
+    /// defaults' `body { padding: 8px }` combined with serval stretching the body to
+    /// the viewport height currently leaks ~16px of overflow past a short page — a
+    /// layout / UA-box follow-up, the scope doc's separate body-box audit, not the
+    /// V1 viewport-scroll family. Zeroing the body box tests the clean path: content
+    /// within the viewport, no scroll headroom.)
+    #[test]
+    fn document_without_overflow_does_not_scroll() {
+        let mut doc =
+            LoadedDocument::parse("<style>body { margin: 0; padding: 0; }</style><div>short</div>");
+        let _ = doc.frame(400, 300);
+        assert!(!doc.scroll_by(0.0, 250.0), "no scrollable overflow → no scroll");
+        assert_eq!(doc.scroll(), (0.0, 0.0));
     }
 
     /// A missing file is a clean error, not a panic.
