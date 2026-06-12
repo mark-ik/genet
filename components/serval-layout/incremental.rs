@@ -39,7 +39,7 @@ use crate::serval_lane::ServalLaneView;
 use crate::style::StylePlane;
 use crate::subtree::SubtreeView;
 use crate::text_measure::TextMeasureCtx;
-use crate::viewport::{document_scroll_range, Viewport};
+use crate::viewport::{document_scroll_range, ScrollKey, Viewport};
 
 /// What [`IncrementalLayout::apply`] did for a mutation batch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -223,6 +223,44 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
         let target = (self.viewport.scroll.0 + dx, self.viewport.scroll.1 + dy);
         self.set_viewport_scroll(dom, target);
         self.viewport.scroll
+    }
+
+    /// Apply a keyboard scroll default action ([`ScrollKey`], scope doc rule 5) to
+    /// the document viewport: an arrow steps a line, `PageUp`/`PageDown` step a
+    /// viewport (less one line of overlap), `Home`/`End` jump to the top/bottom of
+    /// the scroll range — all clamped (so a non-scrollable axis or an edge is a
+    /// no-op). Returns whether the offset moved. The shared half of rule 5; the host
+    /// maps its key event to a `ScrollKey` and gates on "focus not in an editable".
+    pub fn scroll_for_key<D>(&mut self, dom: &D, key: ScrollKey) -> bool
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        /// Arrow-key step in device px (a few lines).
+        const LINE: f32 = 40.0;
+        // A page keeps ~one line of the previous viewport visible (reading continuity).
+        let page = (self.viewport.size.height as f32 - LINE).max(LINE);
+        let before = self.viewport.scroll;
+        match key {
+            ScrollKey::Up => self.scroll_by(dom, 0.0, -LINE),
+            ScrollKey::Down => self.scroll_by(dom, 0.0, LINE),
+            ScrollKey::Left => self.scroll_by(dom, -LINE, 0.0),
+            ScrollKey::Right => self.scroll_by(dom, LINE, 0.0),
+            ScrollKey::PageUp => self.scroll_by(dom, 0.0, -page),
+            ScrollKey::PageDown => self.scroll_by(dom, 0.0, page),
+            ScrollKey::Home => {
+                let x = self.viewport.scroll.0;
+                self.set_viewport_scroll(dom, (x, 0.0));
+                self.viewport.scroll
+            },
+            ScrollKey::End => {
+                let x = self.viewport.scroll.0;
+                let range =
+                    document_scroll_range(dom, &self.styles, &self.fragments, self.viewport.size);
+                self.set_viewport_scroll(dom, (x, range.1));
+                self.viewport.scroll
+            },
+        };
+        self.viewport.scroll != before
     }
 
     /// Recompute the viewport's propagated overflow + size after a relayout,
@@ -1231,5 +1269,46 @@ mod tests {
             (0.0, 0.0),
             "overflow:hidden on the root pins the viewport (no document scroll)",
         );
+    }
+
+    /// V2 — keyboard scroll defaults (`scroll_for_key`): an arrow steps a line,
+    /// `PageDown` a viewport less one line, `Home`/`End` jump to the range ends, all
+    /// clamped (an edge is a no-op).
+    #[test]
+    fn scroll_for_key_steps_lines_pages_and_ends() {
+        const SHEET: &[&str] = &["html,body,div{display:block;margin:0}.tall{height:2000px}"];
+        let (dom, _) = build_nodes(1, "tall");
+        // W=800, H=600 → range.y = content(2000) - viewport(600) = 1400.
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+
+        // Arrow down steps one line (40px).
+        assert!(layout.scroll_for_key(&dom, ScrollKey::Down));
+        assert!(
+            (layout.viewport_scroll().1 - 40.0).abs() < 0.5,
+            "arrow = 40px: {:?}",
+            layout.viewport_scroll(),
+        );
+
+        // PageDown steps a viewport less a line (600 - 40 = 560): 40 → 600.
+        assert!(layout.scroll_for_key(&dom, ScrollKey::PageDown));
+        assert!(
+            (layout.viewport_scroll().1 - 600.0).abs() < 0.5,
+            "page = +560: {:?}",
+            layout.viewport_scroll(),
+        );
+
+        // End jumps to the bottom of the range (1400); another PageDown is a no-op.
+        assert!(layout.scroll_for_key(&dom, ScrollKey::End));
+        assert!(
+            (layout.viewport_scroll().1 - 1400.0).abs() < 1.0,
+            "End = bottom 1400: {:?}",
+            layout.viewport_scroll(),
+        );
+        assert!(!layout.scroll_for_key(&dom, ScrollKey::PageDown), "no movement past the bottom");
+
+        // Home jumps back to the top; another arrow up is a no-op.
+        assert!(layout.scroll_for_key(&dom, ScrollKey::Home));
+        assert_eq!(layout.viewport_scroll(), (0.0, 0.0), "Home = top");
+        assert!(!layout.scroll_for_key(&dom, ScrollKey::Up), "no movement above the top");
     }
 }

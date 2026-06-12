@@ -87,6 +87,24 @@ impl Viewport {
     }
 }
 
+/// A keyboard scroll default action (scope doc rule 5): the document scroll an
+/// arrow / `PageUp` / `PageDown` / `Home` / `End` key performs when focus is not in
+/// an editable. Resolved against the viewport (page size) and the scroll range by
+/// [`IncrementalLayout::scroll_for_key`](crate::IncrementalLayout::scroll_for_key),
+/// so a host only maps its key event onto this and gates on focus. `Space` /
+/// `Shift+Space` map to `PageDown` / `PageUp` at the host.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScrollKey {
+    Up,
+    Down,
+    Left,
+    Right,
+    PageUp,
+    PageDown,
+    Home,
+    End,
+}
+
 /// `visible` / `auto` / `scroll` all let the viewport reach its overflowing
 /// content (a plain page scrolls under `visible`); only `hidden` (and `clip`)
 /// suppress document scroll.

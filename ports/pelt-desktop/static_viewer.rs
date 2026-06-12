@@ -87,15 +87,42 @@ mod windowed {
 
     use netrender::external_texture::ExternalTexturePlacement;
     use netrender::{ColorLoad, NetrenderOptions};
+    use serval_layout::ScrollKey;
     use serval_winit_host::{wheel_delta_from_winit, SurfaceHost};
     use winit::application::ApplicationHandler;
     use winit::dpi::PhysicalSize;
-    use winit::event::WindowEvent;
+    use winit::event::{ElementState, WindowEvent};
     use winit::event_loop::ActiveEventLoop;
+    use winit::keyboard::{Key, NamedKey};
     use winit::window::{Window, WindowId};
 
     use super::{StaticViewerConfig, StaticViewerOutcome};
     use crate::document::LoadedDocument;
+
+    /// Map a winit key (with the shift state) to a [`ScrollKey`] default action, or
+    /// `None` for keys that do not scroll. `Space` / `Shift+Space` are
+    /// `PageDown` / `PageUp` (scope doc rule 5's key list). Pelt-inline for now; this
+    /// lifts to `serval-winit-host` when meerkat shares the decode.
+    fn scroll_key_from_winit(key: &Key, shift: bool) -> Option<ScrollKey> {
+        Some(match key {
+            Key::Named(NamedKey::ArrowUp) => ScrollKey::Up,
+            Key::Named(NamedKey::ArrowDown) => ScrollKey::Down,
+            Key::Named(NamedKey::ArrowLeft) => ScrollKey::Left,
+            Key::Named(NamedKey::ArrowRight) => ScrollKey::Right,
+            Key::Named(NamedKey::PageUp) => ScrollKey::PageUp,
+            Key::Named(NamedKey::PageDown) => ScrollKey::PageDown,
+            Key::Named(NamedKey::Home) => ScrollKey::Home,
+            Key::Named(NamedKey::End) => ScrollKey::End,
+            Key::Named(NamedKey::Space) => {
+                if shift {
+                    ScrollKey::PageUp
+                } else {
+                    ScrollKey::PageDown
+                }
+            },
+            _ => return None,
+        })
+    }
 
     /// The static viewer application: the [`LoadedDocument`] content plus the window
     /// + shared present stack that drives it.
@@ -107,11 +134,22 @@ mod windowed {
         width: u32,
         height: u32,
         redraws: u32,
+        /// Shift state, tracked from `ModifiersChanged`, so `Shift+Space` pages up.
+        shift: bool,
     }
 
     impl ViewerApp {
         pub(super) fn new(config: StaticViewerConfig, doc: LoadedDocument) -> Self {
-            Self { config, doc, window: None, host: None, width: 800, height: 600, redraws: 0 }
+            Self {
+                config,
+                doc,
+                window: None,
+                host: None,
+                width: 800,
+                height: 600,
+                redraws: 0,
+                shift: false,
+            }
         }
 
         pub(super) fn outcome(&self) -> StaticViewerOutcome {
@@ -220,6 +258,22 @@ mod windowed {
                     let (dx, dy) = wheel_delta_from_winit(delta);
                     if self.doc.scroll_by(dx, dy) {
                         self.request_redraw();
+                    }
+                },
+                WindowEvent::ModifiersChanged(mods) => {
+                    self.shift = mods.state().shift_key();
+                },
+                WindowEvent::KeyboardInput { event, .. } => {
+                    // The keyboard scroll defaults (scope doc rule 5): map the key to
+                    // a `ScrollKey` and scroll the document viewport. (No editable
+                    // gate yet — pelt has no focusable fields in V1/V2; add the "focus
+                    // not in an editable" check when it gains them.)
+                    if event.state == ElementState::Pressed {
+                        if let Some(key) = scroll_key_from_winit(&event.logical_key, self.shift) {
+                            if self.doc.scroll_for_key(key) {
+                                self.request_redraw();
+                            }
+                        }
                     }
                 },
                 WindowEvent::RedrawRequested => self.render(event_loop),

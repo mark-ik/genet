@@ -11,7 +11,7 @@
 
 use netrender::Scene;
 use pelt_core::ResourceFetcher;
-use serval_layout::{inline_stylesheets, IncrementalLayout};
+use serval_layout::{inline_stylesheets, IncrementalLayout, ScrollKey};
 use serval_render::scene_from_session_dom;
 use serval_static_dom::{StaticDocument, StaticNodeId};
 
@@ -147,6 +147,16 @@ impl LoadedDocument {
         before != after
     }
 
+    /// Apply a keyboard scroll default action ([`ScrollKey`]) to the document
+    /// viewport (clamped). Returns whether the offset moved, so the host can skip a
+    /// redraw at an edge. A no-op before the first [`frame`](Self::frame).
+    pub fn scroll_for_key(&mut self, key: ScrollKey) -> bool {
+        let Some(session) = self.session.as_mut() else {
+            return false;
+        };
+        session.scroll_for_key(&self.doc, key)
+    }
+
     /// The current document scroll offset in device px (`(0, 0)` before the first
     /// frame).
     pub fn scroll(&self) -> (f32, f32) {
@@ -213,6 +223,20 @@ mod tests {
         let bottom = doc.scroll().1;
         assert!(bottom > 250.0, "scrolled near the bottom: {bottom}");
         assert!(!doc.scroll_by(0.0, 100.0), "already at the bottom edge → no change");
+    }
+
+    /// Keyboard scroll defaults reach the document viewport through the session:
+    /// `PageDown` advances a tall page, `Home` returns to the top.
+    #[test]
+    fn keyboard_scrolls_a_tall_document() {
+        let mut doc = LoadedDocument::parse(
+            "<style>.tall { height: 2000px; }</style><div class=\"tall\">tall</div>",
+        );
+        let _ = doc.frame(400, 300);
+        assert!(doc.scroll_for_key(ScrollKey::PageDown), "PageDown scrolls a tall document");
+        assert!(doc.scroll().1 > 0.0, "the offset advanced: {:?}", doc.scroll());
+        assert!(doc.scroll_for_key(ScrollKey::Home), "Home returns to the top");
+        assert_eq!(doc.scroll(), (0.0, 0.0));
     }
 
     /// A document with content shorter than the viewport does not scroll: the body
