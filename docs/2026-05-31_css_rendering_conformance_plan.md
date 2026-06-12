@@ -641,6 +641,25 @@ note: SVG already raster-decodes via a resvg fallback — the "SVG never decodes
 claim above is stale; SVG icons likely already work in meerkat, worth verifying
 for product value over more conformance-tail paint.)*
 
+**Centered-repeat attempt — regressed, reverted (2026-06-12).** Tried to flip the
+`border-image-repeat` near-misses by adding a `tile_origin` to netrender's
+`RepeatingImageItem` (tiles start at the origin, `placement` becomes the clip via
+the rasterizer's existing `ScenePattern.clip_rect`) and centering the lattice in
+serval. It **regressed css-backgrounds −6** (334 → 328) across two formula
+attempts, so it was reverted in both repos (no commit). Empirically the WPT refs
+do **not** center the way modeled — tile-from-start (BI-3) scores better — and/or
+the clip layer adds edge AA that flips borderline passes. **Lesson: don't retry
+centered-repeat via `tile_origin`** without first pixel-dumping a specific
+`border-image-repeat` ref to see its actual tiling anchor. **The proper path,
+discovered en route:** `paint_list_api` *already* has a `BorderDetails::NinePatch`
+primitive (`NinePatchBorder` = source / slice / width / `repeat_horizontal` /
+`repeat_vertical` / fill), but the `paint_list_render` rasterizer **warn-skips**
+it. Implementing nine-patch rasterization there (vello) is the real border-image
+home — it would do slice + repeat modes correctly in one primitive, replacing
+serval's BI-2/BI-3 pre-sliced `DrawImage` workaround — but it is a meatier
+netrender task than the tweak tried here. border-image stays at **+24** (BI-1/2/3)
+until that lands.
+
 ## Non-goals (for now)
 
 - CSS animations/transitions (their own axis; the alphabetically-first
