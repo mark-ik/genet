@@ -49,7 +49,7 @@ use paint_list_api::{LayoutPoint, LayoutTransform};
 
 use crate::fragment::FragmentPlane;
 use crate::paint_emit::{
-    clips_overflow, compute_transform_matrix, conjugate_at, primary_cv, ScrollOffsets,
+    clips_overflow, compute_transform_matrix, conjugate_at, is_fixed, primary_cv, ScrollOffsets,
 };
 use crate::style::StylePlane;
 
@@ -71,6 +71,12 @@ pub struct ServalLaneView<'a, D: LayoutDom> {
     /// `-offset` content translate). `None` ⇒ nothing scrolls. The host (which
     /// owns the offsets) supplies the same map it passes to paint.
     scroll_offsets: Option<&'a ScrollOffsets<D::NodeId>>,
+    /// Document (viewport) scroll offset, for viewport-scroll-aware hit-testing:
+    /// in-flow content maps through `+offset` (the inverse of paint's `-offset`
+    /// document translate); `position: fixed` subtrees counter it (they paint
+    /// pinned to the viewport). `(0.0, 0.0)` ⇒ the document is not scrolled. The
+    /// host supplies the same offset it feeds the paint viewport.
+    viewport_scroll: (f32, f32),
     /// Host-owned focus + selection, surfaced by [`InteractionQuery`]. The host
     /// owns input, so it supplies these; `None` means "nothing focused / no
     /// selection". (Affordances + activation targets are derived from the DOM,
@@ -91,6 +97,7 @@ impl<'a, D: LayoutDom> ServalLaneView<'a, D> {
             fragments,
             generation: 0,
             scroll_offsets: None,
+            viewport_scroll: (0.0, 0.0),
             focused: None,
             selection: None,
         }
@@ -132,6 +139,14 @@ impl<'a, D: LayoutDom> ServalLaneView<'a, D> {
         self
     }
 
+    /// Supply the document (viewport) scroll offset so hit-testing maps the query
+    /// point through the scrolled document (and keeps `position: fixed` subtrees
+    /// pinned). Pass the same offset handed to the paint viewport.
+    pub fn with_viewport_scroll(mut self, scroll: (f32, f32)) -> Self {
+        self.viewport_scroll = scroll;
+        self
+    }
+
     /// Reverse-lookup a `D::NodeId` for a given `SourceNodeId`.
     /// O(n) over the DOM; acceptable for probe-stage. Cf. module doc.
     /// `pub(crate)` so the `IncrementalLayout` session can serve a hit-test
@@ -162,15 +177,24 @@ where
     }
 
     fn hit_test(&self, point: Point) -> Option<FragmentHit<Self::FragmentId>> {
+        // Document (viewport) scroll: paint translates the whole document by
+        // `-viewport_scroll` inside the canvas, so the inverse maps the query point
+        // by `+viewport_scroll` into content space (the same shape as the per-
+        // container `+offset` map in `walk_for_hit`). `position: fixed` subtrees
+        // counter it back there (they paint pinned). Zero scroll leaves the point
+        // untouched — the unscrolled frame is unchanged.
+        let (sx, sy) = self.viewport_scroll;
+        let doc_point = Point::new(point.x + sx, point.y + sy);
         let mut hit: Option<FragmentHit<SourceNodeId>> = None;
         walk_for_hit(
             self.dom,
             self.styles,
             self.fragments,
             self.scroll_offsets,
+            self.viewport_scroll,
             self.dom.document(),
             Point::new(0.0, 0.0),
-            point,
+            doc_point,
             &mut hit,
         );
         hit
@@ -330,13 +354,18 @@ fn affordance_label<D: LayoutDom>(dom: &D, id: D::NodeId, kind: AffordanceKind) 
 ///     point outside that box skips the subtree (no leak onto elements below a
 ///     scrolled box);
 ///   * a scroll container's descendants are queried at `point + offset` (the
-///     inverse of paint's `-offset` content translate).
+///     inverse of paint's `-offset` content translate);
+///   * a `position: fixed` node counters the document scroll by `-viewport_scroll`
+///     (the inverse of paint's `+viewport_scroll` layer counter), so a pinned box
+///     is hit at its unscrolled screen position. The caller has already mapped the
+///     incoming point by `+viewport_scroll` for the document at large.
 #[allow(clippy::too_many_arguments)]
 fn walk_for_hit<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
     scroll_offsets: Option<&ScrollOffsets<D::NodeId>>,
+    viewport_scroll: (f32, f32),
     id: D::NodeId,
     parent_origin: Point,
     point: Point,
@@ -352,6 +381,19 @@ fn walk_for_hit<D>(
         parent_origin
     };
 
+    let cv = primary_cv(styles, id);
+    // `position: fixed` attaches to the viewport: paint counters the document
+    // scroll around its layer (it paints pinned), so undo the caller's
+    // `+viewport_scroll` map here and hit-test the fixed box and its subtree at
+    // their unscrolled position. (Common case: a fixed box at document level;
+    // nested-in-a-scroller interactions inherit paint's existing stacking
+    // approximation, since this walk is DOM-order, not stacking-order.)
+    let point = if cv.as_deref().is_some_and(is_fixed) {
+        Point::new(point.x - viewport_scroll.0, point.y - viewport_scroll.1)
+    } else {
+        point
+    };
+
     // CSS transform: a transformed node (and its subtree) is painted through its
     // transform conjugated at the box origin — the exact composition
     // `paint_emit::walk` applies. Hit the inverse: map the incoming point into
@@ -360,7 +402,6 @@ fn walk_for_hit<D>(
     // telescopes through nesting because each node maps the already-mapped point
     // it receives. A singular transform (a degenerate scale) collapses the
     // subtree, so nothing in it can be hit.
-    let cv = primary_cv(styles, id);
     let node_transform =
         cv.as_deref().map(compute_transform_matrix).unwrap_or_else(LayoutTransform::identity);
     let local = if node_transform == LayoutTransform::identity() {
@@ -407,7 +448,10 @@ fn walk_for_hit<D>(
     };
 
     for child in dom.dom_children(id) {
-        walk_for_hit(dom, styles, fragments, scroll_offsets, child, origin, child_point, out);
+        walk_for_hit(
+            dom, styles, fragments, scroll_offsets, viewport_scroll, child, origin, child_point,
+            out,
+        );
     }
 }
 
@@ -990,6 +1034,130 @@ mod tests {
             (hit.local_point.y - 85.0).abs() < 0.1,
             "local point maps through the scroll offset: {}",
             hit.local_point.y
+        );
+    }
+
+    /// A4 — in-flow hit-testing maps through the document (viewport) scroll: the
+    /// same screen point resolves to whatever content scrolled under it, and the
+    /// reported local point reflects the scrolled-in offset (mirroring paint's
+    /// `-viewport_scroll` document translate).
+    #[test]
+    fn hit_test_in_flow_maps_through_viewport_scroll() {
+        use crate::cascade::run_cascade;
+
+        let document = StaticDocument::parse(
+            "<html><body>\
+                <div class=\"top\">t</div>\
+                <div class=\"mid\">m</div>\
+                <div class=\"bot\">b</div>\
+            </body></html>",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(200.0, 600.0),
+            &[
+                "html, body { display: block; margin: 0; padding: 0; }",
+                "div { display: block; margin: 0; padding: 0; border: 0; height: 100px; }",
+            ],
+            None,
+        );
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(200.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+
+        let mut divs = Vec::new();
+        collect_divs(NodeRef::document(&document), &mut divs);
+        assert_eq!(divs.len(), 3, "top, mid, bot");
+        let id_of = |n: &NodeRef<StaticDocument>| SourceNodeId(document.opaque_id(n.id()));
+        let (mid_id, bot_id) = (id_of(&divs[1]), id_of(&divs[2]));
+
+        // Unscrolled: a screen point at y=150 hits `mid` (layout y 100..200).
+        let still = ServalLaneView::new(&document, &styles, &fragments);
+        assert_eq!(
+            still.hit_test(Point::new(5.0, 150.0)).expect("hit").source_node,
+            mid_id,
+            "unscrolled, y=150 is in `mid`",
+        );
+
+        // Scrolled down 100px: the document shifts up by 100, so the same screen
+        // point now maps to content-y 250 and hits `bot` (layout y 200..300).
+        let scrolled = ServalLaneView::new(&document, &styles, &fragments)
+            .with_viewport_scroll((0.0, 100.0));
+        let hit = scrolled.hit_test(Point::new(5.0, 150.0)).expect("hit under scroll");
+        assert_eq!(hit.source_node, bot_id, "scrolled, the same point is over `bot`");
+        assert!(
+            (hit.local_point.y - 50.0).abs() < 0.1,
+            "local point maps through the viewport scroll: {}",
+            hit.local_point.y,
+        );
+    }
+
+    /// A4 — a `position: fixed` box is hit at its unscrolled screen position: its
+    /// layer counters the document scroll in paint, so the hit walk counters too.
+    /// Below the fixed box, the scrolled-in in-flow content is hit (so in-flow
+    /// moved while the fixed box did not). The fixed div is last in DOM so it wins
+    /// overlapping points, mirroring its on-top paint.
+    #[test]
+    fn hit_test_keeps_fixed_pinned_under_viewport_scroll() {
+        use crate::cascade::run_cascade;
+
+        let document = StaticDocument::parse(
+            "<html><body>\
+                <div class=\"tall\">t</div>\
+                <div class=\"fixed\">f</div>\
+            </body></html>",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(200.0, 600.0),
+            &[
+                "html, body { display: block; margin: 0; padding: 0; }",
+                "div { display: block; margin: 0; padding: 0; border: 0; }",
+                ".tall { height: 2000px; }",
+                ".fixed { position: fixed; top: 0; left: 0; width: 100px; height: 50px; }",
+            ],
+            None,
+        );
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(200.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+
+        let mut divs = Vec::new();
+        collect_divs(NodeRef::document(&document), &mut divs);
+        let id_of = |n: &NodeRef<StaticDocument>| SourceNodeId(document.opaque_id(n.id()));
+        let (tall_id, fixed_id) = (id_of(&divs[0]), id_of(&divs[1]));
+
+        // Unscrolled, a point in the fixed box (top-left) hits it.
+        let still = ServalLaneView::new(&document, &styles, &fragments);
+        assert_eq!(
+            still.hit_test(Point::new(5.0, 5.0)).expect("hit").source_node,
+            fixed_id,
+            "the fixed box is hit at its screen position",
+        );
+
+        // Scrolled down 300px: the fixed box stays pinned (hit-tested unscrolled),
+        // so the same screen point still hits it, not the scrolled-in `tall`.
+        let scrolled = ServalLaneView::new(&document, &styles, &fragments)
+            .with_viewport_scroll((0.0, 300.0));
+        assert_eq!(
+            scrolled.hit_test(Point::new(5.0, 5.0)).expect("hit under scroll").source_node,
+            fixed_id,
+            "the fixed box stays pinned under document scroll",
+        );
+        // Below the fixed box (y=100, outside its 50px height), the point maps
+        // through the scroll into `tall`'s scrolled-in content.
+        assert_eq!(
+            scrolled.hit_test(Point::new(5.0, 100.0)).expect("hit below fixed").source_node,
+            tall_id,
+            "below the fixed box, the scrolled-in in-flow content is hit",
         );
     }
 }
