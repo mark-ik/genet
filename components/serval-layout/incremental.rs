@@ -231,6 +231,17 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
             Applied::Restyled
         } else {
             // Paint-only: prior fragments (and box-tree side-table) still valid.
+            // But paint reads each box node's cached `style` (the box-tree paint
+            // re-root), and this path keeps the prior box tree — so refresh the
+            // mutated elements' cached style from the re-cascaded plane. Without
+            // it a paint-tier change (transform / color) reaches `self.styles` but
+            // never the emit, freezing the orrery's per-frame motion until a
+            // relayout (a host resize, which rebuilds the tree).
+            let mutated = mutations.iter().filter_map(|m| match m {
+                DomMutation::AttributeChanged { node, .. } => Some(*node),
+                _ => None,
+            });
+            self.built.refresh_styles_for(&self.styles, mutated);
             Applied::RepaintOnly
         }
     }
@@ -576,6 +587,64 @@ mod tests {
         assert!(
             has_glyphs(&layout.emit_paint_list(&dom, &scroll, dev)),
             "emit still produces the glyph-bearing scene after the RepaintOnly move",
+        );
+    }
+
+    /// REGRESSION GUARD (orrery freeze): after a RepaintOnly inline-transform
+    /// change, emit must carry the NEW translate — not the value baked into the
+    /// box tree at full layout. Paint reads `BoxNode::style` (the §5 box-tree
+    /// re-root); this path keeps the prior box tree, so unless the changed nodes'
+    /// cached style is refreshed from the re-cascaded plane, the painted transform
+    /// stays frozen until a relayout (a window resize, for the orrery host). The
+    /// sibling `emit_paint_list_survives_*` only checks glyph presence, so it
+    /// passed even while the position was stale; this asserts the position moves.
+    #[test]
+    fn repaint_only_transform_moves_the_emitted_translate() {
+        use paint_list_api::{PaintCmd, PaintList};
+
+        const SHEET: &[&str] = &[".n{position:absolute;width:80px;height:40px}"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let node = dom.create_element(html("div"));
+        dom.set_attribute(node, attr("class"), "n");
+        dom.set_attribute(node, attr("style"), "transform:translate(10px,0px)"); // materialized
+        dom.append_child(body, node);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let scroll = ScrollOffsets::default();
+        let dev = DeviceIntSize::new(W as i32, H as i32);
+        // The node's CSS transform folds into a `PushTransform` (m41 = translate-x);
+        // the html/body pushes are identity (m41 = 0), so the max picks the node's.
+        let translate_x = |pl: &ServalPaintList| {
+            pl.commands()
+                .iter()
+                .filter_map(|c| match c {
+                    PaintCmd::PushTransform(spec) => Some(spec.transform.m41),
+                    _ => None,
+                })
+                .fold(f32::MIN, f32::max)
+        };
+
+        let before = translate_x(&layout.emit_paint_list(&dom, &scroll, dev));
+        assert!((before - 10.0).abs() < 0.5, "starts at translate-x 10, got {before}");
+
+        // Transform-only change → RepaintOnly; the emitted translate must follow.
+        let _ = drain(&mut dom);
+        dom.set_attribute(node, attr("style"), "transform:translate(90px,0px)");
+        let muts = drain(&mut dom);
+        assert_eq!(
+            layout.apply(&dom, SHEET, &muts),
+            Applied::RepaintOnly,
+            "a transform-only change is paint-tier",
+        );
+        let after = translate_x(&layout.emit_paint_list(&dom, &scroll, dev));
+        assert!(
+            (after - 90.0).abs() < 0.5,
+            "RepaintOnly emit must carry the NEW translate-x (90), got {after}",
         );
     }
 

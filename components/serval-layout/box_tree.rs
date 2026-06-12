@@ -208,6 +208,31 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
         nid(arena)
     }
 
+    /// Re-point each *directly mutated* element box's cached paint style to the
+    /// plane's freshly cascaded value. Paint reads `BoxNode::style` (the box-tree
+    /// paint re-root), and the `RepaintOnly` apply path keeps this box tree (its
+    /// geometry is still valid — `transform` / color are paint-tier), so without
+    /// this refresh the painted node keeps the style cloned at the last full
+    /// layout: a per-frame `transform` (the orrery camera + node motion) or a
+    /// color change lands in the plane but never reaches emit until a relayout.
+    /// Keyed by the mutated DOM ids through `node_map`; only `Element` boxes are
+    /// refreshed (an `Anonymous` wrapper paints no decorations; a `Pseudo` box
+    /// carries the pseudo cascade, not the element's). Inherited-only changes on
+    /// undirtied descendants are out of scope — the orrery / chrome restyle the
+    /// element itself, which is what lands in the mutation set.
+    pub(crate) fn refresh_styles_for<I>(&mut self, styles: &StylePlane<Id>, mutated: I)
+    where
+        I: IntoIterator<Item = Id>,
+    {
+        for id in mutated {
+            let Some(&node_id) = self.node_map.get(&id) else { continue };
+            let i = idx(node_id);
+            if matches!(self.nodes[i].source, BoxSource::Element(eid) if eid == id) {
+                self.nodes[i].style = style_of(styles, id);
+            }
+        }
+    }
+
     /// Whether the box for DOM `id` is an anonymous box (paints no box
     /// decorations of its own — see [`BoxNode::anonymous`]). Paint emission
     /// reads this to skip background / border / shadow on anonymous wrappers.

@@ -219,3 +219,95 @@ never return a pseudo.
 §3 range geometry (with C1) → §4 first-letter → §5 block generated content
 (when a content lane pulls on it). `::first-line` stays deferred
 indefinitely with its rationale recorded in §4.
+
+---
+
+## Follow-ups (after §1–§5 shipped)
+
+§1–§5 all landed (`0df54166bf8` … `2d803d0017e`); the paint walk is now box-tree
+rooted. These are the loose ends each section deferred, smallest first. F1–F3
+block nothing today — pick up when a corpus / lane pulls on it. F4 was a
+host-visible regression from the slice-2 re-root, found and fixed on discovery
+(2026-06-11).
+
+### F1 — url() `background-image` on a pseudo box (small)
+
+**Now**: a block `::before`/`::after` box paints color + gradient backgrounds
+(read CV-pure from the pseudo cascade), but **not** a `background-image: url(…)`
+layer. The DOM-driven `BackgroundImagePlane` is keyed by DOM node id; a pseudo
+box has no DOM id (`BoxSource::Pseudo`), so `em.bg_images_plane.get(dom_id)`
+resolves against the *originating element*, not the pseudo — wrong image (or
+none).
+
+**Do**: key decoded pseudo background-images by `(originating element, kind)` (or
+by arena id) so the pseudo box's url() layer resolves to its own image. The
+gather already runs per box; the plane key is the gap.
+
+**Done when**: `p::before { content:""; display:block; background-image:url(x) }`
+paints `x` in the pseudo box.
+
+### F2 — Mixed inline-one-side / block-other-side pseudo pair (small)
+
+**Now**: when an element has a block `::before` and an *inline* `::after` (or
+vice-versa), the block pseudo forces the element onto the block/mixed
+construction path, where the inline-context branch (which runs
+`push_pseudo_content`) is never taken — so the inline pseudo's run is dropped.
+(Both-inline and both-block already work.)
+
+**Do**: emit the inline-side pseudo run into the element's anonymous inline
+wrapper on the block path (or hoist `push_pseudo_content` so it runs regardless
+of which construction branch the element takes).
+
+**Done when**: `p::before{content:"x";display:block} p::after{content:"y"}`
+shows both the block `x` box and the inline `y` after the text.
+
+### F3 — Retire the test-only cache-less `emit_paint_list` (cleanup)
+
+**Now**: after the box-tree re-root (§5 slice 2b), the free
+`emit_paint_list(dom, styles, fragments, constructed, …)` (text_ctx `None` →
+un-shaped empty runs) has **no production callers** — every live path goes
+through `emit_paint_list_with_layouts`. It survives only as a terser box-only
+test harness across ~10 serval-layout / paint_stacking tests.
+
+**Do**: either fold those tests onto `emit_paint_list_with_layouts` (they
+already build the box tree) and delete the cache-less entry point, or keep it
+and rename it to advertise its test-only, text-less status. Low priority; it is
+a thin wrapper, not a maintenance burden.
+
+**Done when**: there is one paint entry point, or the cache-less one is clearly
+named as the box-only test harness.
+
+### F4 — `RepaintOnly` must refresh box-tree paint styles (DONE 2026-06-11)
+
+**Was**: slice 2b re-rooted paint onto the box tree, so `walk` reads each node's
+computed style (and thus its CSS `transform`) from `BoxNode::style` — a clone
+taken at `full_layout` via `style_of`. But `IncrementalLayout::apply`'s
+`RepaintOnly` path (a paint-tier attribute change: `transform` / color, no
+relayout) updates `self.styles` and **keeps the prior box tree**, so the cached
+`BoxNode::style` stayed frozen at the last full layout. Paint therefore emitted
+the stale transform: the orrery's per-frame inline-`transform` node motion +
+camera pan/zoom froze on screen, only updating when a host resize rebuilt the
+pool (a fresh `full_layout`). The existing `emit_paint_list_survives_*` guard
+only asserted glyph **presence**, not **position**, so the suite stayed green —
+exactly the "output equivalent for today's DOMs" check missing the incremental
+path (slice 2 was flagged riskiest for this reason).
+
+**Did**: `BoxTree::refresh_styles_for(styles, mutated_ids)` re-points each
+mutated `Element` box's cached `style` Arc to the plane's re-cascaded value;
+`apply`'s `RepaintOnly` branch calls it with the batch's `AttributeChanged`
+node ids. Cheap (`Arc` clone, keyed via `node_map`, `Element` boxes only —
+`Anonymous`/`Pseudo` carry their own cascade). Box geometry untouched (paint-tier
+by construction of the branch).
+
+**Guard**: `repaint_only_transform_moves_the_emitted_translate`
+(incremental.rs) — asserts the emitted `PushTransform` translate moves 10→90
+across a `RepaintOnly` apply (fails pre-fix: "got 10").
+
+**Out of scope**: inherited-only changes on undirtied descendants (the mutated
+element itself is what lands in the batch; the orrery / chrome restyle the styled
+element directly). Revisit if a `RepaintOnly` inheritance case surfaces.
+
+### Already recorded in-section (not re-listed here)
+
+- `::first-letter` combining-mark folding after the first letter (§4 tier-1 edge).
+- `::first-line` — absent from servo's `PseudoElement` enum; deferred indefinitely (§4).
