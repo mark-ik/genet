@@ -594,7 +594,7 @@ impl App {
     fn pointer_event_for(&self, node: NodeId, phase: PointerPhase) -> Option<PointerEvent> {
         let (rx, ry, rw, rh) = self.element_rect(node)?;
         let (x, y) = self.cursor;
-        Some(PointerEvent { phase, local: (x - rx, y - ry), size: (rw, rh) })
+        Some(PointerEvent::new(phase, (x - rx, y - ry), (rw, rh)))
     }
 
     /// Point the IME candidate window at the focused field's caret (IME T3): the

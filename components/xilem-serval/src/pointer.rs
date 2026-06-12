@@ -23,7 +23,7 @@ use serval_scripted_dom::NodeId;
 use xilem_core::{MessageCtx, MessageResult, Mut, View, ViewId, ViewMarker, ViewPathTracker};
 
 use crate::pod::ServalElement;
-use crate::{ElementView, OptionalAction, ServalCtx};
+use crate::{ElementView, OptionalAction, Propagation, ServalCtx};
 
 // Distinctive marker id (randomly generated) so a stray message on a wrong path
 // is caught rather than silently matching. 0x504F_494E == "POIN".
@@ -52,6 +52,23 @@ pub struct PointerEvent {
     pub phase: PointerPhase,
     pub local: (f32, f32),
     pub size: (f32, f32),
+    /// Clone-through cancellation state — the native twin of a JS event's
+    /// `preventDefault` / `stopPropagation` (every clone shares one cell, so a
+    /// handler's call is seen by the runner). A drag handler calls
+    /// `e.prop.prevent_default()` to suppress the host's default for this pointer
+    /// pass; the runner records it into [`default_prevented`] after routing, per
+    /// event — never the stale click/key value. See [`Propagation`].
+    ///
+    /// [`default_prevented`]: crate::ServalAppRunner::default_prevented
+    pub prop: Propagation,
+}
+
+impl PointerEvent {
+    /// A pointer event with a fresh [`Propagation`] cell. The host builds one per
+    /// winit pointer event from the captured element's laid-out rect.
+    pub fn new(phase: PointerPhase, local: (f32, f32), size: (f32, f32)) -> Self {
+        Self { phase, local, size, prop: Propagation::new() }
+    }
 }
 
 /// Wraps a [`View`] and registers a native pointer-drag handler on its element.
