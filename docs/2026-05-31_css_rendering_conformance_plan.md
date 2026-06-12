@@ -575,6 +575,39 @@ failures are now *genuinely* per-feature paint gaps (border-image, non-solid
 border styles, `border-radius` clipping, box-shadow detail) plus the separate
 SVG-background axis.
 
+**Status: §5 box-tree paint re-root — conformance-neutral (2026-06-11).** The
+pseudo-element work re-rooted paint emission off the DOM walk onto the box-tree
+arena (`37233436774`, plus the CV-pure-helper, `BoxSource`, block-pseudo, and
+url()-bg slices) — a large structural change explicitly designed to hold output
+identical. Re-measured the three-subset board to confirm at the reftest level
+(not just unit tests):
+
+| subset | pre-§5 baseline | post-§5 re-root (2026-06-11) |
+| --- | --- | --- |
+| `css/css-backgrounds` | 310 / 1325 | **310 / 1325** (`local=269 whole=9 mismatch-eq=1`) |
+| `css/CSS2/normal-flow` | 462 / 1044 | **462 / 1044** (`local=225 whole=2`) |
+| `css/CSS2/floats` | 41 / 197 | **41 / 197** (`local=54 mismatch-eq=4`) |
+
+Flat to the pass, **0 errored** across all three — the re-root is behavior-neutral
+on the conformance corpus, the strongest validation that the DOM→box-tree paint
+spine swap preserved the pixels. (The one regression it *did* introduce — stale
+`BoxNode::style` on the incremental `RepaintOnly` path freezing transforms — was
+off this corpus, in the session path; caught + fixed as `80448871b6a`, pseudo
+follow-up F4.)
+
+**Paint-architecture correction (2026-06-11).** Several notes above describe the
+paint walk as **DOM-driven**, reading each box's style/background from
+`background_color_of(styles, dom_node)`, with anonymous boxes carried via a
+`BoxNode::anonymous` *flag* queried through `BoxTree::is_anonymous` (the
+"Anonymous block boxes" lever, 2026-06-10). That architecture is **superseded**:
+`walk` now recurses the box-tree arena, reading style off `BoxNode::style` and
+identity off `BoxSource::{Element | Anonymous | Pseudo}` (the `anonymous` bool was
+replaced by the `Anonymous` variant). The *behavior* those notes describe is
+unchanged (anonymous boxes still paint no decorations; the lever's pixel wins
+stand) — only the mechanism moved, which is what made block-pseudo paint and
+pseudo hit-routing fall out for free. Read those sections for the conformance
+history, not the current paint structure.
+
 ## Non-goals (for now)
 
 - CSS animations/transitions (their own axis; the alphabetically-first
