@@ -71,19 +71,19 @@ fn idx(n: NodeId) -> usize {
     u64::from(n) as usize
 }
 
+/// Which generated-content pseudo a [`BoxSource::Pseudo`] box realizes.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum PseudoKind {
+    Before,
+    After,
+}
+
 /// What a box's identity is — its style already lives on the node, so this is
 /// for *paint / hit-test* routing: it carries the originating DOM node for the
 /// `dom_id`-keyed concerns (scroll offsets, replaced/background images, canvas
 /// background propagation, hit-test target) and marks boxes that own no DOM
 /// element of their own. A box-tree-driven paint walk reads this instead of
 /// assuming every box maps 1:1 to a DOM node.
-/// Which generated-content pseudo a [`BoxSource::Pseudo`] box realizes.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PseudoKind {
-    Before,
-    After,
-}
-
 #[derive(Clone, Copy)]
 pub(crate) enum BoxSource<Id> {
     /// A real DOM element or text node; `Id` is that node.

@@ -571,7 +571,13 @@ pub(crate) fn walk<Id>(
         }
     }
     // CSS background-image (url()) paints over the color, under content + border.
-    if let Some(decoded) = em.bg_images_plane.get(dom_id).filter(|_| !suppress_bg) {
+    // A pseudo box's image is keyed by `(element, kind)` (no DOM id of its own);
+    // every other box keys by its `dom_id`.
+    let bg_image = match node.source {
+        crate::box_tree::BoxSource::Pseudo(elem, kind) => em.bg_images_plane.get_pseudo(elem, kind),
+        _ => em.bg_images_plane.get(dom_id),
+    };
+    if let Some(decoded) = bg_image.filter(|_| !suppress_bg) {
         let int_w = decoded.width as f32;
         let int_h = decoded.height as f32;
         let key = em.images.add(decoded);
@@ -2274,6 +2280,56 @@ mod tests {
         let b = before.expect("block ::before paints a red background box");
         assert!((b.max.x - b.min.x - 100.0).abs() < 1.0, "::before spans the 100px width, got {b:?}");
         assert!((b.max.y - b.min.y - 20.0).abs() < 1.0, "::before is 20px tall, got {b:?}");
+    }
+
+    /// A block `::before` with a `url()` `background-image` paints it. The image
+    /// is keyed by `(element, ::before)` in the `BackgroundImagePlane` (the pseudo
+    /// box has no DOM id), and the box-tree walk fetches it via the box's
+    /// `BoxSource::Pseudo`. (Pseudo follow-ups F1.)
+    #[test]
+    fn block_pseudo_paints_its_url_background_image() {
+        use base64::Engine as _;
+        // An 8×8 PNG as a data-URI, so decode needs no loader.
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([0, 0, 255, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .expect("encode PNG");
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        let sheet = format!(
+            "html, body, p {{ display: block; margin: 0; width: 100px; }} \
+             p::before {{ content: \"\"; display: block; height: 20px; \
+             background-image: url(\"data:image/png;base64,{b64}\"); }}"
+        );
+
+        let document = StaticDocument::parse("<html><body><p>hi</p></body></html>");
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&document, &mut styles, euclid::Size2D::new(800.0, 600.0), &[sheet.as_str()], None);
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let bg = BackgroundImagePlane::decode_from_cascade(
+            &document,
+            &styles,
+            &crate::image_decode::NoImageLoader,
+        );
+        let plist = emit_paint_list_with_layouts(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &bg,
+            &FxHashMap::default(),
+            DeviceIntSize::new(800, 600),
+        );
+
+        assert!(
+            plist.commands().iter().any(|c| matches!(c, PaintCmd::DrawRepeatingImage(_))),
+            "block ::before with a url() background-image paints a repeating image"
+        );
     }
 
     /// A full-viewport (800×600) `DrawRect`'s color, if one was emitted — the

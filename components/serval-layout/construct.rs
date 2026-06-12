@@ -387,7 +387,20 @@ pub(crate) fn block_pseudo_content<NodeId: Copy + Eq + Hash>(
     if !matches!(cv.get_box().display.outside(), DisplayOutside::Block) {
         return None;
     }
-    let text = pseudo_content_text(cv)?;
+    // A box is generated for any string `content` — including `content: ""` (a
+    // decorative box, e.g. a background-image with no text) — but not for
+    // `normal` / `none`. (Unlike the inline path, an empty block box is still
+    // laid out and painted, so the empty-string case matters here.)
+    use style::values::generics::counters::{Content, ContentItem};
+    let Content::Items(items) = &cv.get_counters().content else {
+        return None;
+    };
+    let mut text = String::new();
+    for item in items.items.iter() {
+        if let ContentItem::String(s) = item {
+            text.push_str(s);
+        }
+    }
     let content = InlineContent { runs: vec![run_from_computed(cv, text)], boxes: Vec::new() };
     Some((cv.clone(), content))
 }

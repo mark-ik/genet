@@ -33,6 +33,7 @@ use std::hash::Hash;
 use layout_dom_api::LayoutDom;
 use rustc_hash::FxHashMap;
 
+use crate::box_tree::PseudoKind;
 use crate::style::StylePlane;
 
 /// Supplies raw (undecoded) image bytes for non-`data:` URLs that
@@ -160,12 +161,17 @@ impl<NodeId: Copy + Eq + Hash> ImagePlane<NodeId> {
 /// are deferred.
 pub struct BackgroundImagePlane<NodeId: Copy + Eq + Hash> {
     images: FxHashMap<NodeId, DecodedImage>,
+    /// `url()` background-images for block-display `::before` / `::after` pseudo
+    /// boxes, keyed by `(originating element, kind)` — the pseudo box has no DOM
+    /// id of its own, so it cannot share the element's `images` slot.
+    pseudo_images: FxHashMap<(NodeId, PseudoKind), DecodedImage>,
 }
 
 impl<NodeId: Copy + Eq + Hash> Default for BackgroundImagePlane<NodeId> {
     fn default() -> Self {
         Self {
             images: FxHashMap::default(),
+            pseudo_images: FxHashMap::default(),
         }
     }
 }
@@ -183,34 +189,49 @@ impl<NodeId: Copy + Eq + Hash> BackgroundImagePlane<NodeId> {
         D: LayoutDom<NodeId = NodeId>,
         L: ImageLoader,
     {
+        let decode = |src: String| -> Option<DecodedImage> {
+            if src.starts_with("data:") {
+                decode_data_uri(&src)
+            } else {
+                loader.load(&src).and_then(|bytes| decode_image_bytes(&bytes))
+            }
+        };
         let mut images = FxHashMap::default();
+        let mut pseudo_images = FxHashMap::default();
         let mut queue = vec![dom.document()];
         while let Some(id) = queue.pop() {
-            if let Some(src) = background_image_url(styles, id) {
-                let decoded = if src.starts_with("data:") {
-                    decode_data_uri(&src)
-                } else {
-                    loader.load(&src).and_then(|bytes| decode_image_bytes(&bytes))
-                };
-                if let Some(decoded) = decoded {
-                    images.insert(id, decoded);
+            if let Some(decoded) = background_image_url(styles, id).and_then(decode) {
+                images.insert(id, decoded);
+            }
+            // Block `::before` / `::after` boxes carry their own background, keyed
+            // by `(element, kind)` since they have no DOM id of their own.
+            for kind in [PseudoKind::Before, PseudoKind::After] {
+                if let Some(decoded) = pseudo_background_image_url(styles, id, kind).and_then(decode)
+                {
+                    pseudo_images.insert((id, kind), decoded);
                 }
             }
             queue.extend(dom.dom_children(id));
         }
-        Self { images }
+        Self { images, pseudo_images }
     }
 
     pub fn get(&self, id: NodeId) -> Option<&DecodedImage> {
         self.images.get(&id)
     }
 
+    /// The decoded `url()` background-image for `element`'s block `kind` pseudo
+    /// box, if any.
+    pub fn get_pseudo(&self, element: NodeId, kind: PseudoKind) -> Option<&DecodedImage> {
+        self.pseudo_images.get(&(element, kind))
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.images.is_empty()
+        self.images.is_empty() && self.pseudo_images.is_empty()
     }
 
     pub fn len(&self) -> usize {
-        self.images.len()
+        self.images.len() + self.pseudo_images.len()
     }
 }
 
@@ -221,13 +242,40 @@ fn background_image_url<NodeId: Copy + Eq + Hash>(
     styles: &StylePlane<NodeId>,
     id: NodeId,
 ) -> Option<String> {
-    use style::values::generics::image::Image;
-
     let entry = styles.get(id)?;
     let data = entry.borrow_data()?;
-    let primary = data.styles.primary();
-    let first = primary.get_background().background_image.0.iter().next()?;
-    match first {
+    first_url_background(data.styles.primary())
+}
+
+/// Read the first `url()` `background-image` layer of `id`'s block-level
+/// `::before` / `::after` pseudo (the one that becomes a paintable box). `None`
+/// when the pseudo is absent, inline-level, or its first layer isn't a `url()`.
+fn pseudo_background_image_url<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+    kind: PseudoKind,
+) -> Option<String> {
+    use style::selector_parser::PseudoElement;
+    use style::values::specified::box_::DisplayOutside;
+
+    let pseudo = match kind {
+        PseudoKind::Before => PseudoElement::Before,
+        PseudoKind::After => PseudoElement::After,
+    };
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    let cv = data.styles.pseudos.get(&pseudo)?;
+    if !matches!(cv.get_box().display.outside(), DisplayOutside::Block) {
+        return None;
+    }
+    first_url_background(cv)
+}
+
+/// The first `url()` `background-image` layer of a `ComputedValues` as a URL
+/// string, or `None` when the first layer is not a `url()` (e.g. a gradient).
+fn first_url_background(cv: &style::properties::ComputedValues) -> Option<String> {
+    use style::values::generics::image::Image;
+    match cv.get_background().background_image.0.iter().next()? {
         Image::Url(url) => url.url().map(|u| u.as_str().to_string()),
         _ => None,
     }
