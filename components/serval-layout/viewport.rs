@@ -27,7 +27,8 @@ use layout_dom_api::{LayoutDom, NodeKind};
 use paint_list_api::DeviceIntSize;
 use style::values::computed::Overflow;
 
-use crate::paint_emit::{generates_box, primary_cv};
+use crate::fragment::FragmentPlane;
+use crate::paint_emit::{clips_overflow, generates_box, is_fixed, primary_cv};
 use crate::style::StylePlane;
 
 /// The per-document viewport (the initial containing block): its size, the
@@ -130,6 +131,76 @@ where
     default
 }
 
+/// The document's maximum scroll offset in device px (scope doc rule 4): how far
+/// the viewport can scroll before its scrollable-overflow region is exhausted
+/// (CSS Overflow §scrollable). Per axis it is `max(0, content_extent -
+/// viewport_size)`, where the content extent is the far edge of the union of
+/// in-flow and `absolute` fragments. A `position: fixed` box is viewport-anchored,
+/// so it and its subtree do not extend the range; an overflow-clip container
+/// bounds its descendants to its own box. The host clamps the viewport scroll to
+/// this so the page cannot scroll past its content.
+///
+/// Bounds come from the spec, not "content height": this reads the retained
+/// fragment plane in DOM order (the same origin accumulation paint and hit-test
+/// use), so root margin and the abs-pos containing-block subtleties inherit those
+/// passes' fidelity rather than a separate height heuristic.
+pub fn document_scroll_range<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    size: DeviceIntSize,
+) -> (f32, f32)
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut extent = (0.0f32, 0.0f32);
+    extend_scrollable(dom, styles, fragments, dom.document(), (0.0, 0.0), &mut extent);
+    ((extent.0 - size.width as f32).max(0.0), (extent.1 - size.height as f32).max(0.0))
+}
+
+/// Accumulate the far (right, bottom) edge of `id`'s fragment and its scrollable
+/// descendants into `extent`, in absolute coords (`parent_origin` accumulated
+/// through the DOM, as paint/hit-test do). Skips `position: fixed` subtrees
+/// (viewport-anchored) and does not descend past an overflow-clip container
+/// (its own box already bounds them).
+fn extend_scrollable<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    id: D::NodeId,
+    parent_origin: (f32, f32),
+    extent: &mut (f32, f32),
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let cv = primary_cv(styles, id);
+    // A fixed box attaches to the viewport: it (and its subtree) never scrolls, so
+    // it does not extend the document's scroll range.
+    if cv.as_deref().is_some_and(is_fixed) {
+        return;
+    }
+    let origin = match fragments.rect_of(id) {
+        Some(l) => {
+            let ox = parent_origin.0 + l.location.x;
+            let oy = parent_origin.1 + l.location.y;
+            extent.0 = extent.0.max(ox + l.size.width);
+            extent.1 = extent.1.max(oy + l.size.height);
+            (ox, oy)
+        },
+        None => parent_origin,
+    };
+    // An overflow-clip container bounds its descendants to its own box (counted
+    // above); their fragments cannot extend the range past it.
+    if cv.as_deref().is_some_and(clips_overflow) {
+        return;
+    }
+    for child in dom.dom_children(id) {
+        extend_scrollable(dom, styles, fragments, child, origin, extent);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,5 +267,73 @@ mod tests {
             Overflow::Scroll,
             "a non-visible root propagates its own overflow, not the body's",
         );
+    }
+
+    /// Lay out `html` cascaded with `sheet` at `w`x`h` and return the document's
+    /// maximum scroll offset.
+    fn scroll_range_of(html: &str, sheet: &str, w: f32, h: f32) -> (f32, f32) {
+        use crate::image_decode::ImagePlane;
+        use crate::layout::layout;
+
+        let document = StaticDocument::parse(html);
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&document, &mut styles, euclid::default::Size2D::new(w, h), &[sheet], None);
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(w),
+            height: taffy::AvailableSpace::Definite(h),
+        };
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        document_scroll_range(&document, &styles, &fragments, DeviceIntSize::new(w as i32, h as i32))
+    }
+
+    /// The scroll range is the content overflow beyond the viewport (rule 4):
+    /// 2000px of content in a 600px viewport scrolls 1400px vertically, and
+    /// 800px-wide content in an 800px viewport does not scroll horizontally.
+    #[test]
+    fn scroll_range_is_content_overflow_beyond_the_viewport() {
+        let range = scroll_range_of(
+            "<html><body><div class=\"tall\"></div></body></html>",
+            "html, body, div { display: block; margin: 0; } .tall { height: 2000px; }",
+            800.0,
+            600.0,
+        );
+        assert!(
+            (range.1 - 1400.0).abs() < 1.0,
+            "vertical range is content(2000) - viewport(600): {}",
+            range.1,
+        );
+        assert_eq!(range.0, 0.0, "content is not wider than the viewport");
+    }
+
+    /// A `position: fixed` box is viewport-anchored, so it does not extend the
+    /// document scroll range — a tall fixed box over a short document still
+    /// scrolls nowhere.
+    #[test]
+    fn fixed_box_does_not_extend_scroll_range() {
+        let range = scroll_range_of(
+            "<html><body><div class=\"short\"></div><div class=\"fixed\"></div></body></html>",
+            "html, body, div { display: block; margin: 0; } \
+             .short { height: 100px; } \
+             .fixed { position: fixed; top: 0; left: 0; width: 50px; height: 3000px; }",
+            800.0,
+            600.0,
+        );
+        assert_eq!(range, (0.0, 0.0), "a fixed box does not extend the document scroll range");
+    }
+
+    /// An overflow-clip container bounds the scroll range to its own box: a 40px
+    /// `overflow: hidden` box holding a 2000px child contributes only its 40px,
+    /// not the clipped child's 2000px.
+    #[test]
+    fn overflow_clip_container_bounds_the_scroll_range() {
+        let range = scroll_range_of(
+            "<html><body><div class=\"box\"><div class=\"inner\"></div></div></body></html>",
+            "html, body, div { display: block; margin: 0; } \
+             .box { overflow: hidden; width: 100px; height: 40px; } \
+             .inner { height: 2000px; }",
+            800.0,
+            600.0,
+        );
+        assert_eq!(range.1, 0.0, "the clipped 2000px child does not extend the scroll range");
     }
 }

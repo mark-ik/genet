@@ -75,7 +75,7 @@ pub use layout::layout;
 pub use paint_emit::{
     emit_paint_list, emit_paint_list_with_layouts, ScrollOffsets, ServalPaintList,
 };
-pub use viewport::Viewport;
+pub use viewport::{document_scroll_range, Viewport};
 pub use serval_lane::ServalLaneView;
 pub use snapshot::build_snapshot_map;
 pub use style::{StyleEntry, StylePlane};
