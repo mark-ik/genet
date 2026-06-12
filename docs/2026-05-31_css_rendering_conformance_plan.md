@@ -620,11 +620,26 @@ change): `BackgroundImagePlane` decodes `border-image-source`,
 (number/%/fill), `-width` (number×border-width / length / auto), and `-outset`,
 each region **stretched** to its dest. A loaded border-image replaces the normal
 border. **css-backgrounds 310 → 334** (+24, `local` 269 → 245), 0 errored, no
-regressions (`636ac8fb51a`, infra `d15cbdd4ebe`). **Next (BI-3):**
-`border-image-repeat` `repeat`/`round`/`space` edge tiling (the remaining ~31
-border-image fails are mostly non-stretch repeat modes + width-% / outset edges),
-then the css-backgrounds tail moves on to `background-clip` (`clip-border-area-*`,
-~42) and box-shadow `inset`.
+regressions (`636ac8fb51a`, infra `d15cbdd4ebe`).
+
+**BI-3 — `border-image-repeat` tiling: spec-correct, +0 (vocabulary-limited)
+(2026-06-11, `40b796a1e8b`).** Implemented `repeat`/`round`/`space` edge tiling
+(`DrawRepeatingImage`, source strip scaled to the dest border width; `round`
+rescales to a whole count, `space` distributes equal gaps). Behavior is now
+correct (was: every edge stretched) — **product value** for border-image-repeat
+use. But **css-backgrounds stays 334** (0 regressions): the repeat-mode reftests
+are **near-misses** (diff 0–3%, maxδ only at the tile *seams*; `round` is maxδ=114
+AA-only). The flip is blocked on the **vocabulary, not the tiling**: CSS `repeat`
+*centers* the tiling (partial tiles clipped equally at both ends), but
+`DrawRepeatingImage` uses one rect as both tile origin and clip, so centered
+tiling needs a separate clip = a **netrender `paint_list_api` change**, out of
+serval's scope (and a shared repo). So border-image is at its serval-side ceiling;
+the remaining exactness waits on that vocabulary, or the runner's GPU-jitter floor
+covering small-count maxδ-255 seams. **Next css-backgrounds tail:**
+`background-clip` (`clip-border-area-*`, ~42) and box-shadow `inset`. *(Product
+note: SVG already raster-decodes via a resvg fallback — the "SVG never decodes"
+claim above is stale; SVG icons likely already work in meerkat, worth verifying
+for product value over more conformance-tail paint.)*
 
 ## Non-goals (for now)
 
