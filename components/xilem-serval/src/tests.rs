@@ -1338,26 +1338,53 @@ mod controls {
 
         runner.dispatch_pointer_down(
             node,
-            PointerEvent { phase: PointerPhase::Down, local: (5.0, 0.0), size: (100.0, 10.0) },
+            PointerEvent::new(PointerPhase::Down, (5.0, 0.0), (100.0, 10.0)),
         );
         assert_eq!(runner.pointer_capture(), Some(node), "down captures the element");
 
-        runner.dispatch_pointer_move(PointerEvent {
-            phase: PointerPhase::Move,
-            local: (40.0, 0.0),
-            size: (100.0, 10.0),
-        });
-        runner.dispatch_pointer_up(PointerEvent {
-            phase: PointerPhase::Up,
-            local: (40.0, 0.0),
-            size: (100.0, 10.0),
-        });
+        runner.dispatch_pointer_move(PointerEvent::new(PointerPhase::Move, (40.0, 0.0), (100.0, 10.0)));
+        runner.dispatch_pointer_up(PointerEvent::new(PointerPhase::Up, (40.0, 0.0), (100.0, 10.0)));
         assert_eq!(runner.pointer_capture(), None, "up clears capture");
         assert_eq!(
             runner.state().phases,
             vec![PointerPhase::Down, PointerPhase::Move, PointerPhase::Up]
         );
         assert_eq!(runner.state().last_x, 40.0, "the captured handler saw the move's local x");
+    }
+
+    /// Pointer cancellation (G1.3): a drag handler that calls
+    /// `e.prop.prevent_default()` is recorded, and — the regression this closes —
+    /// each pointer pass records its *own* value, so a later un-preventing event
+    /// resets `default_prevented` rather than inheriting the press's stale `true`
+    /// (or a prior click/key's).
+    #[test]
+    fn each_pointer_event_records_its_own_default_prevented() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            |_: &()| {
+                on_pointer(el::<_, (), ()>("div", "track"), |_s: &mut (), e: PointerEvent| {
+                    // Prevent the default on the press only; the move does not.
+                    if e.phase == PointerPhase::Down {
+                        e.prop.prevent_default();
+                    }
+                })
+            },
+            (),
+        );
+        let node = runner.root();
+
+        runner.dispatch_pointer_down(
+            node,
+            PointerEvent::new(PointerPhase::Down, (5.0, 0.0), (100.0, 10.0)),
+        );
+        assert!(runner.default_prevented(), "the press handler's prevent_default is recorded");
+
+        runner.dispatch_pointer_move(PointerEvent::new(PointerPhase::Move, (40.0, 0.0), (100.0, 10.0)));
+        assert!(
+            !runner.default_prevented(),
+            "the move records its own un-prevented value, not the press's stale true",
+        );
     }
 
     /// Wheel: a notch routes to the nearest ancestor (including the hit node)
@@ -1431,30 +1458,18 @@ mod controls {
         // Press at 50/100 → value 0.5.
         runner.dispatch_pointer_down(
             track,
-            PointerEvent { phase: PointerPhase::Down, local: (50.0, 0.0), size: (100.0, 12.0) },
+            PointerEvent::new(PointerPhase::Down, (50.0, 0.0), (100.0, 12.0)),
         );
         assert!((runner.state().value - 0.5).abs() < 0.001, "press sets 0.5");
 
         // Drag to 80/100 → value 0.8.
-        runner.dispatch_pointer_move(PointerEvent {
-            phase: PointerPhase::Move,
-            local: (80.0, 0.0),
-            size: (100.0, 12.0),
-        });
+        runner.dispatch_pointer_move(PointerEvent::new(PointerPhase::Move, (80.0, 0.0), (100.0, 12.0)));
         assert!((runner.state().value - 0.8).abs() < 0.001, "drag tracks to 0.8");
 
         // Past the right edge clamps to 1.0.
-        runner.dispatch_pointer_move(PointerEvent {
-            phase: PointerPhase::Move,
-            local: (130.0, 0.0),
-            size: (100.0, 12.0),
-        });
+        runner.dispatch_pointer_move(PointerEvent::new(PointerPhase::Move, (130.0, 0.0), (100.0, 12.0)));
         assert!((runner.state().value - 1.0).abs() < 0.001, "clamps to 1.0");
-        runner.dispatch_pointer_up(PointerEvent {
-            phase: PointerPhase::Up,
-            local: (130.0, 0.0),
-            size: (100.0, 12.0),
-        });
+        runner.dispatch_pointer_up(PointerEvent::new(PointerPhase::Up, (130.0, 0.0), (100.0, 12.0)));
         assert_eq!(runner.pointer_capture(), None, "release ends the drag");
     }
 

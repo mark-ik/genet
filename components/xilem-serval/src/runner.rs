@@ -540,6 +540,9 @@ where
     /// captured element's coordinate space; the host computes them from the
     /// laid-out rect (the headless view layer has no layout).
     pub fn dispatch_pointer_down(&mut self, target: NodeId, event: PointerEvent) -> Vec<Action> {
+        // A fresh pass: reset the cancellation flag; route_pointer records the
+        // real value when a handler runs, and a no-capture press leaves it false.
+        self.last_default_prevented = false;
         let captured = {
             let dom = self.dom.borrow();
             let mut current = Some(target);
@@ -563,6 +566,7 @@ where
     /// Route a `Move` to the element capturing the drag (if any). No-op when no
     /// drag is active.
     pub fn dispatch_pointer_move(&mut self, event: PointerEvent) -> Vec<Action> {
+        self.last_default_prevented = false;
         match self.pointer_capture {
             Some(node) => self.route_pointer(node, event),
             None => Vec::new(),
@@ -572,6 +576,7 @@ where
     /// Route an `Up` to the capturing element and end the drag (clearing
     /// capture). No-op when no drag is active.
     pub fn dispatch_pointer_up(&mut self, event: PointerEvent) -> Vec<Action> {
+        self.last_default_prevented = false;
         match self.pointer_capture.take() {
             Some(node) => self.route_pointer(node, event),
             None => Vec::new(),
@@ -612,8 +617,10 @@ where
         let mut actions = Vec::new();
         {
             let Self { state, view, view_state, root, dom, .. } = self;
+            // Clone into the message: the handler mutates its clone's shared
+            // `Propagation` cell, and the original below reads back what it set.
             let mut msg =
-                MessageCtx::new(Environment::new(), path, DynMessage::new(event));
+                MessageCtx::new(Environment::new(), path, DynMessage::new(event.clone()));
             let mut_ref = ServalElementMut {
                 node: &mut root.node,
                 dom: dom.clone(),
@@ -623,6 +630,10 @@ where
                 actions.push(a);
             }
         }
+        // Record this pointer pass's own cancellation (the host gates its default
+        // drag behavior on it), mirroring dispatch_click / dispatch_key — not the
+        // stale value left by an earlier click/key.
+        self.last_default_prevented = event.prop.default_prevented();
         self.rebuild();
         actions
     }
