@@ -41,6 +41,26 @@ If anyone removes `tests/unit/script` from `workspace.exclude`, the full mozjs b
 
 Flag any plan that re-enables JS-engine work so this cost is on the table.
 
+## Update — 2026-06-12: `ports/pelt-viewer` retired
+
+The Masonry-era Xilem viewer (serval pipeline → netrender rasterize → **CPU
+pixel readback** → `ImageData` → Masonry `image_view`; adapted from
+`wgpu-graft/demo-servo-xilem`, predating direct present) was deleted. Its one
+consumer was `pelt --engine viewer`'s fallthrough, which now exits with a
+pointer at the `pelt-live` bin until a serval-native viewer mode is built on
+the pelt-core / pelt-desktop contracts; pelt's smoke suite (its live value) is
+untouched, and `--netrender-smoke` now exits clean instead of falling through
+into a viewer window. Dividends: the `xilem` / `masonry` / `masonry_winit`
+git deps left the workspace entirely (pelt-viewer was their sole consumer), so
+the xilem fork's one remaining serval consumer is `xilem_core`
+(xilem-serval's direct git dep); a duplicated experimental taffy pin went with
+it; the `viewer-netfetch` feature (and its mockito `ResourceFetcher`
+integration test) was dropped rather than ported — meerkat exercises
+netfetcher for real, and `pelt-core`'s `ResourceFetcher` contract keeps its
+definition awaiting the serval-native viewer. Git-revivable. Verified:
+`cargo check` on pelt (default features), pelt-live, serval-layout,
+xilem-serval.
+
 ## Strategic anchors
 
 - **Blitz/Serval convergence is now feasible to evaluate side-by-side.** The trim was the precondition; serval's shape is finally narrow enough to compare against linebender's `blitz` `packages/*` and read the overlap. Don't defer the audit further; propose it when next relevant.

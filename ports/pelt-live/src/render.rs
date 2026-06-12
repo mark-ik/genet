@@ -4,7 +4,8 @@
 
 //! `ScriptedDom` → `netrender::Scene`.
 //!
-//! A focused mirror of [`pelt-viewer`'s `build_scene`](../../pelt-viewer/render.rs),
+//! A focused mirror of the retired pelt-viewer's `build_scene` (Masonry-era,
+//! removed 2026-06-12),
 //! but pointed at a live, mutable [`ScriptedDom`] instead of parsing HTML: the
 //! serval engine pipeline (cascade → layout → emit) runs over the same DOM that
 //! [`ServalAppRunner`](xilem_serval::ServalAppRunner) diffs. This is the render
@@ -87,8 +88,8 @@ pub fn scene_from_scripted_dom(
 /// `background-image` bytes (`data:` URIs decode inline regardless, so
 /// [`serval_layout::NoImageLoader`] still yields inline images).
 ///
-/// This is the content lane (fetched pages, the static viewer's documents),
-/// shared with `pelt-viewer`'s `build_scene`. Unlike [`scene_from_scripted_dom`]
+/// This is the content lane (fetched pages, static documents; the shape the
+/// retired pelt-viewer's `build_scene` shared). Unlike [`scene_from_scripted_dom`]
 /// it adds no caret/selection/scrollbar overlays — a display surface, not a
 /// focused editable field.
 pub fn scene_from_layout_dom<D, L>(

@@ -110,6 +110,11 @@ pub trait FetchHandler {
     /// Cancel an in-flight deferred request (from `AbortController.abort()`). The
     /// default is a no-op (synchronous hosts have nothing in flight).
     fn cancel(&self, _id: u64) {}
+    /// Demand the next body chunk for a streaming response `id` (the response's
+    /// `ReadableStream` was read and its buffer is empty). A deferred host streams
+    /// the body lazily: one chunk per request, so a body the script never reads is
+    /// never fetched. The default is a no-op (inline hosts deliver the whole body).
+    fn request_chunk(&self, _id: u64) {}
 }
 
 /// Clone the installed handler out from under the `HostState` borrow, so the
@@ -197,6 +202,22 @@ impl<E: ScriptEngine> NativeFn<E> for FetchAbort {
         let id = cx.value_to_string(&a0)?.parse::<u64>().unwrap_or(0);
         if let Some(handler) = host_handler::<E>(cx) {
             handler.cancel(id);
+        }
+        Ok(cx.undefined())
+    }
+}
+
+/// `__fetch_pull(id)` — demand the next body chunk for streaming response `id`
+/// (the body's `ReadableStream` was read with an empty buffer). Relays to the host
+/// so it streams one chunk; a body the script never reads is never fetched.
+pub(crate) struct FetchPull;
+
+impl<E: ScriptEngine> NativeFn<E> for FetchPull {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let a0 = cx.arg(0);
+        let id = cx.value_to_string(&a0)?.parse::<u64>().unwrap_or(0);
+        if let Some(handler) = host_handler::<E>(cx) {
+            handler.request_chunk(id);
         }
         Ok(cx.undefined())
     }
@@ -410,6 +431,7 @@ fn push_json_str(out: &mut String, s: &str) {
 pub(crate) fn install_fetch_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error> {
     engine.set_function::<FetchStart>("__fetch_start", 12)?;
     engine.set_function::<FetchAbort>("__fetch_abort", 1)?;
+    engine.set_function::<FetchPull>("__fetch_pull", 1)?;
     engine.set_function::<ResolveUrl>("__resolve_url", 1)?;
     engine.set_function::<UrlParse>("__url_parse", 2)?;
     engine.set_function::<UrlWith>("__url_with", 3)?;
@@ -1606,7 +1628,7 @@ const FETCH_BOOTSTRAP: &str = r#"
     }
     var id = __nextFetchId++;
     return new Promise(function(resolve, reject) {
-      var entry = { resolve: resolve, reject: reject, controller: null, settled: false, method: req.method };
+      var entry = { resolve: resolve, reject: reject, controller: null, settled: false, awaiting: false, method: req.method };
       __pending[id] = entry;
       // Mid-flight abort: relay to the host (cancel the in-flight work) and reject
       // with the signal's reason. JS mints the reason once so the same instance
@@ -1663,7 +1685,14 @@ const FETCH_BOOTSTRAP: &str = r#"
     var o = JSON.parse(ojson);
     if (o.networkError) { delete __pending[id]; e.reject(new TypeError('Failed to fetch')); return; }
     var controller = null;
-    var stream = new ReadableStream({ start: function(c) { controller = c; } });
+    // Pull-driven: the source asks the host for the next chunk only when the
+    // stream is read and its buffer is empty, marking the entry as awaiting a
+    // chunk so the host event loop stays live until it (or close/error) arrives.
+    // A body the script never reads issues no pull, so the host never streams it.
+    var stream = new ReadableStream({
+      start: function(c) { controller = c; },
+      pull: function() { var pe = __pending[id]; if (pe) pe.awaiting = true; __fetch_pull(id); }
+    });
     var r = makeFilteredShell(o);
     r.headers = new Headers(o.headers); r.headers._guard = 'response'; // network headers, guard bypassed
     r.type = o.type || "default"; r.url = o.url || ""; r.redirected = !!o.redirected;
@@ -1680,6 +1709,7 @@ const FETCH_BOOTSTRAP: &str = r#"
   };
   globalThis.__fetchPushChunk = function(id, arr) {
     var e = __pending[id]; if (!e || !e.controller) return;
+    e.awaiting = false; // the demanded chunk arrived
     var u8 = new Uint8Array(arr.length);
     for (var i = 0; i < arr.length; i++) u8[i] = arr[i] & 0xFF;
     try { e.controller.enqueue(u8); } catch (x) {}

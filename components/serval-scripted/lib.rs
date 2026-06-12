@@ -147,6 +147,33 @@ pub fn pump_and_retire<E: ScriptEngine>(engine: &mut E, pins: &mut ReflectorPins
     pins.retire_dead(engine.drain_dead_reflectors())
 }
 
+/// Run a mark-sweep collection over `dom`, treating the currently-pinned
+/// reflector ids as extra roots (G3). The pin set keeps any orphaned subtree a
+/// live reflector can still reach; everything else detached is reaped. Returns
+/// the number of nodes pruned.
+///
+/// The `ReflectorData` a pin carries *is* a `NodeId`'s raw value (the reflector
+/// bridge packs `id.raw()`), so it round-trips back through `NodeId::from_raw`.
+pub fn collect_dom(dom: &mut ScriptedDom, pins: &ReflectorPins) -> usize {
+    dom.collect(pins.iter().map(|data| NodeId::from_raw(data as usize)))
+}
+
+/// The full scripted-tier GC tick: pump microtasks, retire the reflectors the
+/// engine reported dead (unpinning their nodes), then collect — so a node that
+/// JS just dropped its last reference to is reaped in the same step. This is the
+/// post-unpin cadence; the host also calls [`collect_dom`] at the
+/// `drain_mutations` boundary and on an idle tick. Returns
+/// `(reflectors_unpinned, nodes_collected)`.
+pub fn pump_retire_collect<E: ScriptEngine>(
+    engine: &mut E,
+    pins: &mut ReflectorPins,
+    dom: &mut ScriptedDom,
+) -> (usize, usize) {
+    let unpinned = pump_and_retire(engine, pins);
+    let collected = collect_dom(dom, pins);
+    (unpinned, collected)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use std::cell::RefCell;
@@ -276,6 +303,30 @@ mod pin_tests {
         assert_eq!(pins.len(), 3);
         pins.clear();
         assert!(pins.is_empty());
+    }
+
+    #[test]
+    fn collect_dom_uses_pins_as_roots() {
+        use layout_dom_api::{LayoutDom, LocalName, Namespace, QualName};
+        let qual = |s: &str| QualName::new(None, Namespace::from(""), LocalName::from(s));
+
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let orphan = dom.create_element(qual("o"));
+        dom.append_child(root, orphan);
+        dom.remove_child(orphan); // detach it from the document
+
+        // A live reflector pins the orphan (by its raw NodeId value, as the
+        // reflector bridge carries it): collect_dom spares it.
+        let mut pins = ReflectorPins::new();
+        pins.pin(orphan.raw() as u64);
+        assert_eq!(collect_dom(&mut dom, &pins), 0);
+        assert!(dom.is_live(orphan));
+
+        // JS drops the reflector → unpin → the orphan is reaped.
+        pins.unpin(orphan.raw() as u64);
+        assert_eq!(collect_dom(&mut dom, &pins), 1);
+        assert!(!dom.is_live(orphan));
     }
 }
 

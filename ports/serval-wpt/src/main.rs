@@ -1080,6 +1080,11 @@ mod net {
         rt.block_on(async move {
             let mut handles: std::collections::HashMap<u64, tokio::task::AbortHandle> =
                 std::collections::HashMap::new();
+            // Per-fetch pull credit: a chunk is streamed only when the JS body
+            // ReadableStream demands one (Job::Pull). Keyed by JS id (the routing key
+            // the reply events already use).
+            let mut pulls: std::collections::HashMap<u64, tokio::sync::mpsc::UnboundedSender<()>> =
+                std::collections::HashMap::new();
             let mut rx = Some(rx);
             loop {
                 // Await the next job on the blocking pool, so the runtime thread stays
@@ -1099,8 +1104,20 @@ mod net {
                         });
                     }
                     Ok(Job::Fetch(key, id, req, reply)) => {
-                        let h = tokio::spawn(run_fetch_streaming(id, req, reply)).abort_handle();
+                        let (pull_tx, pull_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+                        pulls.insert(id, pull_tx);
+                        let h = tokio::spawn(run_fetch_streaming(id, req, reply, pull_rx))
+                            .abort_handle();
                         handles.insert(key, h);
+                    }
+                    Ok(Job::Pull(id)) => {
+                        // Grant one chunk of credit; a dead receiver (task finished)
+                        // means the entry is stale, so drop it.
+                        if let Some(tx) = pulls.get(&id) {
+                            if tx.send(()).is_err() {
+                                pulls.remove(&id);
+                            }
+                        }
                     }
                     Ok(Job::Cancel(key)) => {
                         if let Some(h) = handles.remove(&key) {
@@ -1243,7 +1260,12 @@ mod net {
     /// chunk fails to decode, which errors the already-resolved response's body).
     /// Dropping this task (Job::Cancel) drops the in-flight body future, cancelling
     /// the request.
-    async fn run_fetch_streaming(id: u64, req: FetchRequest, reply: std::sync::mpsc::Sender<FetchEvent>) {
+    async fn run_fetch_streaming(
+        id: u64,
+        req: FetchRequest,
+        reply: std::sync::mpsc::Sender<FetchEvent>,
+        mut pull_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
+    ) {
         let Ok(url) = url::Url::parse(&req.url) else {
             let _ = reply.send(FetchEvent::Fail(id, "Failed to fetch".to_string()));
             return;
@@ -1328,22 +1350,29 @@ mod net {
         if reply.send(FetchEvent::StartStream(id, meta)).is_err() {
             return;
         }
-        while let Some(chunk) = resp.body.next_chunk().await {
-            match chunk {
-                Ok(bytes) => {
+        // Pull-driven body: stream one chunk per credit from the JS ReadableStream.
+        // A body the script never reads sends no credit, so it is never fetched (no
+        // streaming a 300 MB response nobody consumes); the task idles here until the
+        // test ends and Job::Cancel aborts it.
+        while pull_rx.recv().await.is_some() {
+            match resp.body.next_chunk().await {
+                Some(Ok(bytes)) => {
                     if reply.send(FetchEvent::Chunk(id, bytes.to_vec())).is_err() {
                         return; // the test's channel is gone (run ended)
                     }
                 }
-                Err(_) => {
+                Some(Err(_)) => {
                     // Body decode error (e.g. a bad Content-Encoding): error the
                     // body stream so reads reject, rather than closing it cleanly.
                     let _ = reply.send(FetchEvent::Error(id));
                     return;
                 }
+                None => {
+                    let _ = reply.send(FetchEvent::Close(id));
+                    return;
+                }
             }
         }
-        let _ = reply.send(FetchEvent::Close(id));
     }
 
     /// A job for the persistent worker. `Get` is a blocking resource GET (reply: the
@@ -1352,6 +1381,8 @@ mod net {
     pub enum Job {
         Get(String, std::sync::mpsc::Sender<Option<String>>),
         Fetch(u64, u64, FetchRequest, std::sync::mpsc::Sender<FetchEvent>),
+        /// Demand the next body chunk for a streaming fetch, by its JS id.
+        Pull(u64),
         Cancel(u64),
     }
 
@@ -1397,6 +1428,11 @@ mod net {
             if let Some(key) = self.keys.borrow_mut().remove(&id) {
                 let _ = worker_jobs().send(Job::Cancel(key));
             }
+        }
+        fn request_chunk(&self, id: u64) {
+            // The body's ReadableStream was read with an empty buffer: ask the worker
+            // to stream one more chunk for this fetch (routed by JS id).
+            let _ = worker_jobs().send(Job::Pull(id));
         }
     }
 

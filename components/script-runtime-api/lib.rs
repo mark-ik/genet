@@ -314,8 +314,15 @@ impl<E: ScriptEngine> Runtime<E> {
     /// How many `fetch()` Promises are still pending. The host drive loop reads this
     /// to know when script has quiesced (no in-flight fetches left to settle).
     pub fn pending_fetches(&mut self) -> usize {
+        // Count only fetches still doing work: a Promise not yet settled, or a
+        // streaming body actively awaiting a demanded chunk. A settled response
+        // whose body the script abandoned (never read) does not count, so the
+        // event loop can quiesce instead of waiting on a chunk no one wants.
         self.engine
-            .eval("String(Object.keys(globalThis.__pending).length)")
+            .eval(
+                "String((function(){var p=globalThis.__pending,n=0;\
+                 for(var k in p){var e=p[k];if(e&&(!e.settled||e.awaiting))n++;}return n;})())",
+            )
             .ok()
             .and_then(|v| self.engine.value_to_string(&v).ok())
             .and_then(|s| s.parse().ok())

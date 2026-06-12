@@ -1,7 +1,18 @@
 # gc-arena DOM Plan (the piccolo fork's dividends)
 
 **Date**: 2026-06-11
-**Status**: Planned. No code written yet.
+**Status**: G0–G2 + G4 done (see Progress). G3 design locked 2026-06-12 to a
+**custom mark-sweep**, not gc-arena (the title is now historical — kept for
+stable references). Why the pivot: gc-arena's `Arena` confines every GC-data
+borrow to its `mutate` closure (`for<'gc>` HRTB), but `LayoutDom`'s hot reads
+return *borrows* (`element_name -> Option<&QualName>`, `attribute`, `text`,
+`attributes`, `dom_children`). Backing those from `Gc<NodeData>` would force a
+clone per cascade access *and* change the trait signatures — breaking rule 1.
+The G3 goals (bounded memory, monotonic non-reused ids, collect
+detached-unpinned subtrees) don't need gc-arena: a mark-sweep over an owned,
+prunable, monotonic-keyed node store hits all of them while keeping the borrow
+API byte-for-byte. gc-arena stays where it earns its keep — *inside* the
+piccolo backend (G3-of-DOM owes it nothing).
 **Scope**: Put the piccolo fork (`Code/crates/piccolo`, v0.3.3, MIT) to work on
 two fronts: (a) the gc-arena direction for `serval-scripted-dom` — kill the
 never-reuse slab's unbounded growth and give the scripted lane real
@@ -48,14 +59,16 @@ updated with the piccolo entry).
 
 ## Design rules (hold these through every phase)
 
-1. **gc-arena never appears in a public API.** `ScriptedDom` keeps its
+1. **No collector machinery in a public API.** `ScriptedDom` keeps its
    `Rc<RefCell<ScriptedDom>>` host shape and its `NodeId`-based `LayoutDom`
-   surface; the `Arena`/`Mutation`/`'gc` machinery is contained inside the
-   crate, entered per method. Consumers (pelt-live, xilem-serval, meerkat)
-   must not change for G3 beyond the documented dangle contract.
+   surface, borrows and all; the mark-sweep is a private method
+   (`collect`) the host drives. Consumers (pelt-live, xilem-serval, meerkat)
+   must not change for G3 beyond the documented dangle contract. (This rule
+   is *why* gc-arena lost — see the Status note; its `'gc` brand can't be
+   contained behind a borrow-returning read.)
 2. **Ids are never reused.** Reclamation frees node *memory*, not id
-   *space*: a monotonic `NodeId` maps to a node through a weak side-table;
-   a dead id resolves to "gone," never to a different node. This sidesteps
+   *space*: a monotonic `NodeId` keys an owned, **prunable** node store; a
+   pruned (dead) id resolves to "gone," never to a different node. This sidesteps
    the wasm32 width *packing* problem (no generation bits needed). It does
    not sidestep id-space *exhaustion*: `usize` is 32 bits on wasm32, and
    reclamation-without-reuse never reclaims id space, so monotonic minting
@@ -225,41 +238,85 @@ the same arena. A missed root collects an attached subtree, which breaks
 the contract rather than merely dangling, so root registration is a G3
 checklist item, not an implementation detail.
 
-### G3 — The gc-arena refit of ScriptedDom
+### G3 — The mark-sweep refit of ScriptedDom (DONE 2026-06-12; gc-arena superseded — see the Status note)
 
-- Internal `Arena<DomRoot>`: nodes become `Gc<'gc, NodeData>` with
-  parent/children as `Gc` links; the public `NodeId` resolves through a
-  monotonic-id → `GcWeak` side-table (rule 2). **The side-table must be
-  prunable** (a swept `HashMap`, not a `Vec`): when a `GcWeak` goes dead,
-  its entry is removed, which is sound precisely because ids never alias
-  (a later lookup of a swept id misses and reads as "not found"). A `Vec`
-  table would just relocate the slab's monotonic growth into the table —
-  the exact leak the refit exists to close — so "table stays bounded" is
-  part of the done-condition below, not only "node heap stays bounded."
-- Roots: the document roots, the reflector-pin table (G1), and an explicit
-  host-pin API for the rare host-held detached subtree.
-- `remove_child` keeps orphan semantics, but an orphan with no pins is now
-  *collectable*; `LayoutDomMut::remove` stays eager-drop in contract (its
-  subtree simply becomes garbage immediately).
-- Collection is incremental, paced at the `drain_mutations` boundary (the
-  batching point the eager-apply design already established), with a debt
-  budget so a frame never pays a full-heap pause. **Plus an idle/timer
-  fallback tick**: a document that goes quiet (stops mutating) but still
-  holds unpinned dead orphans never reaches the drain boundary, so a
-  drain-only pacing leaves that garbage uncollected indefinitely — exactly
-  the backgrounded-SPA case this refit is meant to help. Collection must
-  also fire off an idle cadence, not solely on mutation drain.
-- The mutation log, `LayoutDom` traits, and every consumer signature are
-  unchanged (rule 1); behavior change is exactly the G2 contract.
+**The store.** `Vec<Option<Node>>` → an owned, prunable map keyed by a
+*monotonic* `NodeId` (`HashMap<usize, Node>` with a **deterministic** hasher
+— a tiny no-dep FNV `BuildHasherDefault` — so iteration order never varies by
+seed or target, keeping pelt-live byte-determinism airtight on wasm too). A
+`next_id` counter mints ids; pruning removes map entries, so memory is bounded
+by *live* nodes, not ever-created. One structure: parent/children stay
+`NodeId` links inside `Node`, so the store *is* the graph (no parallel
+side-table to keep in sync — that was the gc-arena design's tax).
 
-**Done when** the churn test shows bounded memory across sustained
-create/remove cycles — *both the node heap and the id side-table plateau*
-(the slab version's monotonic growth plotted against the refit's flat
-line) — a quiet-document variant confirms the idle tick collects orphans
-without further mutations, pelt-live's byte-determinism suite and
-meerkat's 44+63 stay green, and a soak (the orrery's 400-frame
-sustained-motion pattern plus DOM churn) shows no collection-pause
-regression in the A4-style frame timings.
+**The collector** is a private `collect(extra_roots)` mark-sweep:
+
+- *Mark* by **undirected** reachability (parent *and* child edges) from
+  {the document roots} ∪ {`extra_roots`}. Undirected matters: a pin on a deep
+  orphan node must keep its whole connected component — JS can walk
+  `parentNode` up and children down and re-insert any of it.
+- `extra_roots` are the host's live-reflector ids (G1 `ReflectorPins`), passed
+  in. The DOM stays **pin-agnostic** — it takes "extra roots," not reflector
+  knowledge, so the layering holds.
+- *Sweep* prunes every unmarked entry. Cycles (parent↔child) are no problem
+  for a mark. `LayoutDomMut::remove` keeps its eager drop; `remove_child`
+  keeps orphan semantics, but an unpinned orphan is now reaped by the next
+  `collect`.
+- **Roots** = the primary document root (permanent). `create_document`
+  secondaries are added to the roots list too (refinement #4: a secondary
+  whose attached subtree must stay live needs to be a mark root; auto-collect
+  of a *dropped* secondary is a later refinement — treat it as pin-kept
+  then). Fragments (`create_fragment`) are pin-kept orphans, not roots.
+
+**Cadence (this is where C's promptness lives, as timing not bookkeeping).**
+The host calls `collect(pins)` at three moments: the `drain_mutations`
+boundary, an idle/timer tick (so a quiet backgrounded document still reaps
+its dead orphans), and right after an unpin (prompt reclamation of a
+just-orphaned-and-now-unreferenced subtree). No per-subtree pin counting —
+the mark recomputes liveness each call.
+
+**Unchanged (rule 1):** the mutation log, the `LayoutDom`/`LayoutDomMut`
+traits, every consumer signature, and the borrow-returning reads. The only
+behavior change is exactly the G2 contract (`is_live` can now go false for an
+orphaned-then-unpinned id).
+
+**Done when** the churn test shows the store **plateaus** across sustained
+create/remove/collect cycles (vs the slab's monotonic growth); a
+quiet-document variant confirms an idle `collect` reaps orphans with no
+further mutations; an unpinned orphan is collected while a pinned one
+survives (and its whole component with it); pelt-live's byte-determinism
+suite and meerkat's 44+63 stay green; and a soak (the orrery's 400-frame
+pattern plus DOM churn) shows no `collect`-pause regression in the A4-style
+frame timings.
+
+**Landed (2026-06-12).** `serval-scripted-dom`'s store is now
+`HashMap<usize, Node>` over a no-dep deterministic FNV `BuildHasherDefault`,
+keyed by a monotonic `next_id`; the G0 fence's pack/index feed it unchanged.
+`collect(extra_roots)` is the undirected mark-sweep; `live_node_count` is the
+bounded-memory signal. The host helpers `collect_dom(dom, &pins)` and
+`pump_retire_collect(engine, pins, dom)` (in `serval-scripted`) drive it from
+the G1 pin set. Tests: `collect_reaps_unpinned_orphans_keeps_pinned_components`
+(undirected — a pin on a deep leaf spares its ancestors),
+`collect_bounds_memory_under_churn` (store back to baseline after 500×9-node
+cycles while `next_id` climbs past 4000 — the plateau vs the slab's growth),
+`idle_collect_reaps_orphans_without_mutations`,
+`secondary_document_subtree_survives_collect`, and
+`collect_dom_uses_pins_as_roots`. All 14 scripted-dom + 7 serval-scripted
+tests green; downstream stays green (serval-layout 55, xilem-serval 48,
+pelt-live 21 **incl. `cascade_is_deterministic`**, script-runtime-api 159);
+**serval-scripted-dom compiles for wasm32**.
+
+Two honest carve-outs. (1) *Cadence wiring*: the collector and its host
+drivers exist and are tested, but the live scripted host is still one-shot
+`run_script` — there's no persistent run loop yet to call
+`pump_retire_collect` at the drain/idle/post-unpin moments. That wiring lands
+with the persistent host loop; the mechanism is ready for it. (2) *Soak*: the
+orrery 400-frame A4-timing soak is a runtime perf check not run here; `collect`
+is O(live nodes) and called at cadence, so it's algorithmically cheap, but the
+empirical no-regression confirmation waits on that harness. (3) *Secondary-doc
+auto-collect*: a `create_document` whose JS reference is dropped stays pinned
+as a permanent root for now (safe; never wrongly collected) — auto-collecting
+it (treat as pin-kept) is a later refinement.
 
 ### G4 — Piccolo as a seam backend (CLEAN SURFACE DONE 2026-06-11; promise bridge deferred)
 
@@ -512,3 +569,22 @@ front-loads visible wins.
   unblocked** (G1 + G2 done); its done-conditions already carry the four
   folded refinements (prunable side-table, wasm32 id ceiling, idle collection
   tick, secondary-root registration).
+- **2026-06-12** — **G3 design pivot + landed.** Surfaced that gc-arena's
+  `Arena` confines GC-data borrows to its `mutate` closure, which can't serve
+  `LayoutDom`'s borrow-returning hot reads without cloning + a rule-1 trait
+  change. Explored the real design space (the borrow API forces an owned,
+  borrowable store regardless of reclaimer; the only variable is the
+  reclamation trigger) and locked **A — a hand-rolled undirected mark-sweep**
+  over a prunable monotonic-keyed store, with C's promptness folded in as
+  *cadence* (drain + idle + post-unpin) rather than per-subtree bookkeeping.
+  Implemented: store → `HashMap<usize, Node>` (deterministic FNV hasher, so
+  byte-determinism holds incl. wasm), monotonic `next_id`, document-roots
+  list, `collect(extra_roots)` mark-sweep, `live_node_count`; host drivers
+  `collect_dom` / `pump_retire_collect` in `serval-scripted`. 5 new collection
+  tests (bounded-memory plateau, undirected pin-component, idle reap,
+  secondary-root safety, host pin-roots) + all prior green; downstream green
+  (serval-layout / xilem-serval / pelt-live incl. determinism /
+  script-runtime-api); compiles for wasm32. Carve-outs: live-loop cadence
+  wiring waits on the persistent scripted host loop; the orrery soak is the
+  remaining empirical perf check; dropped-secondary-doc auto-collect is a
+  later refinement. **All of G0–G4 are now done.**

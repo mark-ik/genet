@@ -130,8 +130,8 @@ where
 /// Run the full HTML-content pipeline (cascade → image decode → box-tree
 /// layout → paint emit) over any `LayoutDom`, returning a [`ServalPaintList`].
 ///
-/// This is the shared core behind every content lane: the static viewer
-/// (`pelt-viewer`), the scripted live path, and meerkat's content card differ
+/// This is the shared core behind every content lane: the scripted live
+/// path (pelt-live) and meerkat's content card differ
 /// only in how they assemble `stylesheets` and which [`ImageLoader`] resolves
 /// resources, not in the pipeline. `loader` supplies `<img>` /
 /// `background-image` bytes (`data:` URIs decode inline regardless, so a

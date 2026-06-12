@@ -14,7 +14,7 @@
 //!
 //! `run_cascade` builds a `Stylist` from the caller's author sheets and
 //! cascades real CSS over every element, populating `ElementData` in the
-//! `StylePlane`. This is the live path behind pelt-viewer, pelt-live,
+//! `StylePlane`. This is the live path behind pelt-live,
 //! meerkat, and the orrery. Selector matching (`each_class` /
 //! `each_attr_name` / `id`) and `SharedRwLock` exposure via
 //! `TDocument::shared_lock` are wired (see `adapter_stylo.rs`). The one

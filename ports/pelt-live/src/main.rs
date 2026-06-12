@@ -32,8 +32,8 @@
 //! matching formats, so present is *not* a copy: it is a blit. netrender
 //! already ships exactly that blit — [`Renderer::compose_external_texture`]
 //! samples a source texture and draws it into a target view of any
-//! `target_format` (the same zero-copy pass pelt-viewer uses for `<img>`
-//! overlays). We point it at the surface's backbuffer view, so the bin adds no
+//! `target_format` (the same zero-copy pass the `<img>` overlay path uses).
+//! We point it at the surface's backbuffer view, so the bin adds no
 //! GPU code of its own.
 
 use std::cell::RefCell;

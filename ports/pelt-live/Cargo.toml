@@ -27,8 +27,8 @@ xilem-serval = { path = "../../components/xilem-serval" }
 serval-scripted-dom = { path = "../../components/serval-scripted-dom" }
 layout_dom_api = { workspace = true }
 
-# serval engine + render path (same set + versions pelt-viewer's static
-# viewer uses). serval-layout is a path dep; the rest are workspace deps.
+# serval engine + render path. serval-layout is a path dep; the rest are
+# workspace deps.
 serval-layout = { path = "../../components/serval-layout" }
 paint = { workspace = true }
 paint_list_api = { workspace = true }
@@ -40,13 +40,12 @@ engine_observables_api = { workspace = true }
 # concern (a screen-reader adapter consumes it), so it lives here, not in the
 # core layout crate.
 accesskit = { workspace = true }
-# The winit screen-reader adapter for the bin (not a workspace dep; resolves to
-# the 0.32.2 already in the lock via masonry_winit, sharing this accesskit 0.24
+# The winit screen-reader adapter for the bin (sharing this accesskit 0.24
 # and winit 0.30). Bin-only — the lib's a11y builder needs only accesskit.
 accesskit_winit = "0.32"
 
 # taffy must match serval-layout's experimental pin (layout() takes a
-# taffy::Size viewport). Copied verbatim from pelt-viewer.
+# taffy::Size viewport).
 taffy = { version = "=0.11.0-experimental-cache-fix.3", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "detailed_layout_info"] }
 
 euclid = { workspace = true }

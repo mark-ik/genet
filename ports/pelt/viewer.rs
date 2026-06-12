@@ -109,7 +109,10 @@ pub(crate) fn main() {
     );
 
     if netrender_smoke {
+        // Pre-retirement this fell through into the viewer window; with the
+        // viewer gone the smoke is the whole run, exiting clean.
         run_optional_netrender_smoke();
+        return;
     }
 
     if webgl_wgpu_smoke {
@@ -153,13 +156,17 @@ pub(crate) fn main() {
         return;
     }
 
-    // Launch the Xilem viewer (serval content + chrome). `url` is the
-    // first nav input — a file path renders that HTML, anything else
-    // (e.g. "about:blank") falls back to the built-in sample page.
-    if let Err(error) = pelt_viewer::run(Some(url)) {
-        eprintln!("{error}");
-        std::process::exit(1);
-    }
+    // The on-screen viewer engine was retired 2026-06-12 (pelt-viewer, the
+    // Masonry-era CPU-readback window). pelt's live value is the smoke suite
+    // above; the serval-native viewer mode returns here built on the
+    // pelt-core / pelt-desktop contracts (the meerkat / pelt-live present
+    // shape), not as a Masonry window.
+    eprintln!(
+        "pelt has no on-screen viewer engine in this build (pelt-viewer was \
+         retired 2026-06-12); use the pelt-live bin for an on-screen serval \
+         window, or one of the smoke flags below (--help)."
+    );
+    std::process::exit(2);
 }
 
 fn run_optional_netrender_smoke() {
@@ -360,9 +367,11 @@ fn print_help() {
         "\
 pelt {VERSION}
 
-Usage: pelt --engine viewer [URL]
+Usage: pelt [--engine <profile>] [--<smoke flag>]
 
-Script-free Pelt validation entrypoint.
+Script-free Pelt validation entrypoint (smoke runners; the on-screen viewer
+engine was retired 2026-06-12 — use the pelt-live bin until the serval-native
+viewer mode lands).
 
 Options:
     --engine <browser|viewer|static|headless>

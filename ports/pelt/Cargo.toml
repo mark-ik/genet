@@ -25,10 +25,13 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)', 'cfg(llvm_pgo)
 
 [features]
 default = ["viewer-netrender"]
-# viewer-engine pulls the desktop host (smoke runners, present backends)
-# and the Xilem viewer (the chrome + content window). The egui chrome
-# crate was retired 2026-05-20 in favor of the Xilem viewer.
-viewer-engine = ["dep:pelt-desktop", "dep:pelt-viewer"]
+# viewer-engine pulls the desktop host (smoke runners, present backends).
+# The Masonry-era Xilem viewer (pelt-viewer) was retired 2026-06-12 — its
+# CPU-readback render path predated direct present; pelt-live is the
+# on-screen serval window until a serval-native viewer mode is built on the
+# pelt-core/pelt-desktop contracts. (The egui chrome crate was retired
+# 2026-05-20 before it.)
+viewer-engine = ["dep:pelt-desktop"]
 viewer-netrender = ["viewer-engine", "pelt-desktop/netrender"]
 # C4 headed-presentation smoke. Pulls serval's `WindowsDxgiBackend`
 # in through `pelt-desktop`. Inner code is `cfg(target_os = "windows")`
@@ -44,14 +47,8 @@ macos-present = ["viewer-engine", "pelt-desktop/macos-present"]
 # `cfg(target_os = "linux")` gated so the feature still builds
 # on non-Linux hosts.
 linux-present = ["viewer-engine", "pelt-desktop/linux-present"]
-# Route remote http(s) resources (images, linked stylesheets) through
-# netfetcher. Off by default so the binary stays free of the async network
-# stack unless explicitly built with it.
-viewer-netfetch = ["viewer-engine", "pelt-viewer/netfetch"]
-
 [dependencies]
 cfg-if = { workspace = true }
 pelt-core = { workspace = true }
 pelt-desktop = { workspace = true, optional = true }
-pelt-viewer = { workspace = true, optional = true }
 windows-sys = { workspace = true, features = ["Win32_Graphics_Gdi", "Win32_System_Console"] }

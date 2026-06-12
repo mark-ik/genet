@@ -26,7 +26,6 @@ members = [
     "components/script-runtime-api",
     "ports/pelt-core",
     "ports/pelt-desktop",
-    "ports/pelt-viewer",
     "ports/pelt-live",
     "ports/pelt",
     "ports/serval-wpt",
@@ -190,17 +189,12 @@ parking_lot = { version = "0.12", features = ["serde"] }
 parley = { version = "0.10.0", default-features = true }
 pelt-core = { version = "=0.2.0", path = "ports/pelt-core" }
 pelt-desktop = { version = "=0.2.0", path = "ports/pelt-desktop" }
-pelt-viewer = { version = "=0.2.0", path = "ports/pelt-viewer" }
 netrender = { path = "../netrender/netrender" }
 netrender_device = { path = "../netrender/netrender_device" }
-# Linebender UI stack — git dep on the fork's branch mere-wgpu-29-vello-0-9
-# (vello 0.9 / wgpu 29 / parley 0.9, matching netrender). Same fork
-# Strophe + Woodshed consume. Git (not the old repo-escaping `../../crates/xilem`
-# path) so a bare serval clone resolves it without the personal `crates/` fork
-# tree as a sibling; the branch carries the vello/wgpu/parley bumps, so track it.
-xilem = { git = "https://github.com/mark-ik/xilem.git", branch = "mere-wgpu-29-vello-0-9" }
-masonry = { git = "https://github.com/mark-ik/xilem.git", branch = "mere-wgpu-29-vello-0-9" }
-masonry_winit = { git = "https://github.com/mark-ik/xilem.git", branch = "mere-wgpu-29-vello-0-9" }
+# (The Masonry-era `xilem` / `masonry` / `masonry_winit` git deps left with
+# pelt-viewer's retirement, 2026-06-12; their only consumer was the retired
+# viewer. The fork's one remaining serval consumer is `xilem_core`, git-dep'd
+# directly by `components/xilem-serval`.)
 peniko = "0.6"
 percent-encoding = "2.3"
 pkcs8 = { version = "0.10", features = ["rand_core"] }

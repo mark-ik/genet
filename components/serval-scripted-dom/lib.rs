@@ -81,6 +81,34 @@ mod fence {
     }
 }
 
+/// A tiny deterministic FNV-1a hasher for the node store (G3). std `HashMap`'s
+/// `RandomState` is seed-dependent (and its seed is an entropy question on
+/// wasm32); fixing the hasher makes the store's iteration order identical on
+/// every run and target, so pelt-live's byte-determinism stays airtight even
+/// though the store is now a map rather than a dense slab.
+#[derive(Default)]
+struct FnvHasher(u64);
+
+impl std::hash::Hasher for FnvHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        let mut h = if self.0 == 0 { 0xcbf2_9ce4_8422_2325 } else { self.0 };
+        for &b in bytes {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        self.0 = h;
+    }
+}
+
+/// The node store: a *prunable* map from a monotonic node value to its [`Node`].
+/// Keyed by the untagged id value (the low bits the fence's `index` returns), so
+/// the G0 doc-tag never reaches the key. Pruning dead entries is what bounds
+/// memory to live nodes (G3); the deterministic hasher keeps it order-stable.
+type NodeStore = std::collections::HashMap<usize, Node, std::hash::BuildHasherDefault<FnvHasher>>;
+
 struct Node {
     kind: NodeKind,
     name: Option<QualName>,
@@ -103,10 +131,21 @@ impl Node {
     }
 }
 
-/// A mutable DOM arena. `nodes[i]` is `None` once removed (ids are never reused).
+/// A mutable DOM arena. Nodes live in a prunable [`NodeStore`] keyed by a
+/// monotonic id; a pruned id is "gone" (ids are never reused). Memory is bounded
+/// to *live* nodes by [`collect`](ScriptedDom::collect) (G3), not to every node
+/// ever created.
 pub struct ScriptedDom {
-    nodes: Vec<Option<Node>>,
+    nodes: NodeStore,
+    /// Monotonic id counter. The next node's untagged value; never decremented,
+    /// so ids are never reused even as the store is pruned.
+    next_id: usize,
+    /// The primary document root (returned by `document()`).
     root: NodeId,
+    /// All document roots — permanent mark roots for `collect` (the primary plus
+    /// any `create_document` secondaries). A node reachable from one of these is
+    /// never collected; orphans survive only via the host's pins.
+    roots: Vec<NodeId>,
     mutations: Vec<DomMutation<NodeId>>,
     /// Process-unique document tag (G0 fence). Only present where the fence is
     /// active; elsewhere ids are untagged and this field would be dead weight.
@@ -124,32 +163,36 @@ impl ScriptedDom {
     /// A fresh document with an empty `Document` root.
     pub fn new() -> Self {
         let mut dom = Self {
-            nodes: Vec::new(),
+            nodes: NodeStore::default(),
+            next_id: 0,
             // Placeholder; overwritten by the `push` below so the root id
             // carries this document's tag like every other node.
             root: NodeId(0),
+            roots: Vec::new(),
             mutations: Vec::new(),
             #[cfg(all(debug_assertions, target_pointer_width = "64"))]
             doc_tag: fence::next_doc_tag(),
         };
         dom.root = dom.push(Node::new(NodeKind::Document));
+        dom.roots.push(dom.root);
         dom
     }
 
-    /// Pack an arena index into a `NodeId`, tagging it with this document on a
-    /// fenced build. Off the fence this is the bare index (today's behavior).
+    /// Pack a monotonic id value into a `NodeId`, tagging it with this document
+    /// on a fenced build. Off the fence this is the bare value (today's behavior).
     #[cfg(all(debug_assertions, target_pointer_width = "64"))]
-    fn pack(&self, index: usize) -> NodeId {
-        debug_assert!(index <= fence::INDEX_MASK, "scripted-dom node index overflow");
-        NodeId((((self.doc_tag & fence::TAG_MASK) << fence::INDEX_BITS) as usize) | index)
+    fn pack(&self, value: usize) -> NodeId {
+        debug_assert!(value <= fence::INDEX_MASK, "scripted-dom node id overflow");
+        NodeId((((self.doc_tag & fence::TAG_MASK) << fence::INDEX_BITS) as usize) | value)
     }
     #[cfg(not(all(debug_assertions, target_pointer_width = "64")))]
-    fn pack(&self, index: usize) -> NodeId {
-        NodeId(index)
+    fn pack(&self, value: usize) -> NodeId {
+        NodeId(value)
     }
 
-    /// Resolve a `NodeId` to its arena index, asserting it belongs to this
-    /// document first. Every accessor that indexes the slab goes through here.
+    /// Resolve a `NodeId` to its store key (the untagged id value), asserting it
+    /// belongs to this document first. Every accessor that reads the store goes
+    /// through here.
     #[cfg(all(debug_assertions, target_pointer_width = "64"))]
     fn index(&self, id: NodeId) -> usize {
         debug_assert!(
@@ -198,9 +241,12 @@ impl ScriptedDom {
 
     /// Create a detached `Document` node (a second document root, for
     /// `DOMImplementation.createDocument` / `createHTMLDocument`). Lives in the same
-    /// arena as the primary document, so `NodeId`s stay globally unique.
+    /// store as the primary document, so `NodeId`s stay globally unique. Registered
+    /// as a permanent mark root (G3): its attached subtree must stay live.
     pub fn create_document(&mut self) -> NodeId {
-        self.push(Node::new(NodeKind::Document))
+        let id = self.push(Node::new(NodeKind::Document));
+        self.roots.push(id);
+        id
     }
 
     /// Create a detached `Comment` node carrying `data`.
@@ -216,22 +262,19 @@ impl ScriptedDom {
     }
 
     fn node(&self, id: NodeId) -> &Node {
-        self.nodes[self.index(id)]
-            .as_ref()
-            .expect("NodeId refers to a live node")
+        self.nodes.get(&self.index(id)).expect("NodeId refers to a live node")
     }
 
     fn node_mut(&mut self, id: NodeId) -> &mut Node {
         let i = self.index(id);
-        self.nodes[i]
-            .as_mut()
-            .expect("NodeId refers to a live node")
+        self.nodes.get_mut(&i).expect("NodeId refers to a live node")
     }
 
     fn push(&mut self, node: Node) -> NodeId {
-        let id = self.pack(self.nodes.len());
-        self.nodes.push(Some(node));
-        id
+        let value = self.next_id;
+        self.next_id += 1;
+        self.nodes.insert(value, node);
+        self.pack(value)
     }
 
     fn sibling(&self, id: NodeId, delta: isize) -> Option<NodeId> {
@@ -256,14 +299,75 @@ impl ScriptedDom {
         self.node_mut(child).parent = None;
     }
 
-    /// Free a node and its whole subtree (slots become `None`).
+    /// Free a node and its whole subtree (entries removed from the store).
     fn drop_subtree(&mut self, node: NodeId) {
         let children = std::mem::take(&mut self.node_mut(node).children);
         for child in children {
             self.drop_subtree(child);
         }
         let i = self.index(node);
-        self.nodes[i] = None;
+        self.nodes.remove(&i);
+    }
+
+    /// Mark-sweep collection (G3 dangle contract). Prune every node not reachable
+    /// — by **undirected** walk over parent + child edges — from a document root
+    /// or one of `extra_roots`. `extra_roots` are the host's live-reflector pins
+    /// ([`ReflectorPins`](../serval_scripted/struct.ReflectorPins.html)); passing
+    /// them keeps a pinned orphan's whole connected component alive (JS can walk
+    /// `parentNode` up and children down and re-insert any of it). The DOM stays
+    /// pin-agnostic — it takes extra roots, not reflector knowledge. Returns the
+    /// number of nodes pruned.
+    ///
+    /// Idempotent and cheap to call often: the host drives it at the
+    /// `drain_mutations` boundary, on an idle tick, and right after an unpin.
+    pub fn collect(&mut self, extra_roots: impl IntoIterator<Item = NodeId>) -> usize {
+        // Mark: undirected reachability from the document roots + extra roots.
+        let mut marked: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut stack: Vec<usize> = Vec::new();
+        for r in self.roots.clone() {
+            self.seed_mark(r, &mut marked, &mut stack);
+        }
+        for r in extra_roots {
+            self.seed_mark(r, &mut marked, &mut stack);
+        }
+        while let Some(v) = stack.pop() {
+            // This node's neighbours (parent + children) as owned ids, dropping
+            // the store borrow before recursing.
+            let neighbours: Vec<NodeId> = match self.nodes.get(&v) {
+                Some(node) => node.parent.into_iter().chain(node.children.iter().copied()).collect(),
+                None => continue,
+            };
+            for nbr in neighbours {
+                self.seed_mark(nbr, &mut marked, &mut stack);
+            }
+        }
+
+        // Sweep: prune every unmarked entry.
+        let before = self.nodes.len();
+        self.nodes.retain(|k, _| marked.contains(k));
+        before - self.nodes.len()
+    }
+
+    /// The number of live nodes currently in the store. Bounded by `collect`
+    /// (G3), not by total nodes ever created — a diagnostic for the host and the
+    /// regression signal for the bounded-memory churn test.
+    pub fn live_node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Mark `id`'s store key live (if it resolves to a live node here) and queue
+    /// it for the `collect` walk. Skips foreign/dead ids and already-marked ones.
+    fn seed_mark(
+        &self,
+        id: NodeId,
+        marked: &mut std::collections::HashSet<usize>,
+        stack: &mut Vec<usize>,
+    ) {
+        if let Some(v) = self.try_index(id) {
+            if self.nodes.contains_key(&v) && marked.insert(v) {
+                stack.push(v);
+            }
+        }
     }
 
     /// Link `child` under `parent` without recording a mutation. Used while
@@ -316,11 +420,11 @@ impl LayoutDom for ScriptedDom {
     }
 
     /// The dangle-contract liveness check (see [`LayoutDom::is_live`]). Live iff
-    /// the id belongs to this document and its slab slot is still `Some`
-    /// (attached or orphaned-but-kept); a dropped node's slot is `None`. Never
-    /// panics, unlike the read accessors.
+    /// the id belongs to this document and still has an entry in the store
+    /// (attached or orphaned-but-kept); a dropped or collected node has no entry.
+    /// Never panics, unlike the read accessors.
     fn is_live(&self, id: NodeId) -> bool {
-        self.try_index(id).and_then(|i| self.nodes.get(i)).is_some_and(Option::is_some)
+        self.try_index(id).is_some_and(|v| self.nodes.contains_key(&v))
     }
 
     fn parent(&self, id: NodeId) -> Option<NodeId> {
@@ -767,5 +871,110 @@ mod tests {
             o.create_element(qual("x"))
         };
         assert!(!dom.is_live(foreign));
+    }
+
+    // --- G3: mark-sweep collection ------------------------------------------
+
+    const NO_PINS: [NodeId; 0] = [];
+
+    /// `collect` keeps the attached tree and reaps an unpinned orphan, but spares
+    /// a pinned orphan *and its whole connected component* (undirected mark).
+    #[test]
+    fn collect_reaps_unpinned_orphans_keeps_pinned_components() {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let attached = dom.create_element(qual("attached"));
+        dom.append_child(root, attached);
+
+        // An orphan subtree: parent -> mid -> leaf, all detached from the document.
+        let parent = dom.create_element(qual("p"));
+        let mid = dom.create_element(qual("mid"));
+        let leaf = dom.create_element(qual("leaf"));
+        dom.append_child(parent, mid);
+        dom.append_child(mid, leaf);
+
+        // With no pins, the orphan subtree is unreachable → collected; the
+        // attached tree survives.
+        let live_before = dom.live_node_count();
+        let pruned = dom.collect(NO_PINS);
+        assert_eq!(pruned, 3, "the 3-node orphan subtree is reaped");
+        assert_eq!(dom.live_node_count(), live_before - 3);
+        assert!(dom.is_live(root) && dom.is_live(attached));
+        assert!(!dom.is_live(parent) && !dom.is_live(mid) && !dom.is_live(leaf));
+
+        // Rebuild the orphan and pin only the *deep* leaf: the undirected mark
+        // must keep the leaf's ancestors too (JS can walk parentNode up).
+        let parent = dom.create_element(qual("p"));
+        let mid = dom.create_element(qual("mid"));
+        let leaf = dom.create_element(qual("leaf"));
+        dom.append_child(parent, mid);
+        dom.append_child(mid, leaf);
+        let pruned = dom.collect([leaf]); // pin the leaf
+        assert_eq!(pruned, 0, "a pin on the leaf spares the whole component");
+        assert!(dom.is_live(parent) && dom.is_live(mid) && dom.is_live(leaf));
+
+        // Drop the pin → the component is now collectable.
+        assert_eq!(dom.collect(NO_PINS), 3);
+        assert!(!dom.is_live(parent) && !dom.is_live(mid) && !dom.is_live(leaf));
+    }
+
+    /// The bounded-memory property: sustained create/remove-child/collect cycles
+    /// plateau the store, where the never-reuse slab would grow without bound.
+    #[test]
+    fn collect_bounds_memory_under_churn() {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let baseline = dom.live_node_count();
+
+        let mut peak = baseline;
+        for _ in 0..500 {
+            // Attach a small subtree, then orphan it and collect (no pins) — the
+            // SPA churn shape: create nodes, detach them, JS drops the reflectors.
+            let host = dom.create_element(qual("host"));
+            dom.append_child(root, host);
+            for _ in 0..8 {
+                let kid = dom.create_element(qual("kid"));
+                dom.append_child(host, kid);
+            }
+            peak = peak.max(dom.live_node_count());
+            dom.remove_child(host); // orphan the whole subtree
+            dom.collect(NO_PINS); // reap it
+        }
+
+        // Monotonic ids kept climbing, but the store is back to baseline — bounded.
+        assert!(dom.next_id > 4000, "ids are monotonic (no reuse)");
+        assert_eq!(dom.live_node_count(), baseline, "store plateaus, not grows");
+        assert!(peak < baseline + 32, "peak stays tiny — only one subtree at a time");
+    }
+
+    /// A quiet document (no further mutations) still reaps orphans on an idle
+    /// `collect` — the backgrounded-SPA case.
+    #[test]
+    fn idle_collect_reaps_orphans_without_mutations() {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let o = dom.create_element(qual("o"));
+        dom.append_child(root, o);
+        dom.remove_child(o); // orphan; no pin
+        let mut drained = Vec::new();
+        dom.drain_mutations(&mut drained);
+
+        // No mutations happen now; an idle collect still reaps the orphan.
+        assert!(dom.is_live(o));
+        assert_eq!(dom.collect(NO_PINS), 1);
+        assert!(!dom.is_live(o));
+    }
+
+    /// A `create_document` secondary is a permanent root: its attached subtree
+    /// survives `collect` even with no pins.
+    #[test]
+    fn secondary_document_subtree_survives_collect() {
+        let mut dom = ScriptedDom::new();
+        let secondary = dom.create_document();
+        let body = dom.create_element(qual("body"));
+        dom.append_child(secondary, body);
+
+        assert_eq!(dom.collect(NO_PINS), 0, "secondary root keeps its subtree");
+        assert!(dom.is_live(secondary) && dom.is_live(body));
     }
 }
