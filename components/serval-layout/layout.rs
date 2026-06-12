@@ -246,4 +246,80 @@ mod tests {
         assert!(cap > ex && cap < em, "cap-height sits between x-height and em: cap={cap} ex={ex}");
         assert!(ch > 20.0 && ch < em, "1ch is the real `0` advance: {ch}");
     }
+
+    /// Lay out `html` cascaded with `sheets` at a `w`x`h` viewport (the size both
+    /// the cascade's `Device` — viewport units — and taffy's root — `%`-height —
+    /// resolve against).
+    fn layout_at(
+        html: &str,
+        sheets: &[&str],
+        w: f32,
+        h: f32,
+    ) -> (StaticDocument, FragmentPlane<StaticNodeId>) {
+        let document = StaticDocument::parse(html);
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&document, &mut styles, euclid::Size2D::new(w, h), sheets, None);
+        let images = ImagePlane::new();
+        let vp = Size { width: AvailableSpace::Definite(w), height: AvailableSpace::Definite(h) };
+        let (frags, _, _) = layout(&document, &styles, &images, vp);
+        (document, frags)
+    }
+
+    /// Phase B — viewport units resolve against the cascade's `Device` size:
+    /// `50vw`/`50vh` at an 800×600 viewport are 400×300.
+    #[test]
+    fn viewport_units_resolve_against_the_viewport() {
+        let (doc, frags) = layout_at(
+            "<html><body><div></div></body></html>",
+            &["html, body, div { display: block; margin: 0; } div { width: 50vw; height: 50vh; }"],
+            800.0,
+            600.0,
+        );
+        let div = find_element(NodeRef::document(&doc), local_name!("div")).unwrap();
+        let r = frags.rect_of(div.id()).expect("div fragment");
+        assert!((r.size.width - 400.0).abs() < 1.0, "50vw of 800 = 400: {}", r.size.width);
+        assert!((r.size.height - 300.0).abs() < 1.0, "50vh of 600 = 300: {}", r.size.height);
+    }
+
+    /// Phase B — viewport units re-resolve when the viewport changes: the same
+    /// `50vw`/`50vh` div is 400×300 at 800×600 and 500×400 at 1000×800 (a resized
+    /// window re-cascades against the new `Device`).
+    #[test]
+    fn viewport_units_reresolve_on_resize() {
+        let measure = |w: f32, h: f32| {
+            let (doc, frags) = layout_at(
+                "<html><body><div></div></body></html>",
+                &["html, body, div { display: block; margin: 0; } div { width: 50vw; height: 50vh; }"],
+                w,
+                h,
+            );
+            let div = find_element(NodeRef::document(&doc), local_name!("div")).unwrap();
+            frags.rect_of(div.id()).expect("div fragment").size
+        };
+        let small = measure(800.0, 600.0);
+        let large = measure(1000.0, 800.0);
+        assert!((small.width - 400.0).abs() < 1.0, "50vw@800 = 400: {}", small.width);
+        assert!((large.width - 500.0).abs() < 1.0, "50vw@1000 = 500: {}", large.width);
+        assert!((large.height - 400.0).abs() < 1.0, "50vh@800 = 400: {}", large.height);
+    }
+
+    /// Phase B — the `%`-height chain: `html`/`body { height: 100% }` resolves
+    /// against the initial containing block (viewport height), so both are
+    /// viewport-tall. The classic element-first miss — taffy must treat the root's
+    /// height basis as definite (the viewport), not indefinite.
+    #[test]
+    fn percent_height_chain_resolves_against_the_viewport() {
+        let (doc, frags) = layout_at(
+            "<html><body></body></html>",
+            &["html, body { display: block; margin: 0; height: 100%; }"],
+            800.0,
+            600.0,
+        );
+        let html = find_element(NodeRef::document(&doc), local_name!("html")).unwrap();
+        let body = find_element(NodeRef::document(&doc), local_name!("body")).unwrap();
+        let html_h = frags.rect_of(html.id()).expect("html fragment").size.height;
+        let body_h = frags.rect_of(body.id()).expect("body fragment").size.height;
+        assert!((html_h - 600.0).abs() < 1.0, "html height:100% = viewport 600: {html_h}");
+        assert!((body_h - 600.0).abs() < 1.0, "body height:100% = html 600: {body_h}");
+    }
 }
