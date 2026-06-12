@@ -50,23 +50,67 @@ The mechanism already exists: Nova's contributing guide tests PRs against
 `expectations.json` and gives the commands to regenerate `expectations.json` /
 `metrics.json`. The fork's committed `expectations.json` is the steering wheel.
 
+### Step 0 result (recorded 2026-06-11)
+
+Derived from the committed `expectations.json` + `metrics.json`, which agree exactly
+(6,785 fail / 52 crash / 18 timeout / 37 unresolved) and reflect a state `nova_vm` has
+not changed since, so a fresh run reproduces it — no 30-minute run needed.
+
+**Overall: 40,515 / 50,733 pass (~80%)**, ahead of upstream's 77.39%. Non-pass by area:
+
+| Area | Non-pass | Detail |
+| --- | --- | --- |
+| built-ins | 5,491 | **Temporal 3,671** (54% of all failures), RegExp 320, Iterator 224, Promise 193, Set 151, Array 115, resource-mgmt (DisposableStack + Async + Suppressed) ~165, ShadowRealm 64 |
+| language | 888 | core syntax / semantics |
+| staging | 510 | unstable proposals, low priority |
+| **intl402** | **0 (skipped)** | the ~3,326 skips are the Intl tree; Nova does not attempt 402 |
+
+Two masses dominate, and both are **shared-upstream-crate** stories, not hand-rolling:
+
+- **Temporal (3,671, 54% of failures): Nova already binds `temporal_rs`**
+  (`nova_vm` `temporal` feature, on by default) — the *same* crate Boa binds. So this is
+  **incomplete binding, not a missing library**; closing it is finishing the
+  `temporal_rs` wiring, which is upstream trynova's active work. The fork rides it by
+  tracking upstream, exactly as it did the `regress` swap. (This corrects the "Boa owns
+  Temporal" framing below: both engines wrap one `temporal_rs`.) Measured: the fork
+  passes **586 / 4,257 Temporal tests (~14%)** — early, not half-built. Upstream binds it
+  method-by-method (foundation `Instant` / `Duration` Feb 2026, `PlainTime` methods
+  through May), so the remaining types (`PlainDate`, `PlainDateTime`, `ZonedDateTime`,
+  calendars — most of the 4,257) are a multi-quarter upstream grind. The fork (pinned
+  2026-06-02) is roughly current with that, so there is **no rebase windfall today**; the
+  54% mass clears gradually as upstream lands more. Ride it, do not duplicate it.
+- **Intl/402 (skipped): Nova does *not* bind ICU4X** (no `icu_*` in `nova_vm`). This is
+  the one Boa genuinely has and Nova lacks. Closing it means adding an ICU4X binding to
+  Nova (a larger, fullweb-tier lift), not copying Boa.
+
+**Strip those two and Nova is ~93% on the ECMA-262 surface it targets** (40,515 /
+~43,700). The genuine fork-local residual is ~3,100 mid-size built-in clusters
+(Iterator 224, Promise 193 incl. subclassing, Set 151, the RegExp tail 320,
+resource-management ~165, ShadowRealm 64) plus 888 language — each a clean class of
+failures, none urgent, most at least partly upstream.
+
 ## The two-engine axis split (decide this first)
 
 The campaign's largest lever is not test ordering; it is which engine owns which axis,
 given that Nova is native-only and Boa is wasm + oracle and already has ICU4X.
 
-- **Boa owns the Intl/ECMA-402 and Temporal axis.** Boa's dependency graph already
-  pulls the full stack (`icu_collections`, `icu_locale`, `icu_properties`,
-  `icu_normalizer`, `icu_calendar`, `timezone_provider`, `temporal_rs`). Nova's 402
-  pass rate is ~0.78%. Hand-rolling 402 on Nova duplicates a subsystem Boa already
-  carries.
+- **Shared upstream crates carry Intl + Temporal, not Boa itself.** Both engines bind
+  the same neutral libraries: `temporal_rs` for Temporal, ICU4X (`icu_*`) for Intl. Nova
+  **already binds `temporal_rs`** (default feature), so its 3,671 Temporal failures are
+  incomplete binding, not a missing subsystem, and finishing them is upstream trynova's
+  work, not a fork duplication (see the Step 0 result above). Intl is the genuine gap:
+  Nova binds no ICU4X, so ECMA-402 is the one axis where adding a binding (or leaning on
+  Boa for the wasm/fullweb tier) is a real decision. The principle is "neither engine
+  hand-rolls Temporal/Intl; both wrap the canonical crates," not "Boa owns them."
 - **Nova owns ECMA-262 core (already ~96%), the built-ins clusters, the regex tail,
   and realms/host-hooks.** These are the native-hot-path obligations for content
   actors, where Nova is the primary engine.
 
-This reframes the single biggest item below (Intl) from "a subsystem to build on Nova"
-into "an axis Boa already covers," and focuses Nova's effort where it is the load-bearing
-engine.
+This is not "Boa owns Intl/Temporal forever." Both are required for the fullweb goal,
+and both reduce to binding canonical crates. Temporal is upstream trynova's active work
+(ride it). Intl is the **non-redundant** one: no one is binding ICU4X into Nova, so it is
+the conformance target where fork effort uniquely advances native fullweb — behind a
+fullweb feature gate, so it never weighs the lower tiers.
 
 ## The work program
 
@@ -85,9 +129,10 @@ per the split above.
    touch subclassing), and **WebAssembly execution absent** (a fullweb-tier concern,
    defer). Prioritize sparse arrays and Promise subclassing.
 3. **Finish built-ins by spec cluster, not by easiest test.** Target whole clusters
-   that remove classes of expected failures: `Temporal`, `Promise` (incl. subclassing),
-   `Iterator`, `Set`, `TypedArray`, `DataView`, `Atomics`, and module/import behavior.
-   Chase clusters, not low-hanging leaves.
+   that remove classes of expected failures: `Promise` (incl. subclassing), `Iterator`,
+   `Set`, `TypedArray`, `DataView`, `Atomics`, and module/import behavior. Chase clusters,
+   not low-hanging leaves. (`Temporal` is the biggest cluster by far but rides upstream
+   trynova — track, do not duplicate; see the Step 0 result.)
 4. **Realms and host hooks.** The contributing doc calls realm-specific heap work an
    active design area. For content actors, cross-realm objects, modules, jobs/microtasks,
    and host hooks are what turn "looks like JS" into "acts like JS." serval already
@@ -100,15 +145,31 @@ per the split above.
    V8/SpiderMonkey/JSC (and against Boa, the in-tree oracle) on generated programs.
    test262 catches spec obligations; fuzzing catches interactions between them.
 
-Intl/402 is deliberately absent from Nova's list: it rides Boa per the split.
+Intl/402 is the one item Boa covers (the wasm/portable tier) that Nova does not. For
+**native** fullweb it is the non-redundant Nova binding to build (ICU4X, fullweb-gated);
+see Scope below.
 
-## Scope: profile tier and Intl deferral
+## Scope: profile tier and sequencing
 
-"Total conformance including ECMA-402" is the wrong near-term target for the campaign
-that is actually in flight. serval's profile ladder (static / interactive / scripted /
-fullweb) puts the live work at the **scripted tier** (testharness + DOM), which needs no
-Intl. Full 402 is a **fullweb-tier** obligation, and on that tier Boa likely carries it
-anyway. Scope Nova's campaign to ECMA-262; let 402 lag to fullweb.
+Fullweb is the destination, not an optional far-tier: serval is a selective
+(static-to-fullweb), vello/wgpu, wasm-safe web rendering engine, and **total conformance
+including ECMA-402 is the goal**, on the same serval / xilem-serval spine as meerkat
+chrome. So 402 is required, not deferrable-forever — the question is sequencing, not
+whether.
+
+The profile ladder (static / interactive / scripted / fullweb) is the staging, and the
+near-term front line is **meerkat chrome and the rendering stack** (layout / paint /
+compositor / the gc-arena-DOM work), the product's differentiated core. Scripting
+conformance is **parallel required infrastructure** on the same substrate:
+
+- **Lower tiers carry no Intl** (static / interactive / scripted need none), so an ICU4X
+  binding is **fullweb-feature-gated** and never weighs them. The selective architecture
+  is exactly what makes adding a heavy Intl dependency cost-free for the tiers that do not
+  want it.
+- **Intl is the non-redundant Nova binding** for native fullweb. Boa already covers the
+  wasm/portable fullweb path (it binds ICU4X); Nova is the native gap. So when the
+  scripting-conformance axis gets a focused slice, Intl is the pick: required for the
+  goal, unclaimed upstream, a clean ICU4X bind, and a large block (~3,300 tests).
 
 ## Relationship to existing docs
 
