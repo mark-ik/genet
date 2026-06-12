@@ -1,23 +1,43 @@
 # serval-layout: infrastructure scope (post emit-feature push)
 
-**Status (2026-06-07, refreshed 2026-06-09):** scoping, for review. The
-reftest scoreboard has not been updated here; record the next `serval-wpt`
-measurement in the conformance plan once it lands.
+**Status (2026-06-11): ALL FOUR ITEMS DONE — plan complete, ready to archive.**
+The 2026-06-07 scope identified four infrastructure pieces every remaining
+deferred-inventory item needed. All four have since landed:
 
-The recent serval-layout work (gradients incl. repeating-linear, the
-text-decoration trio, letter/word-spacing, the cascade-origin fix, and the full
-list-marker feature) drained the clean *emit-side* backlog. Every remaining item
-in the deferred inventory needs one of four pieces of infrastructure, scoped
-below. Each section is grounded against the current code, with the blocker, the
-approach, the touch-points, and a done-condition.
+| # | item | status |
+| --- | --- | --- |
+| 1 | Interaction state (`:hover`/`:focus`/…) | **DONE** `a2281b3d0fc` |
+| 2 | Cascade-time font system (`ex`/`ch`/`cap`/`ic`) | **DONE** (2026-06-07) |
+| 3 | Quirks mode | **DONE** `03baa49fbd9` |
+| 4 | Pseudo-element cascade | **DONE** — see [pseudo follow-ups](2026-06-11_pseudo_element_followups_scope.md) |
 
-Recommended order is by value over effort: **interaction state** (mostly wired,
-high value), **font system** (self-contained), **quirks mode** (small), then
-**pseudo-element cascade** (largest, but unblocks the most).
+The doc below is the original scope, with each section's status reconciled to the
+code (items 1 and 3 finished *after* this doc was written, so they read stale in
+older revisions). **One low-value cleanup remains**, not blocking anything: item
+2's shared font-collection note (cascade metrics + text shaping from one fontique
+`Collection`). The reftest scoreboard lives in the conformance plan, not here.
+
+Original recommended order (by value over effort): **interaction state** (mostly
+wired, high value), **font system** (self-contained), **quirks mode** (small),
+then **pseudo-element cascade** (largest, but unblocks the most).
 
 ---
 
 ## 1. Interaction state (`:hover` / `:focus` / selection / focus queries)
+
+**Status (2026-06-11): DONE (`a2281b3d0fc`).** The cascade source that was the
+gap below landed: a host-owned `InteractionState`
+(`engine_observables_api::interaction.rs`) is threaded in via `apply_interaction`
+/ `restyle_for_interaction` (cascade.rs), which populate each affected
+`StyleEntry::state` (`StylePlane::apply_interaction_bits` /
+`set_element_state`, with `add_interaction_chain` for `:hover`/`FOCUS_WITHIN`
+ancestor chains) and run Stylo's state-change invalidation for the minimal
+restyle. `:checked` rides the same path (`e1fb3680db9`). Tests:
+`interaction_hover_drives_restyle` (the done-condition: a host hover recolors,
+moving it reverts the old node + recolors the new, via the snapshot path not a
+full re-cascade) and the `p:hover` recolor test. Selection-range geometry — the
+sub-task split out below — also shipped as `range_rects` (pseudo follow-ups §3,
+`41147890b21`). The rest of this section is the original scope, kept for context.
 
 **Unblocks:** dynamic pseudo-classes (`:hover`, `:focus`, `:active`,
 `:focus-within`, `:checked`, …) actually changing style; full
@@ -85,6 +105,15 @@ than `1em`.
 ---
 
 ## 3. Quirks mode
+
+**Status (2026-06-11): DONE (`03baa49fbd9`).** `LayoutDom::quirks_mode()` now
+exists (defaulting `NoQuirks`); `StaticDocument` returns the mode its tree sink
+captured from html5ever, and it threads through `build_stylist` / `make_device`
+/ the adapter via `selectors_quirks_mode`. Guard:
+`quirks_mode_flows_from_parser_to_stylist`. (Low real value as predicted —
+almost all content is standards mode — but it rode along cleanly with the
+adapter work rather than waiting.) The rest of this section is the original
+scope.
 
 **Unblocks:** quirks-mode layout for legacy documents (the small set of
 quirk behaviors Stylo gates on `QuirksMode`).
@@ -164,3 +193,18 @@ Items 1, 2, and 4 each touch the cascade adapter (`adapter_stylo`) and
 `StylePlane`. If more than one is taken on, do the `StylePlane` storage shape
 (pseudo styles, interaction state) as one deliberate change rather than three
 incremental ones, so the plane's storage is not reworked repeatedly.
+
+**Retrospective (2026-06-11):** in the event the plane's storage held up — both
+interaction state (`StyleEntry::state`, item 1) and pseudo styles (eager slots +
+the lazy `::marker` map, item 4) landed as additive fields without reworking the
+plane between them, so the feared repeated rework did not materialize.
+
+## Lone remaining cleanup (not blocking)
+
+Item 2's shared-font-collection note: the cascade resolves font metrics through
+its own thread-local fontique `Collection`, while text shaping uses
+`TextMeasureCtx`'s. Sharing one `Collection` instance between them is a
+consistency cleanup (one registry, no double discovery), not a correctness or
+cost issue — the cascade's metrics collection is already amortized. Pick it up if
+a font-registry divergence ever surfaces; otherwise this plan is done and
+archivable.
