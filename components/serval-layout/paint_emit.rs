@@ -259,6 +259,23 @@ pub(crate) struct Emitter<'a, NodeId: Copy + Eq + Hash> {
     /// §root-background). That element must *not* paint the background on its
     /// own box: it has been lifted to the canvas. `None` ⇒ no propagation.
     canvas_bg_source: Option<NodeId>,
+    /// The document (viewport) scroll offset in device px (CSS Overflow §3.3,
+    /// scope doc rule 2). The whole document paints translated by `-offset` inside
+    /// the canvas; the canvas background ([`emit_canvas_background`], emitted before
+    /// the wrap) and `position: fixed` layers (which counter it in
+    /// [`crate::paint_stacking::paint_layer`]) are exempt. `(0.0, 0.0)` ⇒ the
+    /// document does not scroll (the default the public entry points pass until the
+    /// host wires the offset).
+    viewport_scroll: (f32, f32),
+}
+
+impl<NodeId: Copy + Eq + Hash> Emitter<'_, NodeId> {
+    /// The document (viewport) scroll offset, so the stacking painter can
+    /// counter-translate `position: fixed` layers back to the viewport
+    /// ([`crate::paint_stacking::paint_layer`]).
+    pub(crate) fn viewport_scroll(&self) -> (f32, f32) {
+        self.viewport_scroll
+    }
 }
 
 /// Walk the DOM in pre-order, emitting paint commands for each
@@ -288,9 +305,12 @@ where
     let empty_bg = BackgroundImagePlane::new();
     let no_scroll: FxHashMap<D::NodeId, (f32, f32)> = FxHashMap::default();
     // Cache-less: the laid-out box tree drives structure + position + style, but
-    // `text_ctx` is `None`, so text leaves emit empty (un-shaped) glyph runs.
+    // `text_ctx` is `None`, so text leaves emit empty (un-shaped) glyph runs. No
+    // document scroll on this path — the host wires the viewport offset through the
+    // live pipeline.
     emit_inner(
         dom, styles, fragments, constructed, None, &empty_images, &empty_bg, &no_scroll, viewport,
+        (0.0, 0.0),
     )
 }
 
@@ -327,6 +347,11 @@ where
         bg_images,
         scroll_offsets,
         viewport,
+        // No document scroll on the direct entry point: the host threads the
+        // viewport offset through the live pipeline (Phase C / incremental A5),
+        // not these per-frame emit calls. `(0,0)` reproduces today's behavior
+        // exactly (no wrap, no fixed counter).
+        (0.0, 0.0),
     )
 }
 
@@ -341,6 +366,7 @@ fn emit_inner<D>(
     bg_images_plane: &BackgroundImagePlane<D::NodeId>,
     scroll_offsets: &FxHashMap<D::NodeId, (f32, f32)>,
     viewport: DeviceIntSize,
+    viewport_scroll: (f32, f32),
 ) -> ServalPaintList
 where
     D: LayoutDom,
@@ -354,15 +380,34 @@ where
         fonts: FontCollector::default(),
         images: ImageCollector::default(),
         canvas_bg_source: None,
+        viewport_scroll,
     };
     // CSS Backgrounds-3 §root-background: the root element's background (or, when
     // the root is transparent, the body's) is painted over the *entire* canvas,
     // not just the element's own box, positioned against the root's background
     // positioning area. Emitted first (behind all content); the source element is
     // then recorded so `walk` suppresses the duplicate paint on its own box. This
-    // stays DOM-driven (it is about the real root / body elements).
+    // stays DOM-driven (it is about the real root / body elements). It paints
+    // *before* the document-scroll wrap below, so the canvas background never
+    // scrolls (CSS Overflow §3.3: the canvas is the viewport's, fixed in place).
     emitter.canvas_bg_source =
         emit_canvas_background(dom, styles, fragments, viewport, &mut commands);
+    // Document (viewport) scroll: the whole document paints translated by
+    // `-viewport_scroll` inside the canvas (scope doc rule 2). `position: fixed`
+    // layers counter this translate back to the viewport in
+    // `paint_stacking::paint_layer` (the Fixed≠Absolute distinction), so they stay
+    // pinned while in-flow + absolute content scrolls under them. Skip the wrap at
+    // the origin (the overwhelmingly common, unscrolled frame) so the command
+    // stream is byte-identical to the pre-scroll engine there.
+    let (sx, sy) = viewport_scroll;
+    let document_scrolled = sx != 0.0 || sy != 0.0;
+    if document_scrolled {
+        commands.push(PaintCmd::PushTransform(TransformSpec {
+            origin: LayoutPoint::new(-sx, -sy),
+            transform: LayoutTransform::identity(),
+            kind: TransformKind::Standard,
+        }));
+    }
     // Paint the document as the root stacking context, driven by the box-tree
     // arena. The recursive painter (crate::paint_stacking) walks each context's
     // own subtree for in-flow content, collects its positioned/z-index layers, and
@@ -376,6 +421,9 @@ where
         (0.0, 0.0),
         &mut commands,
     );
+    if document_scrolled {
+        commands.push(PaintCmd::PopTransform);
+    }
     ServalPaintList {
         viewport,
         commands,
@@ -407,6 +455,11 @@ pub(crate) struct Deferred {
     /// (`T(O)·M·T(-O)`), which telescopes exactly through the layout-absolute
     /// origins, so it is correct for nested transforms too.
     pub(crate) ancestor_transform: LayoutTransform,
+    /// Whether this layer attaches to the viewport (`position: fixed`): it is
+    /// counter-translated by the document scroll in
+    /// [`crate::paint_stacking::paint_layer`] so it stays pinned. `false` for
+    /// `absolute` / z-index layers, which scroll with the document.
+    pub(crate) attaches_to_viewport: bool,
 }
 
 /// Whether `id` is out of normal flow (`position: absolute`/`fixed`). Out-of-flow
@@ -416,6 +469,16 @@ pub(crate) struct Deferred {
 pub(crate) fn is_out_of_flow(cv: &ComputedValues) -> bool {
     use style::values::computed::PositionProperty;
     matches!(cv.get_box().position, PositionProperty::Absolute | PositionProperty::Fixed)
+}
+
+/// Whether `id` is `position: fixed`. A fixed box attaches to the viewport: its
+/// stacking layer counters the document scroll so it stays pinned while in-flow
+/// and `absolute` content scrolls under it (CSS Position §6, scope doc rule 3 —
+/// the Fixed≠Absolute distinction). Recorded on its [`Deferred`] for
+/// [`crate::paint_stacking::paint_layer`].
+pub(crate) fn is_fixed(cv: &ComputedValues) -> bool {
+    use style::values::computed::PositionProperty;
+    matches!(cv.get_box().position, PositionProperty::Fixed)
 }
 
 /// Recursive paint-order walk emitting compositor-model commands:
@@ -466,6 +529,7 @@ pub(crate) fn walk<Id>(
             z: crate::paint_stacking::bucket_z(cv),
             seq: deferred.len(),
             ancestor_transform,
+            attaches_to_viewport: is_fixed(cv),
         });
         return;
     }
@@ -2624,6 +2688,129 @@ mod tests {
             &FxHashMap::default(),
             DeviceIntSize::new(800, 600),
         )
+    }
+
+    /// Emit `html` cascaded with `sheet` at 800×600 with an explicit document
+    /// (viewport) scroll, driving the private `emit_inner` directly. The public
+    /// entry points pass zero document scroll until the host threads the viewport
+    /// offset through the live pipeline (Phase C / incremental), so the scrolled
+    /// path is exercised here at the engine boundary.
+    fn emit_scrolled(html: &str, sheet: &str, scroll: (f32, f32)) -> Vec<PaintCmd> {
+        let document = StaticDocument::parse(html);
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&document, &mut styles, euclid::Size2D::new(800.0, 600.0), &[sheet], None);
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        emit_inner(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            Some(&text_ctx),
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &FxHashMap::default(),
+            DeviceIntSize::new(800, 600),
+            scroll,
+        )
+        .commands()
+        .to_vec()
+    }
+
+    /// Index of the first `PushTransform` whose translate `origin` is `(x, y)`
+    /// (within 0.5px). The document-scroll wrap and the fixed counter are both
+    /// pure translates, so they are findable by their offset.
+    fn push_translate_index(cmds: &[PaintCmd], x: f32, y: f32) -> Option<usize> {
+        cmds.iter().position(|c| {
+            matches!(c, PaintCmd::PushTransform(t)
+                if (t.origin.x - x).abs() < 0.5 && (t.origin.y - y).abs() < 0.5)
+        })
+    }
+
+    /// A2 — document scroll: the whole document paints inside a `-scroll` translate
+    /// (CSS Overflow §3.3 viewport scroll), while the canvas background — painted
+    /// over the viewport *before* the wrap — does not move with it. An unscrolled
+    /// frame emits no wrap at all (byte-identical to the pre-scroll engine).
+    #[test]
+    fn document_scroll_translates_in_flow_but_not_the_canvas_background() {
+        // A body background propagates to the canvas; the tall div makes the
+        // document taller than the 600px viewport.
+        let html = "<html><body><div class=\"tall\"></div></body></html>";
+        let sheet = "html, body, div { display: block; margin: 0; } \
+                     body { background-color: rgb(0, 128, 0); } \
+                     .tall { height: 2000px; }";
+
+        // Unscrolled: no document-scroll wrap.
+        let still = emit_scrolled(html, sheet, (0.0, 0.0));
+        assert!(
+            push_translate_index(&still, 0.0, -120.0).is_none(),
+            "an unscrolled document emits no scroll wrap"
+        );
+
+        // Scrolled down 120px: the content wraps in a translate that shifts it up
+        // by 120 (origin (0, -120)).
+        let scrolled = emit_scrolled(html, sheet, (0.0, 120.0));
+        let wrap = push_translate_index(&scrolled, 0.0, -120.0)
+            .expect("the scrolled document wraps its content in a -120 translate");
+
+        // The canvas background (a full-viewport green DrawRect) paints before the
+        // wrap, so it stays put while the document scrolls under it.
+        let canvas_bg = scrolled
+            .iter()
+            .position(|c| {
+                matches!(c, PaintCmd::DrawRect(r)
+                    if r.color.g > 0.4 && r.color.r < 0.1 && r.color.b < 0.1
+                        && (r.placement.bounds.max.y - r.placement.bounds.min.y - 600.0).abs() < 1.0)
+            })
+            .expect("the body background propagates to a full-viewport canvas rect");
+        assert!(
+            canvas_bg < wrap,
+            "the canvas background (idx {canvas_bg}) paints before the scroll wrap (idx {wrap}) — \
+             it does not scroll with the document"
+        );
+    }
+
+    /// A3 — `position: fixed` attaches to the viewport: under document scroll its
+    /// stacking layer is counter-translated by `+scroll`, cancelling the document
+    /// wrap so it stays pinned. An `absolute` box is not (Fixed≠Absolute): it
+    /// scrolls with the document, so no counter is emitted.
+    #[test]
+    fn fixed_layer_counters_document_scroll_but_absolute_does_not() {
+        let sheet = "html, body, div { display: block; margin: 0; } \
+                     .fixed { position: fixed; top: 0; left: 0; width: 50px; height: 50px; } \
+                     .abs { position: absolute; top: 0; left: 0; width: 50px; height: 50px; } \
+                     .tall { height: 2000px; }";
+
+        // A fixed element under a 90px document scroll: a `+90` counter-translate
+        // cancels the document's `-90` wrap, so it stays pinned to the viewport.
+        let fixed = emit_scrolled(
+            "<html><body><div class=\"fixed\"></div><div class=\"tall\"></div></body></html>",
+            sheet,
+            (0.0, 90.0),
+        );
+        assert!(
+            push_translate_index(&fixed, 0.0, -90.0).is_some(),
+            "the document still wraps its in-flow content in a -90 translate"
+        );
+        assert!(
+            push_translate_index(&fixed, 0.0, 90.0).is_some(),
+            "the fixed layer counters the scroll with a +90 translate (stays pinned)"
+        );
+
+        // An absolute element in the same place scrolls with the document: no
+        // counter-translate is emitted — it rides the -90 document wrap.
+        let abs = emit_scrolled(
+            "<html><body><div class=\"abs\"></div><div class=\"tall\"></div></body></html>",
+            sheet,
+            (0.0, 90.0),
+        );
+        assert!(
+            push_translate_index(&abs, 0.0, 90.0).is_none(),
+            "an absolute layer is not viewport-attached — it scrolls with the document"
+        );
     }
 
     /// A block-`display` `::before` paints its own box: its background `DrawRect`

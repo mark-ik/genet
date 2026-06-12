@@ -106,6 +106,22 @@ fn paint_layer<Id>(
 ) where
     Id: Copy + Eq + Hash,
 {
+    // A `position: fixed` layer attaches to the viewport: counter the document
+    // scroll (applied as the outermost wrap in `paint_emit::emit_inner`) so the
+    // layer stays pinned while in-flow + absolute content scrolls under it (scope
+    // doc rule 3, the Fixed≠Absolute distinction). The counter is the outermost
+    // wrap here, so it cancels the document translate regardless of any ancestor
+    // transform re-established below. `absolute` layers carry
+    // `attaches_to_viewport == false` and scroll with the document.
+    let (vsx, vsy) = em.viewport_scroll();
+    let counter = d.attaches_to_viewport && (vsx != 0.0 || vsy != 0.0);
+    if counter {
+        out.push(PaintCmd::PushTransform(TransformSpec {
+            origin: LayoutPoint::new(vsx, vsy),
+            transform: LayoutTransform::identity(),
+            kind: TransformKind::Standard,
+        }));
+    }
     let wrap = d.ancestor_transform != LayoutTransform::identity();
     if wrap {
         out.push(PaintCmd::PushTransform(TransformSpec {
@@ -116,6 +132,9 @@ fn paint_layer<Id>(
     }
     paint_context(em, tree, text_ctx, d.node, d.origin, out);
     if wrap {
+        out.push(PaintCmd::PopTransform);
+    }
+    if counter {
         out.push(PaintCmd::PopTransform);
     }
 }
