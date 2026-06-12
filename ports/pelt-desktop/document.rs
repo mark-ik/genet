@@ -215,18 +215,15 @@ mod tests {
         assert!(!doc.scroll_by(0.0, 100.0), "already at the bottom edge → no change");
     }
 
-    /// A document with no scrollable overflow does not scroll. (The pelt UA
-    /// defaults' `body { padding: 8px }` combined with serval stretching the body to
-    /// the viewport height currently leaks ~16px of overflow past a short page — a
-    /// layout / UA-box follow-up, the scope doc's separate body-box audit, not the
-    /// V1 viewport-scroll family. Zeroing the body box tests the clean path: content
-    /// within the viewport, no scroll headroom.)
+    /// A document with content shorter than the viewport does not scroll: the body
+    /// is content-height (not viewport-stretched), so the UA `body { padding: 8px }`
+    /// stays within the viewport-filling root. (Before the UA body-box fix this
+    /// leaked ~16px of phantom scroll on every short page.)
     #[test]
     fn document_without_overflow_does_not_scroll() {
-        let mut doc =
-            LoadedDocument::parse("<style>body { margin: 0; padding: 0; }</style><div>short</div>");
+        let mut doc = LoadedDocument::parse("<div>short</div>");
         let _ = doc.frame(400, 300);
-        assert!(!doc.scroll_by(0.0, 250.0), "no scrollable overflow → no scroll");
+        assert!(!doc.scroll_by(0.0, 250.0), "a short page has no scroll headroom");
         assert_eq!(doc.scroll(), (0.0, 0.0));
     }
 

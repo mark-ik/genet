@@ -322,4 +322,27 @@ mod tests {
         assert!((html_h - 600.0).abs() < 1.0, "html height:100% = viewport 600: {html_h}");
         assert!((body_h - 600.0).abs() < 1.0, "body height:100% = html 600: {body_h}");
     }
+
+    /// The body box is content-height, not viewport-stretched: a short page's
+    /// `<body>` (UA `height: auto`) shrinks to its content rather than filling the
+    /// viewport, so its padding / margins do not overflow the root (the phantom
+    /// document-scroll fix). The root `<html>` still fills the viewport.
+    #[test]
+    fn body_is_content_height_not_viewport_stretched() {
+        let (doc, frags) = layout_at(
+            "<html><body><div>x</div></body></html>",
+            &["html, body, div { display: block; } body { padding: 8px; }"],
+            800.0,
+            600.0,
+        );
+        let html = find_element(NodeRef::document(&doc), local_name!("html")).unwrap();
+        let body = find_element(NodeRef::document(&doc), local_name!("body")).unwrap();
+        let html_h = frags.rect_of(html.id()).expect("html fragment").size.height;
+        let body_h = frags.rect_of(body.id()).expect("body fragment").size.height;
+        assert!((html_h - 600.0).abs() < 1.0, "the root <html> still fills the viewport: {html_h}");
+        assert!(
+            body_h < 100.0,
+            "<body> is content-height (~one line + 16px padding), not viewport-stretched: {body_h}",
+        );
+    }
 }

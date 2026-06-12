@@ -774,12 +774,14 @@ mod tests {
     }
 
     /// A structural change whose subtree keeps its outer size splices
-    /// incrementally (`Spliced`): appending a `<p>` under the full-height
-    /// `<body>` (UA `height:100%`) re-lays-out the body subtree, and the
-    /// new `<p>` lands where a full recompute would put it.
+    /// incrementally (`Spliced`): appending a `<p>` under a fixed-height `<body>`
+    /// re-lays-out the body subtree (its outer size unchanged, so it splices), and
+    /// the new `<p>` lands where a full recompute would put it. (The body is sized
+    /// explicitly here — its UA height is `auto`, which a content append would grow,
+    /// taking the full-recompute fallback instead.)
     #[test]
     fn structural_change_splices_incrementally() {
-        const SHEET: &[&str] = &["p{height:20px}"];
+        const SHEET: &[&str] = &["body { height: 200px; } p { height: 20px; }"];
         let mut dom = ScriptedDom::new();
         let root = dom.document();
         let h = dom.create_element(html("html"));
@@ -874,13 +876,15 @@ mod tests {
         assert!((color(&layout, p2)[0] - 1.0).abs() < 0.01, "p2 is red (now last-child), got {:?}", color(&layout, p2));
     }
 
-    /// `innerHTML` replace (a `SubtreeReplaced`) under the full-height
-    /// `<body>` splices: the three new paragraphs land at the same
-    /// absolute positions a full recompute produces. (Ported from the
-    /// stateless `relayout_incremental` test it supersedes.)
+    /// `innerHTML` replace (a `SubtreeReplaced`) under a fixed-height `<body>`
+    /// splices (the body's outer size is unchanged): the three new paragraphs land
+    /// at the same absolute positions a full recompute produces. (Ported from the
+    /// stateless `relayout_incremental` test it supersedes. The body is sized
+    /// explicitly — its UA height is `auto`, which the replace would grow, taking
+    /// the full-recompute fallback instead.)
     #[test]
     fn inner_html_replace_splices_matching_full() {
-        const SHEET: &[&str] = &["html, body, p { display: block; }"];
+        const SHEET: &[&str] = &["html, body, p { display: block; } body { height: 200px; }"];
         let mut dom = ScriptedDom::new();
         let root = dom.document();
         let h = dom.create_element(html("html"));

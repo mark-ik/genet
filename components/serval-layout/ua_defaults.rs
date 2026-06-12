@@ -27,19 +27,27 @@
 
 /// Prepended to every `run_cascade` invocation. Always sets:
 ///
-/// - `<html>` and `<body>` to `display: block` and `width / height:
-///   100%`, so an empty document still fills the viewport. The
-///   `100%` resolves against the synthetic Taffy root (which
-///   `construct` gives explicit viewport dimensions).
+/// - `<html>` to `display: block` and `width / height: 100%`, so the root box
+///   fills the viewport (the ICB-sized root); the `100%` resolves against the
+///   Taffy root, which `construct` gives explicit viewport dimensions. `<body>`
+///   to `display: block` and `width: 100%` only — its height stays `auto`
+///   (content), so a short page's body does not stretch to the viewport and its
+///   margins / padding therefore do not overflow it (no phantom document scroll).
+///   A taller-than-viewport body overflows the root and scrolls, as it should.
 /// - Common block-flow elements (`div`, `section`, `article`,
 ///   `header`, `footer`, `nav`, `main`, `aside`, `p`, headings,
 ///   lists, `blockquote`, `pre`, `figure`, `address`, `hr`) to
 ///   `display: block`. Stylo's default would leave them inline.
 pub const UA_DEFAULTS: &str = r#"
-html, body {
+html {
     display: block;
     width: 100%;
     height: 100%;
+}
+
+body {
+    display: block;
+    width: 100%;
 }
 
 /* Document metadata never renders. Per the WHATWG rendering spec
