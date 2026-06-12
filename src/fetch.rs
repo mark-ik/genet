@@ -5,15 +5,18 @@
 //! The Fetch entry point.
 
 use std::io;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::SystemTime;
 
-use bytes::Bytes;
-use futures_util::TryStreamExt;
+use bytes::{Bytes, BytesMut};
+use futures_util::{Stream, TryStreamExt};
 use http_body_util::{BodyExt, Full};
 use url::Url;
 
 use crate::altsvc;
-use crate::cache::{self, StoredResponse};
+use crate::cache::{self, HttpCache, StoredResponse};
 use crate::client::shared_client;
 use crate::cors;
 use crate::decode::decode_stream;
@@ -217,6 +220,14 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
                 }
                 _ => {}
             }
+        }
+
+        // WHATWG HTTP-network-or-cache fetch: if the request's header list contains
+        // `Range`, set `Accept-Encoding: identity` so the server does not transfer-
+        // compress the response (which would invalidate the requested byte offsets).
+        if header_val(&req_headers, "range").is_some() {
+            req_headers.retain(|(k, _)| !k.eq_ignore_ascii_case("accept-encoding"));
+            req_headers.push(("accept-encoding".to_owned(), "identity".to_owned()));
         }
 
         // Append the `Origin` header (WHATWG "append a request Origin header"):
@@ -501,39 +512,30 @@ pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
             };
         }
 
-        // Cacheable GET 200 → buffer the decoded body to store it, then hand the
-        // caller that same buffer (a live stream can't be tee'd into the cache).
+        // Cacheable GET 200 → stream the body straight through, teeing it into the
+        // cache as it is read. The response resolves at its headers (no buffering up
+        // front, so a slow or never-read body cannot stall it); the entry is stored
+        // only once the body is read to completion. A body whose declared length
+        // exceeds the cache cap is streamed without teeing (not worth a cache slot).
         if let Some(key) = &cache_key {
-            if cache::is_cacheable(status, &headers) {
-                let (bytes, decode_err) = ResponseBody::new(body).collect_lossy().await;
-                // A `Content-Encoding` decode failure does not fail the response
-                // (its status/headers are valid); it must surface when the body is
-                // read. Skip caching the corrupt body and hand back one that yields
-                // the decoded prefix then errors.
-                if let Some(err) = decode_err {
-                    return Response {
-                        status,
-                        headers,
-                        body: ResponseBody::from_bytes_then_error(bytes, err),
-                        url_list,
-                        response_type,
-                    };
-                }
+            if cache::is_cacheable(status, &headers) && !over_cache_size_cap(&headers) {
                 let mut stored_headers = headers;
                 strip_body_encoding_headers(&mut stored_headers);
-                cx.cache.put(
-                    key,
-                    StoredResponse {
-                        status,
-                        headers: stored_headers.clone(),
-                        body: bytes.clone(),
-                        stored_at: now,
-                    },
-                );
+                let caching = CachingBody {
+                    inner: body,
+                    acc: BytesMut::new(),
+                    cache: cx.cache.clone(),
+                    key: key.clone(),
+                    status,
+                    headers: stored_headers.clone(),
+                    stored_at: now,
+                    poisoned: false,
+                    done: false,
+                };
                 return Response {
                     status,
                     headers: stored_headers,
-                    body: ResponseBody::from_bytes(bytes),
+                    body: ResponseBody::new(Box::pin(caching)),
                     url_list,
                     response_type,
                 };
@@ -613,6 +615,74 @@ fn header_val<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case(name))
         .map(|(_, v)| v.as_str())
+}
+
+/// Largest body buffered into the HTTP cache. Beyond this the response is streamed
+/// straight through (never cached): buffering a large media body to store it would
+/// stall the response, and it is not worth a cache slot.
+const CACHE_MAX_BODY_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Does `Content-Length` declare a body larger than the cache cap?
+fn over_cache_size_cap(headers: &[(String, String)]) -> bool {
+    header_val(headers, "content-length")
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .is_some_and(|len| len > CACHE_MAX_BODY_BYTES)
+}
+
+/// A body stream that tees the decoded chunks it yields into the HTTP cache.
+/// Passes every chunk through unchanged while accumulating it; on clean
+/// end-of-stream (the consumer read the whole body) it stores the entry. A
+/// mid-stream error, or a body the consumer abandons before completion, is never
+/// stored — so the cache never holds a partial or corrupt response.
+struct CachingBody {
+    inner: BodyStream,
+    acc: BytesMut,
+    cache: Arc<dyn HttpCache>,
+    key: String,
+    status: u16,
+    headers: Vec<(String, String)>,
+    stored_at: SystemTime,
+    poisoned: bool,
+    done: bool,
+}
+
+impl Stream for CachingBody {
+    type Item = io::Result<Bytes>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // `CachingBody`'s fields are all `Unpin`, so a plain projection is sound.
+        let this = self.get_mut();
+        if this.done {
+            return Poll::Ready(None);
+        }
+        match this.inner.as_mut().poll_next(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Some(Ok(bytes))) => {
+                this.acc.extend_from_slice(&bytes);
+                Poll::Ready(Some(Ok(bytes)))
+            }
+            Poll::Ready(Some(Err(e))) => {
+                this.poisoned = true; // a decode/transport error: do not cache
+                this.done = true;
+                Poll::Ready(Some(Err(e)))
+            }
+            Poll::Ready(None) => {
+                this.done = true;
+                if !this.poisoned {
+                    this.cache.put(
+                        &this.key,
+                        StoredResponse {
+                            status: this.status,
+                            headers: std::mem::take(&mut this.headers),
+                            body: std::mem::take(&mut this.acc).freeze(),
+                            stored_at: this.stored_at,
+                        },
+                    );
+                }
+                Poll::Ready(None)
+            }
+        }
+    }
 }
 
 /// The stored/served body is decoded (identity), so its `Content-Encoding` and the

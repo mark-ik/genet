@@ -116,7 +116,43 @@ fn is_safelisted_request_header(name_lc: &str, value: &str) -> bool {
             let essence = value.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
             SAFELISTED_CONTENT_TYPES.contains(&essence.as_str())
         }
+        // A `Range` whose value is a "simple range header value" is safelisted, so a
+        // cross-origin ranged GET (media, resumed downloads) needs no preflight.
+        "range" => is_simple_range_header_value(value),
         _ => false,
+    }
+}
+
+/// WHATWG "simple range header value": `bytes=` + a non-empty ASCII-digit start, a
+/// `-`, an optional ASCII-digit end, nothing trailing, and (when both are present)
+/// start <= end. Digit runs are unbounded, so the comparison is string-based.
+fn is_simple_range_header_value(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("bytes=") else {
+        return false;
+    };
+    let Some((start, end)) = rest.split_once('-') else {
+        return false; // must contain a single '-'
+    };
+    if end.contains('-') {
+        return false; // a second '-' (e.g. a multi-range list) is not simple
+    }
+    let digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+    if start.is_empty() || !digits(start) || !digits(end) {
+        return false; // start required; both runs ASCII-digit-only
+    }
+    // end optional; when present, start <= end (compared without overflow).
+    end.is_empty() || !digits_greater_than(start, end)
+}
+
+/// Whether decimal digit string `a` is numerically greater than `b` (no parsing,
+/// so 60-digit ranges compare correctly). Both are assumed all-ASCII-digit.
+fn digits_greater_than(a: &str, b: &str) -> bool {
+    let a = a.trim_start_matches('0');
+    let b = b.trim_start_matches('0');
+    match a.len().cmp(&b.len()) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => a > b,
     }
 }
 
@@ -422,6 +458,28 @@ mod tests {
             &Method::Post,
             &hdr(&[("content-type", "application/json")])
         ));
+    }
+
+    #[test]
+    fn simple_range_header_safelist() {
+        // Safelisted (no preflight). Long digit runs (start <= end) are simple
+        // regardless of leading zeros, so the comparison must not overflow.
+        assert!(is_simple_range_header_value("bytes=0-10"));
+        assert!(is_simple_range_header_value("bytes=0-"));
+        let big = "bytes=00000000000000000000000000000000000000000000000000000000011-\
+                   00000000000000000000000000000000000000000000000000000000000111";
+        assert!(is_simple_range_header_value(big)); // 11 <= 111
+        // Not safelisted (preflight needed).
+        assert!(!is_simple_range_header_value("bytes=10-9")); // start > end
+        assert!(!is_simple_range_header_value("bytes=-0")); // empty start (suffix range)
+        // Other non-simple shapes.
+        assert!(!is_simple_range_header_value("bytes=0-10,20-30")); // multi-range
+        assert!(!is_simple_range_header_value("foo=0-10")); // wrong unit
+        assert!(!is_simple_range_header_value("bytes=0")); // no '-'
+        assert!(!is_simple_range_header_value("bytes=a-b")); // non-digit
+        // Routed through the safelist check (so a safe range skips preflight).
+        assert!(!needs_preflight(&Method::Get, &hdr(&[("range", "bytes=0-10")])));
+        assert!(needs_preflight(&Method::Get, &hdr(&[("range", "bytes=-0")])));
     }
 
     #[test]

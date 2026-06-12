@@ -102,20 +102,6 @@ impl ResponseBody {
         }
     }
 
-    /// A body that yields the decoded prefix `data` (if any), then fails with
-    /// `err`. For a buffered body whose `Content-Encoding` decode failed partway:
-    /// the response itself is fine, but consuming the body must reject.
-    pub(crate) fn from_bytes_then_error(data: Bytes, err: io::Error) -> Self {
-        let mut items: Vec<io::Result<Bytes>> = Vec::new();
-        if !data.is_empty() {
-            items.push(Ok(data));
-        }
-        items.push(Err(err));
-        Self {
-            inner: Box::pin(futures_util::stream::iter(items)),
-        }
-    }
-
     /// Drain the stream into a single buffer.
     pub async fn bytes(mut self) -> io::Result<Bytes> {
         let mut buf = BytesMut::new();
@@ -123,25 +109,6 @@ impl ResponseBody {
             buf.extend_from_slice(&chunk?);
         }
         Ok(buf.freeze())
-    }
-
-    /// Drain the stream, returning the decoded prefix plus the terminal error if
-    /// decoding failed partway (`None` on a clean read). Lets a caller that must
-    /// buffer the whole body (caching) tolerate a mid-body decode failure: keep
-    /// the prefix, surface the error, and skip storing a corrupt entry.
-    pub(crate) async fn collect_lossy(mut self) -> (Bytes, Option<io::Error>) {
-        let mut buf = BytesMut::new();
-        let mut err = None;
-        while let Some(chunk) = self.inner.next().await {
-            match chunk {
-                Ok(b) => buf.extend_from_slice(&b),
-                Err(e) => {
-                    err = Some(e);
-                    break;
-                }
-            }
-        }
-        (buf.freeze(), err)
     }
 
     /// The next decoded chunk, or `None` at end of stream. Lets an embedder consume
