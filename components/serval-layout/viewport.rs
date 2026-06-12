@@ -72,6 +72,19 @@ impl Viewport {
     pub fn scrolls_y(&self) -> bool {
         is_scrollable(self.overflow.1)
     }
+
+    /// Clamp a desired document scroll to what the viewport can actually reach: an
+    /// axis the viewport does not scroll (propagated `overflow: hidden`/`clip`) pins
+    /// at 0, and a scrollable axis clamps to `[0, range]` (the scrollable-overflow
+    /// extent from [`document_scroll_range`]). The one shared clamp every viewport
+    /// owner (the [`IncrementalLayout`](crate::IncrementalLayout) session, pelt's
+    /// static viewer) routes its wheel / key default action through, so there is no
+    /// second hand-rolled copy (scope doc rule 5).
+    pub fn clamp_scroll(&self, desired: (f32, f32), range: (f32, f32)) -> (f32, f32) {
+        let x = if self.scrolls_x() { desired.0.clamp(0.0, range.0) } else { 0.0 };
+        let y = if self.scrolls_y() { desired.1.clamp(0.0, range.1) } else { 0.0 };
+        (x, y)
+    }
 }
 
 /// `visible` / `auto` / `scroll` all let the viewport reach its overflowing
@@ -335,5 +348,32 @@ mod tests {
             600.0,
         );
         assert_eq!(range.1, 0.0, "the clipped 2000px child does not extend the scroll range");
+    }
+
+    /// `clamp_scroll` pins non-scrollable axes at 0 and clamps scrollable axes to
+    /// `[0, range]` — the shared default-action clamp.
+    #[test]
+    fn clamp_scroll_respects_overflow_and_range() {
+        let scrollable = Viewport {
+            size: DeviceIntSize::new(800, 600),
+            scroll: (0.0, 0.0),
+            overflow: (Overflow::Visible, Overflow::Visible),
+        };
+        assert_eq!(
+            scrollable.clamp_scroll((50.0, 5000.0), (0.0, 1400.0)),
+            (0.0, 1400.0),
+            "an over-scroll clamps to the range (x range 0 pins x at 0)",
+        );
+        assert_eq!(
+            scrollable.clamp_scroll((-10.0, -10.0), (0.0, 1400.0)),
+            (0.0, 0.0),
+            "no negative scroll",
+        );
+        let hidden = Viewport { overflow: (Overflow::Hidden, Overflow::Hidden), ..scrollable };
+        assert_eq!(
+            hidden.clamp_scroll((50.0, 500.0), (1000.0, 1400.0)),
+            (0.0, 0.0),
+            "overflow:hidden axes do not scroll regardless of range",
+        );
     }
 }

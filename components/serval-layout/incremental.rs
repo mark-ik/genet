@@ -210,7 +210,7 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
         D: LayoutDom<NodeId = Id>,
     {
         let range = document_scroll_range(dom, &self.styles, &self.fragments, self.viewport.size);
-        self.viewport.scroll = clamp_to_scrollable(scroll, &self.viewport, range);
+        self.viewport.scroll = self.viewport.clamp_scroll(scroll, range);
     }
 
     /// Scroll the document by `(dx, dy)` from its current offset (clamped as in
@@ -237,7 +237,7 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
         let prev_scroll = self.viewport.scroll;
         let mut vp = Viewport::for_document(dom, &self.styles, size);
         let range = document_scroll_range(dom, &self.styles, &self.fragments, size);
-        vp.scroll = clamp_to_scrollable(prev_scroll, &vp, range);
+        vp.scroll = vp.clamp_scroll(prev_scroll, range);
         self.viewport = vp;
     }
 
@@ -518,15 +518,6 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
         self.recompute_viewport(dom);
         Applied::FullRecompute
     }
-}
-
-/// Clamp a desired document scroll to the axes the viewport actually scrolls
-/// (propagated overflow — a non-scrollable axis pins at 0) and the
-/// scrollable-overflow `range`.
-fn clamp_to_scrollable(scroll: (f32, f32), viewport: &Viewport, range: (f32, f32)) -> (f32, f32) {
-    let x = if viewport.scrolls_x() { scroll.0.clamp(0.0, range.0) } else { 0.0 };
-    let y = if viewport.scrolls_y() { scroll.1.clamp(0.0, range.1) } else { 0.0 };
-    (x, y)
 }
 
 /// Pre-order subtree node ids rooted at `root`.
