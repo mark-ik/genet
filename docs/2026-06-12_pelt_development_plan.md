@@ -1,7 +1,11 @@
 # Pelt Development Plan — serval's reference shell
 
 **Date**: 2026-06-12
-**Status**: Planned. No code written yet.
+**Status**: In progress. **V0 done** — the present core moved into serval as
+`components/serval-winit-host`. **Render-driver reform done** — the host
+render-driver extracted into `components/serval-render` and `pelt-live` retired
+(the V0-shaped move that cleared V1's foundation; see Progress). **V1** (the static
+viewer) is next.
 **Role statement (the decision this plan rests on):** pelt is **serval's
 servoshell** — the minimal reference browser that proves the engine
 standalone, drives engine development without mere's graph machinery, and is
@@ -31,13 +35,16 @@ harness).
 - `pelt-desktop` = desktop host contracts + the platform present smokes
   (windows-dxgi / macos-calayer / wayland-subsurface / netrender / webgl) +
   a smoke-shaped `static_viewer` scaffold.
-- `pelt-live` = the modern on-screen window: winit + direct netrender
-  present, the xilem-serval counter, and the lib (scene_from_scripted_dom,
-  hit_test_node, caret/fragment queries, accesskit_tree, byte-determinism
-  test).
-- The shared present plumbing (`RenderCore` + `WindowSurface`, post-MW3
-  split) lives in **mere** (`crates/serval-winit-host`) — the one
-  backwards-pointing piece.
+- `components/serval-render` = the serval host render-driver (the lib formerly
+  inside the `pelt-live` probe): ScriptedDom / LayoutDom → `netrender::Scene`
+  (`scene_from_layout_dom` / `scene_from_scripted_dom`), the host spatial queries
+  (`hit_test_node`, fragments, caret), and `accesskit_tree`, with the
+  cascade-determinism + host-spine tests. `pelt-live` (the winit counter demo) was
+  **retired** with the extraction (2026-06-12); pelt's own viewer subsumes it.
+- The shared present plumbing (`RenderCore` + `WindowSurface`) now lives in serval
+  as `components/serval-winit-host` (V0, 2026-06-12) — the backwards-pointing piece
+  is gone. With `serval-render` these are the two serval host cores: scene
+  *production* and *presentation*.
 - serval has **no reftest harness** (serval-wpt covers JS-harness tests
   only), and nothing drives full-page `<script>` end to end
   (script-runtime-api + Nova/Boa exist; no full-document consumer).
@@ -72,8 +79,9 @@ bare serval clone builds the crate standalone.
 ### V1 — The viewer mode, static-first, on the modern stack
 
 `pelt --engine static <url-or-file>`: load bytes → `StaticDocument` →
-the pelt-live pipeline → present via V0's core. Document *loading* is the
-genuinely new work, and it is where `ResourceFetcher` gets its consumer
+`serval-render`'s `scene_from_layout_dom` pipeline → present via V0's
+`serval-winit-host` core. Document *loading* is the genuinely new work, and it is
+where `ResourceFetcher` gets its consumer
 back: `file://` and `data:` first-party; http(s) behind a returning
 `netfetch` feature (netfetcher-backed, off by default, replacing the one
 dropped with pelt-viewer — this time wired to a fetcher the contract was
@@ -154,3 +162,18 @@ gc-arena plan's G1 liveness probe with real data.
   entrypoint + reftest harness), meerkat = the product shell. V0 (present-core
   move) is the unlock and the only cross-repo step; V3 is the highest
   engine-development leverage; V4 feeds the gc-arena plan. No code yet.
+- **2026-06-12** — **V0 done.** `serval-winit-host` relocated mere → serval
+  (`components/serval-winit-host`); meerkat + the orrery bin re-point; all build
+  clean, zero behavior change. serval `e075cc5c9c5`, mere `41cb7c6`.
+- **2026-06-12** — **Render-driver reform done** (the V1 foundation, V0-shaped).
+  Prompted mid-V1-planning by "shouldn't pelt-live be reformed?": making
+  `pelt-desktop` consume `pelt-live`'s lib would have been a third consumer of a
+  `ports/` probe's render pipeline — the inverted-dependency smell V0 fixes. So
+  `pelt-live`'s lib (`render.rs` + `a11y.rs`: ScriptedDom/LayoutDom → Scene + host
+  queries + a11y) was extracted into `components/serval-render` (21 tests green,
+  incl. the cascade-determinism + host-spine suites), and `pelt-live` **retired**
+  (counter bin deleted, lib tests moved with the component). Now the two serval
+  host cores — render (`serval-render`) and present (`serval-winit-host`) — are both
+  components. meerkat keeps its own copy (deliberate cross-repo insulation, per the
+  render-glue-extraction plan). serval `b108fb509ca`. The cascade-offthread probe
+  (gitignored mere scratch) re-points locally. V1 now builds on `serval-render`.
