@@ -34,11 +34,12 @@ use crate::cascade::{
 use crate::fragment::FragmentPlane;
 use crate::image_decode::{BackgroundImagePlane, ImagePlane};
 use crate::invalidate::{classify, coalesce};
-use crate::paint_emit::{emit_paint_list_with_layouts, ScrollOffsets, ServalPaintList};
+use crate::paint_emit::{emit_paint_list_scrolled, ScrollOffsets, ServalPaintList};
 use crate::serval_lane::ServalLaneView;
 use crate::style::StylePlane;
 use crate::subtree::SubtreeView;
 use crate::text_measure::TextMeasureCtx;
+use crate::viewport::{document_scroll_range, Viewport};
 
 /// What [`IncrementalLayout::apply`] did for a mutation batch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,6 +96,14 @@ pub struct IncrementalLayout<Id: Copy + Eq + Hash> {
     paint_side_valid: bool,
     width: f32,
     height: f32,
+    /// The document's [`Viewport`] (size + propagated overflow + scroll) — rule 1's
+    /// first-class per-document object, owned by the session because the session
+    /// *is* the document (one viewport per content card / iframe / page). Its
+    /// overflow + size are recomputed on every relayout (the scroll preserved and
+    /// re-clamped); the host drives the scroll through [`set_viewport_scroll`](Self::set_viewport_scroll)
+    /// / [`scroll_by`](Self::scroll_by), and [`emit_paint_list`](Self::emit_paint_list)
+    /// paints at it.
+    viewport: Viewport,
     /// Aggregate `RestyleDamage` from the most recent attribute-only
     /// [`apply`](Self::apply). Lets callers/tests confirm which paint-tier bits
     /// a batch produced (e.g. a transform-only motion frame registers
@@ -121,6 +130,10 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
         run_cascade_with_stylist(dom, &mut styles, &stylist);
         let mut text_ctx = TextMeasureCtx::new();
         let (fragments, built) = full_layout(dom, &styles, width, height, &mut text_ctx);
+        // The document viewport: propagated overflow over the first cascade, scroll
+        // at the origin. Recomputed on every relayout (overflow + size), the host's
+        // scroll preserved and re-clamped (see `recompute_viewport`).
+        let viewport = Viewport::for_document(dom, &styles, DeviceIntSize::new(width as i32, height as i32));
         Self {
             styles,
             stylist,
@@ -131,6 +144,7 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
             paint_side_valid: true,
             width,
             height,
+            viewport,
             last_damage: RestyleDamage::empty(),
         }
     }
@@ -152,15 +166,79 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
     /// query surface — no re-cascade. The session companion to
     /// `LaidOutDocument::hit_test` / the stateless `hit_test_node`, so a host routes
     /// click and region hit-tests through the same session it renders. Clip- and
-    /// scroll-aware via `scroll`. `None` if the point falls outside every fragment.
+    /// scroll-aware via `scroll`, and document-scroll-aware via the session's
+    /// viewport (in-flow content maps through the offset, `position: fixed` stays
+    /// pinned — the hit mirror of [`emit_paint_list`](Self::emit_paint_list)).
+    /// `None` if the point falls outside every fragment.
     pub fn hit_test<D>(&self, dom: &D, x: f32, y: f32, scroll: &ScrollOffsets<Id>) -> Option<Id>
     where
         D: LayoutDom<NodeId = Id>,
     {
-        let view =
-            ServalLaneView::new(dom, &self.styles, &self.fragments).with_scroll_offsets(scroll);
+        let view = ServalLaneView::new(dom, &self.styles, &self.fragments)
+            .with_scroll_offsets(scroll)
+            .with_viewport_scroll(self.viewport.scroll);
         let hit = view.hit_test(Point::new(x, y))?;
         view.find_by_source_id(hit.source_node)
+    }
+
+    /// The document [`Viewport`] (size + propagated overflow + current scroll).
+    pub fn viewport(&self) -> Viewport {
+        self.viewport
+    }
+
+    /// The current document (viewport) scroll offset in device px.
+    pub fn viewport_scroll(&self) -> (f32, f32) {
+        self.viewport.scroll
+    }
+
+    /// The document's maximum scroll offset ([`document_scroll_range`]) — the
+    /// extent of its scrollable-overflow region beyond the viewport (rule 4).
+    pub fn scroll_range<D>(&self, dom: &D) -> (f32, f32)
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        document_scroll_range(dom, &self.styles, &self.fragments, self.viewport.size)
+    }
+
+    /// Set the document scroll to `scroll` (device px), clamped to the axes the
+    /// viewport actually scrolls (propagated overflow — `overflow: hidden` on the
+    /// root pins that axis at 0) and to `[0, `[`scroll_range`](Self::scroll_range)`]`.
+    /// The host calls this from its wheel / keyboard default action; the next
+    /// [`emit_paint_list`](Self::emit_paint_list) paints at the new offset.
+    pub fn set_viewport_scroll<D>(&mut self, dom: &D, scroll: (f32, f32))
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let range = document_scroll_range(dom, &self.styles, &self.fragments, self.viewport.size);
+        self.viewport.scroll = clamp_to_scrollable(scroll, &self.viewport, range);
+    }
+
+    /// Scroll the document by `(dx, dy)` from its current offset (clamped as in
+    /// [`set_viewport_scroll`](Self::set_viewport_scroll)), returning the new
+    /// offset. The convenient form for a wheel delta.
+    pub fn scroll_by<D>(&mut self, dom: &D, dx: f32, dy: f32) -> (f32, f32)
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let target = (self.viewport.scroll.0 + dx, self.viewport.scroll.1 + dy);
+        self.set_viewport_scroll(dom, target);
+        self.viewport.scroll
+    }
+
+    /// Recompute the viewport's propagated overflow + size after a relayout,
+    /// preserving the host's scroll re-clamped to the new content (a relayout can
+    /// shrink the page under the current offset). Called on every layout-changing
+    /// path, not the hot `RepaintOnly` frame.
+    fn recompute_viewport<D>(&mut self, dom: &D)
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let size = DeviceIntSize::new(self.width as i32, self.height as i32);
+        let prev_scroll = self.viewport.scroll;
+        let mut vp = Viewport::for_document(dom, &self.styles, size);
+        let range = document_scroll_range(dom, &self.styles, &self.fragments, size);
+        vp.scroll = clamp_to_scrollable(prev_scroll, &vp, range);
+        self.viewport = vp;
     }
 
     /// The aggregate `RestyleDamage` from the most recent attribute-only
@@ -228,6 +306,7 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
             self.fragments = fragments;
             self.built = built;
             self.paint_side_valid = true;
+            self.recompute_viewport(dom);
             Applied::Restyled
         } else {
             // Paint-only: prior fragments (and box-tree side-table) still valid.
@@ -272,7 +351,10 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
         );
         let images = ImagePlane::new();
         let bg_images = BackgroundImagePlane::new();
-        emit_paint_list_with_layouts(
+        // Paint at the session's document scroll (the viewport the host drives via
+        // `set_viewport_scroll`); `(0,0)` until the host scrolls, so existing
+        // consumers that never scroll the document are unchanged.
+        emit_paint_list_scrolled(
             dom,
             &self.styles,
             &self.fragments,
@@ -282,6 +364,7 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
             &bg_images,
             scroll_offsets,
             viewport,
+            self.viewport.scroll,
         )
     }
 
@@ -417,6 +500,7 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
         // following emit_paint_list would mismatch — mark it stale (a relayout
         // re-validates). Attribute-only hosts (the pool) never take this path.
         self.paint_side_valid = false;
+        self.recompute_viewport(dom);
         Applied::Spliced
     }
 
@@ -431,8 +515,18 @@ impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
         self.fragments = fragments;
         self.built = built;
         self.paint_side_valid = true;
+        self.recompute_viewport(dom);
         Applied::FullRecompute
     }
+}
+
+/// Clamp a desired document scroll to the axes the viewport actually scrolls
+/// (propagated overflow — a non-scrollable axis pins at 0) and the
+/// scrollable-overflow `range`.
+fn clamp_to_scrollable(scroll: (f32, f32), viewport: &Viewport, range: (f32, f32)) -> (f32, f32) {
+    let x = if viewport.scrolls_x() { scroll.0.clamp(0.0, range.0) } else { 0.0 };
+    let y = if viewport.scrolls_y() { scroll.1.clamp(0.0, range.1) } else { 0.0 };
+    (x, y)
 }
 
 /// Pre-order subtree node ids rooted at `root`.
@@ -1090,6 +1184,57 @@ mod tests {
         assert!(
             (now.width - size0.width).abs() < 0.5 && (now.height - size0.height).abs() < 0.5,
             "sustained motion must never resize the box",
+        );
+    }
+
+    /// A5 — the session owns its document viewport: a tall page reports a scroll
+    /// range, an over-scroll clamps to it, and `emit_paint_list` paints the
+    /// document at the clamped offset (the `-range` translate wrap).
+    #[test]
+    fn session_viewport_scroll_clamps_to_range_and_paints_scrolled() {
+        use paint_list_api::{PaintCmd, PaintList};
+
+        const SHEET: &[&str] = &["html,body,div{display:block;margin:0}.tall{height:2000px}"];
+        let (dom, _) = build_nodes(1, "tall");
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+
+        // 2000px of content in a 600px viewport → 1400px of vertical scroll.
+        let range = layout.scroll_range(&dom);
+        assert!((range.1 - 1400.0).abs() < 1.0, "range.y = content(2000) - viewport(600): {}", range.1);
+
+        // An over-scroll clamps to the range.
+        layout.set_viewport_scroll(&dom, (0.0, 5000.0));
+        assert!(
+            (layout.viewport_scroll().1 - 1400.0).abs() < 1.0,
+            "over-scroll clamps to the range: {:?}",
+            layout.viewport_scroll(),
+        );
+
+        // The session emits the document at the clamped scroll: a -1400 translate.
+        let scroll = ScrollOffsets::default();
+        let dev = DeviceIntSize::new(W as i32, H as i32);
+        let pl = layout.emit_paint_list(&dom, &scroll, dev);
+        assert!(
+            pl.commands().iter().any(|c| matches!(c, PaintCmd::PushTransform(t)
+                if t.origin.x.abs() < 0.5 && (t.origin.y + 1400.0).abs() < 0.5)),
+            "emit carries the document scroll as a -1400 translate wrap",
+        );
+    }
+
+    /// A5 — `overflow: hidden` on the root propagates to the viewport and disables
+    /// document scroll (the session pins it at 0), even when the content overflows.
+    #[test]
+    fn session_viewport_scroll_respects_root_overflow_hidden() {
+        const SHEET: &[&str] =
+            &["html,body,div{display:block;margin:0}html{overflow:hidden}.tall{height:2000px}"];
+        let (dom, _) = build_nodes(1, "tall");
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+
+        layout.set_viewport_scroll(&dom, (0.0, 500.0));
+        assert_eq!(
+            layout.viewport_scroll(),
+            (0.0, 0.0),
+            "overflow:hidden on the root pins the viewport (no document scroll)",
         );
     }
 }

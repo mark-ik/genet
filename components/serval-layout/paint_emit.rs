@@ -347,11 +347,40 @@ where
         bg_images,
         scroll_offsets,
         viewport,
-        // No document scroll on the direct entry point: the host threads the
-        // viewport offset through the live pipeline (Phase C / incremental A5),
-        // not these per-frame emit calls. `(0,0)` reproduces today's behavior
-        // exactly (no wrap, no fixed counter).
+        // No document scroll on the direct entry point: callers that scroll the
+        // document use `emit_paint_list_scrolled`. `(0,0)` reproduces today's
+        // behavior exactly (no wrap, no fixed counter).
         (0.0, 0.0),
+    )
+}
+
+/// Like [`emit_paint_list_with_layouts`] but with a document (viewport) scroll
+/// offset: in-flow content paints translated by `-viewport_scroll` (CSS Overflow
+/// §3.3, the document scroll), `position: fixed` stays pinned to the viewport, and
+/// the canvas background does not move. [`emit_paint_list_with_layouts`] is the
+/// `(0.0, 0.0)` (unscrolled) case. An [`IncrementalLayout`](crate::IncrementalLayout)
+/// session supplies the offset from its viewport; a stateless host (pelt's static
+/// viewer) supplies its own.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_paint_list_scrolled<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    constructed: &BoxTree<D::NodeId>,
+    text_ctx: &TextMeasureCtx,
+    images: &ImagePlane<D::NodeId>,
+    bg_images: &BackgroundImagePlane<D::NodeId>,
+    scroll_offsets: &ScrollOffsets<D::NodeId>,
+    viewport: DeviceIntSize,
+    viewport_scroll: (f32, f32),
+) -> ServalPaintList
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    emit_inner(
+        dom, styles, fragments, constructed, Some(text_ctx), images, bg_images, scroll_offsets,
+        viewport, viewport_scroll,
     )
 }
 
