@@ -20,7 +20,7 @@ default = ["viewer"]
 # `ResourceFetcher`, render it through `serval-render`, present it through
 # `serval-winit-host`. Default-on so `pelt --engine static <file>` works out of
 # the box; `--no-default-features` keeps the light contracts + smoke build.
-viewer = ["dep:netrender", "dep:serval-render", "dep:serval-static-dom", "dep:serval-layout", "dep:serval-winit-host", "dep:percent-encoding"]
+viewer = ["dep:netrender", "dep:serval-render", "dep:serval-static-dom", "dep:serval-layout", "dep:serval-winit-host", "dep:percent-encoding", "dep:wgpu"]
 netrender = ["dep:netrender", "dep:webgl_wgpu", "dep:wgpu"]
 # Headed presentation through serval's `WindowsDxgiBackend`. Drives
 # the netrender renderer through the C4 DCOMP composition swapchain

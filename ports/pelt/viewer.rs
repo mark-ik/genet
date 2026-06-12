@@ -156,15 +156,34 @@ pub(crate) fn main() {
         return;
     }
 
-    // The on-screen viewer engine was retired 2026-06-12 (pelt-viewer, the
-    // Masonry-era CPU-readback window). pelt's live value is the smoke suite
-    // above; the serval-native viewer mode returns here built on the
-    // pelt-core / pelt-desktop contracts (the meerkat / pelt-live present
-    // shape), not as a Masonry window.
+    // `pelt --engine static|viewer <url>`: the serval-native on-screen document
+    // viewer (the orrery-host present shape over the pelt-core / pelt-desktop
+    // contracts). Static and Viewer are the script-free document profiles.
+    if matches!(engine_profile, EngineProfile::Static | EngineProfile::Viewer) {
+        let config = pelt_desktop::StaticViewerConfig::new(
+            engine_profile,
+            pelt_desktop::WindowingMode::Headed,
+            url,
+        );
+        match pelt_desktop::run_static_viewer(config) {
+            Ok(outcome) => {
+                println!(
+                    "pelt static viewer url={} window={} redraws={}",
+                    outcome.url, outcome.created_window, outcome.redraws
+                );
+                return;
+            },
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            },
+        }
+    }
+
     eprintln!(
-        "pelt has no on-screen viewer engine in this build (pelt-viewer was \
-         retired 2026-06-12); use the pelt-live bin for an on-screen serval \
-         window, or one of the smoke flags below (--help)."
+        "pelt has no engine for profile {engine_profile} in this build; use \
+         --engine static <url> for the on-screen document viewer, or a smoke flag \
+         (--help)."
     );
     std::process::exit(2);
 }
