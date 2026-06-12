@@ -2088,7 +2088,7 @@ fn box_shadows_of(cv: &ComputedValues) -> Vec<ShadowData> {
 /// ancestor's absolute box origin. These conjugated factors telescope through
 /// layout-absolute origins, so composing them gives the exact cumulative ancestor
 /// transform for a lifted layer (see [`Deferred::ancestor_transform`]).
-fn conjugate_at(origin: (f32, f32), m: LayoutTransform) -> LayoutTransform {
+pub(crate) fn conjugate_at(origin: (f32, f32), m: LayoutTransform) -> LayoutTransform {
     let (ox, oy) = origin;
     LayoutTransform::translation(-ox, -oy, 0.0)
         .then(&m)
@@ -2102,7 +2102,7 @@ fn conjugate_at(origin: (f32, f32), m: LayoutTransform) -> LayoutTransform {
 /// absolute px (the orrery's `transform:translate(px,px)`) is exact; a
 /// fragment-rect reference box for `%` is a follow-up. `rotate`/`scale` longhands
 /// and 3D (preserve-3d/perspective) are out of scope.
-fn compute_transform_matrix(cv: &ComputedValues) -> LayoutTransform {
+pub(crate) fn compute_transform_matrix(cv: &ComputedValues) -> LayoutTransform {
     use app_units::Au;
     use style::values::generics::transform::GenericTranslate as Tr;
 

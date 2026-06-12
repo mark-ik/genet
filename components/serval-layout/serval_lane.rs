@@ -45,9 +45,12 @@ use engine_observables_api::{
     InteractionState, Point, Rect, Selection, SourceNodeId, SourceRange,
 };
 use layout_dom_api::LayoutDom;
+use paint_list_api::{LayoutPoint, LayoutTransform};
 
 use crate::fragment::FragmentPlane;
-use crate::paint_emit::{clips_overflow, primary_cv, ScrollOffsets};
+use crate::paint_emit::{
+    clips_overflow, compute_transform_matrix, conjugate_at, primary_cv, ScrollOffsets,
+};
 use crate::style::StylePlane;
 
 /// Borrowed view over Serval's planes, exposing the engine_observables_api
@@ -349,36 +352,58 @@ fn walk_for_hit<D>(
         parent_origin
     };
 
+    // CSS transform: a transformed node (and its subtree) is painted through its
+    // transform conjugated at the box origin — the exact composition
+    // `paint_emit::walk` applies. Hit the inverse: map the incoming point into
+    // this node's own pre-transform space, so a hit resolves where paint drew it.
+    // Identity (the common case) leaves the point untouched; the inverse
+    // telescopes through nesting because each node maps the already-mapped point
+    // it receives. A singular transform (a degenerate scale) collapses the
+    // subtree, so nothing in it can be hit.
+    let cv = primary_cv(styles, id);
+    let node_transform =
+        cv.as_deref().map(compute_transform_matrix).unwrap_or_else(LayoutTransform::identity);
+    let local = if node_transform == LayoutTransform::identity() {
+        point
+    } else {
+        let eff = conjugate_at((origin.x, origin.y), node_transform);
+        match eff.inverse().and_then(|inv| inv.transform_point2d(LayoutPoint::new(point.x, point.y)))
+        {
+            Some(p) => Point::new(p.x, p.y),
+            None => return,
+        }
+    };
+
     if let Some(l) = layout {
         let rect = Rect::new(origin, l.size.width, l.size.height);
-        if rect.contains(point) {
+        if rect.contains(local) {
             *out = Some(FragmentHit {
                 fragment: SourceNodeId(dom.opaque_id(id)),
                 source_node: SourceNodeId(dom.opaque_id(id)),
-                local_point: Point::new(point.x - origin.x, point.y - origin.y),
+                local_point: Point::new(local.x - origin.x, local.y - origin.y),
             });
         }
 
         // Clip: an overflow container clips its descendants to its padding box.
         // A point outside that box can't hit them — skip the subtree (this is
         // what stops a scrolled box's clicks leaking onto the element below it).
-        if primary_cv(styles, id).as_deref().is_some_and(clips_overflow) {
+        if cv.as_deref().is_some_and(clips_overflow) {
             let pad = Rect::new(
                 Point::new(origin.x + l.border.left, origin.y + l.border.top),
                 l.size.width - l.border.left - l.border.right,
                 l.size.height - l.border.top - l.border.bottom,
             );
-            if !pad.contains(point) {
+            if !pad.contains(local) {
                 return;
             }
         }
     }
 
     // Scroll: descendants of a scroll container are painted translated by
-    // `-offset`, so query them at `point + offset`.
+    // `-offset`, so query them at `point + offset` (in this node's local space).
     let child_point = match scroll_offsets.and_then(|m| m.get(&id)) {
-        Some(&(ox, oy)) => Point::new(point.x + ox, point.y + oy),
-        None => point,
+        Some(&(ox, oy)) => Point::new(local.x + ox, local.y + oy),
+        None => local,
     };
 
     for child in dom.dom_children(id) {
@@ -530,6 +555,98 @@ mod tests {
             hit.source_node.0, expected_opaque,
             "expected hit on <p> (opaque_id {expected_opaque}), got opaque_id {}",
             hit.source_node.0
+        );
+    }
+
+    /// G1.2 transform-aware hit-testing: a `<p>` translated 120px right is
+    /// painted at `origin + 120`, so a point there must resolve to it. The
+    /// DOM-driven walk composes box *locations*; without folding the CSS
+    /// transform it tests the un-transformed rect, so the painted point lands on
+    /// `<body>` behind the `<p>` instead. The fix maps the point through the
+    /// node's transform inverse (mirroring paint), so hit matches where it drew.
+    #[test]
+    fn hit_test_resolves_a_point_inside_a_translated_subtree() {
+        let document =
+            StaticDocument::parse(r#"<html><body><p class="moved">x</p></body></html>"#);
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        crate::cascade::run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[
+                "p { display: block; width: 200px; height: 50px; margin: 0; padding: 0; border: 0; }",
+                ".moved { transform: translate(120px, 0px); }",
+            ],
+            None,
+        );
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let view = ServalLaneView::new(&document, &styles, &fragments);
+
+        let p = find_element(NodeRef::document(&document), local_name!("p")).expect("<p> exists");
+        let p_origin = absolute_origin(&document, &fragments, p.id()).expect("<p> origin");
+        let p_layout = fragments.rect_of(p.id()).expect("<p> fragment");
+        // The painted center: the un-transformed center shifted by the 120px
+        // translate. With width 200, this x (origin + 120 + 100) lies *outside*
+        // the un-transformed rect [origin, origin + 200], so a pre-fix walk misses.
+        let point = Point::new(
+            p_origin.x + 120.0 + p_layout.size.width * 0.5,
+            p_origin.y + p_layout.size.height * 0.5,
+        );
+
+        let hit = view.hit_test(point).expect("hit something at the painted position");
+        let expected = document.opaque_id(p.id());
+        assert_eq!(
+            hit.source_node.0, expected,
+            "a point at the translated <p>'s painted position must resolve to <p> \
+             (opaque_id {expected}), got opaque_id {}",
+            hit.source_node.0,
+        );
+    }
+
+    /// G1.2, the conjugation case a translate can't catch: `scale(2)` about the
+    /// box origin grows the 200×50 `<p>` to 400×100, so a point at `(origin +
+    /// 250, origin + 25)` is inside the *painted* box but outside the
+    /// un-transformed one. It resolves to `<p>` only if the hit maps through the
+    /// transform conjugated at the box origin (not a naive translate).
+    #[test]
+    fn hit_test_resolves_a_point_inside_a_scaled_subtree() {
+        let document =
+            StaticDocument::parse(r#"<html><body><p class="big">x</p></body></html>"#);
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        crate::cascade::run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[
+                "p { display: block; width: 200px; height: 50px; margin: 0; padding: 0; border: 0; }",
+                ".big { transform: scale(2); }",
+            ],
+            None,
+        );
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let view = ServalLaneView::new(&document, &styles, &fragments);
+
+        let p = find_element(NodeRef::document(&document), local_name!("p")).expect("<p> exists");
+        let p_origin = absolute_origin(&document, &fragments, p.id()).expect("<p> origin");
+        // x = origin + 250 is outside the un-scaled [origin, origin+200] but
+        // inside the painted [origin, origin+400]; y = origin + 25 is inside both.
+        let point = Point::new(p_origin.x + 250.0, p_origin.y + 25.0);
+
+        let hit = view.hit_test(point).expect("hit something at the painted position");
+        let expected = document.opaque_id(p.id());
+        assert_eq!(
+            hit.source_node.0, expected,
+            "a point in the scaled <p>'s painted box must resolve to <p> \
+             (opaque_id {expected}), got opaque_id {}",
+            hit.source_node.0,
         );
     }
 
