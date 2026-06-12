@@ -47,7 +47,7 @@ use paint_list_api::{
 use paint_list_api::items::{
     BorderDetails, BorderItem, NinePatchBorder, NinePatchSource, ShadowItem,
 };
-use paint_list_api::specs::{ClipKind, ClipSpec, TransformKind};
+use paint_list_api::specs::{ClipKind, ClipSpec, LayerSpec, TransformKind};
 use parley::PositionedLayoutItem;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -502,6 +502,20 @@ pub(crate) fn walk<Id>(
     // motion). `origin` is the box-model position; `transform` is the CSS
     // transform layered on top.
     let node_transform = compute_transform_matrix(cv);
+    // `opacity < 1` wraps the element + its in-flow subtree in an isolated
+    // stacking layer the renderer composites at `alpha` (group opacity — see
+    // `opacity_of`). The layer is the outermost wrapper, around the node's own
+    // transform, so a transformed/positioned element fades as one unit. Anonymous
+    // boxes carry no own style, so they never open a layer. (Positioned
+    // descendants lifted into sibling stacking layers escape this group — a
+    // documented edge, like the Appendix E deviations in `paint_stacking`.)
+    let opacity = (!is_anon).then(|| opacity_of(cv)).flatten();
+    if let Some(alpha) = opacity {
+        commands.push(PaintCmd::PushLayer(LayerSpec {
+            opacity: alpha,
+            ..Default::default()
+        }));
+    }
     commands.push(PaintCmd::PushTransform(TransformSpec {
         origin: push_origin,
         transform: node_transform,
@@ -750,6 +764,11 @@ pub(crate) fn walk<Id>(
         commands.push(PaintCmd::PopClip);
     }
     commands.push(PaintCmd::PopTransform);
+    // Close the opacity layer opened above; the renderer composites the buffered
+    // subtree back into the parent at `alpha`.
+    if opacity.is_some() {
+        commands.push(PaintCmd::PopLayer);
+    }
 }
 
 /// Emit a list item's marker, hanging to the left of its content box. The
@@ -2309,6 +2328,18 @@ fn box_shadows_of(cv: &ComputedValues) -> Vec<ShadowData> {
         .collect()
 }
 
+/// Read an element's cascaded `opacity` as `Some(alpha)` when it is less than
+/// fully opaque — the signal to wrap the element + its in-flow subtree in an
+/// isolated stacking layer the renderer composites at `alpha`. Group opacity
+/// (one layer for the whole subtree) is the correct CSS semantics: overlapping
+/// descendants composite once, so they do not double-darken the way a
+/// per-primitive alpha multiply would. `None` for the opaque default (1.0, the
+/// common case) — painted with no layer. Clamped to `[0, 1]`.
+fn opacity_of(cv: &ComputedValues) -> Option<f32> {
+    let a = f32::from(cv.get_effects().opacity);
+    (a < 1.0).then_some(a.clamp(0.0, 1.0))
+}
+
 /// A transform `m` applied around the absolute point `origin`: `T(O)·M·T(-O)`.
 /// CSS transforms apply in the element's box-local frame, so an ancestor's
 /// transform that should affect a deferred descendant must be conjugated by the
@@ -2460,6 +2491,46 @@ mod tests {
         // the 60px content box (a small epsilon for the ellipsis glyph advance).
         let max_x = narrow.iter().copied().fold(f32::MIN, f32::max);
         assert!(max_x <= 60.0 + 2.0, "all glyphs stay within the content box, max_x = {max_x}");
+    }
+
+    /// `opacity < 1` wraps the element and its in-flow subtree in one isolated
+    /// stacking layer (group opacity), composited at `alpha`; the opaque default
+    /// opens no layer. The faded subtree's content paints inside the layer.
+    #[test]
+    fn opacity_wraps_subtree_in_a_stacking_layer() {
+        let document = StaticDocument::parse("<html><body><p>hi</p></body></html>");
+
+        // Opaque default: no layer at all.
+        let opaque = emit_with_sheet(&document, "p { display: block; }");
+        assert!(
+            !opaque.commands().iter().any(|c| matches!(c, PaintCmd::PushLayer(_))),
+            "the opaque default opens no stacking layer"
+        );
+
+        // opacity: 0.5 on <p>: exactly one balanced layer at alpha 0.5.
+        let faded = emit_with_sheet(&document, "p { display: block; opacity: 0.5; }");
+        let cmds = faded.commands();
+        let alphas: Vec<f32> = cmds
+            .iter()
+            .filter_map(|c| match c {
+                PaintCmd::PushLayer(s) => Some(s.opacity),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(alphas.len(), 1, "exactly one opacity layer");
+        assert!((alphas[0] - 0.5).abs() < 1e-6, "layer alpha is 0.5, got {}", alphas[0]);
+        assert_eq!(
+            cmds.iter().filter(|c| matches!(c, PaintCmd::PopLayer)).count(),
+            1,
+            "the layer is balanced by one PopLayer"
+        );
+        // The <p>'s text paints between the push and the pop — inside the group.
+        let push_i = cmds.iter().position(|c| matches!(c, PaintCmd::PushLayer(_))).unwrap();
+        let pop_i = cmds.iter().rposition(|c| matches!(c, PaintCmd::PopLayer)).unwrap();
+        assert!(
+            cmds[push_i..pop_i].iter().any(|c| matches!(c, PaintCmd::DrawText(_))),
+            "the faded subtree's text is composited inside the layer"
+        );
     }
 
     /// Cascade-driven style plane sizing block elements 200×50 (no
