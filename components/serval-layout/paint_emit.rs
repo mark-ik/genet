@@ -2587,6 +2587,21 @@ mod tests {
         assert!(max_x <= 60.0 + 2.0, "all glyphs stay within the content box, max_x = {max_x}");
     }
 
+    /// Threading guard. The two stages a future parallel pipeline would move
+    /// across threads must stay `Send`: the shaped-text cache (one
+    /// [`TextMeasureCtx`] moved per shaping worker) and the produced
+    /// [`ServalPaintList`] (handed to the renderer / serialized across IPC, as
+    /// `PaintEnvelope` already does). If a contributor introduces a non-`Send`
+    /// type into either — an `Rc`, a bare `RefCell`, a `!Send` handle — this stops
+    /// compiling, flagging the regression before it becomes a parallelization
+    /// blocker. See the threading scoping discussion (2026-06-12).
+    #[test]
+    fn paint_and_shaping_stages_stay_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<ServalPaintList>();
+        assert_send::<TextMeasureCtx>();
+    }
+
     /// `opacity < 1` wraps the element and its in-flow subtree in one isolated
     /// stacking layer (group opacity), composited at `alpha`; the opaque default
     /// opens no layer. The faded subtree's content paints inside the layer.
