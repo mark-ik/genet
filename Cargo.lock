@@ -6751,6 +6751,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "serval-winit-host"
+version = "0.2.0"
+dependencies = [
+ "netrender",
+ "wgpu",
+ "winit",
+ "xilem-serval",
+]
+
+[[package]]
 name = "serval-wpt"
 version = "0.2.0"
 dependencies = [
