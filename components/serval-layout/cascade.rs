@@ -204,6 +204,23 @@ pub fn run_cascade<D>(
 /// `lock` must be the same `SharedRwLock` the plane wraps its inline-style blocks
 /// under (the plane's `shared_lock()`), so the cascade's guards can read both the
 /// sheets here and those inline blocks (`same_lock_as`).
+/// Enable the CSS properties Stylo gates behind servo's `layout.unimplemented`
+/// pref. That pref is servo's catch-all for properties *its* layout never did;
+/// serval has its own, more complete layout, so the gate is servo's policy, not
+/// serval's. Enabling lets the cascade *parse* them (`text-overflow`,
+/// `user-select`, `backdrop-filter`, `contain`, counters, `mask-image`, `zoom`,
+/// …); serval only changes rendering where it actually reads one
+/// (`text-overflow` today), so the rest are computed-but-unused until serval
+/// grows support. Set once — the pref store is a process-global shared with
+/// Stylo, and the parse-time check reads it.
+fn enable_serval_properties() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        <bool as stylo_static_prefs::Preference>::set("layout.unimplemented", true);
+    });
+}
+
 pub fn build_stylist(
     viewport: euclid::default::Size2D<f32>,
     stylesheets: &[&str],
@@ -211,6 +228,7 @@ pub fn build_stylist(
     lock: &SharedRwLock,
     quirks: QuirksMode,
 ) -> Stylist {
+    enable_serval_properties();
     let url_data = make_url_data(base_url);
     let device = make_device(viewport, quirks);
     let mut stylist = Stylist::new(device, quirks);

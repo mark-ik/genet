@@ -1964,6 +1964,19 @@ pub(crate) fn clips_overflow(cv: &ComputedValues) -> bool {
         || !matches!(box_style.overflow_y, Overflow::Visible)
 }
 
+/// Whether `text-overflow: ellipsis` is in effect for line-end truncation: the
+/// element asks for an ellipsis *and* clips its inline overflow (`overflow-x` not
+/// `visible` — ellipsis only applies when content is clipped). The line-end side
+/// is what a left-to-right label truncates; either side reading `ellipsis`
+/// qualifies (the common single-value `text-overflow: ellipsis`).
+pub(crate) fn text_ellipsis(cv: &ComputedValues) -> bool {
+    use style::values::computed::Overflow;
+    use style::values::specified::text::TextOverflowSide as Side;
+    let to = &cv.get_text().text_overflow;
+    let wants = matches!(to.first, Side::Ellipsis) || matches!(to.second, Side::Ellipsis);
+    wants && !matches!(cv.get_box().overflow_x, Overflow::Visible)
+}
+
 /// Convert Stylo's `computed::Color` to a PaintList `ColorF`.
 /// Resolves `currentColor` via the provided `current_color`, then
 /// flattens to sRGB and reads the raw `[r, g, b, a]` components.
@@ -2320,6 +2333,35 @@ mod tests {
     use crate::cascade::run_cascade;
     use crate::image_decode::ImagePlane;
     use crate::layout::layout;
+
+    /// `text-overflow: ellipsis` (+ `overflow: hidden`) is read from the cascade
+    /// — i.e. the property is parse-enabled in serval's stylo, not gated off.
+    #[test]
+    fn text_overflow_ellipsis_is_read_from_cascade() {
+        let document = StaticDocument::parse("<html><body><p>x</p></body></html>");
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &["p { text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }"],
+            None,
+        );
+        let p = {
+            let mut q = vec![document.document()];
+            let mut found = None;
+            while let Some(id) = q.pop() {
+                if document.element_name(id).is_some_and(|n| n.local == local_name!("p")) {
+                    found = Some(id);
+                    break;
+                }
+                q.extend(document.dom_children(id));
+            }
+            found.expect("<p>")
+        };
+        let cv = primary_cv(&styles, p).expect("p cascade");
+        assert!(text_ellipsis(&cv), "text-overflow: ellipsis + overflow:hidden must be active");
+    }
 
     /// Cascade-driven style plane sizing block elements 200×50 (no
     /// spacing). The box tree reads `ComputedValues`, so emit tests now
