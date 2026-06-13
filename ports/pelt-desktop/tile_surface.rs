@@ -21,7 +21,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use layout_dom_api::{LayoutDom, LocalName, Namespace};
+use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, QualName};
 use netrender::Scene;
 use pelt_core::tile::{
     ContentSource, DocumentRef, DropTarget, SplitAxis, TabStack, TileEvent, TileId, TilePath,
@@ -174,20 +174,31 @@ const DEFAULT_TILE_CSS: &str = "\
     .tile-tab.active { color: #ffffff; background: #4a4a55; } \
     .tile-close { margin-left: 8px; padding: 0 4px; color: #999999; } \
     .tile-content { flex: 1 1 0; min-height: 0; background: #ffffff; } \
-    .tile-divider { flex: 0 0 8px; background: #1a1a1f; }";
+    .tile-divider { flex: 0 0 8px; background: #1a1a1f; } \
+    .tile-ghost { display: inline-block; padding: 6px 12px; color: #ffffff; background: #4a4a55; border: 1px solid #6a6a77; opacity: 0.85; }";
 
-/// A rendered tile-tree frame: the frame scene (tab bars + dividers) plus one layer
-/// per active tile (its content-area rect + its document's scene) for the host to
-/// composite over the frame.
+/// A rendered tile-tree frame: the frame scene (tab bars + dividers), one layer per
+/// active tile (its content-area rect + its document's scene), and an optional drag
+/// ghost (the dragged tab's preview) the host composites on top.
 pub struct TileFrame {
     pub frame_scene: Scene,
     pub tiles: Vec<TileLayer>,
+    /// The drag ghost to composite last, present only while a tab drag is moving.
+    pub ghost: Option<GhostLayer>,
 }
 
 /// One tile's content layer: which tile, where to composite (`(x, y, w, h)` in surface
 /// px), and the document scene to composite there.
 pub struct TileLayer {
     pub tile: TileId,
+    pub rect: (f32, f32, f32, f32),
+    pub scene: Scene,
+}
+
+/// The drag ghost: a small tab-shaped preview (the dragged tab's title) the host
+/// composites at the cursor while a tab drag is in flight. `rect` is `(x, y, w, h)` in
+/// surface px; `scene` is the ghost's own rendered scene.
+pub struct GhostLayer {
     pub rect: (f32, f32, f32, f32),
     pub scene: Scene,
 }
@@ -279,7 +290,9 @@ impl TileSurface {
                 tiles.push(TileLayer { tile: tile_id, rect, scene });
             }
         }
-        TileFrame { frame_scene, tiles }
+        // The ghost is a host-input concern (it tracks a live drag): the surface renders
+        // the frame body, the shell overlays the ghost when a drag is moving.
+        TileFrame { frame_scene, tiles, ghost: None }
     }
 
     /// The shared frame DOM handle (for the host's hit-testing of tab bars / dividers).
@@ -448,6 +461,28 @@ impl TileSurface {
     pub fn inspect_tile(&self, id: TileId) -> Option<ContentReport> {
         self.docs.get(&id).map(|doc| doc.inspect())
     }
+
+    /// The title of tile `id`, if it is in the tree (the drag ghost's label).
+    pub fn tile_title(&self, id: TileId) -> Option<String> {
+        self.runner.state().tree.find(id).map(|t| t.title.clone())
+    }
+
+    /// Render a drag-ghost scene: a single `.tile-ghost` box carrying `title`, laid out
+    /// at `width`×`height` with the frame stylesheet. The host composites it at the
+    /// cursor while a tab drag is in flight.
+    pub fn ghost_scene(&self, title: &str, width: u32, height: u32) -> Scene {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let div = dom.create_element(qual("div"));
+        dom.set_attribute(div, qual("class"), "tile-ghost");
+        let text = dom.create_text(title);
+        dom.append_child(div, text);
+        dom.append_child(root, div);
+        let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
+        let session =
+            IncrementalLayout::new(&dom, &sheets, width.max(1) as f32, height.max(1) as f32);
+        scene_from_session_dom(&session, &dom, width.max(1), height.max(1))
+    }
 }
 
 /// A divider the host can drag to resize a split (the result of [`TileSurface::divider_at`]).
@@ -459,6 +494,12 @@ pub struct DividerHit {
     pub horizontal: bool,
     /// The split's pixel extent along its axis (drag delta / extent = fraction delta).
     pub extent: f32,
+}
+
+/// A `QualName` in the null namespace (the shape the `ScriptedDom` builders take), for
+/// hand-building the one-element ghost DOM.
+fn qual(local: &str) -> QualName {
+    QualName::new(None, Namespace::from(""), LocalName::from(local))
 }
 
 /// Walk the frame DOM for content-area placeholders (carrying `data-tile=<id>`) and

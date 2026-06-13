@@ -184,6 +184,21 @@ mod windowed {
                     placement(*rect),
                 );
             }
+            // The drag ghost composites last (over everything), on a transparent clear so
+            // only its box shows. `_gt` holds the texture alive until present.
+            if let Some(ghost) = frame.ghost.as_ref() {
+                let (gw, gh) = (ghost.rect.2.max(1.0) as u32, ghost.rect.3.max(1.0) as u32);
+                let (_gt, gview) =
+                    host.rasterize(&ghost.scene, gw, gh, ColorLoad::Clear(wgpu::Color::TRANSPARENT));
+                renderer.compose_external_texture(
+                    &gview,
+                    &target,
+                    host.format(),
+                    win_w,
+                    win_h,
+                    placement(ghost.rect),
+                );
+            }
             swap.present();
             self.redraws += 1;
         }

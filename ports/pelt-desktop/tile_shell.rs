@@ -17,7 +17,7 @@ use pelt_core::tile::{DropTarget, Edge, TileId, TilePath, TileTree};
 use serval_render::ContentReport;
 use xilem_serval::PointerClick;
 
-use crate::tile_surface::{TileFrame, TileSurface};
+use crate::tile_surface::{GhostLayer, TileFrame, TileSurface};
 
 type Rect = (f32, f32, f32, f32);
 
@@ -75,10 +75,22 @@ impl TileShell {
     }
 
     /// Render the frame at the current size, caching the tile content rects for input
-    /// routing. The host composites the returned [`TileFrame`].
+    /// routing. While a tab drag is moving, the frame carries a ghost of the dragged tab
+    /// at the cursor. The host composites the returned [`TileFrame`].
     pub fn frame(&mut self) -> TileFrame {
-        let frame = self.surface.frame(self.width, self.height);
+        let mut frame = self.surface.frame(self.width, self.height);
         self.tile_rects = frame.tiles.iter().map(|t| (t.tile, t.rect)).collect();
+        if let Some(drag) = self.tab_drag.as_ref() {
+            if drag.moved {
+                if let Some(title) = self.surface.tile_title(drag.tile) {
+                    let (gw, gh) = (170u32, 30u32);
+                    let scene = self.surface.ghost_scene(&title, gw, gh);
+                    // Offset so the ghost trails just below-right of the cursor hotspot.
+                    let rect = (self.cursor.0 - 12.0, self.cursor.1 - 14.0, gw as f32, gh as f32);
+                    frame.ghost = Some(GhostLayer { rect, scene });
+                }
+            }
+        }
         frame
     }
 
@@ -360,6 +372,30 @@ mod tests {
         } else {
             panic!("expected a stack");
         }
+    }
+
+    /// A moving tab drag carries a ghost in the frame; at rest and after release there
+    /// is none. The ghost is host input state (it tracks the live drag), so it is
+    /// verifiable headless without reading pixels.
+    #[test]
+    fn drag_carries_ghost_then_clears() {
+        let tree = TileTree::stack(vec![doc_tile(1, "<p>1</p>"), doc_tile(2, "<p>2</p>")], 0);
+        let mut shell = TileShell::new(tree);
+        shell.resize(800, 600);
+        let _ = shell.frame();
+        assert!(shell.frame().ghost.is_none(), "no ghost at rest");
+        // Press tab 1, then move past the drag threshold: the frame carries a ghost.
+        let x = (0..400)
+            .map(|x| x as f32)
+            .find(|&x| shell.surface().tab_at(x, 14.0, 800, 600) == Some(TileId(1)))
+            .expect("tab 1 is in the tab bar");
+        shell.pointer_move(x, 14.0);
+        shell.pointer_down();
+        shell.pointer_move(x + 60.0, 200.0);
+        assert!(shell.frame().ghost.is_some(), "a moving tab drag shows a ghost");
+        // Release ends the drag; the ghost clears.
+        shell.pointer_up();
+        assert!(shell.frame().ghost.is_none(), "the ghost clears after release");
     }
 
     /// Inspecting a tile returns its content's structural report — the observe surface
