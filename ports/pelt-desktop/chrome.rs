@@ -22,12 +22,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use netrender::Scene;
-use serval_layout::ScrollOffsets;
+use serval_layout::{IncrementalLayout, ScrollOffsets};
 use serval_render::scene_from_scripted_dom;
 use serval_scripted_dom::{NodeId, ScriptedDom};
 use xilem_serval::{
-    el, lens, on_click, text_field_typed, AnyView, DomHandle, PointerClick, ServalAppRunner,
-    ServalCtx, ServalElement, TextField, TextInput,
+    el, lens, on_click, text_field_typed, AnyView, DomHandle, KeyEvent, PointerClick,
+    ServalAppRunner, ServalCtx, ServalElement, TextField, TextInput,
 };
 
 /// Which side of the window the chrome strip occupies. A horizontal strip (top/bottom)
@@ -296,6 +296,32 @@ impl Chrome {
     /// point → node), routing it to the toolbar's handlers.
     pub fn dispatch_click(&mut self, target: NodeId, event: PointerClick) {
         self.runner.dispatch_click(target, event);
+    }
+
+    /// Dispatch a key to the focused chrome element (the omnibar, when focused) — the
+    /// shell routes keystrokes here while the chrome holds focus.
+    pub fn dispatch_key(&mut self, event: KeyEvent) {
+        self.runner.dispatch_key(event);
+    }
+
+    /// The focused chrome node, if any. The shell reads this to decide whether
+    /// keystrokes go to the chrome (omnibar editing) or the content (scroll keys).
+    pub fn focused(&self) -> Option<NodeId> {
+        self.runner.focus()
+    }
+
+    /// Hit-test the chrome DOM at strip-local `(x, y)`, laying it out at the strip
+    /// size, so the shell can resolve a click in the strip to a chrome node.
+    pub fn hit_test(&self, x: f32, y: f32, width: u32, height: u32) -> Option<NodeId> {
+        let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
+        let dom = self.runner.dom();
+        let dom = dom.borrow();
+        // `&*dom` (not `&dom`): `IncrementalLayout::new` is generic over `D: LayoutDom`,
+        // so it must see `&ScriptedDom`, not `&Ref<ScriptedDom>` (no deref coercion into
+        // a generic param).
+        let session =
+            IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32);
+        session.hit_test(&*dom, x, y, &ScrollOffsets::default())
     }
 }
 

@@ -22,6 +22,9 @@ pub(crate) fn main() {
     let mut out_path: Option<String> = None;
     let mut reftest_dir: Option<String> = None;
     let mut bless = false;
+    // Chrome demo (V2): wrap the content viewer in an omnibar + back/forward strip.
+    let mut with_chrome = false;
+    let mut strip_side = String::from("top");
     let mut netrender_smoke = false;
     let mut webgl_wgpu_smoke = false;
     #[cfg(feature = "windows-present")]
@@ -90,6 +93,19 @@ pub(crate) fn main() {
             },
             "--bless" => {
                 bless = true;
+            },
+            "--chrome" => {
+                with_chrome = true;
+            },
+            "--strip" => {
+                let Some(value) = args.next() else {
+                    eprintln!("--strip requires top, bottom, left, or right");
+                    std::process::exit(2);
+                };
+                strip_side = value;
+            },
+            value if value.starts_with("--strip=") => {
+                strip_side = value["--strip=".len()..].to_owned();
             },
             "--netrender-smoke" => {
                 netrender_smoke = true;
@@ -202,6 +218,12 @@ pub(crate) fn main() {
     // viewer (the orrery-host present shape over the pelt-core / pelt-desktop
     // contracts). Static and Viewer are the script-free document profiles.
     if matches!(engine_profile, EngineProfile::Static | EngineProfile::Viewer) {
+        // `--chrome`: wrap the content in a xilem-serval omnibar + back/forward strip
+        // (V2's two-root browser shell).
+        if with_chrome {
+            run_chrome_profile(url, strip_side, engine_profile);
+            return;
+        }
         let config = pelt_desktop::StaticViewerConfig::new(
             engine_profile,
             pelt_desktop::WindowingMode::Headed,
@@ -273,6 +295,46 @@ fn run_scripted_profile(url: String, js: String) {
             std::process::exit(1);
         },
     }
+}
+
+/// Dispatch `--chrome` to the two-root browser shell: the content viewer wrapped in a
+/// xilem-serval omnibar + back/forward strip on the chosen side. Present only when
+/// built with `--features chrome`.
+#[cfg(feature = "chrome")]
+fn run_chrome_profile(url: String, side: String, profile: EngineProfile) {
+    use pelt_desktop::StripSide;
+    let side = match side.to_ascii_lowercase().as_str() {
+        "top" => StripSide::Top,
+        "bottom" => StripSide::Bottom,
+        "left" => StripSide::Left,
+        "right" => StripSide::Right,
+        other => {
+            eprintln!("--strip expects top, bottom, left, or right (got '{other}')");
+            std::process::exit(2);
+        },
+    };
+    // A vertical strip wants room for the toolbar; a horizontal one is a thin bar.
+    let thickness = if matches!(side, StripSide::Left | StripSide::Right) { 280 } else { 40 };
+    let config =
+        pelt_desktop::StaticViewerConfig::new(profile, pelt_desktop::WindowingMode::Headed, url);
+    match pelt_desktop::run_chrome_viewer(config, side, thickness) {
+        Ok(outcome) => println!(
+            "pelt chrome viewer url={} window={} redraws={}",
+            outcome.url, outcome.created_window, outcome.redraws
+        ),
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        },
+    }
+}
+
+/// Without the chrome demo compiled in, `--chrome` is a clean error pointing at the
+/// feature to enable.
+#[cfg(not(feature = "chrome"))]
+fn run_chrome_profile(_url: String, _side: String, _profile: EngineProfile) {
+    eprintln!("pelt was built without the chrome demo; rebuild with `--features chrome`");
+    std::process::exit(2);
 }
 
 /// Without the scripted profile compiled in, `--engine scripted` is a clean error
@@ -561,6 +623,8 @@ viewer mode lands).
 
 Options:
     --engine <browser|viewer|static|scripted|headless>
+    --chrome                           (wrap the content viewer in an omnibar + back/forward strip; needs --features chrome)
+    --strip <top|bottom|left|right>    (chrome strip side; default top)
     --js <boa|nova>                    (scripted profile: JS backend; nova needs --features scripted-nova)
     --out <path>                       (headless profile: write the scene snapshot for <file>)
     --reftest <dir>                    (headless profile: run a name.html + name.scene fixture dir)

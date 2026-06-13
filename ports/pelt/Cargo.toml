@@ -39,6 +39,10 @@ viewer-netrender = ["viewer-engine", "pelt-desktop/netrender"]
 # under the Windows image-size limit alongside wgpu); add `scripted-nova` for Nova.
 scripted = ["viewer-engine", "pelt-desktop/viewer", "pelt-desktop/scripted"]
 scripted-nova = ["scripted", "pelt-desktop/scripted-nova"]
+# The chrome demo (V2): `pelt --chrome <url>` wraps the content viewer in a
+# xilem-serval omnibar + back/forward strip. Pulls pelt-desktop's chrome runtime on
+# top of the present stack.
+chrome = ["viewer-engine", "pelt-desktop/viewer", "pelt-desktop/chrome"]
 # C4 headed-presentation smoke. Pulls serval's `WindowsDxgiBackend`
 # in through `pelt-desktop`. Inner code is `cfg(target_os = "windows")`
 # gated so the feature still builds on non-Windows hosts.

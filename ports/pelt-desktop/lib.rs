@@ -26,6 +26,9 @@ mod scripted_viewer;
 #[cfg(feature = "chrome")]
 mod chrome;
 
+#[cfg(all(feature = "viewer", feature = "chrome"))]
+mod chrome_viewer;
+
 /// Structural display defaults the viewer + scripted profiles layer over serval's UA
 /// cascade, so a plain HTML document lays out as a stack of blocks rather than one
 /// inline run, and document metadata stays unpainted. Shared by the static
@@ -82,3 +85,5 @@ pub use scripted::{ScriptedDocument, ScriptedEngine};
 pub use scripted_viewer::run_scripted_viewer;
 #[cfg(feature = "chrome")]
 pub use chrome::{Chrome, ChromeIntent, ChromeState, StripSide};
+#[cfg(all(feature = "viewer", feature = "chrome"))]
+pub use chrome_viewer::run_chrome_viewer;
