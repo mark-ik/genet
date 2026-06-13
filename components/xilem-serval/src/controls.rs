@@ -68,6 +68,13 @@ pub struct TextInput {
     /// caret; [`caret_with_preedit`](Self::caret_with_preedit) is where the caret
     /// then sits.
     preedit: String,
+    /// An inline autocomplete suffix shown dim **after** the text but **not** in
+    /// the committed `text` — fish/omnibar-style ghost completion. The host sets it
+    /// from whatever vocabulary it completes against; [`accept_ghost`](Self::accept_ghost)
+    /// (the host's → / Tab) splices it into the buffer. It is deliberately outside
+    /// [`render_text`](Self::render_text) and the caret geometry, so submitting
+    /// evaluates only what was actually typed, never the suggestion.
+    ghost: String,
 }
 
 impl TextInput {
@@ -75,7 +82,7 @@ impl TextInput {
     pub fn new(text: impl Into<String>) -> Self {
         let text = text.into();
         let caret = text.chars().count();
-        Self { text, caret, anchor: caret, preedit: String::new() }
+        Self { text, caret, anchor: caret, preedit: String::new(), ghost: String::new() }
     }
 
     /// The buffer, without the caret marker.
@@ -97,6 +104,43 @@ impl TextInput {
     /// Clear the IME composition (on `Ime::Commit` / `Ime::Disabled`).
     pub fn clear_preedit(&mut self) {
         self.preedit.clear();
+    }
+
+    /// The inline autocomplete suffix (empty when there is no completion).
+    pub fn ghost(&self) -> &str {
+        &self.ghost
+    }
+
+    /// Set the ghost-completion suffix shown dim after the text. Not committed to
+    /// the buffer until [`accept_ghost`](Self::accept_ghost).
+    pub fn set_ghost(&mut self, text: impl Into<String>) {
+        self.ghost = text.into();
+    }
+
+    /// Clear the ghost suffix.
+    pub fn clear_ghost(&mut self) {
+        self.ghost.clear();
+    }
+
+    /// Select the entire buffer (Ctrl / Cmd + A): anchor at the start, caret at
+    /// the end, so the next edit replaces everything.
+    pub fn select_all(&mut self) {
+        self.anchor = 0;
+        self.caret = self.char_count();
+    }
+
+    /// Splice the ghost suffix into the buffer (the host's → / Tab): append it,
+    /// move the caret to the end, and clear the ghost. A no-op when there is no
+    /// ghost. The buffer is the source of truth, so this is the only way ghost
+    /// text ever enters [`text`](Self::text).
+    pub fn accept_ghost(&mut self) {
+        if self.ghost.is_empty() {
+            return;
+        }
+        self.text.push_str(&self.ghost);
+        self.ghost.clear();
+        self.caret = self.char_count();
+        self.anchor = self.caret;
     }
 
     /// The text to render: the buffer with any IME preedit spliced in at the
@@ -402,6 +446,9 @@ impl TextInput {
 fn edit(input: &mut TextInput, ev: KeyEvent) {
     let extend = ev.mods.shift;
     match ev.key {
+        Key::Character(ref s) if (ev.mods.ctrl || ev.mods.meta) && s.eq_ignore_ascii_case("a") => {
+            input.select_all()
+        }
         Key::Character(s) => input.insert_str(&s),
         Key::Named(NamedKey::Space) => input.insert_str(" "),
         Key::Named(NamedKey::Backspace) => input.backspace(),
@@ -422,6 +469,9 @@ fn edit(input: &mut TextInput, ev: KeyEvent) {
 fn edit_multiline(input: &mut TextInput, ev: KeyEvent) {
     let extend = ev.mods.shift;
     match ev.key {
+        Key::Character(ref s) if (ev.mods.ctrl || ev.mods.meta) && s.eq_ignore_ascii_case("a") => {
+            input.select_all()
+        }
         Key::Character(s) => input.insert_str(&s),
         Key::Named(NamedKey::Space) => input.insert_str(" "),
         Key::Named(NamedKey::Enter) => input.insert_str("\n"),
@@ -446,7 +496,16 @@ fn edit_multiline(input: &mut TextInput, ev: KeyEvent) {
 /// View`; [`text_field_typed`] returns it *named*, for a host that must spell
 /// its concrete view type.
 pub type TextField = OnKey<
-    El<(String, El<String, TextInput, ()>, String), TextInput, ()>,
+    El<
+        (
+            String,
+            El<String, TextInput, ()>,
+            String,
+            El<String, TextInput, ()>,
+        ),
+        TextInput,
+        (),
+    >,
     TextInput,
     (),
     fn(&mut TextInput, KeyEvent),
@@ -454,12 +513,23 @@ pub type TextField = OnKey<
 
 /// Build the field's `<input>` / `<textarea>` body: the rendered text split at
 /// the caret into `(before, preedit, after)`, the preedit an underlined `<span>`
-/// (IME T2; empty when not composing). The three concatenate to the rendered
-/// text, so caret geometry over the whole still lines up.
+/// (IME T2; empty when not composing), then the ghost-completion suffix as a dim
+/// trailing `<span>` (empty when there is no completion). The first three
+/// concatenate to the rendered text, so caret geometry over them lines up; the
+/// ghost sits past the caret and outside the committed buffer.
 fn field_body(
     tag: &str,
     input: &TextInput,
-) -> El<(String, El<String, TextInput, ()>, String), TextInput, ()> {
+) -> El<
+    (
+        String,
+        El<String, TextInput, ()>,
+        String,
+        El<String, TextInput, ()>,
+    ),
+    TextInput,
+    (),
+> {
     let (before, preedit, after) = input.render_parts();
     el::<_, TextInput, ()>(
         tag,
@@ -467,6 +537,11 @@ fn field_body(
             before,
             el::<_, TextInput, ()>("span", preedit).attr("style", "text-decoration: underline;"),
             after,
+            // Ghost styled dim + italic via `color` / `font-style` (stylo-backed);
+            // `opacity` is not plumbed to serval's paint, so a muted colour is what
+            // actually distinguishes the suggestion from the typed text.
+            el::<_, TextInput, ()>("span", input.ghost().to_string())
+                .attr("style", "color: #8b91a0; font-style: italic;"),
         ),
     )
 }

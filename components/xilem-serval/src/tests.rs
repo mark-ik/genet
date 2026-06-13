@@ -1591,6 +1591,44 @@ mod controls {
         assert_eq!(t.caret_byte_in_render(), 1);
     }
 
+    /// Ghost autocomplete: the suffix is shown but stays out of the committed
+    /// buffer and the caret geometry, so submitting evaluates only the typed text.
+    /// `accept_ghost` (the host's → / Tab) is the only path that commits it.
+    #[test]
+    fn textinput_ghost_is_uncommitted_until_accepted() {
+        use crate::TextInput;
+        let mut t = TextInput::new(">ros"); // caret at end (4)
+        t.set_ghost("ter");
+        // The ghost is visible via ghost(), but never via the buffer or render.
+        assert_eq!(t.ghost(), "ter");
+        assert_eq!(t.text(), ">ros", "ghost is not in the committed buffer");
+        assert_eq!(t.render_text(), ">ros", "ghost is not in the rendered (caret) text");
+        assert_eq!(t.caret_byte_in_render(), 4, "the caret sits before the ghost");
+
+        // Accepting splices it in, moves the caret to the end, and clears it.
+        t.accept_ghost();
+        assert_eq!(t.text(), ">roster");
+        assert_eq!(t.ghost(), "", "ghost cleared after accept");
+        assert_eq!(t.caret(), 7, "caret moved to the new end");
+
+        // Accepting with no ghost is a no-op.
+        t.accept_ghost();
+        assert_eq!(t.text(), ">roster");
+    }
+
+    /// Ctrl / Cmd + A selects the whole buffer (anchor at start, caret at end).
+    #[test]
+    fn textinput_select_all_covers_the_buffer() {
+        use crate::TextInput;
+        let mut t = TextInput::new("hello");
+        t.move_left(false); // a collapsed caret, no selection
+        assert!(!t.has_selection());
+        t.select_all();
+        assert!(t.has_selection());
+        assert_eq!(t.selection(), (0, 5));
+        assert_eq!(t.selected_text(), "hello");
+    }
+
     // --- selection (model + keyboard) -----------------------------------------
 
     /// A `Shift`-held key event (extends the selection).
