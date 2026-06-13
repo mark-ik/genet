@@ -454,9 +454,25 @@ pub fn measure_inline_content<NodeId>(
         }
     };
 
-    // Reserve each inline box's space. `<img>` uses its intrinsic/CSS size; an
-    // inline-block is measured from its own content (and its content Layout
-    // cached under (this leaf, box index) for paint).
+    // Re-measure fast path. Taffy probes each leaf at min-content, then
+    // max-content, then its resolved width, so this runs 2-3× per leaf. The
+    // glyph shaping is width-independent — only the line breaks change — so once
+    // a leaf is shaped this pass, re-break the cached `Layout` at the new width
+    // instead of re-shaping from scratch. The cache is cleared each pass by
+    // `TextMeasureCtx::reset`, so a hit means "already shaped this pass"; the last
+    // break wins, leaving the cached layout broken at the final width for paint.
+    if let Some(layout) = ctx.layouts.get_mut(&taffy_id) {
+        break_and_align(layout, max_advance);
+        return Size {
+            width: known_dimensions.width.unwrap_or_else(|| layout.width()),
+            height: known_dimensions.height.unwrap_or_else(|| layout.height()),
+        };
+    }
+
+    // First measure of this leaf this pass: reserve each inline box's space
+    // (`<img>` at its intrinsic/CSS size; an inline-block measured from its own
+    // content, its layout cached under `(this leaf, box index)` for paint), shape
+    // once, break, and cache the shaped `Layout` for the re-measure path + paint.
     let mut box_sizes: Vec<(f32, f32)> = Vec::with_capacity(content.boxes.len());
     for (i, b) in content.boxes.iter().enumerate() {
         let (w, h, layout) = measure_inline_box(ctx, b);
@@ -466,7 +482,8 @@ pub fn measure_inline_content<NodeId>(
         box_sizes.push((w, h));
     }
 
-    let layout = build_inline_layout(ctx, content, &box_sizes, max_advance);
+    let mut layout = shape_inline_layout(ctx, content, &box_sizes);
+    break_and_align(&mut layout, max_advance);
     let size = Size {
         width: known_dimensions.width.unwrap_or_else(|| layout.width()),
         height: known_dimensions.height.unwrap_or_else(|| layout.height()),
@@ -497,20 +514,33 @@ fn measure_inline_box<NodeId>(
             (w, h)
         })
         .collect();
-    let layout = build_inline_layout(ctx, &ib.content, &inner_sizes, ib.css_width);
+    let mut layout = shape_inline_layout(ctx, &ib.content, &inner_sizes);
+    break_and_align(&mut layout, ib.css_width);
     let w = ib.css_width.unwrap_or_else(|| layout.width());
     let h = ib.css_height.unwrap_or_else(|| layout.height());
     (w, h, Some(layout))
 }
 
+/// Break a shaped `Layout` into lines at `max_advance` and start-align it.
+/// Split from [`shape_inline_layout`] so a leaf shaped once can be re-broken at
+/// each candidate width Taffy probes (min-content, max-content, then the final
+/// width) without re-shaping — the glyphs are width-independent; only the line
+/// breaks change. This is the cheap half of inline measurement.
+fn break_and_align(layout: &mut Layout<ColorBrush>, max_advance: Option<f32>) {
+    layout.break_all_lines(max_advance);
+    layout.align(Alignment::Start, AlignmentOptions::default());
+}
+
 /// Shape `content` into a parley `Layout`, reserving each inline box at its
-/// matching `box_sizes` entry and wrapping at `max_advance`. Shared by the leaf
+/// matching `box_sizes` entry. Returns the shaped-but-unbroken layout — the
+/// caller runs [`break_and_align`] at the wrap width. Shaping is the expensive,
+/// width-independent half (glyph runs, font resolution); separating it lets a
+/// leaf shape once per pass and re-break per probed width. Shared by the leaf
 /// measure and each inline-block's own measure.
-fn build_inline_layout<NodeId>(
+fn shape_inline_layout<NodeId>(
     ctx: &mut TextMeasureCtx,
     content: &InlineContent<NodeId>,
     box_sizes: &[(f32, f32)],
-    max_advance: Option<f32>,
 ) -> Layout<ColorBrush> {
     // Concatenate run texts, tracking each run's byte range for the
     // per-run style spans.
@@ -600,10 +630,7 @@ fn build_inline_layout<NodeId>(
         });
     }
 
-    let mut layout: Layout<ColorBrush> = builder.build(text.as_str());
-    layout.break_all_lines(max_advance);
-    layout.align(Alignment::Start, AlignmentOptions::default());
-    layout
+    builder.build(text.as_str())
 }
 
 #[cfg(test)]
