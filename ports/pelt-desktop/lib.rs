@@ -33,6 +33,9 @@ mod chrome_viewer;
 mod tile_surface;
 
 #[cfg(feature = "tiles")]
+mod tile_shell;
+
+#[cfg(feature = "tiles")]
 mod tile_viewer;
 
 /// Structural display defaults the viewer + scripted profiles layer over serval's UA
@@ -93,6 +96,8 @@ pub use scripted_viewer::run_scripted_viewer;
 pub use chrome::{Chrome, ChromeIntent, ChromeState, StripSide};
 #[cfg(all(feature = "viewer", feature = "chrome"))]
 pub use chrome_viewer::run_chrome_viewer;
+#[cfg(feature = "tiles")]
+pub use tile_shell::TileShell;
 #[cfg(feature = "tiles")]
 pub use tile_surface::{DividerHit, TileFrame, TileLayer, TileSurface};
 #[cfg(feature = "tiles")]

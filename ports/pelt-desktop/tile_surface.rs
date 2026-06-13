@@ -24,7 +24,7 @@ use std::rc::Rc;
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
 use netrender::Scene;
 use pelt_core::tile::{
-    ContentSource, DocumentRef, DropTarget, Edge, SplitAxis, TabStack, TileEvent, TileId, TilePath,
+    ContentSource, DocumentRef, DropTarget, SplitAxis, TabStack, TileEvent, TileId, TilePath,
     TileTree,
 };
 use serval_layout::IncrementalLayout;
@@ -460,7 +460,7 @@ fn absolute_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pelt_core::tile::{Tile, TileBranch};
+    use pelt_core::tile::{Edge, Tile, TileBranch};
 
     fn doc_tile(id: u64, html: &str) -> Tile {
         Tile {

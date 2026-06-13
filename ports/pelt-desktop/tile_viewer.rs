@@ -4,15 +4,13 @@
 
 //! The on-screen tile viewer (V5): a window split into tiles, each showing a document.
 //!
-//! V2's windowed shell scaled to N+1 layers: the tile frame (tab bars + dividers, one
-//! xilem-serval scene) composited under each active tile's document (composited into
-//! its content-area rect). Input routes by region — a click/scroll inside a tile's
-//! content rect drives that tile's document; a click elsewhere (a tab) drives the
-//! frame, queuing a `TileEvent` the surface applies through the reducer.
+//! A thin winit + present wrapper over [`TileShell`](crate::tile_shell::TileShell): the
+//! window translates winit events into the shell's semantic pointer/wheel methods and
+//! composites the frame the shell renders. All the interaction logic (drags, drops,
+//! routing) lives in the host-agnostic shell, so the same brain drives the window here
+//! and a headless test/driver elsewhere.
 
-use pelt_core::tile::{
-    ContentSource, DocumentRef, SplitAxis, Tile, TileBranch, TileId, TileTree,
-};
+use pelt_core::tile::{ContentSource, DocumentRef, SplitAxis, Tile, TileBranch, TileId, TileTree};
 
 use crate::{StaticViewerOutcome, WindowingMode};
 
@@ -83,99 +81,53 @@ mod windowed {
 
     use netrender::external_texture::ExternalTexturePlacement;
     use netrender::{ColorLoad, NetrenderOptions};
-    use pelt_core::tile::{DropTarget, Edge, TileId, TilePath, TileTree};
+    use pelt_core::tile::TileTree;
     use serval_winit_host::{wheel_delta_from_winit, SurfaceHost};
     use winit::application::ApplicationHandler;
     use winit::dpi::PhysicalSize;
     use winit::event::{ElementState, MouseButton, WindowEvent};
     use winit::event_loop::{ActiveEventLoop, EventLoop};
     use winit::window::{Window, WindowId};
-    use xilem_serval::PointerClick;
 
     use super::StaticViewerOutcome;
-    use crate::tile_surface::TileSurface;
+    use crate::tile_shell::TileShell;
 
     type Rect = (f32, f32, f32, f32);
 
-    /// An in-progress divider drag: which split + boundary, the axis + the split's
-    /// pixel extent, the press point, and the boundary's fractions at press time (so
-    /// the drag is computed from the start, not incrementally).
-    struct DividerDrag {
-        path: TilePath,
-        index: usize,
-        horizontal: bool,
-        extent: f32,
-        start: (f32, f32),
-        init_first: f32,
-        pair_total: f32,
-    }
-
-    /// An in-progress tab drag: the tile being dragged, the press point, and whether
-    /// the cursor has moved past the click/drag threshold yet.
-    struct TabDrag {
-        tile: TileId,
-        start: (f32, f32),
-        moved: bool,
-    }
-
     pub(super) fn run(tree: TileTree, urls: Vec<String>) -> Result<StaticViewerOutcome, String> {
-        let surface = TileSurface::new(tree);
+        let shell = TileShell::new(tree);
         let event_loop =
             EventLoop::new().map_err(|error| format!("could not create event loop: {error}"))?;
-        let mut app = TileApp::new(surface, urls);
+        let mut app = TileApp::new(shell, urls);
         event_loop
             .run_app(&mut app)
             .map_err(|error| format!("tile event loop failed: {error}"))?;
         Ok(app.outcome())
     }
 
+    /// The window over a [`TileShell`]: winit events translate to shell input, and the
+    /// shell's frame is composited (the frame layer plus one document layer per tile).
     struct TileApp {
-        surface: TileSurface,
+        shell: TileShell,
         first_url: String,
         window: Option<Arc<Window>>,
         host: Option<SurfaceHost>,
         width: u32,
         height: u32,
-        cursor: (f32, f32),
-        /// The last frame's tile content rects, for routing a click/scroll to the tile
-        /// under the cursor.
-        tile_rects: Vec<(TileId, Rect)>,
-        /// The in-progress divider drag, if any.
-        divider_drag: Option<DividerDrag>,
-        /// The in-progress tab drag, if any.
-        tab_drag: Option<TabDrag>,
         redraws: u32,
     }
 
     impl TileApp {
-        fn new(surface: TileSurface, urls: Vec<String>) -> Self {
+        fn new(shell: TileShell, urls: Vec<String>) -> Self {
             Self {
-                surface,
+                shell,
                 first_url: urls.into_iter().next().unwrap_or_default(),
                 window: None,
                 host: None,
                 width: 1100,
                 height: 750,
-                cursor: (0.0, 0.0),
-                tile_rects: Vec::new(),
-                divider_drag: None,
-                tab_drag: None,
                 redraws: 0,
             }
-        }
-
-        /// Resolve a tab drop at the current cursor: over another tile's content rect,
-        /// the edge (the nearest side) to split it on. `None` over no tile, or over the
-        /// dragged tile itself (a self-drop).
-        fn resolve_drop(&self, dragged: TileId) -> Option<DropTarget> {
-            let (tile, rect) = self
-                .tile_rects
-                .iter()
-                .find(|(_, r)| in_rect(self.cursor, *r))?;
-            if *tile == dragged {
-                return None;
-            }
-            Some(DropTarget::Edge { tile: *tile, edge: nearest_edge(self.cursor, *rect) })
         }
 
         fn outcome(&self) -> StaticViewerOutcome {
@@ -186,19 +138,10 @@ mod windowed {
             }
         }
 
-        /// The tile whose content rect contains `p`, with the point in tile-local
-        /// coordinates.
-        fn tile_at(&self, p: (f32, f32)) -> Option<(TileId, (f32, f32))> {
-            self.tile_rects.iter().find_map(|(id, r)| {
-                in_rect(p, *r).then(|| (*id, (p.0 - r.0, p.1 - r.1)))
-            })
-        }
-
-        fn render(&mut self, event_loop: &ActiveEventLoop) {
+        fn render(&mut self) {
             let (win_w, win_h) = (self.width.max(1), self.height.max(1));
-            let frame = self.surface.frame(win_w, win_h);
-            // Cache the tile rects for input routing on the next events.
-            self.tile_rects = frame.tiles.iter().map(|t| (t.tile, t.rect)).collect();
+            self.shell.resize(win_w, win_h);
+            let frame = self.shell.frame();
 
             let Some(host) = self.host.as_ref() else { return };
             // The frame (tab bars + content backgrounds) is the bottom layer; each
@@ -243,7 +186,6 @@ mod windowed {
             }
             swap.present();
             self.redraws += 1;
-            let _ = event_loop;
         }
 
         fn request_redraw(&self) {
@@ -255,28 +197,6 @@ mod windowed {
 
     fn placement(r: Rect) -> ExternalTexturePlacement {
         ExternalTexturePlacement::new([r.0, r.1, r.0 + r.2, r.1 + r.3])
-    }
-
-    fn in_rect(p: (f32, f32), r: Rect) -> bool {
-        p.0 >= r.0 && p.0 < r.0 + r.2 && p.1 >= r.1 && p.1 < r.1 + r.3
-    }
-
-    /// The side of rect `r` nearest to point `p` — the edge a tab dropped there splits
-    /// on (drop near the right border → split with the dropped tile on the right).
-    fn nearest_edge(p: (f32, f32), r: Rect) -> Edge {
-        let rx = if r.2 > 0.0 { (p.0 - r.0) / r.2 } else { 0.5 };
-        let ry = if r.3 > 0.0 { (p.1 - r.1) / r.3 } else { 0.5 };
-        let (left, right, top, bottom) = (rx, 1.0 - rx, ry, 1.0 - ry);
-        let m = left.min(right).min(top).min(bottom);
-        if m == left {
-            Edge::Left
-        } else if m == right {
-            Edge::Right
-        } else if m == top {
-            Edge::Top
-        } else {
-            Edge::Bottom
-        }
     }
 
     impl ApplicationHandler for TileApp {
@@ -298,6 +218,7 @@ mod windowed {
             let size = window.inner_size();
             self.width = size.width.max(1);
             self.height = size.height.max(1);
+            self.shell.resize(self.width, self.height);
             let options = NetrenderOptions {
                 tile_cache_size: Some(64),
                 enable_vello: true,
@@ -332,111 +253,33 @@ mod windowed {
                     if let Some(host) = self.host.as_mut() {
                         host.resize(self.width, self.height);
                     }
+                    self.shell.resize(self.width, self.height);
                     self.request_redraw();
                 }
                 WindowEvent::CursorMoved { position, .. } => {
-                    self.cursor = (position.x as f32, position.y as f32);
-                    // A live divider drag: recompute the boundary fractions from the
-                    // press point (so the drag is absolute, not accumulating drift).
-                    let drag = self.divider_drag.as_ref().map(|d| {
-                        (d.path.clone(), d.index, d.horizontal, d.extent, d.start, d.init_first, d.pair_total)
-                    });
-                    if let Some((path, index, horizontal, extent, start, init_first, total)) = drag {
-                        let delta =
-                            if horizontal { self.cursor.0 - start.0 } else { self.cursor.1 - start.1 };
-                        let frac_delta = if extent > 0.0 { delta / extent } else { 0.0 };
-                        let new_first = (init_first + frac_delta).clamp(0.05 * total, 0.95 * total);
-                        if let Some(mut fracs) = self.surface.fractions_at(&path) {
-                            if index + 1 < fracs.len() {
-                                fracs[index] = new_first;
-                                fracs[index + 1] = total - new_first;
-                                self.surface.set_divider_fractions(&path, fracs);
-                                self.request_redraw();
-                            }
-                        }
-                    }
-                    // A tab drag becomes active once the cursor leaves the press point.
-                    if let Some(drag) = self.tab_drag.as_mut() {
-                        if (self.cursor.0 - drag.start.0).abs() + (self.cursor.1 - drag.start.1).abs()
-                            > 6.0
-                        {
-                            drag.moved = true;
-                        }
+                    if self.shell.pointer_move(position.x as f32, position.y as f32) {
+                        self.request_redraw();
                     }
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     if button != MouseButton::Left {
                         return;
                     }
-                    let (w, h) = (self.width.max(1), self.height.max(1));
-                    if state == ElementState::Released {
-                        self.divider_drag = None;
-                        // End a tab drag: a moved drag drops (splits on the target's
-                        // nearest edge); an unmoved one was a click, so activate the tab.
-                        if let Some(drag) = self.tab_drag.take() {
-                            if drag.moved {
-                                if let Some(to) = self.resolve_drop(drag.tile) {
-                                    self.surface.drag_tile(drag.tile, to);
-                                }
-                            } else if let Some(node) =
-                                self.surface.hit_test_frame(drag.start.0, drag.start.1, w, h)
-                            {
-                                self.surface.dispatch_click(node, PointerClick::at(drag.start));
-                                self.surface.pump();
-                            }
-                            self.request_redraw();
-                        }
-                        return;
+                    let changed = match state {
+                        ElementState::Pressed => self.shell.pointer_down(),
+                        ElementState::Released => self.shell.pointer_up(),
+                    };
+                    if changed {
+                        self.request_redraw();
                     }
-                    // A press on a divider starts a resize drag (dividers sit in the
-                    // gaps, so this takes priority over content / tab routing).
-                    if let Some(hit) = self.surface.divider_at(self.cursor.0, self.cursor.1, w, h) {
-                        if let Some(fracs) = self.surface.fractions_at(&hit.path) {
-                            if hit.index + 1 < fracs.len() {
-                                self.divider_drag = Some(DividerDrag {
-                                    path: hit.path,
-                                    index: hit.index,
-                                    horizontal: hit.horizontal,
-                                    extent: hit.extent,
-                                    start: self.cursor,
-                                    init_first: fracs[hit.index],
-                                    pair_total: fracs[hit.index] + fracs[hit.index + 1],
-                                });
-                            }
-                        }
-                        return;
-                    }
-                    // Inside a tile's content: route the click to that document.
-                    if let Some((tile, local)) = self.tile_at(self.cursor) {
-                        if self.surface.click_tile(tile, local.0, local.1) {
-                            self.request_redraw();
-                        }
-                        return;
-                    }
-                    // On a tab: begin a potential tab drag (resolved on release as a
-                    // drag-to-split or, if it never moved, a tab activation).
-                    if let Some(tile) = self.surface.tab_at(self.cursor.0, self.cursor.1, w, h) {
-                        self.tab_drag = Some(TabDrag { tile, start: self.cursor, moved: false });
-                        return;
-                    }
-                    // A close × or other frame click: dispatch it now.
-                    if let Some(node) =
-                        self.surface.hit_test_frame(self.cursor.0, self.cursor.1, w, h)
-                    {
-                        self.surface.dispatch_click(node, PointerClick::at(self.cursor));
-                        self.surface.pump();
-                    }
-                    self.request_redraw();
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
-                    if let Some((tile, _)) = self.tile_at(self.cursor) {
-                        let (dx, dy) = wheel_delta_from_winit(delta);
-                        if self.surface.scroll_tile(tile, dx, dy) {
-                            self.request_redraw();
-                        }
+                    let (dx, dy) = wheel_delta_from_winit(delta);
+                    if self.shell.wheel(dx, dy) {
+                        self.request_redraw();
                     }
                 }
-                WindowEvent::RedrawRequested => self.render(event_loop),
+                WindowEvent::RedrawRequested => self.render(),
                 _ => {}
             }
         }
