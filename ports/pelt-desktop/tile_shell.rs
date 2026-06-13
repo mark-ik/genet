@@ -143,6 +143,11 @@ impl TileShell {
             if (self.cursor.0 - drag.start.0).abs() + (self.cursor.1 - drag.start.1).abs() > 6.0 {
                 drag.moved = true;
             }
+            // Repaint on every move of an armed tab drag so the ghost follows the
+            // cursor (the frame adds the ghost from this drag state).
+            if drag.moved {
+                redraw = true;
+            }
         }
         redraw
     }
@@ -391,7 +396,9 @@ mod tests {
             .expect("tab 1 is in the tab bar");
         shell.pointer_move(x, 14.0);
         shell.pointer_down();
-        shell.pointer_move(x + 60.0, 200.0);
+        // The move past the threshold must signal a redraw, or the windowed shell never
+        // re-frames and the ghost never paints (the bug this guards).
+        assert!(shell.pointer_move(x + 60.0, 200.0), "a moving tab drag asks for a redraw");
         assert!(shell.frame().ghost.is_some(), "a moving tab drag shows a ghost");
         // Release ends the drag; the ghost clears.
         shell.pointer_up();
