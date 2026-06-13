@@ -36,6 +36,15 @@ scripted = [
 # it links a second engine, which on Windows can exceed the linker's image-size limit
 # alongside wgpu — build it on Linux/macOS, or Windows without the present stack.
 scripted-nova = ["scripted", "dep:script-engine-nova"]
+# The chrome profile (V2): browser chrome (omnibar + back/forward) built as
+# xilem-serval views over a second `ScriptedDom`, rendered GPU-free through
+# serval-render. No JS engine — the chrome is view-driven, not script-driven (a
+# sanctioned mod tier is a later lane). The windowed two-root shell additionally
+# needs `viewer` for the present stack + the content document.
+chrome = [
+    "dep:netrender", "dep:serval-render", "dep:serval-layout", "dep:serval-scripted-dom",
+    "dep:layout-dom-api", "dep:xilem-serval",
+]
 netrender = ["dep:netrender", "dep:webgl_wgpu", "dep:wgpu"]
 # Headed presentation through serval's `WindowsDxgiBackend`. Drives
 # the netrender renderer through the C4 DCOMP composition swapchain
@@ -103,6 +112,9 @@ script-engine-boa = { path = "../../components/script-engine-boa", optional = tr
 script-engine-nova = { path = "../../components/script-engine-nova", optional = true }
 # The `LayoutDom` trait (for the inline-`<script>` DOM walk) + QualName parts.
 layout-dom-api = { path = "../../components/shared/layout-dom", optional = true }
+# Chrome profile (behind the `chrome` feature): the xilem-serval reactive toolkit the
+# omnibar + back/forward views are built with, over a ScriptedDom the runner drives.
+xilem-serval = { path = "../../components/xilem-serval", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Windows-only types (HWND) used by the `windows-present` feature's

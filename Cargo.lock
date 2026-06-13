@@ -4907,6 +4907,7 @@ dependencies = [
  "wgpu",
  "windows 0.62.2",
  "winit",
+ "xilem-serval",
 ]
 
 [[package]]
