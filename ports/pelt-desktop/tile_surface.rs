@@ -24,7 +24,8 @@ use std::rc::Rc;
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
 use netrender::Scene;
 use pelt_core::tile::{
-    ContentSource, DocumentRef, SplitAxis, TabStack, TileEvent, TileId, TilePath, TileTree,
+    ContentSource, DocumentRef, DropTarget, Edge, SplitAxis, TabStack, TileEvent, TileId, TilePath,
+    TileTree,
 };
 use serval_layout::IncrementalLayout;
 use serval_render::scene_from_session_dom;
@@ -133,7 +134,9 @@ fn render_stack(stack: &TabStack) -> TileView {
                 },
             );
             Box::new(on_click(
-                el::<_, TileState, ()>("div", (label, close)).attr("class", class),
+                el::<_, TileState, ()>("div", (label, close))
+                    .attr("class", class)
+                    .attr("data-tabid", id.0.to_string()),
                 move |s: &mut TileState, _: PointerClick| s.pending.push(TileEvent::Activated(id)),
             )) as TileView
         })
@@ -340,6 +343,44 @@ impl TileSurface {
         }
     }
 
+    /// The tile id of the tab at `(x, y)`, if a tab is there and the press is not on its
+    /// close × (which the host dispatches as a click instead). Lets the host start a
+    /// tab drag from the press.
+    pub fn tab_at(&self, x: f32, y: f32, width: u32, height: u32) -> Option<TileId> {
+        let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
+        let dom = self.runner.dom();
+        let dom = dom.borrow();
+        let session =
+            IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32);
+        let mut node = session.hit_test(&*dom, x, y, &serval_layout::ScrollOffsets::default())?;
+        let ns = Namespace::default();
+        let class = LocalName::from("class");
+        // A press on the close × is a close, not a drag.
+        if dom
+            .attribute(node, &ns, &class)
+            .is_some_and(|c| c.split_whitespace().any(|w| w == "tile-close"))
+        {
+            return None;
+        }
+        let tabid = LocalName::from("data-tabid");
+        loop {
+            if let Some(id) = dom.attribute(node, &ns, &tabid).and_then(|s| s.parse::<u64>().ok()) {
+                return Some(TileId(id));
+            }
+            node = dom.parent(node)?;
+        }
+    }
+
+    /// Move `tile` onto `to` (a tab drag), applied through the reducer, then reconcile
+    /// the live document set.
+    pub fn drag_tile(&mut self, tile: TileId, to: DropTarget) {
+        let event = TileEvent::Dragged { tile, to };
+        self.runner.update(|s| {
+            s.tree.apply(&event);
+        });
+        self.load_docs();
+    }
+
     /// The child fractions of the split at `path` (for the host's divider drag).
     pub fn fractions_at(&self, path: &TilePath) -> Option<Vec<f32>> {
         self.runner.state().tree.fractions_at(path)
@@ -510,6 +551,31 @@ mod tests {
             (fracs[0] - 0.7).abs() < 1e-5 && (fracs[1] - 0.3).abs() < 1e-5,
             "fractions updated: {fracs:?}",
         );
+    }
+
+    /// A tab can be located by point, and dragging it onto another tile's edge splits
+    /// there: the tile leaves its stack and lands beside the drop target.
+    #[test]
+    fn tab_drag_onto_edge_splits() {
+        let tree = TileTree::split(
+            SplitAxis::Row,
+            vec![
+                TileBranch::new(
+                    0.5,
+                    TileTree::stack(vec![doc_tile(1, "<p>1</p>"), doc_tile(2, "<p>2</p>")], 0),
+                ),
+                TileBranch::new(0.5, TileTree::single(doc_tile(3, "<p>3</p>"))),
+            ],
+        );
+        let mut surface = TileSurface::new(tree);
+        let _ = surface.frame(800, 600);
+        // A tab sits in the left stack's tab bar.
+        assert!(surface.tab_at(20.0, 14.0, 800, 600).is_some(), "a tab is hit at the tab bar");
+        // Drag tile 1 onto tile 3's right edge.
+        surface.drag_tile(TileId(1), DropTarget::Edge { tile: TileId(3), edge: Edge::Right });
+        // Left stack lost tile 1 ([2]); the right became a split [3 | 1].
+        let ids: Vec<u64> = surface.tree().tiles().iter().map(|t| t.id.0).collect();
+        assert_eq!(ids, vec![2, 3, 1], "tile 1 moved beside tile 3: {ids:?}");
     }
 
     /// Closing a tab via its × removes it from the stack and reconciles the docs.
