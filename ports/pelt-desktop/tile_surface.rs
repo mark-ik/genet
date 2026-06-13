@@ -93,8 +93,18 @@ fn render_stack(stack: &TabStack) -> TileView {
         .map(|(i, tile)| {
             let id = tile.id;
             let class = if i == stack.active { "tile-tab active" } else { "tile-tab" };
+            // The label activates the tab; the close × removes it. The × stops
+            // propagation so its click does not also reach the tab's activate handler.
+            let label = el::<_, TileState, ()>("span", tile.title.clone()).attr("class", "tile-label");
+            let close = on_click(
+                el::<_, TileState, ()>("span", "\u{00d7}").attr("class", "tile-close"),
+                move |s: &mut TileState, ev: PointerClick| {
+                    ev.stop_propagation();
+                    s.pending.push(TileEvent::Closed(id));
+                },
+            );
             Box::new(on_click(
-                el::<_, TileState, ()>("div", tile.title.clone()).attr("class", class),
+                el::<_, TileState, ()>("div", (label, close)).attr("class", class),
                 move |s: &mut TileState, _: PointerClick| s.pending.push(TileEvent::Activated(id)),
             )) as TileView
         })
@@ -124,8 +134,9 @@ const DEFAULT_TILE_CSS: &str = "\
     .tile-branch { display: flex; } \
     .tile-stack { width: 100%; height: 100%; } \
     .tile-tabbar { display: flex; height: 28px; background: #33333a; } \
-    .tile-tab { padding: 5px 12px; color: #cccccc; background: #2a2a30; margin-right: 2px; } \
+    .tile-tab { display: flex; align-items: center; padding: 5px 10px; color: #cccccc; background: #2a2a30; margin-right: 2px; } \
     .tile-tab.active { color: #ffffff; background: #4a4a55; } \
+    .tile-close { margin-left: 8px; padding: 0 4px; color: #999999; } \
     .tile-content { flex: 1 1 0; min-height: 0; background: #ffffff; }";
 
 /// A rendered tile-tree frame: the frame scene (tab bars + dividers) plus one layer
@@ -387,23 +398,70 @@ mod tests {
         }
     }
 
-    /// Find a tab `<div class="tile-tab...">` whose text is `label`.
+    /// Closing a tab via its × removes it from the stack and reconciles the docs.
+    #[test]
+    fn close_button_removes_tab() {
+        let stack = TileTree::stack(
+            vec![doc_tile(1, "<p>one</p>"), doc_tile(2, "<p>two</p>")],
+            0,
+        );
+        let mut surface = TileSurface::new(stack);
+        let _ = surface.frame(800, 600);
+        // Click the × inside the tab labelled "tab2".
+        let close = find_close(&surface, "tab2").expect("tab2 close button");
+        surface.dispatch_click(close, PointerClick::at((0.0, 0.0)));
+        assert!(surface.pump(), "closing changed the tree");
+        // The stack collapsed to a single remaining tile (tab1).
+        let ids: Vec<u64> = surface.tree().tiles().iter().map(|t| t.id.0).collect();
+        assert_eq!(ids, vec![1], "tab2 was removed: {ids:?}");
+    }
+
+    /// The full descendant text of `node`, in document order.
+    fn node_text(dom: &ScriptedDom, node: NodeId) -> String {
+        let mut out = String::new();
+        collect_text(dom, node, &mut out);
+        out
+    }
+
+    fn collect_text(dom: &ScriptedDom, node: NodeId, out: &mut String) {
+        if let Some(t) = dom.text(node) {
+            out.push_str(t);
+        }
+        for child in dom.dom_children(node) {
+            collect_text(dom, child, out);
+        }
+    }
+
+    fn has_class(dom: &ScriptedDom, node: NodeId, class: &str) -> bool {
+        dom.attribute(node, &Namespace::default(), &LocalName::from("class"))
+            .is_some_and(|c| c.split_whitespace().any(|w| w == class))
+    }
+
+    /// Find a tab `<div class="tile-tab">` whose label text contains `label`.
     fn find_tab(surface: &TileSurface, label: &str) -> Option<NodeId> {
         let dom = surface.dom();
         let dom = dom.borrow();
         let mut stack = vec![dom.document()];
         while let Some(node) = stack.pop() {
-            let is_tab = dom
-                .attribute(node, &Namespace::default(), &LocalName::from("class"))
-                .is_some_and(|c| c.starts_with("tile-tab"));
-            if is_tab {
-                let text: String = dom
-                    .dom_children(node)
-                    .filter_map(|c| dom.text(c).map(str::to_string))
-                    .collect();
-                if text == label {
-                    return Some(node);
-                }
+            if has_class(&dom, node, "tile-tab") && node_text(&dom, node).contains(label) {
+                return Some(node);
+            }
+            for child in dom.dom_children(node) {
+                stack.push(child);
+            }
+        }
+        None
+    }
+
+    /// Find the `.tile-close` span inside the tab labelled `label`.
+    fn find_close(surface: &TileSurface, label: &str) -> Option<NodeId> {
+        let tab = find_tab(surface, label)?;
+        let dom = surface.dom();
+        let dom = dom.borrow();
+        let mut stack = vec![tab];
+        while let Some(node) = stack.pop() {
+            if has_class(&dom, node, "tile-close") {
+                return Some(node);
             }
             for child in dom.dom_children(node) {
                 stack.push(child);
