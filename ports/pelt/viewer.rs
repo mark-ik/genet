@@ -17,6 +17,11 @@ pub(crate) fn main() {
     // scripted-nova). Parsed as a string so the flag exists even in builds without
     // the scripted profile.
     let mut js_engine = String::from("boa");
+    // Headless profile (V3 reftest harness): `--out <path>` writes a scene snapshot;
+    // `--reftest <dir>` runs a fixture directory; `--bless` (re)writes the snapshots.
+    let mut out_path: Option<String> = None;
+    let mut reftest_dir: Option<String> = None;
+    let mut bless = false;
     let mut netrender_smoke = false;
     let mut webgl_wgpu_smoke = false;
     #[cfg(feature = "windows-present")]
@@ -62,6 +67,29 @@ pub(crate) fn main() {
             },
             value if value.starts_with("--js=") => {
                 js_engine = value["--js=".len()..].to_owned();
+            },
+            "--out" => {
+                let Some(value) = args.next() else {
+                    eprintln!("--out requires a path");
+                    std::process::exit(2);
+                };
+                out_path = Some(value);
+            },
+            value if value.starts_with("--out=") => {
+                out_path = Some(value["--out=".len()..].to_owned());
+            },
+            "--reftest" => {
+                let Some(value) = args.next() else {
+                    eprintln!("--reftest requires a fixture directory");
+                    std::process::exit(2);
+                };
+                reftest_dir = Some(value);
+            },
+            value if value.starts_with("--reftest=") => {
+                reftest_dir = Some(value["--reftest=".len()..].to_owned());
+            },
+            "--bless" => {
+                bless = true;
             },
             "--netrender-smoke" => {
                 netrender_smoke = true;
@@ -202,6 +230,14 @@ pub(crate) fn main() {
         return;
     }
 
+    // `pelt --engine headless`: GPU-free scene-snapshot render (V3 reftest harness).
+    // `--reftest <dir>` runs a fixture directory; otherwise `--out <path>` (or stdout)
+    // writes the snapshot for `<file>`.
+    if matches!(engine_profile, EngineProfile::Headless) {
+        run_headless_profile(url, out_path, reftest_dir, bless);
+        return;
+    }
+
     eprintln!(
         "pelt has no engine for profile {engine_profile} in this build; use \
          --engine static <url> for the on-screen document viewer, \
@@ -248,6 +284,75 @@ fn run_scripted_profile(_url: String, _js: String) {
          (or `--features scripted-nova` for the Nova backend)"
     );
     std::process::exit(2);
+}
+
+/// The headless reftest harness. With `reftest`, run every `name.html` fixture in the
+/// directory against its committed `name.scene` snapshot (or write them under `bless`);
+/// otherwise render `url` to a single scene snapshot, to `out` (or stdout). Exits
+/// non-zero on any reftest failure / error. (Always available here — viewer.rs is
+/// wholly under `viewer-engine`, which enables pelt-desktop's viewer stack.)
+fn run_headless_profile(
+    url: String,
+    out: Option<String>,
+    reftest: Option<String>,
+    bless: bool,
+) {
+    use pelt_desktop::{render_snapshot, run_reftests, Outcome, DEFAULT_HEIGHT, DEFAULT_WIDTH};
+
+    if let Some(dir) = reftest {
+        let results = match run_reftests(
+            std::path::Path::new(&dir),
+            DEFAULT_WIDTH,
+            DEFAULT_HEIGHT,
+            bless,
+        ) {
+            Ok(results) => results,
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            },
+        };
+        let (mut passed, mut failed, mut errored) = (0u32, 0u32, 0u32);
+        for result in &results {
+            match &result.outcome {
+                Outcome::Pass => {
+                    passed += 1;
+                    println!("  ok     {}", result.name);
+                },
+                Outcome::Fail { first_diff_line, .. } => {
+                    failed += 1;
+                    println!("  FAIL   {} (first diff at line {first_diff_line})", result.name);
+                },
+                Outcome::Error(message) => {
+                    errored += 1;
+                    println!("  ERROR  {} ({message})", result.name);
+                },
+            }
+        }
+        let blessed = if bless { " (blessed)" } else { "" };
+        println!("reftest: {passed} passed, {failed} failed, {errored} errored{blessed}");
+        if failed > 0 || errored > 0 {
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    match render_snapshot(&url, DEFAULT_WIDTH, DEFAULT_HEIGHT) {
+        Ok(snapshot) => match out {
+            Some(path) => match std::fs::write(&path, &snapshot) {
+                Ok(()) => println!("pelt headless wrote {} bytes to {path}", snapshot.len()),
+                Err(error) => {
+                    eprintln!("could not write {path}: {error}");
+                    std::process::exit(1);
+                },
+            },
+            None => print!("{snapshot}"),
+        },
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        },
+    }
 }
 
 fn run_optional_netrender_smoke() {
@@ -457,6 +562,9 @@ viewer mode lands).
 Options:
     --engine <browser|viewer|static|scripted|headless>
     --js <boa|nova>                    (scripted profile: JS backend; nova needs --features scripted-nova)
+    --out <path>                       (headless profile: write the scene snapshot for <file>)
+    --reftest <dir>                    (headless profile: run a name.html + name.scene fixture dir)
+    --bless                            (headless --reftest: (re)write the .scene snapshots)
     --netrender-smoke
     --webgl-wgpu-smoke
     --windows-present-smoke            (requires --features windows-present, target_os = \"windows\")

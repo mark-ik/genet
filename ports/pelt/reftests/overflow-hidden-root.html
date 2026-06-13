@@ -1,0 +1,8 @@
+<!doctype html>
+<!-- Viewport family: overflow:hidden propagated from the root disables document
+     scroll, so a tall page does not paint a scrolled/clipped overflow region. -->
+<html><head><style>
+  html { overflow: hidden; }
+  .tall { height: 2000px; background: #eef; }
+</style></head>
+<body><div class="tall">taller than the viewport, but the root clips it</div></body></html>

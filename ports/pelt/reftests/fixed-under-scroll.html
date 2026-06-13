@@ -1,0 +1,15 @@
+<!doctype html>
+<!-- Viewport family: under scroll (see fixed-under-scroll.scroll), a position:fixed
+     box stays pinned to the viewport (counter-translated) while a position:absolute
+     box scrolls away with the document. -->
+<html><head><style>
+  body { margin: 0; }
+  .fixed { position: fixed; top: 0; left: 0; height: 40px; background: #8cf; }
+  .abs { position: absolute; top: 0; left: 200px; height: 40px; background: #fc8; }
+  .tall { height: 2000px; background: #f4f4f4; }
+</style></head>
+<body>
+  <div class="fixed">pinned</div>
+  <div class="abs">scrolls away</div>
+  <div class="tall">tall body</div>
+</body></html>

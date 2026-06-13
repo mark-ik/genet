@@ -14,6 +14,9 @@ mod static_viewer;
 #[cfg(feature = "viewer")]
 mod document;
 
+#[cfg(feature = "viewer")]
+mod headless;
+
 #[cfg(feature = "scripted")]
 mod scripted;
 
@@ -66,6 +69,10 @@ pub use smoke_wayland::{
 pub use static_viewer::{StaticViewerConfig, StaticViewerOutcome, run_static_viewer};
 #[cfg(feature = "viewer")]
 pub use document::{LoadedDocument, LocalFetcher};
+#[cfg(feature = "viewer")]
+pub use headless::{
+    render_snapshot, run_reftests, Outcome, ReftestResult, DEFAULT_HEIGHT, DEFAULT_WIDTH,
+};
 #[cfg(feature = "scripted")]
 pub use scripted::{ScriptedDocument, ScriptedEngine};
 #[cfg(all(feature = "viewer", feature = "scripted"))]
