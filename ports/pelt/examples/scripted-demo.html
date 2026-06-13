@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+<head>
+<style>
+  body { font-family: sans-serif; padding: 24px; color: #1a1a1a; }
+  h1 { color: #228866; margin: 0 0 8px; }
+  p { color: #444; }
+  .count { font-size: 64px; color: #224488; padding: 8px 0; }
+  .row { padding: 3px 0; color: #555; }
+</style>
+</head>
+<body>
+  <h1>pelt &mdash; scripted profile</h1>
+  <p>This page's DOM is mutated live by JavaScript running through
+     script-runtime-api. The counter and the list below are rebuilt by a
+     <code>setInterval</code> the shell drives at frame cadence, and the
+     churned nodes are reclaimed by the GC tick.</p>
+  <div id="counter" class="count">0</div>
+  <div id="log"></div>
+  <script>
+    var n = 0;
+    var counter = document.getElementById('counter');
+    var log = document.getElementById('log');
+    setInterval(function () {
+      n = n + 1;
+      // Mutate: replace the counter's text each tick.
+      counter.textContent = String(n);
+      // Churn: rebuild a small list each tick (exercises the frame-cadence GC,
+      // since each tick's old rows are orphaned and must be reaped).
+      while (log.firstChild) { log.removeChild(log.firstChild); }
+      for (var i = 0; i < 5; i++) {
+        var row = document.createElement('div');
+        row.setAttribute('class', 'row');
+        row.appendChild(document.createTextNode('tick ' + n + ' · row ' + i));
+        log.appendChild(row);
+      }
+    }, 500);
+  </script>
+</body>
+</html>

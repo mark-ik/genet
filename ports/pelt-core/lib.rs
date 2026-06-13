@@ -19,6 +19,10 @@ pub enum EngineProfile {
     Viewer,
     /// Alias for the script-free validation profile.
     Static,
+    /// The scripted profile (V4): a live document whose inline `<script>` runs
+    /// through `script-runtime-api` on a JS engine, mutating the DOM, rendered each
+    /// frame. The content tier's proving ground (and the gc-arena soak's host).
+    Scripted,
     /// Future automation-first profile. This is separate from `--headless`,
     /// which only selects the shell windowing mode.
     Headless,
@@ -42,6 +46,7 @@ impl fmt::Display for EngineProfile {
             Self::Browser => "browser",
             Self::Viewer => "viewer",
             Self::Static => "static",
+            Self::Scripted => "scripted",
             Self::Headless => "headless",
         };
         f.write_str(name)
@@ -56,9 +61,10 @@ impl FromStr for EngineProfile {
             "browser" => Ok(Self::Browser),
             "viewer" => Ok(Self::Viewer),
             "static" => Ok(Self::Static),
+            "scripted" => Ok(Self::Scripted),
             "headless" => Ok(Self::Headless),
             other => Err(format!(
-                "unknown engine profile '{other}'; expected browser, viewer, static, or headless"
+                "unknown engine profile '{other}'; expected browser, viewer, static, scripted, or headless"
             )),
         }
     }
@@ -101,7 +107,11 @@ impl ShellEngine for DeferredShellEngine {
     }
 
     fn capabilities(&self) -> ShellEngineCapabilities {
-        ShellEngineCapabilities::default()
+        ShellEngineCapabilities {
+            // The scripted profile runs JS; the other profiles are script-free today.
+            javascript: matches!(self.profile, EngineProfile::Scripted),
+            ..ShellEngineCapabilities::default()
+        }
     }
 }
 

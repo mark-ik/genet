@@ -67,14 +67,27 @@ fn run_headed(_config: StaticViewerConfig) -> Result<StaticViewerOutcome, String
 
 #[cfg(feature = "viewer")]
 fn run_headed(config: StaticViewerConfig) -> Result<StaticViewerOutcome, String> {
-    use winit::event_loop::EventLoop;
-
     // Load the document before opening a window, so a bad URL fails fast (and the
     // caller reports the error) rather than flashing an empty window.
     let doc = crate::document::LoadedDocument::load(&crate::document::LocalFetcher, &config.url)?;
+    run_headed_with(config, doc)
+}
+
+/// Open a window and present `content` (any [`ViewerContent`](windowed::ViewerContent))
+/// through the shared winit shell until the window closes. The static viewer and the
+/// scripted viewer ([`crate::scripted`]) are the two callers — same shell, different
+/// document. Kept generic (not a trait object) so each content type monomorphizes and
+/// the scripted profile can pick its JS engine at the call site.
+#[cfg(feature = "viewer")]
+pub(crate) fn run_headed_with<C: windowed::ViewerContent + 'static>(
+    config: StaticViewerConfig,
+    content: C,
+) -> Result<StaticViewerOutcome, String> {
+    use winit::event_loop::EventLoop;
+
     let event_loop =
         EventLoop::new().map_err(|error| format!("could not create event loop: {error}"))?;
-    let mut app = windowed::ViewerApp::new(config, doc);
+    let mut app = windowed::ViewerApp::new(config, content);
     event_loop
         .run_app(&mut app)
         .map_err(|error| format!("viewer event loop failed: {error}"))?;
@@ -82,11 +95,12 @@ fn run_headed(config: StaticViewerConfig) -> Result<StaticViewerOutcome, String>
 }
 
 #[cfg(feature = "viewer")]
-mod windowed {
+pub(crate) mod windowed {
     use std::sync::Arc;
+    use std::time::Instant;
 
     use netrender::external_texture::ExternalTexturePlacement;
-    use netrender::{ColorLoad, NetrenderOptions};
+    use netrender::{ColorLoad, NetrenderOptions, Scene};
     use serval_layout::ScrollKey;
     use serval_winit_host::{wheel_delta_from_winit, SurfaceHost};
     use winit::application::ApplicationHandler;
@@ -98,6 +112,43 @@ mod windowed {
 
     use super::{StaticViewerConfig, StaticViewerOutcome};
     use crate::document::LoadedDocument;
+
+    /// A document the viewer can present: render at a size, scroll, click, and (for
+    /// scripted content) advance time-based work. The static [`LoadedDocument`] and
+    /// the scripted [`ScriptedDocument`](crate::scripted::ScriptedDocument) both
+    /// implement it, so they share this one winit shell — the lib-first surface the
+    /// pelt plan's V5/V6 grow from.
+    pub(crate) trait ViewerContent {
+        /// Render at `width`×`height` at the current scroll.
+        fn frame(&mut self, width: u32, height: u32) -> Scene;
+        /// Scroll by a device-px wheel delta; return whether the offset moved.
+        fn scroll_by(&mut self, dx: f32, dy: f32) -> bool;
+        /// Apply a keyboard scroll default; return whether the offset moved.
+        fn scroll_for_key(&mut self, key: ScrollKey) -> bool;
+        /// Handle a left click at a scene point; return whether the document scrolled.
+        fn click_at(&mut self, x: f32, y: f32) -> bool;
+        /// Advance time-based work (script timers + GC) to `now_ms`; return whether
+        /// more is pending, so the shell keeps requesting frames. Static content has
+        /// none — the default returns `false` and the shell redraws only on input.
+        fn pump(&mut self, _now_ms: f64) -> bool {
+            false
+        }
+    }
+
+    impl ViewerContent for LoadedDocument {
+        fn frame(&mut self, width: u32, height: u32) -> Scene {
+            LoadedDocument::frame(self, width, height)
+        }
+        fn scroll_by(&mut self, dx: f32, dy: f32) -> bool {
+            LoadedDocument::scroll_by(self, dx, dy)
+        }
+        fn scroll_for_key(&mut self, key: ScrollKey) -> bool {
+            LoadedDocument::scroll_for_key(self, key)
+        }
+        fn click_at(&mut self, x: f32, y: f32) -> bool {
+            LoadedDocument::click_at(self, x, y)
+        }
+    }
 
     /// Map a winit key (with the shift state) to a [`ScrollKey`] default action, or
     /// `None` for keys that do not scroll. `Space` / `Shift+Space` are
@@ -124,11 +175,12 @@ mod windowed {
         })
     }
 
-    /// The static viewer application: the [`LoadedDocument`] content plus the window
-    /// + shared present stack that drives it.
-    pub(super) struct ViewerApp {
+    /// The viewer application: a [`ViewerContent`] document plus the window + shared
+    /// present stack that drives it. Generic over the content so the static and
+    /// scripted profiles share the shell.
+    pub(crate) struct ViewerApp<C: ViewerContent> {
         config: StaticViewerConfig,
-        doc: LoadedDocument,
+        doc: C,
         window: Option<Arc<Window>>,
         host: Option<SurfaceHost>,
         width: u32,
@@ -139,10 +191,13 @@ mod windowed {
         /// Last cursor position in physical px (winit's `MouseInput` carries none),
         /// so a click can hit-test the document for in-page link navigation.
         cursor: (f32, f32),
+        /// Frame-loop clock origin, supplying the `now_ms` virtual clock that drives
+        /// scripted content's timers (a no-op for static content).
+        start: Instant,
     }
 
-    impl ViewerApp {
-        pub(super) fn new(config: StaticViewerConfig, doc: LoadedDocument) -> Self {
+    impl<C: ViewerContent> ViewerApp<C> {
+        pub(crate) fn new(config: StaticViewerConfig, doc: C) -> Self {
             Self {
                 config,
                 doc,
@@ -153,10 +208,11 @@ mod windowed {
                 redraws: 0,
                 shift: false,
                 cursor: (0.0, 0.0),
+                start: Instant::now(),
             }
         }
 
-        pub(super) fn outcome(&self) -> StaticViewerOutcome {
+        pub(crate) fn outcome(&self) -> StaticViewerOutcome {
             StaticViewerOutcome {
                 url: self.config.url.clone(),
                 created_window: self.window.is_some(),
@@ -168,6 +224,11 @@ mod windowed {
         /// per-frame shape `serval-winit-host` documents: rasterize the scene into a
         /// texture, acquire the backbuffer, composite the texture onto it, present.
         fn render(&mut self, event_loop: &ActiveEventLoop) {
+            // Advance script time-based work (timers + GC) against the frame clock
+            // before laying out; `more` is true while the content has pending work
+            // (scripted timers), so the shell keeps the frame loop running.
+            let now_ms = self.start.elapsed().as_secs_f64() * 1000.0;
+            let more = self.doc.pump(now_ms);
             let Some(host) = self.host.as_ref() else { return };
             let (w, h) = (self.width.max(1), self.height.max(1));
             let scene = self.doc.frame(w, h);
@@ -188,6 +249,10 @@ mod windowed {
             self.redraws += 1;
             if self.config.exit_after_first_redraw {
                 event_loop.exit();
+                return;
+            }
+            if more {
+                self.request_redraw();
             }
         }
 
@@ -198,7 +263,7 @@ mod windowed {
         }
     }
 
-    impl ApplicationHandler for ViewerApp {
+    impl<C: ViewerContent> ApplicationHandler for ViewerApp<C> {
         fn resumed(&mut self, event_loop: &ActiveEventLoop) {
             if self.window.is_some() {
                 return;

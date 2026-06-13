@@ -15,18 +15,6 @@ use serval_layout::{inline_stylesheets, IncrementalLayout, ScrollKey, ScrollOffs
 use serval_render::scene_from_session_dom;
 use serval_static_dom::{StaticDocument, StaticNodeId};
 
-/// Structural display defaults a minimal viewer layers over serval's UA cascade,
-/// so a plain HTML document lays out as a stack of blocks rather than one inline
-/// run, and document metadata stays unpainted. (V1; a fuller UA sheet is a
-/// follow-up.)
-const DEFAULT_SHEET: &[&str] = &[
-    "html, body, div, p, h1, h2, h3, h4, h5, h6, ul, ol, li, dl, dt, dd, \
-     section, article, header, footer, nav, main, aside, figure, figcaption, \
-     blockquote, pre, table, thead, tbody, tr, hr, form, fieldset { display: block; }",
-    "head, style, script, title, meta, link, base { display: none; }",
-    "body { padding: 8px; }",
-];
-
 /// A local-scheme [`ResourceFetcher`]: `data:` decodes the inline payload,
 /// `file://` (and a bare filesystem path) read from disk. `http(s)` is deferred to
 /// a future `netfetch` feature -- V1 is local-first -- so it falls through to a
@@ -121,7 +109,8 @@ impl LoadedDocument {
     /// `data:` content), layering the document's inline sheets over the defaults.
     pub fn parse(html: &str) -> Self {
         let doc = StaticDocument::parse(html);
-        let mut sheets: Vec<String> = DEFAULT_SHEET.iter().map(|s| s.to_string()).collect();
+        let mut sheets: Vec<String> =
+            crate::STRUCTURAL_SHEET.iter().map(|s| s.to_string()).collect();
         sheets.extend(inline_stylesheets(&doc));
         Self { doc, sheets, session: None, size: (0, 0), pending_fragment: None }
     }

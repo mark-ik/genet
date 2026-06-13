@@ -166,6 +166,9 @@ impl<E: ScriptEngine> Runtime<E> {
     /// complete: every node handoff in the `document`/`Node` surface goes through
     /// `dom::reflect_pinned`, and there is no `make_reflector` (unpinned) path.
     pub fn collect_garbage(&mut self) -> (usize, usize) {
+        // Force the engine GC first, so reflector wrappers script has dropped are
+        // observed dead this tick (the epoch-pin default no-ops, losing nothing).
+        self.engine.force_gc();
         let dead = self.engine.drain_dead_reflectors();
         let mut host = self.host.borrow_mut();
         let unpinned = host

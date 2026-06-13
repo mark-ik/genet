@@ -98,6 +98,25 @@ pub trait ScriptEngine: Sized {
     /// Evaluate `source` in the global scope, returning its completion value.
     fn eval(&mut self, source: &str) -> Result<Self::Value, Self::Error>;
 
+    /// Like [`eval`](Self::eval), but bounded: a [`Budget::Steps`] cap stops a
+    /// runaway script (e.g. `while true do end`) after roughly that many
+    /// coarse VM steps and returns an error instead of hanging. The cap is on
+    /// the *main* evaluation, complementing [`pump`](Self::pump)'s cap on
+    /// microtask jobs.
+    ///
+    /// The default ignores the budget and runs [`eval`](Self::eval) unbounded
+    /// — correct for backends whose VM cannot be step-metered (Boa). A
+    /// fuel-metered backend (piccolo) overrides this; an untrusted-script host
+    /// should prefer this method with a [`Budget::Steps`] bound on those
+    /// backends.
+    fn eval_bounded(
+        &mut self,
+        source: &str,
+        _budget: Budget,
+    ) -> Result<Self::Value, Self::Error> {
+        self.eval(source)
+    }
+
     /// Coerce a value to a Rust string (`ToString`).
     fn value_to_string(&mut self, value: &Self::Value) -> Result<String, Self::Error>;
 
@@ -189,6 +208,17 @@ pub trait ScriptEngine: Sized {
     fn drain_dead_reflectors(&mut self) -> Vec<ReflectorData> {
         Vec::new()
     }
+
+    /// Force a full collection of the engine heap, so that
+    /// [`drain_dead_reflectors`](Self::drain_dead_reflectors) can observe the deaths of
+    /// reflector wrappers script no longer references. The runtime calls this at the GC
+    /// tick (`Runtime::collect_garbage`) — a deliberate, not-per-microtask cadence —
+    /// immediately before draining. The default is a no-op: an engine in the epoch-pin
+    /// fallback (whose drain reports nothing), or one whose GC cannot be forced, loses
+    /// nothing by it. A backend with real death-reporting overrides this to drive its
+    /// collector, so a just-orphaned node is reaped that same tick (the gc-arena soak's
+    /// frame-cadence contract).
+    fn force_gc(&mut self) {}
 }
 
 /// A native (Rust) callback exposed to JS, implemented by a zero-sized type so the

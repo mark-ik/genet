@@ -14,6 +14,26 @@ mod static_viewer;
 #[cfg(feature = "viewer")]
 mod document;
 
+#[cfg(feature = "scripted")]
+mod scripted;
+
+#[cfg(all(feature = "viewer", feature = "scripted"))]
+mod scripted_viewer;
+
+/// Structural display defaults the viewer + scripted profiles layer over serval's UA
+/// cascade, so a plain HTML document lays out as a stack of blocks rather than one
+/// inline run, and document metadata stays unpainted. Shared by the static
+/// ([`document`]) and scripted ([`scripted`]) loaders so the two cannot drift. (V1; a
+/// fuller UA sheet is a follow-up.)
+#[cfg(any(feature = "viewer", feature = "scripted"))]
+pub(crate) const STRUCTURAL_SHEET: &[&str] = &[
+    "html, body, div, p, h1, h2, h3, h4, h5, h6, ul, ol, li, dl, dt, dd, \
+     section, article, header, footer, nav, main, aside, figure, figcaption, \
+     blockquote, pre, table, thead, tbody, tr, hr, form, fieldset { display: block; }",
+    "head, style, script, title, meta, link, base { display: none; }",
+    "body { padding: 8px; }",
+];
+
 #[cfg(feature = "macos-present")]
 mod smoke_macos;
 #[cfg(feature = "netrender")]
@@ -46,3 +66,7 @@ pub use smoke_wayland::{
 pub use static_viewer::{StaticViewerConfig, StaticViewerOutcome, run_static_viewer};
 #[cfg(feature = "viewer")]
 pub use document::{LoadedDocument, LocalFetcher};
+#[cfg(feature = "scripted")]
+pub use scripted::{ScriptedDocument, ScriptedEngine};
+#[cfg(all(feature = "viewer", feature = "scripted"))]
+pub use scripted_viewer::run_scripted_viewer;

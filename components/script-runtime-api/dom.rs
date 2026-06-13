@@ -951,7 +951,16 @@ const DOM_BOOTSTRAP: &str = r#"
   // Wrapper cache keyed by the canonical reflector (engine-side `reflector_for`
   // returns the same reflector object per node), so the same node yields the same
   // wrapper: document.getElementById('x') === document.getElementById('x').
-  var wrappers = new Map();
+  //
+  // A WeakMap, not a Map: a strong Map would root every reflector (key) and wrapper
+  // (value) for the realm's life, pinning the underlying node forever and defeating
+  // the whole weak-reflector GC (G1-G3) — script could never drop a node. Weak-keyed
+  // by the reflector, the wrapper dies when script's last reference does (the
+  // reflector and wrapper form an ephemeron cycle the engine collects), the native
+  // weak reflector cache then reports the death, and the node is reaped at the next
+  // GC tick. (Found by the gc-arena soak: a strong Map peaked at ~12k live nodes
+  // under churn; weak-keyed, it stays bounded.)
+  var wrappers = new WeakMap();
 
   // Name validation (DOM "validate" / XML Name + QName productions), used by
   // createElement(NS) / setAttribute(NS) to throw the spec exceptions. The ranges

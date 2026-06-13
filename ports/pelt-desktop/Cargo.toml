@@ -21,6 +21,21 @@ default = ["viewer"]
 # `serval-winit-host`. Default-on so `pelt --engine static <file>` works out of
 # the box; `--no-default-features` keeps the light contracts + smoke build.
 viewer = ["dep:netrender", "dep:serval-render", "dep:serval-static-dom", "dep:serval-layout", "dep:serval-winit-host", "dep:percent-encoding", "dep:wgpu"]
+# The scripted profile (V4): a live `ScriptedDom` document whose inline `<script>`
+# runs through `script-runtime-api` on a JS engine, mutating the DOM, rendered each
+# frame. GPU-free at the core (scene production only); the headed run reuses the
+# `viewer` feature's present stack. Boa is the default engine (pure Rust, all
+# targets); Nova is gated behind `scripted-nova` so the default build links a single
+# engine (Boa+Nova+wgpu together exceed the Windows image-size link limit).
+scripted = [
+    "dep:netrender", "dep:serval-render", "dep:serval-static-dom", "dep:serval-layout",
+    "dep:percent-encoding", "dep:script-runtime-api", "dep:script-engine-api",
+    "dep:serval-scripted-dom", "dep:script-engine-boa", "dep:layout-dom-api",
+]
+# Add the Nova engine to the scripted profile (native-only). Off by default; enabling
+# it links a second engine, which on Windows can exceed the linker's image-size limit
+# alongside wgpu — build it on Linux/macOS, or Windows without the present stack.
+scripted-nova = ["scripted", "dep:script-engine-nova"]
 netrender = ["dep:netrender", "dep:webgl_wgpu", "dep:wgpu"]
 # Headed presentation through serval's `WindowsDxgiBackend`. Drives
 # the netrender renderer through the C4 DCOMP composition swapchain
@@ -76,6 +91,18 @@ serval-layout = { path = "../../components/serval-layout", optional = true }
 serval-winit-host = { path = "../../components/serval-winit-host", optional = true }
 # data: URL payload decoding for the LocalFetcher.
 percent-encoding = { workspace = true, optional = true }
+
+# Scripted profile (behind the `scripted` feature): the browser host surface, the
+# live mutable DOM, and the JS engines. `script-engine-api` supplies the
+# `ScriptEngine` trait bound the engine-generic `ScriptedDocument<E>` is written
+# against; Boa is the default backend, Nova the gated one (`scripted-nova`).
+script-runtime-api = { path = "../../components/script-runtime-api", optional = true }
+script-engine-api = { path = "../../components/script-engine-api", optional = true }
+serval-scripted-dom = { path = "../../components/serval-scripted-dom", optional = true }
+script-engine-boa = { path = "../../components/script-engine-boa", optional = true }
+script-engine-nova = { path = "../../components/script-engine-nova", optional = true }
+# The `LayoutDom` trait (for the inline-`<script>` DOM walk) + QualName parts.
+layout-dom-api = { path = "../../components/shared/layout-dom", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Windows-only types (HWND) used by the `windows-present` feature's

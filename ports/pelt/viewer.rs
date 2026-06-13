@@ -13,6 +13,10 @@ use crate::VERSION;
 pub(crate) fn main() {
     let mut engine_profile = EngineProfile::Viewer;
     let mut url = None;
+    // JS backend for `--engine scripted` (boa default; nova needs --features
+    // scripted-nova). Parsed as a string so the flag exists even in builds without
+    // the scripted profile.
+    let mut js_engine = String::from("boa");
     let mut netrender_smoke = false;
     let mut webgl_wgpu_smoke = false;
     #[cfg(feature = "windows-present")]
@@ -48,6 +52,16 @@ pub(crate) fn main() {
             },
             value if value.starts_with("--engine=") => {
                 engine_profile = parse_engine_profile(&value["--engine=".len()..]);
+            },
+            "--js" => {
+                let Some(value) = args.next() else {
+                    eprintln!("--js requires boa or nova");
+                    std::process::exit(2);
+                };
+                js_engine = value;
+            },
+            value if value.starts_with("--js=") => {
+                js_engine = value["--js=".len()..].to_owned();
             },
             "--netrender-smoke" => {
                 netrender_smoke = true;
@@ -180,10 +194,58 @@ pub(crate) fn main() {
         }
     }
 
+    // `pelt --engine scripted <url> [--js boa|nova]`: the live, script-driven
+    // document profile (V4). Runs the page's inline <script> on the chosen engine and
+    // renders the mutated DOM, driving timers + the GC tick at frame cadence.
+    if matches!(engine_profile, EngineProfile::Scripted) {
+        run_scripted_profile(url, js_engine);
+        return;
+    }
+
     eprintln!(
         "pelt has no engine for profile {engine_profile} in this build; use \
-         --engine static <url> for the on-screen document viewer, or a smoke flag \
-         (--help)."
+         --engine static <url> for the on-screen document viewer, \
+         --engine scripted <url> for the scripted profile (needs --features scripted), \
+         or a smoke flag (--help)."
+    );
+    std::process::exit(2);
+}
+
+/// Dispatch the scripted profile to the on-screen scripted viewer on the chosen JS
+/// backend. Present only when built with `--features scripted`.
+#[cfg(feature = "scripted")]
+fn run_scripted_profile(url: String, js: String) {
+    let Some(engine) = pelt_desktop::ScriptedEngine::parse(&js) else {
+        eprintln!("--js expects boa or nova (got '{js}')");
+        std::process::exit(2);
+    };
+    let config = pelt_desktop::StaticViewerConfig::new(
+        EngineProfile::Scripted,
+        pelt_desktop::WindowingMode::Headed,
+        url,
+    );
+    match pelt_desktop::run_scripted_viewer(config, engine) {
+        Ok(outcome) => println!(
+            "pelt scripted viewer engine={} url={} window={} redraws={}",
+            engine.label(),
+            outcome.url,
+            outcome.created_window,
+            outcome.redraws
+        ),
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        },
+    }
+}
+
+/// Without the scripted profile compiled in, `--engine scripted` is a clean error
+/// pointing at the feature to enable.
+#[cfg(not(feature = "scripted"))]
+fn run_scripted_profile(_url: String, _js: String) {
+    eprintln!(
+        "pelt was built without the scripted profile; rebuild with `--features scripted` \
+         (or `--features scripted-nova` for the Nova backend)"
     );
     std::process::exit(2);
 }
@@ -393,7 +455,8 @@ engine was retired 2026-06-12 — use the pelt-live bin until the serval-native
 viewer mode lands).
 
 Options:
-    --engine <browser|viewer|static|headless>
+    --engine <browser|viewer|static|scripted|headless>
+    --js <boa|nova>                    (scripted profile: JS backend; nova needs --features scripted-nova)
     --netrender-smoke
     --webgl-wgpu-smoke
     --windows-present-smoke            (requires --features windows-present, target_os = \"windows\")

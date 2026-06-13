@@ -486,6 +486,14 @@ mod native {
             Ok(())
         }
 
+        fn force_gc(&mut self) {
+            // Two passes: Nova finalizes the weak references whose targets the first
+            // cycle reclaimed on the second, so a just-dropped reflector becomes
+            // observable to `drain_dead_reflectors` — the engine half of the GC tick.
+            self.agent.gc();
+            self.agent.gc();
+        }
+
         fn drain_dead_reflectors(&mut self) -> Vec<ReflectorData> {
             // Real death-reporting: deref each cached `WeakRef`; a target that
             // has been collected (deref → `None`) is a dead reflector. Backed by

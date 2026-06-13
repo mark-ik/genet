@@ -33,6 +33,12 @@ default = ["viewer-netrender"]
 # 2026-05-20 before it.)
 viewer-engine = ["dep:pelt-desktop"]
 viewer-netrender = ["viewer-engine", "pelt-desktop/netrender"]
+# The scripted profile (V4): `pelt --engine scripted <file>` runs a page's inline
+# <script> on a JS engine and renders the mutated DOM. Pulls pelt-desktop's scripted
+# runtime on top of the present stack. Boa-only by default (a single engine links
+# under the Windows image-size limit alongside wgpu); add `scripted-nova` for Nova.
+scripted = ["viewer-engine", "pelt-desktop/viewer", "pelt-desktop/scripted"]
+scripted-nova = ["scripted", "pelt-desktop/scripted-nova"]
 # C4 headed-presentation smoke. Pulls serval's `WindowsDxgiBackend`
 # in through `pelt-desktop`. Inner code is `cfg(target_os = "windows")`
 # gated so the feature still builds on non-Windows hosts.

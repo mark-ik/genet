@@ -277,6 +277,13 @@ impl ScriptEngine for BoaEngine {
         Ok(())
     }
 
+    fn force_gc(&mut self) {
+        // Drive Boa's collector so the weak canonical-cache entries for reflectors
+        // script no longer references become dead before `drain_dead_reflectors`
+        // sweeps them — the engine half of the frame-cadence GC tick.
+        boa_gc::force_collect();
+    }
+
     fn drain_dead_reflectors(&mut self) -> Vec<ReflectorData> {
         // Real death-reporting: sweep the weak canonical cache and report (and
         // forget) the reflectors whose JS objects have been collected since the
