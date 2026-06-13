@@ -12,7 +12,7 @@
 use netrender::Scene;
 use pelt_core::ResourceFetcher;
 use serval_layout::{inline_stylesheets, IncrementalLayout, ScrollKey, ScrollOffsets};
-use serval_render::scene_from_session_dom;
+use serval_render::{content_report, scene_from_session_dom, ContentReport};
 use serval_static_dom::{StaticDocument, StaticNodeId};
 
 /// A local-scheme [`ResourceFetcher`]: `data:` decodes the inline payload,
@@ -188,6 +188,12 @@ impl LoadedDocument {
     /// frame).
     pub fn scroll(&self) -> (f32, f32) {
         self.session.as_ref().map_or((0.0, 0.0), |s| s.viewport_scroll())
+    }
+
+    /// A structural [`ContentReport`] of this document's addressed content (title,
+    /// outline, links, headings) — the inspector's read model + the semantic oracle.
+    pub fn inspect(&self) -> ContentReport {
+        content_report(&self.doc)
     }
 }
 

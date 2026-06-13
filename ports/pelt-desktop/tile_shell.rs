@@ -14,6 +14,7 @@
 //! gesture can be verified without a human at the screen.
 
 use pelt_core::tile::{DropTarget, Edge, TileId, TilePath, TileTree};
+use serval_render::ContentReport;
 use xilem_serval::PointerClick;
 
 use crate::tile_surface::{TileFrame, TileSurface};
@@ -90,6 +91,13 @@ impl TileShell {
     /// substrate a headless driver / inspector queries).
     pub fn surface(&self) -> &TileSurface {
         &self.surface
+    }
+
+    /// A structural [`ContentReport`] of tile `id`'s document ("inspect tile") — the
+    /// observe surface a driver, an inspector pane, or a test queries instead of
+    /// reading pixels.
+    pub fn inspect_tile(&self, id: TileId) -> Option<ContentReport> {
+        self.surface.inspect_tile(id)
     }
 
     /// The current cursor position.
@@ -301,5 +309,23 @@ mod tests {
         } else {
             panic!("expected a stack");
         }
+    }
+
+    /// Inspecting a tile returns its content's structural report — the observe surface
+    /// reaching the addressed document, asserted semantically (title / headings /
+    /// links) rather than by pixels.
+    #[test]
+    fn inspect_tile_reports_content() {
+        let tree = TileTree::single(doc_tile(
+            1,
+            "<title>Demo</title><h1>Head</h1><a href=\"/x\">link</a>",
+        ));
+        let mut shell = TileShell::new(tree);
+        shell.resize(800, 600);
+        let _ = shell.frame();
+        let report = shell.inspect_tile(TileId(1)).expect("tile 1 has a document");
+        assert_eq!(report.title.as_deref(), Some("Demo"));
+        assert_eq!(report.headings, vec!["Head"]);
+        assert_eq!(report.links, vec!["/x"]);
     }
 }

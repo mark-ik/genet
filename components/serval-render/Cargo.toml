@@ -38,3 +38,5 @@ euclid = { workspace = true }
 # host spine), so xilem-serval is test-only here -- render.rs / a11y.rs do not
 # touch it.
 xilem-serval = { path = "../xilem-serval" }
+# A parsed HTML document for the content-introspection (`inspect`) tests.
+serval-static-dom = { path = "../serval-static-dom" }

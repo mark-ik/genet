@@ -28,9 +28,11 @@
 //! [`serval-winit-host`]: https://docs.rs/serval-winit-host
 
 pub mod a11y;
+pub mod inspect;
 pub mod render;
 
 pub use a11y::accesskit_tree;
+pub use inspect::{content_report, ContentReport, OutlineEntry};
 pub use render::{
     caret_byte_at, caret_screen_rect, fragments_from_scripted_dom, hit_test_node,
     paint_list_from_scripted_dom, paint_list_from_session, scene_from_layout_dom,

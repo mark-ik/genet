@@ -28,7 +28,7 @@ use pelt_core::tile::{
     TileTree,
 };
 use serval_layout::IncrementalLayout;
-use serval_render::scene_from_session_dom;
+use serval_render::{scene_from_session_dom, ContentReport};
 use serval_scripted_dom::{NodeId, ScriptedDom};
 use xilem_serval::{
     el, on_click, AnyView, DomHandle, PointerClick, ServalAppRunner, ServalCtx, ServalElement,
@@ -398,6 +398,12 @@ impl TileSurface {
     /// The current tile tree (read-only).
     pub fn tree(&self) -> &TileTree {
         &self.runner.state().tree
+    }
+
+    /// A structural [`ContentReport`] of tile `id`'s document (the inspector's read
+    /// model — "inspect tile"). `None` for a tile with no document.
+    pub fn inspect_tile(&self, id: TileId) -> Option<ContentReport> {
+        self.docs.get(&id).map(|doc| doc.inspect())
     }
 }
 
