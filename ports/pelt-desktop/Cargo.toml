@@ -45,6 +45,11 @@ chrome = [
     "dep:netrender", "dep:serval-render", "dep:serval-layout", "dep:serval-scripted-dom",
     "dep:layout-dom-api", "dep:xilem-serval",
 ]
+# The tile-tree surface (V5): splits + tab-stacks of live documents, rendered as
+# xilem-serval flex DOM (the frame) with each tile's document composited into its
+# content area. Builds on `chrome` (the xilem-serval render path) + `viewer` (the
+# content LoadedDocument + present stack).
+tiles = ["chrome", "viewer"]
 netrender = ["dep:netrender", "dep:webgl_wgpu", "dep:wgpu"]
 # Headed presentation through serval's `WindowsDxgiBackend`. Drives
 # the netrender renderer through the C4 DCOMP composition swapchain
