@@ -539,6 +539,17 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         crate::caret::selection_style(dom, &self.styles, node)
     }
 
+    /// The caret colour for `node` (the cascaded text colour — `caret-color: auto`),
+    /// resolved from the session's retained [`StylePlane`]. `None` when the node
+    /// has no style data, so the host keeps its theme default. The session
+    /// companion to [`caret::caret_color`](crate::caret::caret_color).
+    pub fn caret_color<D>(&self, dom: &D, node: Id) -> Option<[f32; 4]>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        crate::caret::caret_color(dom, &self.styles, node)
+    }
+
     /// Structural batch: re-cascade styles (full — structural
     /// restyle-invalidation is the deferred optimization), then lay out
     /// **incrementally** by re-laying-out each coalesced subtree over the

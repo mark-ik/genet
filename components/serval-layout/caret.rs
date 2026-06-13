@@ -66,6 +66,35 @@ where
     None
 }
 
+/// The caret colour for `node` as straight RGBA — the cascaded text `color`,
+/// which is what `caret-color: auto` (the default) resolves to. Walks to the
+/// nearest ancestor (including `node`) carrying style data, so a text leaf with
+/// no own rule inherits its container's colour. `None` only when no ancestor has
+/// style data, so the host keeps its theme default.
+///
+/// Reading the text colour makes the caret track the theme automatically (the
+/// sheet already colours the text per theme); an explicit `caret-color` override
+/// is a later refinement.
+pub fn caret_color<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    node: D::NodeId,
+) -> Option<[f32; 4]>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut cur = Some(node);
+    while let Some(id) = cur {
+        if let Some(data) = styles.get(id).and_then(|e| e.borrow_data()) {
+            let color = data.styles.primary().get_inherited_text().color;
+            return Some(*color.into_srgb_legacy().raw_components());
+        }
+        cur = dom.parent(id);
+    }
+    None
+}
+
 /// A caret rectangle in absolute layout (scene) coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CaretRect {
@@ -434,6 +463,25 @@ mod tests {
         let mut bare: StylePlane<StaticNodeId> = StylePlane::new();
         run_cascade(&doc, &mut bare, euclid::Size2D::new(800.0, 600.0), &[], None);
         assert!(selection_style(&doc, &bare, p).is_none(), "no ::selection rule → None");
+    }
+
+    /// The caret colour tracks the cascaded text `color` (`caret-color: auto`), so
+    /// it stays legible on whatever theme the sheet paints the text in.
+    #[test]
+    fn caret_color_tracks_the_text_color() {
+        let doc = StaticDocument::parse("<html><body><p>abc</p></body></html>");
+        let p = find_p(&doc);
+
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &["p { color: rgb(0, 0, 255); }"],
+            None,
+        );
+        let c = caret_color(&doc, &styles, p).expect("a cascaded text colour");
+        assert!(c[2] > 0.99 && c[0] < 0.01, "caret tracks the text colour (blue), got {c:?}");
     }
 
     /// A selection range spanning two block paragraphs highlights text in both
