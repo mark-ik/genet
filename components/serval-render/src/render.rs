@@ -102,7 +102,7 @@ pub fn scene_from_layout_dom<D, L>(
 ) -> netrender::Scene
 where
     D: LayoutDom,
-    D::NodeId: Copy + Eq + Hash + 'static,
+    D::NodeId: Copy + Eq + Hash + Send + Sync + 'static,
     L: ImageLoader,
 {
     let plist = paint_list_from_layout_dom(dom, stylesheets, loader, width, height, scroll_offsets);
@@ -244,7 +244,7 @@ pub fn scene_from_session_dom<D>(
 ) -> netrender::Scene
 where
     D: LayoutDom,
-    D::NodeId: Copy + Eq + Hash + 'static,
+    D::NodeId: Copy + Eq + Hash + Send + Sync + 'static,
 {
     let plist = session.emit_paint_list(
         dom,
