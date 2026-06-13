@@ -6287,6 +6287,7 @@ dependencies = [
  "markup5ever",
  "paint_list_api",
  "parley",
+ "rayon",
  "resvg",
  "rustc-hash 2.1.2",
  "selectors",
