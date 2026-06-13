@@ -11,6 +11,8 @@
 use std::fmt;
 use std::str::FromStr;
 
+pub mod tile;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EngineProfile {
     /// Current all-up Servo browser engine: JS, DOM, layout, paint, webdriver.
