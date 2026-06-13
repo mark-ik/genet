@@ -107,7 +107,7 @@ pub fn render<D>(
 ) -> FragmentPlane<D::NodeId>
 where
     D: LayoutDom,
-    D::NodeId: Copy + Eq + Hash + 'static,
+    D::NodeId: Copy + Eq + Hash + Send + Sync + 'static,
 {
     let mut styles = StylePlane::new();
     run_cascade(
@@ -154,7 +154,7 @@ pub fn paint_list_from_layout_dom<D, L>(
 ) -> ServalPaintList
 where
     D: LayoutDom,
-    D::NodeId: Copy + Eq + Hash + 'static,
+    D::NodeId: Copy + Eq + Hash + Send + Sync + 'static,
     L: ImageLoader,
 {
     let mut styles = StylePlane::new();

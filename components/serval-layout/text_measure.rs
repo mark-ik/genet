@@ -469,20 +469,15 @@ pub fn measure_inline_content<NodeId>(
         };
     }
 
-    // First measure of this leaf this pass: reserve each inline box's space
-    // (`<img>` at its intrinsic/CSS size; an inline-block measured from its own
-    // content, its layout cached under `(this leaf, box index)` for paint), shape
-    // once, break, and cache the shaped `Layout` for the re-measure path + paint.
-    let mut box_sizes: Vec<(f32, f32)> = Vec::with_capacity(content.boxes.len());
-    for (i, b) in content.boxes.iter().enumerate() {
-        let (w, h, layout) = measure_inline_box(ctx, b);
-        if let Some(l) = layout {
-            ctx.inline_block_layouts.insert((taffy_id, i), l);
-        }
-        box_sizes.push((w, h));
+    // First measure of this leaf this pass (when the shaping pre-pass did not
+    // already populate the cache): shape it now — reserving each inline box's
+    // space and caching every inline-block sublayout under `(this leaf, box
+    // index)` for paint — then break and cache the shaped `Layout` for the
+    // re-measure path + paint.
+    let (mut layout, sublayouts) = shape_leaf(&mut ctx.font_ctx, &mut ctx.layout_ctx, content);
+    for (i, l) in sublayouts {
+        ctx.inline_block_layouts.insert((taffy_id, i), l);
     }
-
-    let mut layout = shape_inline_layout(ctx, content, &box_sizes);
     break_and_align(&mut layout, max_advance);
     let size = Size {
         width: known_dimensions.width.unwrap_or_else(|| layout.width()),
@@ -497,7 +492,8 @@ pub fn measure_inline_content<NodeId>(
 /// shrink-to-fit-measured from its content, clamped by any definite CSS
 /// `width`/`height`.
 fn measure_inline_box<NodeId>(
-    ctx: &mut TextMeasureCtx,
+    font_ctx: &mut FontContext,
+    layout_ctx: &mut LayoutContext<ColorBrush>,
     b: &InlineBoxItem<NodeId>,
 ) -> (f32, f32, Option<Layout<ColorBrush>>) {
     let Some(ib) = &b.block else {
@@ -510,15 +506,42 @@ fn measure_inline_box<NodeId>(
         .boxes
         .iter()
         .map(|bb| {
-            let (w, h, _) = measure_inline_box(ctx, bb);
+            let (w, h, _) = measure_inline_box(font_ctx, layout_ctx, bb);
             (w, h)
         })
         .collect();
-    let mut layout = shape_inline_layout(ctx, &ib.content, &inner_sizes);
+    let mut layout = shape_inline_layout(font_ctx, layout_ctx, &ib.content, &inner_sizes);
     break_and_align(&mut layout, ib.css_width);
     let w = ib.css_width.unwrap_or_else(|| layout.width());
     let h = ib.css_height.unwrap_or_else(|| layout.height());
     (w, h, Some(layout))
+}
+
+/// Shape a leaf's inline content into its (unbroken) `Layout` plus the shaped
+/// `Layout` of each top-level inline-block (paired with its box index). This is
+/// the whole width-independent half of inline measurement — reserve each inline
+/// box, then shape the runs — with no line breaking, so it can run ahead of
+/// layout (serial or fanned out across threads; see the shaping pre-pass in
+/// `layout_via_box_tree`). It takes the parley contexts directly, not a
+/// `TextMeasureCtx`, so a worker thread can drive it with its own cloned
+/// `FontContext` + a fresh `LayoutContext`. The caller breaks the leaf layout at
+/// each probed width and caches both it and the inline-block sublayouts.
+pub(crate) fn shape_leaf<NodeId>(
+    font_ctx: &mut FontContext,
+    layout_ctx: &mut LayoutContext<ColorBrush>,
+    content: &InlineContent<NodeId>,
+) -> (Layout<ColorBrush>, Vec<(usize, Layout<ColorBrush>)>) {
+    let mut box_sizes: Vec<(f32, f32)> = Vec::with_capacity(content.boxes.len());
+    let mut sublayouts: Vec<(usize, Layout<ColorBrush>)> = Vec::new();
+    for (i, b) in content.boxes.iter().enumerate() {
+        let (w, h, layout) = measure_inline_box(font_ctx, layout_ctx, b);
+        if let Some(l) = layout {
+            sublayouts.push((i, l));
+        }
+        box_sizes.push((w, h));
+    }
+    let layout = shape_inline_layout(font_ctx, layout_ctx, content, &box_sizes);
+    (layout, sublayouts)
 }
 
 /// Break a shaped `Layout` into lines at `max_advance` and start-align it.
@@ -538,7 +561,8 @@ fn break_and_align(layout: &mut Layout<ColorBrush>, max_advance: Option<f32>) {
 /// leaf shape once per pass and re-break per probed width. Shared by the leaf
 /// measure and each inline-block's own measure.
 fn shape_inline_layout<NodeId>(
-    ctx: &mut TextMeasureCtx,
+    font_ctx: &mut FontContext,
+    layout_ctx: &mut LayoutContext<ColorBrush>,
     content: &InlineContent<NodeId>,
     box_sizes: &[(f32, f32)],
 ) -> Layout<ColorBrush> {
@@ -552,9 +576,7 @@ fn shape_inline_layout<NodeId>(
         ranges.push((start..text.len(), run));
     }
 
-    let mut builder = ctx
-        .layout_ctx
-        .ranged_builder(&mut ctx.font_ctx, text.as_str(), 1.0, true);
+    let mut builder = layout_ctx.ranged_builder(font_ctx, text.as_str(), 1.0, true);
     // Defaults from the first run; per-run spans override below.
     if let Some(first) = content.runs.first() {
         builder.push_default(StyleProperty::FontSize(first.font_size));

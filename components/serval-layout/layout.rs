@@ -42,7 +42,9 @@ pub fn layout<D>(
 ) -> (FragmentPlane<D::NodeId>, BoxTree<D::NodeId>, TextMeasureCtx)
 where
     D: LayoutDom,
-    D::NodeId: Copy + Eq + Hash,
+    // `Send + Sync` is required by the parallel shaping pre-pass in
+    // `layout_via_box_tree`; the concrete DOM node ids satisfy it for free.
+    D::NodeId: Copy + Eq + Hash + Send + Sync,
 {
     // Stateless entry: a fresh context per call (back-compat for callers that
     // do not yet hold a persistent one). Session / host callers should hold a

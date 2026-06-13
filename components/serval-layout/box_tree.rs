@@ -27,6 +27,7 @@ use std::hash::Hash;
 use std::sync::OnceLock;
 
 use layout_dom_api::{LayoutDom, NodeKind};
+use parley::LayoutContext;
 use rustc_hash::FxHashMap;
 use servo_arc::Arc as ServoArc;
 use style::properties::style_structs::Font;
@@ -47,7 +48,9 @@ use crate::construct::{
 use crate::fragment::FragmentPlane;
 use crate::image_decode::ImagePlane;
 use crate::style::StylePlane;
-use crate::text_measure::{measure_inline_content, InlineContent, TextMeasureCtx};
+use crate::text_measure::{
+    measure_inline_content, shape_leaf, ColorBrush, InlineContent, TextMeasureCtx,
+};
 
 /// Shared initial `ComputedValues` for anonymous/text leaves, which have
 /// no DOM element of their own. They're childless (sized by the measure
@@ -818,6 +821,82 @@ impl<Id: Copy + Eq + Hash> LayoutGridContainer for BoxTreeView<'_, Id> {
     }
 }
 
+/// Above this many inline leaves the shaping pre-pass fans out across Rayon;
+/// at or below it the leaves shape inline. Small DOMs (chrome UI) stay
+/// single-threaded — a work-stealing pool's spin-up costs more than the handful
+/// of leaves saves. Tuned conservatively; revisit against a real profile.
+const PARALLEL_SHAPE_THRESHOLD: usize = 24;
+
+/// Shape every visible inline leaf's text into its (unbroken) `Layout` and cache
+/// it (plus each inline-block sublayout) in `text_ctx`, ahead of Taffy layout.
+/// This is the width-independent half of inline measurement (see [`shape_leaf`]);
+/// the serial measure walk then only re-breaks the cached layouts per probed
+/// width. Above [`PARALLEL_SHAPE_THRESHOLD`] leaves the shaping fans out across
+/// Rayon, each worker driving its own cloned `FontContext` (the fontique
+/// `Collection` is `Arc`-shared, so the clone is cheap) and a fresh
+/// `LayoutContext`; the results merge into the caches single-threaded. Shaping is
+/// deterministic, so the parallel and serial paths produce identical layouts.
+fn shape_inline_leaves<D>(tree: &BoxTree<D::NodeId>, text_ctx: &mut TextMeasureCtx)
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + Send + Sync,
+{
+    // Visible inline leaves only. A `display: none` leaf is never measured or
+    // painted, so skip it; a leaf under a `display: none` *ancestor* is shaped
+    // here but harmlessly never read (paint skips the hidden subtree).
+    let leaves: Vec<(NodeId, usize)> = (0..tree.nodes.len())
+        .filter(|&i| {
+            tree.nodes[i].inline_content.is_some()
+                && !tree.nodes[i].style.get_box().display.is_none()
+        })
+        .map(|i| (nid(i), i))
+        .collect();
+    if leaves.is_empty() {
+        return;
+    }
+
+    // Shape each leaf into its unbroken `Layout` + its inline-block sublayouts.
+    type Shaped = (
+        NodeId,
+        parley::Layout<ColorBrush>,
+        Vec<(usize, parley::Layout<ColorBrush>)>,
+    );
+    let shaped: Vec<Shaped> = if leaves.len() >= PARALLEL_SHAPE_THRESHOLD {
+        use rayon::prelude::*;
+        // Each worker clones the base font context (cheap — shared `Collection`)
+        // and spins up its own scratch `LayoutContext`.
+        let base_font_ctx = &text_ctx.font_ctx;
+        leaves
+            .par_iter()
+            .map_init(
+                || (base_font_ctx.clone(), LayoutContext::<ColorBrush>::new()),
+                |(font_ctx, layout_ctx), &(tid, i)| {
+                    let content = tree.nodes[i].inline_content.as_ref().unwrap();
+                    let (layout, subs) = shape_leaf(font_ctx, layout_ctx, content);
+                    (tid, layout, subs)
+                },
+            )
+            .collect()
+    } else {
+        leaves
+            .iter()
+            .map(|&(tid, i)| {
+                let content = tree.nodes[i].inline_content.as_ref().unwrap();
+                let (layout, subs) =
+                    shape_leaf(&mut text_ctx.font_ctx, &mut text_ctx.layout_ctx, content);
+                (tid, layout, subs)
+            })
+            .collect()
+    };
+
+    for (tid, layout, subs) in shaped {
+        text_ctx.layouts.insert(tid, layout);
+        for (i, l) in subs {
+            text_ctx.inline_block_layouts.insert((tid, i), l);
+        }
+    }
+}
+
 /// Lay out `dom` via the box tree against `viewport`, into the caller-held
 /// `text_ctx` (reset per pass; its persistent font context is reused so a
 /// steady-state frame runs no font discovery). Returns the per-node
@@ -832,11 +911,24 @@ pub fn layout_via_box_tree<D>(
 ) -> (FragmentPlane<D::NodeId>, BoxTree<D::NodeId>)
 where
     D: LayoutDom,
-    D::NodeId: Copy + Eq + Hash,
+    // `Send + Sync` lets the shaping pre-pass fan inline leaves across Rayon. The
+    // two real DOM node ids (`StaticNodeId`, scripted `NodeId`) are `usize`
+    // newtypes, so this is free for them.
+    D::NodeId: Copy + Eq + Hash + Send + Sync,
 {
     text_ctx.reset();
     let mut tree = build_box_tree(dom, styles, images);
     let root = nid(tree.root);
+
+    // Shaping pre-pass. Inline-text shaping (glyph runs, font resolution) is the
+    // expensive, width-independent half of inline measurement; line breaking is
+    // the cheap, width-dependent half. Shape every visible inline leaf up front
+    // and cache the unbroken `Layout`s, so Taffy's serial measure walk below only
+    // re-breaks them per probed width (min-content / max-content / final) instead
+    // of re-shaping. Large trees fan the shaping across a Rayon pool; small trees
+    // (chrome UI) shape inline, where pool spin-up would not pay off. Shaping is
+    // pure, so the parallel output is identical to serial — no pixel difference.
+    shape_inline_leaves::<D>(&tree, text_ctx);
 
     {
         let mut view = BoxTreeView {

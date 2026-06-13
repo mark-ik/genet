@@ -35,6 +35,10 @@ paint_list_api = { workspace = true }
 paint_types = { workspace = true }
 parley = { workspace = true }
 pixels = { workspace = true }
+# Parallel inline-text shaping pre-pass (see box_tree::layout_via_box_tree):
+# fans the width-independent shaping of inline leaves across a work-stealing
+# pool before Taffy's serial measure walk. Already in the workspace via Stylo.
+rayon = { workspace = true }
 # SVG background-image / <img> rasterization. resvg re-exports usvg + tiny_skia,
 # so the whole SVG decode path (parse → rasterize to RGBA) needs only this crate.
 # Pinned via the workspace at the upstream-current 0.47 (unified with masonry's

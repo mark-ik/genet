@@ -111,7 +111,7 @@ pub struct IncrementalLayout<Id: Copy + Eq + Hash> {
     last_damage: RestyleDamage,
 }
 
-impl<Id: Copy + Eq + Hash + 'static> IncrementalLayout<Id> {
+impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     /// Initial full cascade + layout over `dom`. Builds the persistent Stylist
     /// (see [`stylist`](Self::stylist)) and runs the first cascade over it, so the
     /// rule tree the incremental passes later reuse is the one this populates.
@@ -662,7 +662,7 @@ fn anchor_fragment<D: LayoutDom>(dom: &D, node: D::NodeId) -> Option<String> {
 fn lay_out<D>(dom: &D, styles: &StylePlane<D::NodeId>, width: f32, height: f32) -> FragmentPlane<D::NodeId>
 where
     D: LayoutDom,
-    D::NodeId: Copy + Eq + Hash,
+    D::NodeId: Copy + Eq + Hash + Send + Sync,
 {
     // Scoped-splice fallback path (fragments only): a throwaway context is fine
     // here; the session's persistent one rides the `full_layout` relayout paths.
@@ -683,7 +683,8 @@ fn full_layout<D>(
 ) -> (FragmentPlane<D::NodeId>, BoxTree<D::NodeId>)
 where
     D: LayoutDom,
-    D::NodeId: Copy + Eq + Hash,
+    // Propagated for `layout_via_box_tree`'s parallel shaping pre-pass.
+    D::NodeId: Copy + Eq + Hash + Send + Sync,
 {
     let images = ImagePlane::new();
     let viewport = taffy::Size {

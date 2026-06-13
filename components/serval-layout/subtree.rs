@@ -108,7 +108,7 @@ pub fn render_subtree<D>(
 ) -> FragmentPlane<D::NodeId>
 where
     D: LayoutDom,
-    D::NodeId: Copy + Eq + Hash + 'static,
+    D::NodeId: Copy + Eq + Hash + Send + Sync + 'static,
 {
     render(
         &SubtreeView::new(dom, root),
