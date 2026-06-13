@@ -109,11 +109,11 @@ fn render_node(node: &TileTree, path: &[usize]) -> TileView {
                     .attr("style", format!("display: flex; flex-direction: {dir};")),
             )
         }
-        TileTree::Stack(stack) => render_stack(stack),
+        TileTree::Stack(stack) => render_stack(stack, path),
     }
 }
 
-fn render_stack(stack: &TabStack) -> TileView {
+fn render_stack(stack: &TabStack, path: &[usize]) -> TileView {
     // The tab bar: a clickable tab per tile, the active one highlighted. Each tab's
     // handler queues an `Activated` for its own id (a per-tab capturing closure).
     let tabs: Vec<TileView> = stack
@@ -141,7 +141,11 @@ fn render_stack(stack: &TabStack) -> TileView {
             )) as TileView
         })
         .collect();
-    let tab_bar = el::<_, TileState, ()>("div", tabs).attr("class", "tile-tabbar");
+    // The tab bar carries its stack's path so a tab dropped here resolves to a
+    // `DropTarget::Stack` (insert into this stack) rather than an edge split.
+    let tab_bar = el::<_, TileState, ()>("div", tabs)
+        .attr("class", "tile-tabbar")
+        .attr("data-stack", encode_path(path));
 
     // The content-area placeholder for the active tile, marked with its id so the host
     // can find its laid-out rect and composite the tile's document there.
@@ -369,6 +373,45 @@ impl TileSurface {
             }
             node = dom.parent(node)?;
         }
+    }
+
+    /// If `(x, y)` is over a stack's tab bar, that stack's path plus the tab index a
+    /// drop would insert at (counting the tabs whose horizontal centre sits left of the
+    /// cursor). Lets the host resolve a tab drop onto a tab bar to a `DropTarget::Stack`
+    /// — merging the dragged tile into that stack rather than splitting a pane.
+    pub fn tabbar_at(&self, x: f32, y: f32, width: u32, height: u32) -> Option<(TilePath, usize)> {
+        let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
+        let dom = self.runner.dom();
+        let dom = dom.borrow();
+        let session =
+            IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32);
+        let mut node = session.hit_test(&*dom, x, y, &serval_layout::ScrollOffsets::default())?;
+        let ns = Namespace::default();
+        let stack_attr = LocalName::from("data-stack");
+        // Walk up to the tab bar carrying its stack path.
+        let bar = loop {
+            if dom.attribute(node, &ns, &stack_attr).is_some() {
+                break node;
+            }
+            node = dom.parent(node)?;
+        };
+        let path = decode_path(dom.attribute(bar, &ns, &stack_attr)?);
+        // Insertion index: how many tab centres are left of the cursor.
+        let tabid = LocalName::from("data-tabid");
+        let mut centres = Vec::new();
+        let mut stack = vec![bar];
+        while let Some(n) = stack.pop() {
+            if dom.attribute(n, &ns, &tabid).is_some() {
+                if let Some(r) = absolute_rect(&dom, &session, n) {
+                    centres.push(r.0 + r.2 / 2.0);
+                }
+            }
+            for child in dom.dom_children(n) {
+                stack.push(child);
+            }
+        }
+        let index = centres.iter().filter(|&&c| c < x).count();
+        Some((path, index))
     }
 
     /// Move `tile` onto `to` (a tab drag), applied through the reducer, then reconcile

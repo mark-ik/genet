@@ -210,9 +210,16 @@ impl TileShell {
             .map(|(id, r)| (*id, (p.0 - r.0, p.1 - r.1)))
     }
 
-    /// Resolve a tab drop at the cursor: over another tile's content, the nearest edge
-    /// to split it on. `None` over no tile, or over the dragged tile itself.
+    /// Resolve a tab drop at the cursor. Over a tab bar, the dragged tile merges into
+    /// that stack (`DropTarget::Stack`); over another tile's content, it splits that
+    /// pane on the nearest edge (`DropTarget::Edge`). `None` over no tile, or over the
+    /// dragged tile's own content.
     fn resolve_drop(&self, dragged: TileId) -> Option<DropTarget> {
+        let (x, y) = self.cursor;
+        let (w, h) = (self.width, self.height);
+        if let Some((stack, index)) = self.surface.tabbar_at(x, y, w, h) {
+            return Some(DropTarget::Stack { stack, index });
+        }
         let (tile, rect) = self.tile_rects.iter().find(|(_, r)| in_rect(self.cursor, *r))?;
         if *tile == dragged {
             return None;
@@ -285,6 +292,50 @@ mod tests {
         // Tile 1 left the stack and split the right pane: left=[2], right=[3 | 1].
         let ids: Vec<u64> = shell.tree().tiles().iter().map(|t| t.id.0).collect();
         assert_eq!(ids, vec![2, 3, 1], "the drag built a new split layout: {ids:?}");
+    }
+
+    /// A tab dropped onto another stack's tab bar merges into that stack instead of
+    /// splitting the pane: the same press→move→release flow, but released over the tab
+    /// bar (top strip) rather than the content area.
+    #[test]
+    fn driven_tab_drag_onto_tabbar_merges_headless() {
+        let tree = TileTree::split(
+            SplitAxis::Row,
+            vec![
+                TileBranch::new(
+                    0.5,
+                    TileTree::stack(vec![doc_tile(1, "<p>1</p>"), doc_tile(2, "<p>2</p>")], 0),
+                ),
+                TileBranch::new(0.5, TileTree::single(doc_tile(3, "<p>3</p>"))),
+            ],
+        );
+        let mut shell = TileShell::new(tree);
+        shell.resize(800, 600);
+        let _ = shell.frame();
+
+        // Press tab 1 in the left bar, drag to the RIGHT stack's tab bar (top strip,
+        // right half), release.
+        shell.pointer_move(20.0, 14.0);
+        shell.pointer_down();
+        shell.pointer_move(600.0, 14.0);
+        shell.pointer_up();
+
+        // Tile 1 merged into the right stack: left collapses to [2], right is [3, 1] —
+        // still a 2-way split, no new split from the drop.
+        let ids: Vec<u64> = shell.tree().tiles().iter().map(|t| t.id.0).collect();
+        assert_eq!(ids, vec![2, 3, 1], "tile 1 merged into the right stack: {ids:?}");
+        match shell.tree() {
+            TileTree::Split { children, .. } => {
+                assert_eq!(children.len(), 2, "still a 2-way split, not a fresh split");
+                match &children[1].tree {
+                    TileTree::Stack(s) => {
+                        assert_eq!(s.tabs.len(), 2, "the right stack now holds two tabs");
+                    }
+                    _ => panic!("the right child should be a stack"),
+                }
+            }
+            _ => panic!("expected the row split to survive"),
+        }
     }
 
     /// A press that does not move past the threshold activates the tab instead of
