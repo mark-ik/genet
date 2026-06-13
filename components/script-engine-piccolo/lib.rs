@@ -40,7 +40,7 @@ use gc_arena::lock::RefLock;
 use gc_arena::{Collect, Gc, GcWeak, Rootable};
 use piccolo::userdata::UserDataInner;
 use piccolo::{
-    Callback, CallbackReturn, Closure, Context, Error, Executor, IntoValue, Lua, Singleton,
+    Callback, CallbackReturn, Closure, Context, Error, Executor, Fuel, IntoValue, Lua, Singleton,
     StashedExecutor, StashedValue, UserData, Value, Variadic,
 };
 use script_engine_api::{
@@ -250,6 +250,24 @@ fn install_await(ctx: Context<'_>, slot: Rc<HostSlot>) {
     ctx.set_global("await", await_cb);
 }
 
+impl PiccoloEngine {
+    /// Take the first completion value off a finished executor (Lua returns a
+    /// value list; the seam wants one). Shared by `eval` and `eval_bounded`.
+    fn take_first(&mut self, executor: &StashedExecutor) -> Result<StashedValue, String> {
+        self.lua
+            .try_enter(|ctx| {
+                let ex = ctx.fetch(executor);
+                let vals = match ex.take_result::<Variadic<Vec<Value>>>(ctx) {
+                    Ok(inner) => inner?,
+                    Err(_bad_mode) => return Ok(ctx.stash(Value::Nil)),
+                };
+                let first = vals.0.into_iter().next().unwrap_or(Value::Nil);
+                Ok(ctx.stash(first))
+            })
+            .map_err(|e| e.to_string())
+    }
+}
+
 impl ScriptEngine for PiccoloEngine {
     type Value = StashedValue;
     type Error = String;
@@ -272,18 +290,53 @@ impl ScriptEngine for PiccoloEngine {
             })
             .map_err(|e| e.to_string())?;
         self.lua.finish(&executor).map_err(|e| format!("{e:?}"))?;
-        self.lua
+        self.take_first(&executor)
+    }
+
+    fn eval_bounded(
+        &mut self,
+        source: &str,
+        budget: Budget,
+    ) -> Result<Self::Value, Self::Error> {
+        let src = source.as_bytes().to_vec();
+        let executor: StashedExecutor = self
+            .lua
             .try_enter(|ctx| {
-                let ex = ctx.fetch(&executor);
-                // First completion value (Lua returns a list; the seam wants one).
-                let vals = match ex.take_result::<Variadic<Vec<Value>>>(ctx) {
-                    Ok(inner) => inner?,
-                    Err(_bad_mode) => return Ok(ctx.stash(Value::Nil)),
-                };
-                let first = vals.0.into_iter().next().unwrap_or(Value::Nil);
-                Ok(ctx.stash(first))
+                let closure = Closure::load(ctx, None, &src[..])?;
+                Ok(ctx.stash(Executor::start(ctx, closure.into(), ())))
             })
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+
+        // Step the executor with metered fuel, the bounded mirror of
+        // `Lua::finish`. A `Steps(n)` budget caps the number of fuel
+        // intervals, so a runaway script returns an error instead of looping
+        // forever.
+        const FUEL_PER_STEP: i32 = 4096;
+        let max_steps = match budget {
+            Budget::Unbounded => None,
+            Budget::Steps(n) => Some(n),
+        };
+        let mut steps: u64 = 0;
+        loop {
+            let mut fuel = Fuel::with(FUEL_PER_STEP);
+            let done = self
+                .lua
+                .enter(|ctx| ctx.fetch(&executor).step(ctx, &mut fuel))
+                .map_err(|e| format!("{e:?}"))?;
+            if done {
+                break;
+            }
+            steps += 1;
+            if let Some(max) = max_steps {
+                if steps >= max {
+                    return Err(format!(
+                        "script budget exhausted after {steps} steps (~{} fuel)",
+                        steps as i64 * FUEL_PER_STEP as i64
+                    ));
+                }
+            }
+        }
+        self.take_first(&executor)
     }
 
     fn value_to_string(&mut self, value: &Self::Value) -> Result<String, Self::Error> {
@@ -458,6 +511,31 @@ mod tests {
         let mut engine = PiccoloEngine::new().unwrap();
         let v = engine.eval("return 'a' .. (1 + 2)").unwrap();
         assert_eq!(engine.value_to_string(&v).unwrap(), "a3");
+    }
+
+    #[test]
+    fn eval_bounded_runs_a_normal_script_to_completion() {
+        let mut engine = PiccoloEngine::new().unwrap();
+        // A terminating loop well under the cap completes normally.
+        let v = engine
+            .eval_bounded("local s = 0 for i = 1, 100 do s = s + i end return s", Budget::Steps(1000))
+            .unwrap();
+        assert_eq!(engine.value_to_string(&v).unwrap(), "5050");
+    }
+
+    #[test]
+    fn eval_bounded_stops_a_runaway_instead_of_hanging() {
+        let mut engine = PiccoloEngine::new().unwrap();
+        let err = engine
+            .eval_bounded("while true do end", Budget::Steps(50))
+            .unwrap_err();
+        assert!(
+            err.contains("budget exhausted"),
+            "a runaway script must error, got: {err}"
+        );
+        // The engine is still usable after stopping a runaway.
+        let v = engine.eval_bounded("return 1 + 1", Budget::Steps(100)).unwrap();
+        assert_eq!(engine.value_to_string(&v).unwrap(), "2");
     }
 
     #[test]
