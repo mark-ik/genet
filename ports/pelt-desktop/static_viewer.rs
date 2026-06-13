@@ -146,7 +146,10 @@ pub(crate) mod windowed {
             LoadedDocument::scroll_for_key(self, key)
         }
         fn click_at(&mut self, x: f32, y: f32) -> bool {
-            LoadedDocument::click_at(self, x, y)
+            // The bare viewer has no chrome/history to navigate, so it only acts on the
+            // in-page scroll; a cross-document link is a no-op here (navigation is the
+            // chrome (V2) and tile (V5) lanes' job).
+            matches!(LoadedDocument::click_at(self, x, y), crate::document::ClickOutcome::Scrolled)
         }
     }
 

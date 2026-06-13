@@ -34,7 +34,7 @@ use xilem_serval::{
     el, on_click, AnyView, DomHandle, PointerClick, ServalAppRunner, ServalCtx, ServalElement,
 };
 
-use crate::document::{LoadedDocument, LocalFetcher};
+use crate::document::{resolve_href, ClickOutcome, LoadedDocument, LocalFetcher};
 
 /// The erased tile-frame view type.
 pub type TileView = Box<dyn AnyView<TileState, (), ServalCtx, ServalElement>>;
@@ -323,10 +323,43 @@ impl TileSurface {
         self.docs.get_mut(&id).is_some_and(|doc| doc.scroll_by(dx, dy))
     }
 
-    /// Handle a click at tile-local `(x, y)` in tile `id`'s document (in-page link
-    /// navigation); returns whether the document scrolled.
+    /// Handle a click at tile-local `(x, y)` in tile `id`'s document. An in-page link
+    /// scrolls the tile; a link to another resource navigates the tile to it (loading
+    /// the linked document, retitling the tab). Returns whether anything changed.
     pub fn click_tile(&mut self, id: TileId, x: f32, y: f32) -> bool {
-        self.docs.get_mut(&id).is_some_and(|doc| doc.click_at(x, y))
+        let outcome = match self.docs.get_mut(&id) {
+            Some(doc) => doc.click_at(x, y),
+            None => return false,
+        };
+        match outcome {
+            ClickOutcome::None => false,
+            ClickOutcome::Scrolled => true,
+            ClickOutcome::Navigate(href) => self.navigate_tile(id, &href),
+        }
+    }
+
+    /// Navigate tile `id` to `href` (resolved against its current document URL): load
+    /// the linked document, swap it in, and retarget the tile's content source + title
+    /// so the tab tracks the new page. Returns whether it navigated. `data:`/external
+    /// links resolve absolute; a relative href joins onto the current URL's directory.
+    fn navigate_tile(&mut self, id: TileId, href: &str) -> bool {
+        let base = match self.runner.state().tree.find(id).map(|t| &t.content) {
+            Some(ContentSource::Document(DocumentRef(url))) => url.clone(),
+            _ => return false,
+        };
+        let url = resolve_href(&base, href);
+        let Ok(doc) = LoadedDocument::load(&LocalFetcher, &url) else {
+            return false;
+        };
+        self.docs.insert(id, doc);
+        let title = crate::tile_viewer::tile_title(&url);
+        self.runner.update(|s| {
+            if let Some(tile) = s.tree.tile_mut(id) {
+                tile.content = ContentSource::Document(DocumentRef(url.clone()));
+                tile.title = title.clone();
+            }
+        });
+        true
     }
 
     /// If `(x, y)` is on a divider, the split it resizes: its path, the boundary index,
@@ -684,6 +717,41 @@ mod tests {
         // The stack collapsed to a single remaining tile (tab1).
         let ids: Vec<u64> = surface.tree().tiles().iter().map(|t| t.id.0).collect();
         assert_eq!(ids, vec![1], "tab2 was removed: {ids:?}");
+    }
+
+    /// Clicking a cross-document link in a tile navigates that tile: the linked
+    /// document loads, swaps into the tile, and the tab retitles (link-click nav, the
+    /// tile lane). A relative href resolves against the tile's current file URL.
+    #[test]
+    fn click_tile_navigates_to_linked_document() {
+        let dir = std::env::temp_dir().join("pelt-tile-nav-test");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join("next.html"), "<h1>Next Page</h1>").expect("write next.html");
+        let first = dir.join("first.html");
+        std::fs::write(
+            &first,
+            "<style>body { margin: 0; padding: 0; } a { display: block; height: 40px; }</style>\
+             <a href=\"next.html\">go</a>",
+        )
+        .expect("write first.html");
+        let mut surface = TileSurface::new(TileTree::single(Tile {
+            id: TileId(1),
+            title: "first".into(),
+            content: ContentSource::Document(DocumentRef(
+                first.to_str().expect("utf8 path").to_string(),
+            )),
+        }));
+        // Lay the tile's document out so the click hit-tests its link.
+        let _ = surface.frame(800, 600);
+        assert!(surface.click_tile(TileId(1), 10.0, 20.0), "the link click navigated the tile");
+        let tile = surface.tree().find(TileId(1)).expect("tile 1 survives");
+        match &tile.content {
+            ContentSource::Document(DocumentRef(url)) => {
+                assert!(url.ends_with("next.html"), "tile retargeted to next.html: {url}");
+            }
+            _ => panic!("expected a document tile"),
+        }
+        assert_eq!(tile.title, "next", "the tab retitled to the new page");
     }
 
     /// The full descendant text of `node`, in document order.

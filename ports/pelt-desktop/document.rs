@@ -86,6 +86,18 @@ pub struct LoadedDocument {
     pending_fragment: Option<String>,
 }
 
+/// What a content click ([`LoadedDocument::click_at`]) resolved to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ClickOutcome {
+    /// Nothing actionable under the point.
+    None,
+    /// An in-page `#fragment` link; the document scrolled to its target (host redraws).
+    Scrolled,
+    /// A link to another resource; the host resolves the href against the current URL
+    /// (see [`resolve_href`]) and loads it.
+    Navigate(String),
+}
+
 impl LoadedDocument {
     /// Fetch `url` through `fetcher`, parse the bytes as HTML, and resolve its
     /// stylesheets. `Err` when the fetch fails (missing file, unsupported scheme).
@@ -165,23 +177,30 @@ impl LoadedDocument {
         session.scroll_for_key(&self.doc, key)
     }
 
-    /// Handle a click at scene point `(x, y)`: if it lands on an in-page link
-    /// (`<a href="#id">`), scroll its target into view. Returns whether the document
-    /// scrolled (so the host redraws). A no-op before the first frame, or off a link.
-    pub fn click_at(&mut self, x: f32, y: f32) -> bool {
-        let fragment = {
+    /// Handle a click at scene point `(x, y)`. An in-page `<a href="#id">` scrolls its
+    /// target into view ([`ClickOutcome::Scrolled`]); an `<a>` to another resource is
+    /// reported as a [`ClickOutcome::Navigate`] for the host to resolve + load;
+    /// elsewhere it is [`ClickOutcome::None`]. A no-op before the first frame.
+    pub fn click_at(&mut self, x: f32, y: f32) -> ClickOutcome {
+        let href = {
             let Some(session) = self.session.as_ref() else {
-                return false;
+                return ClickOutcome::None;
             };
-            session.link_fragment_at(&self.doc, x, y, &ScrollOffsets::default())
+            session.link_href_at(&self.doc, x, y, &ScrollOffsets::default())
         };
-        let Some(fragment) = fragment else {
-            return false;
+        let Some(href) = href else {
+            return ClickOutcome::None;
         };
-        let Some(session) = self.session.as_mut() else {
-            return false;
-        };
-        session.scroll_to_id(&self.doc, &fragment)
+        // An in-page `#fragment` scrolls within this document; any other href is a
+        // navigation the host resolves against the current URL and loads.
+        if let Some(fragment) = href.strip_prefix('#').filter(|f| !f.is_empty()) {
+            let fragment = fragment.to_string();
+            if let Some(session) = self.session.as_mut() {
+                session.scroll_to_id(&self.doc, &fragment);
+            }
+            return ClickOutcome::Scrolled;
+        }
+        ClickOutcome::Navigate(href)
     }
 
     /// The current document scroll offset in device px (`(0, 0)` before the first
@@ -194,6 +213,29 @@ impl LoadedDocument {
     /// outline, links, headings) — the inspector's read model + the semantic oracle.
     pub fn inspect(&self) -> ContentReport {
         content_report(&self.doc)
+    }
+}
+
+/// Resolve a link `href` against the `base` URL the document was loaded from. Absolute
+/// hrefs (a scheme like `https:` / `data:`, a Windows drive, or a root path) pass
+/// through; a relative href joins onto the base's directory (everything up to its last
+/// `/` or `\`). Pragmatic local-first resolution, not the full URL algorithm.
+pub fn resolve_href(base: &str, href: &str) -> String {
+    if has_scheme(href) || href.starts_with('/') || href.starts_with('\\') {
+        return href.to_string();
+    }
+    let cut = base.rfind(['/', '\\']).map_or(0, |i| i + 1);
+    format!("{}{}", &base[..cut], href)
+}
+
+/// Whether `url` begins with a URL scheme (`name:`) or a Windows drive (`C:`). A bare
+/// relative path (`page.html`, `sub/page.html`) has neither.
+fn has_scheme(url: &str) -> bool {
+    match url.find(':') {
+        Some(i) if i > 0 => {
+            url[..i].chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        }
+        _ => false,
     }
 }
 
@@ -291,15 +333,47 @@ mod tests {
         let _ = doc.frame(400, 300);
 
         // The link is a 40px block at the top; click inside it.
-        assert!(doc.click_at(10.0, 20.0), "clicking the in-page link scrolls to its target");
+        assert_eq!(
+            doc.click_at(10.0, 20.0),
+            ClickOutcome::Scrolled,
+            "clicking the in-page link scrolls to its target",
+        );
         // #mark sits at y = 40 (link) + 1000 (spacer) = 1040.
         assert!((doc.scroll().1 - 1040.0).abs() < 1.0, "scrolled to #mark: {:?}", doc.scroll());
 
         // The point now shows the target (a div, not a link), so a click there is a
         // no-op.
         let before = doc.scroll();
-        assert!(!doc.click_at(10.0, 20.0), "no link under the point now → no-op");
+        assert_eq!(doc.click_at(10.0, 20.0), ClickOutcome::None, "no link under the point now");
         assert_eq!(doc.scroll(), before, "scroll unchanged off a link");
+    }
+
+    /// Clicking an `<a>` to another resource reports a navigation (the host loads it),
+    /// and does not scroll the current document.
+    #[test]
+    fn external_link_click_reports_navigation() {
+        let html = "<style>body { margin: 0; padding: 0; } a { display: block; height: 40px; }</style>\
+            <a href=\"next.html\">go</a>";
+        let mut doc = LoadedDocument::parse(html);
+        let _ = doc.frame(400, 300);
+        assert_eq!(
+            doc.click_at(10.0, 20.0),
+            ClickOutcome::Navigate("next.html".to_string()),
+            "an external link reports a navigation to its href",
+        );
+        assert_eq!(doc.scroll(), (0.0, 0.0), "a navigation does not scroll the current document");
+    }
+
+    /// `resolve_href` joins a relative link onto the base's directory and passes
+    /// absolute hrefs (scheme / root path) through unchanged.
+    #[test]
+    fn resolve_href_joins_relative_and_passes_absolute() {
+        assert_eq!(resolve_href("docs/a.html", "b.html"), "docs/b.html");
+        assert_eq!(resolve_href("a.html", "sub/c.html"), "sub/c.html");
+        assert_eq!(resolve_href("file:///x/a.html", "b.html"), "file:///x/b.html");
+        assert_eq!(resolve_href("a.html", "https://example.org/p"), "https://example.org/p");
+        assert_eq!(resolve_href("a.html", "data:text/html,<p>x</p>"), "data:text/html,<p>x</p>");
+        assert_eq!(resolve_href("docs/a.html", "/root.html"), "/root.html");
     }
 
     /// Keyboard scroll defaults reach the document viewport through the session:

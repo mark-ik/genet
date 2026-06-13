@@ -83,7 +83,7 @@ pub use smoke_wayland::{
 };
 pub use static_viewer::{StaticViewerConfig, StaticViewerOutcome, run_static_viewer};
 #[cfg(feature = "viewer")]
-pub use document::{LoadedDocument, LocalFetcher};
+pub use document::{ClickOutcome, LoadedDocument, LocalFetcher, resolve_href};
 #[cfg(feature = "viewer")]
 pub use headless::{
     render_snapshot, run_reftests, Outcome, ReftestResult, DEFAULT_HEIGHT, DEFAULT_WIDTH,

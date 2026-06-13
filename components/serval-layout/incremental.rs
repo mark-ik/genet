@@ -328,6 +328,31 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         None
     }
 
+    /// The full `href` of the `<a>` link under scene point `(x, y)`, or `None`. Like
+    /// [`link_fragment_at`](Self::link_fragment_at) but returns the whole href (a
+    /// cross-document URL, a relative path, or an in-page `#fragment`), so the host can
+    /// resolve and load a navigation. The host distinguishes an in-page `#…` href
+    /// (scroll) from a navigable one (load) on the returned string.
+    pub fn link_href_at<D>(
+        &self,
+        dom: &D,
+        x: f32,
+        y: f32,
+        scroll: &ScrollOffsets<Id>,
+    ) -> Option<String>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let mut cur = self.hit_test(dom, x, y, scroll);
+        while let Some(node) = cur {
+            if let Some(href) = anchor_href(dom, node) {
+                return Some(href);
+            }
+            cur = dom.parent(node);
+        }
+        None
+    }
+
     /// Recompute the viewport's propagated overflow + size after a relayout,
     /// preserving the host's scroll re-clamped to the new content (a relayout can
     /// shrink the page under the current offset). Called on every layout-changing
@@ -666,6 +691,17 @@ fn anchor_fragment<D: LayoutDom>(dom: &D, node: D::NodeId) -> Option<String> {
     }
     let href = dom.attribute(node, &ns!(), &local_name!("href"))?;
     href.strip_prefix('#').filter(|f| !f.is_empty()).map(str::to_string)
+}
+
+/// The full, non-empty `href` of an `<a>` element (in-page or cross-document), or
+/// `None` when `node` is not such a link. Behind [`IncrementalLayout::link_href_at`].
+fn anchor_href<D: LayoutDom>(dom: &D, node: D::NodeId) -> Option<String> {
+    use html5ever::{local_name, ns};
+    if dom.element_name(node)?.local != local_name!("a") {
+        return None;
+    }
+    let href = dom.attribute(node, &ns!(), &local_name!("href"))?;
+    (!href.is_empty()).then(|| href.to_string())
 }
 
 /// Lay out over an already-cascaded plane (no images in the scripted

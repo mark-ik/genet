@@ -193,6 +193,18 @@ impl TileTree {
         self.tiles().into_iter().find(|t| t.id == id)
     }
 
+    /// Find a tile by id anywhere in the tree, mutably — for the host to retarget a
+    /// tile's content + title when a followed link navigates it (not an event: the
+    /// content source changing is a host state edit, outside the gesture reducer).
+    pub fn tile_mut(&mut self, id: TileId) -> Option<&mut Tile> {
+        match self {
+            TileTree::Stack(stack) => stack.tabs.iter_mut().find(|t| t.id == id),
+            TileTree::Split { children, .. } => {
+                children.iter_mut().find_map(|b| b.tree.tile_mut(id))
+            }
+        }
+    }
+
     /// The child fractions of the split addressed by `path`, or `None` if the path
     /// does not resolve to a split. (For a host driving divider resize.)
     pub fn fractions_at(&self, path: &TilePath) -> Option<Vec<f32>> {

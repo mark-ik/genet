@@ -287,6 +287,14 @@ impl Chrome {
         self.runner.update(|s| s.queue(ChromeIntent::Navigate(url.clone())));
     }
 
+    /// Queue a navigation to `url` (a content link click the shell resolved to a URL).
+    /// Mirrors [`submit_omnibar`](Self::submit_omnibar) with an explicit target, so a
+    /// followed link walks the same history + omnibar path as a typed URL.
+    pub fn navigate_to(&mut self, url: impl Into<String>) {
+        let url = url.into();
+        self.runner.update(move |s| s.queue(ChromeIntent::Navigate(url.clone())));
+    }
+
     /// The shared chrome DOM handle (for the shell's hit-testing).
     pub fn dom(&self) -> DomHandle {
         self.runner.dom()
@@ -387,6 +395,21 @@ mod tests {
         let intents = chrome.take_intents();
         assert!(intents.contains(&ChromeIntent::Back), "click queued Back: {intents:?}");
         assert_eq!(chrome.state().current(), "a", "Back stepped history");
+    }
+
+    /// A followed content link (`navigate_to`) queues a Navigate that `take_intents`
+    /// applies to history + the omnibar — the same path a typed URL walks.
+    #[test]
+    fn navigate_to_advances_history_and_omnibar() {
+        let mut chrome = Chrome::new("a.html", StripSide::Top, 40);
+        chrome.navigate_to("b.html");
+        let intents = chrome.take_intents();
+        assert!(
+            intents.contains(&ChromeIntent::Navigate("b.html".to_string())),
+            "navigate_to queued a Navigate: {intents:?}",
+        );
+        assert_eq!(chrome.state().current(), "b.html", "history advanced to the link target");
+        assert_eq!(chrome.state().omnibar.text(), "b.html", "the omnibar shows the new URL");
     }
 
     impl Chrome {

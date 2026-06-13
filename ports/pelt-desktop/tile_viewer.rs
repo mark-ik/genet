@@ -48,7 +48,7 @@ fn tree_from_urls(urls: &[String]) -> TileTree {
 }
 
 /// A short tab title from a URL: the file stem, or the URL truncated.
-fn tile_title(url: &str) -> String {
+pub(crate) fn tile_title(url: &str) -> String {
     let trimmed = url.split(['#', '?']).next().unwrap_or(url);
     let name = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
     let stem = name.strip_suffix(".html").unwrap_or(name);

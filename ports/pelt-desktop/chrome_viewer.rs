@@ -53,7 +53,7 @@ mod windowed {
 
     use super::{StaticViewerConfig, StaticViewerOutcome};
     use crate::chrome::{Chrome, ChromeIntent, StripSide};
-    use crate::document::{LoadedDocument, LocalFetcher};
+    use crate::document::{ClickOutcome, LoadedDocument, LocalFetcher, resolve_href};
 
     /// A rect `(x, y, w, h)` in window pixels.
     type Rect = (u32, u32, u32, u32);
@@ -334,8 +334,17 @@ mod windowed {
                             self.cursor.0 - content_rect.0 as f32,
                             self.cursor.1 - content_rect.1 as f32,
                         );
-                        if self.content.click_at(local.0, local.1) {
-                            self.request_redraw();
+                        match self.content.click_at(local.0, local.1) {
+                            ClickOutcome::Scrolled => self.request_redraw(),
+                            ClickOutcome::Navigate(href) => {
+                                // A content link: resolve against the current URL and
+                                // route it through the chrome's navigate path, so the
+                                // omnibar + history update and the content reloads.
+                                let url = resolve_href(&self.loaded_url, &href);
+                                self.chrome.navigate_to(url);
+                                self.apply_chrome_intents();
+                            }
+                            ClickOutcome::None => {}
                         }
                     }
                 }
