@@ -256,6 +256,19 @@ mod windowed {
         })
     }
 
+    /// Whether `key` is the paste key — `V` (combined with Ctrl/Cmd by the caller) or a
+    /// keyboard's dedicated Paste key.
+    fn is_paste_key(key: &Key) -> bool {
+        matches!(key, Key::Character(s) if s.eq_ignore_ascii_case("v"))
+            || matches!(key, Key::Named(NamedKey::Paste))
+    }
+
+    /// Read UTF-8 text from the OS clipboard, or `None` if the clipboard can't be opened
+    /// (e.g. a headless host) or holds no text.
+    fn read_clipboard() -> Option<String> {
+        arboard::Clipboard::new().ok()?.get_text().ok()
+    }
+
     impl ApplicationHandler for BrowserApp {
         fn resumed(&mut self, event_loop: &ActiveEventLoop) {
             if self.window.is_some() {
@@ -362,11 +375,17 @@ mod windowed {
                         return;
                     }
                     if self.chrome.focused().is_some() {
-                        // The omnibar holds focus: Enter submits the URL, every other
-                        // key edits the field.
+                        // The omnibar holds focus: Enter submits the URL, Ctrl/Cmd+V
+                        // pastes the clipboard, every other key edits the field.
                         if matches!(event.logical_key, Key::Named(NamedKey::Enter)) {
                             self.chrome.submit_omnibar();
                             self.apply_chrome_intents();
+                        } else if (self.mods.ctrl || self.mods.meta)
+                            && is_paste_key(&event.logical_key)
+                        {
+                            if let Some(text) = read_clipboard() {
+                                self.chrome.paste(&text);
+                            }
                         } else if let Some(key_event) =
                             key_event_from_winit(&event.logical_key, self.mods)
                         {

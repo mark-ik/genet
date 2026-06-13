@@ -295,6 +295,13 @@ impl Chrome {
         self.runner.update(move |s| s.queue(ChromeIntent::Navigate(url.clone())));
     }
 
+    /// Paste `text` into the omnibar at the caret, replacing any selection. The shell
+    /// reads the OS clipboard and calls this on Ctrl/Cmd+V while the omnibar is focused.
+    pub fn paste(&mut self, text: &str) {
+        let text = text.to_string();
+        self.runner.update(move |s| s.omnibar.insert_str(&text));
+    }
+
     /// The shared chrome DOM handle (for the shell's hit-testing).
     pub fn dom(&self) -> DomHandle {
         self.runner.dom()
@@ -410,6 +417,18 @@ mod tests {
         );
         assert_eq!(chrome.state().current(), "b.html", "history advanced to the link target");
         assert_eq!(chrome.state().omnibar.text(), "b.html", "the omnibar shows the new URL");
+    }
+
+    /// Pasting inserts text into the omnibar at the caret (the shell supplies the
+    /// clipboard string; the insertion itself is host-independent and testable).
+    #[test]
+    fn paste_inserts_into_omnibar() {
+        let mut chrome = Chrome::new("a.html", StripSide::Top, 40);
+        let before = chrome.state().omnibar.text().to_string();
+        chrome.paste("ZZ");
+        let after = chrome.state().omnibar.text();
+        assert!(after.contains("ZZ"), "the pasted text is in the omnibar: {after}");
+        assert!(after.len() > before.len(), "the omnibar grew by the pasted text");
     }
 
     impl Chrome {

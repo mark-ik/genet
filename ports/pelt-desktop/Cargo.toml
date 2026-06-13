@@ -43,7 +43,7 @@ scripted-nova = ["scripted", "dep:script-engine-nova"]
 # needs `viewer` for the present stack + the content document.
 chrome = [
     "dep:netrender", "dep:serval-render", "dep:serval-layout", "dep:serval-scripted-dom",
-    "dep:layout-dom-api", "dep:xilem-serval",
+    "dep:layout-dom-api", "dep:xilem-serval", "dep:arboard",
 ]
 # The tile-tree surface (V5): splits + tab-stacks of live documents, rendered as
 # xilem-serval flex DOM (the frame) with each tile's document composited into its
@@ -120,6 +120,9 @@ layout-dom-api = { path = "../../components/shared/layout-dom", optional = true 
 # Chrome profile (behind the `chrome` feature): the xilem-serval reactive toolkit the
 # omnibar + back/forward views are built with, over a ScriptedDom the runner drives.
 xilem-serval = { path = "../../components/xilem-serval", optional = true }
+# OS clipboard access for the omnibar's Ctrl/Cmd+V paste (chrome feature). Reads only;
+# a failed open (e.g. a headless host) degrades to a no-op paste.
+arboard = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Windows-only types (HWND) used by the `windows-present` feature's
