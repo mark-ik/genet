@@ -23,7 +23,9 @@ use std::rc::Rc;
 
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
 use netrender::Scene;
-use pelt_core::tile::{ContentSource, DocumentRef, SplitAxis, TabStack, TileEvent, TileId, TileTree};
+use pelt_core::tile::{
+    ContentSource, DocumentRef, SplitAxis, TabStack, TileEvent, TileId, TilePath, TileTree,
+};
 use serval_layout::IncrementalLayout;
 use serval_render::scene_from_session_dom;
 use serval_scripted_dom::{NodeId, ScriptedDom};
@@ -48,33 +50,60 @@ pub struct TileState {
 /// child sized by `flex-grow: fraction`; tab-stacks become a tab bar over a
 /// content-area placeholder marked with the active tile's id.
 fn tile_view(state: &TileState) -> TileView {
-    render_node(&state.tree)
+    render_node(&state.tree, &[])
 }
 
-fn render_node(node: &TileTree) -> TileView {
+/// Encode a split path (`[0, 1]`) as a DOM-attr string (`"0.1"`); the empty path (the
+/// root split) is `""`.
+fn encode_path(path: &[usize]) -> String {
+    path.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(".")
+}
+
+/// Decode the `data-divider` attr back to a [`TilePath`].
+fn decode_path(s: &str) -> TilePath {
+    if s.is_empty() {
+        TilePath(Vec::new())
+    } else {
+        TilePath(s.split('.').filter_map(|p| p.parse().ok()).collect())
+    }
+}
+
+fn render_node(node: &TileTree, path: &[usize]) -> TileView {
     match node {
         TileTree::Split { axis, children } => {
             let dir = match axis {
                 SplitAxis::Row => "row",
                 SplitAxis::Column => "column",
             };
-            let kids: Vec<TileView> = children
-                .iter()
-                .map(|branch| {
-                    let inner = render_node(&branch.tree);
-                    let style = format!(
-                        "flex: {frac} {frac} 0; min-width: 0; min-height: 0;",
-                        frac = branch.fraction
-                    );
-                    Box::new(
-                        el::<_, TileState, ()>("div", inner)
-                            .attr("class", "tile-branch")
-                            .attr("style", style),
-                    ) as TileView
-                })
-                .collect();
+            let path_attr = encode_path(path);
+            // Interleave a draggable divider between adjacent children. Each divider
+            // carries its split's path + the boundary index, so the host can resolve a
+            // drag to a `DividerMoved`.
+            let mut items: Vec<TileView> = Vec::new();
+            for (j, branch) in children.iter().enumerate() {
+                let mut child_path = path.to_vec();
+                child_path.push(j);
+                let inner = render_node(&branch.tree, &child_path);
+                let style = format!(
+                    "flex: {frac} {frac} 0; min-width: 0; min-height: 0;",
+                    frac = branch.fraction
+                );
+                items.push(Box::new(
+                    el::<_, TileState, ()>("div", inner)
+                        .attr("class", "tile-branch")
+                        .attr("style", style),
+                ) as TileView);
+                if j + 1 < children.len() {
+                    items.push(Box::new(
+                        el::<_, TileState, ()>("div", ())
+                            .attr("class", "tile-divider")
+                            .attr("data-divider", path_attr.clone())
+                            .attr("data-dindex", j.to_string()),
+                    ) as TileView);
+                }
+            }
             Box::new(
-                el::<_, TileState, ()>("div", kids)
+                el::<_, TileState, ()>("div", items)
                     .attr("class", "tile-split")
                     .attr("style", format!("display: flex; flex-direction: {dir};")),
             )
@@ -137,7 +166,8 @@ const DEFAULT_TILE_CSS: &str = "\
     .tile-tab { display: flex; align-items: center; padding: 5px 10px; color: #cccccc; background: #2a2a30; margin-right: 2px; } \
     .tile-tab.active { color: #ffffff; background: #4a4a55; } \
     .tile-close { margin-left: 8px; padding: 0 4px; color: #999999; } \
-    .tile-content { flex: 1 1 0; min-height: 0; background: #ffffff; }";
+    .tile-content { flex: 1 1 0; min-height: 0; background: #ffffff; } \
+    .tile-divider { flex: 0 0 8px; background: #1a1a1f; }";
 
 /// A rendered tile-tree frame: the frame scene (tab bars + dividers) plus one layer
 /// per active tile (its content-area rect + its document's scene) for the host to
@@ -279,10 +309,66 @@ impl TileSurface {
         self.docs.get_mut(&id).is_some_and(|doc| doc.click_at(x, y))
     }
 
+    /// If `(x, y)` is on a divider, the split it resizes: its path, the boundary index,
+    /// whether the split is horizontal (a Row), and the split's pixel extent along its
+    /// axis (so the host can convert a drag delta to a fraction).
+    pub fn divider_at(&self, x: f32, y: f32, width: u32, height: u32) -> Option<DividerHit> {
+        let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
+        let dom = self.runner.dom();
+        let dom = dom.borrow();
+        let session =
+            IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32);
+        let mut node = session.hit_test(&*dom, x, y, &serval_layout::ScrollOffsets::default())?;
+        let ns = Namespace::default();
+        loop {
+            if let Some(path_str) = dom.attribute(node, &ns, &LocalName::from("data-divider")) {
+                let index: usize = dom
+                    .attribute(node, &ns, &LocalName::from("data-dindex"))?
+                    .parse()
+                    .ok()?;
+                let path = decode_path(path_str);
+                // The divider's parent is the split container; its extent sets the
+                // pixels-per-fraction for the drag.
+                let split_node = dom.parent(node)?;
+                let split_rect = absolute_rect(&dom, &session, split_node)?;
+                let horizontal =
+                    matches!(self.runner.state().tree.axis_at(&path), Some(SplitAxis::Row));
+                let extent = if horizontal { split_rect.2 } else { split_rect.3 };
+                return Some(DividerHit { path, index, horizontal, extent });
+            }
+            node = dom.parent(node)?;
+        }
+    }
+
+    /// The child fractions of the split at `path` (for the host's divider drag).
+    pub fn fractions_at(&self, path: &TilePath) -> Option<Vec<f32>> {
+        self.runner.state().tree.fractions_at(path)
+    }
+
+    /// Set the child fractions of the split at `path` (a divider drag), applied through
+    /// the reducer.
+    pub fn set_divider_fractions(&mut self, path: &TilePath, fractions: Vec<f32>) {
+        let event = TileEvent::DividerMoved { split: path.clone(), fractions };
+        self.runner.update(|s| {
+            s.tree.apply(&event);
+        });
+    }
+
     /// The current tile tree (read-only).
     pub fn tree(&self) -> &TileTree {
         &self.runner.state().tree
     }
+}
+
+/// A divider the host can drag to resize a split (the result of [`TileSurface::divider_at`]).
+pub struct DividerHit {
+    pub path: TilePath,
+    /// The boundary index: the divider sits between split children `index` and `index+1`.
+    pub index: usize,
+    /// Whether the split is a Row (horizontal drag) vs a Column (vertical drag).
+    pub horizontal: bool,
+    /// The split's pixel extent along its axis (drag delta / extent = fraction delta).
+    pub extent: f32,
 }
 
 /// Walk the frame DOM for content-area placeholders (carrying `data-tile=<id>`) and
@@ -396,6 +482,34 @@ mod tests {
         } else {
             panic!("expected a stack");
         }
+    }
+
+    /// A divider sits at the boundary between split children; resizing it rewrites the
+    /// fractions.
+    #[test]
+    fn divider_resizes_split() {
+        let tree = TileTree::split(
+            SplitAxis::Row,
+            vec![
+                TileBranch::new(0.5, TileTree::single(doc_tile(1, "<p>l</p>"))),
+                TileBranch::new(0.5, TileTree::single(doc_tile(2, "<p>r</p>"))),
+            ],
+        );
+        let mut surface = TileSurface::new(tree);
+        let _ = surface.frame(800, 600);
+        // The divider sits at the center of an 800px row split.
+        let hit = surface
+            .divider_at(400.0, 300.0, 800, 600)
+            .expect("a divider at the center boundary");
+        assert_eq!(hit.index, 0);
+        assert!(hit.horizontal, "a Row split drags horizontally");
+        assert!(hit.extent > 700.0, "extent is ~ the window width: {}", hit.extent);
+        surface.set_divider_fractions(&hit.path, vec![0.7, 0.3]);
+        let fracs = surface.fractions_at(&hit.path).expect("split fractions");
+        assert!(
+            (fracs[0] - 0.7).abs() < 1e-5 && (fracs[1] - 0.3).abs() < 1e-5,
+            "fractions updated: {fracs:?}",
+        );
     }
 
     /// Closing a tab via its × removes it from the stack and reconciles the docs.

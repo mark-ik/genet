@@ -193,6 +193,23 @@ impl TileTree {
         self.tiles().into_iter().find(|t| t.id == id)
     }
 
+    /// The child fractions of the split addressed by `path`, or `None` if the path
+    /// does not resolve to a split. (For a host driving divider resize.)
+    pub fn fractions_at(&self, path: &TilePath) -> Option<Vec<f32>> {
+        match self.node_at(path)? {
+            TileTree::Split { children, .. } => Some(children.iter().map(|b| b.fraction).collect()),
+            TileTree::Stack(_) => None,
+        }
+    }
+
+    /// The axis of the split addressed by `path`, or `None` if it is not a split.
+    pub fn axis_at(&self, path: &TilePath) -> Option<SplitAxis> {
+        match self.node_at(path)? {
+            TileTree::Split { axis, .. } => Some(*axis),
+            TileTree::Stack(_) => None,
+        }
+    }
+
     /// Apply a [`TileEvent`] to the tree, returning whether it changed. This is the
     /// **reference reducer standalone pelt uses** — the tree is pelt's whole arrangement
     /// state, so it applies events here. mere does *not* use it: mere applies the same

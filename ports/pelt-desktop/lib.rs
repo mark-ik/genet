@@ -94,6 +94,6 @@ pub use chrome::{Chrome, ChromeIntent, ChromeState, StripSide};
 #[cfg(all(feature = "viewer", feature = "chrome"))]
 pub use chrome_viewer::run_chrome_viewer;
 #[cfg(feature = "tiles")]
-pub use tile_surface::{TileFrame, TileLayer, TileSurface};
+pub use tile_surface::{DividerHit, TileFrame, TileLayer, TileSurface};
 #[cfg(feature = "tiles")]
 pub use tile_viewer::run_tile_viewer;

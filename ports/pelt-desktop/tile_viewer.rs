@@ -83,7 +83,7 @@ mod windowed {
 
     use netrender::external_texture::ExternalTexturePlacement;
     use netrender::{ColorLoad, NetrenderOptions};
-    use pelt_core::tile::{TileId, TileTree};
+    use pelt_core::tile::{TileId, TilePath, TileTree};
     use serval_winit_host::{wheel_delta_from_winit, SurfaceHost};
     use winit::application::ApplicationHandler;
     use winit::dpi::PhysicalSize;
@@ -96,6 +96,19 @@ mod windowed {
     use crate::tile_surface::TileSurface;
 
     type Rect = (f32, f32, f32, f32);
+
+    /// An in-progress divider drag: which split + boundary, the axis + the split's
+    /// pixel extent, the press point, and the boundary's fractions at press time (so
+    /// the drag is computed from the start, not incrementally).
+    struct DividerDrag {
+        path: TilePath,
+        index: usize,
+        horizontal: bool,
+        extent: f32,
+        start: (f32, f32),
+        init_first: f32,
+        pair_total: f32,
+    }
 
     pub(super) fn run(tree: TileTree, urls: Vec<String>) -> Result<StaticViewerOutcome, String> {
         let surface = TileSurface::new(tree);
@@ -119,6 +132,8 @@ mod windowed {
         /// The last frame's tile content rects, for routing a click/scroll to the tile
         /// under the cursor.
         tile_rects: Vec<(TileId, Rect)>,
+        /// The in-progress divider drag, if any.
+        divider_drag: Option<DividerDrag>,
         redraws: u32,
     }
 
@@ -133,6 +148,7 @@ mod windowed {
                 height: 750,
                 cursor: (0.0, 0.0),
                 tile_rects: Vec::new(),
+                divider_drag: None,
                 redraws: 0,
             }
         }
@@ -277,9 +293,51 @@ mod windowed {
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     self.cursor = (position.x as f32, position.y as f32);
+                    // A live divider drag: recompute the boundary fractions from the
+                    // press point (so the drag is absolute, not accumulating drift).
+                    let drag = self.divider_drag.as_ref().map(|d| {
+                        (d.path.clone(), d.index, d.horizontal, d.extent, d.start, d.init_first, d.pair_total)
+                    });
+                    if let Some((path, index, horizontal, extent, start, init_first, total)) = drag {
+                        let delta =
+                            if horizontal { self.cursor.0 - start.0 } else { self.cursor.1 - start.1 };
+                        let frac_delta = if extent > 0.0 { delta / extent } else { 0.0 };
+                        let new_first = (init_first + frac_delta).clamp(0.05 * total, 0.95 * total);
+                        if let Some(mut fracs) = self.surface.fractions_at(&path) {
+                            if index + 1 < fracs.len() {
+                                fracs[index] = new_first;
+                                fracs[index + 1] = total - new_first;
+                                self.surface.set_divider_fractions(&path, fracs);
+                                self.request_redraw();
+                            }
+                        }
+                    }
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
-                    if state != ElementState::Pressed || button != MouseButton::Left {
+                    if button != MouseButton::Left {
+                        return;
+                    }
+                    if state == ElementState::Released {
+                        self.divider_drag = None;
+                        return;
+                    }
+                    let (w, h) = (self.width.max(1), self.height.max(1));
+                    // A press on a divider starts a resize drag (dividers sit in the
+                    // gaps, so this takes priority over content / tab routing).
+                    if let Some(hit) = self.surface.divider_at(self.cursor.0, self.cursor.1, w, h) {
+                        if let Some(fracs) = self.surface.fractions_at(&hit.path) {
+                            if hit.index + 1 < fracs.len() {
+                                self.divider_drag = Some(DividerDrag {
+                                    path: hit.path,
+                                    index: hit.index,
+                                    horizontal: hit.horizontal,
+                                    extent: hit.extent,
+                                    start: self.cursor,
+                                    init_first: fracs[hit.index],
+                                    pair_total: fracs[hit.index] + fracs[hit.index + 1],
+                                });
+                            }
+                        }
                         return;
                     }
                     if let Some((tile, local)) = self.tile_at(self.cursor) {
@@ -288,8 +346,7 @@ mod windowed {
                             self.request_redraw();
                         }
                     } else {
-                        // Outside any content (a tab / divider): drive the frame.
-                        let (w, h) = (self.width.max(1), self.height.max(1));
+                        // Outside any content (a tab): drive the frame.
                         if let Some(node) =
                             self.surface.hit_test_frame(self.cursor.0, self.cursor.1, w, h)
                         {
