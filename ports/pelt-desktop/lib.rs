@@ -32,6 +32,9 @@ mod chrome_viewer;
 #[cfg(feature = "tiles")]
 mod tile_surface;
 
+#[cfg(feature = "tiles")]
+mod tile_viewer;
+
 /// Structural display defaults the viewer + scripted profiles layer over serval's UA
 /// cascade, so a plain HTML document lays out as a stack of blocks rather than one
 /// inline run, and document metadata stays unpainted. Shared by the static
@@ -92,3 +95,5 @@ pub use chrome::{Chrome, ChromeIntent, ChromeState, StripSide};
 pub use chrome_viewer::run_chrome_viewer;
 #[cfg(feature = "tiles")]
 pub use tile_surface::{TileFrame, TileLayer, TileSurface};
+#[cfg(feature = "tiles")]
+pub use tile_viewer::run_tile_viewer;

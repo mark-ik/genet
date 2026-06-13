@@ -43,6 +43,9 @@ scripted-nova = ["scripted", "pelt-desktop/scripted-nova"]
 # xilem-serval omnibar + back/forward strip. Pulls pelt-desktop's chrome runtime on
 # top of the present stack.
 chrome = ["viewer-engine", "pelt-desktop/viewer", "pelt-desktop/chrome"]
+# The tile-tree demo (V5): `pelt --tiles <url>...` splits the window into tiles, each
+# showing a document, with switchable tabs. Pulls pelt-desktop's tile surface.
+tiles = ["viewer-engine", "pelt-desktop/viewer", "pelt-desktop/tiles"]
 # C4 headed-presentation smoke. Pulls serval's `WindowsDxgiBackend`
 # in through `pelt-desktop`. Inner code is `cfg(target_os = "windows")`
 # gated so the feature still builds on non-Windows hosts.

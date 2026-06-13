@@ -25,6 +25,9 @@ pub(crate) fn main() {
     // Chrome demo (V2): wrap the content viewer in an omnibar + back/forward strip.
     let mut with_chrome = false;
     let mut strip_side = String::from("top");
+    // Tiles demo (V5): split the window into tiles, one document each.
+    let mut with_tiles = false;
+    let mut tile_urls: Vec<String> = Vec::new();
     let mut netrender_smoke = false;
     let mut webgl_wgpu_smoke = false;
     #[cfg(feature = "windows-present")]
@@ -97,6 +100,9 @@ pub(crate) fn main() {
             "--chrome" => {
                 with_chrome = true;
             },
+            "--tiles" => {
+                with_tiles = true;
+            },
             "--strip" => {
                 let Some(value) = args.next() else {
                     eprintln!("--strip requires top, bottom, left, or right");
@@ -143,6 +149,7 @@ pub(crate) fn main() {
             },
             value => {
                 url = Some(value.to_owned());
+                tile_urls.push(value.to_owned());
             },
         }
     }
@@ -218,6 +225,11 @@ pub(crate) fn main() {
     // viewer (the orrery-host present shape over the pelt-core / pelt-desktop
     // contracts). Static and Viewer are the script-free document profiles.
     if matches!(engine_profile, EngineProfile::Static | EngineProfile::Viewer) {
+        // `--tiles`: split the window into tiles, one document each (V5's tile surface).
+        if with_tiles {
+            run_tiles_profile(tile_urls);
+            return;
+        }
         // `--chrome`: wrap the content in a xilem-serval omnibar + back/forward strip
         // (V2's two-root browser shell).
         if with_chrome {
@@ -295,6 +307,30 @@ fn run_scripted_profile(url: String, js: String) {
             std::process::exit(1);
         },
     }
+}
+
+/// Dispatch `--tiles` to the tile viewer: a window split into tiles, one document per
+/// content URL. Present only when built with `--features tiles`.
+#[cfg(feature = "tiles")]
+fn run_tiles_profile(urls: Vec<String>) {
+    match pelt_desktop::run_tile_viewer(urls, pelt_desktop::WindowingMode::Headed) {
+        Ok(outcome) => println!(
+            "pelt tile viewer url={} window={} redraws={}",
+            outcome.url, outcome.created_window, outcome.redraws
+        ),
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        },
+    }
+}
+
+/// Without the tiles demo compiled in, `--tiles` is a clean error pointing at the
+/// feature to enable.
+#[cfg(not(feature = "tiles"))]
+fn run_tiles_profile(_urls: Vec<String>) {
+    eprintln!("pelt was built without the tiles demo; rebuild with `--features tiles`");
+    std::process::exit(2);
 }
 
 /// Dispatch `--chrome` to the two-root browser shell: the content viewer wrapped in a
@@ -625,6 +661,7 @@ Options:
     --engine <browser|viewer|static|scripted|headless>
     --chrome                           (wrap the content viewer in an omnibar + back/forward strip; needs --features chrome)
     --strip <top|bottom|left|right>    (chrome strip side; default top)
+    --tiles <url>...                   (split the window into tiles, one document each; needs --features tiles)
     --js <boa|nova>                    (scripted profile: JS backend; nova needs --features scripted-nova)
     --out <path>                       (headless profile: write the scene snapshot for <file>)
     --reftest <dir>                    (headless profile: run a name.html + name.scene fixture dir)

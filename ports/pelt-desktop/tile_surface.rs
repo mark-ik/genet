@@ -136,9 +136,10 @@ pub struct TileFrame {
     pub tiles: Vec<TileLayer>,
 }
 
-/// One tile's content layer: where to composite (`(x, y, w, h)` in surface px) and the
-/// document scene to composite there.
+/// One tile's content layer: which tile, where to composite (`(x, y, w, h)` in surface
+/// px), and the document scene to composite there.
 pub struct TileLayer {
+    pub tile: TileId,
     pub rect: (f32, f32, f32, f32),
     pub scene: Scene,
 }
@@ -227,7 +228,7 @@ impl TileSurface {
             if let Some(doc) = self.docs.get_mut(&tile_id) {
                 let (w, h) = (rect.2.max(1.0) as u32, rect.3.max(1.0) as u32);
                 let scene = doc.frame(w, h);
-                tiles.push(TileLayer { rect, scene });
+                tiles.push(TileLayer { tile: tile_id, rect, scene });
             }
         }
         TileFrame { frame_scene, tiles }
@@ -242,6 +243,29 @@ impl TileSurface {
     /// handler (queuing a tile event).
     pub fn dispatch_click(&mut self, target: NodeId, event: PointerClick) {
         self.runner.dispatch_click(target, event);
+    }
+
+    /// Hit-test the frame DOM at `(x, y)` (laid out at the surface size), so the host
+    /// can resolve a click on a tab / divider to a frame node.
+    pub fn hit_test_frame(&self, x: f32, y: f32, width: u32, height: u32) -> Option<NodeId> {
+        let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
+        let dom = self.runner.dom();
+        let dom = dom.borrow();
+        let session =
+            IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32);
+        session.hit_test(&*dom, x, y, &serval_layout::ScrollOffsets::default())
+    }
+
+    /// Scroll the document in tile `id` by a device-px wheel delta; returns whether it
+    /// moved (a no-op for a tile with no document, or at a scroll edge).
+    pub fn scroll_tile(&mut self, id: TileId, dx: f32, dy: f32) -> bool {
+        self.docs.get_mut(&id).is_some_and(|doc| doc.scroll_by(dx, dy))
+    }
+
+    /// Handle a click at tile-local `(x, y)` in tile `id`'s document (in-page link
+    /// navigation); returns whether the document scrolled.
+    pub fn click_tile(&mut self, id: TileId, x: f32, y: f32) -> bool {
+        self.docs.get_mut(&id).is_some_and(|doc| doc.click_at(x, y))
     }
 
     /// The current tile tree (read-only).
