@@ -4930,10 +4930,10 @@ version = "0.2.0"
 dependencies = [
  "arboard",
  "ash",
+ "data-url",
  "layout-dom-api",
  "netrender",
  "pelt-core",
- "percent-encoding",
  "pollster",
  "raw-window-handle",
  "script-engine-api",
