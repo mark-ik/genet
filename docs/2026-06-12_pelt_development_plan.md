@@ -4,13 +4,16 @@
 **Status**: In progress. **V0 done** — the present core moved into serval as
 `components/serval-winit-host`. **Render-driver reform done** — the host
 render-driver extracted into `components/serval-render` and `pelt-live` retired
-(the V0-shaped move that cleared V1's foundation; see Progress). **V1 done**
-(2026-06-14): the static viewer loads + renders + scrolls local documents
-(file://, bare path, `data:` percent-encoded and base64) and http(s) under
-`--features netfetch` (netfetcher-backed); capabilities print honestly. V2–V5
-already have substantial implementations ahead of this doc (chrome, headless
-reftest harness, scripted, the tile surface) — a phase-status reconciliation is
-overdue.
+(the V0-shaped move that cleared V1's foundation; see Progress). **Reconciled
+2026-06-14** (per-phase audit against the code): **V0–V2, V4, V5 done; V3 mostly
+done** (the reftest harness + its fixtures shipped, one viewport fixture + PNG
+rasterization open); **V6 gated** (the standalone surface lib + tile-tree contract
+are done, but meerkat embedding awaits the `external_texture` element in
+xilem-serval and the meerkat-side wiring). The doc had been steering by its
+authoring-day "V1 is next" status while V2–V5 quietly shipped; the per-phase
+**Status** lines below now track reality. Next real engine-development leverage:
+V3's PNG/raster lane and the missing overhang fixture, then V6's gate
+(external-texture element) when its other consumers (scrying, input-spine) pull it.
 **Role statement (revised 2026-06-12, with Mark):** pelt is two things over
 one lib. (a) **serval's servoshell** — the minimal reference browser that
 proves the engine standalone, drives engine development without mere's graph
@@ -96,6 +99,9 @@ later.
 
 ### V0 — Move the present core into serval (the unlock)
 
+**Status: Done** (2026-06-12) — `serval-winit-host` relocated mere → serval; see
+Progress.
+
 Relocate `serval-winit-host` from mere (`crates/serval-winit-host`) into
 serval as **`components/serval-winit-host`** (components, not ports: meerkat
 consuming a serval *component* is the established pattern — xilem-serval,
@@ -111,6 +117,11 @@ with zero behavior change, mere's `crates/serval-winit-host` is gone, and a
 bare serval clone builds the crate standalone.
 
 ### V1 — The viewer mode, static-first, on the modern stack
+
+**Status: Done** (2026-06-14) — `pelt --engine static <url-or-file>` loads file://,
+a bare path, and `data:` (percent-encoded + base64 via the spec parser), renders +
+scrolls with engine-side document scroll; http(s) loads under `--features netfetch`
+(netfetcher-backed, offline mockito test); the capabilities printout is honest.
 
 `pelt --engine static <url-or-file>`: load bytes → `StaticDocument` →
 `serval-render`'s `scene_from_layout_dom` pipeline → present via V0's
@@ -140,6 +151,12 @@ matches what the profile actually wires (no aspirational flags).
 
 ### V2 — Minimal chrome as xilem-serval views (the public demo)
 
+**Status: Done** — omnibar navigation of the content root, back/forward over a
+simple history (`Vec<String>` + position, with forward-truncation), strict
+two-root separation (the chrome reaches content only via `ChromeIntent`), thin
+shell (`chrome.rs` ~464 LOC GPU-free + `chrome_viewer.rs` ~415 LOC windowed),
+tested. `--features chrome`; `pelt --chrome <url> --strip <side>`.
+
 An omnibar + back/forward built as xilem-serval views over a second document
 root, exactly meerkat's separate-roots discipline at 1/20th the size. This
 makes pelt the **mere-free public demo** of the xilem-with-a-real-DOM
@@ -152,6 +169,16 @@ see each other's tree, and the whole shell remains small enough to read in
 one sitting (pelt stays the thin reference).
 
 ### V3 — Headless screenshot mode → the reftest harness (highest engine leverage)
+
+**Status: Mostly done** — `pelt --engine headless --reftest <dir>` runs a fixture
+directory green in one command, a layout change reds the affected fixture with a
+named scene diff (`first diff at line N`), and `--bless` (re)writes snapshots.
+Shipped fixtures: `before-content` (`::before`), `checked` (`:checked`), and the
+viewport family `document-scroll`, `overflow-hidden-root`, `fixed-under-scroll`,
+`percent-height` (scroll sidecars drive the scrolled ones). **Open:** the
+scrollable-overflow-with-abs-pos-overhang fixture, and the rasterized-PNG lane
+(scene-snapshot is the primary artifact; PNG is a documented offscreen-readback
+follow-up).
 
 `pelt --engine headless --out <path> <file>`: run the pipeline windowless
 (pelt-live's lib already proves GPU-free runs), emit **both** a netrender
@@ -173,6 +200,15 @@ under scroll, the %-height chain, scrollable-overflow with an abs-pos
 overhang).
 
 ### V4 — The scripted profile (the content tier's proving ground)
+
+**Status: Done** — a local page's inline `<script>` mutates its own DOM and the
+mutation renders; `--js boa|nova` selects the engine (Nova behind
+`--features scripted-nova`); the **GC tick auto-fires at frame cadence** (the
+viewer's render pump → `Runtime::collect_garbage`, before layout) and the
+`gc_soak_bounds_memory` soak (120 frames × 50-node churn) holds memory bounded —
+closing the gc-arena plan's two carve-outs (the explicit→auto GC flip and the
+collection soak). **Open:** external `<script src>` (deferred; inline-only by
+design). `--features scripted`.
 
 `pelt --engine scripted`: page `<script>` runs through script-runtime-api on
 the selected engine (Nova native / Boa wasm-oracle, the serval-wpt
@@ -197,6 +233,16 @@ carve-out #2 soak). Both of that plan's remaining carve-outs close here.
 
 ### V5 — The tile tree (the surface grows; logically follows V2, may interleave with V3/V4)
 
+**Status: Done** — pelt standalone splits the window, opens documents in tabs
+per pane, drags a tab between stacks (drop onto a tab bar merges; onto a tile's
+content splits on the nearest edge), and closes tiles (empty stacks collapse,
+single-child splits flatten) — all driven through the serval-side tile-tree
+contract (`pelt-core/tile.rs`: `TileTree` / `TileEvent` / `ContentSource`, the
+reference `apply` reducer), the only seam, with the bin holding no tile logic the
+lib doesn't expose. 13 contract + 6 surface + 5 headless-driven-input tests.
+`--features tiles`. (The "may interleave" was accurate — it shipped alongside
+V3/V4.)
+
 The surface lib gains splits + tab-stacks of documents: per-tile document
 lifecycle (N documents live at once), per-tile history, tab activation /
 close / drag-between-stacks, divider resize — rendered as xilem-serval flex
@@ -218,6 +264,20 @@ driven entirely through the contract (the bin holds no tile logic the lib
 doesn't expose).
 
 ### V6 — Shed the loop: pelt-surface as meerkat's workbench pane (the module)
+
+**Status: Gated** — the serval half is ready: the standalone pelt surface lib
+works unchanged (V5), and the tile-tree contract is the only seam (`pelt-core`'s
+`ContentSource` already names the `ExternalTexture(key)` lane). Blocked on three
+things, none of them new serval *components*: (1) the **`external_texture` element
+view in xilem-serval** — still absent (grep: 0 matches), the shared gate the
+scrying plan and the input-spine companion also wait on; (2) **meerkat hosting
+`TileSurface`** in its workbench pane (today it renders tiles through platen-view's
+own `WorkbenchScene`, not the pelt surface; meerkat doesn't yet depend on
+`pelt-core`/`pelt-desktop`); (3) the **`tree_projection` → `TileTree` mapping** in
+meerkat's reconcile loop (platen's `tree_projection` produces a `WorkbenchPlan`
+but nothing maps it onto the contract). The `WorkbenchScene` and `TileSurface`
+stay distinct by design — mere projects forme onto the simpler contract, not a
+union.
 
 The embedding step. meerkat hosts the V5 surface lib as a pane: mere's
 platen maps the forme arrangement through `tree_projection` onto the V5
@@ -291,6 +351,18 @@ the same lib, and the tile-tree contract is the only seam between them.
   V6 is also where the generalizable pane-module contract (standalone-or-
   hosted surface) gets written down, since roster/gloss/apparatus want the
   same shape.
+- **2026-06-14** — **Phase-status reconciliation** (per-phase audit against the
+  code, file:line-verified, five parallel auditors). The doc had drifted: it read
+  as if V1 were the frontier while V2–V5 had quietly shipped. Reconciled to: V0,
+  V1, V2, V4, V5 **done**; V3 **mostly done** (harness, `::before`/`:checked`, and
+  viewport fixtures all present; only the scrollable-overflow-overhang fixture and
+  the PNG raster lane remain), V6 **gated** on the `external_texture` element
+  (xilem-serval) + meerkat wiring + the `tree_projection`→`TileTree` map. Per-phase
+  **Status** lines added above; no code changed. Notable finds: the GC tick already
+  auto-fires at frame cadence (V4 carve-outs closed); the tile-tree contract
+  (`pelt-core/tile.rs`) already names a third `Settings` content lane beyond the
+  plan's two; V6's blocker is "meerkat hasn't plugged the surface in," not "the
+  surface doesn't exist."
 - **2026-06-14** — **V1 done.** The static viewer was already wired end to end
   (`pelt --engine static <url>` → `LoadedDocument` → `serval-render` →
   `serval-winit-host`, with engine-side document scroll from the viewport scope);
