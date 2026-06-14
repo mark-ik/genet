@@ -1888,6 +1888,62 @@ mod tests {
         assert_eq!(gutter, Some(p), "...it resolves to the containing block <p>");
     }
 
+    /// A colour-only inline `<a>` mid-paragraph is hit-testable. parley does not
+    /// split runs on colour (it is a per-cluster `Brush`, not a shaping boundary), so
+    /// the link shapes into the *same* glyph run as the surrounding text. Resolving
+    /// by the run's first byte would attribute the whole run to the text before the
+    /// link, making it unhittable (the diagnosed bug); cluster-granularity resolution
+    /// maps each glyph's own byte, so a click on the link's glyphs resolves to the
+    /// `<a>` and a click on the surrounding text to the block `<p>`.
+    #[test]
+    fn colour_only_inline_link_is_hit_testable() {
+        // Ahem 20px: every glyph is a 20px em square. "XXLINKYY" lays out on one line,
+        // bytes 0..1 "XX", 2..5 "LINK" (the <a>), 6..7 "YY"; x = 20*index. The <a>
+        // differs from its siblings ONLY in colour, so all eight glyphs share one run.
+        const SHEET: &[&str] = &[
+            "html,body,p{margin:0;padding:0;border:0} p{font-family:Ahem;font-size:20px} a{color:rgb(0,0,255)}",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+        let before = dom.create_text("XX");
+        dom.append_child(p, before);
+        let a = dom.create_element(html("a"));
+        dom.set_attribute(a, attr("href"), "/dest");
+        dom.append_child(p, a);
+        let link_text = dom.create_text("LINK");
+        dom.append_child(a, link_text);
+        let after = dom.create_text("YY");
+        dom.append_child(p, after);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let scroll = ScrollOffsets::default();
+        // On the link glyphs (x 40..120, e.g. x=60 over the 4th glyph): resolves to <a>
+        // even though the run starts in the preceding "XX" text.
+        assert_eq!(
+            layout.hit_test(&dom, 60.0, 10.0, &scroll),
+            Some(a),
+            "a click on the colour-only link's glyphs resolves to the inline <a>",
+        );
+        // On the text before / after the link (same run): resolves to the block <p>,
+        // not the link — the cluster's byte is outside the <a>'s source range.
+        assert_eq!(
+            layout.hit_test(&dom, 10.0, 10.0, &scroll),
+            Some(p),
+            "the text before the link resolves to the containing <p>, not the <a>",
+        );
+        assert_eq!(
+            layout.hit_test(&dom, 130.0, 10.0, &scroll),
+            Some(p),
+            "the text after the link resolves to the containing <p>, not the <a>",
+        );
+    }
+
     /// `pointer-events: none` removes a box as a hit target so the point falls through
     /// to what is behind it, but a `pointer-events: auto` descendant inside it stays
     /// hittable (the CSS-UI non-blanket rule, which the inherited computed value
