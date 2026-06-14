@@ -61,6 +61,26 @@ tag_fns! {
     li => "li",
 }
 
+/// An `<external-texture>` element view: a host-composited texture region.
+///
+/// The producer registers a `wgpu::Texture` with the renderer under `key` (a stable
+/// `u64`); serval lays out a `width`×`height` block box, and paint emits a
+/// `DrawExternalTexture` at it that the host composites the producer's texture into —
+/// a constellation actor scene, a scrying WebView, or a pelt tile's external-content
+/// lane. A leaf: it has no serval-painted children (the texture *is* its content).
+/// The element sets its own `display:block` + intrinsic size via the `style`
+/// attribute, so it needs no stylesheet rule; override the size with CSS as for any
+/// replaced box.
+pub fn external_texture<State, Action>(key: u64, width: u32, height: u32) -> El<(), State, Action>
+where
+    State: 'static,
+    Action: 'static,
+{
+    el("external-texture", ())
+        .attr("key", key.to_string())
+        .attr("style", format!("display:block;width:{width}px;height:{height}px"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,5 +106,33 @@ mod tests {
         assert_eq!(d.element_name(root).unwrap().local.as_ref(), "div");
         let child = d.dom_children(root).next().expect("div has a child");
         assert_eq!(d.element_name(child).unwrap().local.as_ref(), "span");
+    }
+
+    /// `external_texture(7, 320, 240)` builds an `<external-texture>` element carrying
+    /// the host texture key and a block box sized via its `style` attribute — the
+    /// element serval-layout paints as a `DrawExternalTexture` compositor pass.
+    #[test]
+    fn external_texture_builds_keyed_element() {
+        use layout_dom_api::{LocalName, Namespace};
+        let no_ns = Namespace::from("");
+        let dom = Rc::new(RefCell::new(ScriptedDom::new()));
+        let runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            |_: &()| external_texture::<(), ()>(7, 320, 240),
+            (),
+        );
+        let d = dom.borrow();
+        let root = runner.root();
+        assert_eq!(
+            d.element_name(root).unwrap().local.as_ref(),
+            "external-texture",
+            "the view names the reserved element",
+        );
+        assert_eq!(d.attribute(root, &no_ns, &LocalName::from("key")), Some("7"), "carries the key");
+        assert_eq!(
+            d.attribute(root, &no_ns, &LocalName::from("style")),
+            Some("display:block;width:320px;height:240px"),
+            "sizes itself as a block box",
+        );
     }
 }
