@@ -45,7 +45,7 @@ use paint_list_api::{
     TransformSpec,
 };
 use paint_list_api::items::{
-    BorderDetails, BorderItem, NinePatchBorder, NinePatchSource, ShadowItem,
+    BorderDetails, BorderItem, ExternalTextureItem, NinePatchBorder, NinePatchSource, ShadowItem,
 };
 use paint_list_api::specs::{ClipKind, ClipSpec, LayerSpec, TransformKind};
 use parley::PositionedLayoutItem;
@@ -766,7 +766,21 @@ pub(crate) fn walk<Id>(
     if bg_radius.is_some() {
         commands.push(PaintCmd::PopClip);
     }
-    if let Some(decoded) = em.images_plane.get(dom_id) {
+    if let Some(texture_key) = node.external_texture_key {
+        // An `<external-texture>` paints no serval content: emit a compositor-pass
+        // command at its border box. The renderer lowers `DrawExternalTexture` to a
+        // per-frame composite of the `wgpu::Texture` the producer registered under
+        // `texture_key` (`paint_list_api`'s PM-3 contract), so a constellation actor
+        // scene / scrying WebView / pelt tile lane the host owns appears here. CSS
+        // opacity rides the node's opacity layer (as for `DrawImage`), so the item is
+        // identity-opacity.
+        commands.push(PaintCmd::DrawExternalTexture(ExternalTextureItem {
+            placement: CommonPlacement::new(local_bounds),
+            texture_key,
+            opacity: 1.0,
+            content_generation: None,
+        }));
+    } else if let Some(decoded) = em.images_plane.get(dom_id) {
         let key = em.images.add(decoded);
         commands.push(PaintCmd::DrawImage(ImageItem {
             placement: CommonPlacement::new(local_bounds),
@@ -3028,6 +3042,55 @@ mod tests {
         assert!(
             !plist.commands().iter().any(|c| matches!(c, PaintCmd::DrawImage(_))),
             "no pre-sliced DrawImages — the rasterizer owns the slicing"
+        );
+    }
+
+    /// An `<external-texture key="…">` emits a compositor-pass `DrawExternalTexture`
+    /// at its box (instead of serval-painted content), carrying the host's texture
+    /// key — the element behind the actor-texture / scrying / pelt-tile external lanes.
+    #[test]
+    fn external_texture_element_emits_a_compositor_pass() {
+        let document = StaticDocument::parse(
+            "<html><body><external-texture key=\"42\" \
+             style=\"display:block;width:200px;height:120px\"></external-texture></body></html>",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&document, &mut styles, euclid::Size2D::new(800.0, 600.0), &[], None);
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let bg = BackgroundImagePlane::decode_from_cascade(
+            &document,
+            &styles,
+            &crate::image_decode::NoImageLoader,
+        );
+        let plist = emit_paint_list_with_layouts(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &bg,
+            &FxHashMap::default(),
+            DeviceIntSize::new(800, 600),
+        );
+
+        let ext: Vec<_> = plist
+            .commands()
+            .iter()
+            .filter_map(|c| match c {
+                PaintCmd::DrawExternalTexture(e) => Some(e),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ext.len(), 1, "one DrawExternalTexture for the element, got {}", ext.len());
+        assert_eq!(ext[0].texture_key, 42, "carries the element's host texture key");
+        assert!(
+            !plist.commands().iter().any(|c| matches!(c, PaintCmd::DrawImage(_))),
+            "an external-texture paints no DrawImage — the compositor pass replaces it",
         );
     }
 

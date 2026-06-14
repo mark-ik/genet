@@ -142,6 +142,12 @@ pub(crate) struct BoxNode<Id> {
     /// (intrinsic from the `ImagePlane`, overridden by definite CSS
     /// width/height). Mutually exclusive with `inline_content`.
     pub(crate) replaced_size: Option<(f32, f32)>,
+    /// `Some(key)` => an `<external-texture>` leaf: instead of serval-painted
+    /// content, paint emits a [`PaintCmd::DrawExternalTexture`](paint_list_api::PaintCmd)
+    /// at this box, and the host composites the texture the producer registered under
+    /// `key` (a constellation actor scene, a scrying WebView, a pelt tile's external
+    /// content lane). The box still participates in layout like a replaced element.
+    pub(crate) external_texture_key: Option<u64>,
     /// Paint/hit-test identity (see [`BoxSource`]). An [`BoxSource::Anonymous`]
     /// box wraps a run of a mixed container's inline-level children: it has no DOM
     /// element of its own, so it paints no box decorations — its `node_map` key is
@@ -162,6 +168,7 @@ impl<Id> BoxNode<Id> {
             inline_content: None,
             marker: None,
             replaced_size: None,
+            external_texture_key: None,
             source,
             cache: Cache::new(),
             unrounded_layout: Layout::new(),
@@ -334,6 +341,9 @@ where
     if !has_block_pseudo && is_replaced(dom, elem.id()) {
         let mut node = BoxNode::new(style, BoxSource::Element(elem.id()));
         node.replaced_size = Some(replaced_px_size(dom, styles, images, elem.id()));
+        // `<external-texture>` carries a host-composited texture key; every other
+        // replaced element yields `None` here.
+        node.external_texture_key = crate::construct::external_texture_key_of(dom, elem.id());
         let i = tree.push(node);
         tree.node_map.insert(elem.id(), nid(i));
         return i;

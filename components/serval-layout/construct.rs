@@ -121,7 +121,31 @@ where
         q.local == local_name!("img")
             || q.local == local_name!("iframe")
             || q.local == local_name!("canvas")
+            // `<external-texture>` is a host-composited replaced element (see
+            // `external_texture_key_of`): a custom name, so compared by string rather
+            // than a `local_name!` atom. It sizes like the default-object replaced
+            // elements (300×150, CSS-overridable).
+            || q.local.as_ref() == "external-texture"
     })
+}
+
+/// The texture key of an `<external-texture key="…">` element, or `None` when `id` is
+/// not such an element (every other replaced element, e.g. `<img>`). The producer
+/// mints the `u64` key out of band and registers the matching `wgpu::Texture` with
+/// the renderer; the element only carries the stable key + a box, so paint emits a
+/// [`PaintCmd::DrawExternalTexture`](paint_list_api::PaintCmd) the host composites.
+/// `key` is the standards-neutral attribute the xilem-serval `external_texture` view
+/// sets; a missing / unparseable key yields `None` (the element paints nothing).
+pub(crate) fn external_texture_key_of<D>(dom: &D, id: D::NodeId) -> Option<u64>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    use html5ever::{ns, LocalName};
+    if dom.element_name(id)?.local.as_ref() != "external-texture" {
+        return None;
+    }
+    dom.attribute(id, &ns!(), &LocalName::from("key"))?.parse().ok()
 }
 
 /// Whether `id` is a replaced element that, lacking intrinsic content, falls
