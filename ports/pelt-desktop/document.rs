@@ -167,6 +167,21 @@ impl LoadedDocument {
         before != after
     }
 
+    /// Scroll by a device-px wheel delta at scene point `(x, y)`: the wheel routes to
+    /// the nearest `overflow: scroll/auto` container under the pointer (CSS scroll
+    /// chaining), falling through to the document viewport when none takes it — the
+    /// position-aware wheel default action ([`IncrementalLayout::scroll_at`]). Returns
+    /// whether anything moved (an inner scroller or the viewport), so the host can skip
+    /// a redraw at an edge. A no-op before the first [`frame`](Self::frame). The
+    /// superset of [`scroll_by`](Self::scroll_by): a document with no nested scroller
+    /// behaves identically (the viewport takes every delta).
+    pub fn scroll_at(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> bool {
+        let Some(session) = self.session.as_mut() else {
+            return false;
+        };
+        session.scroll_at(&self.doc, x, y, dx, dy)
+    }
+
     /// Apply a keyboard scroll default action ([`ScrollKey`]) to the document
     /// viewport (clamped). Returns whether the offset moved, so the host can skip a
     /// redraw at an edge. A no-op before the first [`frame`](Self::frame).
@@ -298,6 +313,38 @@ mod tests {
         let bottom = doc.scroll().1;
         assert!(bottom > 250.0, "scrolled near the bottom: {bottom}");
         assert!(!doc.scroll_by(0.0, 100.0), "already at the bottom edge → no change");
+    }
+
+    /// The wheel at a point scrolls a nested `overflow: scroll` container under the
+    /// pointer (CSS scroll chaining), where a plain viewport wheel can't: a short page
+    /// whose only scrollable content is a nested 100px scroller over 500px of content
+    /// has no document-scroll headroom, so `scroll_by` is a no-op, but `scroll_at` over
+    /// the scroller moves it — with the document viewport itself never moving. Proves
+    /// the wheel → `IncrementalLayout::scroll_at` wiring end to end through the host.
+    #[test]
+    fn wheel_at_a_point_scrolls_a_nested_overflow_container() {
+        let html = "<style>body{margin:0;padding:0} \
+            .scroller{overflow:scroll;width:200px;height:100px} .inner{height:500px}</style>\
+            <div class=\"scroller\"><div class=\"inner\">inner</div></div>";
+        let mut doc = LoadedDocument::parse(html);
+        let _ = doc.frame(400, 300);
+
+        // The page fits the 300px viewport (the scroller is only 100px tall), so a
+        // plain viewport wheel finds no headroom.
+        assert!(!doc.scroll_by(0.0, 100.0), "the short page does not scroll its viewport");
+        assert_eq!(doc.scroll(), (0.0, 0.0), "viewport stays at the top");
+
+        // A wheel over the nested scroller (at scene point 50,50) scrolls IT, even
+        // though the document viewport cannot move.
+        assert!(
+            doc.scroll_at(50.0, 50.0, 0.0, 100.0),
+            "the wheel scrolls the nested container under the pointer",
+        );
+        assert_eq!(
+            doc.scroll(),
+            (0.0, 0.0),
+            "the document viewport never moved — it was the inner container",
+        );
     }
 
     /// A `url#id` fragment scrolls the target into view on the first frame: the

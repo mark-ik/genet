@@ -323,6 +323,15 @@ impl TileSurface {
         self.docs.get_mut(&id).is_some_and(|doc| doc.scroll_by(dx, dy))
     }
 
+    /// Scroll tile `id`'s document by a device-px wheel delta at tile-local point
+    /// `(x, y)`: a nested `overflow: scroll/auto` container under the pointer takes it
+    /// first (CSS scroll chaining), else the document viewport. Returns whether
+    /// anything moved. The position-aware form of [`scroll_tile`](Self::scroll_tile),
+    /// for routing the wheel to the scroller under the cursor.
+    pub fn scroll_tile_at(&mut self, id: TileId, x: f32, y: f32, dx: f32, dy: f32) -> bool {
+        self.docs.get_mut(&id).is_some_and(|doc| doc.scroll_at(x, y, dx, dy))
+    }
+
     /// Handle a click at tile-local `(x, y)` in tile `id`'s document. An in-page link
     /// scrolls the tile; a link to another resource navigates the tile to it (loading
     /// the linked document, retitling the tab). Returns whether anything changed.

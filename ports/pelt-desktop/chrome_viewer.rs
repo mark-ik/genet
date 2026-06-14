@@ -365,7 +365,15 @@ mod windowed {
                     let (_, content_rect) = self.regions();
                     if in_rect(self.cursor, content_rect) {
                         let (dx, dy) = wheel_delta_from_winit(delta);
-                        if self.content.scroll_by(dx, dy) {
+                        // The content renders into a sub-rect below the chrome strip;
+                        // convert the cursor to content-local space (as the click path
+                        // does) so the wheel scrolls the nested container under the
+                        // pointer, else the document viewport.
+                        let local = (
+                            self.cursor.0 - content_rect.0 as f32,
+                            self.cursor.1 - content_rect.1 as f32,
+                        );
+                        if self.content.scroll_at(local.0, local.1, dx, dy) {
                             self.request_redraw();
                         }
                     }

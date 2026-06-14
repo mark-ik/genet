@@ -211,10 +211,11 @@ impl TileShell {
     }
 
     /// Wheel by `(dx, dy)` over the tile under the cursor (scrolls just that document).
-    /// Returns whether it moved.
+    /// Returns whether it moved. Routes to the nearest `overflow: scroll/auto` container
+    /// under the pointer (tile-local), falling through to the tile's document viewport.
     pub fn wheel(&mut self, dx: f32, dy: f32) -> bool {
-        if let Some((tile, _)) = self.tile_at(self.cursor) {
-            return self.surface.scroll_tile(tile, dx, dy);
+        if let Some((tile, local)) = self.tile_at(self.cursor) {
+            return self.surface.scroll_tile_at(tile, local.0, local.1, dx, dy);
         }
         false
     }

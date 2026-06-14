@@ -123,6 +123,16 @@ pub(crate) mod windowed {
         fn frame(&mut self, width: u32, height: u32) -> Scene;
         /// Scroll by a device-px wheel delta; return whether the offset moved.
         fn scroll_by(&mut self, dx: f32, dy: f32) -> bool;
+        /// Scroll by a device-px wheel delta at scene point `(x, y)`: the wheel default
+        /// action routes to the nearest `overflow: scroll/auto` container under the
+        /// pointer, falling through to the document viewport. Returns whether anything
+        /// moved. The default ignores the position and scrolls the viewport (the
+        /// behaviour for content with no retained per-element scroll, e.g. the scripted
+        /// document's per-frame-rebuilt session); the static [`LoadedDocument`] overrides
+        /// it with the position-aware nested scroll its persistent session retains.
+        fn scroll_at(&mut self, _x: f32, _y: f32, dx: f32, dy: f32) -> bool {
+            self.scroll_by(dx, dy)
+        }
         /// Apply a keyboard scroll default; return whether the offset moved.
         fn scroll_for_key(&mut self, key: ScrollKey) -> bool;
         /// Handle a left click at a scene point; return whether the document scrolled.
@@ -141,6 +151,9 @@ pub(crate) mod windowed {
         }
         fn scroll_by(&mut self, dx: f32, dy: f32) -> bool {
             LoadedDocument::scroll_by(self, dx, dy)
+        }
+        fn scroll_at(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> bool {
+            LoadedDocument::scroll_at(self, x, y, dx, dy)
         }
         fn scroll_for_key(&mut self, key: ScrollKey) -> bool {
             LoadedDocument::scroll_for_key(self, key)
@@ -324,11 +337,14 @@ pub(crate) mod windowed {
                     self.request_redraw();
                 },
                 WindowEvent::MouseWheel { delta, .. } => {
-                    // The shared wheel default action (scope doc rule 5): map the
-                    // wheel to a device-px delta and scroll the document's viewport.
-                    // Redraw only when the offset actually moved (not at an edge).
+                    // The shared wheel default action (scope doc rule 5): map the wheel
+                    // to a device-px delta and scroll at the cursor — a nested
+                    // `overflow: scroll/auto` container under the pointer takes it first,
+                    // else the document viewport. The viewer fills the window, so the
+                    // cursor is already in document space. Redraw only when something
+                    // moved (not at an edge).
                     let (dx, dy) = wheel_delta_from_winit(delta);
-                    if self.doc.scroll_by(dx, dy) {
+                    if self.doc.scroll_at(self.cursor.0, self.cursor.1, dx, dy) {
                         self.request_redraw();
                     }
                 },
