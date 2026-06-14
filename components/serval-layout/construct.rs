@@ -16,6 +16,7 @@
 //! `docs/2026-05-25_box_tree_trait_impl_plan.md`.)
 
 use std::hash::Hash;
+use std::ops::Range;
 
 use layout_dom_api::{LayoutDom, NodeKind};
 
@@ -259,7 +260,7 @@ pub(crate) fn gather_inline_content<'a, D>(
     styles: &StylePlane<D::NodeId>,
     images: &ImagePlane<D::NodeId>,
     elem: NodeRef<'a, D>,
-) -> InlineContent<D::NodeId>
+) -> (InlineContent<D::NodeId>, Vec<(Range<usize>, D::NodeId)>)
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -268,21 +269,27 @@ where
 
     let mut runs = Vec::new();
     let mut boxes = Vec::new();
+    // Byte-range → source-element index, parallel to the concatenated run text
+    // `measure`/`paint` see, for inline hit-testing ([`crate::inline_hit`]). Each
+    // text/`<br>` run records the element that styles it (the innermost inline
+    // element, e.g. an `<a>`); built in run-append order so byte ranges line up.
+    let mut sources = Vec::new();
     let mut offset = 0usize;
     // `::before` generated content, prepended; then the element's own content;
     // then `::after`, appended. Both are inline text runs here (the common case
     // — block-`display` generated content is a later slice), so they style and
     // paint through the existing run path with the pseudo's own cascade.
-    push_pseudo_content(styles, elem.id(), PseudoElement::Before, &mut runs, &mut offset);
-    gather_runs(dom, styles, images, elem, &mut runs, &mut boxes, &mut offset);
-    push_pseudo_content(styles, elem.id(), PseudoElement::After, &mut runs, &mut offset);
+    push_pseudo_content(styles, elem.id(), PseudoElement::Before, &mut runs, &mut sources, &mut offset);
+    gather_runs(dom, styles, images, elem, &mut runs, &mut boxes, &mut sources, &mut offset);
+    push_pseudo_content(styles, elem.id(), PseudoElement::After, &mut runs, &mut sources, &mut offset);
     // `::first-letter` restyles the first typographic letter of the block's
     // content. Applied after the runs are gathered (so it sees `::before`'s
     // generated text as the first letter when present), and only here at the
     // inline-formatting-context root — a child `span::first-letter` never reaches
-    // this path, matching the spec's block-container restriction.
+    // this path, matching the spec's block-container restriction. It splits a run
+    // at a byte boundary without moving any byte, so the `sources` ranges stay valid.
     apply_first_letter(styles, elem.id(), &mut runs);
-    InlineContent { runs, boxes, no_wrap: no_wrap_of(styles, elem.id()) }
+    (InlineContent { runs, boxes, no_wrap: no_wrap_of(styles, elem.id()) }, sources)
 }
 
 /// Split the first content run at the `::first-letter` boundary, restyling the
@@ -357,6 +364,7 @@ fn push_pseudo_content<NodeId: Copy + Eq + Hash>(
     id: NodeId,
     pseudo: style::selector_parser::PseudoElement,
     runs: &mut Vec<InlineRun>,
+    sources: &mut Vec<(Range<usize>, NodeId)>,
     offset: &mut usize,
 ) {
     let Some(entry) = styles.get(id) else { return };
@@ -369,8 +377,12 @@ fn push_pseudo_content<NodeId: Copy + Eq + Hash>(
         return;
     }
     if let Some(text) = pseudo_content_text(cv) {
+        let start = *offset;
         *offset += text.len();
         runs.push(run_from_computed(cv, text));
+        // Generated content's "source" for hit-testing is the element owning the
+        // pseudo (there is no separate pseudo DOM node to address).
+        sources.push((start..*offset, id));
     }
 }
 
@@ -423,6 +435,7 @@ pub(crate) fn block_pseudo_content<NodeId: Copy + Eq + Hash>(
 /// except replaced elements (`<img>`) which become inline boxes.
 /// `offset` tracks the running byte position into the concatenated run
 /// text so each box's `index` matches the parley `InlineBox` placement.
+#[allow(clippy::too_many_arguments)]
 fn gather_runs<'a, D>(
     dom: &'a D,
     styles: &StylePlane<D::NodeId>,
@@ -430,13 +443,14 @@ fn gather_runs<'a, D>(
     node: NodeRef<'a, D>,
     runs: &mut Vec<InlineRun>,
     boxes: &mut Vec<InlineBoxItem<D::NodeId>>,
+    sources: &mut Vec<(Range<usize>, D::NodeId)>,
     offset: &mut usize,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
     for child in node.dom_children() {
-        gather_child(dom, styles, images, node.id(), child, runs, boxes, offset);
+        gather_child(dom, styles, images, node.id(), child, runs, boxes, sources, offset);
     }
 }
 
@@ -454,6 +468,7 @@ fn gather_child<'a, D>(
     child: NodeRef<'a, D>,
     runs: &mut Vec<InlineRun>,
     boxes: &mut Vec<InlineBoxItem<D::NodeId>>,
+    sources: &mut Vec<(Range<usize>, D::NodeId)>,
     offset: &mut usize,
 ) where
     D: LayoutDom,
@@ -469,8 +484,13 @@ fn gather_child<'a, D>(
             // follow-ups.)
             let text = collapse_whitespace(dom.text(child.id()).unwrap_or(""));
             if !text.is_empty() {
+                let start = *offset;
                 *offset += text.len();
                 runs.push(run_for_element(styles, styling, text));
+                // Bare text is owned (for hit-testing) by the inline element that
+                // styles it — the innermost enclosing inline, so a click on a link's
+                // text resolves to the `<a>`.
+                sources.push((start..*offset, styling));
             }
         }
         NodeKind::Element => {
@@ -480,8 +500,10 @@ fn gather_child<'a, D>(
             {
                 // `<br>` is a forced line break: emit a newline run (parley
                 // breaks lines at the mandatory `\n`).
+                let start = *offset;
                 *offset += 1;
                 runs.push(run_for_element(styles, styling, "\n".to_string()));
+                sources.push((start..*offset, styling));
             } else if is_replaced(dom, child.id()) {
                 let (width, height) = replaced_px_size(dom, styles, images, child.id());
                 boxes.push(InlineBoxItem {
@@ -494,8 +516,10 @@ fn gather_child<'a, D>(
             } else if is_inline_block(styles, child.id()) {
                 // Atomic inline-block: gather its own inline content + box
                 // style; the measure pass sizes it and parley places it as a
-                // unit. Its content is not flowed into this line.
-                let content = gather_inline_content(dom, styles, images, child);
+                // unit. Its content is not flowed into this line. (Its own inline
+                // sources are dropped: the inline-block is hit as a box via its
+                // fragment; resolving links *inside* an inline-block is a follow-on.)
+                let (content, _inner_sources) = gather_inline_content(dom, styles, images, child);
                 let (css_width, css_height) = inline_block_css_size(styles, child.id());
                 boxes.push(InlineBoxItem {
                     index: *offset,
@@ -511,8 +535,10 @@ fn gather_child<'a, D>(
                 });
             } else {
                 // A non-replaced inline element flows transparently: its own
-                // children join this line, styled by it.
-                gather_runs(dom, styles, images, child, runs, boxes, offset);
+                // children join this line, styled by it — and recurse with the
+                // child as the styling element, so its descendants' runs are
+                // sourced to it (the innermost inline wins).
+                gather_runs(dom, styles, images, child, runs, boxes, sources, offset);
             }
         }
         _ => {}
@@ -550,18 +576,19 @@ pub(crate) fn gather_inline_group<'a, D>(
     images: &ImagePlane<D::NodeId>,
     styling: D::NodeId,
     group: &[NodeRef<'a, D>],
-) -> InlineContent<D::NodeId>
+) -> (InlineContent<D::NodeId>, Vec<(Range<usize>, D::NodeId)>)
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
     let mut runs = Vec::new();
     let mut boxes = Vec::new();
+    let mut sources = Vec::new();
     let mut offset = 0usize;
     for &child in group {
-        gather_child(dom, styles, images, styling, child, &mut runs, &mut boxes, &mut offset);
+        gather_child(dom, styles, images, styling, child, &mut runs, &mut boxes, &mut sources, &mut offset);
     }
-    InlineContent { runs, boxes, no_wrap: no_wrap_of(styles, styling) }
+    (InlineContent { runs, boxes, no_wrap: no_wrap_of(styles, styling) }, sources)
 }
 
 /// Build an [`InlineRun`] for `text` styled by element `id`'s cascade

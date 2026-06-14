@@ -37,6 +37,7 @@ mod fragment;
 mod host_loader;
 mod image_decode;
 mod incremental;
+mod inline_hit;
 mod invalidate;
 mod layout;
 mod paint_emit;

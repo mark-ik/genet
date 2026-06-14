@@ -24,6 +24,7 @@
 #![allow(unsafe_code)] // calc-value resolution casts a raw pointer back to a Stylo calc node.
 
 use std::hash::Hash;
+use std::ops::Range;
 use std::sync::OnceLock;
 
 use layout_dom_api::{LayoutDom, NodeKind};
@@ -178,6 +179,13 @@ pub struct BoxTree<Id: Copy + Eq + Hash> {
     /// callers read results back keyed by DOM identity — same contract as
     /// `ConstructedTree::node_map`.
     pub node_map: FxHashMap<Id, NodeId>,
+    /// Per inline-formatting leaf (keyed by the leaf's DOM `Id`, the same key it has
+    /// in `node_map`): the byte-range → source-element index over the leaf's
+    /// concatenated inline text. Built by [`crate::construct`] as the runs are
+    /// gathered; read by inline hit-testing ([`crate::inline_hit`]) to resolve a
+    /// point on a `display:inline` element (which establishes no box of its own).
+    /// Absent for leaves with no inline text.
+    inline_sources: FxHashMap<Id, Vec<(Range<usize>, Id)>>,
 }
 
 impl<Id: Copy + Eq + Hash> BoxTree<Id> {
@@ -193,6 +201,13 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
     /// leaves. Mirrors `TaffyTree::get_node_context` on the old oracle.
     pub fn get_node_context(&self, id: NodeId) -> Option<&InlineContent<Id>> {
         self.nodes.get(idx(id)).and_then(|n| n.inline_content.as_ref())
+    }
+
+    /// The byte-range → source-element index for inline-formatting leaf `id` (keyed
+    /// by DOM `Id`), or `None` when `id` has no inline text. Read by inline
+    /// hit-testing to map a point inside the leaf to the inline element under it.
+    pub(crate) fn inline_sources(&self, id: Id) -> Option<&[(Range<usize>, Id)]> {
+        self.inline_sources.get(&id).map(Vec::as_slice)
     }
 
     /// The root box's arena index — the entry point for the box-tree paint walk.
@@ -266,6 +281,7 @@ where
         nodes: Vec::new(),
         root: 0,
         node_map: FxHashMap::default(),
+        inline_sources: FxHashMap::default(),
     };
 
     // The layout root. Two shapes of `LayoutDom::document()`:
@@ -327,12 +343,19 @@ where
     // subtree's runs + boxes; inline children get no boxes of their own.
     if !has_block_pseudo && establishes_inline_context(dom, styles, elem) {
         let mut node = BoxNode::new(style, BoxSource::Element(elem.id()));
-        let mut content = gather_inline_content(dom, styles, images, elem);
+        let (mut content, mut sources) = gather_inline_content(dom, styles, images, elem);
         // List marker: `inside` flows as the item's first inline run; `outside`
         // (the default) hangs to the left as a separate shaped layout.
         if list_marker_is_inside(styles, elem.id()) {
             if let Some(run) = list_marker_inline_run(dom, styles, elem.id()) {
+                // Prepending the marker shifts every later byte range; slide the
+                // inline sources to match and attribute the marker to the item.
+                let marker_len = run.text.len();
                 content.runs.insert(0, run);
+                for (range, _) in sources.iter_mut() {
+                    *range = (range.start + marker_len)..(range.end + marker_len);
+                }
+                sources.insert(0, (0..marker_len, elem.id()));
             }
         } else {
             node.marker = list_marker_content(dom, styles, elem.id());
@@ -340,6 +363,9 @@ where
         node.inline_content = Some(content);
         let i = tree.push(node);
         tree.node_map.insert(elem.id(), nid(i));
+        if !sources.is_empty() {
+            tree.inline_sources.insert(elem.id(), sources);
+        }
         return i;
     }
 
@@ -419,11 +445,16 @@ fn flush_anon_group<'a, D>(
 {
     let Some(first) = group.first() else { return };
     let key = first.id();
-    let content = gather_inline_group(dom, styles, images, styling, group);
+    let (content, sources) = gather_inline_group(dom, styles, images, styling, group);
     let mut node = BoxNode::new(initial_style(), BoxSource::Anonymous(key));
     node.inline_content = Some(content);
     let i = tree.push(node);
     tree.node_map.insert(key, nid(i));
+    // The anonymous box is keyed by its first member; inline hit-testing addresses
+    // it by that same key.
+    if !sources.is_empty() {
+        tree.inline_sources.insert(key, sources);
+    }
     children.push(i);
     group.clear();
 }
@@ -1068,7 +1099,7 @@ mod tests {
         );
         let images = ImagePlane::decode_from_dom(&document);
         let p = find_all(&document, html5ever::local_name!("p"))[0];
-        let content = gather_inline_content(&document, &styles, &images, NodeRef::new(&document, p));
+        let (content, _sources) = gather_inline_content(&document, &styles, &images, NodeRef::new(&document, p));
 
         let texts: Vec<&str> = content.runs.iter().map(|r| r.text.as_str()).collect();
         assert_eq!(texts.first().copied(), Some("X"), "::before run first, got {texts:?}");
@@ -1109,7 +1140,7 @@ mod tests {
         );
         let images = ImagePlane::decode_from_dom(&document);
         let p = find_all(&document, html5ever::local_name!("p"))[0];
-        let content = gather_inline_content(&document, &styles, &images, NodeRef::new(&document, p));
+        let (content, _sources) = gather_inline_content(&document, &styles, &images, NodeRef::new(&document, p));
 
         let texts: Vec<&str> = content.runs.iter().map(|r| r.text.as_str()).collect();
         assert_eq!(texts.first().copied(), Some("(H"), "leading punct rides the letter, got {texts:?}");
@@ -1143,7 +1174,7 @@ mod tests {
         run_cascade(&document, &mut styles, euclid::Size2D::new(VIEWPORT, VIEWPORT), &[], None);
         let images = ImagePlane::decode_from_dom(&document);
         let p = find_all(&document, html5ever::local_name!("p"))[0];
-        let content = gather_inline_content(&document, &styles, &images, NodeRef::new(&document, p));
+        let (content, _sources) = gather_inline_content(&document, &styles, &images, NodeRef::new(&document, p));
         assert_eq!(content.runs.len(), 1, "no split without a ::first-letter rule");
     }
 

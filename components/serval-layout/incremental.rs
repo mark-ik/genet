@@ -178,7 +178,30 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             .with_scroll_offsets(scroll)
             .with_viewport_scroll(self.viewport.scroll);
         let hit = view.hit_test(Point::new(x, y))?;
-        view.find_by_source_id(hit.source_node)
+        let node = view.find_by_source_id(hit.source_node)?;
+        // Inline refinement: a `display:inline` element (`<a>`, `<span>`, …)
+        // establishes no box, so the block walk above can only resolve its
+        // containing inline-formatting leaf. Descend into that leaf's cached text to
+        // recover the inline element under the point — the `elementFromPoint`
+        // granularity links and inline interactivity need. Over the leaf's
+        // inter-run / empty space this yields `None` and the block leaf stands.
+        self.inline_hit_at(node, hit.local_point).or(Some(node))
+    }
+
+    /// Resolve a point inside inline-formatting leaf `node` to the inline element
+    /// under it (the standards [`elementFromPoint`] descent), or `None` when `node`
+    /// is not an inline-formatting leaf or the point misses every run. `local` is the
+    /// point relative to `node`'s border-box origin, as [`hit_test`](Self::hit_test)'s
+    /// `FragmentHit::local_point` reports it; inline layout is content-box relative,
+    /// so border + padding come off first.
+    fn inline_hit_at(&self, node: Id, local: Point) -> Option<Id> {
+        let taffy_id = self.built.node_map.get(&node)?;
+        let layout = self.text_ctx.layouts.get(taffy_id)?;
+        let sources = self.built.inline_sources(node)?;
+        let frame = self.fragments.rect_of(node)?;
+        let cx = local.x - (frame.border.left + frame.padding.left);
+        let cy = local.y - (frame.border.top + frame.padding.top);
+        crate::inline_hit::inline_source_at(layout, sources, cx, cy)
     }
 
     /// The document [`Viewport`] (size + propagated overflow + current scroll).
@@ -1485,5 +1508,84 @@ mod tests {
         );
         // Scrolling to it again is a no-op (already in position).
         assert!(!layout.scroll_to_element(&dom, target), "already in position");
+    }
+
+    /// Inline links are hit-testable (the `elementFromPoint` descent): a click on an
+    /// inline `<a>`'s text resolves to the `<a>`, while a click past its text (the
+    /// line's empty trailing space) resolves to the containing block — containment,
+    /// not a line-wide rect. (The bug that made inline links unclickable.)
+    #[test]
+    fn inline_link_is_hit_testable() {
+        // Ahem renders each glyph as a solid em square, so "AAAA" at 20px is an exact
+        // 80×20 box at the paragraph's content origin (margins / padding / border 0).
+        const SHEET: &[&str] = &[
+            "html,body,p{margin:0;padding:0;border:0} p{font-family:Ahem;font-size:20px} a{color:rgb(0,0,255)}",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+        let a = dom.create_element(html("a"));
+        dom.set_attribute(a, attr("href"), "/dest");
+        dom.append_child(p, a);
+        let t = dom.create_text("AAAA");
+        dom.append_child(a, t);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let scroll = ScrollOffsets::default();
+        // On the link text (the 80×20 "AAAA" box): resolves to the inline <a>.
+        assert_eq!(
+            layout.hit_test(&dom, 30.0, 10.0, &scroll),
+            Some(a),
+            "a click on the link text resolves to the inline <a>",
+        );
+        // Past the link text on the same line (x=200, beyond the 80px run): the empty
+        // trailing space is not the link — resolves to the containing <p>.
+        let off = layout.hit_test(&dom, 200.0, 10.0, &scroll);
+        assert_ne!(off, Some(a), "a click past the link text must not hit the <a>");
+        assert_eq!(off, Some(p), "...it resolves to the containing block <p>");
+    }
+
+    /// A wrapped inline `<a>` is a *set* of per-line run rects, not a union bounding
+    /// box: a point on the short second line, past its text but within the longer
+    /// first line's x-extent, must NOT hit the anchor (a union rect would wrongly
+    /// claim it). Guards the multi-line conformance pitfall the standards review
+    /// flagged (CSS2.2 §9.4.2: an inline box split across lines is several boxes).
+    #[test]
+    fn wrapped_inline_link_uses_per_line_rects_not_a_union() {
+        // 85px box, 20px Ahem: "AAAA" (80px) fills line 1; the space breaks and "BB"
+        // (40px) drops to line 2. A union x-extent would be 0..80 over both lines; the
+        // set is 0..80 on line 1, 0..40 on line 2.
+        const SHEET: &[&str] = &[
+            "html,body,p{margin:0;padding:0;border:0} p{width:85px;font-family:Ahem;font-size:20px} a{color:rgb(0,0,255)}",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+        let a = dom.create_element(html("a"));
+        dom.set_attribute(a, attr("href"), "/dest");
+        dom.append_child(p, a);
+        let t = dom.create_text("AAAA BB");
+        dom.append_child(a, t);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let scroll = ScrollOffsets::default();
+        // Line 1 "AAAA" (y~10, x 0..80) and line 2 "BB" (y~30, x 0..40) are the anchor.
+        assert_eq!(layout.hit_test(&dom, 60.0, 10.0, &scroll), Some(a), "line 1, on AAAA");
+        assert_eq!(layout.hit_test(&dom, 20.0, 30.0, &scroll), Some(a), "line 2, on BB");
+        // Line 2, x=60: past "BB" (0..40) but within line 1's "AAAA" x-extent. The set
+        // does not hit; a union rect (0..80 × 0..40) would. Must resolve to <p>.
+        let gutter = layout.hit_test(&dom, 60.0, 30.0, &scroll);
+        assert_ne!(gutter, Some(a), "a union rect would false-hit here; the set must not");
+        assert_eq!(gutter, Some(p), "...it resolves to the containing block <p>");
     }
 }
