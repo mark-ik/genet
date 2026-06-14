@@ -276,8 +276,13 @@ compositor pass). Gate (3) is also **resolved**: the
 **`tree_projection` → `TileTree` mapping** landed in platen (mere `f0440f1`,
 `tile_tree_from_plan`) — forme's `WorkbenchPlan` projects onto pelt-core's
 `TileTree` (platen path-deps the zero-dependency `pelt-core` contract leaf; the
-host supplies each tile's id / title / content lane). The one remaining gate is
-the product-render rewrite: (2) **meerkat hosting
+host supplies each tile's id / title / content lane). The pelt side of the
+last gate is also now ready: the surface exposes external-texture tiles
+(`TileFrame::external_tiles` = `(tile, rect, key)`, `fdfd0b89850`), so a host
+composites an actor texture into a tile's rect exactly as meerkat already does for
+`WorkbenchScene` slots — the V6 mixed-content frame (a document tile beside an
+actor-texture tile) is renderable. The last gate is purely the meerkat-side
+product-render rewrite: (2) **meerkat hosting
 `TileSurface`** in its workbench pane (today it renders tiles through platen-view's
 own `WorkbenchScene`, not the pelt surface; meerkat doesn't yet depend on
 `pelt-core`/`pelt-desktop`); (3) the **`tree_projection` → `TileTree` mapping** in
