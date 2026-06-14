@@ -201,7 +201,18 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         let frame = self.fragments.rect_of(node)?;
         let cx = local.x - (frame.border.left + frame.padding.left);
         let cy = local.y - (frame.border.top + frame.padding.top);
-        crate::inline_hit::inline_source_at(layout, sources, cx, cy)
+        let el = crate::inline_hit::inline_source_at(layout, sources, cx, cy)?;
+        // `pointer-events: none` on the resolved inline element makes it fall through
+        // to the block leaf (already resolved per its own pointer-events). A nested
+        // `auto` descendant resolves to itself (innermost wins), so a click on it
+        // still hits even inside a `none` ancestor.
+        if crate::paint_emit::primary_cv(&self.styles, el)
+            .as_deref()
+            .is_some_and(crate::paint_emit::pointer_events_none)
+        {
+            return None;
+        }
+        Some(el)
     }
 
     /// The document [`Viewport`] (size + propagated overflow + current scroll).
@@ -1587,5 +1598,52 @@ mod tests {
         let gutter = layout.hit_test(&dom, 60.0, 30.0, &scroll);
         assert_ne!(gutter, Some(a), "a union rect would false-hit here; the set must not");
         assert_eq!(gutter, Some(p), "...it resolves to the containing block <p>");
+    }
+
+    /// `pointer-events: none` removes a box as a hit target so the point falls through
+    /// to what is behind it, but a `pointer-events: auto` descendant inside it stays
+    /// hittable (the CSS-UI non-blanket rule, which the inherited computed value
+    /// encodes for free).
+    #[test]
+    fn pointer_events_none_falls_through_but_auto_descendant_still_hits() {
+        const SHEET: &[&str] = &[
+            "html,body{margin:0} \
+             .target{position:absolute;left:0;top:0;width:100px;height:100px} \
+             .overlay{position:absolute;left:0;top:0;width:100px;height:100px;pointer-events:none} \
+             .live{position:absolute;left:0;top:0;width:50px;height:50px;pointer-events:auto}",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let target = dom.create_element(html("div"));
+        dom.set_attribute(target, attr("class"), "target");
+        dom.append_child(body, target);
+        // The overlay is later in DOM (paints on top) and is pointer-events:none; it
+        // carries a small pointer-events:auto patch.
+        let overlay = dom.create_element(html("div"));
+        dom.set_attribute(overlay, attr("class"), "overlay");
+        dom.append_child(body, overlay);
+        let live = dom.create_element(html("div"));
+        dom.set_attribute(live, attr("class"), "live");
+        dom.append_child(overlay, live);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let scroll = ScrollOffsets::default();
+        // Over the overlay but outside the live patch: the none overlay falls through
+        // to the target beneath it (without the rule it would hit the topmost overlay).
+        assert_eq!(
+            layout.hit_test(&dom, 75.0, 75.0, &scroll),
+            Some(target),
+            "a pointer-events:none box falls through to what is behind it",
+        );
+        // Over the live patch (auto, inside the none overlay): it stays hittable.
+        assert_eq!(
+            layout.hit_test(&dom, 25.0, 25.0, &scroll),
+            Some(live),
+            "a pointer-events:auto descendant of a none box still hits",
+        );
     }
 }

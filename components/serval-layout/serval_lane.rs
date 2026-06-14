@@ -49,7 +49,8 @@ use paint_list_api::{LayoutPoint, LayoutTransform};
 
 use crate::fragment::FragmentPlane;
 use crate::paint_emit::{
-    clips_overflow, compute_transform_matrix, conjugate_at, is_fixed, primary_cv, ScrollOffsets,
+    clips_overflow, compute_transform_matrix, conjugate_at, is_fixed, pointer_events_none,
+    primary_cv, ScrollOffsets,
 };
 use crate::style::StylePlane;
 
@@ -417,7 +418,11 @@ fn walk_for_hit<D>(
 
     if let Some(l) = layout {
         let rect = Rect::new(origin, l.size.width, l.size.height);
-        if rect.contains(local) {
+        // `pointer-events: none` makes the box not a hit target: the point falls
+        // through to whatever sits behind it. The walk still descends into children,
+        // so a `pointer-events: auto` descendant of a `none` box stays hittable (the
+        // computed value already encodes the inheritance).
+        if rect.contains(local) && !cv.as_deref().is_some_and(pointer_events_none) {
             *out = Some(FragmentHit {
                 fragment: SourceNodeId(dom.opaque_id(id)),
                 source_node: SourceNodeId(dom.opaque_id(id)),

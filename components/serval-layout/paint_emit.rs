@@ -510,6 +510,17 @@ pub(crate) fn is_fixed(cv: &ComputedValues) -> bool {
     matches!(cv.get_box().position, PositionProperty::Fixed)
 }
 
+/// Whether the box computes `pointer-events: none` — it is not a hit-test target
+/// (CSS-UI). The property inherits, so the per-box computed value already encodes the
+/// cascade: a descendant that re-sets `pointer-events: auto` computes `Auto` and stays
+/// hittable, which is exactly the non-blanket descendant rule (blanket suppression is
+/// only for frame/iframe contents and `inert`, which serval does not model here). Read
+/// by the hit walk to skip recording such boxes while still descending into them.
+pub(crate) fn pointer_events_none(cv: &ComputedValues) -> bool {
+    use style::values::computed::ui::PointerEvents;
+    matches!(cv.clone_pointer_events(), PointerEvents::None)
+}
+
 /// Recursive paint-order walk emitting compositor-model commands:
 ///
 /// For each node with a fragment:
