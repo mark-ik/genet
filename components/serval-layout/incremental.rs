@@ -333,6 +333,58 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         self.viewport.scroll != before
     }
 
+    /// Scroll the document the **minimum** needed to bring `node` fully into the
+    /// viewport — the `scroll-into-view` "nearest" alignment focus uses (Tab /
+    /// autofocus), distinct from [`scroll_to_element`](Self::scroll_to_element)'s
+    /// always-top "start" alignment (anchor navigation). A node already fully visible
+    /// is a no-op (focus does not jump the page); one off the top brings its top edge
+    /// to the viewport top; one off the bottom brings its bottom edge to the viewport
+    /// bottom; one larger than the viewport aligns its start (top-/left-edge), so the
+    /// element's beginning is visible. Per axis and clamped to the scroll range (a
+    /// non-scrolling axis stays put). Returns whether the offset moved; a no-op if
+    /// `node` has no fragment.
+    ///
+    /// Document-viewport scope, like `scroll_to_element`: bringing `node` into view
+    /// within an intervening nested scroll container (and then the viewport) is the
+    /// recursive `scroll-into-view` refinement, a follow-on on
+    /// [`element_scroll`](Self::element_scroll).
+    pub fn scroll_element_into_view<D>(&mut self, dom: &D, node: Id) -> bool
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let Some(origin) = crate::serval_lane::absolute_origin(dom, &self.fragments, node) else {
+            return false;
+        };
+        let Some(rect) = self.fragments.rect_of(node) else {
+            return false;
+        };
+        let before = self.viewport.scroll;
+        let vw = self.viewport.size.width as f32;
+        let vh = self.viewport.size.height as f32;
+        let (sx, sy) = self.viewport.scroll;
+        let (el_left, el_top) = (origin.x, origin.y);
+        let (el_right, el_bottom) = (origin.x + rect.size.width, origin.y + rect.size.height);
+        // "nearest" per axis: align the off-edge to the matching viewport edge, but
+        // never push the element's start edge off (an element taller/wider than the
+        // viewport aligns its start). An element already within the window holds.
+        let new_y = if el_top < sy {
+            el_top
+        } else if el_bottom > sy + vh {
+            (el_bottom - vh).min(el_top)
+        } else {
+            sy
+        };
+        let new_x = if el_left < sx {
+            el_left
+        } else if el_right > sx + vw {
+            (el_right - vw).min(el_left)
+        } else {
+            sx
+        };
+        self.set_viewport_scroll(dom, (new_x, new_y));
+        self.viewport.scroll != before
+    }
+
     /// Scroll to the element whose `id` attribute is `id` (anchor-fragment
     /// navigation: `url#id` and in-page `#id` links), via
     /// [`scroll_to_element`](Self::scroll_to_element). Returns whether the offset
@@ -1695,6 +1747,58 @@ mod tests {
         );
         // Scrolling to it again is a no-op (already in position).
         assert!(!layout.scroll_to_element(&dom, target), "already in position");
+    }
+
+    /// `scroll_element_into_view` uses "nearest" alignment (focus / Tab), the minimum
+    /// scroll to make the element visible: a target below the fold brings its *bottom*
+    /// to the viewport bottom (not its top to the top, as anchor navigation would),
+    /// an already-visible target is a no-op, and a target above the current scroll
+    /// brings its top down to the viewport top.
+    #[test]
+    fn scroll_element_into_view_uses_nearest_alignment() {
+        const SHEET: &[&str] = &[
+            "html,body,div{display:block;margin:0}.spacer{height:1000px}.target{height:50px}",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let top = dom.create_element(html("div"));
+        dom.set_attribute(top, attr("class"), "spacer");
+        dom.append_child(body, top);
+        let target = dom.create_element(html("div"));
+        dom.set_attribute(target, attr("class"), "target");
+        dom.append_child(body, target);
+        let bottom = dom.create_element(html("div"));
+        dom.set_attribute(bottom, attr("class"), "spacer");
+        dom.append_child(body, bottom);
+
+        // W=800, H=600. The target box is y=1000..1050. Content = 2050; range.y = 1450.
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+
+        // From the top, the target (1000..1050) is below the 600px fold. "nearest"
+        // brings its bottom (1050) to the viewport bottom: scroll = 1050 - 600 = 450
+        // (anchor "start" alignment would scroll to 1000 instead).
+        assert!(layout.scroll_element_into_view(&dom, target));
+        assert!(
+            (layout.viewport_scroll().1 - 450.0).abs() < 1.0,
+            "nearest brings the bottom to the fold (450), not the top to the top (1000): {:?}",
+            layout.viewport_scroll(),
+        );
+        // Now fully visible (1000..1050 within 450..1050) → no-op.
+        assert!(!layout.scroll_element_into_view(&dom, target), "already visible: no jump");
+
+        // Scroll past it, then bring it back: now above the window, so its top (1000)
+        // comes to the viewport top.
+        layout.set_viewport_scroll(&dom, (0.0, 1400.0));
+        assert!(layout.scroll_element_into_view(&dom, target));
+        assert!(
+            (layout.viewport_scroll().1 - 1000.0).abs() < 1.0,
+            "off the top brings the top edge to the viewport top (1000): {:?}",
+            layout.viewport_scroll(),
+        );
     }
 
     /// Build `body > div.scroller > (div.top, div.bottom)` — a 100×100
