@@ -46,6 +46,10 @@ chrome = ["viewer-engine", "pelt-desktop/viewer", "pelt-desktop/chrome"]
 # The tile-tree demo (V5): `pelt --tiles <url>...` splits the window into tiles, each
 # showing a document, with switchable tabs. Pulls pelt-desktop's tile surface.
 tiles = ["viewer-engine", "pelt-desktop/viewer", "pelt-desktop/tiles"]
+# Remote document loading (V1's http(s) half): `pelt --features netfetch --engine
+# static https://…` loads over the netfetcher engine. Off by default — the async
+# network stack is opt-in; the default build stays local-first.
+netfetch = ["viewer-engine", "pelt-desktop/viewer", "pelt-desktop/netfetch"]
 # C4 headed-presentation smoke. Pulls serval's `WindowsDxgiBackend`
 # in through `pelt-desktop`. Inner code is `cfg(target_os = "windows")`
 # gated so the feature still builds on non-Windows hosts.

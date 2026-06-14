@@ -14,6 +14,9 @@ mod static_viewer;
 #[cfg(feature = "viewer")]
 mod document;
 
+#[cfg(feature = "netfetch")]
+mod net_fetch;
+
 #[cfg(feature = "viewer")]
 mod headless;
 

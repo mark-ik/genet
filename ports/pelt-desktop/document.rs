@@ -16,9 +16,9 @@ use serval_render::{content_report, scene_from_session_dom, ContentReport};
 use serval_static_dom::{StaticDocument, StaticNodeId};
 
 /// A local-scheme [`ResourceFetcher`]: `data:` decodes the inline payload,
-/// `file://` (and a bare filesystem path) read from disk. `http(s)` is deferred to
-/// a future `netfetch` feature -- V1 is local-first -- so it falls through to a
-/// failed read and a clean `None`.
+/// `file://` (and a bare filesystem path) read from disk. `http(s)` loads over the
+/// netfetcher engine when built with the `netfetch` feature; without it, a remote URL
+/// falls through to a failed read and a clean `None` (V1 is local-first by default).
 pub struct LocalFetcher;
 
 impl ResourceFetcher for LocalFetcher {
@@ -30,13 +30,19 @@ impl ResourceFetcher for LocalFetcher {
             let parsed = data_url::DataUrl::process(url).ok()?;
             return parsed.decode_to_vec().ok().map(|(bytes, _fragment)| bytes);
         }
+        // http(s) over the netfetcher engine (the `netfetch` feature). Without it, a
+        // remote URL is not a filesystem path either, so fall through to `None`.
+        #[cfg(feature = "netfetch")]
+        if url.starts_with("http://") || url.starts_with("https://") {
+            return crate::net_fetch::http_get_bytes(url);
+        }
         if let Some(rest) = url.strip_prefix("file://") {
             return std::fs::read(file_url_to_path(rest)).ok();
         }
         // Anything else is treated as a filesystem path: the bare-path CLI case
         // (`pelt --engine static doc.html`) and a Windows drive path (`C:\x`) a
-        // scheme check would misread. `http(s)` has no V1 fetcher, so it lands
-        // here and fails to `None`.
+        // scheme check would misread. A remote URL with no `netfetch` lands here and
+        // fails to `None`.
         std::fs::read(url).ok()
     }
 }

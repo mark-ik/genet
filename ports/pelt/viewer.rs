@@ -655,8 +655,9 @@ Usage: pelt [--engine <profile>] [<url-or-file>] [options]
 
 Script-free Pelt: serval's reference browser. `--engine static <url-or-file>`
 opens the serval-native on-screen document viewer (file://, a bare path, and
-data: URLs — percent-encoded or base64); `--chrome` wraps it in an omnibar +
-back/forward strip, `--tiles` splits the window into per-document tiles. The
+data: URLs — percent-encoded or base64; http(s) needs --features netfetch);
+`--chrome` wraps it in an omnibar + back/forward strip, `--tiles` splits the
+window into per-document tiles. The
 other profiles: `--engine scripted` runs a page's <script> (needs --features
 scripted), `--engine headless` is the GPU-free scene-snapshot / reftest harness.
 Smoke runners validate the present backends (--help lists them).
