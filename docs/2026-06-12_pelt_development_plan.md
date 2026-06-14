@@ -272,8 +272,12 @@ is the only seam (`pelt-core`'s `ContentSource` already names the
 **`external_texture` element view in xilem-serval** landed (`a8832e2762a`), the
 shared primitive the scrying plan and the input-spine companion also wanted (an
 `<external-texture key>` replaced leaf that paint emits as a `DrawExternalTexture`
-compositor pass). The two remaining gates are pure meerkat-side wiring (no new
-serval components): (2) **meerkat hosting
+compositor pass). Gate (3) is also **resolved**: the
+**`tree_projection` → `TileTree` mapping** landed in platen (mere `f0440f1`,
+`tile_tree_from_plan`) — forme's `WorkbenchPlan` projects onto pelt-core's
+`TileTree` (platen path-deps the zero-dependency `pelt-core` contract leaf; the
+host supplies each tile's id / title / content lane). The one remaining gate is
+the product-render rewrite: (2) **meerkat hosting
 `TileSurface`** in its workbench pane (today it renders tiles through platen-view's
 own `WorkbenchScene`, not the pelt surface; meerkat doesn't yet depend on
 `pelt-core`/`pelt-desktop`); (3) the **`tree_projection` → `TileTree` mapping** in
