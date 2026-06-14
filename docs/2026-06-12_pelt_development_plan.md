@@ -4,8 +4,13 @@
 **Status**: In progress. **V0 done** — the present core moved into serval as
 `components/serval-winit-host`. **Render-driver reform done** — the host
 render-driver extracted into `components/serval-render` and `pelt-live` retired
-(the V0-shaped move that cleared V1's foundation; see Progress). **V1** (the static
-viewer) is next.
+(the V0-shaped move that cleared V1's foundation; see Progress). **V1 done**
+(2026-06-14): the static viewer loads + renders + scrolls local documents
+(file://, bare path, `data:` percent-encoded and base64) and http(s) under
+`--features netfetch` (netfetcher-backed); capabilities print honestly. V2–V5
+already have substantial implementations ahead of this doc (chrome, headless
+reftest harness, scripted, the tile surface) — a phase-status reconciliation is
+overdue.
 **Role statement (revised 2026-06-12, with Mark):** pelt is two things over
 one lib. (a) **serval's servoshell** — the minimal reference browser that
 proves the engine standalone, drives engine development without mere's graph
@@ -286,6 +291,17 @@ the same lib, and the tile-tree contract is the only seam between them.
   V6 is also where the generalizable pane-module contract (standalone-or-
   hosted surface) gets written down, since roster/gloss/apparatus want the
   same shape.
+- **2026-06-14** — **V1 done.** The static viewer was already wired end to end
+  (`pelt --engine static <url>` → `LoadedDocument` → `serval-render` →
+  `serval-winit-host`, with engine-side document scroll from the viewport scope);
+  this session closed the loading gaps. `data:` decoding moved to the spec parser
+  (`data_url::DataUrl`), gaining base64 bodies; http(s) landed behind a `netfetch`
+  feature that drives the netfetcher engine (the host-owns-networking pattern,
+  mirroring serval-wpt's `fetch()` wiring — path dep + tokio bridge over the sync
+  `ResourceFetcher`, offline mockito test). The wheel also now routes through the
+  engine's `scroll_at`, so nested `overflow:scroll` containers scroll under the
+  cursor. serval `67c4a8acf93` (netfetch), `016333bd1a9` (base64 + help text),
+  `7874e5a1297` (nested-scroll wheel).
 - **2026-06-12** — **Render-driver reform done** (the V1 foundation, V0-shaped).
   Prompted mid-V1-planning by "shouldn't pelt-live be reformed?": making
   `pelt-desktop` consume `pelt-live`'s lib would have been a third consumer of a
