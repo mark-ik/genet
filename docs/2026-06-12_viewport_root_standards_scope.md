@@ -33,6 +33,31 @@ done for background."
 - Canvas-background propagation: complete (the model to copy).
 - Quirks mode landed (2026-06-11), which the `scrollingElement` rule needs.
 
+**Update (2026-06-14): the V1 viewport family landed; this scope is largely
+discharged.** Verified against the code (a parallel capability audit, not this
+doc's prior snapshot):
+
+- **Document / viewport scroll: DONE.** A first-class `Viewport` (`viewport.rs`)
+  owns offset + propagated overflow + size; root → viewport propagation with the
+  `<body>` fallback and `overflow:hidden`-disables-scroll (rule 2, both halves);
+  `document_scroll_range` from the scrollable-overflow region (rule 4); the
+  session emits the document at `-scroll` and hit-tests through `+scroll`. Tested
+  in `layout::tests` + `incremental::tests`.
+- **`position: fixed`: DONE** (rule 3). `is_fixed` / `attaches_to_viewport`; the
+  stacking layer counters the document scroll so a fixed box stays pinned in
+  *both* paint and hit-test (`Fixed ≠ Absolute`); tested.
+- **`%`-height chain, viewport units (`vw`/`vh`), resize re-resolution: DONE**,
+  guarded in `layout::tests`.
+- **Inline-box hit-testing + `pointer-events`: DONE** (2026-06-14) — the
+  hit-test family this scope is adjacent to. See
+  `2026-06-14_engine_capability_audit.md`.
+- **Still open (the one V1-adjacent gap):** nested (element)
+  `overflow:scroll/auto` scrolling. The paint + hit consumers already read
+  `ScrollOffsets`; nothing populates the per-element map (it is always
+  `::default()`). A data-flow gap, not an algorithm gap; the next slice.
+- `sticky`, `background-attachment:fixed`, and the named knockouts remain
+  deferred as scoped.
+
 ---
 
 ## Engine model rules (the guidance, in one place)
