@@ -23,8 +23,12 @@ pub struct LocalFetcher;
 
 impl ResourceFetcher for LocalFetcher {
     fn fetch(&self, url: &str) -> Option<Vec<u8>> {
-        if let Some(rest) = url.strip_prefix("data:") {
-            return decode_data_url(rest);
+        if url.starts_with("data:") {
+            // The spec `data:` parser (the same one `serval-layout` decodes inline
+            // `<img>` payloads with): handles percent-encoded *and* `;base64` bodies,
+            // the charset / mime header, and the optional fragment.
+            let parsed = data_url::DataUrl::process(url).ok()?;
+            return parsed.decode_to_vec().ok().map(|(bytes, _fragment)| bytes);
         }
         if let Some(rest) = url.strip_prefix("file://") {
             return std::fs::read(file_url_to_path(rest)).ok();
@@ -35,17 +39,6 @@ impl ResourceFetcher for LocalFetcher {
         // here and fails to `None`.
         std::fs::read(url).ok()
     }
-}
-
-/// Decode a `data:` URL payload (everything after `data:`): split on the first
-/// comma into the metadata and the data. A percent-encoded text payload decodes to
-/// its bytes; `;base64` payloads are deferred (a follow-up adds base64).
-fn decode_data_url(rest: &str) -> Option<Vec<u8>> {
-    let (meta, data) = rest.split_once(',')?;
-    if meta.ends_with(";base64") {
-        return None; // base64 data: is a V1 follow-up.
-    }
-    Some(percent_encoding::percent_decode_str(data).collect())
 }
 
 /// Map the part after `file://` to a filesystem path: drop an empty / `localhost`
@@ -281,6 +274,21 @@ mod tests {
         assert!(!doc.frame(400, 300).ops.is_empty(), "the decoded document renders");
     }
 
+    /// A `;base64` `data:` payload decodes before parsing (the spec parser handles the
+    /// base64 body the hand-rolled splitter used to reject).
+    #[test]
+    fn base64_data_url_decodes() {
+        // base64("<h1>Hi</h1>") = PGgxPkhpPC9oMT4=
+        let mut doc =
+            LoadedDocument::load(&LocalFetcher, "data:text/html;base64,PGgxPkhpPC9oMT4=")
+                .expect("a base64 data: URL loads");
+        let scene = doc.frame(400, 300);
+        assert!(
+            scene.ops.iter().any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
+            "the base64-decoded document paints its text",
+        );
+    }
+
     /// A bare filesystem path reads from disk (the primary CLI case).
     #[test]
     fn bare_path_reads_from_disk() {
@@ -458,12 +466,13 @@ mod tests {
         );
     }
 
-    /// base64 `data:` is deferred in V1: it does not pretend to decode.
+    /// A `LocalFetcher` `fetch` of an unreadable path is a clean `None` (the
+    /// `http(s)`-without-netfetch case lands here too).
     #[test]
-    fn base64_data_url_is_deferred() {
+    fn missing_path_fetches_none() {
         assert!(
-            LocalFetcher.fetch("data:text/html;base64,PGgxPkhpPC9oMT4=").is_none(),
-            "base64 data: is a V1 follow-up (None for now)",
+            LocalFetcher.fetch("definitely/not/a/real/file.html").is_none(),
+            "an unreadable path (or an http URL with no netfetch) fetches None",
         );
     }
 }
