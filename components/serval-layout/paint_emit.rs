@@ -2144,6 +2144,20 @@ pub(crate) fn clips_overflow(cv: &ComputedValues) -> bool {
         || !matches!(box_style.overflow_y, Overflow::Visible)
 }
 
+/// Whether the box's inline (x) axis is wheel-scrollable: `overflow-x: scroll` or
+/// `auto`. `hidden`/`clip` clip but only scroll programmatically, so they are not
+/// wheel targets. The per-axis predicate the host's wheel routing walks for.
+pub(crate) fn scrolls_overflow_x(cv: &ComputedValues) -> bool {
+    use style::values::computed::Overflow;
+    matches!(cv.get_box().overflow_x, Overflow::Scroll | Overflow::Auto)
+}
+
+/// Whether the box's block (y) axis is wheel-scrollable (`overflow-y: scroll`/`auto`).
+pub(crate) fn scrolls_overflow_y(cv: &ComputedValues) -> bool {
+    use style::values::computed::Overflow;
+    matches!(cv.get_box().overflow_y, Overflow::Scroll | Overflow::Auto)
+}
+
 /// Whether `text-overflow: ellipsis` is in effect for line-end truncation: the
 /// element asks for an ellipsis *and* clips its inline overflow (`overflow-x` not
 /// `visible` — ellipsis only applies when content is clipped). The line-end side

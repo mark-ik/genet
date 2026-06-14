@@ -104,6 +104,14 @@ pub struct IncrementalLayout<Id: Copy + Eq + Hash> {
     /// / [`scroll_by`](Self::scroll_by), and [`emit_paint_list`](Self::emit_paint_list)
     /// paints at it.
     viewport: Viewport,
+    /// Per-element scroll offsets for nested `overflow: scroll/auto` containers,
+    /// retained across frames (parallel to `viewport.scroll` for the document). The
+    /// host drives these through [`scroll_at`](Self::scroll_at) (the wheel default
+    /// action); [`hit_test`](Self::hit_test) and [`emit_paint_list`](Self::emit_paint_list)
+    /// merge them with the caller's own offsets, so a content document's inner
+    /// scrollers move while a host's explicit offsets (meerkat's panes) still apply.
+    /// Empty until something scrolls, so existing callers are unchanged.
+    element_scroll: ScrollOffsets<Id>,
     /// Aggregate `RestyleDamage` from the most recent attribute-only
     /// [`apply`](Self::apply). Lets callers/tests confirm which paint-tier bits
     /// a batch produced (e.g. a transform-only motion frame registers
@@ -145,6 +153,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             width,
             height,
             viewport,
+            element_scroll: ScrollOffsets::default(),
             last_damage: RestyleDamage::empty(),
         }
     }
@@ -174,8 +183,9 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     where
         D: LayoutDom<NodeId = Id>,
     {
+        let merged = self.merged_scroll(scroll);
         let view = ServalLaneView::new(dom, &self.styles, &self.fragments)
-            .with_scroll_offsets(scroll)
+            .with_scroll_offsets(&merged)
             .with_viewport_scroll(self.viewport.scroll);
         let hit = view.hit_test(Point::new(x, y))?;
         let node = view.find_by_source_id(hit.source_node)?;
@@ -387,6 +397,168 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         None
     }
 
+    /// Merge the session's retained per-element scroll ([`element_scroll`](Self::element_scroll),
+    /// driven by [`scroll_at`](Self::scroll_at)) with a caller's own offsets — the
+    /// caller's winning on a key collision (a host that explicitly positions a
+    /// container, e.g. meerkat's panes, overrides the wheel-driven offset). The
+    /// merge the hit-test and paint both read, so a content document's inner
+    /// scrollers move while a host's explicit offsets still apply. Cheap-paths the
+    /// common cases (an empty side returns the other cloned), so callers that never
+    /// scroll a nested container pay one clone of their own (usually empty) map.
+    fn merged_scroll(&self, host: &ScrollOffsets<Id>) -> ScrollOffsets<Id> {
+        if self.element_scroll.is_empty() {
+            return host.clone();
+        }
+        if host.is_empty() {
+            return self.element_scroll.clone();
+        }
+        let mut merged = self.element_scroll.clone();
+        for (k, v) in host {
+            merged.insert(*k, *v);
+        }
+        merged
+    }
+
+    /// Scroll the nearest nested scroll container under scene point `(x, y)` by
+    /// `(dx, dy)` device px — the wheel default action for `overflow: scroll/auto`
+    /// containers. Hit-tests the point (element-scroll aware), then walks hit → root
+    /// for the nearest ancestor that scrolls on a requested axis and is not already
+    /// at its limit (CSS scroll *chaining*: a container pinned at its edge passes the
+    /// delta to its scrollable ancestor), updates that container's retained
+    /// [`element_scroll`](Self::element_scroll) offset, and returns `true`. With no
+    /// scrollable container in the chain it falls through to the document viewport
+    /// ([`scroll_by`](Self::scroll_by)), returning whether the document moved. The
+    /// host maps a wheel delta straight onto this; the next
+    /// [`emit_paint_list`](Self::emit_paint_list) paints at the new offsets.
+    pub fn scroll_at<D>(&mut self, dom: &D, x: f32, y: f32, dx: f32, dy: f32) -> bool
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        // Hit-test through the current element scroll (so a click on already-scrolled
+        // content resolves to the right node); the host passes no extra offset here.
+        let mut node = self.hit_test(dom, x, y, &ScrollOffsets::default());
+        while let Some(n) = node {
+            if let Some(next) = self.scroll_step(dom, n, dx, dy) {
+                self.element_scroll.insert(n, next);
+                return true;
+            }
+            node = dom.parent(n);
+        }
+        // No nested scroll container consumed the delta → scroll the document.
+        let before = self.viewport.scroll;
+        self.scroll_by(dom, dx, dy);
+        self.viewport.scroll != before
+    }
+
+    /// The clamped new element-scroll offset for scrolling `node` by `(dx, dy)` from
+    /// its current offset, or `None` when `node` is not a wheel-scrollable container
+    /// on either requested axis, or the clamp leaves the offset unchanged (already at
+    /// its limit — the caller chains to the next ancestor). A non-scrollable axis
+    /// holds its current value; a scrollable axis clamps to `[0, extent]` from
+    /// [`scroll_extent`](Self::scroll_extent).
+    fn scroll_step<D>(&self, dom: &D, node: Id, dx: f32, dy: f32) -> Option<(f32, f32)>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let cv = crate::paint_emit::primary_cv(&self.styles, node)?;
+        let sx = crate::paint_emit::scrolls_overflow_x(&cv);
+        let sy = crate::paint_emit::scrolls_overflow_y(&cv);
+        if !sx && !sy {
+            return None;
+        }
+        let (mx, my) = self.scroll_extent(dom, node);
+        let cur = self.element_scroll.get(&node).copied().unwrap_or((0.0, 0.0));
+        let nx = if sx { (cur.0 + dx).clamp(0.0, mx) } else { cur.0 };
+        let ny = if sy { (cur.1 + dy).clamp(0.0, my) } else { cur.1 };
+        if (nx - cur.0).abs() < f32::EPSILON && (ny - cur.1).abs() < f32::EPSILON {
+            return None;
+        }
+        Some((nx, ny))
+    }
+
+    /// The maximum element-scroll offset `(mx, my)` for scroll container `node`: per
+    /// axis, how far its content overflows its scrollport (the padding box) before
+    /// the content's far edge reaches the scrollport edge. The nested-container
+    /// analogue of [`document_scroll_range`], rooted at the container and measured in
+    /// its border-box coordinates (the frame paint and hit-test position descendants
+    /// in). `(0, 0)` when `node` has no fragment or its content does not overflow.
+    ///
+    /// First cut of the scrollable-overflow region: the union of in-flow + `absolute`
+    /// descendant fragment far edges plus the container's end padding, skipping
+    /// `position: fixed` subtrees and not descending past a nested clip container (its
+    /// own box bounds its descendants). The precise region (rule 4: transformed /
+    /// negative-margin descendant overflow) is a documented follow-on.
+    fn scroll_extent<D>(&self, dom: &D, node: Id) -> (f32, f32)
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let Some(frame) = self.fragments.rect_of(node) else {
+            return (0.0, 0.0);
+        };
+        let (cr, cb) = self.content_far_edge(dom, node);
+        // The scrollport is the padding box (border-box minus borders); the content
+        // can scroll until its far edge plus the container's end padding reaches it.
+        let port_right = frame.size.width - frame.border.right;
+        let port_bottom = frame.size.height - frame.border.bottom;
+        let mx = (cr + frame.padding.right - port_right).max(0.0);
+        let my = (cb + frame.padding.bottom - port_bottom).max(0.0);
+        (mx, my)
+    }
+
+    /// The far (right, bottom) edge of `node`'s in-flow + `absolute` descendants in
+    /// `node`'s border-box coordinates — the content extent
+    /// [`scroll_extent`](Self::scroll_extent) measures against. Children are
+    /// positioned relative to the container's border-box origin (paint walks them
+    /// there, `paint_emit.rs`), so accumulation starts at `(0, 0)` and excludes the
+    /// container's own box (it is the scrollport, not content).
+    fn content_far_edge<D>(&self, dom: &D, node: Id) -> (f32, f32)
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let mut extent = (0.0f32, 0.0f32);
+        for child in dom.dom_children(node) {
+            self.accumulate_far_edge(dom, child, (0.0, 0.0), &mut extent);
+        }
+        extent
+    }
+
+    /// Accumulate the far (right, bottom) edge of `id`'s fragment and its scrollable
+    /// descendants into `extent`, in the host container's border-box coordinates
+    /// (`parent_origin` accumulated through the DOM, as paint/hit-test do). Mirrors
+    /// [`viewport::extend_scrollable`](crate::viewport) one level down: a `position:
+    /// fixed` subtree is viewport-anchored (it never scrolls the container), and a
+    /// nested overflow-clip container bounds its own descendants.
+    fn accumulate_far_edge<D>(
+        &self,
+        dom: &D,
+        id: Id,
+        parent_origin: (f32, f32),
+        extent: &mut (f32, f32),
+    ) where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let cv = crate::paint_emit::primary_cv(&self.styles, id);
+        if cv.as_deref().is_some_and(crate::paint_emit::is_fixed) {
+            return;
+        }
+        let origin = match self.fragments.rect_of(id) {
+            Some(l) => {
+                let ox = parent_origin.0 + l.location.x;
+                let oy = parent_origin.1 + l.location.y;
+                extent.0 = extent.0.max(ox + l.size.width);
+                extent.1 = extent.1.max(oy + l.size.height);
+                (ox, oy)
+            },
+            None => parent_origin,
+        };
+        if cv.as_deref().is_some_and(crate::paint_emit::clips_overflow) {
+            return;
+        }
+        for child in dom.dom_children(id) {
+            self.accumulate_far_edge(dom, child, origin, extent);
+        }
+    }
+
     /// Recompute the viewport's propagated overflow + size after a relayout,
     /// preserving the host's scroll re-clamped to the new content (a relayout can
     /// shrink the page under the current offset). Called on every layout-changing
@@ -513,6 +685,10 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         );
         let images = ImagePlane::new();
         let bg_images = BackgroundImagePlane::new();
+        // Merge the session's retained per-element scroll (driven by `scroll_at`)
+        // with the caller's own offsets, so a content document's inner scrollers
+        // move while a host's explicit offsets (meerkat's panes) still apply.
+        let merged = self.merged_scroll(scroll_offsets);
         // Paint at the session's document scroll (the viewport the host drives via
         // `set_viewport_scroll`); `(0,0)` until the host scrolls, so existing
         // consumers that never scroll the document are unchanged.
@@ -524,7 +700,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             &self.text_ctx,
             &images,
             &bg_images,
-            scroll_offsets,
+            &merged,
             viewport,
             self.viewport.scroll,
         )
@@ -1519,6 +1695,118 @@ mod tests {
         );
         // Scrolling to it again is a no-op (already in position).
         assert!(!layout.scroll_to_element(&dom, target), "already in position");
+    }
+
+    /// Build `body > div.scroller > (div.top, div.bottom)` — a 100×100
+    /// `overflow:scroll` container over 500px of stacked content (two 250px
+    /// blocks). Returns the dom plus the scroller / top / bottom ids.
+    fn build_nested_scroller() -> (ScriptedDom, NodeId, NodeId, NodeId) {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let scroller = dom.create_element(html("div"));
+        dom.set_attribute(scroller, attr("class"), "scroller");
+        dom.append_child(body, scroller);
+        let top = dom.create_element(html("div"));
+        dom.set_attribute(top, attr("class"), "top");
+        dom.append_child(scroller, top);
+        let bottom = dom.create_element(html("div"));
+        dom.set_attribute(bottom, attr("class"), "bottom");
+        dom.append_child(scroller, bottom);
+        (dom, scroller, top, bottom)
+    }
+
+    const NESTED_SCROLL_SHEET: &[&str] = &[
+        "html,body,div{display:block;margin:0;padding:0;border:0} \
+         .scroller{overflow:scroll;width:100px;height:100px} \
+         .top{height:250px} .bottom{height:250px}",
+    ];
+
+    /// Nested element scrolling: `scroll_at` over an `overflow:scroll` container
+    /// routes the wheel delta into *that* container (not the document), clamps to its
+    /// scrollable extent, and the change is observable through the session's own
+    /// hit-test (a fixed scene point resolves to deeper content as the container
+    /// scrolls under it — the merge into `hit_test` working end to end).
+    #[test]
+    fn nested_overflow_scroll_routes_to_container_and_clamps() {
+        let (dom, _scroller, top, bottom) = build_nested_scroller();
+        let mut layout = IncrementalLayout::new(&dom, NESTED_SCROLL_SHEET, W, H);
+        let scroll = ScrollOffsets::default();
+
+        // Unscrolled: scene (50,50) is over the first 250px block.
+        assert_eq!(layout.hit_test(&dom, 50.0, 50.0, &scroll), Some(top), "starts over .top");
+
+        // Wheel down 300px inside the scroller → routes to the container (true), and
+        // the same scene point now resolves to the second block scrolled under it.
+        assert!(layout.scroll_at(&dom, 50.0, 50.0, 0.0, 300.0), "the scroller consumes the delta");
+        assert_eq!(
+            layout.hit_test(&dom, 50.0, 50.0, &scroll),
+            Some(bottom),
+            "scrolled 300px, the point now resolves to .bottom (content moved up under it)",
+        );
+
+        // Content 500px in a 100px scrollport → max scroll 400px. An over-scroll past
+        // it still moves (clamps to 400, still .bottom), but a further wheel at the
+        // limit is a no-op: the container is pinned and the document does not scroll
+        // (it fits), so `scroll_at` returns false (chaining found no taker).
+        assert!(layout.scroll_at(&dom, 50.0, 50.0, 0.0, 1000.0), "over-scroll clamps but still moves to the limit");
+        assert_eq!(layout.hit_test(&dom, 50.0, 50.0, &scroll), Some(bottom), "still over .bottom at the limit");
+        assert!(
+            !layout.scroll_at(&dom, 50.0, 50.0, 0.0, 1000.0),
+            "at the scroll limit with a non-scrolling document, the wheel is a no-op",
+        );
+    }
+
+    /// The nested scroll offset reaches paint: after `scroll_at`, `emit_paint_list`
+    /// carries the container's content translated by `-offset` (the scroll wrap the
+    /// renderer composites under the clip). The merge into `emit_paint_list` working.
+    #[test]
+    fn nested_scroll_translates_the_emitted_paint() {
+        use paint_list_api::{PaintCmd, PaintList};
+
+        let (dom, _scroller, _top, _bottom) = build_nested_scroller();
+        let mut layout = IncrementalLayout::new(&dom, NESTED_SCROLL_SHEET, W, H);
+        let scroll = ScrollOffsets::default();
+        let dev = DeviceIntSize::new(W as i32, H as i32);
+
+        // Before scrolling, no -150 translate exists.
+        let before = layout.emit_paint_list(&dom, &scroll, dev);
+        assert!(
+            !before.commands().iter().any(|c| matches!(c, PaintCmd::PushTransform(t)
+                if (t.origin.y + 150.0).abs() < 0.5)),
+            "unscrolled: no scroll translate yet",
+        );
+
+        assert!(layout.scroll_at(&dom, 50.0, 50.0, 0.0, 150.0), "scroll the container 150px");
+
+        // After: the scroller's content is translated by (0, -150).
+        let after = layout.emit_paint_list(&dom, &scroll, dev);
+        assert!(
+            after.commands().iter().any(|c| matches!(c, PaintCmd::PushTransform(t)
+                if t.origin.x.abs() < 0.5 && (t.origin.y + 150.0).abs() < 0.5)),
+            "the nested scroll paints the content at a -150 translate wrap",
+        );
+    }
+
+    /// Scroll chaining's base case: a point with no `overflow:scroll/auto` ancestor
+    /// falls through to the document viewport, so `scroll_at` over a plain tall page
+    /// scrolls the document (the same path `scroll_by` drives), not a nested map.
+    #[test]
+    fn scroll_at_falls_through_to_the_document_viewport() {
+        const SHEET: &[&str] = &["html,body,div{display:block;margin:0}.tall{height:2000px}"];
+        let (dom, _) = build_nodes(1, "tall");
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+
+        // No scroll container under the point → the document viewport takes the delta.
+        assert!(layout.scroll_at(&dom, 50.0, 50.0, 0.0, 40.0), "the document consumes the wheel");
+        assert!(
+            (layout.viewport_scroll().1 - 40.0).abs() < 0.5,
+            "the document scrolled 40px: {:?}",
+            layout.viewport_scroll(),
+        );
     }
 
     /// Inline links are hit-testable (the `elementFromPoint` descent): a click on an

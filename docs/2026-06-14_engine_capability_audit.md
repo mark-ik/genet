@@ -45,7 +45,7 @@ snapshot; this corrects them.
 
 | Gap | Status | Effort |
 |---|---|---|
-| Nested element scrolling (`overflow:scroll/auto`) | partial | medium |
+| Nested element scrolling (`overflow:scroll/auto`) | **done** (this session) | — |
 | `preventDefault` consumption on content clicks | partial | medium |
 | Inline-element rects in the a11y tree | missing | medium |
 | Scroll-into-view on Tab focus | missing | small |
@@ -54,9 +54,28 @@ snapshot; this corrects them.
 | Browser HTML form elements (value/submit/validation/events) | missing | large |
 | DOM drag events; CSS paint long-tail (inset shadow, blend, filters, `::first-line`) | missing | large / medium |
 
-## Next: nested element scrolling (this slice)
+## Landed: nested element scrolling
 
-The highest-value genuine gap, and a **data-flow gap, not an algorithm gap**:
+Done this session (`incremental.rs`, lib tests green). `IncrementalLayout` now
+retains an `element_scroll: ScrollOffsets<Id>`; `scroll_at(dom, x, y, dx, dy)`
+hit-tests the point, walks hit → root for the nearest `overflow: scroll/auto`
+container not already at its limit (CSS scroll chaining via `scrolls_overflow_x/y`),
+clamps the new offset to `scroll_extent` (the content far edge past the padding-box
+scrollport, the nested analogue of `document_scroll_range`), and writes it; no
+scrollable ancestor falls through to the document viewport. `hit_test` and
+`emit_paint_list` `merge_scroll` the retained map with the caller's own offsets
+(caller wins), so meerkat's explicit pane offsets are unchanged and content
+documents get nested scroll for free. Host wiring is one line: wheel → `scroll_at`.
+
+Follow-ons (recorded, not done):
+
+- The precise per-container scrollable-overflow region (rule 4: transformed /
+  negative-margin / `absolute`-out-of-clip descendant overflow). `scroll_extent`
+  currently unions in-flow + `absolute` fragment far edges plus end padding.
+- Nested-scroller stacking vs `position: fixed` inside a scroller (the hit walk is
+  DOM-order, inheriting paint's existing stacking approximation).
+
+The original plan, for reference — a **data-flow gap, not an algorithm gap**:
 the paint walk translates descendants by `-offset` (`paint_emit.rs:850`) and the
 hit walk maps the query point through `+offset` (`serval_lane.rs:450`) already,
 both tested; the feature is dead only because `incremental.rs` always passes
