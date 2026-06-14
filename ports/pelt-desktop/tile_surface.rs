@@ -148,7 +148,11 @@ fn render_stack(stack: &TabStack, path: &[usize]) -> TileView {
         .attr("data-stack", encode_path(path));
 
     // The content-area placeholder for the active tile, marked with its id so the host
-    // can find its laid-out rect and composite the tile's document there.
+    // can find its laid-out rect and composite the tile's content there — a document
+    // scene (the document lane, a [`TileLayer`]) or, for the external-texture lane, the
+    // producer's texture (a constellation actor, a scrying WebView) composited into the
+    // rect ([`TileFrame::external_tiles`]). The lane is read off the tile's
+    // `ContentSource`, not the DOM, so the placeholder stays lane-neutral.
     let active_id = stack.tabs.get(stack.active).map(|t| t.id.0).unwrap_or(0);
     let content = el::<_, TileState, ()>("div", ())
         .attr("class", "tile-content")
@@ -178,11 +182,20 @@ const DEFAULT_TILE_CSS: &str = "\
     .tile-ghost { display: inline-block; padding: 6px 12px; color: #ffffff; background: #4a4a55; border: 1px solid #6a6a77; opacity: 0.85; }";
 
 /// A rendered tile-tree frame: the frame scene (tab bars + dividers), one layer per
-/// active tile (its content-area rect + its document's scene), and an optional drag
-/// ghost (the dragged tab's preview) the host composites on top.
+/// active *document* tile (its content-area rect + its document's scene), the
+/// content-area rects of the active *external-texture* tiles (the host composites the
+/// producer's texture into each), and an optional drag ghost (the dragged tab's
+/// preview) the host composites on top.
 pub struct TileFrame {
     pub frame_scene: Scene,
     pub tiles: Vec<TileLayer>,
+    /// The active external-texture tiles: `(tile, content-area rect, key)`. The surface
+    /// renders no content for these (it has no producer texture); the host composites
+    /// the texture it registered under `key` (a constellation actor, a scrying WebView)
+    /// into the rect — the V6 actor-texture tile beside a document tile. The lane is
+    /// read off the tile's `ContentSource`, so a host that uses none (standalone pelt)
+    /// gets an empty list.
+    pub external_tiles: Vec<(TileId, (f32, f32, f32, f32), pelt_core::tile::TextureKey)>,
     /// The drag ghost to composite last, present only while a tab drag is moving.
     pub ghost: Option<GhostLayer>,
 }
@@ -281,7 +294,17 @@ impl TileSurface {
             let areas = content_area_rects(&dom, &session);
             (scene, areas)
         };
-        // Render each active tile's document into its content rect.
+        // External-texture tiles: surface each one's content rect + key so the host
+        // composites its producer texture there. Read off the tree before the doc loop
+        // borrows `self.docs` mutably (disjoint fields, separate borrows).
+        let external_tiles: Vec<(TileId, (f32, f32, f32, f32), pelt_core::tile::TextureKey)> = areas
+            .iter()
+            .filter_map(|(id, rect)| match &self.runner.state().tree.find(*id)?.content {
+                ContentSource::ExternalTexture(key) => Some((*id, *rect, *key)),
+                _ => None,
+            })
+            .collect();
+        // Render each active document tile into its content rect.
         let mut tiles = Vec::new();
         for (tile_id, rect) in areas {
             if let Some(doc) = self.docs.get_mut(&tile_id) {
@@ -292,7 +315,7 @@ impl TileSurface {
         }
         // The ghost is a host-input concern (it tracks a live drag): the surface renders
         // the frame body, the shell overlays the ghost when a drag is moving.
-        TileFrame { frame_scene, tiles, ghost: None }
+        TileFrame { frame_scene, tiles, external_tiles, ghost: None }
     }
 
     /// The shared frame DOM handle (for the host's hit-testing of tab bars / dividers).
@@ -592,7 +615,7 @@ fn absolute_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pelt_core::tile::{Edge, Tile, TileBranch};
+    use pelt_core::tile::{Edge, TextureKey, Tile, TileBranch};
 
     fn doc_tile(id: u64, html: &str) -> Tile {
         Tile {
@@ -600,6 +623,53 @@ mod tests {
             title: format!("tab{id}"),
             content: ContentSource::Document(DocumentRef(format!("data:text/html,{html}"))),
         }
+    }
+
+    fn external_tile(id: u64, key: u64) -> Tile {
+        Tile {
+            id: TileId(id),
+            title: format!("actor{id}"),
+            content: ContentSource::ExternalTexture(TextureKey(key)),
+        }
+    }
+
+    /// An external-texture tile surfaces its content rect + key (for the host to
+    /// composite a producer texture there — the V6 actor-texture lane) and produces no
+    /// document layer.
+    #[test]
+    fn external_texture_tile_surfaces_its_rect_and_key() {
+        let mut surface = TileSurface::new(TileTree::single(external_tile(1, 99)));
+        let frame = surface.frame(800, 600);
+        assert!(frame.tiles.is_empty(), "an external-texture tile has no document layer");
+        assert_eq!(frame.external_tiles.len(), 1, "its content rect + key are surfaced");
+        let (tile, rect, key) = frame.external_tiles[0];
+        assert_eq!(tile, TileId(1));
+        assert_eq!(key, TextureKey(99), "carries the host's texture key");
+        assert!(rect.2 > 1.0 && rect.3 > 1.0, "non-degenerate content rect: {rect:?}");
+    }
+
+    /// A document tile and an external-texture tile side by side: the document gets a
+    /// scene layer, the external one a rect+key — the V6 "mixed content" frame.
+    #[test]
+    fn mixed_document_and_external_tiles() {
+        let tree = TileTree::split(
+            SplitAxis::Row,
+            vec![
+                TileBranch::new(0.5, TileTree::single(doc_tile(1, "<p>doc</p>"))),
+                TileBranch::new(0.5, TileTree::single(external_tile(2, 7))),
+            ],
+        );
+        let mut surface = TileSurface::new(tree);
+        let frame = surface.frame(800, 600);
+        assert_eq!(frame.tiles.len(), 1, "one document layer");
+        assert_eq!(frame.tiles[0].tile, TileId(1));
+        assert_eq!(frame.external_tiles.len(), 1, "one external-texture rect+key");
+        assert_eq!(frame.external_tiles[0].0, TileId(2));
+        // The external tile sits to the right of the document tile.
+        assert!(
+            frame.external_tiles[0].1.0 > frame.tiles[0].rect.0,
+            "external tile is right of the document tile",
+        );
     }
 
     /// A single-tile surface renders a frame scene and one content layer with a
