@@ -1,0 +1,17 @@
+<!--
+  scrollable-overflow with an abs-pos overhang (viewport scope rule 4). The in-flow
+  content is short (200px, well within the 600px viewport), but an absolutely-
+  positioned descendant at top:1500px extends the document's scrollable-overflow
+  region, so the page scrolls to reveal it. The .scroll sidecar scrolls past the
+  bottom (clamped to the real range), so the snapshot shows the overhang box in
+  view at the bottom of the viewport. An engine that ignored the abs-pos overhang
+  would compute a zero scroll range and snapshot the unscrolled top instead — a
+  different scene, which the reftest reds.
+-->
+<style>
+  html, body { margin: 0; padding: 0; }
+  .flow { height: 200px; }
+  .overhang { position: absolute; top: 1500px; left: 0; width: 300px; height: 80px; }
+</style>
+<div class="flow">in flow</div>
+<div class="overhang">overhang</div>
