@@ -175,10 +175,10 @@ directory green in one command, a layout change reds the affected fixture with a
 named scene diff (`first diff at line N`), and `--bless` (re)writes snapshots.
 Shipped fixtures: `before-content` (`::before`), `checked` (`:checked`), and the
 viewport family `document-scroll`, `overflow-hidden-root`, `fixed-under-scroll`,
-`percent-height` (scroll sidecars drive the scrolled ones). **Open:** the
-scrollable-overflow-with-abs-pos-overhang fixture, and the rasterized-PNG lane
-(scene-snapshot is the primary artifact; PNG is a documented offscreen-readback
-follow-up).
+`percent-height`, `scrollable-overflow-overhang` (the abs-pos-overhang case,
+`a56882c177d`; scroll sidecars drive the scrolled ones). The fixture set is now
+complete. **Open:** the rasterized-PNG lane only (scene-snapshot is the primary
+artifact; PNG is a documented offscreen-readback follow-up).
 
 `pelt --engine headless --out <path> <file>`: run the pipeline windowless
 (pelt-live's lib already proves GPU-free runs), emit **both** a netrender
@@ -265,12 +265,15 @@ doesn't expose).
 
 ### V6 — Shed the loop: pelt-surface as meerkat's workbench pane (the module)
 
-**Status: Gated** — the serval half is ready: the standalone pelt surface lib
-works unchanged (V5), and the tile-tree contract is the only seam (`pelt-core`'s
-`ContentSource` already names the `ExternalTexture(key)` lane). Blocked on three
-things, none of them new serval *components*: (1) the **`external_texture` element
-view in xilem-serval** — still absent (grep: 0 matches), the shared gate the
-scrying plan and the input-spine companion also wait on; (2) **meerkat hosting
+**Status: Gated (serval side done; meerkat wiring next)** — the serval half is
+ready: the standalone pelt surface lib works unchanged (V5), the tile-tree contract
+is the only seam (`pelt-core`'s `ContentSource` already names the
+`ExternalTexture(key)` lane), and gate (1) is now **resolved** — the
+**`external_texture` element view in xilem-serval** landed (`a8832e2762a`), the
+shared primitive the scrying plan and the input-spine companion also wanted (an
+`<external-texture key>` replaced leaf that paint emits as a `DrawExternalTexture`
+compositor pass). The two remaining gates are pure meerkat-side wiring (no new
+serval components): (2) **meerkat hosting
 `TileSurface`** in its workbench pane (today it renders tiles through platen-view's
 own `WorkbenchScene`, not the pelt surface; meerkat doesn't yet depend on
 `pelt-core`/`pelt-desktop`); (3) the **`tree_projection` → `TileTree` mapping** in
