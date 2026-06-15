@@ -239,6 +239,18 @@ impl TileSurface {
         surface
     }
 
+    /// Layer a host theme over the default tile CSS — the seam [`DEFAULT_TILE_CSS`]
+    /// anticipates ("a theme layers over it, like the chrome's"). The default stays the
+    /// base sheet (`sheets[0]`); this replaces any prior host theme, so a host can call
+    /// it every time it (re)builds the surface or when its theme changes without the
+    /// sheets accumulating. Later sheets win the cascade at equal specificity, so the
+    /// theme need only restate the properties it overrides (e.g. the panel background on
+    /// `.tile-content`, the tab-bar / active-tab colors).
+    pub fn set_theme(&mut self, css: impl Into<String>) {
+        self.sheets.truncate(1); // keep DEFAULT_TILE_CSS as the base
+        self.sheets.push(css.into());
+    }
+
     /// Ensure a [`LoadedDocument`] exists for every document-lane tile currently in the
     /// tree (and drop docs for tiles that are gone). Lazily loads new tiles.
     fn load_docs(&mut self) {
