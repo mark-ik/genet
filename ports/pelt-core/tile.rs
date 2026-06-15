@@ -66,6 +66,21 @@ pub struct Tile {
     pub id: TileId,
     pub title: String,
     pub content: ContentSource,
+    /// An optional tab tint the host owns. `None` (the default) leaves the tab to the
+    /// surface's tab styling; `Some` colors *this* tab so it can carry a host meaning of
+    /// its own — mere tints each tab to match its graph node's state + selection, so a
+    /// tab reads as its node. The surface renders it inline (overriding the tab CSS).
+    pub accent: Option<TabAccent>,
+}
+
+/// A host-owned tab tint: opaque sRGB `background` + `foreground` (label) bytes the
+/// surface paints inline on a tab, overriding the theme's tab colors. The host decides
+/// the meaning (mere: the node's activation/selection color); the contract just carries
+/// the two colors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TabAccent {
+    pub background: [u8; 3],
+    pub foreground: [u8; 3],
 }
 
 /// Where a tile's content comes from — the two lanes the surface composites. The
@@ -425,6 +440,7 @@ mod tests {
             id: TileId(id),
             title: url.to_string(),
             content: ContentSource::Document(DocumentRef(url.to_string())),
+            accent: None,
         }
     }
 
@@ -503,6 +519,7 @@ mod tests {
             id: TileId(9),
             title: "Settings".into(),
             content: ContentSource::Settings(SettingsRef("pelt/appearance".into())),
+            accent: None,
         };
         assert!(matches!(tile.content, ContentSource::Settings(_)));
     }

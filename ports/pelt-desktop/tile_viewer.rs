@@ -22,12 +22,14 @@ fn tree_from_urls(urls: &[String]) -> TileTree {
         id: TileId(id),
         title: crate::tile_surface::tile_title(&urls[index]),
         content: ContentSource::Document(DocumentRef(urls[index].clone())),
+        accent: None,
     };
     match urls.len() {
         0 => TileTree::single(Tile {
             id: TileId(1),
             title: "blank".into(),
             content: ContentSource::Document(DocumentRef("about:blank".into())),
+            accent: None,
         }),
         1 => TileTree::single(tile(0, 1)),
         2 => TileTree::split(

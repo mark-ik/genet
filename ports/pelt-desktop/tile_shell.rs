@@ -277,6 +277,7 @@ mod tests {
             id: TileId(id),
             title: format!("tab{id}"),
             content: ContentSource::Document(DocumentRef(format!("data:text/html,{html}"))),
+            accent: None,
         }
     }
 

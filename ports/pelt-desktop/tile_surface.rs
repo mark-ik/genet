@@ -133,10 +133,22 @@ fn render_stack(stack: &TabStack, path: &[usize]) -> TileView {
                     s.pending.push(TileEvent::Closed(id));
                 },
             );
+            // A host accent paints this tab inline (background + label color), overriding
+            // the theme's tab CSS — mere tints each tab to match its node. Empty otherwise,
+            // so the tab keeps the default styling.
+            let style = match tile.accent {
+                Some(a) => format!(
+                    "background-color: rgb({}, {}, {}); color: rgb({}, {}, {});",
+                    a.background[0], a.background[1], a.background[2],
+                    a.foreground[0], a.foreground[1], a.foreground[2],
+                ),
+                None => String::new(),
+            };
             Box::new(on_click(
                 el::<_, TileState, ()>("div", (label, close))
                     .attr("class", class)
-                    .attr("data-tabid", id.0.to_string()),
+                    .attr("data-tabid", id.0.to_string())
+                    .attr("style", style),
                 move |s: &mut TileState, _: PointerClick| s.pending.push(TileEvent::Activated(id)),
             )) as TileView
         })
@@ -676,6 +688,7 @@ mod tests {
             id: TileId(id),
             title: format!("tab{id}"),
             content: ContentSource::Document(DocumentRef(format!("data:text/html,{html}"))),
+            accent: None,
         }
     }
 
@@ -684,6 +697,7 @@ mod tests {
             id: TileId(id),
             title: format!("actor{id}"),
             content: ContentSource::ExternalTexture(TextureKey(key)),
+            accent: None,
         }
     }
 
