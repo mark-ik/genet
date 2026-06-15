@@ -11,7 +11,7 @@
 mod profile;
 mod static_viewer;
 
-#[cfg(feature = "viewer")]
+#[cfg(feature = "tile-surface")]
 mod document;
 
 #[cfg(feature = "netfetch")]
@@ -32,10 +32,10 @@ mod chrome;
 #[cfg(all(feature = "viewer", feature = "chrome"))]
 mod chrome_viewer;
 
-#[cfg(feature = "tiles")]
+#[cfg(feature = "tile-surface")]
 mod tile_surface;
 
-#[cfg(feature = "tiles")]
+#[cfg(feature = "tile-surface")]
 mod tile_shell;
 
 #[cfg(feature = "tiles")]
@@ -46,7 +46,7 @@ mod tile_viewer;
 /// inline run, and document metadata stays unpainted. Shared by the static
 /// ([`document`]) and scripted ([`scripted`]) loaders so the two cannot drift. (V1; a
 /// fuller UA sheet is a follow-up.)
-#[cfg(any(feature = "viewer", feature = "scripted"))]
+#[cfg(any(feature = "tile-surface", feature = "scripted"))]
 pub(crate) const STRUCTURAL_SHEET: &[&str] = &[
     "html, body, div, p, h1, h2, h3, h4, h5, h6, ul, ol, li, dl, dt, dd, \
      section, article, header, footer, nav, main, aside, figure, figcaption, \
@@ -85,7 +85,7 @@ pub use smoke_wayland::{
     run_wayland_subsurface_present_smoke, WaylandPresentSmokeConfig, WaylandPresentSmokeOutcome,
 };
 pub use static_viewer::{StaticViewerConfig, StaticViewerOutcome, run_static_viewer};
-#[cfg(feature = "viewer")]
+#[cfg(feature = "tile-surface")]
 pub use document::{ClickOutcome, LoadedDocument, LocalFetcher, resolve_href};
 #[cfg(feature = "viewer")]
 pub use headless::{
@@ -99,9 +99,9 @@ pub use scripted_viewer::run_scripted_viewer;
 pub use chrome::{Chrome, ChromeIntent, ChromeState, StripSide};
 #[cfg(all(feature = "viewer", feature = "chrome"))]
 pub use chrome_viewer::run_chrome_viewer;
-#[cfg(feature = "tiles")]
+#[cfg(feature = "tile-surface")]
 pub use tile_shell::TileShell;
-#[cfg(feature = "tiles")]
+#[cfg(feature = "tile-surface")]
 pub use tile_surface::{DividerHit, TileFrame, TileLayer, TileSurface};
 #[cfg(feature = "tiles")]
 pub use tile_viewer::run_tile_viewer;

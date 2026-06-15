@@ -20,7 +20,7 @@ use crate::{StaticViewerOutcome, WindowingMode};
 fn tree_from_urls(urls: &[String]) -> TileTree {
     let tile = |index: usize, id: u64| Tile {
         id: TileId(id),
-        title: tile_title(&urls[index]),
+        title: crate::tile_surface::tile_title(&urls[index]),
         content: ContentSource::Document(DocumentRef(urls[index].clone())),
     };
     match urls.len() {
@@ -44,18 +44,6 @@ fn tree_from_urls(urls: &[String]) -> TileTree {
                 TileBranch::new(0.5, TileTree::single(tile(2, 3))),
             ],
         ),
-    }
-}
-
-/// A short tab title from a URL: the file stem, or the URL truncated.
-pub(crate) fn tile_title(url: &str) -> String {
-    let trimmed = url.split(['#', '?']).next().unwrap_or(url);
-    let name = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
-    let stem = name.strip_suffix(".html").unwrap_or(name);
-    if stem.is_empty() {
-        "tile".into()
-    } else {
-        stem.chars().take(24).collect()
     }
 }
 

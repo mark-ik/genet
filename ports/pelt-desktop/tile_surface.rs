@@ -384,7 +384,7 @@ impl TileSurface {
             return false;
         };
         self.docs.insert(id, doc);
-        let title = crate::tile_viewer::tile_title(&url);
+        let title = tile_title(&url);
         self.runner.update(|s| {
             if let Some(tile) = s.tree.tile_mut(id) {
                 tile.content = ContentSource::Document(DocumentRef(url.clone()));
@@ -610,6 +610,22 @@ fn absolute_rect(
         current = dom.parent(parent);
     }
     Some((x, y, w, h))
+}
+
+/// A short tab title from a content URL: the last path segment without its query /
+/// fragment or `.html` suffix, capped to 24 chars (`"tile"` when empty). A GPU-free
+/// helper shared by the surface (retitling a tile on a followed link) and the
+/// windowed tile viewer (`tile_viewer`); lives here so the surface lib does not
+/// reach back into the present-stack module.
+pub(crate) fn tile_title(url: &str) -> String {
+    let trimmed = url.split(['#', '?']).next().unwrap_or(url);
+    let name = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
+    let stem = name.strip_suffix(".html").unwrap_or(name);
+    if stem.is_empty() {
+        "tile".into()
+    } else {
+        stem.chars().take(24).collect()
+    }
 }
 
 #[cfg(test)]
