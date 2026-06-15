@@ -279,6 +279,32 @@ impl TileSurface {
         changed
     }
 
+    /// Replace the authoritative tile tree — the **host-driven** path. A host that owns
+    /// the arrangement (meerkat's `Workbench`) projects its state onto a `TileTree` and
+    /// sets it here each frame, instead of letting the surface's own reducer
+    /// ([`pump`](Self::pump)) be the writer. Reconciles the live document set to the new
+    /// tree; the next [`frame`](Self::frame) renders it. Pair with
+    /// [`take_events`](Self::take_events): the host reads the surface's gestures, applies
+    /// them to its own state, and re-projects through here — so the surface stays a
+    /// view, never a second authority.
+    pub fn set_tree(&mut self, tree: TileTree) {
+        self.runner.update(|s| s.tree = tree);
+        self.load_docs();
+    }
+
+    /// Drain the queued tile gestures (tab activate / close) **without** applying them —
+    /// the host-authority counterpart to [`pump`](Self::pump). A host that owns the
+    /// arrangement reads the events here, maps each onto its own state (meerkat's
+    /// `Workbench::activate` / `close_tile` / …), and re-projects via
+    /// [`set_tree`](Self::set_tree). `pump` (apply locally) and `take_events` (apply at
+    /// the host) are the two authority models the one surface serves — standalone pelt
+    /// pumps, an embedding host takes.
+    pub fn take_events(&mut self) -> Vec<TileEvent> {
+        let mut events = Vec::new();
+        self.runner.update(|s| events = std::mem::take(&mut s.pending));
+        events
+    }
+
     /// Render the frame at `width`×`height`: the frame scene plus a content layer per
     /// active tile (its rect + its document's scene). The host composites the frame,
     /// then each tile layer over its rect.
@@ -741,6 +767,48 @@ mod tests {
         } else {
             panic!("expected a stack");
         }
+    }
+
+    /// The host-authority path: a tab click queues a gesture that `take_events` returns
+    /// WITHOUT applying (the surface's tree is unchanged, for the host to apply to its
+    /// own state) — unlike `pump`, which applies locally. The two authority models the
+    /// one surface serves (standalone pelt pumps; an embedding host like meerkat takes).
+    #[test]
+    fn take_events_reports_gestures_without_applying() {
+        let stack =
+            TileTree::stack(vec![doc_tile(1, "<p>one</p>"), doc_tile(2, "<p>two</p>")], 0);
+        let mut surface = TileSurface::new(stack);
+        let _ = surface.frame(800, 600);
+        let tab = find_tab(&surface, "tab2").expect("tab2 exists");
+        surface.dispatch_click(tab, PointerClick::at((0.0, 0.0)));
+
+        let events = surface.take_events();
+        assert_eq!(events, vec![TileEvent::Activated(TileId(2))], "the gesture is reported");
+        if let TileTree::Stack(s) = surface.tree() {
+            assert_eq!(s.active, 0, "take_events does NOT apply — the host owns the tree");
+        } else {
+            panic!("expected a stack");
+        }
+        assert!(surface.take_events().is_empty(), "the queue was drained");
+    }
+
+    /// `set_tree` drives the surface from the host's authoritative tree: the rendered
+    /// frame reflects the host's new tree (its tiles), the document set reconciled.
+    #[test]
+    fn set_tree_drives_the_surface_from_the_host() {
+        let mut surface = TileSurface::new(TileTree::single(doc_tile(1, "<p>a</p>")));
+        let _ = surface.frame(800, 600);
+        surface.set_tree(TileTree::split(
+            SplitAxis::Row,
+            vec![
+                TileBranch::new(0.5, TileTree::single(doc_tile(2, "<p>b</p>"))),
+                TileBranch::new(0.5, TileTree::single(doc_tile(3, "<p>c</p>"))),
+            ],
+        ));
+        let frame = surface.frame(800, 600);
+        assert_eq!(frame.tiles.len(), 2, "the surface renders the host's new tree");
+        let ids: Vec<u64> = frame.tiles.iter().map(|t| t.tile.0).collect();
+        assert!(ids.contains(&2) && ids.contains(&3), "the host's new tiles, got {ids:?}");
     }
 
     /// A divider sits at the boundary between split children; resizing it rewrites the
