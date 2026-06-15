@@ -281,14 +281,23 @@ last gate is also now ready: the surface exposes external-texture tiles
 (`TileFrame::external_tiles` = `(tile, rect, key)`, `fdfd0b89850`), so a host
 composites an actor texture into a tile's rect exactly as meerkat already does for
 `WorkbenchScene` slots — the V6 mixed-content frame (a document tile beside an
-actor-texture tile) is renderable. The last gate is purely the meerkat-side
-product-render rewrite: (2) **meerkat hosting
-`TileSurface`** in its workbench pane (today it renders tiles through platen-view's
-own `WorkbenchScene`, not the pelt surface; meerkat doesn't yet depend on
-`pelt-core`/`pelt-desktop`); (3) the **`tree_projection` → `TileTree` mapping** in
-meerkat's reconcile loop (platen's `tree_projection` produces a `WorkbenchPlan`
-but nothing maps it onto the contract). The `WorkbenchScene` and `TileSurface`
-stay distinct by design — mere projects forme onto the simpler contract, not a
+actor-texture tile) is renderable. Everything up to the live render swap is now done:
+the GPU-free surface is **decoupled** from pelt's present stack (a `tile-surface`
+feature, `0705a366bcb`, so meerkat gets `TileSurface`/`TileShell`/`LoadedDocument`
+without `serval-winit-host`/`wgpu`); meerkat **consumes** it (mere `e415cfc`,
+`pelt-desktop { default-features = false, features = ["tile-surface"] }` +
+`pelt-core` — builds clean, shared `wgpu 29`/`winit 0.30` pins, no conflict); and
+the workbench-side projection landed too (`Workbench::to_tile_tree`, mere
+`6daf2f9`). The one remaining piece is the meerkat-internal **render-loop swap**:
+build the `TileTree` from the `Workbench`, render the `TileSurface` frame in place
+of `WorkbenchScene`, composite each member's actor texture into the
+`external_tiles` rects (the surface's key maps back to the member by its low 64
+bits — the logic meerkat already has for `.wb-slot` placements), and translate the
+surface's `TileEvent`s into `Workbench` mutations
+(`activate`/`close_tile`/`move_to_slot_of`/`set_weights`), re-projecting after. A
+live-render rewrite, verifiable by running meerkat. The `WorkbenchScene` and
+`TileSurface` stay distinct by design — mere projects forme onto the simpler
+contract, not a
 union.
 
 The embedding step. meerkat hosts the V5 surface lib as a pane: mere's
