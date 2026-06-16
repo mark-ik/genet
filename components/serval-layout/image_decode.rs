@@ -345,10 +345,11 @@ fn decode_data_uri(src: &str) -> Option<DecodedImage> {
 }
 
 /// Decode raw image-file bytes into RGBA8 pixels. Tries the `image`
-/// crate first (PNG / JPEG / GIF / etc. per its enabled features); on
+/// crate first (PNG / JPEG / GIF / ICO / etc. per its enabled features); on
 /// failure, falls back to SVG (`image` is raster-only). Returns `None`
-/// when neither can decode the bytes.
-fn decode_image_bytes(bytes: &[u8]) -> Option<DecodedImage> {
+/// when neither can decode the bytes. Public so a host can decode a favicon
+/// (`<link rel="icon">` bytes) into the RGBA8 a graph tile paints.
+pub fn decode_image_bytes(bytes: &[u8]) -> Option<DecodedImage> {
     if let Ok(dynamic) = image::load_from_memory(bytes) {
         let rgba = dynamic.to_rgba8();
         let (width, height) = rgba.dimensions();

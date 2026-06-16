@@ -65,12 +65,12 @@ pub use cascade::{
 pub use cell::ArcRefCell;
 pub use fragment::FragmentPlane;
 pub use host_loader::{
-    inline_stylesheets, inline_stylesheets_from_source, linked_stylesheets,
+    inline_stylesheets, inline_stylesheets_from_source, linked_icon_href, linked_stylesheets,
     linked_stylesheets_with_loader, LocalFileImageLoader, ResourceResolver,
 };
 pub use incremental::{Applied, IncrementalLayout};
 pub use image_decode::{
-    BackgroundImagePlane, DecodedImage, ImageLoader, ImagePlane, NoImageLoader,
+    decode_image_bytes, BackgroundImagePlane, DecodedImage, ImageLoader, ImagePlane, NoImageLoader,
 };
 pub use invalidate::{classify, coalesce, Invalidation};
 pub use layout::layout;

@@ -205,6 +205,39 @@ where
     sheets
 }
 
+/// The `href` of the page's favicon `<link rel="icon">` (also `rel="shortcut icon"`
+/// or any `rel` whose space-separated tokens include `icon`), raw and unresolved —
+/// the caller joins it against the document base. `None` when the head declares no
+/// icon link (the caller may fall back to `/favicon.ico`). A read-only DOM scan
+/// mirroring [`linked_stylesheets_with_loader`]; it fetches nothing.
+pub fn linked_icon_href<D>(dom: &D) -> Option<String>
+where
+    D: LayoutDom,
+{
+    let no_ns = Namespace::default();
+    let rel_attr = LocalName::from("rel");
+    let href_attr = LocalName::from("href");
+
+    let mut stack = vec![dom.document()];
+    while let Some(id) = stack.pop() {
+        let is_icon = dom.element_name(id).is_some_and(|q| q.local.as_ref() == "link")
+            && dom.attribute(id, &no_ns, &rel_attr).is_some_and(|rel| {
+                rel.split_ascii_whitespace().any(|t| t.eq_ignore_ascii_case("icon"))
+            });
+        if is_icon {
+            if let Some(href) = dom.attribute(id, &no_ns, &href_attr) {
+                if !href.trim().is_empty() {
+                    return Some(href.to_string());
+                }
+            }
+        }
+        for child in dom.dom_children(id) {
+            stack.push(child);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
