@@ -185,3 +185,64 @@ where
         paint_list_api::DeviceIntSize::new(width as i32, height as i32),
     )
 }
+
+/// Lay out at `(width, height)` (so `@media` / sizing cascade at the real viewport),
+/// then emit ONE vertical BAND of the document: the page scrolled to `band_y`, into a
+/// `band_h`-tall viewport. The translator culls paint commands outside the band
+/// viewport, so the returned list holds only the band's ops — a flat scene the host
+/// can rasterize and composite without overflowing the GPU / vello encode budget that
+/// a whole dense page would. Also returns the document scroll range
+/// (`(max_scroll_x, max_scroll_y)`), so the host knows the full height (for the scroll
+/// range) and which band to request next. The content host re-requests bands as the
+/// scroll moves (its windowing, done here because the host gets a flat scene it cannot
+/// window itself). `data:` images decode inline; `loader` resolves remote bytes.
+pub fn paint_list_band_from_layout_dom<D, L>(
+    dom: &D,
+    stylesheets: &[&str],
+    loader: &L,
+    width: u32,
+    height: u32,
+    band_y: u32,
+    band_h: u32,
+    scroll_offsets: &ScrollOffsets<D::NodeId>,
+) -> (ServalPaintList, (f32, f32))
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + Send + Sync + 'static,
+    L: ImageLoader,
+{
+    let mut styles = StylePlane::new();
+    run_cascade(
+        dom,
+        &mut styles,
+        euclid::default::Size2D::new(width as f32, height as f32),
+        stylesheets,
+        None,
+    );
+    let images = ImagePlane::decode_from_dom_with_loader(dom, loader);
+    let bg_images = BackgroundImagePlane::decode_from_cascade(dom, &styles, loader);
+    let viewport = taffy::Size {
+        width: taffy::AvailableSpace::Definite(width as f32),
+        height: taffy::AvailableSpace::Definite(height as f32),
+    };
+    let (fragments, built, text_ctx) = layout(dom, &styles, &images, viewport);
+    let scroll_range = crate::viewport::document_scroll_range(
+        dom,
+        &styles,
+        &fragments,
+        paint_list_api::DeviceIntSize::new(width as i32, height as i32),
+    );
+    let plist = emit_paint_list_scrolled(
+        dom,
+        &styles,
+        &fragments,
+        &built,
+        &text_ctx,
+        &images,
+        &bg_images,
+        scroll_offsets,
+        paint_list_api::DeviceIntSize::new(width as i32, band_h.max(1) as i32),
+        (0.0, band_y as f32),
+    );
+    (plist, scroll_range)
+}
