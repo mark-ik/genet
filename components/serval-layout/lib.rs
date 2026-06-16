@@ -55,8 +55,8 @@ pub use adapter::NodeRef;
 pub use adapter_stylo::StyleNodeRef;
 pub use box_tree::{build_box_tree, layout_via_box_tree, BoxTree};
 pub use caret::{
-    caret_byte_at_point, caret_byte_vertical, caret_rect, range_rects, selection_rects,
-    selection_style, CaretRect, TextRange,
+    caret_byte_at_point, caret_byte_vertical, caret_rect, find_text_rects, range_rects,
+    selection_rects, selection_style, CaretRect, TextRange,
 };
 pub use cascade::{
     apply_interaction, restyle_for_interaction, restyle_structural, restyle_with_snapshots,
@@ -253,4 +253,52 @@ where
         (0.0, band_y as f32),
     );
     (plist, scroll_range, links)
+}
+
+/// Find-in-page over a whole `LayoutDom`: cascade + decode + lay out at `(width,
+/// height)`, then return the highlight rects for every occurrence of `needle` in the
+/// laid-out text — one inner `Vec` per match (full-document px `[x0, y0, x1, y1]`,
+/// unscrolled, like the link rects). Case-insensitive. The HTML/serval lane hands the
+/// host a flat scene it cannot query, so the content actor runs this where the layout
+/// lives (parallel to [`paint_list_band_from_layout_dom`]) and ships the rects back for
+/// the host to highlight. `data:` images decode inline; `loader` resolves remote bytes
+/// (an `<img>`'s size can affect layout, so the same decode the band path uses).
+pub fn find_text_rects_from_layout_dom<D, L>(
+    dom: &D,
+    stylesheets: &[&str],
+    loader: &L,
+    width: u32,
+    height: u32,
+    needle: &str,
+) -> Vec<Vec<[f32; 4]>>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + Send + Sync + 'static,
+    L: ImageLoader,
+{
+    let mut styles = StylePlane::new();
+    run_cascade(
+        dom,
+        &mut styles,
+        euclid::default::Size2D::new(width as f32, height as f32),
+        stylesheets,
+        None,
+    );
+    // `<img>` sizes can shift text, so decode replaced images (as the band path does);
+    // CSS backgrounds do not affect text geometry, so they are skipped here.
+    let images = ImagePlane::decode_from_dom_with_loader(dom, loader);
+    let viewport = taffy::Size {
+        width: taffy::AvailableSpace::Definite(width as f32),
+        height: taffy::AvailableSpace::Definite(height as f32),
+    };
+    let (fragments, built, text_ctx) = layout(dom, &styles, &images, viewport);
+    caret::find_text_rects(dom, &built, &text_ctx, &fragments, needle)
+        .into_iter()
+        .map(|rects| {
+            rects
+                .into_iter()
+                .map(|r| [r.x, r.y, r.x + r.width, r.y + r.height])
+                .collect()
+        })
+        .collect()
 }

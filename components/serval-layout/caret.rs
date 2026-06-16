@@ -276,6 +276,61 @@ where
     rects
 }
 
+/// Every occurrence of `needle` in the document's laid-out text, as highlight rects
+/// in absolute (scene) coordinates — one inner `Vec` per match (a match wrapped across
+/// lines yields several rects). Document order: leaves in pre-order, matches in byte
+/// order within each leaf. Case-insensitive (ASCII fold). The find-in-page primitive.
+///
+/// It walks the inline-formatting leaves ([`collect_text_leaves`]), reconstructs each
+/// leaf's concatenated run text (the same byte space [`selection_rects`] /
+/// [`caret_rect`] index — both derive from the run concatenation order, so the offsets
+/// line up by construction), finds substring matches, and maps each match's byte range
+/// to per-line rects via [`selection_rects`]. An empty needle, or one that matches no
+/// laid-out text, yields no rects. Matches do not overlap (search resumes past each
+/// hit). The HTML/serval lane has no host-queryable packet, so the content actor runs
+/// this where the layout lives (see [`crate::find_text_rects_from_layout_dom`]).
+pub fn find_text_rects<D>(
+    dom: &D,
+    built: &BoxTree<D::NodeId>,
+    text_ctx: &TextMeasureCtx,
+    fragments: &FragmentPlane<D::NodeId>,
+    needle: &str,
+) -> Vec<Vec<CaretRect>>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let needle_lc = needle.to_ascii_lowercase();
+    if needle_lc.is_empty() {
+        return Vec::new();
+    }
+    let mut leaves = Vec::new();
+    collect_text_leaves(dom, built, text_ctx, dom.document(), &mut leaves);
+    let mut out = Vec::new();
+    for leaf in leaves {
+        let Some(&taffy_id) = built.node_map.get(&leaf) else {
+            continue;
+        };
+        let Some(content) = built.get_node_context(taffy_id) else {
+            continue;
+        };
+        // The leaf's concatenated run text — the byte space `selection_rects` indexes.
+        let text: String = content.runs.iter().map(|r| r.text.as_str()).collect();
+        let hay = text.to_ascii_lowercase();
+        let mut from = 0;
+        while let Some(rel) = hay[from..].find(&needle_lc) {
+            let start = from + rel;
+            let end = start + needle_lc.len();
+            let rects = selection_rects(dom, leaf, start, end, built, text_ctx, fragments);
+            if !rects.is_empty() {
+                out.push(rects);
+            }
+            from = end;
+        }
+    }
+    out
+}
+
 /// Pre-order (document-order) walk collecting nodes that own a cached
 /// `parley::Layout` — the inline-formatting leaves selection geometry addresses
 /// (and, via [`crate::link_harvest`], the leaves an `<a href>`'s text flows in).
@@ -552,6 +607,43 @@ mod tests {
         assert!(
             range_rects(&doc, collapsed, &built, &text_ctx, &fragments).is_empty(),
             "collapsed range → no rects"
+        );
+    }
+
+    /// `find_text_rects` locates every (case-insensitive) occurrence of a needle in
+    /// the laid-out text, in document order, each as a positive-area highlight rect;
+    /// an absent or empty needle yields nothing.
+    #[test]
+    fn find_text_rects_locates_case_insensitive_matches() {
+        let doc = StaticDocument::parse(
+            "<html><body><p>The quick brown fox.</p><p>Another Fox here.</p></body></html>",
+        );
+        let sheet = &["html, body, p { display: block; margin: 0; font-size: 20px; }"];
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&doc, &styles, &ImagePlane::new(), viewport);
+
+        // "fox" / "Fox" — one per paragraph, matched case-insensitively.
+        let matches = find_text_rects(&doc, &built, &text_ctx, &fragments, "FOX");
+        assert_eq!(matches.len(), 2, "two case-insensitive 'fox' matches, got {matches:?}");
+        for m in &matches {
+            let r = m.first().expect("each match has a rect");
+            assert!(r.width > 0.0 && r.height > 0.0, "positive-area highlight, got {r:?}");
+        }
+        // Document order: the second match (second paragraph) sits below the first.
+        assert!(matches[1][0].y > matches[0][0].y, "second match is below the first");
+
+        assert!(
+            find_text_rects(&doc, &built, &text_ctx, &fragments, "zebra").is_empty(),
+            "an absent needle finds nothing"
+        );
+        assert!(
+            find_text_rects(&doc, &built, &text_ctx, &fragments, "").is_empty(),
+            "an empty needle finds nothing"
         );
     }
 
