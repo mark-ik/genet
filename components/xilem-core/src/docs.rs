@@ -1,0 +1,116 @@
+// Copyright 2024 the Xilem Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Hide these docs from "general audiences" online.
+// but keep them available for developers of Xilem Core to browse.
+#![cfg_attr(docsrs, doc(hidden))]
+
+//! Fake implementations of Xilem traits for use within documentation examples and tests.
+//!
+//! Users of Xilem Core should not use these traits.
+//!
+//! The items defined in this trait will often be imported in doc comments in renamed form.
+//! This is mostly intended for writing documentation internally to Xilem Core.
+//!
+//! This module is not required to follow semver. It is public only for documentation purposes.
+//!
+//! # Examples
+//!
+//! ```
+//! /// A view to do something fundamental
+//! ///
+//! /// # Examples
+//! /// ```
+//! /// # use xilem_core::docs::{DocsView as WidgetView, State};
+//! /// use xilem_core::interesting_primitive;
+//! /// fn user_component() -> WidgetView<State> {
+//! ///     interesting_primitive()
+//! /// }
+//! ///
+//! /// ```
+//! fn interesting_primitive() -> InterestingPrimitive {
+//!    // ...
+//! #  InterestingPrimitive
+//! }
+//! # struct InterestingPrimitive;
+//! ```
+
+use crate::{NoElement, View, ViewPathTracker, ViewSequence, run_once};
+
+/// A type used for documentation
+#[derive(Debug)]
+pub enum Fake {}
+
+impl ViewPathTracker for Fake {
+    fn environment(&mut self) -> &mut crate::environment::Environment {
+        match *self {}
+    }
+    fn push_id(&mut self, _: crate::ViewId) {
+        match *self {}
+    }
+    fn pop_id(&mut self) {
+        match *self {}
+    }
+
+    fn view_path(&mut self) -> &[crate::ViewId] {
+        match *self {}
+    }
+}
+
+/// A version of [`View`] used for documentation.
+///
+/// This will often be imported by a different name in a hidden use item.
+///
+/// In most cases, that name will be `WidgetView`, as Xilem Core's documentation is
+/// primarily targeted at users of [Xilem](https://crates.io/crates/xilem/).
+pub trait DocsView<State: 'static, Action = ()>: View<State, Action, Fake> {}
+impl<V, State, Action> DocsView<State, Action> for V
+where
+    V: View<State, Action, Fake>,
+    State: 'static,
+{
+}
+
+/// A version of [`ViewSequence`] used for documentation.
+///
+/// This will often be imported by a different name in a hidden use item.
+///
+/// In most cases, that name will be `WidgetViewSequence`, as Xilem Core's documentation is
+/// primarily targeted at users of [Xilem](https://crates.io/crates/xilem/).
+pub trait DocsViewSequence<State: 'static, Action = ()>:
+    ViewSequence<State, Action, Fake, NoElement>
+{
+}
+
+impl<Seq, State: 'static, Action> DocsViewSequence<State, Action> for Seq where
+    Seq: ViewSequence<State, Action, Fake, NoElement>
+{
+}
+
+/// A state type usable in a component
+#[derive(Debug)]
+pub struct State;
+
+/// A minimal component.
+// TODO: Does this need to have the state argument?
+pub fn some_component<Action>(
+    _: &mut State,
+) -> impl DocsView<State, Action, Element = NoElement> + use<Action> {
+    // The view which does nothing already exists in `run_once`.
+    run_once(|| {})
+}
+
+/// A minimal component with generic State.
+pub fn some_component_generic<State: 'static, Action>(
+    _: &mut State,
+) -> impl DocsView<State, Action, Element = NoElement> + use<State, Action> {
+    // The view which does nothing already exists in `run_once`.
+    run_once(|| {})
+}
+
+/// A minimal component without any state.
+pub fn stateless_component<Action>() -> impl DocsView<(), Action, Element = NoElement> + use<Action>
+{
+    // The view which does nothing already exists in `run_once`.
+    run_once(|| {})
+}
