@@ -383,8 +383,9 @@ fn caret_band(layout: &Layout<ColorBrush>, byte: usize) -> (f32, f32) {
 
 /// Absolute border-box origin of `target`: walk from the document root,
 /// accumulating each ancestor's parent-relative `taffy::Layout.location`. `None`
-/// if `target` is unreachable / unlaid-out.
-fn absolute_origin<D>(
+/// if `target` is unreachable / unlaid-out. Shared with [`crate::link_harvest`] for
+/// placing an inline replaced box (an image link) in absolute coordinates.
+pub(crate) fn absolute_origin<D>(
     dom: &D,
     fragments: &FragmentPlane<D::NodeId>,
     target: D::NodeId,

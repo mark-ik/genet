@@ -33,9 +33,10 @@
 use std::hash::Hash;
 
 use layout_dom_api::LayoutDom;
+use parley::PositionedLayoutItem;
 
 use crate::box_tree::BoxTree;
-use crate::caret::{collect_text_leaves, selection_rects};
+use crate::caret::{absolute_origin, collect_text_leaves, selection_rects};
 use crate::fragment::FragmentPlane;
 use crate::incremental::anchor_href;
 use crate::text_measure::TextMeasureCtx;
@@ -93,7 +94,83 @@ where
     //    parent-relative fragment origins down the tree to absolute document px.
     boxed_anchor_rects(dom, fragments, dom.document(), (0.0, 0.0), &mut out);
 
+    // 3. Image-only inline anchors: an `<a href>` that wraps only a replaced `<img>`
+    //    while staying `inline` establishes no box and carries no text, so neither
+    //    pass above catches it. Harvest the image's positioned inline box instead.
+    image_anchor_rects(dom, fragments, built, text_ctx, &mut out);
+
     out
+}
+
+/// Harvest the rect of an inline replaced `<img>` that is the content of an inline
+/// `<a href>` (an image link — a logo / banner home-link). Such an anchor establishes
+/// no fragment box and carries no text, so the text pass and the boxed-anchor pass
+/// both miss it; its geometry is the image's positioned inline box in its formatting
+/// leaf's `parley::Layout` (the same box paint emits the `DrawImage` from). Boxed
+/// anchors are already covered by [`boxed_anchor_rects`], so only INLINE anchors (no
+/// fragment box of their own) are handled here.
+fn image_anchor_rects<D>(
+    dom: &D,
+    fragments: &FragmentPlane<D::NodeId>,
+    built: &BoxTree<D::NodeId>,
+    text_ctx: &TextMeasureCtx,
+    out: &mut Vec<(String, [f32; 4])>,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut leaves = Vec::new();
+    collect_text_leaves(dom, built, text_ctx, dom.document(), &mut leaves);
+    for leaf in leaves {
+        let Some(&taffy_id) = built.node_map.get(&leaf) else {
+            continue;
+        };
+        let (Some(layout), Some(content)) =
+            (text_ctx.layouts.get(&taffy_id), built.get_node_context(taffy_id))
+        else {
+            continue;
+        };
+        let (Some((ox, oy)), Some(frame)) =
+            (absolute_origin(dom, fragments, leaf), fragments.rect_of(leaf))
+        else {
+            continue;
+        };
+        // The leaf content-box origin — the space parley positions inline boxes in.
+        let content_x = ox + frame.border.left + frame.padding.left;
+        let content_y = oy + frame.border.top + frame.padding.top;
+        for line in layout.lines() {
+            for item in line.items() {
+                let PositionedLayoutItem::InlineBox(pbox) = item else {
+                    continue;
+                };
+                let Some(box_item) = content.boxes.get(pbox.id as usize) else {
+                    continue;
+                };
+                // Replaced `<img>` only (an inline-block is hit through its own
+                // fragments; links inside an inline-block are a follow-on).
+                if box_item.block.is_some() {
+                    continue;
+                }
+                let Some((anchor, href)) = enclosing_anchor(dom, box_item.source, leaf) else {
+                    continue;
+                };
+                // A boxed anchor's box already covers this (pass 2); only the
+                // box-less inline anchor needs the image rect.
+                if fragments.rect_of(anchor).is_some() {
+                    continue;
+                }
+                out.push((
+                    href,
+                    [
+                        content_x + pbox.x,
+                        content_y + pbox.y,
+                        content_x + pbox.x + pbox.width,
+                        content_y + pbox.y + pbox.height,
+                    ],
+                ));
+            }
+        }
+    }
 }
 
 /// The nearest `<a href>` at or above inline source `src` (stopping at the
@@ -199,6 +276,23 @@ mod tests {
             .iter()
             .any(|(_, r)| (r[2] - r[0] - 200.0).abs() < 1.0 && (r[3] - r[1] - 40.0).abs() < 1.0);
         assert!(has_box, "the 200x40 border box is harvested, got {links:?}");
+    }
+
+    /// An image-only inline `<a href>` (a logo / banner link, `<a><img></a>` with the
+    /// anchor staying `inline`) harvests the image's box — the case neither the text
+    /// pass nor the boxed-anchor pass catches.
+    #[test]
+    fn image_only_inline_anchor_harvests_the_image_box() {
+        let (doc, fragments, built, text_ctx) = lay(
+            "<html><body><p><a href=\"https://example.test/home\"><img width=\"40\" height=\"30\"></a></p></body></html>",
+            &["html, body, p { display: block; margin: 0; } img { width: 40px; height: 30px; }"],
+        );
+        let links = harvest_link_rects(&doc, &fragments, &built, &text_ctx);
+        let hit = links.iter().find(|(h, _)| h == "https://example.test/home");
+        assert!(hit.is_some(), "an image-only inline link harvests a rect, got {links:?}");
+        let (_, rect) = hit.unwrap();
+        assert!((rect[2] - rect[0] - 40.0).abs() < 2.0, "~40px wide image box, got {}", rect[2] - rect[0]);
+        assert!((rect[3] - rect[1] - 30.0).abs() < 2.0, "~30px tall image box, got {}", rect[3] - rect[1]);
     }
 
     /// A page with no links harvests nothing.
