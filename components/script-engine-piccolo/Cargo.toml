@@ -18,8 +18,10 @@ path = "lib.rs"
 
 [dependencies]
 script-engine-api = { path = "../script-engine-api" }
-# The vendored piccolo fork (Code/crates/piccolo, 0.3.3, MIT).
-piccolo = { path = "../../../../crates/piccolo" }
+# The piccolo fork (github.com/mark-ik/piccolo, master, 0.3.3, MIT). Git dep so
+# a bare clone resolves; for local piccolo dev, the gitignored
+# `Code/.cargo/config.toml` `paths` override redirects this to the local checkout.
+piccolo = { git = "https://github.com/mark-ik/piccolo", branch = "master" }
 # gc-arena, pinned to the *same* rev piccolo uses (no skew), for the in-arena
 # weak reflector cache (`GcWeak`). This is the only direct gc-arena dep in
 # serval before G3, and it is local to the piccolo backend; the workspace-wide

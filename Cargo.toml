@@ -12,6 +12,7 @@ members = [
     "components/serval-scripted-dom",
     "components/serval-scripted",
     "components/serval-static-html",
+    "components/xilem-core",
     "components/xilem-serval",
     "components/serval-winit-host",
     "components/serval-render",
@@ -190,12 +191,14 @@ parking_lot = { version = "0.12", features = ["serde"] }
 parley = { version = "0.10.0", default-features = true }
 pelt-core = { version = "=0.2.0", path = "ports/pelt-core" }
 pelt-desktop = { version = "=0.2.0", path = "ports/pelt-desktop" }
-netrender = { path = "../netrender/netrender" }
-netrender_device = { path = "../netrender/netrender_device" }
-# (The Masonry-era `xilem` / `masonry` / `masonry_winit` git deps left with
-# pelt-viewer's retirement, 2026-06-12; their only consumer was the retired
-# viewer. The fork's one remaining serval consumer is `xilem_core`, git-dep'd
-# directly by `components/xilem-serval`.)
+netrender = { git = "https://github.com/mark-ik/webrender-wgpu.git", branch = "main" }
+netrender_device = { git = "https://github.com/mark-ik/webrender-wgpu.git", branch = "main" }
+# (No xilem git deps remain. The Masonry-era `xilem` / `masonry` /
+# `masonry_winit` git deps left with pelt-viewer's retirement, 2026-06-12. The
+# last survivor, `xilem_core`, was vendored into `components/xilem-core` (a
+# verbatim Apache-2.0 mirror of upstream main) and is consumed by
+# `components/xilem-serval` via a path dep, so a bare serval clone needs no
+# mark-ik/xilem fork checkout.)
 peniko = "0.6"
 percent-encoding = "2.3"
 pkcs8 = { version = "0.10", features = ["rand_core"] }
@@ -315,10 +318,10 @@ paint = { package = "servo-paint", version = "=0.2.0", path = "components/paint"
 paint_api = { package = "servo-paint-api", version = "=0.2.0", path = "components/shared/paint" }
 # Moved to the netrender workspace as a neutral, engine-agnostic crate
 # (extraction plan 2026-05-20). serval is now a consumer, not the owner.
-paint_list_api = { path = "../netrender/paint_list_api" }
+paint_list_api = { git = "https://github.com/mark-ik/webrender-wgpu.git", branch = "main" }
 # The PaintCmd -> netrender::Scene translator; also lives in the netrender
 # workspace so any engine (serval, nematic, inker) can reuse the lowering.
-paint_list_render = { path = "../netrender/paint_list_render" }
+paint_list_render = { git = "https://github.com/mark-ik/webrender-wgpu.git", branch = "main" }
 paint_types = { package = "servo-paint-types", version = "=0.2.0", path = "components/shared/paint-types" }
 pixels = { package = "servo-pixels", version = "=0.2.0", path = "components/pixels" }
 profile = { package = "servo-profile", version = "=0.2.0", path = "components/profile" }
@@ -442,31 +445,24 @@ gpu-allocator = { path = "support/patches/gpu-allocator" }
 # redirected; the workspace's taffy 0.10.1 is unaffected. See
 # docs/2026-05-31_css_rendering_conformance_plan.md (floats × BFC).
 taffy = { path = "support/patches/taffy" }
-# Nova fork (serval-embedder branch), vendored locally at `Code/crates/nova`
-# (same HEAD as the mark-ik/nova serval-embedder branch). Carries the
+# Nova fork (serval-embedder branch on github.com/mark-ik/nova). Carries the
 # EmbedderObject native-data patch plus the reflector-liveness weak-ref API
 # (`EmbedderObject::into_weak_ref`/`from_weak_ref` + `clear_weak_ref_kept_objects`,
-# G1 in docs/2026-06-11_gc_arena_dom_plan.md). Local path (like the vendored boa
-# and piccolo forks) so the patch builds without a push. Same bare-clone
-# trade-off as boa: a bare serval clone needs the sibling `Code/crates/nova`
-# checkout; to restore bare-clone resolution, push the patch to mark-ik/nova
-# `serval-embedder` and switch back to `{ git = ..., branch = "serval-embedder" }`.
-nova_vm = { path = "../../crates/nova/nova_vm" }
-# Boa fork (serval branch) tracking boa-upstream main (the 1.0.0-dev line),
-# vendored locally at `Code/crates/boa` (same HEAD as the mark-ik/boa serval
-# branch) so serval can carry an additive source patch — `JsObject::downgrade()`
+# G1 in docs/2026-06-11_gc_arena_dom_plan.md). Git dep so a bare clone resolves
+# without the sibling checkout; for local nova dev, the gitignored
+# `Code/.cargo/config.toml` `paths` override redirects this to `../../crates/nova`.
+nova_vm = { git = "https://github.com/mark-ik/nova", branch = "serval-embedder" }
+# Boa fork (serval branch on github.com/mark-ik/boa) tracking boa-upstream main
+# (the 1.0.0-dev line). Carries an additive source patch — `JsObject::downgrade()`
 # + `WeakJsObject`, for the reflector-liveness weak cache (G1 in
-# docs/2026-06-11_gc_arena_dom_plan.md). Local path (like the vendored piccolo
-# fork) so the patch builds without a publish/push; boa_engine pulls its sibling
-# boa_* crates via boa's own intra-repo path deps, so only boa_engine + boa_gc
-# are named from crates.io (by script-engine-boa) and need patching.
-# Trade-off vs the old git pin: a *bare* clone of serval alone no longer
-# resolves boa — it needs the sibling `Code/crates/boa` checkout (already true
-# for `Code/crates/piccolo`). To restore bare-clone resolution, push the patch
-# to mark-ik/boa `serval` and switch these two back to `{ git = ..., branch =
-# "serval" }`. See docs/2026-05-20_serval_script_engine_plan.md.
-boa_engine = { path = "../../crates/boa/core/engine" }
-boa_gc = { path = "../../crates/boa/core/gc" }
+# docs/2026-06-11_gc_arena_dom_plan.md). boa_engine pulls its sibling boa_* crates
+# via boa's own intra-repo path deps, so only boa_engine + boa_gc are named from
+# crates.io (by script-engine-boa) and need patching. Git deps so a bare clone
+# resolves; for local boa dev, the gitignored `Code/.cargo/config.toml` `paths`
+# override redirects these to `../../crates/boa`.
+# See docs/2026-05-20_serval_script_engine_plan.md.
+boa_engine = { git = "https://github.com/mark-ik/boa.git", branch = "serval" }
+boa_gc = { git = "https://github.com/mark-ik/boa.git", branch = "serval" }
 # stylo_taffy (serval-layout) depends on crates.io `stylo`/`stylo_atoms`
 # `^0.17`. serval pins the same crates from the servo/stylo git rev, and
 # `stylo` declares `links = "servo_style_crate"` (only one Stylo allowed
