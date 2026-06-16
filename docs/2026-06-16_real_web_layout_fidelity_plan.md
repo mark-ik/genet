@@ -34,12 +34,17 @@ cheapest large visual win.
   `figure`/`pre`/`dd`) are correct in the *full* box-tree path (a stacked-`<p>`
   gap test confirmed adjacent-sibling collapse), but adding them to the UA
   sheet exposed two divergences that a sheet edit cannot fix:
-  1. **Root-child `body` margin.** The full box-tree root handling drops
-     `body`'s own margin (a `<div>` at the body origin lands at x=0, not x=8),
-     while `IncrementalLayout` applies it. The two paths disagree on the
-     document gutter. Also entangled with the deliberate `body { width: 100% }`
-     (defended in `ua_defaults.rs` as preventing phantom document scroll);
-     auto-width + margin is the standards-correct shape.
+  1. **Root-element margin.** The full box-tree root handling drops the root's
+     child margin. Runtime probe (`box_tree` `lay`): with `body { margin: 8px }`,
+     a `<div>` at the body origin lands at **(0, 0)**, not (8, 8) — body's own
+     left margin is dropped and its top margin over-collapses through to the
+     ICB. One level deeper a margined `<div>` *inside* body lands at **(8, 0)**:
+     the left margin applies correctly, the top still collapses through. So the
+     bug is specific to the **root element's child** (body), the classic
+     "root-element margins don't collapse with the viewport" special case real
+     browsers implement but serval doesn't yet. It is *not* the `body { width:
+     100% }` over-constraint (auto-width probes the same (0,0)). `IncrementalLayout`
+     applies body's margin, so the two paths also disagree on the gutter.
   2. **First-child margin collapse at the splice boundary.** In full-document
      layout a first child's top margin collapses *through* its block parent
      (html → body → p, so the p lands at y=0). `IncrementalLayout::apply_structural`
@@ -57,8 +62,10 @@ cheapest large visual win.
 **Slice (revised):**
 
 1. Done: heading scale + weight (shipped).
-2. Engine fix A — `body`/root-child margin in the full box-tree root handling
-   (and reconcile with `body { width: 100% }`; auto-width is the spec shape).
+2. Engine fix A — the root-element-margin special case in the full box-tree
+   root handling: the root's child (body) margin must apply on all edges and
+   not collapse through to the ICB (not a `width` issue; auto-width probes the
+   same (0,0)).
 3. Engine fix B — first-child margin collapse *through* a block parent in
    `IncrementalLayout`'s subtree splice (the `SubtreeView` boundary must carry
    the collapse context the subtree root sits in within the full document).
