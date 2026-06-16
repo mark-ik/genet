@@ -11,10 +11,16 @@
 //! the root to fill the viewport. Without that, an HTML document
 //! parsed through Stylo lays out as one long inline stream.
 //!
-//! This is the minimal subset of WHATWG / WebKit's UA stylesheet
-//! that gets a serval document close enough to look like HTML.
-//! User stylesheets override (later origin entries win the cascade);
-//! Stylo's `Origin::UserAgent` ordering handles that automatically.
+//! This is the load-bearing subset of WHATWG / WebKit's UA stylesheet
+//! that gets a serval document close enough to look like HTML: the
+//! `display` flips plus the collapse-free metric defaults real browsers
+//! ship (the `<h1>`..`<h6>` font-size scale + weight). Those matter
+//! because a thin UA sheet shifts *every* box, so the page looks wrong
+//! before any harder feature does. The spec block-flow *margins* are not
+//! here yet (they need a margin-collapse-parity engine fix first — see
+//! the NOTE by the heading rules). User stylesheets override (later
+//! origin entries win the cascade); Stylo's `Origin::UserAgent` ordering
+//! handles that automatically.
 //!
 //! Inspired by:
 //! - <https://html.spec.whatwg.org/multipage/rendering.html>
@@ -70,6 +76,35 @@ table, caption, thead, tbody, tfoot, tr {
    per-run weight/style of inline formatting contexts. */
 b, strong { font-weight: bold; }
 i, em, cite, var, dfn, address { font-style: italic; }
+
+/* Heading scale + weight (WHATWG rendering §15.3.3 / CSS2.2 §B). Without
+   these every heading renders at body size and un-bolded — the biggest
+   single "every box shifts" gap that is also collapse-free (font-size and
+   weight change a box's content, not its margins, so the full and
+   incremental layout paths agree). The heading *margins* the spec also
+   ships are deferred with the rest of the block margins (see NOTE below).
+   Nested-section heading rescaling (`:is(article,…) h1`) is also deferred. */
+h1 { font-size: 2em;    font-weight: bold; }
+h2 { font-size: 1.5em;  font-weight: bold; }
+h3 { font-size: 1.17em; font-weight: bold; }
+h4 {                    font-weight: bold; }
+h5 { font-size: 0.83em; font-weight: bold; }
+h6 { font-size: 0.67em; font-weight: bold; }
+
+/* NOTE: the spec block-flow margins (`p`/`h1`..`h6`/`ul`/`ol`/`blockquote`/
+   `figure`/`pre`/`dd` and the `body { margin: 8px }` gutter) are deliberately
+   NOT set here yet. They are correct in the *full* layout path (verified) but
+   expose two engine divergences that need fixing first, not a sheet line:
+     1. `body`'s margin is dropped by the full box-tree root handling (a
+        root-child margin gap), while IncrementalLayout applies it — the two
+        paths disagree on the document gutter.
+     2. A first child's top margin collapses *through* its block parent in
+        full-document layout (html → body → p), but NOT in IncrementalLayout's
+        splice, which re-lays-out the subtree in isolation (a `SubtreeView`
+        root establishes its own formatting context). So adding block margins
+        mis-positions the first spliced child relative to a full recompute.
+   Both are tracked in the real-web layout fidelity plan (UA-sheet item) as a
+   margin-collapse-parity fix that must land before the UA margins do. */
 
 /* Lists indent so their markers (emitted by paint as a hanging bullet /
    ordinal) have room to sit in the padding, left of each item's content.

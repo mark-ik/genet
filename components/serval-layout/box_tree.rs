@@ -1087,6 +1087,29 @@ mod tests {
         assert!(approx(b.location.y, 40.0), ".b stacks below .a (y=40), got y={}", b.location.y);
     }
 
+    /// UA default heading scale: `h1 { font-size: 2em }` makes an `<h1>`'s line
+    /// box about twice as tall as a `<p>`'s for the same text, proving the
+    /// font-size scale cascades into layout (not just `display: block`).
+    #[test]
+    fn ua_heading_scale_makes_h1_taller_than_p() {
+        let (doc, frags) = lay(
+            "<html><body><h1>Aa</h1><p>Aa</p></body></html>",
+            &[],
+        );
+        let h1 = frags
+            .rect_of(find_all(&doc, html5ever::local_name!("h1"))[0])
+            .expect("h1 fragment");
+        let p = frags
+            .rect_of(find_all(&doc, html5ever::local_name!("p"))[0])
+            .expect("p fragment");
+        assert!(
+            h1.size.height > p.size.height * 1.5,
+            "h1 (2em) line box should dwarf p (1em): h1={}, p={}",
+            h1.size.height,
+            p.size.height
+        );
+    }
+
     /// `::before` / `::after` with string `content` generate inline runs around
     /// the element's own content, ordered before/after it, each carrying the
     /// pseudo's *own* cascaded style (not the element's).

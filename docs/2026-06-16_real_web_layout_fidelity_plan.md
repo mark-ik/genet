@@ -21,16 +21,49 @@ harder feature matters. A page with wrong `<h1>`/`<p>`/`<ul>` margins and
 heading scale looks broken even if tables and floats were perfect. This is the
 cheapest large visual win.
 
-**State:** `ua_defaults.rs` ships the structural display rules
-(`ua_defaults.rs:64-66` give block boxes; inline emphasis weights are present)
-but the metric defaults that browsers ship (the `<h1>`..`<h6>` font-size scale
-and margins, `<p>` margins, list indentation and markers, `<blockquote>` /
-`<pre>` margins, default `<body>` margin) are the area to fill in and check
-against a reference UA sheet.
+**State (updated 2026-06-16):** split into two halves once attempted.
 
-**Slice:** extend `ua_defaults.rs` toward the HTML standard's rendering-section
-UA sheet; assert a handful of computed-margin / computed-font-size values in
-inline tests so the sheet cannot silently regress. No engine change.
+- **Heading scale + weight — DONE.** `ua_defaults.rs` now ships the
+  `<h1>`..`<h6>` `font-size` scale (2em … 0.67em) + `font-weight: bold`. These
+  are *collapse-free* (font-size/weight change a box's content, not its
+  margins), so the full and incremental layout paths agree. Verified by
+  `box_tree.rs` `ua_heading_scale_makes_h1_taller_than_p`. Headings were
+  previously body-sized and un-bolded.
+- **Block-flow margins — BLOCKED on a margin-collapse-parity engine fix.** The
+  spec margins (`body { margin: 8px }`, `p`/`h1`..`h6`/`ul`/`ol`/`blockquote`/
+  `figure`/`pre`/`dd`) are correct in the *full* box-tree path (a stacked-`<p>`
+  gap test confirmed adjacent-sibling collapse), but adding them to the UA
+  sheet exposed two divergences that a sheet edit cannot fix:
+  1. **Root-child `body` margin.** The full box-tree root handling drops
+     `body`'s own margin (a `<div>` at the body origin lands at x=0, not x=8),
+     while `IncrementalLayout` applies it. The two paths disagree on the
+     document gutter. Also entangled with the deliberate `body { width: 100% }`
+     (defended in `ua_defaults.rs` as preventing phantom document scroll);
+     auto-width + margin is the standards-correct shape.
+  2. **First-child margin collapse at the splice boundary.** In full-document
+     layout a first child's top margin collapses *through* its block parent
+     (html → body → p, so the p lands at y=0). `IncrementalLayout::apply_structural`
+     (`incremental.rs:875`) re-lays-out the changed subtree in isolation via
+     `SubtreeView::new(dom, root)`; a subtree root establishes its own
+     formatting context, so that margin does NOT collapse through, and the
+     first spliced child is mis-positioned relative to a full recompute
+     (broke `incremental::tests::{inner_html_replace_splices_matching_full,
+     structural_change_splices_incrementally}` the moment `p` had a margin).
+
+  So "UA-sheet completeness" is NOT the self-contained, no-engine-change task it
+  looked like: the block margins are gated on margin-collapse parity across the
+  full and incremental paths.
+
+**Slice (revised):**
+
+1. Done: heading scale + weight (shipped).
+2. Engine fix A — `body`/root-child margin in the full box-tree root handling
+   (and reconcile with `body { width: 100% }`; auto-width is the spec shape).
+3. Engine fix B — first-child margin collapse *through* a block parent in
+   `IncrementalLayout`'s subtree splice (the `SubtreeView` boundary must carry
+   the collapse context the subtree root sits in within the full document).
+4. Only then: add the spec block margins to `ua_defaults.rs`, with the existing
+   stacked-block geometry tests extended to first-child cases on both paths.
 
 ---
 
@@ -127,11 +160,15 @@ and `::first-line` are the most commonly hit on real pages.
 
 ## Suggested order
 
-1 (UA sheet) is the cheapest large win and unblocks honest visual comparison
-for everything else, so do it first. Then 3 (`white-space:pre`, small and
-self-contained) and 2 (tables, large but high-frequency). 4 (float wrap) and 6
-(flex/grid hardening) are the precision passes. 5 and 7 are promoted by target
-shift (interactive pages; visual polish), not by being next in line.
+1's heading half is done; its margin half is now the highest-value *engine*
+work (the two margin-collapse-parity fixes), since margins shift every box and
+unblock honest visual comparison. In parallel, 3 (`white-space:pre`, small and
+self-contained) and 2 (tables, large but high-frequency) need no margin work.
+4 (float wrap) and 6 (flex/grid hardening) are the precision passes. 5 and 7
+are promoted by target shift (interactive pages; visual polish), not by being
+next in line.
 
-Each item is independently shippable and individually testable; none requires a
-planes-architecture change.
+Most items are independently shippable and individually testable, and none
+requires a planes-architecture change. The exception surfaced by 1: the UA
+block margins are coupled to margin-collapse correctness across the full and
+incremental layout paths, so they are an engine fix, not a sheet edit.
