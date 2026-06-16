@@ -277,8 +277,9 @@ where
 }
 
 /// Pre-order (document-order) walk collecting nodes that own a cached
-/// `parley::Layout` — the inline-formatting leaves selection geometry addresses.
-fn collect_text_leaves<D>(
+/// `parley::Layout` — the inline-formatting leaves selection geometry addresses
+/// (and, via [`crate::link_harvest`], the leaves an `<a href>`'s text flows in).
+pub(crate) fn collect_text_leaves<D>(
     dom: &D,
     built: &BoxTree<D::NodeId>,
     text_ctx: &TextMeasureCtx,

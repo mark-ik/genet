@@ -40,6 +40,7 @@ mod incremental;
 mod inline_hit;
 mod invalidate;
 mod layout;
+mod link_harvest;
 mod paint_emit;
 mod paint_stacking;
 mod serval_lane;
@@ -193,9 +194,12 @@ where
 /// can rasterize and composite without overflowing the GPU / vello encode budget that
 /// a whole dense page would. Also returns the document scroll range
 /// (`(max_scroll_x, max_scroll_y)`), so the host knows the full height (for the scroll
-/// range) and which band to request next. The content host re-requests bands as the
-/// scroll moves (its windowing, done here because the host gets a flat scene it cannot
-/// window itself). `data:` images decode inline; `loader` resolves remote bytes.
+/// range) and which band to request next, and every `<a href>`'s hit rect(s) +
+/// href in **full-document px** (`[x0, y0, x1, y1]`, unscrolled — band-independent,
+/// so the host hit-tests a click against them after adding the card's scroll; see
+/// [`link_harvest`]). The content host re-requests bands as the scroll moves (its
+/// windowing, done here because the host gets a flat scene it cannot window itself).
+/// `data:` images decode inline; `loader` resolves remote bytes.
 pub fn paint_list_band_from_layout_dom<D, L>(
     dom: &D,
     stylesheets: &[&str],
@@ -205,7 +209,7 @@ pub fn paint_list_band_from_layout_dom<D, L>(
     band_y: u32,
     band_h: u32,
     scroll_offsets: &ScrollOffsets<D::NodeId>,
-) -> (ServalPaintList, (f32, f32))
+) -> (ServalPaintList, (f32, f32), Vec<(String, [f32; 4])>)
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash + Send + Sync + 'static,
@@ -232,6 +236,10 @@ where
         &fragments,
         paint_list_api::DeviceIntSize::new(width as i32, height as i32),
     );
+    // Harvest the link rects off the same layout pass (full-document px, band-
+    // independent): the flat scene the host gets is not queryable, so it hit-tests
+    // a click against this table instead of the scene.
+    let links = crate::link_harvest::harvest_link_rects(dom, &fragments, &built, &text_ctx);
     let plist = emit_paint_list_scrolled(
         dom,
         &styles,
@@ -244,5 +252,5 @@ where
         paint_list_api::DeviceIntSize::new(width as i32, band_h.max(1) as i32),
         (0.0, band_y as f32),
     );
-    (plist, scroll_range)
+    (plist, scroll_range, links)
 }

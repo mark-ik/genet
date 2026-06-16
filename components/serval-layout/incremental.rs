@@ -956,8 +956,9 @@ fn anchor_fragment<D: LayoutDom>(dom: &D, node: D::NodeId) -> Option<String> {
 }
 
 /// The full, non-empty `href` of an `<a>` element (in-page or cross-document), or
-/// `None` when `node` is not such a link. Behind [`IncrementalLayout::link_href_at`].
-fn anchor_href<D: LayoutDom>(dom: &D, node: D::NodeId) -> Option<String> {
+/// `None` when `node` is not such a link. Behind [`IncrementalLayout::link_href_at`]
+/// and the all-anchors harvest ([`crate::link_harvest`]).
+pub(crate) fn anchor_href<D: LayoutDom>(dom: &D, node: D::NodeId) -> Option<String> {
     use html5ever::{local_name, ns};
     if dom.element_name(node)?.local != local_name!("a") {
         return None;
