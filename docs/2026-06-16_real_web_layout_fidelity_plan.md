@@ -14,63 +14,54 @@ models*, not engine bugs.
 
 ---
 
-## 1. UA-stylesheet completeness (highest value)
+## 1. UA-stylesheet completeness — DONE (2026-06-16)
 
 **Why first:** when the UA sheet is thin, every box is mispositioned before any
 harder feature matters. A page with wrong `<h1>`/`<p>`/`<ul>` margins and
-heading scale looks broken even if tables and floats were perfect. This is the
+heading scale looks broken even if tables and floats were perfect. This was the
 cheapest large visual win.
 
-**State (updated 2026-06-16):** split into two halves once attempted.
+**Shipped.** `ua_defaults.rs` now carries the metric defaults: the `<body>` 8px
+gutter, the `<h1>`..`<h6>` `font-size` scale (2em … 0.67em) + `font-weight:
+bold`, and the block-flow margins (`p`/`h1`..`h6`/`ul`/`ol`/`blockquote`/
+`figure`/`pre`/`dd`/`hr`). Verified end to end: `box_tree.rs`
+(`ua_heading_scale_makes_h1_taller_than_p`, `ua_body_gutter_offsets_the_body_box`,
+`ua_paragraph_margins_collapse_between_siblings`) and the 19 `paint`
+`html_to_pixels_e2e` tests (three fixtures gained a `body { margin: 0 }` to
+neutralize the new gutter for their pixel coordinates).
 
-- **Heading scale + weight — DONE.** `ua_defaults.rs` now ships the
-  `<h1>`..`<h6>` `font-size` scale (2em … 0.67em) + `font-weight: bold`. These
-  are *collapse-free* (font-size/weight change a box's content, not its
-  margins), so the full and incremental layout paths agree. Verified by
-  `box_tree.rs` `ua_heading_scale_makes_h1_taller_than_p`. Headings were
-  previously body-sized and un-bolded.
-- **Block-flow margins — BLOCKED on a margin-collapse-parity engine fix.** The
-  spec margins (`body { margin: 8px }`, `p`/`h1`..`h6`/`ul`/`ol`/`blockquote`/
-  `figure`/`pre`/`dd`) are correct in the *full* box-tree path (a stacked-`<p>`
-  gap test confirmed adjacent-sibling collapse), but adding them to the UA
-  sheet exposed two divergences that a sheet edit cannot fix:
-  1. **Root-element margin.** The full box-tree root handling drops the root's
-     child margin. Runtime probe (`box_tree` `lay`): with `body { margin: 8px }`,
-     a `<div>` at the body origin lands at **(0, 0)**, not (8, 8) — body's own
-     left margin is dropped and its top margin over-collapses through to the
-     ICB. One level deeper a margined `<div>` *inside* body lands at **(8, 0)**:
-     the left margin applies correctly, the top still collapses through. So the
-     bug is specific to the **root element's child** (body), the classic
-     "root-element margins don't collapse with the viewport" special case real
-     browsers implement but serval doesn't yet. It is *not* the `body { width:
-     100% }` over-constraint (auto-width probes the same (0,0)). `IncrementalLayout`
-     applies body's margin, so the two paths also disagree on the gutter.
-  2. **First-child margin collapse at the splice boundary.** In full-document
-     layout a first child's top margin collapses *through* its block parent
-     (html → body → p, so the p lands at y=0). `IncrementalLayout::apply_structural`
-     (`incremental.rs:875`) re-lays-out the changed subtree in isolation via
-     `SubtreeView::new(dom, root)`; a subtree root establishes its own
-     formatting context, so that margin does NOT collapse through, and the
-     first spliced child is mis-positioned relative to a full recompute
-     (broke `incremental::tests::{inner_html_replace_splices_matching_full,
-     structural_change_splices_incrementally}` the moment `p` had a margin).
+**What it took (the engine story — corrected from the initial guess):**
 
-  So "UA-sheet completeness" is NOT the self-contained, no-engine-change task it
-  looked like: the block margins are gated on margin-collapse parity across the
-  full and incremental paths.
+- The block margins are *correct in the full box-tree path* with no engine
+  change. The earlier "root-element margin is dropped" finding was a **probe
+  bug**: fragment `location` is parent-relative (Taffy's `final_layout.location`;
+  `caret::absolute_origin` walks to accumulate), so the original probe read a
+  child's body-relative `(0,0)` as if absolute. Re-probed, `<body>` sits at
+  `(8,8)` relative to `<html>` exactly as it should. There was no "fix A".
+- The one real fix was **`IncrementalLayout`'s splice (`apply_structural`)**, in
+  two parts:
+  1. **Margin-collapse parity.** `SubtreeView::new(dom, root)` makes the spliced
+     subtree root the scoped ICB — a BFC — so its first/last in-flow child
+     margins stop collapsing *into* it the way a non-BFC root collapses them in
+     the full document. New guard `splice_loses_margin_collapse` detects this
+     (root not an independent formatting context AND a first/last in-flow child
+     carries a collapsing block margin) and falls back to `full_relayout` (cheap
+     for a shallow root like `<body>`). Test:
+     `margined_first_child_falls_back_to_full`.
+  2. **Coordinate space.** The splice translated every descendant by the root
+     delta (`prior_root - scoped_root`), which forced descendants into *absolute*
+     space while the full path stores *parent-relative*. Dead code while `<body>`
+     sat at the origin; the moment the UA gutter offset `<body>`, spliced
+     children diverged by the gutter. Fixed: descendants keep their scoped
+     parent-relative locations; only the subtree root pins to its prior location.
 
-**Slice (revised):**
+  The two existing splice tests now use `overflow: hidden` bodies (a BFC) so
+  they keep exercising the splice path under the UA `p` margin instead of taking
+  the collapse fallback.
 
-1. Done: heading scale + weight (shipped).
-2. Engine fix A — the root-element-margin special case in the full box-tree
-   root handling: the root's child (body) margin must apply on all edges and
-   not collapse through to the ICB (not a `width` issue; auto-width probes the
-   same (0,0)).
-3. Engine fix B — first-child margin collapse *through* a block parent in
-   `IncrementalLayout`'s subtree splice (the `SubtreeView` boundary must carry
-   the collapse context the subtree root sits in within the full document).
-4. Only then: add the spec block margins to `ua_defaults.rs`, with the existing
-   stacked-block geometry tests extended to first-child cases on both paths.
+**Deferred (small):** nested-section heading rescaling (`:is(article,…) h1`);
+`white-space: pre` lets `<pre>` preserve newlines (item 3) so the `pre` margin
+is the only `<pre>` UA rule still partial.
 
 ---
 
@@ -167,15 +158,15 @@ and `::first-line` are the most commonly hit on real pages.
 
 ## Suggested order
 
-1's heading half is done; its margin half is now the highest-value *engine*
-work (the two margin-collapse-parity fixes), since margins shift every box and
-unblock honest visual comparison. In parallel, 3 (`white-space:pre`, small and
-self-contained) and 2 (tables, large but high-frequency) need no margin work.
-4 (float wrap) and 6 (flex/grid hardening) are the precision passes. 5 and 7
-are promoted by target shift (interactive pages; visual polish), not by being
-next in line.
+1 (UA-sheet metric defaults) is **done**, including the splice margin-collapse
+parity it turned out to require. Next: 3 (`white-space:pre`, small and
+self-contained) and 2 (tables, large but high-frequency). 4 (float wrap) and 6
+(flex/grid hardening) are the precision passes. 5 and 7 are promoted by target
+shift (interactive pages; visual polish), not by being next in line.
 
-Most items are independently shippable and individually testable, and none
-requires a planes-architecture change. The exception surfaced by 1: the UA
-block margins are coupled to margin-collapse correctness across the full and
-incremental layout paths, so they are an engine fix, not a sheet edit.
+Each item is independently shippable and individually testable, and none
+requires a planes-architecture change. 1's lesson for the rest: a UA-sheet
+change that moves boxes can surface latent incremental-layout assumptions (here,
+the splice's absolute-vs-parent-relative coordinate handling and its BFC-at-the-
+boundary margin collapse), so re-run the `paint` e2e band scans after any future
+metric-default change.

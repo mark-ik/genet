@@ -876,23 +876,44 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             let Some(scoped_root) = scoped.rect_of(root).copied() else {
                 return self.full_relayout(dom);
             };
+            // Margin-collapse parity at the splice boundary. A `SubtreeView`-rooted
+            // scoped layout makes `root` the scoped ICB — a block formatting context
+            // — so its first/last in-flow child margins stop collapsing INTO it. In
+            // the full document a non-BFC `root` (e.g. `<body>`, a plain `<div>`) has
+            // those margins collapse through it, shifting its children. Splicing such
+            // a root would mis-place every child by the lost collapse, so fall back to
+            // a correct full relayout. (CSS 2.2 §8.3.1; for a shallow root like
+            // `<body>` the full relayout is barely more than the subtree layout.)
+            if splice_loses_margin_collapse(dom, &self.styles, &scoped, root) {
+                return self.full_relayout(dom);
+            }
             // Outer size change → ancestors would reflow → full fallback.
             if (scoped_root.size.width - prior_root.size.width).abs() >= 0.5
                 || (scoped_root.size.height - prior_root.size.height).abs() >= 0.5
             {
                 return self.full_relayout(dom);
             }
-            // Splice: translate the scoped subtree to its real position.
-            let dx = prior_root.location.x - scoped_root.location.x;
-            let dy = prior_root.location.y - scoped_root.location.y;
+            // Splice the scoped subtree into the prior fragments. Fragment
+            // locations are *parent-relative* (Taffy's `final_layout.location`;
+            // `caret::absolute_origin` walks to accumulate), so a descendant's
+            // scoped location — relative to its own parent inside the subtree — is
+            // already its real location: the size-preserving precondition + the
+            // margin-collapse guard above make the subtree's internal layout
+            // context-independent, so the scoped pass reproduces it exactly. Keep
+            // descendants as-is; only the root's own parent-relative location lives
+            // outside the subtree (the scoped pass put it at the scoped origin), so
+            // pin it to its prior value. (Translating descendants by the root delta
+            // would force them into absolute space, diverging from the full path
+            // whenever an ancestor carries an offset, e.g. the UA `body` margin.)
             let mut subtree = Vec::new();
             collect_subtree(dom, root, &mut subtree);
             for node in subtree {
                 if let Some(layout) = scoped.rect_of(node) {
-                    let mut translated = *layout;
-                    translated.location.x += dx;
-                    translated.location.y += dy;
-                    result.insert(node, translated);
+                    let mut placed = *layout;
+                    if node == root {
+                        placed.location = prior_root.location;
+                    }
+                    result.insert(node, placed);
                 }
             }
         }
@@ -927,6 +948,80 @@ fn collect_subtree<D: LayoutDom>(dom: &D, root: D::NodeId, out: &mut Vec<D::Node
     for child in dom.dom_children(root) {
         collect_subtree(dom, child, out);
     }
+}
+
+/// Whether splicing the subtree rooted at `root` would lose a margin collapse
+/// that the full document performs — the staleness check behind the splice's
+/// full-relayout fallback (CSS 2.2 §8.3.1, §9.4.1).
+///
+/// A `SubtreeView`-rooted scoped layout makes `root` the scoped ICB, hence a
+/// block formatting context: its first/last in-flow child margins are *applied*
+/// (no collapse into `root`). But if `root` is NOT a BFC in the full document,
+/// those margins collapse *through* it there, so the scoped child positions are
+/// off by the lost collapse. True exactly when `root` is collapse-permeable on a
+/// block edge AND an adjacent in-flow child carries the margin that would
+/// collapse across it (so a margin-free subtree still splices cheaply).
+fn splice_loses_margin_collapse<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    scoped: &FragmentPlane<D::NodeId>,
+    root: D::NodeId,
+) -> bool
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    if establishes_independent_formatting_context(styles, root) {
+        return false;
+    }
+    let in_flow: Vec<D::NodeId> = dom
+        .dom_children(root)
+        .filter(|&c| scoped.rect_of(c).is_some() && is_in_flow(styles, c))
+        .collect();
+    let (Some(&first), Some(&last)) = (in_flow.first(), in_flow.last()) else {
+        return false;
+    };
+    let first_top = scoped.rect_of(first).map_or(0.0, |l| l.margin.top);
+    let last_bottom = scoped.rect_of(last).map_or(0.0, |l| l.margin.bottom);
+    first_top.abs() > 0.5 || last_bottom.abs() > 0.5
+}
+
+/// Whether `node` establishes an independent formatting context, so its in-flow
+/// children's margins do not collapse into it: `overflow != visible`, an
+/// out-of-flow box, or a non-`Flow` inner display (`flow-root` / `flex` / `grid`
+/// / `table`). Conservatively `false` when the style is unavailable (defer to
+/// the child-margin check rather than splice blindly).
+fn establishes_independent_formatting_context<NodeId>(
+    styles: &StylePlane<NodeId>,
+    node: NodeId,
+) -> bool
+where
+    NodeId: Copy + Eq + Hash,
+{
+    use style::values::computed::{Overflow, PositionProperty};
+    use style::values::specified::box_::DisplayInside;
+    let Some(cv) = crate::paint_emit::primary_cv(styles, node) else {
+        return false;
+    };
+    let b = cv.get_box();
+    !matches!(b.overflow_x, Overflow::Visible)
+        || !matches!(b.overflow_y, Overflow::Visible)
+        || matches!(b.position, PositionProperty::Absolute | PositionProperty::Fixed)
+        || !matches!(b.display.inside(), DisplayInside::Flow)
+}
+
+/// Whether `node` is in normal flow (not absolutely/fixed positioned). Floats
+/// are treated as in-flow here: counting one only risks an unnecessary splice
+/// fallback, never an incorrect splice.
+fn is_in_flow<NodeId>(styles: &StylePlane<NodeId>, node: NodeId) -> bool
+where
+    NodeId: Copy + Eq + Hash,
+{
+    use style::values::computed::PositionProperty;
+    let Some(cv) = crate::paint_emit::primary_cv(styles, node) else {
+        return false;
+    };
+    !matches!(cv.get_box().position, PositionProperty::Absolute | PositionProperty::Fixed)
 }
 
 /// The first element (pre-order) whose `id` attribute equals `id`, or `None` — the
@@ -1218,10 +1313,12 @@ mod tests {
     /// re-lays-out the body subtree (its outer size unchanged, so it splices), and
     /// the new `<p>` lands where a full recompute would put it. (The body is sized
     /// explicitly here — its UA height is `auto`, which a content append would grow,
-    /// taking the full-recompute fallback instead.)
+    /// taking the full-recompute fallback instead. It is also `overflow: hidden` so
+    /// it establishes a BFC: under the UA `p { margin }`, a non-BFC body would take
+    /// the margin-collapse fallback — see `margined_first_child_falls_back_to_full`.)
     #[test]
     fn structural_change_splices_incrementally() {
-        const SHEET: &[&str] = &["body { height: 200px; } p { height: 20px; }"];
+        const SHEET: &[&str] = &["body { height: 200px; overflow: hidden; } p { height: 20px; }"];
         let mut dom = ScriptedDom::new();
         let root = dom.document();
         let h = dom.create_element(html("html"));
@@ -1244,6 +1341,39 @@ mod tests {
         let full = oracle.rect_of(p).expect("oracle <p>");
         assert!((spliced.location.y - full.location.y).abs() < 0.5, "spliced <p> y must match full");
         assert!((spliced.size.height - full.size.height).abs() < 0.5, "spliced <p> height must match full");
+    }
+
+    /// Margin-collapse parity (fix B): a fixed-size, non-BFC subtree root
+    /// (`<body>`) whose first in-flow child carries a block-start margin does
+    /// NOT splice — the scoped `SubtreeView` layout makes `body` a BFC, so that
+    /// margin would stop collapsing through it and the child would land too low.
+    /// The engine detects the lost collapse and falls back to a correct full
+    /// recompute, so the `<p>` lands exactly where full layout puts it.
+    #[test]
+    fn margined_first_child_falls_back_to_full() {
+        const SHEET: &[&str] = &["body { height: 200px; } p { height: 20px; margin: 16px 0; }"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let _ = drain(&mut dom);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+        let muts = drain(&mut dom);
+        // Non-BFC body + margined first child → splice is unsound → full recompute.
+        assert_eq!(layout.apply(&dom, SHEET, &muts), Applied::FullRecompute);
+
+        // And the result matches a from-scratch full layout (the collapse is honored).
+        let mut oracle_styles = StylePlane::new();
+        run_cascade(&dom, &mut oracle_styles, euclid::Size2D::new(W, H), SHEET, None);
+        let oracle = lay_out(&dom, &oracle_styles, W, H);
+        let got = layout.fragments().rect_of(p).expect("new <p> laid out");
+        let want = oracle.rect_of(p).expect("oracle <p>");
+        assert!((got.location.y - want.location.y).abs() < 0.5, "p y must match full: {} vs {}", got.location.y, want.location.y);
     }
 
     /// When a structural change grows its subtree's outer size (an
@@ -1321,10 +1451,13 @@ mod tests {
     /// at the same absolute positions a full recompute produces. (Ported from the
     /// stateless `relayout_incremental` test it supersedes. The body is sized
     /// explicitly — its UA height is `auto`, which the replace would grow, taking
-    /// the full-recompute fallback instead.)
+    /// the full-recompute fallback instead — and is `overflow: hidden` so it
+    /// establishes a BFC: under the UA `p { margin }` a non-BFC body would take the
+    /// margin-collapse fallback instead of splicing.)
     #[test]
     fn inner_html_replace_splices_matching_full() {
-        const SHEET: &[&str] = &["html, body, p { display: block; } body { height: 200px; }"];
+        const SHEET: &[&str] =
+            &["html, body, p { display: block; } body { height: 200px; overflow: hidden; }"];
         let mut dom = ScriptedDom::new();
         let root = dom.document();
         let h = dom.create_element(html("html"));

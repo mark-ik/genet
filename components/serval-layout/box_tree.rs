@@ -1110,6 +1110,39 @@ mod tests {
         );
     }
 
+    /// UA default `body { margin: 8px }` offsets the body box from the root: the
+    /// `<body>` fragment sits at (8, 8) relative to `<html>` (which fills the
+    /// viewport at the origin), so the document content gets its 8px gutter.
+    /// (`location` is parent-relative, so this reads the body's own offset, not a
+    /// child's. A `<div>` child is used because it carries no UA margin — a `<p>`'s
+    /// larger top margin would collapse with body's and shift the body box down.)
+    #[test]
+    fn ua_body_gutter_offsets_the_body_box() {
+        let (doc, frags) = lay("<html><body><div>x</div></body></html>", &[]);
+        let body = frags
+            .rect_of(find_all(&doc, html5ever::local_name!("body"))[0])
+            .expect("body fragment");
+        assert!(approx(body.location.x, 8.0), "body left gutter 8px, got {}", body.location.x);
+        assert!(approx(body.location.y, 8.0), "body top gutter 8px, got {}", body.location.y);
+    }
+
+    /// UA default `p { margin: 1em 0 }` spaces stacked paragraphs by one line.
+    /// Adjacent block margins collapse, so the gap between two `<p>`s is one
+    /// `1em` (~16px at the 16px default), not two.
+    #[test]
+    fn ua_paragraph_margins_collapse_between_siblings() {
+        let (doc, frags) = lay("<html><body><p>one</p><p>two</p></body></html>", &[]);
+        let ps = find_all(&doc, html5ever::local_name!("p"));
+        let first = frags.rect_of(ps[0]).expect("first p");
+        let second = frags.rect_of(ps[1]).expect("second p");
+        let gap = second.location.y - (first.location.y + first.size.height);
+        assert!(
+            (gap - 16.0).abs() <= 4.0,
+            "collapsed 1em paragraph margin ≈ 16px gap, got {}",
+            gap
+        );
+    }
+
     /// `::before` / `::after` with string `content` generate inline runs around
     /// the element's own content, ordered before/after it, each carrying the
     /// pseudo's *own* cascaded style (not the element's).

@@ -394,8 +394,11 @@ fn html_to_pixels_inline_img_flows_among_text() {
     let image = render_to_image(
         &html,
         &[
-            "body { background-color: rgb(255, 255, 255); }",
-            "p { color: rgb(0, 0, 0); }",
+            // `margin: 0` on body + p neutralizes the UA gutter and paragraph
+            // margins so the first line sits at the top-left, where this band
+            // scan ([0,24)) expects it (this test is about inline-img flow).
+            "body { background-color: rgb(255, 255, 255); margin: 0; }",
+            "p { color: rgb(0, 0, 0); margin: 0; }",
         ],
     );
 
@@ -800,7 +803,10 @@ fn html_to_pixels_background_image_tiles_from_css() {
     );
     let image = render_to_image(
         "<html><body><div></div></body></html>",
-        &["body { background-color: rgb(255, 255, 255); }", &css],
+        // `body { margin: 0 }` neutralizes the UA 8px gutter so the div sits at the
+        // origin and these pixel coordinates stay valid (this test is about
+        // background tiling, not the document gutter).
+        &["body { background-color: rgb(255, 255, 255); margin: 0; }", &css],
     );
 
     // Inside the 40×40 div: the green tile repeats to cover it. Sample
@@ -1151,7 +1157,9 @@ fn html_to_pixels_border_renders_at_element_edges() {
     let image = render_to_image(
         "<html><body><div></div></body></html>",
         &[
-            "body { background-color: rgb(255, 255, 255); }",
+            // `margin: 0` neutralizes the UA 8px gutter so the div sits at the
+            // origin and these border pixel coordinates stay valid.
+            "body { background-color: rgb(255, 255, 255); margin: 0; }",
             "div {
                 width: 40px;
                 height: 40px;

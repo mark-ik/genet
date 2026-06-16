@@ -88,12 +88,15 @@ The engine lays out *correctly* for the constructs it models; it does not yet
 model enough of them to render a typical real page faithfully. The ranked gaps,
 detailed with file:line in `2026-06-16_real_web_layout_fidelity_plan.md`:
 
-1. **UA-stylesheet completeness** (margins, heading scale). The highest-value
-   single fix: when the UA sheet is thin, *every box shifts*, so the page looks
-   wrong before any harder feature matters.
-2. **Tables** rendered as block. `ua_defaults.rs:64-66` forces
+1. **UA-stylesheet completeness** (margins, heading scale) — **DONE
+   (2026-06-16)**. The `<body>` gutter, heading scale + weight, and block-flow
+   margins now ship in `ua_defaults.rs`. This required fixing the incremental
+   splice's margin-collapse parity and an absolute-vs-parent-relative coordinate
+   bug it had been hiding (see the fidelity plan). It was the highest-value
+   single fix: a thin UA sheet shifted *every box*.
+2. **Tables** rendered as block. `ua_defaults.rs` forces
    `table,tr,...{display:block}` and `box_tree.rs:659-668` has no
-   `Display::Table` arm.
+   `Display::Table` arm. **Next up.**
 3. **`white-space: pre`/`pre-wrap`** not preserved. `construct.rs:509` calls
    `collapse_whitespace` unconditionally; `nowrap` is handled, `pre` is not.
 4. **Text wrap-around-floats.** The `break_all_lines` seam in `text_measure.rs`
