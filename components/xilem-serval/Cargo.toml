@@ -14,16 +14,15 @@ name = "xilem_serval"
 path = "src/lib.rs"
 
 # Third reactive backend beside Masonry (`xilem`) and the browser DOM
-# (`xilem_web`), pointed at serval's `LayoutDomMut`. Git-dep on the Linebender
-# fork's `xilem_core` (branch `mere-wgpu-29-vello-0-9`; the fork's only serval
-# consumer since pelt-viewer's 2026-06-12 retirement); we take only the
-# diff/message core, not the
-# Masonry renderer, so we depend on `xilem_core` directly rather than `xilem`.
-# A git dep (not the old repo-escaping `../../../../crates/xilem` path) so a bare
-# serval clone resolves it without the personal `crates/` fork tree as a sibling.
-# `xilem_core` carries none of the branch's vello/wgpu/parley bumps (it is
-# byte-identical to upstream main), so tracking the branch head is divergence-free.
+# (`xilem_web`), pointed at serval's `LayoutDomMut`. We take only the
+# diff/message core, not the Masonry renderer, so we depend on `xilem_core`
+# directly rather than `xilem`.
+# `xilem_core` is vendored into the workspace at `components/xilem-core` (a
+# verbatim Apache-2.0 mirror of upstream main; see that crate's header). It was
+# previously a git dep on the mark-ik/xilem fork, but the fork's vello/wgpu/parley
+# divergence lives in other xilem crates, not `xilem_core`, so vendoring is
+# loss-free and lets a bare serval clone resolve without any xilem fork checkout.
 [dependencies]
-xilem_core = { git = "https://github.com/mark-ik/xilem.git", branch = "mere-wgpu-29-vello-0-9" }
+xilem_core = { path = "../xilem-core" }
 serval-scripted-dom = { path = "../serval-scripted-dom" }
 layout_dom_api = { package = "layout-dom-api", path = "../shared/layout-dom" }
