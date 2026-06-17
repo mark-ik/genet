@@ -45,7 +45,8 @@ use paint_list_api::{
     TransformSpec,
 };
 use paint_list_api::items::{
-    BorderDetails, BorderItem, ExternalTextureItem, NinePatchBorder, NinePatchSource, ShadowItem,
+    BorderDetails, BorderItem, ExternalTextureItem, NinePatchBorder, NinePatchSource, PathCommand,
+    PathData, ShadowItem,
 };
 use paint_list_api::specs::{ClipKind, ClipSpec, LayerSpec, TransformKind};
 use parley::PositionedLayoutItem;
@@ -625,6 +626,16 @@ pub(crate) fn walk<Id>(
         transform: node_transform,
         kind: TransformKind::Standard,
     }));
+    // CSS `clip-path`: clip the whole element (box + content + descendants) to a
+    // path, just inside the fragment transform (so the path is in local border-box
+    // coords) and outermost of the element's own clips. Balanced before the
+    // fragment `PopTransform` below.
+    let clip_path = (!is_anon)
+        .then(|| clip_path_polygon(cv, l.size.width, l.size.height))
+        .flatten();
+    if let Some(ref path) = clip_path {
+        commands.push(PaintCmd::PushClip(ClipSpec { kind: ClipKind::Path(path.clone()) }));
+    }
     // Absolute origin to pass to children (this node's origin + its location), so a
     // deferred descendant records where to place itself.
     let child_origin = (origin.0 + l.location.x, origin.1 + l.location.y);
@@ -902,6 +913,9 @@ pub(crate) fn walk<Id>(
         commands.push(PaintCmd::PopTransform);
     }
     if clip_rect.is_some() {
+        commands.push(PaintCmd::PopClip);
+    }
+    if clip_path.is_some() {
         commands.push(PaintCmd::PopClip);
     }
     commands.push(PaintCmd::PopTransform);
@@ -2482,6 +2496,46 @@ fn box_shadows_of(cv: &ComputedValues) -> Vec<ShadowData> {
             inset: sh.inset,
         })
         .collect()
+}
+
+/// CSS `clip-path` as a paint-list path in the element's local (border-box)
+/// coordinates, or `None` when there's no clip path serval emits yet. First cut:
+/// `polygon()` only (the common custom-shape case); `circle()` / `ellipse()` /
+/// `inset()` / `path()` / `url()` are follow-ups, and the box clips normally
+/// meanwhile. The reference box is the border box (`clip-path`'s default), i.e.
+/// `(0,0)..(w,h)` in local coords — the space inside the fragment's transform.
+fn clip_path_polygon(cv: &ComputedValues, w: f32, h: f32) -> Option<PathData> {
+    use style::values::computed::Length;
+    use style::values::generics::basic_shape::{BasicShape, ClipPath};
+
+    let shape = match cv.get_svg().clip_path {
+        ClipPath::Shape(ref shape, _reference_box) => shape,
+        _ => return None,
+    };
+    let poly = match **shape {
+        BasicShape::Polygon(ref p) => p,
+        _ => return None,
+    };
+    if poly.coordinates.is_empty() {
+        return None;
+    }
+    let commands = poly
+        .coordinates
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let x = c.0.resolve(Length::new(w.max(0.0))).px();
+            let y = c.1.resolve(Length::new(h.max(0.0))).px();
+            let pt = LayoutPoint::new(x, y);
+            if i == 0 {
+                PathCommand::MoveTo(pt)
+            } else {
+                PathCommand::LineTo(pt)
+            }
+        })
+        .chain(std::iter::once(PathCommand::Close))
+        .collect();
+    Some(PathData { commands })
 }
 
 /// Read an element's cascaded `opacity` as `Some(alpha)` when it is less than

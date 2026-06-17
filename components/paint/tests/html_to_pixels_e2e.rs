@@ -1001,6 +1001,35 @@ fn html_to_pixels_box_shadow_inset_blur_renders_soft_inner_halo() {
     );
 }
 
+/// CSS `clip-path: polygon(...)` clips an element to an arbitrary path. A 60×60
+/// red div clipped to the triangle `(0,0)-(60,0)-(0,60)` shows red only in the
+/// top-left half (`x + y < 60`); the bottom-right half is clipped away to white.
+#[test]
+fn html_to_pixels_clip_path_polygon_clips_to_triangle() {
+    let image = render_to_image(
+        "<html><body><div></div></body></html>",
+        &[
+            "body { background-color: rgb(255, 255, 255); margin: 0; }",
+            "div {
+                width: 60px;
+                height: 60px;
+                background-color: rgb(255, 0, 0);
+                clip-path: polygon(0px 0px, 60px 0px, 0px 60px);
+            }",
+        ],
+    );
+    assert_eq!(
+        image.get_pixel(10, 10).0,
+        [255, 0, 0, 255],
+        "(10,10) is inside the clip triangle, should be red"
+    );
+    assert_eq!(
+        image.get_pixel(50, 50).0,
+        [255, 255, 255, 255],
+        "(50,50) is clipped away by clip-path, should be white"
+    );
+}
+
 /// Nested elements with distinct colors paint into the right pixels.
 /// `<div>` is 50×50 anchored at body's origin (top-left); a pixel
 /// inside the div should carry its background color, and a pixel
