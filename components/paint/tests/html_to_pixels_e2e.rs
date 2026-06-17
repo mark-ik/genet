@@ -1093,6 +1093,27 @@ fn html_to_pixels_clip_path_inset_clips_to_rect() {
     assert_eq!(image.get_pixel(5, 5).0, [255, 255, 255, 255], "(5,5) in the inset border, white");
 }
 
+/// `mix-blend-mode: multiply` composites an element into its backdrop by
+/// multiplying. A red child over a blue parent multiplies to black (255,0,0 ×
+/// 0,0,255 = 0,0,0); the parent-only area stays blue.
+#[test]
+fn html_to_pixels_mix_blend_mode_multiply() {
+    let image = render_to_image(
+        "<html><body><div class=p><div class=c></div></div></body></html>",
+        &[
+            "body { margin: 0; }",
+            ".p { width: 80px; height: 80px; background-color: rgb(0, 0, 255); }",
+            ".c { width: 40px; height: 40px; background-color: rgb(255, 0, 0); mix-blend-mode: multiply; }",
+        ],
+    );
+    let [r, g, b, _] = image.get_pixel(10, 10).0;
+    assert!(
+        r < 50 && g < 50 && b < 50,
+        "(10,10) red multiplied over blue should be ~black, got [{r},{g},{b}]"
+    );
+    assert_eq!(image.get_pixel(60, 60).0, [0, 0, 255, 255], "(60,60) is parent-only, blue");
+}
+
 /// Nested elements with distinct colors paint into the right pixels.
 /// `<div>` is 50×50 anchored at body's origin (top-left); a pixel
 /// inside the div should carry its background color, and a pixel

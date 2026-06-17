@@ -40,7 +40,7 @@ use paint_list_api::{
     DeviceIntSize, EngineId, ExtendMode, FontInstanceKey, FontResource, GlyphInstance, GradientStop,
     IdNamespace, ImageItem, ImageKey, ImageRendering, ImageResource, LayoutPoint, LayoutRect,
     LayoutSideOffsets, LayoutSize, LayoutTransform, LayoutVector2D, LinearGradientItem,
-    LinearGradientPayload, NormalBorder, PaintCmd, PaintList, RadialGradientItem,
+    LinearGradientPayload, MixBlendMode, NormalBorder, PaintCmd, PaintList, RadialGradientItem,
     RadialGradientPayload, RectItem, RepeatMode, RepeatingImageItem, TextOptions, TextRunItem,
     TransformSpec,
 };
@@ -615,9 +615,15 @@ pub(crate) fn walk<Id>(
     // descendants lifted into sibling stacking layers escape this group — a
     // documented edge, like the Appendix E deviations in `paint_stacking`.)
     let opacity = (!is_anon).then(|| opacity_of(cv)).flatten();
-    if let Some(alpha) = opacity {
+    let blend = (!is_anon).then(|| mix_blend_mode_of(cv)).flatten();
+    // `opacity < 1` or a non-normal `mix-blend-mode` each force an isolated
+    // stacking layer: opacity composites the subtree once at `alpha`, blend
+    // composites it into its backdrop with the given mode.
+    let needs_layer = opacity.is_some() || blend.is_some();
+    if needs_layer {
         commands.push(PaintCmd::PushLayer(LayerSpec {
-            opacity: alpha,
+            opacity: opacity.unwrap_or(1.0),
+            mix_blend_mode: blend.unwrap_or(MixBlendMode::Normal),
             ..Default::default()
         }));
     }
@@ -919,9 +925,9 @@ pub(crate) fn walk<Id>(
         commands.push(PaintCmd::PopClip);
     }
     commands.push(PaintCmd::PopTransform);
-    // Close the opacity layer opened above; the renderer composites the buffered
-    // subtree back into the parent at `alpha`.
-    if opacity.is_some() {
+    // Close the stacking layer opened above (opacity and/or mix-blend-mode); the
+    // renderer composites the buffered subtree back into the parent accordingly.
+    if needs_layer {
         commands.push(PaintCmd::PopLayer);
     }
 }
@@ -2620,6 +2626,34 @@ fn clip_path_of(cv: &ComputedValues, w: f32, h: f32) -> Option<ClipKind> {
 fn opacity_of(cv: &ComputedValues) -> Option<f32> {
     let a = f32::from(cv.get_effects().opacity);
     (a < 1.0).then_some(a.clamp(0.0, 1.0))
+}
+
+/// CSS `mix-blend-mode` as a paint-list blend mode, or `None` for `normal` (the
+/// common case — no blend, so no stacking layer is forced on its account). A
+/// non-normal mode wraps the element + subtree in an isolated layer that the
+/// renderer composites back into its backdrop with that blend (the canonical CSS
+/// set maps 1:1).
+fn mix_blend_mode_of(cv: &ComputedValues) -> Option<MixBlendMode> {
+    use style::computed_values::mix_blend_mode::T as M;
+    Some(match cv.get_effects().mix_blend_mode {
+        M::Normal => return None,
+        M::Multiply => MixBlendMode::Multiply,
+        M::Screen => MixBlendMode::Screen,
+        M::Overlay => MixBlendMode::Overlay,
+        M::Darken => MixBlendMode::Darken,
+        M::Lighten => MixBlendMode::Lighten,
+        M::ColorDodge => MixBlendMode::ColorDodge,
+        M::ColorBurn => MixBlendMode::ColorBurn,
+        M::HardLight => MixBlendMode::HardLight,
+        M::SoftLight => MixBlendMode::SoftLight,
+        M::Difference => MixBlendMode::Difference,
+        M::Exclusion => MixBlendMode::Exclusion,
+        M::Hue => MixBlendMode::Hue,
+        M::Saturation => MixBlendMode::Saturation,
+        M::Color => MixBlendMode::Color,
+        M::Luminosity => MixBlendMode::Luminosity,
+        M::PlusLighter => MixBlendMode::PlusLighter,
+    })
 }
 
 /// A transform `m` applied around the absolute point `origin`: `T(O)·M·T(-O)`.
