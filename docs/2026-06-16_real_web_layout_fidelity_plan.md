@@ -63,52 +63,46 @@ neutralize the new gutter for their pixel coordinates).
 
 ---
 
-## 2. Tables
+## 2. Tables — first cut DONE (2026-06-16)
 
-**State:** rendered as block. `ua_defaults.rs` forces
-`table,caption,thead,tbody,tfoot,tr {display:block}`, and `box_tree.rs:659-668`
-dispatches only `Block`/`Flex`/`Grid` with no `Display::Table` arm.
+**Shipped: simple tables lay out as a grid.** A `<table>` previously stacked
+every cell as a block; it now renders as a 2D grid of its cells.
 
-**Spike result (2026-06-16) — grid-as-table is the path; grid prerequisite now
-met.** Findings, grounded in code:
+How it works (grounded in code):
 
-- `stylo_taffy::convert::display` already maps `display: table` -> `taffy::Display::Grid`
-  and `table-cell` -> `Block` (registry `convert.rs:179,183`). Taffy itself has
-  no table algorithm (only block/flex/grid/float/leaf), so table-as-grid is the
-  intended design, not a new engine.
-- **CSS grid was non-functional** until this spike: `grid-template-columns/rows`
-  are gated behind servo's `layout.grid.enabled` pref, which serval did not set,
-  so the cascade dropped authored track lists to `None` and every grid
-  degenerated to a single stacked column. **Fixed** by enabling the pref in
-  `cascade.rs` `enable_serval_properties` (same rationale as `layout.unimplemented`:
-  serval has its own Taffy grid, so the gate is servo's policy). A 2x2
-  `grid-template` now lays out correctly (`box_tree.rs`
-  `grid_template_lays_out_cells_in_a_grid`). This also advances item 6.
-- **The remaining table work is box-tree construction, not layout.** HTML nests
-  cells `table > (thead/tbody/tfoot) > tr > (td/th)` (html5ever even
-  auto-inserts `<tbody>`), but Taffy grid only lays out a container's *direct*
-  children. So the cells must be **flattened** to direct grid items of the table
-  box, and their grid placement (row from the `tr`, column from cell order;
-  `colspan`/`rowspan` -> grid spans) plus the table's `grid-template-columns`
-  (the column count) must be **injected** — that information comes from DOM
-  structure, not CSS computed values. The grid path in `box_tree` reads raw
-  `TaffyStyloStyle` (no override hook like the block path's `CssStyle::size_override`),
-  so this needs a small style-injection mechanism for synthetic grid
-  placement/template.
+- `stylo_taffy::convert::display` already maps `display: table` ->
+  `taffy::Display::Grid` and `table-cell` -> `Block` (registry
+  `convert.rs:179,183`); Taffy has no table algorithm of its own, so
+  table-as-grid is the design.
+- **Prerequisite:** CSS grid was non-functional (grid track properties gated
+  behind servo's `layout.grid.enabled`, unset, so authored templates dropped to
+  `None` and grids collapsed to one column). Enabled in `cascade.rs`
+  `enable_serval_properties`; verified by `grid_template_lays_out_cells_in_a_grid`.
+- **UA sheet:** replaced the forced `display:block` on table elements with their
+  real display (`table` / `table-row-group` / `table-row` / `table-cell` /
+  `table-caption`; `th` bold).
+- **Box-tree flattening:** HTML nests cells `table > (thead/tbody/tfoot) > tr >
+  (td/th)` (html5ever auto-inserts `<tbody>`), but Taffy grid lays out only a
+  container's *direct* children. `box_tree.rs` `build_table` + `collect_table_rows`
+  walk the row-group / row nesting and make the cells **direct grid children** of
+  the table box, each tagged with its 0-based `(row, col)`.
+- **Placement injection (no hard container-template needed):** each cell carries
+  `grid_placement` on its `BoxNode`; `CssStyle` (the grid item style) implements
+  `GridItemStyle::grid_row`/`grid_column` to report an explicit grid line at
+  `row+1` / `col+1`. The table's *implicit* grid then auto-sizes the column/row
+  tracks to cell content. (This sidesteps `GridContainerStyle`, whose
+  associated track-list iterator types are bound to `TaffyStyloStyle` and would
+  be awkward to synthesize.) Verified by `table_cells_lay_out_in_a_grid` (a 2x2
+  table -> four cells at the four grid positions) + paint e2e green.
 
-**Slice (revised):**
-
-1. Done: enable grid (`layout.grid.enabled`) so the grid algorithm is usable.
-2. UA sheet: replace the forced `display:block` on table elements with their
-   real display (`table` / `table-row` / `table-cell` / `table-row-group`).
-3. Box-tree: a `display:table` box gathers its descendant cells (through
-   row-group / row boxes) as direct grid children; compute the column count and
-   inject `grid-template-columns: repeat(ncols, auto)` + per-cell grid placement
-   (auto-flow suffices for the no-span first cut). Add the injection hook to the
-   grid container/item style path.
-4. First cut covers simple tables (auto column widths, no `colspan`/`rowspan`,
-   no `border-collapse`). Defer: spans (grid spans), `border-collapse`, the auto
-   vs fixed table-layout width-distribution algorithm, `<caption>` placement.
+**Deferred (real, recorded):** `colspan`/`rowspan` (map to grid spans via the
+same per-cell injection, `end: line(start + span)`); `border-collapse`; the auto
+vs fixed table-layout column-width-distribution algorithm (the implicit grid's
+`auto` tracks approximate auto-layout, but not its min/max content redistribution
+rules); `<caption>` (currently walked-past, so caption content does not render);
+`<colgroup>`/`<col>` column styling; ragged rows / cells-per-row mismatch (each
+cell is placed explicitly, so ragged tables place correctly, but missing cells
+leave grid holes rather than CSS table's anonymous-cell fill).
 
 ---
 
@@ -197,10 +191,11 @@ and `::first-line` are the most commonly hit on real pages.
 
 ## Suggested order
 
-1 (UA-sheet metric defaults) and 3 (`white-space: pre`) are **done**. Next: 2
-(tables, large but high-frequency) is the biggest remaining gap. 4 (float wrap)
-and 6 (flex/grid hardening) are the precision passes. 5 and 7 are promoted by
-target shift (interactive pages; visual polish), not by being next in line.
+1 (UA-sheet metric defaults), 3 (`white-space: pre`), and 2 (tables, first cut)
+are **done**; grid (item 6's core) is enabled too. Next: 4 (float wrap) and the
+table long-tail (spans / `border-collapse` / `<caption>`). 6 (flex hardening,
+and proving the rest of the grid surface) and 5/7 (form controls, paint tail)
+follow by target shift.
 
 Each item is independently shippable and individually testable, and none
 requires a planes-architecture change. 1's lesson for the rest: a UA-sheet

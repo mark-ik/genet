@@ -70,10 +70,22 @@ head, title, meta, link, style, script, base, noscript, template {
 address, article, aside, blockquote, div, dl, dt, dd,
 figure, figcaption, footer, h1, h2, h3, h4, h5, h6, header, hgroup,
 hr, main, nav, ol, p, pre, section, ul, li,
-fieldset, form, details, summary, dialog, menu,
-table, caption, thead, tbody, tfoot, tr {
+fieldset, form, details, summary, dialog, menu {
     display: block;
 }
+
+/* Table box hierarchy. serval lays a `display: table` box out as a CSS grid
+   (`stylo_taffy` maps table -> grid; `box_tree` flattens the row-group / row
+   nesting and gives each cell an explicit grid position). These real display
+   values replace the old `table,tr,... { display: block }` stopgap that stacked
+   every cell. `border-collapse` / `caption` placement / fixed table-layout are
+   first-cut deferrals. */
+table { display: table; }
+thead, tbody, tfoot { display: table-row-group; }
+tr { display: table-row; }
+td, th { display: table-cell; }
+caption { display: table-caption; }
+th { font-weight: bold; }
 
 /* Inline emphasis — real browsers ship these; they drive the
    per-run weight/style of inline formatting contexts. */

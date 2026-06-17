@@ -94,13 +94,12 @@ detailed with file:line in `2026-06-16_real_web_layout_fidelity_plan.md`:
    splice's margin-collapse parity and an absolute-vs-parent-relative coordinate
    bug it had been hiding (see the fidelity plan). It was the highest-value
    single fix: a thin UA sheet shifted *every box*.
-2. **Tables** rendered as block. `ua_defaults.rs` forces
-   `table,tr,...{display:block}` and `box_tree.rs:659-668` has no
-   `Display::Table` arm. **Spiked 2026-06-16:** the path is table-as-grid
-   (`stylo_taffy` already maps `display:table` -> grid), and CSS grid itself
-   was unblocked this session (`layout.grid.enabled`). Remaining work is
-   box-tree construction (flatten cells into the table grid + inject placement).
-   See the fidelity plan.
+2. **Tables** — **first cut DONE (2026-06-16)**. A `<table>` now lays out as a
+   grid of its cells (table-as-grid; `box_tree.rs` `build_table` flattens the
+   row-group/row nesting into direct grid items, each with injected
+   `grid-row`/`grid-column`). CSS grid was unblocked this session
+   (`layout.grid.enabled`). Deferred: `colspan`/`rowspan`, `border-collapse`,
+   table-layout width distribution, `<caption>`. See the fidelity plan.
 3. **`white-space: pre`/`pre-wrap`** preservation — **DONE (2026-06-16)**. The
    text path applies the computed `white-space-collapse` (`construct.rs`
    `apply_white_space_collapse`); `<pre>` preserves whitespace + newlines and

@@ -148,6 +148,12 @@ pub(crate) struct BoxNode<Id> {
     /// `key` (a constellation actor scene, a scrying WebView, a pelt tile's external
     /// content lane). The box still participates in layout like a replaced element.
     pub(crate) external_texture_key: Option<u64>,
+    /// `Some((row, col))` => this box is a `display: table-cell` flattened into
+    /// its `display: table` ancestor's grid (see [`build_table`]). It is laid out
+    /// as a grid item at the explicit 0-based `(row, col)` (injected by
+    /// [`CssStyle`]'s `GridItemStyle`), so the table's implicit grid auto-sizes
+    /// the column/row tracks to cell content. `None` for every non-cell box.
+    pub(crate) grid_placement: Option<(u16, u16)>,
     /// Paint/hit-test identity (see [`BoxSource`]). An [`BoxSource::Anonymous`]
     /// box wraps a run of a mixed container's inline-level children: it has no DOM
     /// element of its own, so it paints no box decorations — its `node_map` key is
@@ -169,6 +175,7 @@ impl<Id> BoxNode<Id> {
             marker: None,
             replaced_size: None,
             external_texture_key: None,
+            grid_placement: None,
             source,
             cache: Cache::new(),
             unrounded_layout: Layout::new(),
@@ -379,6 +386,15 @@ where
         return i;
     }
 
+    // A `display: table` box lays out as a grid (`stylo_taffy` maps it so): its
+    // cells flatten out of the row-group / row nesting into direct grid items at
+    // explicit `(row, col)` positions, so the table's implicit grid sizes the
+    // column/row tracks to cell content. (First cut: no `colspan`/`rowspan`,
+    // `border-collapse`, or `<caption>` placement.)
+    if !has_block_pseudo && table_inside(styles, elem.id()) {
+        return build_table(dom, styles, images, elem, style, tree);
+    }
+
     // Block / mixed children. Each run of (non-replaced) inline-level children —
     // non-blank text, inline-blocks, and `display:inline` elements — is wrapped
     // in an anonymous block box: a line carrying them as atomic inline content,
@@ -414,6 +430,94 @@ where
     let i = tree.push(node);
     tree.node_map.insert(elem.id(), nid(i));
     i
+}
+
+/// The computed inner display of `id`, or `None` when the cascade has not run.
+fn display_inside_of<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> Option<style::values::specified::box_::DisplayInside> {
+    styles
+        .get(id)
+        .and_then(|e| e.borrow_data())
+        .map(|d| d.styles.primary().get_box().display.inside())
+}
+
+/// Whether `id` is a `display: table` box (inner display `table`).
+fn table_inside<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId) -> bool {
+    use style::values::specified::box_::DisplayInside;
+    matches!(display_inside_of(styles, id), Some(DisplayInside::Table))
+}
+
+/// Build a `display: table` box as a grid container whose direct children are
+/// its flattened cells. Cells are gathered in row-major order through the
+/// row-group / row nesting (`<tbody>`/`<thead>`/`<tfoot>` and bare `<tr>`), each
+/// tagged with its 0-based `(row, col)` (read by [`CssStyle`]'s `GridItemStyle`),
+/// so the table's implicit grid auto-sizes the column/row tracks. First cut:
+/// `colspan`/`rowspan`, `border-collapse`, and `<caption>` are not handled.
+fn build_table<'a, D>(
+    dom: &'a D,
+    styles: &StylePlane<D::NodeId>,
+    images: &ImagePlane<D::NodeId>,
+    elem: NodeRef<'a, D>,
+    style: ServoArc<ComputedValues>,
+    tree: &mut BoxTree<D::NodeId>,
+) -> usize
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut children = Vec::new();
+    let mut row = 0u16;
+    collect_table_rows(dom, styles, images, elem, &mut row, &mut children, tree);
+    let mut node = BoxNode::new(style, BoxSource::Element(elem.id()));
+    node.children = children;
+    let i = tree.push(node);
+    tree.node_map.insert(elem.id(), nid(i));
+    i
+}
+
+/// Walk `container`'s table structure, building each `table-cell` into a grid
+/// item tagged with its `(*row, col)` and pushing it onto `children`; recurse
+/// through row groups. `*row` advances once per `table-row`.
+#[allow(clippy::too_many_arguments)]
+fn collect_table_rows<'a, D>(
+    dom: &'a D,
+    styles: &StylePlane<D::NodeId>,
+    images: &ImagePlane<D::NodeId>,
+    container: NodeRef<'a, D>,
+    row: &mut u16,
+    children: &mut Vec<usize>,
+    tree: &mut BoxTree<D::NodeId>,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    use style::values::specified::box_::DisplayInside;
+    for child in container.dom_children() {
+        match display_inside_of(styles, child.id()) {
+            Some(DisplayInside::TableRow) => {
+                let mut col = 0u16;
+                for cell in child.dom_children() {
+                    if matches!(display_inside_of(styles, cell.id()), Some(DisplayInside::TableCell)) {
+                        let ci = build_node(dom, styles, images, cell, tree);
+                        tree.nodes[ci].grid_placement = Some((*row, col));
+                        children.push(ci);
+                        col += 1;
+                    }
+                }
+                *row += 1;
+            }
+            Some(
+                DisplayInside::TableRowGroup
+                | DisplayInside::TableHeaderGroup
+                | DisplayInside::TableFooterGroup,
+            ) => collect_table_rows(dom, styles, images, child, row, children, tree),
+            // `<caption>`, `<colgroup>`, stray content: not laid out in the
+            // first-cut grid (deferred).
+            _ => {}
+        }
+    }
 }
 
 /// Build a synthetic block box for the element's block-level `::before` /
@@ -503,17 +607,21 @@ type NodeStyle = TaffyStyloStyle<ServoArc<ComputedValues>>;
 struct CssStyle {
     inner: NodeStyle,
     size_override: Option<taffy::Size<taffy::Dimension>>,
+    /// 0-based `(row, col)` for a flattened table cell — its `GridItemStyle`
+    /// reports an explicit grid line at `row + 1` / `col + 1` instead of the
+    /// element's own (`auto`) placement. `None` for every non-cell box.
+    grid_placement: Option<(u16, u16)>,
 }
 
 impl CssStyle {
     #[inline]
     fn new(inner: NodeStyle) -> Self {
-        Self { inner, size_override: None }
+        Self { inner, size_override: None, grid_placement: None }
     }
 
     #[inline]
     fn with_size(inner: NodeStyle, size: taffy::Size<taffy::Dimension>) -> Self {
-        Self { inner, size_override: Some(size) }
+        Self { inner, size_override: Some(size), grid_placement: None }
     }
 }
 
@@ -603,6 +711,39 @@ impl taffy::BlockItemStyle for CssStyle {
     }
 }
 
+impl taffy::GridItemStyle for CssStyle {
+    #[inline]
+    fn grid_row(&self) -> taffy::Line<taffy::GridPlacement<style::Atom>> {
+        match self.grid_placement {
+            // 0-based row `r` occupies grid row line `r + 1`, spanning one track
+            // (`end: auto`). This is what flattens a table cell into the table's grid.
+            Some((row, _)) => taffy::Line {
+                start: taffy::style_helpers::line(row as i16 + 1),
+                end: taffy::GridPlacement::Auto,
+            },
+            None => taffy::GridItemStyle::grid_row(&self.inner),
+        }
+    }
+    #[inline]
+    fn grid_column(&self) -> taffy::Line<taffy::GridPlacement<style::Atom>> {
+        match self.grid_placement {
+            Some((_, col)) => taffy::Line {
+                start: taffy::style_helpers::line(col as i16 + 1),
+                end: taffy::GridPlacement::Auto,
+            },
+            None => taffy::GridItemStyle::grid_column(&self.inner),
+        }
+    }
+    #[inline]
+    fn align_self(&self) -> Option<taffy::AlignSelf> {
+        taffy::GridItemStyle::align_self(&self.inner)
+    }
+    #[inline]
+    fn justify_self(&self) -> Option<taffy::AlignSelf> {
+        taffy::GridItemStyle::justify_self(&self.inner)
+    }
+}
+
 /// View bundling the tree (owns the nodes) with the parley measure
 /// context, so the measure closure in `compute_child_layout` can reach
 /// `TextMeasureCtx` while Taffy holds `&mut` to the tree — the same
@@ -625,7 +766,7 @@ impl<Id: Copy + Eq + Hash> BoxTreeView<'_, Id> {
     fn css_style(&self, n: NodeId) -> CssStyle {
         let node = self.node(n);
         let inner = TaffyStyloStyle(node.style.clone());
-        match node.replaced_size {
+        let mut cs = match node.replaced_size {
             Some((w, h)) => CssStyle::with_size(
                 inner,
                 taffy::Size {
@@ -634,7 +775,12 @@ impl<Id: Copy + Eq + Hash> BoxTreeView<'_, Id> {
                 },
             ),
             None => CssStyle::new(inner),
-        }
+        };
+        // A flattened table cell carries its explicit grid position (read by
+        // `CssStyle`'s `GridItemStyle`); harmless on non-grid paths, which never
+        // query `grid_row`/`grid_column`.
+        cs.grid_placement = node.grid_placement;
+        cs
     }
 
     /// Unified dispatch that both `LayoutPartialTree::compute_child_layout`
@@ -846,8 +992,11 @@ impl<Id: Copy + Eq + Hash> LayoutGridContainer for BoxTreeView<'_, Id> {
         = NodeStyle
     where
         Self: 'b;
+    // `CssStyle` (not raw `NodeStyle`) so a flattened table cell can report its
+    // injected `grid_row`/`grid_column`; a normal grid item carries `None` and
+    // forwards to its computed placement.
     type GridItemStyle<'b>
-        = NodeStyle
+        = CssStyle
     where
         Self: 'b;
 
@@ -857,8 +1006,8 @@ impl<Id: Copy + Eq + Hash> LayoutGridContainer for BoxTreeView<'_, Id> {
     }
 
     #[inline]
-    fn get_grid_child_style(&self, child: NodeId) -> NodeStyle {
-        self.get_core_container_style(child)
+    fn get_grid_child_style(&self, child: NodeId) -> CssStyle {
+        self.css_style(child)
     }
 }
 
@@ -1167,6 +1316,32 @@ mod tests {
         assert!(approx(at(1).0, 50.0) && approx(at(1).1, 0.0), "cell 1 at (50,0): {:?}", at(1));
         assert!(approx(at(2).0, 0.0) && approx(at(2).1, 30.0), "cell 2 at (0,30): {:?}", at(2));
         assert!(approx(at(3).0, 50.0) && approx(at(3).1, 30.0), "cell 3 at (50,30): {:?}", at(3));
+    }
+
+    /// A `<table>` lays out as a grid of its cells (first cut): a 2x2 table flattens
+    /// `table > tbody > tr > td` (html5ever auto-inserts the `<tbody>`) into four
+    /// grid items at explicit `(row, col)` positions, so the cells form a 2x2 grid
+    /// instead of stacking as blocks. Column/row tracks auto-size to the 30x20 cells.
+    #[test]
+    fn table_cells_lay_out_in_a_grid() {
+        let (doc, frags) = lay(
+            "<html><body><table>\
+                <tr><td>A</td><td>B</td></tr>\
+                <tr><td>C</td><td>D</td></tr>\
+             </table></body></html>",
+            &["td { width: 30px; height: 20px; }"],
+        );
+        let cells = find_all(&doc, html5ever::local_name!("td"));
+        assert_eq!(cells.len(), 4, "four cells");
+        let at = |i: usize| {
+            let l = frags.rect_of(cells[i]).expect("cell fragment");
+            (l.location.x, l.location.y)
+        };
+        // Cells relative to the table grid: a 2x2 layout, not a vertical stack.
+        assert!(approx(at(0).0, 0.0) && approx(at(0).1, 0.0), "A at (0,0): {:?}", at(0));
+        assert!(approx(at(1).0, 30.0) && approx(at(1).1, 0.0), "B right of A (30,0): {:?}", at(1));
+        assert!(approx(at(2).0, 0.0) && approx(at(2).1, 20.0), "C below A (0,20): {:?}", at(2));
+        assert!(approx(at(3).0, 30.0) && approx(at(3).1, 20.0), "D at (30,20): {:?}", at(3));
     }
 
     /// UA `pre { white-space: pre }` preserves source newlines as forced line
