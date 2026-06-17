@@ -631,10 +631,10 @@ pub(crate) fn walk<Id>(
     // coords) and outermost of the element's own clips. Balanced before the
     // fragment `PopTransform` below.
     let clip_path = (!is_anon)
-        .then(|| clip_path_polygon(cv, l.size.width, l.size.height))
+        .then(|| clip_path_of(cv, l.size.width, l.size.height))
         .flatten();
-    if let Some(ref path) = clip_path {
-        commands.push(PaintCmd::PushClip(ClipSpec { kind: ClipKind::Path(path.clone()) }));
+    if let Some(ref kind) = clip_path {
+        commands.push(PaintCmd::PushClip(ClipSpec { kind: kind.clone() }));
     }
     // Absolute origin to pass to children (this node's origin + its location), so a
     // deferred descendant records where to place itself.
@@ -2498,44 +2498,116 @@ fn box_shadows_of(cv: &ComputedValues) -> Vec<ShadowData> {
         .collect()
 }
 
-/// CSS `clip-path` as a paint-list path in the element's local (border-box)
-/// coordinates, or `None` when there's no clip path serval emits yet. First cut:
-/// `polygon()` only (the common custom-shape case); `circle()` / `ellipse()` /
-/// `inset()` / `path()` / `url()` are follow-ups, and the box clips normally
-/// meanwhile. The reference box is the border box (`clip-path`'s default), i.e.
-/// `(0,0)..(w,h)` in local coords — the space inside the fragment's transform.
-fn clip_path_polygon(cv: &ComputedValues, w: f32, h: f32) -> Option<PathData> {
+/// A circle/ellipse as a closed `PathData` of four cubic Beziers (the standard
+/// kappa approximation), centered `(cx, cy)` with radii `(rx, ry)` in local
+/// coords. Starts at 3 o'clock and sweeps clockwise.
+fn ellipse_path(cx: f32, cy: f32, rx: f32, ry: f32) -> PathData {
+    const K: f32 = 0.552_284_75; // 4/3 * (sqrt(2) - 1)
+    let (ox, oy) = (rx * K, ry * K);
+    let pt = LayoutPoint::new;
+    PathData {
+        commands: vec![
+            PathCommand::MoveTo(pt(cx + rx, cy)),
+            PathCommand::CurveTo { control1: pt(cx + rx, cy + oy), control2: pt(cx + ox, cy + ry), to: pt(cx, cy + ry) },
+            PathCommand::CurveTo { control1: pt(cx - ox, cy + ry), control2: pt(cx - rx, cy + oy), to: pt(cx - rx, cy) },
+            PathCommand::CurveTo { control1: pt(cx - rx, cy - oy), control2: pt(cx - ox, cy - ry), to: pt(cx, cy - ry) },
+            PathCommand::CurveTo { control1: pt(cx + ox, cy - ry), control2: pt(cx + rx, cy - oy), to: pt(cx + rx, cy) },
+            PathCommand::Close,
+        ],
+    }
+}
+
+/// CSS `clip-path` as a paint-list clip in the element's local (border-box)
+/// coordinates, or `None` when there's no clip serval emits. Handles the basic
+/// shapes `polygon()` / `circle()` / `ellipse()`; `inset()` / `rect()` / `path()`
+/// / `url()` and a reference box other than the border box are follow-ups (the
+/// box clips normally meanwhile). The border box is `(0,0)..(w,h)` here — the
+/// space inside the fragment's transform.
+fn clip_path_of(cv: &ComputedValues, w: f32, h: f32) -> Option<ClipKind> {
     use style::values::computed::Length;
-    use style::values::generics::basic_shape::{BasicShape, ClipPath};
+    use style::values::generics::basic_shape::{BasicShape, ClipPath, ShapeRadius};
+    use style::values::generics::position::PositionOrAuto;
 
     let shape = match cv.get_svg().clip_path {
         ClipPath::Shape(ref shape, _reference_box) => shape,
         _ => return None,
     };
-    let poly = match **shape {
-        BasicShape::Polygon(ref p) => p,
-        _ => return None,
+    let (cw, ch) = (w.max(0.0), h.max(0.0));
+    // `at <position>` center (default center). `Position` resolves keywords to
+    // percentages at compute time, so the components are plain LengthPercentages.
+    let center = |pos: &PositionOrAuto<style::values::computed::Position>| -> (f32, f32) {
+        match pos {
+            PositionOrAuto::Auto => (w / 2.0, h / 2.0),
+            PositionOrAuto::Position(p) => (
+                p.horizontal.resolve(Length::new(cw)).px(),
+                p.vertical.resolve(Length::new(ch)).px(),
+            ),
+        }
     };
-    if poly.coordinates.is_empty() {
-        return None;
-    }
-    let commands = poly
-        .coordinates
-        .iter()
-        .enumerate()
-        .map(|(i, c)| {
-            let x = c.0.resolve(Length::new(w.max(0.0))).px();
-            let y = c.1.resolve(Length::new(h.max(0.0))).px();
-            let pt = LayoutPoint::new(x, y);
-            if i == 0 {
-                PathCommand::MoveTo(pt)
-            } else {
-                PathCommand::LineTo(pt)
+    match **shape {
+        BasicShape::Polygon(ref poly) => {
+            if poly.coordinates.is_empty() {
+                return None;
             }
-        })
-        .chain(std::iter::once(PathCommand::Close))
-        .collect();
-    Some(PathData { commands })
+            let commands = poly
+                .coordinates
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let pt = LayoutPoint::new(
+                        c.0.resolve(Length::new(cw)).px(),
+                        c.1.resolve(Length::new(ch)).px(),
+                    );
+                    if i == 0 { PathCommand::MoveTo(pt) } else { PathCommand::LineTo(pt) }
+                })
+                .chain(std::iter::once(PathCommand::Close))
+                .collect();
+            Some(ClipKind::Path(PathData { commands }))
+        },
+        BasicShape::Circle(ref c) => {
+            let (cx, cy) = center(&c.position);
+            // CSS: a `%` circle radius resolves against `sqrt(w² + h²) / sqrt(2)`.
+            let r = match c.radius {
+                ShapeRadius::Length(ref nn) => {
+                    let basis = (cw * cw + ch * ch).sqrt() / std::f32::consts::SQRT_2;
+                    nn.0.resolve(Length::new(basis)).px()
+                },
+                ShapeRadius::ClosestSide => cx.min(cy).min(w - cx).min(h - cy).max(0.0),
+                ShapeRadius::FarthestSide => cx.max(cy).max(w - cx).max(h - cy).max(0.0),
+            };
+            Some(ClipKind::Path(ellipse_path(cx, cy, r, r)))
+        },
+        BasicShape::Ellipse(ref e) => {
+            let (cx, cy) = center(&e.position);
+            let axis = |r: &ShapeRadius<style::values::computed::LengthPercentage>, c: f32, near: f32, basis: f32| -> f32 {
+                match r {
+                    ShapeRadius::Length(nn) => nn.0.resolve(Length::new(basis)).px(),
+                    ShapeRadius::ClosestSide => c.min(near).max(0.0),
+                    ShapeRadius::FarthestSide => c.max(near).max(0.0),
+                }
+            };
+            let rx = axis(&e.semiaxis_x, cx, w - cx, cw);
+            let ry = axis(&e.semiaxis_y, cy, h - cy, ch);
+            Some(ClipKind::Path(ellipse_path(cx, cy, rx, ry)))
+        },
+        // `inset()` (computed `<basic-shape-rect>`): an inset rect. CSS order is
+        // top / right / bottom / left. First cut: sharp corners (the `round`
+        // radius is deferred); the box clips to the rect meanwhile.
+        BasicShape::Rect(ref inset) => {
+            let top = inset.rect.0.resolve(Length::new(ch)).px();
+            let right = inset.rect.1.resolve(Length::new(cw)).px();
+            let bottom = inset.rect.2.resolve(Length::new(ch)).px();
+            let left = inset.rect.3.resolve(Length::new(cw)).px();
+            let x1 = (w - right).max(left);
+            let y1 = (h - bottom).max(top);
+            Some(ClipKind::Rect(LayoutRect::new(
+                LayoutPoint::new(left, top),
+                LayoutPoint::new(x1, y1),
+            )))
+        },
+        // `path()` / `shape()` are follow-ups.
+        BasicShape::PathOrShape(_) => None,
+    }
 }
 
 /// Read an element's cascaded `opacity` as `Some(alpha)` when it is less than

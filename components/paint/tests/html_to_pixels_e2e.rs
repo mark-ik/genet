@@ -1030,6 +1030,69 @@ fn html_to_pixels_clip_path_polygon_clips_to_triangle() {
     );
 }
 
+/// `clip-path: circle(...)` clips to a disc. A 60×60 red div clipped to
+/// `circle(20px at center)` is red at the center and white in the corners
+/// (which are ~35px from center, outside the 20px radius).
+#[test]
+fn html_to_pixels_clip_path_circle_clips_to_disc() {
+    let image = render_to_image(
+        "<html><body><div></div></body></html>",
+        &[
+            "body { background-color: rgb(255, 255, 255); margin: 0; }",
+            "div {
+                width: 60px;
+                height: 60px;
+                background-color: rgb(255, 0, 0);
+                clip-path: circle(20px at center);
+            }",
+        ],
+    );
+    assert_eq!(image.get_pixel(30, 30).0, [255, 0, 0, 255], "(30,30) is the circle center, red");
+    assert_eq!(image.get_pixel(5, 5).0, [255, 255, 255, 255], "(5,5) is outside the circle, white");
+}
+
+/// `clip-path: ellipse(...)` clips to an oval. A 60×60 red div clipped to
+/// `ellipse(25px 15px at center)` is red at the center and clipped above/below
+/// (a point 27px above center exceeds the 15px y-radius).
+#[test]
+fn html_to_pixels_clip_path_ellipse_clips_to_oval() {
+    let image = render_to_image(
+        "<html><body><div></div></body></html>",
+        &[
+            "body { background-color: rgb(255, 255, 255); margin: 0; }",
+            "div {
+                width: 60px;
+                height: 60px;
+                background-color: rgb(255, 0, 0);
+                clip-path: ellipse(25px 15px at center);
+            }",
+        ],
+    );
+    assert_eq!(image.get_pixel(30, 30).0, [255, 0, 0, 255], "(30,30) is the ellipse center, red");
+    assert_eq!(image.get_pixel(30, 3).0, [255, 255, 255, 255], "(30,3) exceeds the y-radius, white");
+}
+
+/// `clip-path: inset(...)` clips to an inset rect. A 60×60 red div clipped to
+/// `inset(10px)` shows red only in the inner `(10,10)..(50,50)` rect; the 10px
+/// border is clipped to white.
+#[test]
+fn html_to_pixels_clip_path_inset_clips_to_rect() {
+    let image = render_to_image(
+        "<html><body><div></div></body></html>",
+        &[
+            "body { background-color: rgb(255, 255, 255); margin: 0; }",
+            "div {
+                width: 60px;
+                height: 60px;
+                background-color: rgb(255, 0, 0);
+                clip-path: inset(10px);
+            }",
+        ],
+    );
+    assert_eq!(image.get_pixel(30, 30).0, [255, 0, 0, 255], "(30,30) inside the inset rect, red");
+    assert_eq!(image.get_pixel(5, 5).0, [255, 255, 255, 255], "(5,5) in the inset border, white");
+}
+
 /// Nested elements with distinct colors paint into the right pixels.
 /// `<div>` is 50×50 anchored at body's origin (top-left); a pixel
 /// inside the div should carry its background color, and a pixel
