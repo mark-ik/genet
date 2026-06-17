@@ -181,11 +181,20 @@ container-style forwarding. No new dispatch, mostly correctness hardening.
 
 ## 7. Paint tail
 
-**State:** the long tail of paint features named in the 2026-06-14 audit: inset
-shadow, blend modes, filters, `::first-line`. Each is bounded and independent.
+**State:** the long tail of paint features named in the 2026-06-14 audit:
+~~inset shadow~~, blend modes, filters, `::first-line`. Each is bounded and
+independent.
 
-**Slice:** pick up opportunistically; none blocks the higher items. Inset shadow
-and `::first-line` are the most commonly hit on real pages.
+- **Inset `box-shadow` — DONE (2026-06-17).** Was deferred on both sides;
+  emitted in `paint_emit` (after background, padding-box bounds, `clip_mode:
+  Inset`) and rendered in netrender. Hard (`blur: 0`) = clip-difference frame
+  rects; blurred = an *inverse* Gaussian mask (`cs_clip_rectangle`'s new `INVERT`
+  override outputs `1 - coverage`; blur is linear so `blur(1-c) == 1 - blur(c)`),
+  composited over the box and clipped to it (the scene has no destination-out
+  compose). Verified by two e2e tests (inset ring + soft inner halo).
+
+**Slice (remaining):** blend modes, filters, `::first-line` — pick up
+opportunistically; none blocks the higher items.
 
 ---
 
