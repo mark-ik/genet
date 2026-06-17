@@ -232,7 +232,12 @@ impl TileShell {
         }
         if let Some(node) = self.surface.hit_test_frame(x, y, w, h) {
             self.surface.dispatch_click(node, PointerClick::at(self.cursor));
-            self.surface.pump();
+            // The click queued a gesture (e.g. a close ×). Standalone pelt applies it
+            // here; a host-authoritative shell leaves it for `take_events` so the host
+            // applies it to its arrangement and re-projects.
+            if !self.host_authoritative {
+                self.surface.pump();
+            }
         }
         true
     }
@@ -258,7 +263,11 @@ impl TileShell {
                 let (w, h) = (self.width, self.height);
                 if let Some(node) = self.surface.hit_test_frame(drag.start.0, drag.start.1, w, h) {
                     self.surface.dispatch_click(node, PointerClick::at(drag.start));
-                    self.surface.pump();
+                    // An unmoved press is a tab activate. Standalone pelt applies it; a
+                    // host-authoritative shell leaves it for `take_events`.
+                    if !self.host_authoritative {
+                        self.surface.pump();
+                    }
                 }
             }
             return true;
@@ -420,6 +429,35 @@ mod tests {
             "the divider drag is reported as DividerMoved: {events:?}"
         );
         shell.pointer_up();
+    }
+
+    /// In host-authority mode an unmoved tab click is reported as Activated via
+    /// take_events *without* applying it locally — the host (meerkat's Workbench) owns
+    /// the active tab and re-projects. (The click path also went through `pump` before;
+    /// this guards that it now queues for the host instead.)
+    #[test]
+    fn host_authoritative_reports_tab_activate_without_applying() {
+        let tree = TileTree::stack(vec![doc_tile(1, "<p>1</p>"), doc_tile(2, "<p>2</p>")], 0);
+        let mut shell = TileShell::new_host_authoritative(tree);
+        shell.resize(800, 600);
+        let _ = shell.frame();
+        let x = (0..400)
+            .map(|x| x as f32)
+            .find(|&x| shell.surface().tab_at(x, 14.0, 800, 600) == Some(TileId(2)))
+            .expect("tab 2 is in the tab bar");
+        shell.pointer_move(x, 14.0);
+        shell.pointer_down();
+        shell.pointer_up();
+        if let TileTree::Stack(s) = shell.tree() {
+            assert_eq!(s.active, 0, "host-authority mode does not change the active tab locally");
+        } else {
+            panic!("expected a stack");
+        }
+        let events = shell.take_events();
+        assert!(
+            events.iter().any(|e| matches!(e, TileEvent::Activated(TileId(2)))),
+            "the unmoved tab click is reported as Activated: {events:?}"
+        );
     }
 
     /// A tab dropped onto another stack's tab bar merges into that stack instead of
