@@ -205,6 +205,56 @@ fn collapse_whitespace(s: &str) -> String {
     out
 }
 
+/// Collapse runs of whitespace, but preserve forced line breaks: a run that
+/// contains a `\n` becomes a single `\n` (parley breaks there), any other run a
+/// single space (CSS `white-space-collapse: preserve-breaks`, i.e. `pre-line`).
+fn collapse_preserving_breaks(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut run_ws = false;
+    let mut run_has_break = false;
+    for c in s.chars() {
+        if c.is_whitespace() {
+            run_ws = true;
+            run_has_break |= c == '\n';
+        } else {
+            if run_ws {
+                out.push(if run_has_break { '\n' } else { ' ' });
+                run_ws = false;
+                run_has_break = false;
+            }
+            out.push(c);
+        }
+    }
+    if run_ws {
+        out.push(if run_has_break { '\n' } else { ' ' });
+    }
+    out
+}
+
+/// Apply `text`'s computed `white-space-collapse` to source `text`, the CSS
+/// step that turns formatting whitespace into rendered whitespace + forced
+/// breaks before it reaches parley. `Collapse` (the `white-space: normal` /
+/// `nowrap` default) folds every run to one space; `Preserve` / `BreakSpaces`
+/// (`pre` / `pre-wrap`) keep whitespace and newlines verbatim — parley breaks at
+/// each `\n`; `PreserveBreaks` (`pre-line`) collapses spaces but keeps newlines.
+fn apply_white_space_collapse<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+    text: &str,
+) -> String {
+    use style::computed_values::white_space_collapse::T as Collapse;
+    let mode = styles
+        .get(id)
+        .and_then(|e| e.borrow_data())
+        .map(|d| d.styles.primary().get_inherited_text().white_space_collapse)
+        .unwrap_or(Collapse::Collapse);
+    match mode {
+        Collapse::Collapse => collapse_whitespace(text),
+        Collapse::Preserve | Collapse::BreakSpaces => text.to_string(),
+        Collapse::PreserveBreaks => collapse_preserving_breaks(text),
+    }
+}
+
 /// Whether `id` is `display: inline-block` — inline-level outside, but an
 /// independent (flow-root) formatting context inside.
 pub(crate) fn is_inline_block<NodeId: Copy + Eq + Hash>(
@@ -500,13 +550,15 @@ fn gather_child<'a, D>(
 {
     match dom.kind(child.id()) {
         NodeKind::Text => {
-            // CSS `white-space: normal` — collapse each run of whitespace
-            // (including source newlines + indentation) to a single space, so
-            // formatting whitespace does not force line breaks (parley breaks
-            // on `\n`) or render as literal runs. A real line break comes only
-            // from `<br>`. (Leading/trailing-edge trimming and `pre` are
-            // follow-ups.)
-            let text = collapse_whitespace(dom.text(child.id()).unwrap_or(""));
+            // CSS white-space-collapse, applied per the text's computed value.
+            // The `white-space: normal` / `nowrap` default collapses each run of
+            // whitespace (source newlines + indentation) to one space, so
+            // formatting whitespace does not force line breaks (parley breaks on
+            // `\n`) or render as literal runs. `pre` / `pre-wrap` preserve
+            // whitespace + newlines (each source `\n` becomes a parley break);
+            // `pre-line` collapses spaces but keeps newlines. (Leading/trailing-
+            // edge trimming is a follow-up.) A real break also comes from `<br>`.
+            let text = apply_white_space_collapse(styles, styling, dom.text(child.id()).unwrap_or(""));
             if !text.is_empty() {
                 let start = *offset;
                 *offset += text.len();

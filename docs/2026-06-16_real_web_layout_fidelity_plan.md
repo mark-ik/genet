@@ -59,9 +59,7 @@ neutralize the new gutter for their pixel coordinates).
   they keep exercising the splice path under the UA `p` margin instead of taking
   the collapse fallback.
 
-**Deferred (small):** nested-section heading rescaling (`:is(article,…) h1`);
-`white-space: pre` lets `<pre>` preserve newlines (item 3) so the `pre` margin
-is the only `<pre>` UA rule still partial.
+**Deferred (small):** nested-section heading rescaling (`:is(article,…) h1`).
 
 ---
 
@@ -83,20 +81,25 @@ before committing; do not assume grid-as-table is free.
 
 ---
 
-## 3. `white-space: pre` / `pre-wrap` preservation
+## 3. `white-space: pre` / `pre-wrap` preservation — DONE (2026-06-16)
 
-**State:** `construct.rs:509` calls `collapse_whitespace` unconditionally on
-text content, so source newlines and indentation always collapse to single
-spaces. `white-space: nowrap` is handled (`construct.rs:163`, tested
-`box_tree.rs:1221`), but the *preserve* values (`pre`, `pre-wrap`, `pre-line`)
-are not. Code blocks, ASCII art, and `<pre>` content render wrong.
+**Shipped.** The text-gathering path no longer collapses unconditionally: it
+reads the text's computed `white-space-collapse` and applies it
+(`construct.rs` `apply_white_space_collapse`). `Collapse` (the `white-space:
+normal` / `nowrap` default) folds whitespace runs to one space as before;
+`Preserve` / `BreakSpaces` (`pre` / `pre-wrap`) keep whitespace + newlines
+verbatim, and each source `\n` becomes a parley line break (the same mechanism
+`<br>` already used); `PreserveBreaks` (`pre-line`) collapses spaces but keeps
+newlines. The UA sheet gains `pre { white-space: pre }` (the shorthand also sets
+`text-wrap-mode: nowrap`, so `<pre>` lines don't soft-wrap, riding the existing
+`no_wrap_of` path). Verified: `box_tree.rs`
+(`pre_preserves_newlines_as_line_breaks` + a `normal_whitespace_collapses_newlines`
+control) and the 19 `paint` e2e tests (normal-text collapse unchanged).
 
-**Slice:** gate `collapse_whitespace` on the computed `white-space` value at the
-`construct.rs:509` call site; for `pre`/`pre-wrap` preserve runs and honor
-forced newlines (segment text on `\n` into separate inline items or carry the
-break into the parley builder). Self-contained in `construct.rs` +
-`text_measure.rs`. Add a test that a `<pre>` with two source lines lays out on
-two lines.
+**Deferred (small):** leading/trailing per-line whitespace trimming edge cases;
+a monospace default font-family for `<pre>` (depends on a registered monospace
+face); `tab-size`. The core preserve-newlines behavior that makes code blocks
+and ASCII art legible is in.
 
 ---
 
@@ -158,11 +161,10 @@ and `::first-line` are the most commonly hit on real pages.
 
 ## Suggested order
 
-1 (UA-sheet metric defaults) is **done**, including the splice margin-collapse
-parity it turned out to require. Next: 3 (`white-space:pre`, small and
-self-contained) and 2 (tables, large but high-frequency). 4 (float wrap) and 6
-(flex/grid hardening) are the precision passes. 5 and 7 are promoted by target
-shift (interactive pages; visual polish), not by being next in line.
+1 (UA-sheet metric defaults) and 3 (`white-space: pre`) are **done**. Next: 2
+(tables, large but high-frequency) is the biggest remaining gap. 4 (float wrap)
+and 6 (flex/grid hardening) are the precision passes. 5 and 7 are promoted by
+target shift (interactive pages; visual polish), not by being next in line.
 
 Each item is independently shippable and individually testable, and none
 requires a planes-architecture change. 1's lesson for the rest: a UA-sheet

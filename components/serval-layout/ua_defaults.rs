@@ -101,7 +101,10 @@ h6 { font-size: 0.67em; margin: 2.33em 0; font-weight: bold; }
    paragraphs sit one line apart, not two. */
 p, dl { margin: 1em 0; }
 blockquote, figure { margin: 1em 40px; }
-pre { margin: 1em 0; }
+/* `<pre>` preserves source whitespace + newlines and does not soft-wrap
+   (`white-space: pre` = `white-space-collapse: preserve` + `text-wrap-mode:
+   nowrap`), so code blocks / ASCII art keep their lines. */
+pre { margin: 1em 0; white-space: pre; }
 dd { margin-left: 40px; }
 hr { margin: 0.5em 0; }
 

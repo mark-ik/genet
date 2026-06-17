@@ -1143,6 +1143,50 @@ mod tests {
         );
     }
 
+    /// UA `pre { white-space: pre }` preserves source newlines as forced line
+    /// breaks: a three-line `<pre>` is about three times as tall as a one-line
+    /// one (a `white-space: normal` element would collapse the newlines to spaces
+    /// and lay all the text on one line).
+    #[test]
+    fn pre_preserves_newlines_as_line_breaks() {
+        let (doc3, frags3) = lay("<html><body><pre>a\nb\nc</pre></body></html>", &[]);
+        let three = frags3
+            .rect_of(find_all(&doc3, html5ever::local_name!("pre"))[0])
+            .expect("3-line pre");
+        let (doc1, frags1) = lay("<html><body><pre>a</pre></body></html>", &[]);
+        let one = frags1
+            .rect_of(find_all(&doc1, html5ever::local_name!("pre"))[0])
+            .expect("1-line pre");
+        assert!(
+            three.size.height > one.size.height * 2.0,
+            "3-line pre should be ~3x a 1-line pre: three={}, one={}",
+            three.size.height,
+            one.size.height
+        );
+    }
+
+    /// A `white-space: normal` block (the default) collapses source newlines to
+    /// spaces, so the same three lines lay out as one — the control that proves
+    /// `pre_preserves_newlines_as_line_breaks` is the `pre` rule talking, not the
+    /// parser keeping newlines for everyone.
+    #[test]
+    fn normal_whitespace_collapses_newlines() {
+        let (doc, frags) = lay("<html><body><div>a\nb\nc</div></body></html>", &[]);
+        let div = frags
+            .rect_of(find_all(&doc, html5ever::local_name!("div"))[0])
+            .expect("div");
+        let (doc1, frags1) = lay("<html><body><pre>a</pre></body></html>", &[]);
+        let one = frags1
+            .rect_of(find_all(&doc1, html5ever::local_name!("pre"))[0])
+            .expect("1-line pre");
+        assert!(
+            div.size.height < one.size.height * 1.6,
+            "collapsed div stays one line (< ~1.6x a single line): div={}, one={}",
+            div.size.height,
+            one.size.height
+        );
+    }
+
     /// `::before` / `::after` with string `content` generate inline runs around
     /// the element's own content, ordered before/after it, each carrying the
     /// pseudo's *own* cascaded style (not the element's).

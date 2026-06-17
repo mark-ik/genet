@@ -97,8 +97,10 @@ detailed with file:line in `2026-06-16_real_web_layout_fidelity_plan.md`:
 2. **Tables** rendered as block. `ua_defaults.rs` forces
    `table,tr,...{display:block}` and `box_tree.rs:659-668` has no
    `Display::Table` arm. **Next up.**
-3. **`white-space: pre`/`pre-wrap`** not preserved. `construct.rs:509` calls
-   `collapse_whitespace` unconditionally; `nowrap` is handled, `pre` is not.
+3. **`white-space: pre`/`pre-wrap`** preservation — **DONE (2026-06-16)**. The
+   text path applies the computed `white-space-collapse` (`construct.rs`
+   `apply_white_space_collapse`); `<pre>` preserves whitespace + newlines and
+   does not soft-wrap.
 4. **Text wrap-around-floats.** The `break_all_lines` seam in `text_measure.rs`
    does not yet shape around float exclusion rects.
 5. **Engine-rendered form controls** (vs the host-side controls that exist
