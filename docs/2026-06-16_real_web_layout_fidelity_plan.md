@@ -202,8 +202,40 @@ and independent.
   composited over the box and clipped to it (the scene has no destination-out
   compose). Verified by two e2e tests (inset ring + soft inner halo).
 
-**Slice (remaining):** blend modes, filters, `::first-line` — pick up
-opportunistically; none blocks the higher items.
+- **`mix-blend-mode` — DONE (2026-06-17).** The paint-list `LayerSpec` already
+  carries `mix_blend_mode` and the translator + vello rasterizer apply it (the
+  canonical 6: Normal/Multiply/Screen/Overlay/Darken/Lighten; richer modes fall
+  back to Normal until netrender's `SceneBlendMode` grows). serval just wasn't
+  emitting it — `paint_emit` now reads `cv.get_effects().mix_blend_mode` and
+  opens the element's stacking layer for a non-normal mode (alongside opacity).
+  Verified by an e2e test (red child `multiply` over a blue parent → black).
+
+- **`border-image` (image source) — confirmed already DONE.** `DrawBorder`
+  routes `NinePatch` details to `emit_nine_patch` (corners/edges/`fill`);
+  serval's `emit_border_image` emits them. Only a *gradient* source is deferred
+  (`paint_list_render` ~918) — niche.
+
+**Slice (remaining) — both verified heavy, both low-priority (none blocks
+higher items):**
+
+- **`filter` (element).** Not a wire-up. `LayerSpec.filters` carries the full
+  CSS chain (blur + the color ops) but the translator applies only `Opacity`;
+  the rest are dropped. The renderer has *backdrop*-filter machinery (D1, woven
+  through `tile_cache` + `vello_tile_rasterizer` via `render_to_texture` +
+  `filter.rs`), but that filters the content *behind* a layer, not the layer's
+  own output. Element `filter` needs a new layer-output filter pass + color
+  `SceneFilter` variants/shaders + translator + serval emission — a focused GPU
+  effort.
+
+- **`::first-line`.** Blocked below serval: the **servo** `PseudoElement` enum
+  (`style/servo/selector_parser.rs:50`) has no `FirstLine` variant ("If/when
+  :first-line is added…"), so it is never parsed or cascaded — unlike the
+  working `::first-letter`. Support means a **vendored-Stylo** addition (enum
+  variant + `"first-line"` parse + eager-pseudo cascade registration +
+  `APPLIES_TO_FIRST_LINE` flags), *then* the paint override (the line iteration
+  in `emit_inline_content` makes line-0 trivial to target; `StylePlane` would
+  thread into the `Emitter` to reach the pseudo cv). Color-only is metric-safe
+  (no re-break); `font-*` on the first line would force relayout.
 
 ---
 
