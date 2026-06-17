@@ -927,6 +927,42 @@ fn html_to_pixels_box_shadow_blur_renders_soft_halo() {
     );
 }
 
+/// A hard inset `box-shadow` paints inside the box, clipped to the padding box.
+/// A 60×60 white div with `box-shadow: inset 0 0 0 10px rgb(255,0,0)` (offset 0,
+/// blur 0, spread 10) fills the outer 10px ring red, leaving a 40×40 white hole.
+/// (`margin: 0` so the div sits at the origin for exact coordinates.)
+#[test]
+fn html_to_pixels_box_shadow_inset_hard_renders_inner_ring() {
+    let image = render_to_image(
+        "<html><body><div></div></body></html>",
+        &[
+            "body { background-color: rgb(255, 255, 255); margin: 0; }",
+            "div {
+                width: 60px;
+                height: 60px;
+                background-color: rgb(255, 255, 255);
+                box-shadow: inset 0 0 0 10px rgb(255, 0, 0);
+            }",
+        ],
+    );
+    // Div (0,0)..(60,60); inset shadow fills the outer 10px ring, hole (10,10)..(50,50).
+    assert_eq!(
+        image.get_pixel(5, 30).0,
+        [255, 0, 0, 255],
+        "(5,30) is in the left inset ring, should be red"
+    );
+    assert_eq!(
+        image.get_pixel(30, 5).0,
+        [255, 0, 0, 255],
+        "(30,5) is in the top inset ring, should be red"
+    );
+    assert_eq!(
+        image.get_pixel(30, 30).0,
+        [255, 255, 255, 255],
+        "(30,30) is in the inset hole, should be white"
+    );
+}
+
 /// Nested elements with distinct colors paint into the right pixels.
 /// `<div>` is 50×50 anchored at body's origin (top-left); a pixel
 /// inside the div should carry its background color, and a pixel

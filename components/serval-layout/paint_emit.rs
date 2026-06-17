@@ -647,8 +647,9 @@ pub(crate) fn walk<Id>(
     let content_offset = (l.border.left + l.padding.left, l.border.top + l.padding.top);
 
     // Outset box-shadows paint behind the border-box, so emit them before the
-    // background. (Inset shadows are deferred — skipped here.) An anonymous box
-    // paints none of its (borrowed-key's) box decorations.
+    // background. (Inset shadows paint over the background instead — emitted
+    // after it, below.) An anonymous box paints none of its (borrowed-key's)
+    // box decorations.
     for shadow in box_shadows_of(cv).into_iter().filter(|_| !is_anon) {
         if shadow.inset {
             continue;
@@ -765,6 +766,28 @@ pub(crate) fn walk<Id>(
     // Close the border-radius clip around the background layers.
     if bg_radius.is_some() {
         commands.push(PaintCmd::PopClip);
+    }
+    // Inset box-shadows paint over the background, clipped to the padding box,
+    // under the content + border (CSS Backgrounds-3 paint order). `box_bounds` is
+    // the padding box (border box inset by the border widths); the renderer casts
+    // the shadow inward from that edge and clips it there.
+    if !is_anon {
+        let pad = LayoutRect::new(
+            LayoutPoint::new(l.border.left, l.border.top),
+            LayoutPoint::new(l.size.width - l.border.right, l.size.height - l.border.bottom),
+        );
+        for shadow in box_shadows_of(cv).into_iter().filter(|s| s.inset) {
+            commands.push(PaintCmd::DrawShadow(ShadowItem {
+                placement: CommonPlacement::new(pad),
+                box_bounds: pad,
+                offset: LayoutVector2D::new(shadow.h, shadow.v),
+                color: shadow.color,
+                blur_radius: shadow.blur,
+                spread_radius: shadow.spread,
+                border_radius: BorderRadius::zero(),
+                clip_mode: BoxShadowClipMode::Inset,
+            }));
+        }
     }
     if let Some(texture_key) = node.external_texture_key {
         // An `<external-texture>` paints no serval content: emit a compositor-pass
