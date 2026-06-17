@@ -121,7 +121,17 @@ impl TileShell {
     /// at the cursor. The host composites the returned [`TileFrame`].
     pub fn frame(&mut self) -> TileFrame {
         let mut frame = self.surface.frame(self.width, self.height);
-        self.tile_rects = frame.tiles.iter().map(|t| (t.tile, t.rect)).collect();
+        // Cache every tile's content rect for input routing (click / scroll / drop).
+        // A host-driven tile (meerkat) composites its own texture, so it has no document
+        // layer in `frame.tiles` but does report an `external_tiles` rect — include both,
+        // or drop resolution (`resolve_drop` -> `tile_at`) never finds an external tile
+        // and an Edge (split) drop can't resolve.
+        self.tile_rects = frame
+            .tiles
+            .iter()
+            .map(|t| (t.tile, t.rect))
+            .chain(frame.external_tiles.iter().map(|(tile, rect, _)| (*tile, *rect)))
+            .collect();
         if let Some(drag) = self.tab_drag.as_ref() {
             if drag.moved {
                 if let Some(title) = self.surface.tile_title(drag.tile) {
@@ -457,6 +467,46 @@ mod tests {
         assert!(
             events.iter().any(|e| matches!(e, TileEvent::Activated(TileId(2)))),
             "the unmoved tab click is reported as Activated: {events:?}"
+        );
+    }
+
+    /// A host-driven tile composites its own texture (meerkat's lane), so it has no
+    /// document layer — its content rect lives only in `frame.external_tiles`. The shell
+    /// must still find it for drop resolution: dragging a tab onto an external tile's
+    /// content resolves an Edge (split) drop. Guards the regression where `tile_rects`
+    /// drew only from `frame.tiles` and every meerkat drop silently failed.
+    #[test]
+    fn host_authority_edge_drop_resolves_external_tile() {
+        fn ext_tile(id: u64) -> Tile {
+            Tile {
+                id: TileId(id),
+                title: format!("ext{id}"),
+                content: ContentSource::ExternalTexture(pelt_core::tile::TextureKey(id)),
+                accent: None,
+            }
+        }
+        let tree = TileTree::split(
+            SplitAxis::Row,
+            vec![
+                TileBranch::new(0.5, TileTree::stack(vec![ext_tile(1), ext_tile(2)], 0)),
+                TileBranch::new(0.5, TileTree::single(ext_tile(3))),
+            ],
+        );
+        let mut shell = TileShell::new_host_authoritative(tree);
+        shell.resize(800, 600);
+        let _ = shell.frame();
+        // Drag tab 1 from the left stack onto the right (external) pane's content.
+        shell.pointer_move(20.0, 14.0);
+        shell.pointer_down();
+        shell.pointer_move(770.0, 300.0);
+        shell.pointer_up();
+        let events = shell.take_events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                TileEvent::Dragged { tile: TileId(1), to: DropTarget::Edge { tile: TileId(3), .. } }
+            )),
+            "dragging onto an external tile resolves an Edge drop: {events:?}"
         );
     }
 

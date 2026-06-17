@@ -185,7 +185,7 @@ const DEFAULT_TILE_CSS: &str = "\
     .tile-split { width: 100%; height: 100%; } \
     .tile-branch { display: flex; } \
     .tile-stack { width: 100%; height: 100%; } \
-    .tile-tabbar { display: flex; height: 28px; background: #33333a; } \
+    .tile-tabbar { display: flex; height: 36px; background: #33333a; } \
     .tile-tab { display: flex; align-items: center; padding: 5px 10px; color: #cccccc; background: #2a2a30; margin-right: 2px; } \
     .tile-tab.active { color: #ffffff; background: #4a4a55; } \
     .tile-close { margin-left: 8px; padding: 0 4px; color: #999999; } \
