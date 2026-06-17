@@ -3932,7 +3932,7 @@ dependencies = [
 [[package]]
 name = "netrender"
 version = "0.0.1"
-source = "git+https://github.com/mark-ik/webrender-wgpu.git?branch=main#6054a0256acf546873cad3c990fc2f9d23f900eb"
+source = "git+https://github.com/mark-ik/netrender.git?branch=main#6054a0256acf546873cad3c990fc2f9d23f900eb"
 dependencies = [
  "log",
  "netrender_device",
@@ -3944,7 +3944,7 @@ dependencies = [
 [[package]]
 name = "netrender_device"
 version = "0.0.1"
-source = "git+https://github.com/mark-ik/webrender-wgpu.git?branch=main#6054a0256acf546873cad3c990fc2f9d23f900eb"
+source = "git+https://github.com/mark-ik/netrender.git?branch=main#6054a0256acf546873cad3c990fc2f9d23f900eb"
 dependencies = [
  "log",
  "pollster",
@@ -4826,7 +4826,7 @@ dependencies = [
 [[package]]
 name = "paint_list_api"
 version = "0.0.1"
-source = "git+https://github.com/mark-ik/webrender-wgpu.git?branch=main#6054a0256acf546873cad3c990fc2f9d23f900eb"
+source = "git+https://github.com/mark-ik/netrender.git?branch=main#6054a0256acf546873cad3c990fc2f9d23f900eb"
 dependencies = [
  "euclid",
  "serde",
@@ -4835,7 +4835,7 @@ dependencies = [
 [[package]]
 name = "paint_list_render"
 version = "0.0.1"
-source = "git+https://github.com/mark-ik/webrender-wgpu.git?branch=main#6054a0256acf546873cad3c990fc2f9d23f900eb"
+source = "git+https://github.com/mark-ik/netrender.git?branch=main#6054a0256acf546873cad3c990fc2f9d23f900eb"
 dependencies = [
  "log",
  "netrender",

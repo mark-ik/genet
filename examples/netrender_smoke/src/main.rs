@@ -4,7 +4,7 @@
 
 //! Phase 1 second receipt — embedder hookup smoke.
 //!
-//! Standalone binary (NOT a servo-wgpu workspace member; see Cargo.toml).
+//! Standalone binary (NOT a serval workspace member; see Cargo.toml).
 //! Proves the netrender API survives contact with a real embedder context
 //! without the Servo stack.
 //!
@@ -19,8 +19,8 @@
 //! - Call `Renderer::render` against the target view
 //! - Poll the device — completes without error
 //!
-//! The servo-wgpu workspace Cargo.toml has a broken patch for `webrender`
-//! (directory renamed to `netrender` in webrender-wgpu commit c9481b04b,
+//! The serval workspace Cargo.toml has a broken patch for `webrender`
+//! (directory renamed to `netrender` in netrender commit c9481b04b,
 //! 2026-04-30). This standalone binary bypasses that workspace entirely
 //! so the embedder hookup receipt can be captured now.
 
@@ -102,21 +102,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let log = format!(
         "Phase 1 second receipt (embedder hookup): PASS\n\
          date: 2026-04-30\n\
-         binary: servo-wgpu/examples/netrender_smoke\n\
+         binary: serval/examples/netrender_smoke\n\
          adapter: {} ({:?})\n\
          target: {}x{} {:?}\n\
          frame: 1x full-NDC red brush_solid via Renderer::render\n\
          result: Renderer::render completed without error\n\
-         note: standalone binary (not workspace member) — servo-wgpu\n\
+         note: standalone binary (not workspace member) — serval\n\
                workspace blocked by broken webrender patch (renamed to\n\
-               netrender in webrender-wgpu c9481b04b, 2026-04-30)\n",
+               netrender in netrender c9481b04b, 2026-04-30)\n",
         final_info.name,
         final_info.backend,
         DIM,
         DIM,
         TARGET_FORMAT,
     );
-    let log_path = "C:/Users/mark_/Code/repos/webrender-wgpu/netrender-notes/logs/2026-04-30_netrender_embedder_hookup.log";
+    let log_path = "C:/Users/mark_/Code/repos/netrender/netrender-notes/logs/2026-04-30_netrender_embedder_hookup.log";
     std::fs::write(log_path, &log)?;
     println!("log written to {}", log_path);
 

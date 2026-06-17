@@ -67,14 +67,14 @@ pub fn read_texture_to_image(
     let (origin, width, height) = clamp_readback_rect(rect, size)?;
     let padded_bytes_per_row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("servo_wgpu_readback_buffer"),
+        label: Some("serval_readback_buffer"),
         size: padded_bytes_per_row as u64 * height as u64,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
 
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("servo_wgpu_readback_encoder"),
+        label: Some("serval_readback_encoder"),
     });
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {

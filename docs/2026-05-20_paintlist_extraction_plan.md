@@ -21,7 +21,7 @@ The PM-3 dep graph placed PaintList consumption "in netrender"
 That couldn't ship as written:
 
 1. **netrender is a fork of `servo/webrender`.** Its remotes are
-   `origin = mark-ik/webrender-wgpu`, `upstream = servo/webrender`. It is
+   `origin = mark-ik/netrender`, `upstream = servo/webrender`. It is
    kept rebaseable on upstream and engine-agnostic. Housing
    `paint-list-api` inside the `netrender` crate would inject Mere/Serval
    engine vocabulary (`EngineId::{SERVAL,NEMATIC,SCRYING}`, CSS display-list

@@ -78,7 +78,7 @@ impl WgpuRenderingContext {
         let required_features = adapter.features() & wanted_features;
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("servo_wgpu_rendering_context"),
+            label: Some("serval_rendering_context"),
             required_features,
             required_limits: wgpu::Limits {
                 // WebRender's composite shader uses up to @location(17).
@@ -168,7 +168,7 @@ impl WgpuRenderingContext {
         if needs_new_texture {
             *captured_frame = Some(CapturedFrame {
                 texture: self.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("servo_wgpu_readback_snapshot"),
+                    label: Some("serval_readback_snapshot"),
                     size: wgpu::Extent3d {
                         width: size.width,
                         height: size.height,
@@ -193,7 +193,7 @@ impl WgpuRenderingContext {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("servo_wgpu_snapshot_encoder"),
+                label: Some("serval_snapshot_encoder"),
             });
         encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {

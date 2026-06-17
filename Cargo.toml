@@ -191,8 +191,8 @@ parking_lot = { version = "0.12", features = ["serde"] }
 parley = { version = "0.10.0", default-features = true }
 pelt-core = { version = "=0.2.0", path = "ports/pelt-core" }
 pelt-desktop = { version = "=0.2.0", path = "ports/pelt-desktop" }
-netrender = { git = "https://github.com/mark-ik/webrender-wgpu.git", branch = "main" }
-netrender_device = { git = "https://github.com/mark-ik/webrender-wgpu.git", branch = "main" }
+netrender = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
+netrender_device = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
 # (No xilem git deps remain. The Masonry-era `xilem` / `masonry` /
 # `masonry_winit` git deps left with pelt-viewer's retirement, 2026-06-12. The
 # last survivor, `xilem_core`, was vendored into `components/xilem-core` (a
@@ -318,10 +318,10 @@ paint = { package = "servo-paint", version = "=0.2.0", path = "components/paint"
 paint_api = { package = "servo-paint-api", version = "=0.2.0", path = "components/shared/paint" }
 # Moved to the netrender workspace as a neutral, engine-agnostic crate
 # (extraction plan 2026-05-20). serval is now a consumer, not the owner.
-paint_list_api = { git = "https://github.com/mark-ik/webrender-wgpu.git", branch = "main" }
+paint_list_api = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
 # The PaintCmd -> netrender::Scene translator; also lives in the netrender
 # workspace so any engine (serval, nematic, inker) can reuse the lowering.
-paint_list_render = { git = "https://github.com/mark-ik/webrender-wgpu.git", branch = "main" }
+paint_list_render = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
 paint_types = { package = "servo-paint-types", version = "=0.2.0", path = "components/shared/paint-types" }
 pixels = { package = "servo-pixels", version = "=0.2.0", path = "components/pixels" }
 profile = { package = "servo-profile", version = "=0.2.0", path = "components/profile" }
@@ -476,7 +476,7 @@ stylo_atoms = { git = "https://github.com/servo/stylo", rev = "572ecba2d1600e7c3
 # directly from crates.io. If vello upstream needs a fork applied later,
 # re-add here pinned to a specific upstream version.
 # For WebRender / netrender:
-# The webrender-wgpu/ workspace was renamed to netrender/, which dropped
+# The netrender/ workspace (formerly the webrender-wgpu fork) dropped
 # webrender, webrender_api, and wr_malloc_size_of as separate crates. Local
 # stubs in support/patches/ restore workspace loadability while consumers
 # are migrated to netrender's surface (post-cut C2-C4 work).

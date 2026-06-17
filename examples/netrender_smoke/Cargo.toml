@@ -4,15 +4,15 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Standalone project — intentionally NOT a servo-wgpu workspace member.
-# The servo-wgpu workspace Cargo.toml patches webrender from a path that no
-# longer exists (renamed to netrender in commit c9481b04b of webrender-wgpu);
-# that patch failure blocks the full workspace. This example proves the
-# netrender embedder hookup independently, without Servo.
+# Standalone project — intentionally NOT a serval workspace member.
+# The serval workspace Cargo.toml patches webrender from a path that no
+# longer exists (the directory was renamed to netrender in netrender commit
+# c9481b04b); that patch failure blocks the full workspace. This example proves
+# the netrender embedder hookup independently, without Servo.
 #
 # Build:
 #   cargo run --manifest-path examples/netrender_smoke/Cargo.toml
-# from servo-wgpu/ root.
+# from serval/ root.
 
 [[bin]]
 name = "netrender-smoke"
@@ -21,7 +21,7 @@ path = "src/main.rs"
 [workspace]
 
 [dependencies]
-# Workspace was renamed: webrender-wgpu/ → netrender/.
+# netrender lives in the sibling netrender/ workspace.
 netrender = { path = "../../../netrender/netrender" }
 wgpu = "29"
 pollster = "0.4"
