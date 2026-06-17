@@ -13,7 +13,7 @@
 //! the same seam the lib-first plan applies to rendering, applied to interaction, so a
 //! gesture can be verified without a human at the screen.
 
-use pelt_core::tile::{DropTarget, Edge, TileId, TilePath, TileTree};
+use pelt_core::tile::{DropTarget, Edge, TileEvent, TileId, TilePath, TileTree};
 use serval_render::ContentReport;
 use xilem_serval::PointerClick;
 
@@ -52,11 +52,32 @@ pub struct TileShell {
     tile_rects: Vec<(TileId, Rect)>,
     divider_drag: Option<DividerDrag>,
     tab_drag: Option<TabDrag>,
+    /// When set, a tab-drag drop and a divider resize are *reported* as
+    /// [`TileEvent`]s through [`take_events`](Self::take_events) for an embedding host
+    /// to apply to its own arrangement, instead of being applied to the surface tree
+    /// here. The host re-projects via [`set_tree`](Self::set_tree), so the surface
+    /// stays a view, never a second authority. Default `false` keeps the standalone
+    /// (apply-locally) behaviour the windowed [`crate::tile_viewer`] relies on.
+    host_authoritative: bool,
 }
 
 impl TileShell {
     /// A shell over `tree`, at a default size (set the real size with [`resize`]).
+    /// Gestures apply to the surface tree locally (standalone pelt).
     pub fn new(tree: TileTree) -> Self {
+        Self::with_authority(tree, false)
+    }
+
+    /// A shell whose tab-drag and divider gestures are *reported* through
+    /// [`take_events`](Self::take_events) for an embedding host to apply (meerkat's
+    /// `Workbench`), rather than mutating the surface tree. Pair with
+    /// [`set_tree`](Self::set_tree): the host applies each gesture to its arrangement
+    /// and re-projects. (Host-authority mode.)
+    pub fn new_host_authoritative(tree: TileTree) -> Self {
+        Self::with_authority(tree, true)
+    }
+
+    fn with_authority(tree: TileTree, host_authoritative: bool) -> Self {
         Self {
             surface: TileSurface::new(tree),
             width: 800,
@@ -65,7 +86,28 @@ impl TileShell {
             tile_rects: Vec::new(),
             divider_drag: None,
             tab_drag: None,
+            host_authoritative,
         }
+    }
+
+    /// Replace the tile tree — the host re-projects its arrangement here after applying
+    /// the gestures from [`take_events`](Self::take_events). Mirrors
+    /// [`TileSurface::set_tree`].
+    pub fn set_tree(&mut self, tree: TileTree) {
+        self.surface.set_tree(tree);
+    }
+
+    /// Drain the queued tile gestures: tab activate / close always, plus (in
+    /// host-authority mode) the tab-drag [`Dragged`](TileEvent::Dragged) and divider
+    /// [`DividerMoved`](TileEvent::DividerMoved). The host maps each onto its
+    /// arrangement and re-projects via [`set_tree`](Self::set_tree).
+    pub fn take_events(&mut self) -> Vec<TileEvent> {
+        self.surface.take_events()
+    }
+
+    /// Layer the host's theme CSS over the surface's structural default.
+    pub fn set_theme(&mut self, css: impl Into<String>) {
+        self.surface.set_theme(css);
     }
 
     /// Set the surface size (the next [`frame`](Self::frame) lays out at it).
@@ -134,7 +176,14 @@ impl TileShell {
                 if index + 1 < fracs.len() {
                     fracs[index] = new_first;
                     fracs[index + 1] = total - new_first;
-                    self.surface.set_divider_fractions(&path, fracs);
+                    if self.host_authoritative {
+                        // Report the resize; the host applies it to its arrangement
+                        // and re-projects. Do not mutate the surface tree here.
+                        self.surface
+                            .queue_event(TileEvent::DividerMoved { split: path, fractions: fracs });
+                    } else {
+                        self.surface.set_divider_fractions(&path, fracs);
+                    }
                     redraw = true;
                 }
             }
@@ -196,7 +245,14 @@ impl TileShell {
         if let Some(drag) = self.tab_drag.take() {
             if drag.moved {
                 if let Some(to) = self.resolve_drop(drag.tile) {
-                    self.surface.drag_tile(drag.tile, to);
+                    if self.host_authoritative {
+                        // Report the drop; the host applies it to its arrangement and
+                        // re-projects. Do not mutate the surface tree here.
+                        self.surface
+                            .queue_event(TileEvent::Dragged { tile: drag.tile, to });
+                    } else {
+                        self.surface.drag_tile(drag.tile, to);
+                    }
                 }
             } else {
                 let (w, h) = (self.width, self.height);
@@ -311,6 +367,59 @@ mod tests {
         // Tile 1 left the stack and split the right pane: left=[2], right=[3 | 1].
         let ids: Vec<u64> = shell.tree().tiles().iter().map(|t| t.id.0).collect();
         assert_eq!(ids, vec![2, 3, 1], "the drag built a new split layout: {ids:?}");
+    }
+
+    /// In host-authority mode the same driven tab-drag and divider-drag are *reported*
+    /// through `take_events` and the surface tree is left UNCHANGED — the embedding host
+    /// (meerkat's Workbench) applies them and re-projects via `set_tree`. This is the
+    /// counterpart to `driven_tab_drag_splits_headless`, which applies locally.
+    #[test]
+    fn host_authoritative_reports_gestures_without_applying() {
+        let tree = TileTree::split(
+            SplitAxis::Row,
+            vec![
+                TileBranch::new(
+                    0.5,
+                    TileTree::stack(vec![doc_tile(1, "<p>1</p>"), doc_tile(2, "<p>2</p>")], 0),
+                ),
+                TileBranch::new(0.5, TileTree::single(doc_tile(3, "<p>3</p>"))),
+            ],
+        );
+        let mut shell = TileShell::new_host_authoritative(tree);
+        shell.resize(800, 600);
+        let _ = shell.frame();
+        let before: Vec<u64> = shell.tree().tiles().iter().map(|t| t.id.0).collect();
+
+        // Drag tab 1 onto the right pane: a Dragged event, surface tree unchanged.
+        shell.pointer_move(20.0, 14.0);
+        shell.pointer_down();
+        shell.pointer_move(770.0, 300.0);
+        shell.pointer_up();
+        let after: Vec<u64> = shell.tree().tiles().iter().map(|t| t.id.0).collect();
+        assert_eq!(before, after, "host-authority mode must not mutate the surface tree");
+        let events = shell.take_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TileEvent::Dragged { tile: TileId(1), .. })),
+            "the drag is reported as a Dragged event: {events:?}"
+        );
+
+        // Drag the central divider: a DividerMoved event, fractions unchanged on the
+        // surface (the host owns them). The tree is still the original 50/50 row.
+        let _ = shell.frame();
+        shell.pointer_move(400.0, 300.0);
+        shell.pointer_down();
+        let moved = shell.pointer_move(420.0, 300.0);
+        assert!(moved, "the divider drag asks for a redraw");
+        let events = shell.take_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TileEvent::DividerMoved { .. })),
+            "the divider drag is reported as DividerMoved: {events:?}"
+        );
+        shell.pointer_up();
     }
 
     /// A tab dropped onto another stack's tab bar merges into that stack instead of

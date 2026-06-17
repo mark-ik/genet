@@ -329,6 +329,15 @@ impl TileSurface {
         events
     }
 
+    /// Queue `event` for [`take_events`](Self::take_events) to drain, *without*
+    /// applying it to the tree. The host-authoritative [`TileShell`] uses this to
+    /// report a tab-drag / divider gesture as an event the embedding host maps onto
+    /// its own arrangement, rather than mutating the surface tree (which would make
+    /// the surface a second authority alongside the host).
+    pub fn queue_event(&mut self, event: TileEvent) {
+        self.runner.update(|s| s.pending.push(event));
+    }
+
     /// Render the frame at `width`×`height`: the frame scene plus a content layer per
     /// active tile (its rect + its document's scene). The host composites the frame,
     /// then each tile layer over its rect.
@@ -929,6 +938,7 @@ mod tests {
             content: ContentSource::Document(DocumentRef(
                 first.to_str().expect("utf8 path").to_string(),
             )),
+            accent: None,
         }));
         // Lay the tile's document out so the click hit-tests its link.
         let _ = surface.frame(800, 600);
