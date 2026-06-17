@@ -1143,6 +1143,32 @@ mod tests {
         );
     }
 
+    /// CSS Grid lays out with explicit track templates: a `grid-template-columns:
+    /// 50px 50px` / `grid-template-rows: 30px 30px` container places its four
+    /// children in a 2x2 grid. This is the receipt that `layout.grid.enabled` is
+    /// set (the cascade keeps the track lists instead of dropping them to `None`,
+    /// which degenerates grid to a single stacked column).
+    #[test]
+    fn grid_template_lays_out_cells_in_a_grid() {
+        let (doc, frags) = lay(
+            "<html><body><div class=g><span class=c>A</span><span class=c>B</span>\
+             <span class=c>C</span><span class=c>D</span></div></body></html>",
+            &[
+                ".g { display: grid; grid-template-columns: 50px 50px; grid-template-rows: 30px 30px; }",
+                ".c { display: block; }",
+            ],
+        );
+        let cells = find_all(&doc, html5ever::local_name!("span"));
+        let at = |i: usize| {
+            let l = frags.rect_of(cells[i]).expect("cell");
+            (l.location.x, l.location.y)
+        };
+        assert!(approx(at(0).0, 0.0) && approx(at(0).1, 0.0), "cell 0 at (0,0): {:?}", at(0));
+        assert!(approx(at(1).0, 50.0) && approx(at(1).1, 0.0), "cell 1 at (50,0): {:?}", at(1));
+        assert!(approx(at(2).0, 0.0) && approx(at(2).1, 30.0), "cell 2 at (0,30): {:?}", at(2));
+        assert!(approx(at(3).0, 50.0) && approx(at(3).1, 30.0), "cell 3 at (50,30): {:?}", at(3));
+    }
+
     /// UA `pre { white-space: pre }` preserves source newlines as forced line
     /// breaks: a three-line `<pre>` is about three times as tall as a one-line
     /// one (a `white-space: normal` element would collapse the newlines to spaces

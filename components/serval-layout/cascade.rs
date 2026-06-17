@@ -218,6 +218,13 @@ fn enable_serval_properties() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         <bool as stylo_static_prefs::Preference>::set("layout.unimplemented", true);
+        // CSS Grid track properties (`grid-template-columns/rows`, `grid-auto-*`,
+        // `grid-row/column`) are gated behind servo's `layout.grid.enabled`,
+        // off by default because *servo's* layout never implemented grid. serval
+        // dispatches `display: grid` to Taffy's grid algorithm (`box_tree`), so
+        // the gate is servo's policy, not serval's — enable it so the cascade
+        // keeps the authored track lists instead of dropping them to `None`.
+        <bool as stylo_static_prefs::Preference>::set("layout.grid.enabled", true);
     });
 }
 

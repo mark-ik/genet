@@ -65,19 +65,50 @@ neutralize the new gutter for their pixel coordinates).
 
 ## 2. Tables
 
-**State:** rendered as block. `ua_defaults.rs:64-66` forces
+**State:** rendered as block. `ua_defaults.rs` forces
 `table,caption,thead,tbody,tfoot,tr {display:block}`, and `box_tree.rs:659-668`
-dispatches only `Block`/`Flex`/`Grid` with no `Display::Table` arm. Note that
-`CssStyle::is_table` *is* forwarded (`box_tree.rs:593-595`), so the block-item
-machinery already knows which boxes are tables; what is missing is the table
-layout algorithm (column sizing, row/cell box generation, border-collapse).
+dispatches only `Block`/`Flex`/`Grid` with no `Display::Table` arm.
 
-**Slice:** this is the largest single item. Sequence it as: (a) stop forcing
-`display:block` on table elements in the UA sheet; (b) add a `Display::Table`
-dispatch arm; (c) drive it through Taffy's grid layout as the column/row engine
-(the pragmatic path, since grid is already wired) or a dedicated table pass if
-grid's model proves too lossy for `colspan`/`rowspan`. Decide (c) with a spike
-before committing; do not assume grid-as-table is free.
+**Spike result (2026-06-16) — grid-as-table is the path; grid prerequisite now
+met.** Findings, grounded in code:
+
+- `stylo_taffy::convert::display` already maps `display: table` -> `taffy::Display::Grid`
+  and `table-cell` -> `Block` (registry `convert.rs:179,183`). Taffy itself has
+  no table algorithm (only block/flex/grid/float/leaf), so table-as-grid is the
+  intended design, not a new engine.
+- **CSS grid was non-functional** until this spike: `grid-template-columns/rows`
+  are gated behind servo's `layout.grid.enabled` pref, which serval did not set,
+  so the cascade dropped authored track lists to `None` and every grid
+  degenerated to a single stacked column. **Fixed** by enabling the pref in
+  `cascade.rs` `enable_serval_properties` (same rationale as `layout.unimplemented`:
+  serval has its own Taffy grid, so the gate is servo's policy). A 2x2
+  `grid-template` now lays out correctly (`box_tree.rs`
+  `grid_template_lays_out_cells_in_a_grid`). This also advances item 6.
+- **The remaining table work is box-tree construction, not layout.** HTML nests
+  cells `table > (thead/tbody/tfoot) > tr > (td/th)` (html5ever even
+  auto-inserts `<tbody>`), but Taffy grid only lays out a container's *direct*
+  children. So the cells must be **flattened** to direct grid items of the table
+  box, and their grid placement (row from the `tr`, column from cell order;
+  `colspan`/`rowspan` -> grid spans) plus the table's `grid-template-columns`
+  (the column count) must be **injected** — that information comes from DOM
+  structure, not CSS computed values. The grid path in `box_tree` reads raw
+  `TaffyStyloStyle` (no override hook like the block path's `CssStyle::size_override`),
+  so this needs a small style-injection mechanism for synthetic grid
+  placement/template.
+
+**Slice (revised):**
+
+1. Done: enable grid (`layout.grid.enabled`) so the grid algorithm is usable.
+2. UA sheet: replace the forced `display:block` on table elements with their
+   real display (`table` / `table-row` / `table-cell` / `table-row-group`).
+3. Box-tree: a `display:table` box gathers its descendant cells (through
+   row-group / row boxes) as direct grid children; compute the column count and
+   inject `grid-template-columns: repeat(ncols, auto)` + per-cell grid placement
+   (auto-flow suffices for the no-span first cut). Add the injection hook to the
+   grid container/item style path.
+4. First cut covers simple tables (auto column widths, no `colspan`/`rowspan`,
+   no `border-collapse`). Defer: spans (grid spans), `border-collapse`, the auto
+   vs fixed table-layout width-distribution algorithm, `<caption>` placement.
 
 ---
 
@@ -139,9 +170,14 @@ pages become the target.
 ## 6. flex / grid measurement correctness
 
 **State:** flex and grid are *dispatched* (`box_tree.rs:666-667`,
-`LayoutFlexboxContainer`/`LayoutGridContainer` impls at `box_tree.rs:823-844`)
-but their measurement correctness on real layouts past the wired path is
-unproven. Wired is not the same as faithful.
+`LayoutFlexboxContainer`/`LayoutGridContainer` impls at `box_tree.rs:823-844`).
+**Grid was silently broken** until 2026-06-16: `grid-template-columns/rows` are
+servo-pref-gated (`layout.grid.enabled`), unset, so the cascade dropped them and
+grid collapsed to a single column. Now enabled (see item 2), with a 2x2
+`grid-template` test. Flex (and the rest of the grid surface: `repeat()`,
+`fr`, `minmax`, gaps, alignment, auto-placement) is still wired-but-unproven on
+real layouts. Wired is not the same as faithful; check whether any *other* grid
+or flex sub-properties are pref-gated the same way.
 
 **Slice:** build a fidelity test set of real-world flex/grid patterns (nav bars,
 card grids, holy-grail layouts) and assert geometry; fix divergences in the
