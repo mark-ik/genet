@@ -179,11 +179,20 @@ container-style forwarding. No new dispatch, mostly correctness hardening.
 
 ---
 
-## 7. Paint tail
+## 7. Paint tail (+ paint-list features)
 
 **State:** the long tail of paint features named in the 2026-06-14 audit:
-~~inset shadow~~, blend modes, filters, `::first-line`. Each is bounded and
-independent.
+~~inset shadow~~, blend modes, filters, `::first-line`, plus the paint-list
+gaps (~~clip-path~~, `DrawPath` (already done), border-image). Each is bounded
+and independent.
+
+- **CSS `clip-path` — DONE (2026-06-17).** The renderer already had the path
+  clip (`SceneClip::Path` + vello lowering, Phase 9b'); the gaps were the
+  translator (`ClipKind::Path` fell back to unclipped) and serval emission.
+  `paint_emit` reads `cv.get_svg().clip_path` and emits `PushClip` around the
+  element for `polygon()` / `circle()` / `ellipse()` (Bezier paths) and
+  `inset()` (rect). Deferred: rounded-`inset`, `path()`/`shape()`, `url(#ref)`,
+  non-border-box reference boxes. Verified by four e2e shape tests.
 
 - **Inset `box-shadow` — DONE (2026-06-17).** Was deferred on both sides;
   emitted in `paint_emit` (after background, padding-box bounds, `clip_mode:
