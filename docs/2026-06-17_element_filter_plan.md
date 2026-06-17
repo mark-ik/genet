@@ -65,6 +65,33 @@ shape params:
 4. **`drop-shadow()`.** Like box-shadow but follows the element's alpha; its own
    increment (a shadow of the offscreen alpha, offset + blurred + colored).
 
+## Turnkey recipe for the rasterizer pass (mirror the backdrop loop)
+
+The backdrop-filter pass in `renderer/mod.rs` (~690-790) is the exact template;
+element filter is the same loop with two changes (render the layer's *content*,
+and *replace* it rather than inject after it):
+
+| step | backdrop (existing) | element filter (new) |
+|---|---|---|
+| collect | `PushLayer` with `backdrop_filter` → `(i, filter, bounds)` | `PushLayer` with non-empty `filters` → `(push_i, pop_i, filters, bounds)` |
+| sub-scene | `build_prefix_scene(scene, i)` (ops `[0..i)`, balanced) | `build_layer_content_scene(scene, push_i, pop_i)` (ops `(push_i..pop_i)`) — new, mirror `build_prefix_scene` |
+| render | `render_scene_to_texture(rast, tc, &sub)` | same |
+| filter | `build_blurred_image(tex, w, r)` | per op: `build_blurred_image` for `Blur`; `build_color_matrix_image(tex, m)` for color ops (new) |
+| register | `register_texture(key, tex)` | same |
+| splice | **insert** `SceneOp::Image` after the `PushLayer` | **replace** ops `[push_i..=pop_i]` with one `SceneOp::Image` (suppress the original content so it doesn't double-render) |
+
+New artifacts: `build_layer_content_scene`, `build_color_matrix_image` +
+`cs_color_matrix.wgsl` (one fragment pass sampling the input texture and applying
+a 4x5 matrix uniform — mirror `clip_rectangle_callback` / `cs_clip_rectangle`),
+and a `scene_filter_to_matrix(SceneFilter) -> [f32; 20]` using the CSS Filter
+Effects §formulas (grayscale/sepia/saturate/hue-rotate are linear-RGB matrices;
+brightness/contrast/invert are simple per-channel). Compose a chain of color ops
+into one matrix; keep `Blur` as a separate spatial pass.
+
+`bounds` for element filter is the layer's content AABB (use the layer clip rect
+when present, else the union of the inner ops' bounds; pad by the blur radius for
+`Blur`). The injected image carries the layer's `alpha`/`blend_mode`.
+
 ## Seams (file:line)
 
 - Translator output-filter handling: `paint_list_render/src/lib.rs`
