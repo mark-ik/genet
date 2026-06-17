@@ -1,6 +1,9 @@
 /.servo
-/.cargo/*
-!/.cargo/config.*
+# `.cargo/config.toml` is now local-dev-only (gitignored): serval needs no
+# committed build settings (the inherited servo target linkers / RUSTC_BOOTSTRAP
+# were verified unused), so the file holds only local path overrides, like
+# `repos/mere/.cargo/config.toml`.
+/.cargo/
 # cargo-check / reftest log artifacts (root + per-crate, any depth): test
 # outputs, reftest dumps, pass/fail lists. The committed cargo-check-env.ps1
 # (mozjs build-env script) is the one thing kept.

@@ -1,37 +1,16 @@
-[target.aarch64-linux-android]
-linker = "aarch64-linux-android30-clang"
-
-[target.armv7-linux-androideabi]
-linker = "armv7a-linux-androideabi30-clang"
-
-[target.armv-linux-androideabi]
-linker = "armv7a-linux-androideabi30-clang"
-
-[target.i686-linux-android]
-linker = "i686-linux-android30-clang"
-
-[target.x86_64-linux-android]
-linker = "x86_64-linux-android30-clang"
-
-[target.x86_64-pc-windows-msvc]
-linker = "lld-link.exe"
-rustflags = ["-C", "link-args=/STACK:8388608"]
-
-[target.x86_64-uwp-windows-msvc]
-linker = "lld-link.exe"
-
-[target.i686-pc-windows-msvc]
-linker = "lld-link.exe"
-
-[target.aarch64-pc-windows-msvc]
-linker = "lld-link.exe"
-
-[target.aarch64-uwp-windows-msvc]
-linker = "lld-link.exe"
-
-[env]
-MACOSX_DEPLOYMENT_TARGET = "13.0"
-RUSTC_BOOTSTRAP = "crown,script,script_bindings,style_tests,mozjs,mozjs_sys"
-
-[build]
-rustdocflags = ["--document-private-items"]
+# Local path overrides (gitignored; local-dev only) — mirrors
+# repos/mere/.cargo/config.toml. serval builds its renderer + script-engine
+# git-deps against the in-sync local checkouts, so a cross-repo version skew
+# can never block the build. Delete this file to fall back to the published
+# git-deps (a clean clone builds without it).
+#
+# serval needs no *committed* build settings: the inherited servo target
+# linkers (Android / UWP / Windows-non-x64) and the RUSTC_BOOTSTRAP whitelist
+# (crown / script / mozjs / style_tests, all workspace-excluded) were verified
+# unused, and the e2e builds + passes with the default linker and stack.
+paths = [
+    "C:/Users/mark_/Code/repos/netrender",
+    "C:/Users/mark_/Code/crates/nova",
+    "C:/Users/mark_/Code/crates/boa",
+    "C:/Users/mark_/Code/crates/piccolo",
+]
