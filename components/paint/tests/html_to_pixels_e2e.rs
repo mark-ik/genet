@@ -963,6 +963,44 @@ fn html_to_pixels_box_shadow_inset_hard_renders_inner_ring() {
     );
 }
 
+/// A blurred inset `box-shadow` paints a soft halo hugging the inner edges,
+/// fading toward the center, via the inverse Gaussian mask (`1 - coverage`).
+/// A 60×60 white div with `box-shadow: inset 0 0 6px 6px rgb(255,0,0)` (blur 6,
+/// spread 6) casts a red band in from the edges that fades to white at center.
+#[test]
+fn html_to_pixels_box_shadow_inset_blur_renders_soft_inner_halo() {
+    let image = render_to_image(
+        "<html><body><div></div></body></html>",
+        &[
+            "body { background-color: rgb(255, 255, 255); margin: 0; }",
+            "div {
+                width: 60px;
+                height: 60px;
+                background-color: rgb(255, 255, 255);
+                box-shadow: inset 0 0 6px 6px rgb(255, 0, 0);
+            }",
+        ],
+    );
+    // Scan inward from the left edge along y=30: a reddish inset halo fades in.
+    let mut halo = 0u32;
+    for x in 0..14u32 {
+        let [r, g, b, _a] = image.get_pixel(x, 30).0;
+        if r > 200 && g < 235 && b < 235 && (r as i32 - g as i32) > 20 {
+            halo += 1;
+        }
+    }
+    assert!(
+        halo >= 5,
+        "expected a soft red inset halo at the left edge (inverse mask), found {halo} reddish pixels"
+    );
+    // The center is far from every edge — the blurred inset shadow has faded out.
+    let [cr, cg, cb, _] = image.get_pixel(30, 30).0;
+    assert!(
+        cg > 225 && cb > 225,
+        "(30,30) center should be ~white (inset shadow faded), got [{cr},{cg},{cb}]"
+    );
+}
+
 /// Nested elements with distinct colors paint into the right pixels.
 /// `<div>` is 50×50 anchored at body's origin (top-left); a pixel
 /// inside the div should carry its background color, and a pixel

@@ -422,6 +422,7 @@ impl Paint {
                 mask.bounds,
                 mask.corner_radius,
                 mask.blur_radius_px,
+                mask.invert,
             );
         }
 
