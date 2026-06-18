@@ -1673,6 +1673,34 @@ mod tests {
         assert!(approx(c.0, 60.0), ".c (order 0, doc-second) third (x=60), got {}", c.0);
     }
 
+    /// `order` feeds line wrapping, not just within-line placement: the sort
+    /// runs before line collection, so reordering changes which items share a
+    /// line. In a 60px row wrapping two 30px items per line, `.c { order: -1 }`
+    /// moves to the front of line 1, pushing `.b` onto line 2. This is the
+    /// subtlest `order` path (order x flex-wrap interaction).
+    #[test]
+    fn flex_order_feeds_line_wrapping() {
+        let (doc, frags) = lay(
+            "<html><body><div class=row>\
+                <div class=a></div><div class=b></div><div class=c></div>\
+             </div></body></html>",
+            &[
+                ".row { display: flex; flex-wrap: wrap; width: 60px; }",
+                ".a { width: 30px; height: 20px; }",
+                ".b { width: 30px; height: 20px; }",
+                ".c { order: -1; width: 30px; height: 20px; }",
+            ],
+        );
+        let a = div_rect(&doc, &frags, 1);
+        let b = div_rect(&doc, &frags, 2);
+        let c = div_rect(&doc, &frags, 3);
+        // order-modified [c(-1), a(0), b(0)], wrapping 2-per-line:
+        // line 1 = [c, a] at y=0; line 2 = [b] at y=20.
+        assert!(approx(c.0, 0.0) && approx(c.1, 0.0), ".c leads line 1 (0,0): {c:?}");
+        assert!(approx(a.0, 30.0) && approx(a.1, 0.0), ".a fills line 1 (30,0): {a:?}");
+        assert!(approx(b.0, 0.0) && approx(b.1, 20.0), ".b pushed to line 2 (0,20): {b:?}");
+    }
+
     /// UA `pre { white-space: pre }` preserves source newlines as forced line
     /// breaks: a three-line `<pre>` is about three times as tall as a one-line
     /// one (a `white-space: normal` element would collapse the newlines to spaces
