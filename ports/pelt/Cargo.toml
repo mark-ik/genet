@@ -39,6 +39,11 @@ viewer-netrender = ["viewer-engine", "pelt-desktop/netrender"]
 # under the Windows image-size limit alongside wgpu); add `scripted-nova` for Nova.
 scripted = ["viewer-engine", "pelt-desktop/viewer", "pelt-desktop/scripted"]
 scripted-nova = ["scripted", "pelt-desktop/scripted-nova"]
+# The rasterized-PNG reftest lane (V3): `pelt --engine headless --out <file>.png`
+# emits a rendered PNG (human-eyes artifact), and `--reftest <dir>` additionally
+# compares an optional `name.png` per fixture under a fuzz threshold. GPU-required,
+# so opt-in on top of the GPU-free scene-snapshot lane.
+png-reftest = ["viewer-engine", "pelt-desktop/png-reftest"]
 # The chrome demo (V2): `pelt --chrome <url>` wraps the content viewer in a
 # xilem-serval omnibar + back/forward strip. Pulls pelt-desktop's chrome runtime on
 # top of the present stack.

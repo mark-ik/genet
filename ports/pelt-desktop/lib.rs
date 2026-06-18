@@ -91,6 +91,8 @@ pub use document::{ClickOutcome, LoadedDocument, LocalFetcher, resolve_href};
 pub use headless::{
     render_snapshot, run_reftests, Outcome, ReftestResult, DEFAULT_HEIGHT, DEFAULT_WIDTH,
 };
+#[cfg(feature = "png-reftest")]
+pub use headless::{render_png, render_png_scrolled, png_within_fuzz, Fuzz};
 #[cfg(feature = "scripted")]
 pub use scripted::{ScriptedDocument, ScriptedEngine};
 #[cfg(all(feature = "viewer", feature = "scripted"))]

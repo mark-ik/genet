@@ -421,6 +421,10 @@ fn run_headless_profile(
                     failed += 1;
                     println!("  FAIL   {} (first diff at line {first_diff_line})", result.name);
                 },
+                Outcome::PngFail { detail } => {
+                    failed += 1;
+                    println!("  FAIL   {} (png: {detail})", result.name);
+                },
                 Outcome::Error(message) => {
                     errored += 1;
                     println!("  ERROR  {} ({message})", result.name);
@@ -432,6 +436,14 @@ fn run_headless_profile(
         if failed > 0 || errored > 0 {
             std::process::exit(1);
         }
+        return;
+    }
+
+    // `--out *.png`: the rasterized "for human eyes" artifact instead of the scene
+    // text snapshot. GPU-required, so behind the png-reftest feature.
+    if out.as_deref().is_some_and(|p| p.ends_with(".png")) {
+        let path = out.expect("checked Some above");
+        write_headless_png(&url, &path);
         return;
     }
 
@@ -451,6 +463,35 @@ fn run_headless_profile(
             std::process::exit(1);
         },
     }
+}
+
+/// Render `url` to a PNG and write it to `path`. Present only with `--features
+/// png-reftest` (it boots wgpu); without it, a clean pointer to the feature.
+#[cfg(feature = "png-reftest")]
+fn write_headless_png(url: &str, path: &str) {
+    use pelt_desktop::{render_png, DEFAULT_HEIGHT, DEFAULT_WIDTH};
+    match render_png(url, DEFAULT_WIDTH, DEFAULT_HEIGHT) {
+        Ok(png) => match std::fs::write(path, &png) {
+            Ok(()) => println!("pelt headless wrote {} PNG bytes to {path}", png.len()),
+            Err(error) => {
+                eprintln!("could not write {path}: {error}");
+                std::process::exit(1);
+            },
+        },
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        },
+    }
+}
+
+#[cfg(not(feature = "png-reftest"))]
+fn write_headless_png(_url: &str, _path: &str) {
+    eprintln!(
+        "pelt was built without the PNG lane; rebuild with `--features png-reftest` to \
+         write a .png (the GPU-free .scene snapshot needs no feature)."
+    );
+    std::process::exit(2);
 }
 
 fn run_optional_netrender_smoke() {

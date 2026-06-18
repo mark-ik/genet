@@ -69,6 +69,13 @@ tiles = ["tile-surface", "chrome", "viewer"]
 # netfetcher in the product; serval's engine components stay byte-consuming.
 netfetch = ["tile-surface", "dep:netfetcher", "dep:tokio", "dep:bytes", "dep:url"]
 netrender = ["dep:netrender", "dep:webgl_wgpu", "dep:wgpu"]
+# The rasterized-PNG reftest lane (V3 follow-up): renders the headless `Scene`
+# through netrender's offscreen wgpu readback to a PNG — the "for human eyes"
+# artifact (`--out <file>.png`) plus an optional `name.png` fixture comparison
+# with a fuzz threshold. GPU-required, so opt-in; the scene-snapshot lane stays
+# GPU-free. `viewer` already brings the netrender + wgpu crates (via
+# `tile-surface`); this just adds the PNG encoder.
+png-reftest = ["viewer", "dep:image"]
 # Headed presentation through serval's `WindowsDxgiBackend`. Drives
 # the netrender renderer through the C4 DCOMP composition swapchain
 # attached to a winit window's HWND. Windows-only at runtime; the
@@ -107,6 +114,7 @@ linux-present = [
 
 [dependencies]
 netrender = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
 paint = { workspace = true, optional = true }
 pelt-core = { workspace = true }
 pollster = { version = "0.4", optional = true }
