@@ -177,6 +177,37 @@ or flex sub-properties are pref-gated the same way.
 card grids, holy-grail layouts) and assert geometry; fix divergences in the
 container-style forwarding. No new dispatch, mostly correctness hardening.
 
+**Status (2026-06-18): test floor landed; forwarding is faithful, one gap.** A
+5-reader audit (flex/grid forwarding through `stylo_taffy`, pref-gating against
+Stylo 0.18 `longhands.toml`, harness, test matrix) found:
+
+- **Pref-gating is clean.** No flex/grid property is gated behind a pref serval
+  leaves off (the silent-breakage hunt that motivated this item came up empty);
+  every gated grid property sits behind `layout.grid.enabled`, which
+  `enable_serval_properties` sets. All flex/gap/alignment longhands are ungated.
+- **Forwarding through `TaffyStyloStyle` is genuine, not stubbed** — every flex
+  and grid container/item property is read live off `ComputedValues` and mapped
+  by real `convert.rs` functions.
+- **10 geometry-asserting tests landed** in `box_tree.rs` and pass: flex
+  row-flow / grow (1:3→25:75) / shrink / `align-items:stretch` default /
+  `justify-content:space-between`; grid `fr` / `minmax` clamp / numeric
+  line-based span / `justify+align-items:center`; and the **holy-grail
+  `grid-template-areas`** case. The audit *predicted* named-area placement would
+  diverge (taffy's `into_origin_zero_placement_ignoring_named`), but it was
+  empirically **falsified** — named-area placement is faithful (header spans the
+  full 100px row, not the 30px auto-placement cell).
+- **The one real gap: CSS `order`** (forwarding gap #1). This taffy version does
+  not model it — flex items lay out in document order regardless of `order:N`
+  (confirmed: `order:2` item stays at x=0, `order:1` at x=30). Tracked as an
+  `#[ignore]`d test (`flex_order_reorders_items`). A real fix is a **taffy-fork**
+  change (a `FlexboxItemStyle::order()` method + a stable sort by it before flex
+  placement) plus a serval flex-item style wrapper reading the cascade (the same
+  `CssStyle`-wraps-`TaffyStyloStyle` precedent grid placement already uses, so no
+  `stylo_taffy` patch needed). Deferred as its own focused pass (paint-order
+  semantics + wrap interaction warrant care). Lower-risk gaps (subgrid, masonry,
+  `flex-basis:content`, content-distribution fallback keyword) are taffy/upstream
+  and recorded in the audit, not yet tested.
+
 ---
 
 ## 7. Paint tail (+ paint-list features)

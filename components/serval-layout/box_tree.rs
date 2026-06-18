@@ -1372,6 +1372,247 @@ mod tests {
         assert!(approx(at(3).0, 30.0) && approx(at(3).1, 20.0), "D at (30,20): {:?}", at(3));
     }
 
+    // ---- Flex / grid measurement fidelity (item 6 of the layout fidelity plan) ----
+    // Geometry-asserting tests over real flex/grid patterns. Fragment `location`
+    // is container-relative (cf. `grid_template_lays_out_cells_in_a_grid`), so a
+    // flex/grid child's asserted x/y is its offset within the container's content
+    // box. Sizes are integer px so every coordinate is hand-computable.
+
+    /// Helper: laid-out (x, y, w, h) of the i-th `<div>` (0 = the container).
+    fn div_rect(
+        doc: &StaticDocument,
+        frags: &FragmentPlane<StaticNodeId>,
+        i: usize,
+    ) -> (f32, f32, f32, f32) {
+        let d = find_all(doc, html5ever::local_name!("div"))[i];
+        let r = frags.rect_of(d).expect("div fragment");
+        (r.location.x, r.location.y, r.size.width, r.size.height)
+    }
+
+    /// Flex row: items flow along the main axis left-to-right at their flex-basis
+    /// widths (no grow/shrink needed; total < container). The baseline receipt
+    /// that the `display: flex` path lays children out (there were no flex tests
+    /// before item 6).
+    #[test]
+    fn flex_row_lays_children_left_to_right() {
+        let (doc, frags) = lay(
+            "<html><body><div class=row><div class=a></div><div class=b></div></div></body></html>",
+            &[
+                ".row { display: flex; width: 100px; height: 30px; }",
+                ".a { width: 40px; height: 30px; }",
+                ".b { width: 30px; height: 30px; }",
+            ],
+        );
+        let a = div_rect(&doc, &frags, 1);
+        let b = div_rect(&doc, &frags, 2);
+        assert!(approx(a.0, 0.0) && approx(a.1, 0.0), ".a at row start (0,0): {a:?}");
+        assert!(approx(b.0, 40.0) && approx(b.1, 0.0), ".b after .a (40,0): {b:?}");
+    }
+
+    /// `flex-grow` distributes free space in proportion to the grow factors:
+    /// `1 : 3` over a 100px row with zero basis gives 25 : 75.
+    #[test]
+    fn flex_grow_distributes_free_space() {
+        let (doc, frags) = lay(
+            "<html><body><div class=row><div class=a></div><div class=b></div></div></body></html>",
+            &[
+                ".row { display: flex; width: 100px; height: 20px; }",
+                ".a { flex-grow: 1; flex-basis: 0px; height: 20px; }",
+                ".b { flex-grow: 3; flex-basis: 0px; height: 20px; }",
+            ],
+        );
+        let a = div_rect(&doc, &frags, 1);
+        let b = div_rect(&doc, &frags, 2);
+        assert!(approx(a.2, 25.0), ".a gets 1/4 of free space (25px), got {}", a.2);
+        assert!(approx(b.2, 75.0) && approx(b.0, 25.0), ".b gets 3/4 (75px) at x=25: {b:?}");
+    }
+
+    /// `flex-shrink` distributes overflow in proportion to scaled shrink factors
+    /// (shrink x basis): two equal-basis items shrinking equally split a 60px
+    /// overflow, landing at 50px each.
+    #[test]
+    fn flex_shrink_distributes_overflow() {
+        let (doc, frags) = lay(
+            "<html><body><div class=row><div class=a></div><div class=b></div></div></body></html>",
+            &[
+                ".row { display: flex; width: 100px; height: 20px; }",
+                ".a { flex-basis: 80px; flex-shrink: 1; height: 20px; }",
+                ".b { flex-basis: 80px; flex-shrink: 1; height: 20px; }",
+            ],
+        );
+        let a = div_rect(&doc, &frags, 1);
+        let b = div_rect(&doc, &frags, 2);
+        assert!(approx(a.2, 50.0), ".a shrinks 80->50, got {}", a.2);
+        assert!(approx(b.2, 50.0) && approx(b.0, 50.0), ".b shrinks to 50 at x=50: {b:?}");
+    }
+
+    /// Default `align-items: stretch`: a flex item with no cross-axis (height)
+    /// size stretches to the container's height. Guards a regression of
+    /// `item_alignment(NORMAL)` away from `Stretch` (which would collapse the
+    /// item to content height 0).
+    #[test]
+    fn flex_align_items_stretch_default() {
+        let (doc, frags) = lay(
+            "<html><body><div class=row><div class=a></div></div></body></html>",
+            &[
+                ".row { display: flex; width: 100px; height: 40px; }",
+                ".a { width: 30px; }",
+            ],
+        );
+        let a = div_rect(&doc, &frags, 1);
+        assert!(approx(a.3, 40.0), ".a stretches to container height 40, got {}", a.3);
+        assert!(approx(a.2, 30.0), ".a keeps its 30px width, got {}", a.2);
+    }
+
+    /// `justify-content: space-between` pins the first item to the start and the
+    /// last to the end, the remaining space falling between them.
+    #[test]
+    fn flex_justify_content_space_between() {
+        let (doc, frags) = lay(
+            "<html><body><div class=row><div class=a></div><div class=b></div></div></body></html>",
+            &[
+                ".row { display: flex; justify-content: space-between; width: 100px; height: 20px; }",
+                ".a { width: 20px; height: 20px; }",
+                ".b { width: 20px; height: 20px; }",
+            ],
+        );
+        let a = div_rect(&doc, &frags, 1);
+        let b = div_rect(&doc, &frags, 2);
+        assert!(approx(a.0, 0.0), ".a pinned to start (x=0), got {}", a.0);
+        assert!(approx(b.0, 80.0), ".b pinned to end (x=80), got {}", b.0);
+    }
+
+    /// Grid `fr` units resolve the free space proportionally: `1fr 3fr` over a
+    /// 100px grid gives 25px and 75px tracks; auto-sized cells stretch to fill.
+    #[test]
+    fn grid_template_columns_fr_units() {
+        let (doc, frags) = lay(
+            "<html><body><div class=g><div class=c></div><div class=c></div></div></body></html>",
+            &[
+                ".g { display: grid; grid-template-columns: 1fr 3fr; grid-template-rows: 20px; width: 100px; }",
+            ],
+        );
+        let a = div_rect(&doc, &frags, 1);
+        let b = div_rect(&doc, &frags, 2);
+        assert!(approx(a.0, 0.0) && approx(a.2, 25.0), "cell 0: 1fr -> 25px at x=0: {a:?}");
+        assert!(approx(b.0, 25.0) && approx(b.2, 75.0), "cell 1: 3fr -> 75px at x=25: {b:?}");
+    }
+
+    /// Grid `minmax(80px, 1fr)` clamps the flexible track: with a fixed 20px
+    /// track beside it in a 100px grid, only 80px of free space remains, so the
+    /// `1fr` resolves to exactly its 80px minimum.
+    #[test]
+    fn grid_minmax_track_clamps_to_min() {
+        let (doc, frags) = lay(
+            "<html><body><div class=g><div class=c></div><div class=c></div></div></body></html>",
+            &[
+                ".g { display: grid; grid-template-columns: minmax(80px, 1fr) 20px; grid-template-rows: 20px; width: 100px; }",
+            ],
+        );
+        let a = div_rect(&doc, &frags, 1);
+        let b = div_rect(&doc, &frags, 2);
+        assert!(approx(a.2, 80.0), "minmax track resolves to 80px, got {}", a.2);
+        assert!(approx(b.0, 80.0) && approx(b.2, 20.0), "fixed track 20px at x=80: {b:?}");
+    }
+
+    /// Numeric line-based placement: `grid-column: 2 / 4` / `grid-row: 1 / 3`
+    /// spans columns 2-3 and both rows. This is the placement path that taffy
+    /// *does* resolve (unlike named lines, cf. `grid_template_areas_*`).
+    #[test]
+    fn grid_line_based_placement_spans_tracks() {
+        let (doc, frags) = lay(
+            "<html><body><div class=g><div class=span></div></div></body></html>",
+            &[
+                ".g { display: grid; grid-template-columns: 30px 30px 40px; \
+                      grid-template-rows: 20px 20px; width: 100px; height: 40px; }",
+                ".span { grid-column: 2 / 4; grid-row: 1 / 3; }",
+            ],
+        );
+        let s = div_rect(&doc, &frags, 1);
+        // cols 2-3: x = 30, width = 30 + 40 = 70; rows 1-2: y = 0, height = 40.
+        assert!(approx(s.0, 30.0) && approx(s.1, 0.0), "span starts at col 2 / row 1 (30,0): {s:?}");
+        assert!(approx(s.2, 70.0) && approx(s.3, 40.0), "span covers cols 2-3 x both rows (70x40): {s:?}");
+    }
+
+    /// `justify-items: center` + `align-items: center` center a smaller item in
+    /// its grid cell on both axes. Guards the `justify_items` / `align_items`
+    /// forwarding (a regression lands the item at the cell origin instead).
+    #[test]
+    fn grid_center_item_in_cell() {
+        let (doc, frags) = lay(
+            "<html><body><div class=g><div class=item></div></div></body></html>",
+            &[
+                ".g { display: grid; grid-template-columns: 100px; grid-template-rows: 60px; \
+                      justify-items: center; align-items: center; width: 100px; height: 60px; }",
+                ".item { width: 40px; height: 20px; }",
+            ],
+        );
+        let it = div_rect(&doc, &frags, 1);
+        // centered in the 100x60 cell: x = (100-40)/2 = 30, y = (60-20)/2 = 20.
+        assert!(approx(it.0, 30.0) && approx(it.1, 20.0), "item centered in cell (30,20): {it:?}");
+    }
+
+    /// `grid-template-areas` (the holy-grail layout): a header/sidebar/main/footer
+    /// placed by named areas. **Canary for forwarding gap #3** — this taffy
+    /// version's `into_origin_zero_placement_ignoring_named` resolves named-line
+    /// placement (which `grid-area: header` compiles to) to `Auto`, so named
+    /// placement is expected to fall back to auto-placement and diverge. If this
+    /// passes, named-area plumbing works despite that resolver; if it fails, the
+    /// gap is confirmed (a taffy-fork fix, not a serval one).
+    #[test]
+    fn grid_template_areas_holy_grail() {
+        let (doc, frags) = lay(
+            "<html><body><div class=g>\
+                <div class=header></div><div class=side></div>\
+                <div class=main></div><div class=footer></div>\
+             </div></body></html>",
+            &[
+                ".g { display: grid; grid-template-columns: 30px 70px; \
+                      grid-template-rows: 20px 60px 20px; \
+                      grid-template-areas: \"header header\" \"side main\" \"footer footer\"; \
+                      width: 100px; height: 100px; }",
+                ".header { grid-area: header; }",
+                ".side { grid-area: side; }",
+                ".main { grid-area: main; }",
+                ".footer { grid-area: footer; }",
+            ],
+        );
+        let header = div_rect(&doc, &frags, 1);
+        let side = div_rect(&doc, &frags, 2);
+        let main = div_rect(&doc, &frags, 3);
+        let footer = div_rect(&doc, &frags, 4);
+        assert!(approx(header.0, 0.0) && approx(header.1, 0.0) && approx(header.2, 100.0) && approx(header.3, 20.0),
+            "header spans the top row (0,0,100,20): {header:?}");
+        assert!(approx(side.0, 0.0) && approx(side.1, 20.0) && approx(side.2, 30.0) && approx(side.3, 60.0),
+            "side is the left-middle cell (0,20,30,60): {side:?}");
+        assert!(approx(main.0, 30.0) && approx(main.1, 20.0) && approx(main.2, 70.0) && approx(main.3, 60.0),
+            "main is the right-middle cell (30,20,70,60): {main:?}");
+        assert!(approx(footer.0, 0.0) && approx(footer.1, 80.0) && approx(footer.2, 100.0) && approx(footer.3, 20.0),
+            "footer spans the bottom row (0,80,100,20): {footer:?}");
+    }
+
+    /// Known gap (forwarding #1, high risk): this taffy version does not model
+    /// CSS `order` — `FlexItem.order` is hardcoded to the document index
+    /// (taffy `compute/flexbox.rs:527`; no `FlexboxItemStyle::order`), so
+    /// `order: N` never reorders. Ignored until `order` is modeled in the taffy
+    /// fork; kept so the gap is tracked in the suite, not invisible.
+    #[test]
+    #[ignore = "taffy does not model flex `order`; document-order only (forwarding gap #1)"]
+    fn flex_order_reorders_items() {
+        let (doc, frags) = lay(
+            "<html><body><div class=row><div class=a></div><div class=b></div></div></body></html>",
+            &[
+                ".row { display: flex; width: 100px; height: 20px; }",
+                ".a { order: 2; width: 30px; height: 20px; }",
+                ".b { order: 1; width: 30px; height: 20px; }",
+            ],
+        );
+        // With `order` honored, .b (order 1) precedes .a (order 2): .b at x=0.
+        let a = div_rect(&doc, &frags, 1);
+        let b = div_rect(&doc, &frags, 2);
+        assert!(b.0 < a.0, "order:1 .b should precede order:2 .a, got b.x={} a.x={}", b.0, a.0);
+    }
+
     /// UA `pre { white-space: pre }` preserves source newlines as forced line
     /// breaks: a three-line `<pre>` is about three times as tall as a one-line
     /// one (a `white-space: normal` element would collapse the newlines to spaces
