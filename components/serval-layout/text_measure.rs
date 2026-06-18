@@ -32,6 +32,7 @@ use parley::{
 use rustc_hash::FxHashMap;
 use taffy::geometry::Size;
 use taffy::style::AvailableSpace;
+use taffy::InlineFloatBand;
 
 /// CSS generic font family. Serval-local mirror of the subset of
 /// Stylo's `GenericFontFamily` we map to parley — keeps the leaf
@@ -315,6 +316,15 @@ pub struct TextMeasureCtx {
     /// Built by [`measure_inline_content`]; paint reads it to draw the
     /// inline-block's glyphs at the box's parley-placed position.
     pub inline_block_layouts: FxHashMap<(taffy::NodeId, usize), Layout<ColorBrush>>,
+    /// Float exclusion bands per inline-context leaf (keyed by the leaf's Taffy
+    /// id), in the leaf's content-box-local space. Populated by the box-tree's
+    /// block-child layout when a text leaf sits in a block formatting context
+    /// with active floats (`BlockContext::inline_exclusion_bands`), and read by
+    /// [`measure_inline_content`] to narrow each line box around the floats so
+    /// text wraps to their side and reclaims the column below them. Absent ⇒ no
+    /// active floats ⇒ the scalar single-width break path runs unchanged.
+    /// Cleared per pass by [`TextMeasureCtx::reset`].
+    pub float_bands: FxHashMap<taffy::NodeId, Vec<InlineFloatBand>>,
 }
 
 impl Default for TextMeasureCtx {
@@ -342,6 +352,7 @@ impl TextMeasureCtx {
             marker_layouts: FxHashMap::default(),
             ellipsis_layouts: FxHashMap::default(),
             inline_block_layouts: FxHashMap::default(),
+            float_bands: FxHashMap::default(),
         }
     }
 
@@ -355,6 +366,7 @@ impl TextMeasureCtx {
         self.marker_layouts.clear();
         self.ellipsis_layouts.clear();
         self.inline_block_layouts.clear();
+        self.float_bands.clear();
     }
 
     /// Shape a list item's marker (a single run) into a one-line `Layout` and
@@ -454,6 +466,21 @@ pub fn measure_inline_content<NodeId>(
         }
     };
 
+    // Float wrap-around: if this leaf has float exclusion bands snapshotted for
+    // this pass (a paragraph in a block formatting context with active floats)
+    // and a definite wrap width, each line breaks against the band at its own y
+    // so text wraps to the float's side and reclaims the column below it. Cloned
+    // up front (a tiny Vec) so it does not borrow `ctx` across the layout-cache
+    // mutation below; absent/empty ⇒ the scalar `break_and_align` path runs
+    // unchanged (so every non-float inline test is byte-identical). The bands
+    // are only ever populated on the definite-width final block-layout pass, so
+    // the intrinsic min/max-content probes never see them.
+    let float_bands: Option<Vec<InlineFloatBand>> = match (ctx.float_bands.get(&taffy_id), max_advance)
+    {
+        (Some(b), Some(_)) if !content.no_wrap && !b.is_empty() => Some(b.clone()),
+        _ => None,
+    };
+
     // Re-measure fast path. Taffy probes each leaf at min-content, then
     // max-content, then its resolved width, so this runs 2-3× per leaf. The
     // glyph shaping is width-independent — only the line breaks change — so once
@@ -462,7 +489,10 @@ pub fn measure_inline_content<NodeId>(
     // `TextMeasureCtx::reset`, so a hit means "already shaped this pass"; the last
     // break wins, leaving the cached layout broken at the final width for paint.
     if let Some(layout) = ctx.layouts.get_mut(&taffy_id) {
-        break_and_align(layout, max_advance);
+        match (&float_bands, max_advance) {
+            (Some(bands), Some(content_width)) => break_and_align_floats(layout, bands, content_width),
+            _ => break_and_align(layout, max_advance),
+        }
         return Size {
             width: known_dimensions.width.unwrap_or_else(|| layout.width()),
             height: known_dimensions.height.unwrap_or_else(|| layout.height()),
@@ -478,7 +508,10 @@ pub fn measure_inline_content<NodeId>(
     for (i, l) in sublayouts {
         ctx.inline_block_layouts.insert((taffy_id, i), l);
     }
-    break_and_align(&mut layout, max_advance);
+    match (&float_bands, max_advance) {
+        (Some(bands), Some(content_width)) => break_and_align_floats(&mut layout, bands, content_width),
+        _ => break_and_align(&mut layout, max_advance),
+    }
     let size = Size {
         width: known_dimensions.width.unwrap_or_else(|| layout.width()),
         height: known_dimensions.height.unwrap_or_else(|| layout.height()),
@@ -552,6 +585,65 @@ pub(crate) fn shape_leaf<NodeId>(
 fn break_and_align(layout: &mut Layout<ColorBrush>, max_advance: Option<f32>) {
     layout.break_all_lines(max_advance);
     layout.align(Alignment::Start, AlignmentOptions::default());
+}
+
+/// Break a shaped `Layout` into lines that wrap around float exclusion `bands`,
+/// then start-align each line within its own (narrowed) box. The float-aware
+/// twin of [`break_and_align`]: where that breaks every line at one width, this
+/// gives each line the width left by the floats at its own y.
+///
+/// `bands` are content-box-local (`y` from the content-box top, `left`/`right`
+/// insets inward from the edges); `content_width` is the float-free content-box
+/// width. For each line, the band covering its top y narrows it to
+/// `[left, content_width - right]`; a line with no covering band — below all
+/// floats, or in a zero-inset gap between them — keeps the full width, which is
+/// how text reclaims the column under a float.
+///
+/// parley breaks lines incrementally: before each line we read its top y
+/// (`committed_y`, set from the prior lines' heights), look up the active band,
+/// and set the line's x-offset + max-advance. Those flow into the line metrics
+/// (`inline_min_coord` / `inline_max_coord`) and so into glyph positions at
+/// align time. `set_layout_max_advance(content_width)` first satisfies parley's
+/// invariant that each line's max-advance is `<= the layout's`.
+fn break_and_align_floats(
+    layout: &mut Layout<ColorBrush>,
+    bands: &[InlineFloatBand],
+    content_width: f32,
+) {
+    {
+        let mut breaker = layout.break_lines();
+        breaker.state_mut().set_layout_max_advance(content_width);
+        loop {
+            let line_top = breaker.committed_y() as f32;
+            let (line_x, line_max_advance) = band_for_line(bands, line_top, content_width);
+            let state = breaker.state_mut();
+            state.set_line_x(line_x);
+            state.set_line_max_advance(line_max_advance);
+            if breaker.break_next().is_none() {
+                break;
+            }
+        }
+        // `breaker` drops here: its lines swap back into `layout` and the
+        // layout's width/height are recomputed from the per-line metrics.
+    }
+    layout.align(Alignment::Start, AlignmentOptions::default());
+}
+
+/// The inline `(x_offset, max_advance)` for a line whose top sits at `y`
+/// (content-box-local), given the float exclusion `bands` and the float-free
+/// `content_width`. The first band covering `y` narrows the line by its insets;
+/// no covering band (below the floats, or a zero-inset gap) yields the full
+/// width at x = 0. Insets are clamped so a float wider than the column cannot
+/// produce a negative advance.
+fn band_for_line(bands: &[InlineFloatBand], y: f32, content_width: f32) -> (f32, f32) {
+    for band in bands {
+        if y >= band.y_start && y < band.y_end {
+            let line_x = band.left.clamp(0.0, content_width);
+            let line_max_advance = (content_width - band.left - band.right).clamp(0.0, content_width);
+            return (line_x, line_max_advance);
+        }
+    }
+    (0.0, content_width)
 }
 
 /// Shape `content` into a parley `Layout`, reserving each inline box at its

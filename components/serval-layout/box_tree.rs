@@ -797,6 +797,34 @@ impl<Id: Copy + Eq + Hash> BoxTreeView<'_, Id> {
             return taffy::compute_hidden_layout(self, node);
         }
 
+        // Float wrap-around: when this block child is a text / inline-context
+        // leaf laid out inside a block formatting context that has active
+        // floats, snapshot the float exclusion bands (in the leaf's
+        // content-box-local space) keyed by the leaf's Taffy id, so the parley
+        // measure can narrow each line box around them. `block_ctx` is only
+        // `Some` on the final block-layout pass (intrinsic sizing routes through
+        // `compute_child_layout` with no context), so this never perturbs the
+        // min/max-content probes. Absent bands ⇒ the scalar break path runs.
+        {
+            let is_inline_leaf = {
+                let leaf = &self.tree.nodes[idx(node)];
+                leaf.children.is_empty()
+                    && leaf.replaced_size.is_none()
+                    && leaf.inline_content.is_some()
+            };
+            if is_inline_leaf {
+                if let Some(ctx) = block_ctx.as_ref() {
+                    // The leaf's content-box top is its own local origin (y = 0).
+                    if ctx.has_active_floats(0.0) {
+                        let bands = ctx.inline_exclusion_bands(0.0);
+                        if !bands.is_empty() {
+                            self.text_ctx.float_bands.insert(node, bands);
+                        }
+                    }
+                }
+            }
+        }
+
         taffy::compute_cached_layout(self, node, inputs, |tree, node, inputs| {
             let key = idx(node);
             let display = tree.tree.nodes[key].style.clone_display();
@@ -1667,6 +1695,79 @@ mod tests {
         assert!(approx(a.location.x, 0.0), ".a at left, got x={}", a.location.x);
         assert!(approx(b.location.x, 40.0), ".b beside .a (x=40), got x={}", b.location.x);
         assert!(approx(b.location.y, 0.0), ".b on the same line as .a (y=0), got y={}", b.location.y);
+    }
+
+    /// Inline float wrap-around: a paragraph after a `float: left` wraps its
+    /// lines to the float's right while they overlap it vertically (top y below
+    /// the float's 40px bottom), then reclaims the full column below. Asserted
+    /// on the cached parley layout's per-line metrics directly (no paint
+    /// round-trip), since the likeliest defect on this path is a BFC-vs-leaf
+    /// coordinate-offset bug in the float band, which shows up here first.
+    #[test]
+    fn inline_text_wraps_around_left_float() {
+        // A long run so it spans several 20px lines: at least two beside the
+        // 40px-tall float and several reclaiming the full width below it.
+        let words = std::iter::repeat("word").take(40).collect::<Vec<_>>().join(" ");
+        let html = format!("<html><body><div class=\"fl\"></div><p>{words}</p></body></html>");
+        let document = StaticDocument::parse(&html);
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(300.0, 300.0),
+            &[
+                "html, body { margin: 0; padding: 0; }",
+                "body { width: 200px; }",
+                ".fl { float: left; width: 60px; height: 40px; }",
+                "p { margin: 0; font-size: 16px; line-height: 20px; }",
+            ],
+            None,
+        );
+        let images = ImagePlane::decode_from_dom(&document);
+        let viewport = Size {
+            width: AvailableSpace::Definite(300.0),
+            height: AvailableSpace::Definite(300.0),
+        };
+        let mut text_ctx = TextMeasureCtx::new();
+        let (_frags, built) =
+            layout_via_box_tree(&document, &styles, &images, viewport, &mut text_ctx);
+
+        let p = find_all(&document, html5ever::local_name!("p"))[0];
+        let taffy_id = *built.node_map.get(&p).expect("p box");
+        let layout = text_ctx.layouts.get(&taffy_id).expect("p text laid out");
+
+        let mut beside_float = 0; // lines whose top is above the float bottom
+        let mut below_float = 0; // lines whose top is below the float bottom
+        for line in layout.lines() {
+            let m = line.metrics();
+            let top = m.block_min_coord;
+            // Every line spans to the container's right edge (200): floats only
+            // narrow the start side here.
+            assert!(
+                approx(m.inline_max_coord, 200.0),
+                "line ends at the container edge (200), got {} (top y={top})",
+                m.inline_max_coord,
+            );
+            // Skip the boundary line straddling the float bottom (y≈40) to avoid
+            // floating-point ambiguity exactly at the transition.
+            if top < 39.5 {
+                assert!(
+                    approx(m.inline_min_coord, 60.0),
+                    "line beside the float starts at its right edge (x=60), got {} (top y={top})",
+                    m.inline_min_coord,
+                );
+                beside_float += 1;
+            } else if top > 40.5 {
+                assert!(
+                    approx(m.inline_min_coord, 0.0),
+                    "line below the float reclaims the left edge (x=0), got {} (top y={top})",
+                    m.inline_min_coord,
+                );
+                below_float += 1;
+            }
+        }
+        assert!(beside_float > 0, "expected lines wrapping beside the float");
+        assert!(below_float > 0, "expected lines reclaiming the column below the float");
     }
 
     /// `position: relative` offsets the box by its inset from in-flow.

@@ -1299,11 +1299,11 @@ fn html_to_pixels_block_siblings_stack_vertically() {
 /// algorithm through `stylo_taffy`'s converter and displaces sibling
 /// blocks horizontally.
 ///
-/// Limit (documented, not a bug): serval's inline content is a
-/// parley-measured opaque leaf to Taffy, so *text wrapping around* a
-/// float doesn't work yet — only block-level float displacement. Real
-/// text reflow around floats needs integration at the IFC seam (see
-/// docs/2026-05-20_stylo_taffy_adoption_plan.md).
+/// (Inline text *wrapping around* a float is a separate path, now wired
+/// at the IFC seam: a paragraph's parley line boxes narrow per-line
+/// around the float's exclusion band and reclaim the column below it.
+/// Covered by `serval-layout`'s `inline_text_wraps_around_left_float`;
+/// this test stays focused on block-level displacement.)
 #[test]
 fn html_to_pixels_float_left_places_blocks_side_by_side() {
     let image = render_to_image(

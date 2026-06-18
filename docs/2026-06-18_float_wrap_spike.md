@@ -6,6 +6,17 @@ paragraph wrapping to the right of a `float:left`, reclaiming full width below
 it). Grounded by a four-part study (parley capability, serval float state, the
 engine model, the `break_all_lines` seam).
 
+**Status (2026-06-18): first cut landed.** Implemented exactly as designed
+below — taffy gains `FloatContext::exclusion_bands` + `InlineFloatBand` +
+`BlockContext::inline_exclusion_bands` (patch 0002, see `SERVAL_PATCHES.md`);
+the box tree snapshots bands per inline-context leaf into `TextMeasureCtx`;
+`text_measure`'s `break_and_align_floats` drives `Layout::break_lines()` with
+per-line `set_line_x` / `set_line_max_advance`. Proven by
+`serval-layout`'s `inline_text_wraps_around_left_float` (200px column, 60×40
+`float:left`: lines above the float's 40px bottom start at x=60, lines below
+reclaim x=0, all ending at the 200px edge). Full lib suite green (192). The
+"Deferred" list below is the remaining backlog.
+
 ## The finding: it's parley wiring + float-band plumbing, not a new line-breaker
 
 parley 0.10.0 already models per-line geometry. The incremental breaker

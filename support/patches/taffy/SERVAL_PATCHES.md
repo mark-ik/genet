@@ -43,3 +43,36 @@ for auto-width.
 
 Reftest moved: `css/CSS2/floats/floats-wrap-bfc-008` (fixed-width BFC clearing a
 full-width float) now matches its reference.
+
+### 0002 — float exclusion-band accessor (`0002-exclusion-bands.patch`)
+
+**Files:** `src/compute/float.rs`, `src/compute/block.rs`, `src/compute/mod.rs`
+**Upstream status:** serval-only so far (the inline IFC seam it feeds is
+serval's parley-measured leaf, which upstream taffy does not model). Additive —
+no existing taffy behaviour changes.
+
+Inline text wrapping *around* a float needs each line box to know the width the
+floats leave at its own y. taffy places floats (the `float_layout` feature) but
+exposes only `find_content_slot` (one slot for one block child); it has no way
+to hand a paragraph's line breaker the full set of exclusion bands.
+
+This adds a read-only accessor and a small value type, leaving placement
+untouched:
+
+- `float.rs`: `InlineFloatBand { y_start, y_end, left, right }` and
+  `FloatContext::exclusion_bands(min_y) -> Vec<(Range<f32>, [f32; 2])>` — a thin
+  filter over the existing `segments` walk (segments at/below `min_y` that
+  impose an inset on either side), in BFC-root space.
+- `block.rs`: `BlockContext::inline_exclusion_bands(min_y) -> Vec<InlineFloatBand>`
+  — the same coordinate handling as `find_content_slot` (subtract `y_offset` for
+  block-local y; `max` each segment inset with the content-box inset and re-base
+  to the content-box edge), but returning every band rather than one slot.
+- `mod.rs`: re-export `InlineFloatBand`.
+
+Consumed in serval-layout: the box tree snapshots these bands per inline-context
+leaf into `TextMeasureCtx`, and the parley measure drives `Layout::break_lines()`
+with per-line `set_line_x` / `set_line_max_advance` so lines wrap to a float's
+side and reclaim the column below it (the float-wrap first cut;
+`docs/2026-06-18_float_wrap_spike.md`). Known limit: only x-axis content-box
+insets are tracked, so a top padding/border on the leaf is not yet reflected in
+the band's `y` (fine for the common no-top-padding case).

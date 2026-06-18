@@ -46,6 +46,29 @@ pub struct ContentSlot {
     pub height: f32,
 }
 
+/// A horizontal exclusion band for wrapping inline content around floats.
+///
+/// Over the y-range `[y_start, y_end)` (in the consuming block's
+/// content-box-local coordinate space), floats narrow the available inline
+/// width by `left` on the inline-start side and `right` on the inline-end side
+/// — both measured inward from the content-box edges. Consumed by inline line
+/// breaking to give each line box its own (narrowed) width, so text wraps to
+/// the side of a float and reclaims the full column below it.
+///
+/// serval patch (float wrap-around): produced by
+/// [`FloatContext::exclusion_bands`] + `BlockContext::inline_exclusion_bands`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InlineFloatBand {
+    /// Top of the band (content-box-local y).
+    pub y_start: f32,
+    /// Bottom of the band (content-box-local y).
+    pub y_end: f32,
+    /// Inline-start inset imposed by floats over this band.
+    pub left: f32,
+    /// Inline-end inset imposed by floats over this band.
+    pub right: f32,
+}
+
 /// A floated box
 #[derive(Debug, Clone, Default)]
 pub struct PlacedFloatedBox {
@@ -546,6 +569,28 @@ impl FloatContext {
                 }
             }
         }
+    }
+
+    /// Snapshot the float exclusion segments active at or below `min_y` (in
+    /// this context's BFC-root coordinate space). Each entry is the segment's
+    /// y-range paired with its float insets `[left, right]` (absolute, measured
+    /// from the BFC edges). Segments that impose no inset on either side are
+    /// omitted, since they exclude nothing from inline content. An empty result
+    /// means no active floats below `min_y`.
+    ///
+    /// serval patch (float wrap-around): a thin read over the existing
+    /// `segments` walk, the raw material for `BlockContext::inline_exclusion_bands`,
+    /// which converts each segment into a content-box-local [`InlineFloatBand`]
+    /// for parley line breaking.
+    pub fn exclusion_bands(&self, min_y: f32) -> Vec<(Range<f32>, [f32; 2])> {
+        if !self.has_active_floats(min_y) {
+            return Vec::new();
+        }
+        self.segments
+            .iter()
+            .filter(|seg| seg.y.end > min_y && (seg.insets[0] > 0.0 || seg.insets[1] > 0.0))
+            .map(|seg| (seg.y.clone(), seg.insets))
+            .collect()
     }
 }
 

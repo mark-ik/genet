@@ -15,7 +15,7 @@ use crate::{
 };
 
 #[cfg(feature = "float_layout")]
-use super::float::{ContentSlot, FloatContext, FloatIntrinsicWidthCalculator};
+use super::float::{ContentSlot, FloatContext, FloatIntrinsicWidthCalculator, InlineFloatBand};
 #[cfg(feature = "float_layout")]
 use crate::{Clear, Float, FloatDirection};
 
@@ -163,6 +163,36 @@ impl BlockContext<'_> {
     /// Get the bottom of lowest relevant float for the specific clear property
     pub fn cleared_threshold(&self, clear: Clear) -> Option<f32> {
         self.bfc.float_context.cleared_threshold(clear).map(|threshold| threshold - self.y_offset)
+    }
+
+    /// Snapshot the active float exclusion bands for inline content laid out in
+    /// this block, in the block's content-box-local coordinate space: `y`
+    /// measured from the content-box top, `left` / `right` insets measured
+    /// inward from the content-box edges. Empty when no floats are active at or
+    /// below `min_y` (block-local).
+    ///
+    /// serval patch (float wrap-around): the per-line widths that let a
+    /// paragraph's lines wrap to the side of a float and reclaim the full
+    /// column below it. Mirrors the coordinate handling of
+    /// [`Self::find_content_slot`] (subtract `y_offset` to reach block-local y;
+    /// `max` each segment inset with the content-box inset and re-base to the
+    /// content-box edge), but returns every band rather than picking one slot.
+    /// Note: only the x-axis content-box insets are tracked, so a top
+    /// padding/border on an inline-context leaf is not yet reflected in `y`
+    /// (acceptable for the common no-top-padding case; see the float-wrap spike).
+    pub fn inline_exclusion_bands(&self, min_y: f32) -> Vec<InlineFloatBand> {
+        let cbi = self.content_box_insets;
+        self.bfc
+            .float_context
+            .exclusion_bands(min_y + self.y_offset)
+            .into_iter()
+            .map(|(y, insets)| InlineFloatBand {
+                y_start: y.start - self.y_offset,
+                y_end: y.end - self.y_offset,
+                left: (insets[0].max(cbi[0]) - cbi[0]).max(0.0),
+                right: (insets[1].max(cbi[1]) - cbi[1]).max(0.0),
+            })
+            .collect()
     }
 
     /// Update the height that descendent floats with the height that floats consume

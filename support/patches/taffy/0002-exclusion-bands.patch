@@ -1,0 +1,126 @@
+diff --git a/src/compute/block.rs b/src/compute/block.rs
+index 40274edaf4e..bef6f479a10 100644
+--- a/src/compute/block.rs
++++ b/src/compute/block.rs
+@@ -15,7 +15,7 @@ use crate::{
+ };
+ 
+ #[cfg(feature = "float_layout")]
+-use super::float::{ContentSlot, FloatContext, FloatIntrinsicWidthCalculator};
++use super::float::{ContentSlot, FloatContext, FloatIntrinsicWidthCalculator, InlineFloatBand};
+ #[cfg(feature = "float_layout")]
+ use crate::{Clear, Float, FloatDirection};
+ 
+@@ -165,6 +165,36 @@ impl BlockContext<'_> {
+         self.bfc.float_context.cleared_threshold(clear).map(|threshold| threshold - self.y_offset)
+     }
+ 
++    /// Snapshot the active float exclusion bands for inline content laid out in
++    /// this block, in the block's content-box-local coordinate space: `y`
++    /// measured from the content-box top, `left` / `right` insets measured
++    /// inward from the content-box edges. Empty when no floats are active at or
++    /// below `min_y` (block-local).
++    ///
++    /// serval patch (float wrap-around): the per-line widths that let a
++    /// paragraph's lines wrap to the side of a float and reclaim the full
++    /// column below it. Mirrors the coordinate handling of
++    /// [`Self::find_content_slot`] (subtract `y_offset` to reach block-local y;
++    /// `max` each segment inset with the content-box inset and re-base to the
++    /// content-box edge), but returns every band rather than picking one slot.
++    /// Note: only the x-axis content-box insets are tracked, so a top
++    /// padding/border on an inline-context leaf is not yet reflected in `y`
++    /// (acceptable for the common no-top-padding case; see the float-wrap spike).
++    pub fn inline_exclusion_bands(&self, min_y: f32) -> Vec<InlineFloatBand> {
++        let cbi = self.content_box_insets;
++        self.bfc
++            .float_context
++            .exclusion_bands(min_y + self.y_offset)
++            .into_iter()
++            .map(|(y, insets)| InlineFloatBand {
++                y_start: y.start - self.y_offset,
++                y_end: y.end - self.y_offset,
++                left: (insets[0].max(cbi[0]) - cbi[0]).max(0.0),
++                right: (insets[1].max(cbi[1]) - cbi[1]).max(0.0),
++            })
++            .collect()
++    }
++
+     /// Update the height that descendent floats with the height that floats consume
+     /// within a particular child
+     fn add_child_floated_content_height_contribution(&mut self, child_contribution: f32) {
+diff --git a/src/compute/float.rs b/src/compute/float.rs
+index cc3d2533b9e..43f99fd6b71 100644
+--- a/src/compute/float.rs
++++ b/src/compute/float.rs
+@@ -46,6 +46,29 @@ pub struct ContentSlot {
+     pub height: f32,
+ }
+ 
++/// A horizontal exclusion band for wrapping inline content around floats.
++///
++/// Over the y-range `[y_start, y_end)` (in the consuming block's
++/// content-box-local coordinate space), floats narrow the available inline
++/// width by `left` on the inline-start side and `right` on the inline-end side
++/// — both measured inward from the content-box edges. Consumed by inline line
++/// breaking to give each line box its own (narrowed) width, so text wraps to
++/// the side of a float and reclaims the full column below it.
++///
++/// serval patch (float wrap-around): produced by
++/// [`FloatContext::exclusion_bands`] + `BlockContext::inline_exclusion_bands`.
++#[derive(Debug, Clone, Copy, PartialEq)]
++pub struct InlineFloatBand {
++    /// Top of the band (content-box-local y).
++    pub y_start: f32,
++    /// Bottom of the band (content-box-local y).
++    pub y_end: f32,
++    /// Inline-start inset imposed by floats over this band.
++    pub left: f32,
++    /// Inline-end inset imposed by floats over this band.
++    pub right: f32,
++}
++
+ /// A floated box
+ #[derive(Debug, Clone, Default)]
+ pub struct PlacedFloatedBox {
+@@ -547,6 +570,28 @@ impl FloatContext {
+             }
+         }
+     }
++
++    /// Snapshot the float exclusion segments active at or below `min_y` (in
++    /// this context's BFC-root coordinate space). Each entry is the segment's
++    /// y-range paired with its float insets `[left, right]` (absolute, measured
++    /// from the BFC edges). Segments that impose no inset on either side are
++    /// omitted, since they exclude nothing from inline content. An empty result
++    /// means no active floats below `min_y`.
++    ///
++    /// serval patch (float wrap-around): a thin read over the existing
++    /// `segments` walk, the raw material for `BlockContext::inline_exclusion_bands`,
++    /// which converts each segment into a content-box-local [`InlineFloatBand`]
++    /// for parley line breaking.
++    pub fn exclusion_bands(&self, min_y: f32) -> Vec<(Range<f32>, [f32; 2])> {
++        if !self.has_active_floats(min_y) {
++            return Vec::new();
++        }
++        self.segments
++            .iter()
++            .filter(|seg| seg.y.end > min_y && (seg.insets[0] > 0.0 || seg.insets[1] > 0.0))
++            .map(|seg| (seg.y.clone(), seg.insets))
++            .collect()
++    }
+ }
+ 
+ /// Context for computing the intrinsic width contribution of a set of floats
+diff --git a/src/compute/mod.rs b/src/compute/mod.rs
+index d70c77c2985..33f60cdfb54 100644
+--- a/src/compute/mod.rs
++++ b/src/compute/mod.rs
+@@ -48,7 +48,7 @@ pub use self::flexbox::compute_flexbox_layout;
+ pub use self::grid::compute_grid_layout;
+ 
+ #[cfg(feature = "float_layout")]
+-pub use self::float::{ContentSlot, FloatContext, FloatIntrinsicWidthCalculator};
++pub use self::float::{ContentSlot, FloatContext, FloatIntrinsicWidthCalculator, InlineFloatBand};
+ 
+ use crate::geometry::{Line, Point, Size};
+ use crate::style::{AvailableSpace, CoreStyle, Overflow};
