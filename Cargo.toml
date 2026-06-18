@@ -220,12 +220,12 @@ rustls-platform-verifier = "0.7.0"
 sea-query = { version = "=1.0.0-rc.31", default-features = false, features = ["backend-sqlite", "derive"] }
 sea-query-rusqlite = { version = "=0.8.0-rc.15" }
 sec1 = "0.7"
-selectors = { git = "https://github.com/servo/stylo", rev = "572ecba2d1600e7c3d490586692a209faf703baa" }
+selectors = { git = "https://github.com/servo/stylo", rev = "8bde0e96db888b7f188830bea261e72b2006fd73" }
 serde = "1.0.228"
 serde_bytes = "0.11"
 serde_core = "1.0.226"
 serde_json = "1.0"
-servo_arc = { git = "https://github.com/servo/stylo", rev = "572ecba2d1600e7c3d490586692a209faf703baa" }
+servo_arc = { git = "https://github.com/servo/stylo", rev = "8bde0e96db888b7f188830bea261e72b2006fd73" }
 sha1 = "0.10"
 sha2 = "0.10"
 sha3 = "0.10"
@@ -237,12 +237,12 @@ skrifa = "0.42.1"
 smallvec = { version = "1.15", features = ["serde", "union"] }
 string_cache = "0.9"
 strum = { version = "0.28", features = ["derive"] }
-stylo = { git = "https://github.com/servo/stylo", rev = "572ecba2d1600e7c3d490586692a209faf703baa" }
-stylo_atoms = { git = "https://github.com/servo/stylo", rev = "572ecba2d1600e7c3d490586692a209faf703baa" }
-stylo_dom = { git = "https://github.com/servo/stylo", rev = "572ecba2d1600e7c3d490586692a209faf703baa" }
-stylo_malloc_size_of = { git = "https://github.com/servo/stylo", rev = "572ecba2d1600e7c3d490586692a209faf703baa" }
-stylo_static_prefs = { git = "https://github.com/servo/stylo", rev = "572ecba2d1600e7c3d490586692a209faf703baa" }
-stylo_traits = { git = "https://github.com/servo/stylo", rev = "572ecba2d1600e7c3d490586692a209faf703baa" }
+stylo = { git = "https://github.com/servo/stylo", rev = "8bde0e96db888b7f188830bea261e72b2006fd73" }
+stylo_atoms = { git = "https://github.com/servo/stylo", rev = "8bde0e96db888b7f188830bea261e72b2006fd73" }
+stylo_dom = { git = "https://github.com/servo/stylo", rev = "8bde0e96db888b7f188830bea261e72b2006fd73" }
+stylo_malloc_size_of = { git = "https://github.com/servo/stylo", rev = "8bde0e96db888b7f188830bea261e72b2006fd73" }
+stylo_static_prefs = { git = "https://github.com/servo/stylo", rev = "8bde0e96db888b7f188830bea261e72b2006fd73" }
+stylo_traits = { git = "https://github.com/servo/stylo", rev = "8bde0e96db888b7f188830bea261e72b2006fd73" }
 syn = { version = "2", default-features = false, features = ["clone-impls", "derive", "parsing"] }
 synstructure = "0.13"
 taffy = { version = "0.10.1", default-features = false, features = ["calc", "detailed_layout_info", "grid", "std"] }
@@ -464,14 +464,14 @@ nova_vm = { git = "https://github.com/mark-ik/nova", branch = "serval-embedder" 
 boa_engine = { git = "https://github.com/mark-ik/boa.git", branch = "serval" }
 boa_gc = { git = "https://github.com/mark-ik/boa.git", branch = "serval" }
 # stylo_taffy (serval-layout) depends on crates.io `stylo`/`stylo_atoms`
-# `^0.17`. serval pins the same crates from the servo/stylo git rev, and
-# `stylo` declares `links = "servo_style_crate"` (only one Stylo allowed
-# in the graph). Redirect the crates.io deps to the git rev so they
-# unify with serval's Stylo instead of conflicting. The git rev is
-# 0.17.0, which satisfies stylo_taffy's `^0.17`. See
-# docs/2026-05-20_stylo_taffy_adoption_plan.md.
-stylo = { git = "https://github.com/servo/stylo", rev = "572ecba2d1600e7c3d490586692a209faf703baa" }
-stylo_atoms = { git = "https://github.com/servo/stylo", rev = "572ecba2d1600e7c3d490586692a209faf703baa" }
+# `^0.18` (stylo_taffy 0.3.0-alpha.5). serval pins the same crates from the
+# servo/stylo git rev, and `stylo` declares `links = "servo_style_crate"`
+# (only one Stylo allowed in the graph). Redirect the crates.io deps to the
+# git rev so they unify with serval's Stylo instead of conflicting. The git
+# rev is the v0.18.0 release tag, declaring 0.18.0, which satisfies
+# stylo_taffy's `^0.18`. See docs/2026-05-20_stylo_taffy_adoption_plan.md.
+stylo = { git = "https://github.com/servo/stylo", rev = "8bde0e96db888b7f188830bea261e72b2006fd73" }
+stylo_atoms = { git = "https://github.com/servo/stylo", rev = "8bde0e96db888b7f188830bea261e72b2006fd73" }
 # vello patch removed 2026-05-15 per Mark's audit — bumping to vello 0.9
 # directly from crates.io. If vello upstream needs a fork applied later,
 # re-add here pinned to a specific upstream version.
