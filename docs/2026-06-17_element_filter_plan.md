@@ -5,6 +5,16 @@ item 7. **Scope:** CSS `filter` applied to an element (blur, the color ops,
 later drop-shadow) — distinct from `backdrop-filter` (which filters content
 *behind* a layer; D1 machinery, separate).
 
+**STATUS — DONE (2026-06-18).** Increments 1 (data path), 2 (color filters), and
+3 (blur) shipped and verified (`html_to_pixels_e2e`: invert/grayscale/brightness,
+29 green); adversarially reviewed (backdrop+filter-on-one-layer fixed). Commits:
+netrender `fbe3dbf6a` (data path), `6051954c1` (GPU pass), `c5e6400c8` (review
+fixes); serval `76c20f9f4dc` (emission + e2e). Remaining: increment 4
+(`drop-shadow()`), nested element filters, non-square-viewport blur, and the
+tile-cache-aware texture-reuse scheme (the per-frame `register_texture` growth,
+load-bearing and shared with backdrop-filter). The plan below is the as-built
+record.
+
 ## Why it is not a wire-up (verified)
 
 - `paint_list_api::LayerSpec.filters: Vec<FilterOp>` already carries the full

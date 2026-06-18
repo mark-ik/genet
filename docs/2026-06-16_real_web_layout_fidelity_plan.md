@@ -215,17 +215,25 @@ and independent.
   serval's `emit_border_image` emits them. Only a *gradient* source is deferred
   (`paint_list_render` ~918) — niche.
 
-**Slice (remaining) — both verified heavy, both low-priority (none blocks
-higher items):**
+**Slice — `filter` is DONE (below); `::first-line` remains (verified heavy, low
+priority, blocks nothing):**
 
-- **`filter` (element).** Not a wire-up. `LayerSpec.filters` carries the full
-  CSS chain (blur + the color ops) but the translator applies only `Opacity`;
-  the rest are dropped. The renderer has *backdrop*-filter machinery (D1, woven
-  through `tile_cache` + `vello_tile_rasterizer` via `render_to_texture` +
-  `filter.rs`), but that filters the content *behind* a layer, not the layer's
-  own output. Element `filter` needs a new layer-output filter pass + color
-  `SceneFilter` variants/shaders + translator + serval emission — a focused GPU
-  effort.
+- **`filter` (element) — DONE (2026-06-18).** The focused GPU effort, built:
+  `cs_color_matrix.wgsl` + pipeline/cache (netrender_device), `color_matrix_callback`
+  (filter.rs), and a `preprocess_element_filters` pass mirroring the backdrop
+  loop — renders a filtered layer's own content to an offscreen, applies the
+  chain (blur via the blur cascade, the color ops via the color-matrix shader:
+  unpremultiply → 4x5 matrix → clamp → re-premultiply, in sRGB space), and
+  splices the result back so the layer wrapper keeps alpha/blend/clip. Shared
+  `preprocess_filters` runs on both `render_vello` and the compositor path. serval
+  emits `cv.get_effects().filter`. Matrices follow CSS Filter Effects L1
+  (grayscale BT.709, saturate/hue-rotate 0.213, sepia/brightness/contrast/invert),
+  research-vetted. Verified: e2e invert→cyan, grayscale→sRGB-luminance gray,
+  brightness halves (`html_to_pixels_e2e`, 29 green). Adversarially reviewed;
+  backdrop+filter-on-one-layer fixed. Deferred: nested element filters,
+  `drop-shadow()`, non-square-viewport blur, filter + interleaved external
+  textures, the per-frame texture growth (load-bearing for tile reuse, shared
+  with backdrop-filter). See `2026-06-17_element_filter_plan.md`.
 
 - **`::first-line`.** Blocked below serval: the **servo** `PseudoElement` enum
   (`style/servo/selector_parser.rs:50`) has no `FirstLine` variant ("If/when
