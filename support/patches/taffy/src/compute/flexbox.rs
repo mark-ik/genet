@@ -27,6 +27,12 @@ struct FlexItem {
     /// The order of the node relative to it's siblings
     order: u32,
 
+    /// The CSS `order` value, used to stable-sort items into order-modified
+    /// document order before line collection. Distinct from `order` above,
+    /// which stays the document index used for paint/output ordering.
+    /// (serval patch: flex `order` support.)
+    css_order: i32,
+
     /// The base size of this item
     size: Size<Option<f32>>,
     /// The minimum allowable size of this item
@@ -506,7 +512,8 @@ fn generate_anonymous_flex_items(
     node: NodeId,
     constants: &AlgoConstants,
 ) -> Vec<FlexItem> {
-    tree.child_ids(node)
+    let mut items: Vec<FlexItem> = tree
+        .child_ids(node)
         .enumerate()
         .map(|(index, child)| (index, child, tree.get_flexbox_child_style(child)))
         .filter(|(_, _, style)| style.position() != Position::Absolute)
@@ -525,6 +532,7 @@ fn generate_anonymous_flex_items(
             FlexItem {
                 node: child,
                 order: index as u32,
+                css_order: child_style.order(),
                 size: child_style
                     .size()
                     .maybe_resolve(constants.node_inner_size, |val, basis| tree.calc(val, basis))
@@ -577,7 +585,14 @@ fn generate_anonymous_flex_items(
                 offset_cross: 0.0,
             }
         })
-        .collect()
+        .collect();
+
+    // CSS `order`: lay items out in order-modified document order. `sort_by_key`
+    // is stable, so items with equal `order` (the common case, order 0) keep
+    // their document order. The `order` field retains the document index for
+    // paint/output ordering. (serval patch: flex `order` support.)
+    items.sort_by_key(|item| item.css_order);
+    items
 }
 
 /// Determine the available main and cross space for the flex items.

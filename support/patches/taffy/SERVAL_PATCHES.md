@@ -76,3 +76,30 @@ side and reclaim the column below it (the float-wrap first cut;
 `docs/2026-06-18_float_wrap_spike.md`). Known limit: only x-axis content-box
 insets are tracked, so a top padding/border on the leaf is not yet reflected in
 the band's `y` (fine for the common no-top-padding case).
+
+### 0003 — flex `order` support (`0003-flex-order.patch`)
+
+**Files:** `src/style/flex.rs`, `src/compute/flexbox.rs`
+**Upstream status:** serval-only. This taffy version does not model CSS `order`
+at all — `FlexItem.order` is the document index (used only for paint/output
+ordering), and the flex algorithm processes items in document order. PR-able.
+
+CSS `order` lays flex items out (and paints them) in *order-modified document
+order*: items sort by ascending `order`, ties broken by document order.
+
+- `flex.rs`: add `FlexboxItemStyle::order() -> i32` (default 0). Adapters that
+  don't override it keep document order, so existing behaviour is unchanged.
+- `flexbox.rs`: `FlexItem` gains a `css_order: i32` field, populated from
+  `child_style.order()` in `generate_anonymous_flex_items`; after collection the
+  item vec is `sort_by_key(|i| i.css_order)` — a *stable* sort, so equal-`order`
+  items (the common case, 0) keep document order. The pre-existing `order: u32`
+  field is left as the document index for paint/output ordering, so paint order
+  is unchanged (a deliberate first-cut limit: CSS `order` also re-orders
+  painting, but serval paints in document order regardless, and flex items rarely
+  overlap).
+
+Consumed in serval-layout: `box_tree.rs`'s `CssStyle` flex-item wrapper overrides
+`FlexboxItemStyle::order()` to read `get_position().order` off the cascade (the
+same wrap-and-override pattern it already uses for grid placement; no
+`stylo_taffy` patch needed). Verified by `flex_order_reorders_items` and
+`flex_order_is_stable_and_handles_negative`.

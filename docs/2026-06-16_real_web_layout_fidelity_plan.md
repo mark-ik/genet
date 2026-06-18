@@ -196,17 +196,19 @@ Stylo 0.18 `longhands.toml`, harness, test matrix) found:
   diverge (taffy's `into_origin_zero_placement_ignoring_named`), but it was
   empirically **falsified** — named-area placement is faithful (header spans the
   full 100px row, not the 30px auto-placement cell).
-- **The one real gap: CSS `order`** (forwarding gap #1). This taffy version does
-  not model it — flex items lay out in document order regardless of `order:N`
-  (confirmed: `order:2` item stays at x=0, `order:1` at x=30). Tracked as an
-  `#[ignore]`d test (`flex_order_reorders_items`). A real fix is a **taffy-fork**
-  change (a `FlexboxItemStyle::order()` method + a stable sort by it before flex
-  placement) plus a serval flex-item style wrapper reading the cascade (the same
-  `CssStyle`-wraps-`TaffyStyloStyle` precedent grid placement already uses, so no
-  `stylo_taffy` patch needed). Deferred as its own focused pass (paint-order
-  semantics + wrap interaction warrant care). Lower-risk gaps (subgrid, masonry,
-  `flex-basis:content`, content-distribution fallback keyword) are taffy/upstream
-  and recorded in the audit, not yet tested.
+- **CSS `order` — now fixed** (was forwarding gap #1). This taffy version did
+  not model it (items laid out in document order regardless of `order:N`). Fixed
+  as **taffy patch 0003**: a `FlexboxItemStyle::order()` trait method + a stable
+  sort of the flex items by the cascaded `order` before line collection, with a
+  serval `CssStyle` flex-item wrapper reading `get_position().order` off the
+  cascade (the `CssStyle`-wraps-`TaffyStyloStyle` precedent grid placement uses,
+  so no `stylo_taffy` patch). Verified by `flex_order_reorders_items` (orders
+  3/1/2 → visual 1/2/3) and `flex_order_is_stable_and_handles_negative` (stable
+  ties + negative). First-cut limit: paint order stays document order (CSS
+  `order` also re-orders painting, but serval paints in document order and flex
+  items rarely overlap). Lower-risk gaps (subgrid, masonry, `flex-basis:content`,
+  content-distribution fallback keyword) are taffy/upstream and recorded in the
+  audit, not yet tested.
 
 ---
 

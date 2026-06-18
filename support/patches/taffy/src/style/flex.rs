@@ -64,6 +64,18 @@ pub trait FlexboxItemStyle: CoreStyle {
     fn align_self(&self) -> Option<AlignSelf> {
         Style::<Self::CustomIdent>::DEFAULT.align_self
     }
+
+    /// The CSS `order` property. Flex items are laid out (and painted) in
+    /// ascending `order`, ties broken by document order ("order-modified
+    /// document order"). Defaults to 0.
+    ///
+    /// serval patch (flex `order`): this method does not exist upstream; the
+    /// flex algorithm stable-sorts items by it before line collection. Style
+    /// adapters that do not override it keep the default 0 (document order).
+    #[inline(always)]
+    fn order(&self) -> i32 {
+        0
+    }
 }
 
 use crate::geometry::AbsoluteAxis;

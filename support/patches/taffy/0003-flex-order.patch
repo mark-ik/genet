@@ -1,0 +1,74 @@
+diff --git a/src/compute/flexbox.rs b/src/compute/flexbox.rs
+index eb56619a96e..ace52217395 100644
+--- a/src/compute/flexbox.rs
++++ b/src/compute/flexbox.rs
+@@ -27,6 +27,12 @@ struct FlexItem {
+     /// The order of the node relative to it's siblings
+     order: u32,
+ 
++    /// The CSS `order` value, used to stable-sort items into order-modified
++    /// document order before line collection. Distinct from `order` above,
++    /// which stays the document index used for paint/output ordering.
++    /// (serval patch: flex `order` support.)
++    css_order: i32,
++
+     /// The base size of this item
+     size: Size<Option<f32>>,
+     /// The minimum allowable size of this item
+@@ -506,7 +512,8 @@ fn generate_anonymous_flex_items(
+     node: NodeId,
+     constants: &AlgoConstants,
+ ) -> Vec<FlexItem> {
+-    tree.child_ids(node)
++    let mut items: Vec<FlexItem> = tree
++        .child_ids(node)
+         .enumerate()
+         .map(|(index, child)| (index, child, tree.get_flexbox_child_style(child)))
+         .filter(|(_, _, style)| style.position() != Position::Absolute)
+@@ -525,6 +532,7 @@ fn generate_anonymous_flex_items(
+             FlexItem {
+                 node: child,
+                 order: index as u32,
++                css_order: child_style.order(),
+                 size: child_style
+                     .size()
+                     .maybe_resolve(constants.node_inner_size, |val, basis| tree.calc(val, basis))
+@@ -577,7 +585,14 @@ fn generate_anonymous_flex_items(
+                 offset_cross: 0.0,
+             }
+         })
+-        .collect()
++        .collect();
++
++    // CSS `order`: lay items out in order-modified document order. `sort_by_key`
++    // is stable, so items with equal `order` (the common case, order 0) keep
++    // their document order. The `order` field retains the document index for
++    // paint/output ordering. (serval patch: flex `order` support.)
++    items.sort_by_key(|item| item.css_order);
++    items
+ }
+ 
+ /// Determine the available main and cross space for the flex items.
+diff --git a/src/style/flex.rs b/src/style/flex.rs
+index e4c7654ad54..4562685ddaa 100644
+--- a/src/style/flex.rs
++++ b/src/style/flex.rs
+@@ -64,6 +64,18 @@ pub trait FlexboxItemStyle: CoreStyle {
+     fn align_self(&self) -> Option<AlignSelf> {
+         Style::<Self::CustomIdent>::DEFAULT.align_self
+     }
++
++    /// The CSS `order` property. Flex items are laid out (and painted) in
++    /// ascending `order`, ties broken by document order ("order-modified
++    /// document order"). Defaults to 0.
++    ///
++    /// serval patch (flex `order`): this method does not exist upstream; the
++    /// flex algorithm stable-sorts items by it before line collection. Style
++    /// adapters that do not override it keep the default 0 (document order).
++    #[inline(always)]
++    fn order(&self) -> i32 {
++        0
++    }
+ }
+ 
+ use crate::geometry::AbsoluteAxis;

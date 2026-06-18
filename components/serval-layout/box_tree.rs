@@ -744,6 +744,33 @@ impl taffy::GridItemStyle for CssStyle {
     }
 }
 
+impl taffy::FlexboxItemStyle for CssStyle {
+    #[inline]
+    fn flex_basis(&self) -> taffy::Dimension {
+        taffy::FlexboxItemStyle::flex_basis(&self.inner)
+    }
+    #[inline]
+    fn flex_grow(&self) -> f32 {
+        taffy::FlexboxItemStyle::flex_grow(&self.inner)
+    }
+    #[inline]
+    fn flex_shrink(&self) -> f32 {
+        taffy::FlexboxItemStyle::flex_shrink(&self.inner)
+    }
+    #[inline]
+    fn align_self(&self) -> Option<taffy::AlignSelf> {
+        taffy::FlexboxItemStyle::align_self(&self.inner)
+    }
+    /// CSS `order`. `stylo_taffy`'s `TaffyStyloStyle` does not forward it (the
+    /// taffy `order()` method is serval's fork addition), so read it straight
+    /// off the cascade — the same wrap-and-override pattern this type already
+    /// uses for grid placement. Initial value 0 (document order).
+    #[inline]
+    fn order(&self) -> i32 {
+        self.inner.0.get_position().order
+    }
+}
+
 /// View bundling the tree (owns the nodes) with the parley measure
 /// context, so the measure closure in `compute_child_layout` can reach
 /// `TextMeasureCtx` while Taffy holds `&mut` to the tree — the same
@@ -999,8 +1026,11 @@ impl<Id: Copy + Eq + Hash> LayoutFlexboxContainer for BoxTreeView<'_, Id> {
         = NodeStyle
     where
         Self: 'b;
+    // `CssStyle` (not raw `NodeStyle`) so a flex item reports its cascaded
+    // `order` (which `TaffyStyloStyle` does not forward); a normal item keeps
+    // order 0 and forwards everything else to the inner wrapper.
     type FlexboxItemStyle<'b>
-        = NodeStyle
+        = CssStyle
     where
         Self: 'b;
 
@@ -1010,8 +1040,8 @@ impl<Id: Copy + Eq + Hash> LayoutFlexboxContainer for BoxTreeView<'_, Id> {
     }
 
     #[inline]
-    fn get_flexbox_child_style(&self, child: NodeId) -> NodeStyle {
-        self.get_core_container_style(child)
+    fn get_flexbox_child_style(&self, child: NodeId) -> CssStyle {
+        self.css_style(child)
     }
 }
 
@@ -1591,26 +1621,56 @@ mod tests {
             "footer spans the bottom row (0,80,100,20): {footer:?}");
     }
 
-    /// Known gap (forwarding #1, high risk): this taffy version does not model
-    /// CSS `order` — `FlexItem.order` is hardcoded to the document index
-    /// (taffy `compute/flexbox.rs:527`; no `FlexboxItemStyle::order`), so
-    /// `order: N` never reorders. Ignored until `order` is modeled in the taffy
-    /// fork; kept so the gap is tracked in the suite, not invisible.
+    /// CSS `order` lays flex items out in order-modified document order: items
+    /// sort by ascending `order` (here .a/.b/.c carry 3/1/2), so the visual
+    /// order becomes .b, .c, .a. serval reads the cascaded `order` through the
+    /// `CssStyle` flex-item wrapper and the taffy fork stable-sorts items by it
+    /// before line collection (taffy patch 0003).
     #[test]
-    #[ignore = "taffy does not model flex `order`; document-order only (forwarding gap #1)"]
     fn flex_order_reorders_items() {
         let (doc, frags) = lay(
-            "<html><body><div class=row><div class=a></div><div class=b></div></div></body></html>",
+            "<html><body><div class=row>\
+                <div class=a></div><div class=b></div><div class=c></div>\
+             </div></body></html>",
             &[
-                ".row { display: flex; width: 100px; height: 20px; }",
-                ".a { order: 2; width: 30px; height: 20px; }",
+                ".row { display: flex; width: 90px; height: 20px; }",
+                ".a { order: 3; width: 30px; height: 20px; }",
                 ".b { order: 1; width: 30px; height: 20px; }",
+                ".c { order: 2; width: 30px; height: 20px; }",
             ],
         );
-        // With `order` honored, .b (order 1) precedes .a (order 2): .b at x=0.
         let a = div_rect(&doc, &frags, 1);
         let b = div_rect(&doc, &frags, 2);
-        assert!(b.0 < a.0, "order:1 .b should precede order:2 .a, got b.x={} a.x={}", b.0, a.0);
+        let c = div_rect(&doc, &frags, 3);
+        // order-modified order [b(1), c(2), a(3)] -> x = 0, 30, 60.
+        assert!(approx(b.0, 0.0), "order:1 .b first (x=0), got {}", b.0);
+        assert!(approx(c.0, 30.0), "order:2 .c second (x=30), got {}", c.0);
+        assert!(approx(a.0, 60.0), "order:3 .a last (x=60), got {}", a.0);
+    }
+
+    /// `order` ties keep document order (the sort is stable) and a negative
+    /// `order` sorts ahead of the default 0: with .b at `order:-1` and .a/.c at
+    /// the default 0, the visual order is .b, .a, .c — .b first by -1, then .a
+    /// before .c by document order among the equal zeros.
+    #[test]
+    fn flex_order_is_stable_and_handles_negative() {
+        let (doc, frags) = lay(
+            "<html><body><div class=row>\
+                <div class=a></div><div class=b></div><div class=c></div>\
+             </div></body></html>",
+            &[
+                ".row { display: flex; width: 90px; height: 20px; }",
+                ".a { width: 30px; height: 20px; }",
+                ".b { order: -1; width: 30px; height: 20px; }",
+                ".c { width: 30px; height: 20px; }",
+            ],
+        );
+        let a = div_rect(&doc, &frags, 1);
+        let b = div_rect(&doc, &frags, 2);
+        let c = div_rect(&doc, &frags, 3);
+        assert!(approx(b.0, 0.0), "order:-1 .b first (x=0), got {}", b.0);
+        assert!(approx(a.0, 30.0), ".a (order 0, doc-first) second (x=30), got {}", a.0);
+        assert!(approx(c.0, 60.0), ".c (order 0, doc-second) third (x=60), got {}", c.0);
     }
 
     /// UA `pre { white-space: pre }` preserves source newlines as forced line
