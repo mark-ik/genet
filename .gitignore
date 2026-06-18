@@ -4,6 +4,13 @@
 # were verified unused), so the file holds only local path overrides, like
 # `repos/mere/.cargo/config.toml`.
 /.cargo/
+# Don't commit Cargo.lock (any workspace, any depth). The owned forks
+# (mark-ik/netrender, nova, boa) are `branch = ...` git deps; a committed lock
+# would pin them to a dev-history commit that goes stale as we develop. Tracking
+# their branch tips (and resolving crates.io deps to the latest matching release)
+# is what keeps the dependency landscape current rather than expiring on a pin.
+# Load-bearing upstreams we don't own (servo/stylo) stay rev-pinned in Cargo.toml.
+Cargo.lock
 # cargo-check / reftest log artifacts (root + per-crate, any depth): test
 # outputs, reftest dumps, pass/fail lists. The committed cargo-check-env.ps1
 # (mozjs build-env script) is the one thing kept.
