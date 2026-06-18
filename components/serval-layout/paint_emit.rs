@@ -48,7 +48,7 @@ use paint_list_api::items::{
     BorderDetails, BorderItem, ExternalTextureItem, NinePatchBorder, NinePatchSource, PathCommand,
     PathData, ShadowItem,
 };
-use paint_list_api::specs::{ClipKind, ClipSpec, LayerSpec, TransformKind};
+use paint_list_api::specs::{ClipKind, ClipSpec, FilterOp, LayerSpec, TransformKind};
 use parley::PositionedLayoutItem;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -616,14 +616,17 @@ pub(crate) fn walk<Id>(
     // documented edge, like the Appendix E deviations in `paint_stacking`.)
     let opacity = (!is_anon).then(|| opacity_of(cv)).flatten();
     let blend = (!is_anon).then(|| mix_blend_mode_of(cv)).flatten();
-    // `opacity < 1` or a non-normal `mix-blend-mode` each force an isolated
-    // stacking layer: opacity composites the subtree once at `alpha`, blend
-    // composites it into its backdrop with the given mode.
-    let needs_layer = opacity.is_some() || blend.is_some();
+    let filters = if is_anon { Vec::new() } else { filters_of(cv) };
+    // `opacity < 1`, a non-normal `mix-blend-mode`, or a non-empty `filter`
+    // chain each force an isolated stacking layer: opacity composites the
+    // subtree once at `alpha`, blend composites it into its backdrop with the
+    // given mode, and filter applies to the layer's own rasterized output.
+    let needs_layer = opacity.is_some() || blend.is_some() || !filters.is_empty();
     if needs_layer {
         commands.push(PaintCmd::PushLayer(LayerSpec {
             opacity: opacity.unwrap_or(1.0),
             mix_blend_mode: blend.unwrap_or(MixBlendMode::Normal),
+            filters,
             ..Default::default()
         }));
     }
@@ -2654,6 +2657,37 @@ fn mix_blend_mode_of(cv: &ComputedValues) -> Option<MixBlendMode> {
         M::Luminosity => MixBlendMode::Luminosity,
         M::PlusLighter => MixBlendMode::PlusLighter,
     })
+}
+
+/// One computed CSS `filter` function as a paint-list `FilterOp`, or `None` for
+/// the functions serval doesn't emit yet. `blur()` carries a px radius;
+/// `brightness/contrast/saturate` a `NonNegative<Number>` and
+/// `grayscale/invert/sepia/opacity` a `ZeroToOne<Number>` (both unwrap to
+/// `f32`); `hue-rotate` an angle in degrees. `drop-shadow()` is deferred
+/// end-to-end (no `SceneFilter::DropShadow` yet), and `url()` (an SVG filter
+/// reference) is uninhabited under the servo feature.
+fn filter_op_of(f: &style::values::computed::effects::Filter) -> Option<FilterOp> {
+    use style::values::generics::effects::GenericFilter as GF;
+    Some(match f {
+        GF::Blur(len) => FilterOp::Blur(len.0.px()),
+        GF::Brightness(n) => FilterOp::Brightness(n.0),
+        GF::Contrast(n) => FilterOp::Contrast(n.0),
+        GF::Saturate(n) => FilterOp::Saturate(n.0),
+        GF::Grayscale(n) => FilterOp::Grayscale(n.0),
+        GF::Invert(n) => FilterOp::Invert(n.0),
+        GF::Sepia(n) => FilterOp::Sepia(n.0),
+        GF::HueRotate(a) => FilterOp::HueRotate(a.degrees()),
+        GF::Opacity(n) => FilterOp::Opacity(n.0),
+        GF::DropShadow(_) | GF::Url(_) => return None,
+    })
+}
+
+/// CSS `filter` as a paint-list filter chain, or an empty vec for `filter: none`
+/// (the common case — no chain, so no stacking layer is forced on its account).
+/// A non-empty chain wraps the element + subtree in an isolated layer whose
+/// rasterized output the renderer filters before compositing.
+fn filters_of(cv: &ComputedValues) -> Vec<FilterOp> {
+    cv.get_effects().filter.0.iter().filter_map(filter_op_of).collect()
 }
 
 /// A transform `m` applied around the absolute point `origin`: `T(O)·M·T(-O)`.

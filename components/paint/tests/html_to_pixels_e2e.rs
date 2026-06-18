@@ -1114,6 +1114,79 @@ fn html_to_pixels_mix_blend_mode_multiply() {
     assert_eq!(image.get_pixel(60, 60).0, [0, 0, 255, 255], "(60,60) is parent-only, blue");
 }
 
+/// `filter: invert(1)` reverses each color channel. A red div inverts to cyan
+/// (255,0,0 -> 0,255,255). Exercises the element-filter GPU pass end to end:
+/// the layer's content renders to a texture, the color-matrix pass transforms
+/// it, and the result composites back.
+#[test]
+fn html_to_pixels_filter_invert_reverses_channels() {
+    let image = render_to_image(
+        "<html><body><div></div></body></html>",
+        &[
+            "body { background-color: rgb(255, 255, 255); margin: 0; }",
+            "div {
+                width: 50px;
+                height: 50px;
+                background-color: rgb(255, 0, 0);
+                filter: invert(1);
+            }",
+        ],
+    );
+    let [r, g, b, _] = image.get_pixel(25, 25).0;
+    assert!(
+        r < 40 && g > 215 && b > 215,
+        "(25,25) red inverted should be cyan, got [{r},{g},{b}]"
+    );
+}
+
+/// `filter: grayscale(1)` desaturates to sRGB luminance. A red div becomes a
+/// dark gray (~0.2126 * 255 = ~54), with R == G == B. Also confirms the matrix
+/// runs in sRGB-encoded space (a linear-space bug would give ~124).
+#[test]
+fn html_to_pixels_filter_grayscale_desaturates() {
+    let image = render_to_image(
+        "<html><body><div></div></body></html>",
+        &[
+            "body { background-color: rgb(255, 255, 255); margin: 0; }",
+            "div {
+                width: 50px;
+                height: 50px;
+                background-color: rgb(255, 0, 0);
+                filter: grayscale(1);
+            }",
+        ],
+    );
+    let [r, g, b, _] = image.get_pixel(25, 25).0;
+    assert!(r > 38 && r < 70, "(25,25) red -> sRGB-luminance gray ~54, got [{r},{g},{b}]");
+    assert!(
+        (r as i32 - g as i32).abs() <= 4 && (g as i32 - b as i32).abs() <= 4,
+        "grayscale output has equal channels, got [{r},{g},{b}]"
+    );
+}
+
+/// `filter: brightness(0.5)` scales each channel by 0.5. (200,100,50) -> ~
+/// (100,50,25). Exercises the diagonal-scale matrix.
+#[test]
+fn html_to_pixels_filter_brightness_scales() {
+    let image = render_to_image(
+        "<html><body><div></div></body></html>",
+        &[
+            "body { background-color: rgb(0, 0, 0); margin: 0; }",
+            "div {
+                width: 50px;
+                height: 50px;
+                background-color: rgb(200, 100, 50);
+                filter: brightness(0.5);
+            }",
+        ],
+    );
+    let [r, g, b, _] = image.get_pixel(25, 25).0;
+    assert!(
+        (r as i32 - 100).abs() < 14 && (g as i32 - 50).abs() < 14 && (b as i32 - 25).abs() < 14,
+        "(25,25) brightness(0.5) of (200,100,50) ~ (100,50,25), got [{r},{g},{b}]"
+    );
+}
+
 /// Nested elements with distinct colors paint into the right pixels.
 /// `<div>` is 50×50 anchored at body's origin (top-left); a pixel
 /// inside the div should carry its background color, and a pixel
