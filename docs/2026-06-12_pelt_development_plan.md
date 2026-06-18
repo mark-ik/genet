@@ -1,19 +1,22 @@
 # Pelt Development Plan — serval's reference shell
 
 **Date**: 2026-06-12
-**Status**: In progress. **V0 done** — the present core moved into serval as
+**Status**: **All phases (V0–V6) done — reconciled 2026-06-18.** **V0 done** — the
+present core moved into serval as
 `components/serval-winit-host`. **Render-driver reform done** — the host
 render-driver extracted into `components/serval-render` and `pelt-live` retired
 (the V0-shaped move that cleared V1's foundation; see Progress). **Reconciled
-2026-06-14** (per-phase audit against the code): **V0–V2, V4, V5 done; V3 mostly
-done** (the reftest harness + its fixtures shipped, one viewport fixture + PNG
-rasterization open); **V6 gated** (the standalone surface lib + tile-tree contract
-are done, but meerkat embedding awaits the `external_texture` element in
-xilem-serval and the meerkat-side wiring). The doc had been steering by its
-authoring-day "V1 is next" status while V2–V5 quietly shipped; the per-phase
-**Status** lines below now track reality. Next real engine-development leverage:
-V3's PNG/raster lane and the missing overhang fixture, then V6's gate
-(external-texture element) when its other consumers (scrying, input-spine) pull it.
+2026-06-18** (second per-phase audit against the code, five parallel auditors):
+**all phases done.** V0–V2, V4, V5 were already done; **V6 — gated at the
+2026-06-14 reconciliation on "the meerkat render-loop swap" — landed** across
+seven mere commits (`53a8605`..`0176101`): meerkat now renders its workbench pane
+through the pelt `TileSurface`/`TileShell` in host-authority mode, routes
+input/drag/resize through the `TileEvent` seam, and **deleted** the old
+`WorkbenchScene` subsystem; and **V3 closed out** — the rasterized-PNG lane
+landed and the four stale reftest fixtures were re-blessed (suite 7/7 green). The
+doc had drifted again (V6 read as gated while it shipped), exactly the 2026-06-14
+pattern; the per-phase **Status** lines below now track reality. *(Superseding the
+2026-06-14 reconciliation, which read V3 mostly-done and V6 gated.)*
 **Role statement (revised 2026-06-12, with Mark):** pelt is two things over
 one lib. (a) **serval's servoshell** — the minimal reference browser that
 proves the engine standalone, drives engine development without mere's graph
@@ -170,15 +173,23 @@ one sitting (pelt stays the thin reference).
 
 ### V3 — Headless screenshot mode → the reftest harness (highest engine leverage)
 
-**Status: Mostly done** — `pelt --engine headless --reftest <dir>` runs a fixture
-directory green in one command, a layout change reds the affected fixture with a
-named scene diff (`first diff at line N`), and `--bless` (re)writes snapshots.
-Shipped fixtures: `before-content` (`::before`), `checked` (`:checked`), and the
-viewport family `document-scroll`, `overflow-hidden-root`, `fixed-under-scroll`,
-`percent-height`, `scrollable-overflow-overhang` (the abs-pos-overhang case,
-`a56882c177d`; scroll sidecars drive the scrolled ones). The fixture set is now
-complete. **Open:** the rasterized-PNG lane only (scene-snapshot is the primary
-artifact; PNG is a documented offscreen-readback follow-up).
+**Status: Done** (2026-06-18) — `pelt --engine headless --reftest <dir>` runs the
+fixture directory green in one command, a layout change reds the affected fixture
+with a named scene diff (`first diff at line N`), and `--bless` (re)writes
+snapshots. Shipped fixtures: `before-content` (`::before`), `checked` (`:checked`),
+and the viewport family `document-scroll`, `overflow-hidden-root`,
+`fixed-under-scroll`, `percent-height`, `scrollable-overflow-overhang` (the
+abs-pos-overhang case, `a56882c177d`; scroll sidecars drive the scrolled ones).
+The **rasterized-PNG lane landed** (`af353f7e247`, behind a `png-reftest` feature):
+`render_png` boots wgpu and rasterizes the same scene the snapshot captures (white
+canvas clear), `--out <file>.png` writes it (the human-eyes artifact), and
+`run_reftests` compares an optional `name.png` under a fuzz threshold (max
+per-channel delta + diff fraction, `name.fuzz` sidecar override, `Outcome::PngFail`).
+The PNG comparison is **additive** — a GPU-rendered PNG jitters across machines, so
+the byte-deterministic `.scene` stays the primary regression net and no `name.png`
+is committed by default. The four scene fixtures were also re-blessed for this
+session's serval-layout drift (UA margins shift transforms `0,0→8,8`; netrender's
+new `SceneLayer.filters` field), so the suite is 7/7 green again (`3f73b93c393`).
 
 `pelt --engine headless --out <path> <file>`: run the pipeline windowless
 (pelt-live's lib already proves GPU-free runs), emit **both** a netrender
@@ -265,7 +276,15 @@ doesn't expose).
 
 ### V6 — Shed the loop: pelt-surface as meerkat's workbench pane (the module)
 
-**Status: Gated (serval side done; meerkat wiring next)** — the serval half is
+**Status: Done** (2026-06-18) — the meerkat render-loop swap this doc gated on has
+landed (see "That render-loop swap landed" below); the standalone pelt bin is
+unchanged and the tile-tree contract is the only seam. Two non-blocking follow-ups
+remain, neither a hole in the swap: the forme-canonical authority inversion is
+deferred (the `Pane` tree stays canonical, forme + `TreeGeometry` persistence-only
+until a second surface reads the arrangement), and meerkat routes every tile
+through `ExternalTexture` rather than pelt's in-surface `Document` lane (so the
+"document tile" is satisfied as a serval-doc actor-texture); the generalizable
+pane-module contract write-up is also not yet authored. The serval half was already
 ready: the standalone pelt surface lib works unchanged (V5), the tile-tree contract
 is the only seam (`pelt-core`'s `ContentSource` already names the
 `ExternalTexture(key)` lane), and gate (1) is now **resolved** — the
@@ -288,14 +307,16 @@ without `serval-winit-host`/`wgpu`); meerkat **consumes** it (mere `e415cfc`,
 `pelt-desktop { default-features = false, features = ["tile-surface"] }` +
 `pelt-core` — builds clean, shared `wgpu 29`/`winit 0.30` pins, no conflict); and
 the workbench-side projection landed too (`Workbench::to_tile_tree`, mere
-`6daf2f9`). The one remaining piece is the meerkat-internal **render-loop swap**:
-build the `TileTree` from the `Workbench`, render the `TileSurface` frame in place
-of `WorkbenchScene`, composite each member's actor texture into the
+`6daf2f9`). **That render-loop swap landed** across seven mere commits (`53a8605`
+render, `4016dac` input, `e5814ed` divider, `567b2de` tab drag, `65a6497` full
+host-authority, `567eb17` excise `WorkbenchScene`, `0176101` persist tiling): the
+`TileTree` builds from the `Workbench` (`Workbench::to_tile_tree`), the
+`TileSurface` frame replaced `WorkbenchScene` (now **deleted** — `grep WorkbenchScene
+meerkat/src` is empty), each member's actor texture composites into the
 `external_tiles` rects (the surface's key maps back to the member by its low 64
-bits — the logic meerkat already has for `.wb-slot` placements), and translate the
-surface's `TileEvent`s into `Workbench` mutations
-(`activate`/`close_tile`/`move_to_slot_of`/`set_weights`), re-projecting after. A
-live-render rewrite, verifiable by running meerkat. The `WorkbenchScene` and
+bits), and the surface's `TileEvent`s translate into `Workbench` mutations
+(`activate`/`close_tile`/`move_to_slot_of`/`set_split_fractions`), re-projecting
+after — verified by running meerkat. The `WorkbenchScene` and
 `TileSurface` stay distinct by design — mere projects forme onto the simpler
 contract, not a
 union.
@@ -308,14 +329,14 @@ actor textures, scrying WebViews — the routing distinction
 `SurfaceContractMode::CompositedTexture` already names). The pelt bin and the
 meerkat pane wrap the *same lib*; neither knows the other exists.
 
-**Gated on** mere's window-composition P2+ (panes resolve everywhere) and
-the external-texture element view in xilem-serval (the same missing
-primitive the scrying plan and the input-spine companion already point at —
-this is now the fourth consumer waiting on it). This phase is also the
-second instance of the orrery-host pattern, which is the moment to write
-down the **pane-module contract** generally (standalone-or-hosted surface:
-frame / input / resize / content-source), since roster/gloss/apparatus want
-the same shape under the window-composition pane model.
+**Gates — all cleared (2026-06-18).** The `external_texture` element view in
+xilem-serval landed (`a8832e2762a`), the `tree_projection` → `TileTree` mapping
+landed in platen (`f0440f1`), and meerkat's pane render/input went through the
+surface (the seven commits above), so the swap is live. This phase is also the
+second instance of the orrery-host pattern, which is the moment to write down the
+**pane-module contract** generally (standalone-or-hosted surface: frame / input /
+resize / content-source), since roster/gloss/apparatus want the same shape under
+the window-composition pane model — **the one remaining V6 follow-up**, non-blocking.
 
 **Done when** meerkat's workbench pane renders through the pelt surface lib
 with forme-projected tiles and mixed content (a serval document tile beside
@@ -407,3 +428,18 @@ the same lib, and the tile-tree contract is the only seam between them.
   components. meerkat keeps its own copy (deliberate cross-repo insulation, per the
   render-glue-extraction plan). serval `b108fb509ca`. The cascade-offthread probe
   (gitignored mere scratch) re-points locally. V1 now builds on `serval-render`.
+- **2026-06-18** — **Second phase-status reconciliation + the plan closes out.**
+  A per-phase audit against the code (five parallel auditors, the 2026-06-14
+  pattern) found the doc had drifted again: it read V6 **gated** while the meerkat
+  render-loop swap had landed. Reconciled to **all phases done**. V6: the swap
+  shipped across seven mere commits (`53a8605`..`0176101`) — meerkat renders +
+  routes input through the pelt `TileSurface`/`TileShell` (host-authority) and
+  **deleted** `WorkbenchScene`; non-blocking follow-ups (forme-canonical authority
+  inversion, exercising pelt's `Document` lane, the pane-module contract write-up)
+  noted on V6. V3: the last open item — the **rasterized-PNG lane** — landed
+  (`af353f7e247`, `png-reftest` feature: `render_png` + `--out *.png` +
+  fuzz-thresholded optional `name.png` compare, additive over the primary GPU-free
+  `.scene`); and the four scene fixtures, stale against this session's serval-layout
+  changes (UA margins + netrender's `SceneLayer.filters`), were **re-blessed**
+  (`3f73b93c393`) so the suite is 7/7 green. Audit also confirmed V0–V2 + V4–V5
+  unchanged-done (V4–V5 now exceed the plan's test counts).
