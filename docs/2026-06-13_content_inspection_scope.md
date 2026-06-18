@@ -64,4 +64,4 @@ serval HTML" line goes away). The surface is engine-level, not a pelt feature.
 - The Inspector pane + roster bridge: the mere peripheral-panes doc (above).
 - The accesskit twin: `serval-render/src/a11y.rs`.
 - The drive half: `pelt-desktop/tile_shell.rs`; the pelt plan
-  ([`2026-06-12_pelt_development_plan.md`](2026-06-12_pelt_development_plan.md)).
+  ([`2026-06-12_pelt_development_plan.md`](archive/2026-06-12_pelt_development_plan.md), archived).

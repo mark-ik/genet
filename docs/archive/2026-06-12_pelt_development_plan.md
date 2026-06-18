@@ -1,5 +1,15 @@
 # Pelt Development Plan — serval's reference shell
 
+**Status (archived 2026-06-18):** All phases V0–V6 done. Pelt reached its planned
+end-state: serval's reference shell (the standalone browser that proves the engine
++ the validation entrypoint + the reftest harness, now complete on both the scene
+and PNG lanes) and the standalone-capable browsing surface meerkat embeds (V6 — the
+workbench pane renders through the pelt `TileSurface`). Residual open points were
+spun out to `2026-06-18_pelt_followups.md` before archiving. Kept here as the
+record of the phase design + the as-built progress log.
+
+---
+
 **Date**: 2026-06-12
 **Status**: **All phases (V0–V6) done — reconciled 2026-06-18.** **V0 done** — the
 present core moved into serval as

@@ -324,7 +324,7 @@ now; flipping it to the microtask-checkpoint cadence is a one-line change, left
 until the live webview driver exercises it (so the conformance path isn't
 silently collecting mid-campaign). **That live driver is pelt V4** — the
 scripted profile (`pelt --engine scripted`) in
-`docs/2026-06-12_pelt_development_plan.md`, which the pelt plan already names as
+`docs/archive/2026-06-12_pelt_development_plan.md` (archived), which the pelt plan already names as
 "the gc-arena DOM plan's first real scripted workload." It's the only consumer
 that calls `collect_garbage` at a frame cadence, and it's a few phases out (V0
 done, V1 next), so the explicit-call shape is the right resting state until

@@ -40,7 +40,7 @@ The chain is built and tested across four crates. This is the correction to any
    on the netrender `Renderer` blits the producer's registered `wgpu::Texture`
    onto the backbuffer.
 
-Corroborated by `2026-06-12_pelt_development_plan.md:275-291`: the element
+Corroborated by `archive/2026-06-12_pelt_development_plan.md:275-291`: the element
 landed (`a8832e2762a`), pelt-core's `ContentSource` names the
 `ExternalTexture(key)` lane, and the surface exposes
 `TileFrame::external_tiles = (tile, rect, key)` (`fdfd0b89850`).
@@ -52,7 +52,7 @@ concern.
 
 ### Residual: meerkat's render-loop swap (cross-repo, not an engine primitive)
 
-Per `2026-06-12_pelt_development_plan.md:266-301`, V6 (pelt-as-meerkat-pane) is
+Per `archive/2026-06-12_pelt_development_plan.md:266-301`, V6 (pelt-as-meerkat-pane) is
 gated on the meerkat side only. Everything up to the live render swap is done:
 `tree_projection -> TileTree` mapping in platen (mere `f0440f1`), the GPU-free
 `tile-surface` feature (`0705a366bcb`) consumed by meerkat (mere `e415cfc`),
@@ -119,7 +119,7 @@ mark-sweep collector over document roots ∪ host reflector pins, wired into
 
 **The lynchpin gap is closed.** The older docs named "nothing drives a full-page
 `<script>` end to end." pelt V4 closes it (done, 2026-06-12,
-`2026-06-12_pelt_development_plan.md:202-232`): `pelt --engine scripted` parses
+`archive/2026-06-12_pelt_development_plan.md:202-232`): `pelt --engine scripted` parses
 a loaded page's HTML into a live `ScriptedDom`, runs its inline `<script>`s,
 the mutation relayouts and renders, `--js boa|nova` selects the engine, the GC
 tick auto-fires at frame cadence, and `gc_soak_bounds_memory` (120 frames x
