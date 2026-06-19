@@ -201,9 +201,22 @@ Ranked roughly by leverage toward real scripted pages:
    the page URL). Verified by `dom_url_reflection_works` +
    `url_attributes_resolve_against_page_url`. Only the `double` reflected kind
    remains (niche).
-3. **CSSOM + platform services.** `getComputedStyle`,
-   `CSSStyleDeclaration`, `localStorage`, `history`/`location`: catalogued in
-   `web_platform_api_shared_middle_plan.md:245-258`, unbuilt.
+3. **CSSOM + platform services — DONE (2026-06-19).** `location` (a live view of
+   the document URL with `assign`/`replace`/`reload`), `localStorage` (in-memory
+   `Storage` + `Proxy` named access), and `history` (`pushState`/`replaceState`/
+   `state`/`length`/`go`/`back`/`forward`, popstate deferred) ship as a new
+   `platform` surface; `element.style` is an inline `CSSStyleDeclaration` over the
+   `style` attribute (camelCase + `cssText` + `getPropertyValue`/`setProperty`/…).
+   `getComputedStyle` lands as a cross-layer **`ComputedStyleHandler`** seam
+   mirroring `FetchHandler` (the runtime links no layout engine): serval-layout's
+   `IncrementalLayout::computed_value` serializes a node's computed longhand (a
+   curated first-cut set via Stylo `clone_<longhand>().to_css_string()`; computed
+   not used values), pelt's `ScriptedDocument` implements the trait over its
+   retained frame cascade (one frame stale by construction). Verified on Boa +
+   Nova (script-runtime-api suite 72/0 + a pelt end-to-end). Residuals:
+   getComputedStyle enumeration (`length`/`item`/full longhand set) + used-value
+   resolution for layout-dependent properties; `localStorage` persistence;
+   `sessionStorage`; `popstate`.
 4. **`web-api-bindgen` codegen.** Planned-only; today's surface is hand-written
    native fns + JS bootstrap. Promote when the hand-written surface gets large
    enough that codegen pays for itself, not before.
