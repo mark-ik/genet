@@ -112,6 +112,12 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         sheets.extend(inline_stylesheets(&doc));
 
         let mut rt = Runtime::<E>::new().map_err(|e| format!("script runtime init: {e:?}"))?;
+        // The document URL is the base for reflected URL attributes (`a.href`,
+        // `img.src`, …) and for resolving fetches; set it from the loader when present
+        // (the `parse()` path has no URL, so those reflect their raw values).
+        if let Some((_, base)) = loader {
+            let _ = rt.set_base_url(base);
+        }
         // The parsed body becomes the live DOM, so script querying it (document.body,
         // getElementById, querySelector) sees the page's elements.
         rt.load_dom(&doc);
@@ -965,6 +971,22 @@ mod tests {
         );
     }
 
+    /// `ScriptedDocument::load` sets the runtime base URL from the page URL, so a
+    /// reflected URL attribute (`a.href`) resolves to an absolute URL against it.
+    fn url_attributes_resolve_against_page_url<E: ScriptEngine>() {
+        let files = map_fetcher(&[(
+            "http://x/dir/index.html",
+            "<body><a id='a' href='sub/p.html'></a>\
+             <script>console.log(document.getElementById('a').href);</script></body>",
+        )]);
+        let doc = ScriptedDocument::<E>::load(&files, "http://x/dir/index.html").expect("loads");
+        assert!(
+            doc.console().iter().any(|l| l == "http://x/dir/sub/p.html"),
+            "a.href resolved against the page URL: {:?}",
+            doc.console(),
+        );
+    }
+
     #[test]
     fn mutation_renders_on_boa() {
         mutation_renders::<BoaEngine>();
@@ -1016,6 +1038,10 @@ mod tests {
     #[test]
     fn integrity_mismatch_blocks_on_boa() {
         integrity_mismatch_blocks::<BoaEngine>();
+    }
+    #[test]
+    fn url_attributes_resolve_against_page_url_on_boa() {
+        url_attributes_resolve_against_page_url::<BoaEngine>();
     }
     #[test]
     fn node_identity_is_stable_on_boa() {
@@ -1110,6 +1136,10 @@ mod tests {
         #[test]
         fn integrity_mismatch_blocks_on_nova() {
             integrity_mismatch_blocks::<NovaEngine>();
+        }
+        #[test]
+        fn url_attributes_resolve_against_page_url_on_nova() {
+            url_attributes_resolve_against_page_url::<NovaEngine>();
         }
     }
 }

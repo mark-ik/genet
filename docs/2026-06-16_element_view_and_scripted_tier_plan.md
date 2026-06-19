@@ -174,9 +174,13 @@ Ranked roughly by leverage toward real scripted pages:
    they reflect mutations) are all implemented + tested on Boa and Nova
    (`dom_fragment_clone`, `dom_collections_works` — which asserts the length grows
    after an `appendChild` — and `dom_tokenlist_dataset_works` for
-   `classList`/`relList`/`dataset`). Residual micro-gap: URL / tokenlist
-   *table-driven* reflected IDL-attribute kinds (tokenlists work today via the
-   hand-wired `classList`/`relList`, not the reflection table).
+   `classList`/`relList`/`dataset`). The reflected-attribute table carries the
+   **tokenlist** kind (`relList`) and, as of 2026-06-18, the **URL** kind
+   (`href`/`src`/`action`/`cite`/`poster`/`formAction`, resolved against the
+   document base URL via `__resolve_url`; `ScriptedDocument` sets that base from
+   the page URL). Verified by `dom_url_reflection_works` +
+   `url_attributes_resolve_against_page_url`. Only the `double` reflected kind
+   remains (niche).
 3. **CSSOM + platform services.** `getComputedStyle`,
    `CSSStyleDeclaration`, `localStorage`, `history`/`location`: catalogued in
    `web_platform_api_shared_middle_plan.md:245-258`, unbuilt.

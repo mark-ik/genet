@@ -41,10 +41,12 @@
 //! **live** `HTMLCollection`s — `getElementsByTagName` / `getElementsByClassName` /
 //! `children` are Proxy-backed and re-walked per access, so they reflect later
 //! mutations — plus `DOMTokenList` (`classList` / `relList`), `dataset`, and
-//! `NodeList` (`childNodes`). Verified by `dom_fragment_clone`,
-//! `dom_collections_works`, `dom_tokenlist_dataset_works`. Not yet: URL / tokenlist
-//! *table-driven* reflected IDL-attribute kinds (tokenlists are served today by the
-//! hand-wired `classList` / `relList`, not the reflection table). See
+//! `NodeList` (`childNodes`). The reflected-attribute table carries `tokenlist`
+//! (`t`, e.g. `relList`) and `url` (`u`, e.g. `href` / `src`, resolved against the
+//! document base URL) kinds alongside DOMString / boolean / enumerated / long.
+//! Verified by `dom_fragment_clone`, `dom_collections_works`,
+//! `dom_tokenlist_dataset_works`, `dom_url_reflection_works`. Only the `double`
+//! reflected kind remains. See
 //! `docs/2026-05-26_pluggable_engines_testharness_plan.md`.
 
 use std::cell::RefCell;
@@ -1981,8 +1983,9 @@ const DOM_BOOTSTRAP: &str = r#"
   // Reflected IDL attribute accessors on Element.prototype (Lever 1). Driven by a
   // table of [idlName, attr, kind]; kinds: s=DOMString, b=boolean, e=enumerated
   // (approximate: lowercased pass-through, '' default — keyword canonicalization
-  // deferred), l=long. url/tokenlist/double are deferred (need URL parsing /
-  // exotic objects). All over the existing get/set/has/toggle/removeAttribute.
+  // deferred), l=long, t=tokenlist (a DOMTokenList over the attribute), u=url
+  // (resolved against the document base URL via `__resolve_url`). Only `double` is
+  // deferred. All over the existing get/set/has/toggle/removeAttribute.
   function installReflectedAttributes() {
     function parseHtmlLong(s) {
       if (s === null || s === undefined) return null;
@@ -2026,6 +2029,12 @@ const DOM_BOOTSTRAP: &str = r#"
       } else if (kind === 't') {
         // tokenlist: a DOMTokenList over the content attribute (e.g. relList -> rel).
         desc.get = function() { return makeDOMTokenList(this, attr); };
+      } else if (kind === 'u') {
+        // url: reflect the content attribute resolved against the document base URL
+        // (absent -> ""); the raw string is stored on set. `__resolve_url` returns the
+        // input unchanged when it is already absolute or no base URL is set.
+        desc.get = function() { var v = this.getAttribute(attr); return v === null ? '' : __resolve_url(v); };
+        desc.set = function(v) { this.setAttribute(attr, String(v)); };
       }
       Object.defineProperty(Element.prototype, idl, desc);
     }
@@ -2053,6 +2062,12 @@ const DOM_BOOTSTRAP: &str = r#"
     def('defaultChecked', 'b', 'checked'); def('defaultMuted', 'b', 'muted'); def('defaultSelected', 'b', 'selected');
     // Tokenlist reflected attributes (DOMTokenList over the content attribute).
     def('relList', 't', 'rel');
+    // URL reflected attributes — resolved against the document base URL on get,
+    // raw string on set. (Approximate, like the DOMString set: installed on
+    // Element.prototype rather than per-interface.)
+    var U = ['href', 'src', 'action', 'cite', 'poster'];
+    for (var u = 0; u < U.length; u++) def(U[u], 'u');
+    def('formAction', 'u', 'formaction');
     // Enumerated reflected attributes (limited-enum, "" missing-value default).
     // Conflict-free idlName -> keyword set, extracted from the WPT metadata;
     // `type` / `formMethod` are skipped (multiple keyword sets across interfaces).
@@ -2849,9 +2864,42 @@ mod tests {
         );
     }
 
+    /// URL reflected IDL attributes (`href`, `src`, …): the getter resolves the
+    /// content attribute against the document base URL, the setter stores the raw
+    /// string, and an absent attribute reflects as the empty string.
+    fn dom_url_reflection_works<E: ScriptEngine>() {
+        use serval_static_dom::StaticDocument;
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.set_base_url("http://example.com/dir/page.html").expect("base url");
+        rt.load_dom(&StaticDocument::parse(
+            "<html><body><a id='a' href='sub/x.html'></a><img id='i'></body></html>",
+        ));
+        rt.eval(
+            "var a = document.getElementById('a');\
+             console.log(a.href);\
+             a.href = 'other.html'; console.log(a.getAttribute('href'));\
+             console.log(a.href);\
+             console.log(document.getElementById('i').src);",
+        )
+        .expect("url-reflection script");
+        assert_eq!(
+            rt.host().borrow().console,
+            vec![
+                "http://example.com/dir/sub/x.html", // relative href resolved on get
+                "other.html",                        // setter stored the raw value
+                "http://example.com/dir/other.html", // re-resolved after set
+                "",                                  // absent src reflects as ""
+            ],
+        );
+    }
+
     #[test]
     fn dom_collections_on_boa() {
         dom_collections_works::<script_engine_boa::BoaEngine>();
+    }
+    #[test]
+    fn dom_url_reflection_on_boa() {
+        dom_url_reflection_works::<script_engine_boa::BoaEngine>();
     }
 
     /// DOMImplementation + multi-document, against any backend: hasFeature,
@@ -3058,6 +3106,12 @@ mod tests {
     #[test]
     fn dom_collections_on_nova() {
         dom_collections_works::<script_engine_nova::NovaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dom_url_reflection_on_nova() {
+        dom_url_reflection_works::<script_engine_nova::NovaEngine>();
     }
 
     #[cfg(not(target_arch = "wasm32"))]
