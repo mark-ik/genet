@@ -126,8 +126,10 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         for script in &scripts {
             match script {
                 ScriptSource::Inline(text) => eval_reporting(&mut rt, text),
-                ScriptSource::External { src, timing: ScriptTiming::Blocking } => {
-                    if let Some(source) = fetch_external(loader, src) {
+                ScriptSource::External { src, timing: ScriptTiming::Blocking, charset, integrity } => {
+                    if let Some(source) =
+                        fetch_external(loader, src, charset.as_deref(), integrity.as_deref())
+                    {
                         eval_reporting(&mut rt, &source);
                     }
                 },
@@ -136,8 +138,10 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
             }
         }
         for script in deferred {
-            if let ScriptSource::External { src, .. } = script {
-                if let Some(source) = fetch_external(loader, src) {
+            if let ScriptSource::External { src, charset, integrity, .. } = script {
+                if let Some(source) =
+                    fetch_external(loader, src, charset.as_deref(), integrity.as_deref())
+                {
                     eval_reporting(&mut rt, &source);
                 }
             }
@@ -333,12 +337,22 @@ enum ScriptTiming {
 
 /// One runnable `<script>` in document order: inline classic text, or an external
 /// classic `src` (raw attribute value, resolved against the document URL at fetch
-/// time) with its timing. An external `src` takes precedence over inline content
-/// (per HTML). `type=module` and non-JS `type`s are not runnable and are dropped at
-/// collection (see [`classify_script_type`]).
+/// time) with its timing and post-fetch processing (`charset` decode + `integrity`
+/// SRI check). An external `src` takes precedence over inline content (per HTML).
+/// `type=module` and non-JS `type`s are not runnable and are dropped at collection
+/// (see [`classify_script_type`]).
 enum ScriptSource {
     Inline(String),
-    External { src: String, timing: ScriptTiming },
+    External {
+        src: String,
+        timing: ScriptTiming,
+        /// `<script charset>` — the encoding to decode the fetched bytes with
+        /// (default UTF-8).
+        charset: Option<String>,
+        /// `<script integrity>` — Subresource-Integrity metadata the fetched bytes
+        /// must match, else the script is blocked.
+        integrity: Option<String>,
+    },
 }
 
 /// How a `<script>`'s `type` attribute classifies it.
@@ -426,7 +440,15 @@ fn collect_scripts_rec(dom: &StaticDocument, node: StaticNodeId, out: &mut Vec<S
                         } else {
                             ScriptTiming::Blocking
                         };
-                        out.push(ScriptSource::External { src, timing });
+                        let nonempty = |name: &str| {
+                            attr(name).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+                        };
+                        out.push(ScriptSource::External {
+                            src,
+                            timing,
+                            charset: nonempty("charset"),
+                            integrity: nonempty("integrity"),
+                        });
                     },
                     // Inline classic: `async`/`defer` are ignored — it runs in place.
                     None => {
@@ -450,21 +472,89 @@ fn collect_scripts_rec(dom: &StaticDocument, node: StaticNodeId, out: &mut Vec<S
 }
 
 /// Fetch an external script's source through the `loader` (`(fetcher, base_url)`),
-/// resolving `src` against `base_url`. `None` (with a log) when there is no loader
-/// (the fetch-free [`ScriptedDocument::parse`] path) or the fetch fails.
-fn fetch_external(loader: Option<(&dyn ResourceFetcher, &str)>, src: &str) -> Option<String> {
+/// resolving `src` against `base_url`, verifying any `integrity` (SRI) metadata, and
+/// decoding the bytes per `charset` (default UTF-8). `None` (with a log) when there
+/// is no loader (the fetch-free [`ScriptedDocument::parse`] path), the fetch fails,
+/// or the integrity check rejects the bytes.
+fn fetch_external(
+    loader: Option<(&dyn ResourceFetcher, &str)>,
+    src: &str,
+    charset: Option<&str>,
+    integrity: Option<&str>,
+) -> Option<String> {
     let Some((fetcher, base)) = loader else {
         eprintln!("[pelt-scripted] skipping external <script src=\"{src}\"> (no fetcher)");
         return None;
     };
     let url = crate::document::resolve_href(base, src);
-    match fetcher.fetch(&url) {
-        Some(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+    let bytes = match fetcher.fetch(&url) {
+        Some(bytes) => bytes,
         None => {
             eprintln!("[pelt-scripted] could not fetch script {url}");
-            None
+            return None;
         },
+    };
+    if let Some(metadata) = integrity {
+        if !integrity_matches(metadata, &bytes) {
+            eprintln!("[pelt-scripted] integrity mismatch for {url}; script blocked");
+            return None;
+        }
     }
+    Some(decode_script_bytes(&bytes, charset))
+}
+
+/// Whether `bytes` satisfy a Subresource-Integrity `integrity` attribute. Per SRI:
+/// parse the space-separated `alg-base64hash[?opts]` tokens, take the **strongest**
+/// algorithm present (sha512 > sha384 > sha256), and accept if the digest matches
+/// **any** of that algorithm's hashes. Unrecognized/empty metadata imposes no
+/// requirement (returns `true`). Compares raw digest bytes, so base64 padding
+/// variance does not matter.
+fn integrity_matches(metadata: &str, bytes: &[u8]) -> bool {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    let mut strongest = 0u8; // 1 = sha256, 2 = sha384, 3 = sha512
+    let mut expected: Vec<&str> = Vec::new();
+    for token in metadata.split_whitespace() {
+        let Some((alg, rest)) = token.split_once('-') else { continue };
+        let strength = match alg {
+            "sha256" => 1u8,
+            "sha384" => 2,
+            "sha512" => 3,
+            _ => continue,
+        };
+        let hash = rest.split('?').next().unwrap_or(rest); // drop any `?options`
+        if strength > strongest {
+            strongest = strength;
+            expected.clear();
+            expected.push(hash);
+        } else if strength == strongest {
+            expected.push(hash);
+        }
+    }
+    if strongest == 0 {
+        return true; // no valid metadata → no integrity requirement
+    }
+    let digest: Vec<u8> = match strongest {
+        1 => sha2::Sha256::digest(bytes).to_vec(),
+        2 => sha2::Sha384::digest(bytes).to_vec(),
+        _ => sha2::Sha512::digest(bytes).to_vec(),
+    };
+    let std = base64::engine::general_purpose::STANDARD;
+    let nopad = base64::engine::general_purpose::STANDARD_NO_PAD;
+    expected.iter().any(|h| {
+        std.decode(h).or_else(|_| nopad.decode(h)).map(|d| d == digest).unwrap_or(false)
+    })
+}
+
+/// Decode fetched script bytes into source text using the `<script charset>`
+/// encoding (resolved through `encoding_rs`), defaulting to UTF-8. An unknown label
+/// also falls back to UTF-8.
+fn decode_script_bytes(bytes: &[u8], charset: Option<&str>) -> String {
+    let encoding = charset
+        .and_then(|label| encoding_rs::Encoding::for_label(label.trim().as_bytes()))
+        .unwrap_or(encoding_rs::UTF_8);
+    encoding.decode(bytes).0.into_owned()
 }
 
 /// Evaluate `source`, reporting (but not propagating) a script error — a browser
@@ -791,6 +881,90 @@ mod tests {
         );
     }
 
+    /// Build a fetcher from owned `(url, bytes)` pairs — for fixtures whose script
+    /// bytes are not valid UTF-8 (charset) or are hashed (integrity).
+    fn map_of(files: Vec<(&str, Vec<u8>)>) -> MapFetcher {
+        MapFetcher(files.into_iter().map(|(u, b)| (u.to_string(), b)).collect())
+    }
+
+    /// `<script charset>` decodes the fetched bytes with the named encoding, not
+    /// UTF-8: an ISO-8859-1 script with a `0xE9` byte ('é') decodes to `café`. As
+    /// UTF-8 the lone `0xE9` is invalid and would become a replacement char.
+    fn external_script_charset_decodes<E: ScriptEngine>() {
+        let mut script = b"console.log('caf".to_vec();
+        script.push(0xE9); // 'é' in ISO-8859-1; invalid as UTF-8
+        script.extend_from_slice(b"');");
+        let files = map_of(vec![
+            (
+                "http://x/index.html",
+                b"<body><script src=\"app.js\" charset=\"iso-8859-1\"></script></body>".to_vec(),
+            ),
+            ("http://x/app.js", script),
+        ]);
+        let doc = ScriptedDocument::<E>::load(&files, "http://x/index.html").expect("loads");
+        assert!(
+            doc.console().iter().any(|l| l == "caf\u{e9}"),
+            "iso-8859-1 script decoded to 'café': {:?}",
+            doc.console(),
+        );
+    }
+
+    /// A matching `integrity` (SRI) hash lets the external script run.
+    fn integrity_match_runs<E: ScriptEngine>() {
+        use base64::Engine as _;
+        use sha2::Digest as _;
+        let script = b"console.log('sri-ok');";
+        let hash = base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(script));
+        let files = map_of(vec![
+            (
+                "http://x/index.html",
+                format!("<body><script src=\"app.js\" integrity=\"sha256-{hash}\"></script></body>")
+                    .into_bytes(),
+            ),
+            ("http://x/app.js", script.to_vec()),
+        ]);
+        let doc = ScriptedDocument::<E>::load(&files, "http://x/index.html").expect("loads");
+        assert!(
+            doc.console().iter().any(|l| l == "sri-ok"),
+            "matching integrity runs the script: {:?}",
+            doc.console(),
+        );
+    }
+
+    /// A mismatched `integrity` hash blocks the external script (it never runs), but a
+    /// classic sibling still runs — the block is per-script, not fatal.
+    fn integrity_mismatch_blocks<E: ScriptEngine>() {
+        use base64::Engine as _;
+        use sha2::Digest as _;
+        // A hash of *different* content: the fetched script will not match it.
+        let wrong =
+            base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(b"other bytes"));
+        let files = map_of(vec![
+            (
+                "http://x/index.html",
+                format!(
+                    "<body>\
+                        <script src=\"app.js\" integrity=\"sha256-{wrong}\"></script>\
+                        <script>console.log('after');</script>\
+                     </body>"
+                )
+                .into_bytes(),
+            ),
+            ("http://x/app.js", b"console.log('should-not-run');".to_vec()),
+        ]);
+        let doc = ScriptedDocument::<E>::load(&files, "http://x/index.html").expect("loads");
+        assert!(
+            !doc.console().iter().any(|l| l == "should-not-run"),
+            "mismatched integrity blocks the script: {:?}",
+            doc.console(),
+        );
+        assert!(
+            doc.console().iter().any(|l| l == "after"),
+            "the blocked script is not fatal — the sibling still runs: {:?}",
+            doc.console(),
+        );
+    }
+
     #[test]
     fn mutation_renders_on_boa() {
         mutation_renders::<BoaEngine>();
@@ -830,6 +1004,18 @@ mod tests {
     #[test]
     fn script_type_module_is_recognized_not_executed_on_boa() {
         script_type_module_is_recognized_not_executed::<BoaEngine>();
+    }
+    #[test]
+    fn external_script_charset_decodes_on_boa() {
+        external_script_charset_decodes::<BoaEngine>();
+    }
+    #[test]
+    fn integrity_match_runs_on_boa() {
+        integrity_match_runs::<BoaEngine>();
+    }
+    #[test]
+    fn integrity_mismatch_blocks_on_boa() {
+        integrity_mismatch_blocks::<BoaEngine>();
     }
     #[test]
     fn node_identity_is_stable_on_boa() {
@@ -912,6 +1098,18 @@ mod tests {
         #[test]
         fn script_type_module_is_recognized_not_executed_on_nova() {
             script_type_module_is_recognized_not_executed::<NovaEngine>();
+        }
+        #[test]
+        fn external_script_charset_decodes_on_nova() {
+            external_script_charset_decodes::<NovaEngine>();
+        }
+        #[test]
+        fn integrity_match_runs_on_nova() {
+            integrity_match_runs::<NovaEngine>();
+        }
+        #[test]
+        fn integrity_mismatch_blocks_on_nova() {
+            integrity_mismatch_blocks::<NovaEngine>();
         }
     }
 }

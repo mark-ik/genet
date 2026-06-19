@@ -138,12 +138,34 @@ Ranked roughly by leverage toward real scripted pages:
    that order, fetching each `src` through the same `ResourceFetcher` the page
    loaded over and resolving relative URLs against the document URL
    (`document::resolve_href`). `parse()` (the fetch-free path) skips externals;
-   `load()` fetches them. Classic synchronous model — correct for
-   non-`async`/`defer` scripts. Verified on Boa (+ Nova under `scripted-nova`):
+   `load()` fetches them. Verified on Boa (+ Nova under `scripted-nova`):
    `external_script_runs`, `scripts_run_in_document_order` (inline A / external
    B / inline C → console A,B,C), `relative_src_resolves_against_page_url`,
-   `missing_external_script_is_skipped`. Follow-ups: `async`/`defer` ordering,
-   `type=module`, charset/integrity.
+   `missing_external_script_is_skipped`.
+
+   **Script-element semantics — also DONE (2026-06-18):**
+   - **`async`/`defer` timing.** Two-phase: parser-blocking scripts (inline;
+     external with neither attribute) run in document order; `defer`/`async`
+     externals run after that pass (`defer` in document order — the guarantee;
+     `async` unordered, document order a faithful realization of the synchronous
+     fetch). `async`/`defer` ignored on inline scripts; `async` wins over `defer`.
+   - **`<script type>` classification** (`classify_script_type`). Empty / a JS
+     MIME essence → classic; `module` → recognized but **not executed** (module
+     loading = an import graph + engine module-eval, blocked below pelt: the
+     runtime exposes only script-mode `eval`); anything else (`application/json`,
+     `text/plain`, import maps) → a data block, not executed.
+   - **`charset`** — fetched bytes decoded via `encoding_rs` per the attribute
+     (default UTF-8). **`integrity`** — Subresource-Integrity: strongest-algorithm
+     sha256/384/512 digest checked against the metadata (raw-bytes compare via
+     `sha2` + `base64`); a mismatch blocks just that script.
+
+   Verified: `defer_runs_after_parser_blocking`,
+   `defer_scripts_run_in_document_order`, `async_runs_after_parser_blocking`,
+   `script_type_data_block_is_not_executed`,
+   `script_type_module_is_recognized_not_executed`,
+   `external_script_charset_decodes` (ISO-8859-1 → café),
+   `integrity_match_runs`, `integrity_mismatch_blocks`. Remaining follow-up:
+   **`type=module` execution** (an import-graph loader + engine module-eval).
 2. **DOM node-type breadth.** `Comment`, `DocumentFragment`, `cloneNode`, live
    `HTMLCollection` (`dom.rs:39-40`).
 3. **CSSOM + platform services.** `getComputedStyle`,
