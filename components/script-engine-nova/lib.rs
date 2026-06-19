@@ -163,6 +163,58 @@ mod native {
         ScriptEngineLive,
     };
 
+    /// A queue of `Global`s awaiting release. Nova's `Global` has no `Drop` (freeing
+    /// needs the `Agent`), so [`NovaValue`]'s `Drop` parks its `Global` here; the
+    /// engine drains the queue with the agent at the end of each native call and at
+    /// each GC tick.
+    type ReleaseQueue = Rc<RefCell<Vec<Global<Value<'static>>>>>;
+
+    /// Nova's host-held value: a rooted [`Global`] plus a handle to the engine's
+    /// [`ReleaseQueue`]. Because `Global` has no `Drop`, the generic host/DOM code —
+    /// which obtains values via `cx.arg`, `make_string`, … and drops them like any
+    /// other `Self::Value` — would otherwise leak a permanent `heap.globals` root per
+    /// drop (so every reflector passed as a native-fn argument is pinned forever,
+    /// defeating GC reaping on Nova). This wrapper's `Drop` parks the `Global` on the
+    /// release queue instead; the engine frees it on the next drain.
+    pub struct NovaValue {
+        global: Option<Global<Value<'static>>>,
+        release: ReleaseQueue,
+    }
+
+    impl NovaValue {
+        fn new(global: Global<Value<'static>>, release: &ReleaseQueue) -> Self {
+            Self { global: Some(global), release: release.clone() }
+        }
+        /// Read the rooted value without releasing it.
+        fn get(&self, agent: &Agent, gc: NoGcScope) -> Value<'static> {
+            self.global.as_ref().expect("live NovaValue").get(agent, gc)
+        }
+        /// Take the inner `Global` out (the `Drop` then no-ops) so the caller can
+        /// `take` it against the agent — e.g. the trampoline handing the result to
+        /// the VM, or `settle`/`set_global` reading it.
+        fn into_global(mut self) -> Global<Value<'static>> {
+            self.global.take().expect("live NovaValue")
+        }
+    }
+
+    impl Drop for NovaValue {
+        fn drop(&mut self) {
+            if let Some(g) = self.global.take() {
+                self.release.borrow_mut().push(g);
+            }
+        }
+    }
+
+    /// Free every `Global` parked on the release queue (`take` each against the
+    /// agent). Called at native-call end and at GC ticks, both of which hold the
+    /// `Agent`.
+    fn drain_release(agent: &Agent, release: &ReleaseQueue) {
+        let drained: Vec<Global<Value<'static>>> = release.borrow_mut().drain(..).collect();
+        for g in drained {
+            g.take(agent);
+        }
+    }
+
     /// Nova's realm `[[HostDefined]]` slot: the neutral [`HostData`] (the DOM, set by
     /// the host) plus the canonical-reflector cache and the pending-host-promise table.
     /// The cached `Global`s (reflectors, and the promise values awaiting settlement)
@@ -178,15 +230,20 @@ mod native {
         /// minted by `PromiseCapability::new`).
         promises: RefCell<HashMap<u64, Global<Value<'static>>>>,
         next_token: Cell<u64>,
+        /// Engine-wide release queue (shared with [`NovaEngine`]). The trampoline
+        /// reaches it here — it has only the `Agent`, not the engine — to hand each
+        /// [`NovaCallCx`] a handle and to drain the call's dropped temporaries.
+        release: ReleaseQueue,
     }
 
     impl NovaHostSlot {
-        fn new() -> Self {
+        fn new(release: ReleaseQueue) -> Self {
             Self {
                 neutral: RefCell::new(None),
                 reflectors: RefCell::new(HashMap::new()),
                 promises: RefCell::new(HashMap::new()),
                 next_token: Cell::new(0),
+                release,
             }
         }
     }
@@ -224,19 +281,22 @@ mod native {
         agent: &'a mut Agent,
         gc: GcScope<'a, 'a>,
         args: Vec<Global<Value<'static>>>,
+        /// Handle to the engine's release queue, so the [`NovaValue`]s this context
+        /// mints (args, intermediates) park their `Global` on drop instead of leaking.
+        release: ReleaseQueue,
     }
 
     impl CallCx for NovaCallCx<'_> {
-        type Value = Global<Value<'static>>;
+        type Value = NovaValue;
         type Error = String;
 
         fn arg(&mut self, i: usize) -> Self::Value {
             match self.args.get(i) {
                 Some(g) => {
                     let v = g.get(self.agent, self.gc.nogc()).unbind();
-                    Global::new(self.agent, v)
+                    NovaValue::new(Global::new(self.agent, v), &self.release)
                 },
-                None => Global::new(self.agent, Value::Undefined),
+                None => NovaValue::new(Global::new(self.agent, Value::Undefined), &self.release),
             }
         }
 
@@ -269,7 +329,7 @@ mod native {
             // `run_in_realm` (which can't nest). Mirrors the engine-level
             // `ScriptEngineLive::make_reflector`.
             let eo = EmbedderObject::create_with_data(self.agent, data);
-            Ok(Global::new(self.agent, Value::EmbedderObject(eo).unbind()))
+            Ok(NovaValue::new(Global::new(self.agent, Value::EmbedderObject(eo).unbind()), &self.release))
         }
 
         fn reflector_for(&mut self, data: ReflectorData) -> Result<Self::Value, Self::Error> {
@@ -295,7 +355,10 @@ mod native {
             // Cache hit *and still alive*: hand back the same embedder object.
             if let Some(Value::WeakRef(weak_ref)) = cached {
                 if let Some(eo) = EmbedderObject::from_weak_ref(self.agent, weak_ref) {
-                    return Ok(Global::new(self.agent, Value::EmbedderObject(eo).unbind()));
+                    return Ok(NovaValue::new(
+                        Global::new(self.agent, Value::EmbedderObject(eo).unbind()),
+                        &self.release,
+                    ));
                 }
             }
             // Miss/dead: mint the reflector, cache a `WeakRef` to it, return it.
@@ -313,26 +376,30 @@ mod native {
                     }
                 }
             }
-            Ok(Global::new(self.agent, Value::EmbedderObject(eo).unbind()))
+            Ok(NovaValue::new(
+                Global::new(self.agent, Value::EmbedderObject(eo).unbind()),
+                &self.release,
+            ))
         }
 
         fn make_string(&mut self, s: &str) -> Result<Self::Value, Self::Error> {
             let js = JsString::from_str(self.agent, s, self.gc.nogc());
-            Ok(Global::new(self.agent, Value::from(js).unbind()))
+            Ok(NovaValue::new(Global::new(self.agent, Value::from(js).unbind()), &self.release))
         }
 
         fn make_null(&mut self) -> Self::Value {
-            Global::new(self.agent, Value::Null)
+            NovaValue::new(Global::new(self.agent, Value::Null), &self.release)
         }
 
         fn undefined(&mut self) -> Self::Value {
-            Global::new(self.agent, Value::Undefined)
+            NovaValue::new(Global::new(self.agent, Value::Undefined), &self.release)
         }
 
         fn new_host_promise(&mut self) -> Result<(Self::Value, PromiseToken), Self::Error> {
             // Mid-call: the trampoline holds the `Agent` and we are already in the
             // realm, so mint directly (mirrors `make_reflector`'s in-call path).
-            mint_and_store(self.agent, self.gc.nogc())
+            let (g, token) = mint_and_store(self.agent, self.gc.nogc())?;
+            Ok((NovaValue::new(g, &self.release), token))
         }
     }
 
@@ -347,8 +414,23 @@ mod native {
     ) -> nova_vm::ecmascript::JsResult<'gc, Value<'gc>> {
         let rooted: Vec<Global<Value<'static>>> =
             (0..args.len()).map(|i| Global::new(agent, args.get(i).unbind())).collect();
+        // The engine-wide release queue lives in the realm host slot (the trampoline
+        // has only the `Agent`, not the engine). The callee's `cx.arg`/`make_*` values
+        // park their `Global` here on drop; we drain it once the call returns.
+        let release: ReleaseQueue = {
+            let a: &Agent = agent;
+            a.current_realm(gc.nogc())
+                .host_defined(a)
+                .and_then(|hd| hd.downcast_ref::<NovaHostSlot>().map(|slot| slot.release.clone()))
+                .expect("host slot present")
+        };
         let (result, args_to_release) = {
-            let mut cx = NovaCallCx { agent: &mut *agent, gc: gc.reborrow(), args: rooted };
+            let mut cx = NovaCallCx {
+                agent: &mut *agent,
+                gc: gc.reborrow(),
+                args: rooted,
+                release: release.clone(),
+            };
             let r = F::call(&mut cx);
             // Reclaim the rooted argument handles (ends the `&mut agent` reborrow).
             let NovaCallCx { args, .. } = cx;
@@ -360,14 +442,21 @@ mod native {
         for arg in args_to_release {
             arg.take(agent);
         }
+        // Drain the `NovaValue` temporaries the callee dropped (its `cx.arg` copies,
+        // intermediate `make_*` values). This is the fix for the reflector leak: the
+        // copy that rooted each reflector argument is freed here, so the reflector is
+        // no longer pinned. The result value is still held in `result` (not dropped),
+        // so it is not in the queue.
+        drain_release(agent, &release);
         match result {
-            Ok(global) => {
+            Ok(value) => {
                 // `into_nogc` carries the full `'gc` lifetime, so the bound value can
-                // be returned (unlike a `nogc()` borrow, which is local). `take`
-                // (not `get`) frees the return value's root; the VM stack keeps it
-                // alive from here.
+                // be returned (unlike a `nogc()` borrow, which is local). `into_global`
+                // pulls the `Global` out of the wrapper (its `Drop` then no-ops);
+                // `take` (not `get`) frees the return value's root, and the VM stack
+                // keeps it alive from here.
                 let nogc = gc.into_nogc();
-                Ok(global.take(agent).bind(nogc))
+                Ok(value.into_global().take(agent).bind(nogc))
             },
             Err(msg) => Err(agent.throw_exception(ExceptionType::Error, msg, gc.into_nogc())),
         }
@@ -381,11 +470,15 @@ mod native {
         /// The leaked (`'static`) host hooks installed on `agent`; `eval_module` sets
         /// their module resolver per call.
         hooks: &'static ServalHostHooks,
+        /// Release queue for dropped [`NovaValue`]s (shared with the realm host slot).
+        /// Drained at each native call (in the trampoline) and at each GC tick.
+        release: ReleaseQueue,
     }
 
     impl ScriptEngine for NovaEngine {
-        // Nova values are GC-scoped, so the held value type is a rooted `Global`.
-        type Value = Global<Value<'static>>;
+        // Nova's `Global` has no `Drop`, so the held value type is a `NovaValue`
+        // wrapper that parks its `Global` on the release queue when dropped.
+        type Value = NovaValue;
         type Error = String;
         type CallCx<'a> = NovaCallCx<'a>;
 
@@ -401,16 +494,19 @@ mod native {
             }));
             let mut agent = GcAgent::new(AgentOptions::default(), hooks);
             let realm = agent.create_default_realm();
+            // One release queue, shared between the engine (drained at GC ticks) and
+            // the realm host slot (where the trampoline reaches it per native call).
+            let release: ReleaseQueue = Rc::new(RefCell::new(Vec::new()));
             // The realm owns the host slot (neutral DOM + reflector cache) for its
             // whole life; `set_host_data` later fills the neutral half.
-            realm.initialize_host_defined(&mut agent, Rc::new(NovaHostSlot::new()));
-            Ok(Self { agent, realm, jobs, hooks })
+            realm.initialize_host_defined(&mut agent, Rc::new(NovaHostSlot::new(release.clone())));
+            Ok(Self { agent, realm, jobs, hooks, release })
         }
 
         fn eval(&mut self, source: &str) -> Result<Self::Value, Self::Error> {
             let src = source.to_string();
-            let mut out: Result<Global<Value<'static>>, String> =
-                Err("eval did not run".to_string());
+            let release = self.release.clone(); // captured before the `&mut self.agent` borrow
+            let mut out: Result<NovaValue, String> = Err("eval did not run".to_string());
             self.agent.run_in_realm(&self.realm, |agent, mut gc| {
                 let realm = agent.current_realm(gc.nogc());
                 let source_text = JsString::from_string(agent, src, gc.nogc());
@@ -426,7 +522,7 @@ mod native {
                 // "evaluation threw").
                 let thrown = match script_evaluation(agent, script.unbind(), gc.reborrow()) {
                     Ok(value) => {
-                        out = Ok(Global::new(agent, value.unbind()));
+                        out = Ok(NovaValue::new(Global::new(agent, value.unbind()), &release));
                         None
                     },
                     Err(err) => Some(err.value().unbind()),
@@ -449,9 +545,10 @@ mod native {
             resolve: &mut dyn FnMut(&str, &str) -> Option<(String, String)>,
         ) -> Result<Option<Self::Value>, Self::Error> {
             let hooks = self.hooks; // `&'static`, Copy — does not borrow `self`.
+            let release = self.release.clone(); // captured before the `&mut self.agent` borrow
             let src = source.to_string();
             let base = base_url.to_string();
-            let mut out: Result<Option<Global<Value<'static>>>, String> =
+            let mut out: Result<Option<NovaValue>, String> =
                 Err("eval_module did not run".to_string());
             // The resolver is installed for this call so `load_imported_module` can
             // fetch imports; the entry's `[[HostDefined]]` is `base_url`, the base its
@@ -475,7 +572,9 @@ mod native {
                         },
                     };
                     match agent.run_module(module.unbind(), None, gc.reborrow()) {
-                        Ok(value) => out = Ok(Some(Global::new(agent, value.unbind()))),
+                        Ok(value) => {
+                            out = Ok(Some(NovaValue::new(Global::new(agent, value.unbind()), &release)))
+                        },
                         Err(err) => {
                             let v = err.value().unbind();
                             let msg = v
@@ -587,17 +686,23 @@ mod native {
             // Microtask checkpoint complete: ClearKeptObjects (spec 9.10), so
             // reflectors only observed through the weak canonical cache since the
             // last pump become collectable again. This is also what makes
-            // `drain_dead_reflectors` able to ever observe a death.
+            // `drain_dead_reflectors` able to ever observe a death. Also drain any
+            // host-held `NovaValue`s dropped between calls (the per-call trampoline
+            // drain only covers within-call temporaries).
+            let release = self.release.clone();
             self.agent.run_in_realm(&self.realm, |agent, _gc| {
                 clear_weak_ref_kept_objects(agent);
+                drain_release(agent, &release);
             });
             outcome
         }
 
         fn new_host_promise(&mut self) -> Result<(Self::Value, PromiseToken), Self::Error> {
-            let mut out = Err("new_host_promise did not run".to_string());
+            let release = self.release.clone();
+            let mut out: Result<(NovaValue, PromiseToken), String> =
+                Err("new_host_promise did not run".to_string());
             self.agent.run_in_realm(&self.realm, |agent, gc| {
-                out = mint_and_store(agent, gc.nogc());
+                out = mint_and_store(agent, gc.nogc()).map(|(g, t)| (NovaValue::new(g, &release), t));
             });
             out
         }
@@ -640,6 +745,13 @@ mod native {
         }
 
         fn force_gc(&mut self) {
+            // Free any host-held `NovaValue`s dropped since the last drain *before*
+            // collecting, so their reflector roots are gone and the targets become
+            // collectable this tick.
+            let release = self.release.clone();
+            self.agent.run_in_realm(&self.realm, |agent, _gc| {
+                drain_release(agent, &release);
+            });
             // Two passes: Nova finalizes the weak references whose targets the first
             // cycle reclaimed on the second, so a just-dropped reflector becomes
             // observable to `drain_dead_reflectors` — the engine half of the GC tick.
@@ -696,10 +808,14 @@ mod native {
 
     impl ScriptEngineLive for NovaEngine {
         fn make_reflector(&mut self, data: ReflectorData) -> Result<Self::Value, Self::Error> {
+            let release = self.release.clone();
             let mut out = None;
             self.agent.run_in_realm(&self.realm, |agent, _gc| {
                 let eo = EmbedderObject::create_with_data(agent, data);
-                out = Some(Global::new(agent, Value::EmbedderObject(eo).unbind()));
+                out = Some(NovaValue::new(
+                    Global::new(agent, Value::EmbedderObject(eo).unbind()),
+                    &release,
+                ));
             });
             Ok(out.expect("run_in_realm ran"))
         }
@@ -719,36 +835,31 @@ mod native {
     mod tests {
         use super::*;
 
-        // KNOWN-FAILING (ignored): pins the pre-existing Nova reflector leak.
-        //
-        // `NovaCallCx::arg` (and the other minting methods) return `Global::new(...)`,
-        // and Nova's `Global` has no `Drop` — every heap-rooted `Global` occupies an
-        // `agent.heap.globals` slot that must be *explicitly* `take`n or it leaks a
-        // permanent root. The trampoline `take`s the original args + the result, but
-        // the per-call `Global`s the generic DOM code obtains via `cx.arg(i)` (and
-        // drops) are never freed. So any reflector passed as a native-fn argument —
-        // `parent.appendChild(child)`, `removeChild`, etc. — is pinned forever, which
-        // is why `pump_collects_orphans` / `gc_soak_bounds_memory` never reap on Nova
-        // (they pass on Boa, whose `JsValue` frees on drop). The fix is a
-        // deferred-release wrapper for Nova's `Self::Value` (a `Drop` that hands the
-        // `Global` to a release queue the engine drains with the agent); `Global` is
-        // neither `Copy` nor cheap-`Clone` to the same root, and its `RootRepr` is
-        // private, so a scratch-arena alone cannot reach the caller's handle.
+        // Regression guard for the Nova reflector leak (fixed by the `NovaValue`
+        // deferred-release wrapper). Before the fix, `NovaCallCx::arg` returned a bare
+        // `Global::new(...)`, and Nova's `Global` has no `Drop` — every heap-rooted
+        // `Global` occupies an `agent.heap.globals` slot that must be *explicitly*
+        // `take`n or it leaks a permanent root. The per-call `Global`s the generic DOM
+        // code obtained via `cx.arg(i)` (and dropped) were never freed, so any
+        // reflector passed as a native-fn argument — `parent.appendChild(child)`,
+        // `removeChild`, etc. — was pinned forever, defeating GC reaping on Nova.
+        // Now `cx.arg` mints a `NovaValue` whose `Drop` parks the `Global` on the
+        // release queue, which the trampoline drains at call end. See
+        // `docs/2026-06-19_nova_reflector_global_leak.md`.
         #[test]
-        #[ignore = "pre-existing Nova per-call Global leak (cx.arg); needs a Drop-managed Self::Value"]
         fn arg_reflector_dies_after_gc() {
             // A reflector passed as an argument to a native fn must still die once
-            // script drops it. It does not today (the leak above), so this is ignored.
+            // script drops it.
             let mut engine = NovaEngine::new().unwrap();
             struct Canonical;
             impl NativeFn<NovaEngine> for Canonical {
-                fn call(cx: &mut NovaCallCx<'_>) -> Result<Global<Value<'static>>, String> {
+                fn call(cx: &mut NovaCallCx<'_>) -> Result<NovaValue, String> {
                     cx.reflector_for(0x99)
                 }
             }
             struct Consume;
             impl NativeFn<NovaEngine> for Consume {
-                fn call(cx: &mut NovaCallCx<'_>) -> Result<Global<Value<'static>>, String> {
+                fn call(cx: &mut NovaCallCx<'_>) -> Result<NovaValue, String> {
                     let _ = cx.arg(0); // touch the arg, then let it drop
                     Ok(cx.undefined())
                 }
@@ -811,7 +922,7 @@ mod native {
             // not a thread_local.
             struct SetText;
             impl NativeFn<NovaEngine> for SetText {
-                fn call(cx: &mut NovaCallCx<'_>) -> Result<Global<Value<'static>>, String> {
+                fn call(cx: &mut NovaCallCx<'_>) -> Result<NovaValue, String> {
                     let node = cx.arg(0);
                     let text = cx.arg(1);
                     let id = cx.reflector_data(&node).unwrap_or(0);
@@ -912,7 +1023,7 @@ mod native {
             // A callback handing JS the *canonical* reflector for node 0x42.
             struct Canonical;
             impl NativeFn<NovaEngine> for Canonical {
-                fn call(cx: &mut NovaCallCx<'_>) -> Result<Global<Value<'static>>, String> {
+                fn call(cx: &mut NovaCallCx<'_>) -> Result<NovaValue, String> {
                     cx.reflector_for(0x42)
                 }
             }

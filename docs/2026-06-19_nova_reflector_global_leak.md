@@ -1,7 +1,10 @@
 # Nova reflector `Global` leak — problem + fix
 
-**Date:** 2026-06-19. **Status:** root-caused (repro committed `7fdb86bd579`),
-fix not yet applied. **Affects:** `script-engine-nova` only (Boa is unaffected).
+**Date:** 2026-06-19. **Status:** FIXED (option B, the `NovaValue`
+deferred-release wrapper). Root-cause repro committed `7fdb86bd579`; the fix
+un-ignores it and the two pelt GC tests (`arg_reflector_dies_after_gc` + 7/7
+nova engine tests green; 82/82 pelt scripted tests green across Boa and Nova).
+**Affects:** `script-engine-nova` only (Boa is unaffected).
 
 ## Symptom
 

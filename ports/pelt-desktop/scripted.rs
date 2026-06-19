@@ -1298,18 +1298,16 @@ mod tests {
         fn scripted_content_scrolls_on_nova() {
             scripted_content_scrolls::<NovaEngine>();
         }
-        // Ignored on Nova: a pre-existing per-call `Global` leak in the Nova engine
-        // (reflectors passed as native-fn arguments are never freed — Nova's `Global`
-        // has no `Drop`) pins every node, so the GC never reaps. Root-caused by
-        // `script-engine-nova`'s ignored `arg_reflector_dies_after_gc`; both pass on
-        // Boa. Un-ignore once Nova's `Self::Value` gets deferred-release.
+        // These passed on Boa and failed on Nova until the Nova `Global`-leak fix
+        // (the `NovaValue` deferred-release wrapper; reflectors passed as native-fn
+        // arguments are now freed at call end instead of pinning every node). See
+        // `script-engine-nova`'s `arg_reflector_dies_after_gc` and
+        // `docs/2026-06-19_nova_reflector_global_leak.md`.
         #[test]
-        #[ignore = "pre-existing Nova per-call Global leak; see arg_reflector_dies_after_gc"]
         fn pump_collects_orphans_on_nova() {
             pump_collects_orphans::<NovaEngine>();
         }
         #[test]
-        #[ignore = "pre-existing Nova per-call Global leak; see arg_reflector_dies_after_gc"]
         fn gc_soak_bounds_memory_on_nova() {
             gc_soak_bounds_memory::<NovaEngine>();
         }
