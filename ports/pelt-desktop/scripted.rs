@@ -22,11 +22,13 @@
 //! `module` is a data block and is not executed. `type=module` scripts (inline or
 //! `src`) are **deferred** (run after the parser-blocking pass, in document order)
 //! and evaluated with module scope via the engine's module path (`eval_module`); a
-//! backend without module support logs and skips. Cross-module `import` is the
-//! first-cut limitation — it needs a module loader wired on the engine — so a module
-//! that imports another reports an error and is skipped. A failed/missing/integrity-
-//! rejected external script is reported and skipped, like an inline error — a browser
-//! keeps rendering the rest of the document.
+//! backend without module support logs and skips. Cross-module `import` works on a
+//! module-capable backend: the engine's loader resolves each specifier against the
+//! importing module's URL and pulls its source through this document's fetcher (the
+//! `resolve` closure below), caching by URL so a diamond / cycle loads once. An
+//! unresolvable or throwing import rejects the module, which is reported and skipped.
+//! A failed/missing/integrity-rejected external script is likewise reported and
+//! skipped, like an inline error, and the document keeps rendering.
 //!
 //! The script/layout split (recorded on [`script_runtime_api::HostState`]): the host
 //! owns the real viewport. Each frame it syncs the current scroll *into* the runtime
@@ -158,12 +160,20 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
                         eval_reporting(&mut rt, &source);
                     }
                 },
-                ScriptSource::ModuleInline(text) => eval_module_reporting(&mut rt, text),
+                ScriptSource::ModuleInline(text) => {
+                    // An inline module's imports resolve against the document URL.
+                    let base = loader.map(|(_, page)| page.to_string()).unwrap_or_default();
+                    eval_module_reporting(&mut rt, loader, &base, text);
+                },
                 ScriptSource::ModuleExternal { src, charset, integrity } => {
+                    // An external module's imports resolve against its own URL.
+                    let base = loader
+                        .map(|(_, page)| crate::document::resolve_href(page, src))
+                        .unwrap_or_default();
                     if let Some(source) =
                         fetch_external(loader, src, charset.as_deref(), integrity.as_deref())
                     {
-                        eval_module_reporting(&mut rt, &source);
+                        eval_module_reporting(&mut rt, loader, &base, &source);
                     }
                 },
                 // Inline classic never defers.
@@ -616,13 +626,28 @@ fn eval_reporting<E: ScriptEngine>(rt: &mut Runtime<E>, source: &str) {
     }
 }
 
-/// Evaluate `source` as a module (`<script type=module>`), reporting (but not
-/// propagating) failures: an engine without module support (`Ok(None)`) is logged
-/// and skipped, and a module that throws — including one that `import`s another,
-/// which needs a module loader not yet wired — is reported, like a classic script
-/// error. A cross-module `import` is the known limitation of this first cut.
-fn eval_module_reporting<E: ScriptEngine>(rt: &mut Runtime<E>, source: &str) {
-    match rt.eval_module(source) {
+/// Evaluate `source` as a module (`<script type=module>`) with `base_url` as the
+/// base its `import`s resolve against, fetching each dependency through `loader`'s
+/// fetcher. Reports (but does not propagate) failures: an engine without module
+/// support (`Ok(None)`) is logged and skipped; a module that throws — or a
+/// dependency that fails to fetch — is reported, like a classic script error.
+fn eval_module_reporting<E: ScriptEngine>(
+    rt: &mut Runtime<E>,
+    loader: Option<(&dyn ResourceFetcher, &str)>,
+    base_url: &str,
+    source: &str,
+) {
+    // Resolve an import specifier against the importing module's URL (`referrer`, or
+    // `base_url` for the entry), then fetch its source through the page fetcher.
+    // WHATWG URL join (not the naive `resolve_href`) so `./` and `../` normalize.
+    let mut resolve = |specifier: &str, referrer: &str| -> Option<(String, String)> {
+        let (fetcher, _page) = loader?;
+        let base = if referrer.is_empty() { base_url } else { referrer };
+        let url = url::Url::parse(base).ok()?.join(specifier).ok()?.to_string();
+        let bytes = fetcher.fetch(&url)?;
+        Some((url, String::from_utf8_lossy(&bytes).into_owned()))
+    };
+    match rt.eval_module(source, base_url, &mut resolve) {
         Ok(Some(_)) => {},
         Ok(None) => eprintln!(
             "[pelt-scripted] <script type=module> not supported by this engine; skipped"
@@ -982,9 +1007,9 @@ mod tests {
         );
     }
 
-    /// (Boa) A module that `import`s another fails gracefully — no module loader is
-    /// wired yet, so the import rejects, the module is reported and skipped, and a
-    /// classic sibling still runs (the page is not broken).
+    /// (Boa) A module that `import`s another but cannot fetch it (the fetch-free
+    /// `parse` path has no loader) fails gracefully: the import rejects, the module is
+    /// reported and skipped, and a classic sibling still runs (the page is not broken).
     #[test]
     fn module_import_fails_gracefully_on_boa() {
         let html = "<body>\
@@ -1017,6 +1042,51 @@ mod tests {
             doc.console().iter().any(|l| l == "ext-module:undefined"),
             "external module fetched and run with module scope: {:?}",
             doc.console(),
+        );
+    }
+
+    /// (Boa) Cross-module `import` works: an entry module imports a named export from
+    /// a relative dependency (resolved against the entry's URL and fetched through the
+    /// host loader) and uses it.
+    #[test]
+    fn module_imports_dependency_on_boa() {
+        let files = map_fetcher(&[
+            ("http://x/index.html", "<body><script type=\"module\" src=\"main.js\"></script></body>"),
+            ("http://x/main.js", "import { greet } from './dep.js';\nconsole.log(greet('world'));"),
+            ("http://x/dep.js", "export function greet(name) { return 'hello ' + name; }"),
+        ]);
+        let doc = ScriptedDocument::<BoaEngine>::load(&files, "http://x/index.html").expect("loads");
+        assert!(
+            doc.console().iter().any(|l| l == "hello world"),
+            "the entry module imported and used the dependency's export: {:?}",
+            doc.console(),
+        );
+    }
+
+    /// (Boa) A diamond import (`main` → `b`, `c` → `shared`) loads `shared` exactly
+    /// once: its top-level side effect fires a single time (the loader caches by URL).
+    #[test]
+    fn module_import_diamond_loads_shared_once_on_boa() {
+        let files = map_fetcher(&[
+            ("http://x/index.html", "<body><script type=\"module\" src=\"main.js\"></script></body>"),
+            (
+                "http://x/main.js",
+                "import { b } from './b.js';\nimport { c } from './c.js';\nconsole.log('main:' + b + c);",
+            ),
+            ("http://x/b.js", "import { x } from './shared.js';\nexport var b = x;"),
+            ("http://x/c.js", "import { x } from './shared.js';\nexport var c = x;"),
+            ("http://x/shared.js", "console.log('shared-init');\nexport var x = 'S';"),
+        ]);
+        let doc = ScriptedDocument::<BoaEngine>::load(&files, "http://x/index.html").expect("loads");
+        let console = doc.console();
+        assert_eq!(
+            console.iter().filter(|l| *l == "shared-init").count(),
+            1,
+            "the shared module initializes exactly once across the diamond: {console:?}",
+        );
+        assert!(
+            console.iter().any(|l| l == "main:SS"),
+            "both branches see the shared export: {console:?}",
         );
     }
 

@@ -8,11 +8,16 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::future::Future;
+use std::path::Path;
+use std::rc::Rc;
 
 use boa_engine::{
     Context, JsData, JsError, JsNativeError, JsObject, JsResult, JsString, JsValue, NativeFunction,
     Source,
+    builtins::promise::PromiseState,
     class::{Class, ClassBuilder},
+    module::{Module, ModuleLoader, ModuleRequest, Referrer},
     object::{
         WeakJsObject,
         builtins::{JsFunction, JsPromise},
@@ -105,9 +110,93 @@ fn make_pending(ctx: &mut Context) -> JsResult<(JsValue, PromiseToken)> {
     Ok((promise.into(), token))
 }
 
+/// The host module resolver for one `eval_module` call: maps an import
+/// `(specifier, referrer_url)` to the imported module's `(resolved_url, source)`,
+/// or `None` when it cannot be resolved/fetched.
+type ModuleResolver<'a> = dyn FnMut(&str, &str) -> Option<(String, String)> + 'a;
+
+/// Boa [`ModuleLoader`] backed by a host resolver. The loader lives on the
+/// `Context` for the engine's whole life, but the resolver borrows host state (the
+/// page fetcher) and lives only for one `eval_module` call — so it is injected as a
+/// scoped raw pointer, set for the duration of the call and cleared after.
+/// `load_imported_module` reads it to fetch + parse each dependency on demand,
+/// caching by resolved URL so a diamond / cycle loads each module once.
+#[derive(Default)]
+struct HostModuleLoader {
+    /// Parsed modules by resolved URL — the per-call cache, cleared each call.
+    cache: RefCell<HashMap<String, Module>>,
+    /// Raw pointer to the active resolver, set for one `eval_module` call (`None`
+    /// otherwise). The pointee outlives the call (it is an `eval_module` argument),
+    /// so the deref in `load_imported_module` is sound; single-threaded, no reentrancy.
+    resolver: Cell<Option<*mut ModuleResolver<'static>>>,
+}
+
+impl HostModuleLoader {
+    /// Install `resolver` for the duration of `f`, then clear it and the module
+    /// cache. The lifetime is erased to `'static` for storage in the long-lived
+    /// loader; it is never observed past `f`, where the real resolver lives.
+    fn with_resolver<R>(&self, resolver: &mut ModuleResolver<'_>, f: impl FnOnce() -> R) -> R {
+        let raw: *mut ModuleResolver<'_> = resolver;
+        // SAFETY: erases only the trait object's captured-data lifetime, not the
+        // (HRTB) argument lifetimes; same fat-pointer layout. Cleared below before
+        // the real lifetime ends.
+        let erased: *mut ModuleResolver<'static> = unsafe { std::mem::transmute(raw) };
+        self.resolver.set(Some(erased));
+        let out = f();
+        self.resolver.set(None);
+        self.cache.borrow_mut().clear();
+        out
+    }
+}
+
+impl ModuleLoader for HostModuleLoader {
+    fn load_imported_module(
+        self: Rc<Self>,
+        referrer: Referrer,
+        request: ModuleRequest,
+        context: &RefCell<&mut Context>,
+    ) -> impl Future<Output = JsResult<Module>> {
+        let result = (|| {
+            let specifier = request.specifier().to_std_string_escaped();
+            // The importing module's URL (its `path`, set when we parsed it) is the
+            // base its relative imports resolve against; empty for the entry's realm.
+            let referrer_url =
+                referrer.path().and_then(Path::to_str).unwrap_or("").to_string();
+
+            let Some(ptr) = self.resolver.get() else {
+                return Err(JsNativeError::typ()
+                    .with_message("no module resolver active")
+                    .into());
+            };
+            // SAFETY: `ptr` was set by `with_resolver` to a resolver that outlives
+            // this call (cleared after); single-threaded, non-reentrant access.
+            let resolve = unsafe { &mut *ptr };
+            let Some((url, source)) = resolve(&specifier, &referrer_url) else {
+                return Err(JsNativeError::typ()
+                    .with_message(format!("could not resolve module '{specifier}'"))
+                    .into());
+            };
+
+            if let Some(module) = self.cache.borrow().get(&url).cloned() {
+                return Ok(module);
+            }
+            let module = Module::parse(
+                Source::from_bytes(source.as_bytes()).with_path(Path::new(&url)),
+                None,
+                &mut context.borrow_mut(),
+            )?;
+            self.cache.borrow_mut().insert(url, module.clone());
+            Ok(module)
+        })();
+        async { result }
+    }
+}
+
 /// A Boa-backed scripting engine.
 pub struct BoaEngine {
     ctx: Context,
+    /// The module loader installed on `ctx`; `eval_module` sets its resolver per call.
+    loader: Rc<HostModuleLoader>,
 }
 
 /// The call context handed to a native callback. Boa's callback gives
@@ -188,28 +277,39 @@ impl ScriptEngine for BoaEngine {
     type CallCx<'a> = BoaCallCx<'a>;
 
     fn new() -> Result<Self, Self::Error> {
-        let mut ctx = Context::default();
+        let loader = Rc::new(HostModuleLoader::default());
+        let mut ctx = Context::builder().module_loader(loader.clone()).build()?;
         ctx.register_global_class::<Reflector>()?;
         ctx.insert_data(HostCell::new());
-        Ok(Self { ctx })
+        Ok(Self { ctx, loader })
     }
 
     fn eval(&mut self, source: &str) -> Result<Self::Value, Self::Error> {
         self.ctx.eval(Source::from_bytes(source))
     }
 
-    fn eval_module(&mut self, source: &str) -> Result<Option<Self::Value>, Self::Error> {
-        use boa_engine::builtins::promise::PromiseState;
-        use boa_engine::module::Module;
-
-        // Parse, then load → link → evaluate. `load_link_evaluate` returns a promise
-        // settled by the job queue; `run_jobs` drives it to completion (no-import
-        // modules settle immediately — a module that `import`s another needs a module
-        // loader wired on the context, not yet provided, so its load rejects).
-        let module = Module::parse(Source::from_bytes(source), None, &mut self.ctx)?;
-        let promise = module.load_link_evaluate(&mut self.ctx);
-        let _ = self.ctx.run_jobs();
-        match promise.state() {
+    fn eval_module(
+        &mut self,
+        source: &str,
+        base_url: &str,
+        resolve: &mut dyn FnMut(&str, &str) -> Option<(String, String)>,
+    ) -> Result<Option<Self::Value>, Self::Error> {
+        // Install the host resolver for this call so the loader can fetch imports,
+        // then parse the entry (its `path` = `base_url`, the base its imports resolve
+        // against) and drive load → link → evaluate. `run_jobs` settles the promise
+        // (synchronously, since the resolver fetches synchronously).
+        let loader = Rc::clone(&self.loader);
+        let state = loader.with_resolver(resolve, || {
+            let module = Module::parse(
+                Source::from_bytes(source.as_bytes()).with_path(Path::new(base_url)),
+                None,
+                &mut self.ctx,
+            )?;
+            let promise = module.load_link_evaluate(&mut self.ctx);
+            let _ = self.ctx.run_jobs();
+            Ok::<_, JsError>(promise.state())
+        })?;
+        match state {
             PromiseState::Fulfilled(_) => Ok(Some(JsValue::undefined())),
             PromiseState::Rejected(reason) => Err(JsError::from_opaque(reason)),
             PromiseState::Pending => Err(JsNativeError::typ()

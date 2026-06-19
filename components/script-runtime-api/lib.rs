@@ -137,11 +137,18 @@ impl<E: ScriptEngine> Runtime<E> {
         self.engine.eval(source)
     }
 
-    /// Evaluate `source` as an ECMAScript module (`<script type=module>`). Returns
-    /// `Ok(None)` when the backend does not support modules, so the host can log and
-    /// skip rather than fail. See [`ScriptEngine::eval_module`].
-    pub fn eval_module(&mut self, source: &str) -> Result<Option<E::Value>, E::Error> {
-        self.engine.eval_module(source)
+    /// Evaluate `source` as an ECMAScript module (`<script type=module>`), resolving
+    /// `import`s against `base_url` through the host `resolve` callback (which fetches
+    /// dependency source). Returns `Ok(None)` when the backend does not support
+    /// modules, so the host can log and skip rather than fail. See
+    /// [`ScriptEngine::eval_module`].
+    pub fn eval_module(
+        &mut self,
+        source: &str,
+        base_url: &str,
+        resolve: &mut dyn FnMut(&str, &str) -> Option<(String, String)>,
+    ) -> Result<Option<E::Value>, E::Error> {
+        self.engine.eval_module(source, base_url, resolve)
     }
 
     /// Populate the live document from a parsed source document (any

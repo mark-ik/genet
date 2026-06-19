@@ -100,13 +100,25 @@ pub trait ScriptEngine: Sized {
 
     /// Evaluate `source` as an ECMAScript **module** (module scope, strict mode,
     /// `import` / `export`), driving its load → link → evaluate to completion.
-    /// Returns `Ok(Some(value))` on success, `Err` if the module throws, and
-    /// `Ok(None)` when this backend does not support module evaluation — the
-    /// default, so a backend without module support (or that has not wired it yet)
-    /// degrades gracefully rather than failing to compile. A backend that drives
-    /// imports does so through its own module loader; callers needing cross-module
-    /// imports must wire that on the backend.
-    fn eval_module(&mut self, _source: &str) -> Result<Option<Self::Value>, Self::Error> {
+    ///
+    /// `base_url` is the entry module's own URL (its `import` specifiers resolve
+    /// against it). `resolve` is the host module resolver: given an import
+    /// `(specifier, referrer_url)` it returns the imported module's
+    /// `(resolved_url, source)`, or `None` if it cannot be resolved/fetched — the
+    /// seam through which the host (which owns the fetcher) supplies dependency
+    /// source on demand. The engine keys its module cache on `resolved_url`, so a
+    /// diamond or cycle resolves each module once.
+    ///
+    /// Returns `Ok(Some(value))` on success, `Err` if the module (or a dependency)
+    /// throws or fails to load, and `Ok(None)` when this backend does not support
+    /// module evaluation — the default, so a backend without module support (or one
+    /// that has not wired it yet) degrades gracefully rather than failing to compile.
+    fn eval_module(
+        &mut self,
+        _source: &str,
+        _base_url: &str,
+        _resolve: &mut dyn FnMut(&str, &str) -> Option<(String, String)>,
+    ) -> Result<Option<Self::Value>, Self::Error> {
         Ok(None)
     }
 

@@ -42,7 +42,7 @@ scripted = [
     "dep:netrender", "dep:serval-render", "dep:serval-static-dom", "dep:serval-layout",
     "dep:script-runtime-api", "dep:script-engine-api",
     "dep:serval-scripted-dom", "dep:script-engine-boa", "dep:layout-dom-api",
-    "dep:encoding_rs", "dep:sha2", "dep:base64",
+    "dep:encoding_rs", "dep:sha2", "dep:base64", "dep:url",
 ]
 # Add the Nova engine to the scripted profile (native-only). Off by default; enabling
 # it links a second engine, which on Windows can exceed the linker's image-size limit
