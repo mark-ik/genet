@@ -5,11 +5,18 @@
 //! The scripted document profile (V4): a live, script-mutated document.
 //!
 //! The content half of `pelt --engine scripted <url>`: a [`ScriptedDocument`] that
-//! parses HTML into a live [`ScriptedDom`], runs its inline `<script>` through
-//! [`script_runtime_api::Runtime`] on a chosen JS engine (Boa by default, Nova
-//! behind `scripted-nova`), and renders the *mutated* DOM each frame through
-//! `serval-render`. GPU-free and testable here; the windowed present loop drives it
-//! exactly as it drives the static [`LoadedDocument`](crate::document::LoadedDocument).
+//! parses HTML into a live [`ScriptedDom`], runs its `<script>`s — inline *and*
+//! external `<script src>` (fetched through the same [`ResourceFetcher`] the page
+//! loaded over, in document order) — through [`script_runtime_api::Runtime`] on a
+//! chosen JS engine (Boa by default, Nova behind `scripted-nova`), and renders the
+//! *mutated* DOM each frame through `serval-render`. GPU-free and testable here; the
+//! windowed present loop drives it exactly as it drives the static
+//! [`LoadedDocument`](crate::document::LoadedDocument).
+//!
+//! Script execution is synchronous in document order (the classic-script model);
+//! `async` / `defer` ordering and `type=module` are follow-ups. A failed or
+//! missing external script is reported and skipped, like an inline script error —
+//! a browser keeps rendering the rest of the document.
 //!
 //! The script/layout split (recorded on [`script_runtime_api::HostState`]): the host
 //! owns the real viewport. Each frame it syncs the current scroll *into* the runtime
@@ -56,8 +63,10 @@ pub struct ScriptedDocument<E: ScriptEngine> {
 }
 
 impl<E: ScriptEngine> ScriptedDocument<E> {
-    /// Fetch `url` through `fetcher`, parse it, and run its inline scripts. `Err` on a
-    /// failed fetch or a runtime that would not initialize.
+    /// Fetch `url` through `fetcher`, parse it, and run its scripts — inline and
+    /// external `<script src>` (each resolved against `url` and fetched through the
+    /// same `fetcher`). `Err` on a failed fetch of the document, or a runtime that
+    /// would not initialize.
     pub fn load(fetcher: &impl ResourceFetcher, url: &str) -> Result<Self, String> {
         // Split a `url#id` fragment off before fetching (the fetcher takes the
         // resource, not the fragment).
@@ -68,15 +77,28 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         let bytes = fetcher
             .fetch(resource)
             .ok_or_else(|| format!("could not load {resource}"))?;
-        let mut me = Self::parse(&String::from_utf8_lossy(&bytes))?;
+        // External scripts resolve against the document URL and fetch through the
+        // same fetcher; pass both into the builder.
+        let mut me = Self::build(&String::from_utf8_lossy(&bytes), Some((fetcher, resource)))?;
         me.pending_fragment = fragment;
         Ok(me)
     }
 
-    /// Parse already-loaded HTML into a live DOM, then run its inline `<script>`s
+    /// Parse already-loaded HTML into a live DOM, then run its **inline** `<script>`s
     /// against it (settling microtasks). The fetch-free half, for tests and inline
-    /// `data:` content. `Err` if the runtime fails to initialize.
+    /// `data:` content — with no fetcher, external `<script src>` is reported and
+    /// skipped. `Err` if the runtime fails to initialize.
     pub fn parse(html: &str) -> Result<Self, String> {
+        Self::build(html, None)
+    }
+
+    /// Parse `html` into a live DOM and run its scripts in document order. With a
+    /// `loader` (`(fetcher, base_url)`), external `<script src>` is resolved against
+    /// `base_url` and fetched; without one (the [`parse`](Self::parse) path), an
+    /// external script is reported and skipped. A script that errors (or whose fetch
+    /// fails) is reported but does not abort the load — a browser keeps rendering the
+    /// document. `Err` only if the runtime fails to initialize.
+    fn build(html: &str, loader: Option<(&dyn ResourceFetcher, &str)>) -> Result<Self, String> {
         let doc = StaticDocument::parse(html);
         let mut sheets: Vec<String> =
             crate::STRUCTURAL_SHEET.iter().map(|s| s.to_string()).collect();
@@ -86,11 +108,37 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         // The parsed body becomes the live DOM, so script querying it (document.body,
         // getElementById, querySelector) sees the page's elements.
         rt.load_dom(&doc);
-        // Run the page's inline scripts in document order; a script error is reported
-        // but does not abort the load (a browser keeps rendering the document).
-        for src in inline_scripts(&doc) {
-            if let Err(e) = rt.eval(&src) {
-                eprintln!("[pelt-scripted] script error: {e:?}");
+
+        // Run scripts in document order: inline text directly, external `src` fetched
+        // through the loader (resolving relative to the document URL). A classic
+        // synchronous model — each script runs before the next, inline and external
+        // alike — which is correct for non-`async`/`defer` scripts.
+        for script in collect_scripts(&doc) {
+            let source = match script {
+                ScriptSource::Inline(text) => Some(text),
+                ScriptSource::External(src) => match loader {
+                    Some((fetcher, base)) => {
+                        let url = crate::document::resolve_href(base, &src);
+                        match fetcher.fetch(&url) {
+                            Some(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+                            None => {
+                                eprintln!("[pelt-scripted] could not fetch script {url}");
+                                None
+                            },
+                        }
+                    },
+                    None => {
+                        eprintln!(
+                            "[pelt-scripted] skipping external <script src=\"{src}\"> (no fetcher)"
+                        );
+                        None
+                    },
+                },
+            };
+            if let Some(source) = source {
+                if let Err(e) = rt.eval(&source) {
+                    eprintln!("[pelt-scripted] script error: {e:?}");
+                }
             }
         }
         rt.run_microtasks();
@@ -269,34 +317,50 @@ impl ScriptedEngine {
     }
 }
 
-/// Text of every inline `<script>` (no `src`) in document order. `<script src>` is a
-/// V4 follow-up (the done-condition is inline script); skipping it here keeps a page
-/// with an external script from silently running its inline siblings out of order.
-fn inline_scripts(doc: &StaticDocument) -> Vec<String> {
+/// One `<script>` to run, in document order: inline text, or an external `src` URL
+/// (raw attribute value, resolved against the document URL at fetch time). An
+/// external `src` takes precedence over inline text (per HTML: a `<script>` with a
+/// `src` ignores its element content).
+enum ScriptSource {
+    Inline(String),
+    External(String),
+}
+
+/// Every runnable `<script>` in document order — `src` scripts as
+/// [`ScriptSource::External`], inline-text scripts as [`ScriptSource::Inline`].
+/// Empty/whitespace-only inline scripts and `src`-less empty scripts are dropped.
+/// Keeping one ordered list (rather than inline-only) is what lets external and
+/// inline scripts run in their authored order.
+fn collect_scripts(doc: &StaticDocument) -> Vec<ScriptSource> {
     let mut out = Vec::new();
-    collect_inline_scripts(doc, doc.document(), &mut out);
+    collect_scripts_rec(doc, doc.document(), &mut out);
     out
 }
 
-fn collect_inline_scripts(dom: &StaticDocument, node: StaticNodeId, out: &mut Vec<String>) {
+fn collect_scripts_rec(dom: &StaticDocument, node: StaticNodeId, out: &mut Vec<ScriptSource>) {
     if dom.element_name(node).is_some_and(|q| q.local.as_ref() == "script") {
-        let has_src = dom
+        let src = dom
             .attribute(node, &Namespace::default(), &LocalName::from("src"))
-            .is_some();
-        if !has_src {
-            let mut text = String::new();
-            for child in dom.dom_children(node) {
-                if let Some(t) = dom.text(child) {
-                    text.push_str(t);
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        match src {
+            // A `src` script ignores its element content (HTML spec); run the resource.
+            Some(src) => out.push(ScriptSource::External(src)),
+            None => {
+                let mut text = String::new();
+                for child in dom.dom_children(node) {
+                    if let Some(t) = dom.text(child) {
+                        text.push_str(t);
+                    }
                 }
-            }
-            if !text.trim().is_empty() {
-                out.push(text);
-            }
+                if !text.trim().is_empty() {
+                    out.push(ScriptSource::Inline(text));
+                }
+            },
         }
     }
     for child in dom.dom_children(node) {
-        collect_inline_scripts(dom, child, out);
+        collect_scripts_rec(dom, child, out);
     }
 }
 
@@ -431,9 +495,115 @@ mod tests {
         );
     }
 
+    /// In-memory [`ResourceFetcher`] for the external-script tests: a fixed
+    /// URL→bytes map, so a `load` resolves the page and its `<script src>`s without
+    /// touching the network or disk.
+    struct MapFetcher(std::collections::HashMap<String, Vec<u8>>);
+    impl ResourceFetcher for MapFetcher {
+        fn fetch(&self, url: &str) -> Option<Vec<u8>> {
+            self.0.get(url).cloned()
+        }
+    }
+    fn map_fetcher(files: &[(&str, &str)]) -> MapFetcher {
+        MapFetcher(files.iter().map(|(u, b)| (u.to_string(), b.as_bytes().to_vec())).collect())
+    }
+
+    /// An external `<script src>` is fetched and executed: the script injects a `<p>`,
+    /// so the rendered scene gains glyph runs an empty body would not have — the
+    /// load → fetch-script → run → mutate → render path end to end. (This is the gap
+    /// item 3 closes: an inline-only driver rendered nothing for this page.)
+    fn external_script_runs<E: ScriptEngine>() {
+        let files = map_fetcher(&[
+            ("http://x/index.html", "<body><script src=\"app.js\"></script></body>"),
+            (
+                "http://x/app.js",
+                "var p=document.createElement('p');\
+                 p.appendChild(document.createTextNode('ext'));\
+                 document.body.appendChild(p);",
+            ),
+        ]);
+        let mut doc = ScriptedDocument::<E>::load(&files, "http://x/index.html").expect("loads");
+        let scene = doc.frame(400, 300);
+        assert!(
+            scene.ops.iter().any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
+            "external-script-injected text renders as glyphs",
+        );
+    }
+
+    /// Inline and external scripts run in document order: three scripts (inline,
+    /// external, inline) each log a letter, and the console shows `A`, `B`, `C` in
+    /// order — proving inline and external interleave in authored order (the ordering
+    /// the old inline-only path explicitly could not guarantee).
+    fn scripts_run_in_document_order<E: ScriptEngine>() {
+        let files = map_fetcher(&[
+            (
+                "http://x/index.html",
+                "<body>\
+                    <script>console.log('A');</script>\
+                    <script src=\"b.js\"></script>\
+                    <script>console.log('C');</script>\
+                 </body>",
+            ),
+            ("http://x/b.js", "console.log('B');"),
+        ]);
+        let doc = ScriptedDocument::<E>::load(&files, "http://x/index.html").expect("loads");
+        assert_eq!(
+            doc.console(),
+            vec!["A".to_string(), "B".to_string(), "C".to_string()],
+            "scripts ran in document order (inline A, external B, inline C)",
+        );
+    }
+
+    /// A relative `src` resolves against the document URL's directory, not the host
+    /// root: `sub/app.js` on `http://x/dir/index.html` fetches
+    /// `http://x/dir/sub/app.js`.
+    fn relative_src_resolves_against_page_url<E: ScriptEngine>() {
+        let files = map_fetcher(&[
+            ("http://x/dir/index.html", "<body><script src=\"sub/app.js\"></script></body>"),
+            ("http://x/dir/sub/app.js", "console.log('relative-ok');"),
+        ]);
+        let doc = ScriptedDocument::<E>::load(&files, "http://x/dir/index.html").expect("loads");
+        assert!(
+            doc.console().iter().any(|l| l == "relative-ok"),
+            "relative src resolved against the page directory: {:?}",
+            doc.console(),
+        );
+    }
+
+    /// A missing external script is reported and skipped, not fatal: the page still
+    /// loads and its inline siblings still run (browser resilience).
+    fn missing_external_script_is_skipped<E: ScriptEngine>() {
+        let files = map_fetcher(&[(
+            "http://x/index.html",
+            "<body><script src=\"gone.js\"></script><script>console.log('still-here');</script></body>",
+        )]);
+        let doc = ScriptedDocument::<E>::load(&files, "http://x/index.html").expect("loads anyway");
+        assert!(
+            doc.console().iter().any(|l| l == "still-here"),
+            "inline sibling runs despite the missing external script: {:?}",
+            doc.console(),
+        );
+    }
+
     #[test]
     fn mutation_renders_on_boa() {
         mutation_renders::<BoaEngine>();
+    }
+    #[test]
+    fn external_script_runs_on_boa() {
+        external_script_runs::<BoaEngine>();
+    }
+    #[test]
+    fn scripts_run_in_document_order_on_boa() {
+        scripts_run_in_document_order::<BoaEngine>();
+    }
+    #[test]
+    fn relative_src_resolves_against_page_url_on_boa() {
+        relative_src_resolves_against_page_url::<BoaEngine>();
+    }
+    #[test]
+    fn missing_external_script_is_skipped_on_boa() {
+        missing_external_script_is_skipped::<BoaEngine>();
     }
     #[test]
     fn node_identity_is_stable_on_boa() {
@@ -480,6 +650,22 @@ mod tests {
         #[test]
         fn node_identity_is_stable_on_nova() {
             node_identity_is_stable::<NovaEngine>();
+        }
+        #[test]
+        fn external_script_runs_on_nova() {
+            external_script_runs::<NovaEngine>();
+        }
+        #[test]
+        fn scripts_run_in_document_order_on_nova() {
+            scripts_run_in_document_order::<NovaEngine>();
+        }
+        #[test]
+        fn relative_src_resolves_against_page_url_on_nova() {
+            relative_src_resolves_against_page_url::<NovaEngine>();
+        }
+        #[test]
+        fn missing_external_script_is_skipped_on_nova() {
+            missing_external_script_is_skipped::<NovaEngine>();
         }
     }
 }

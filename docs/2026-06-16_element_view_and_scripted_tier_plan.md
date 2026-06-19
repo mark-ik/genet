@@ -131,9 +131,19 @@ tick auto-fires at frame cadence, and `gc_soak_bounds_memory` (120 frames x
 
 Ranked roughly by leverage toward real scripted pages:
 
-1. **External `<script src>`** loading. pelt V4 is inline-`<script>`-only by
-   design (`pelt_development_plan.md:209-212`). This is the most common reason a
-   real scripted page does nothing today.
+1. **External `<script src>`** loading — **DONE (2026-06-18).** Was the most
+   common reason a real scripted page did nothing. `ScriptedDocument` now
+   collects every `<script>` in document order as inline-or-external
+   (`scripted.rs` `collect_scripts` / `ScriptSource`); `build()` runs them in
+   that order, fetching each `src` through the same `ResourceFetcher` the page
+   loaded over and resolving relative URLs against the document URL
+   (`document::resolve_href`). `parse()` (the fetch-free path) skips externals;
+   `load()` fetches them. Classic synchronous model — correct for
+   non-`async`/`defer` scripts. Verified on Boa (+ Nova under `scripted-nova`):
+   `external_script_runs`, `scripts_run_in_document_order` (inline A / external
+   B / inline C → console A,B,C), `relative_src_resolves_against_page_url`,
+   `missing_external_script_is_skipped`. Follow-ups: `async`/`defer` ordering,
+   `type=module`, charset/integrity.
 2. **DOM node-type breadth.** `Comment`, `DocumentFragment`, `cloneNode`, live
    `HTMLCollection` (`dom.rs:39-40`).
 3. **CSSOM + platform services.** `getComputedStyle`,

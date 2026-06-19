@@ -8,10 +8,10 @@ none blocks pelt's reference-shell or embedded-surface roles.
 
 ## Owned elsewhere (pointer only)
 
-- **External `<script src>`** (pelt V4 is inline-only by design). This is
-  residual-scripted-tier item #1 in
-  `2026-06-16_element_view_and_scripted_tier_plan.md` (the real home); it is the
-  most common reason a real scripted page does nothing today.
+- ~~**External `<script src>`** (pelt V4 is inline-only by design).~~ **DONE
+  (2026-06-18)** — `ScriptedDocument` now fetches and runs external scripts in
+  document order. See residual-scripted-tier item #1 in
+  `2026-06-16_element_view_and_scripted_tier_plan.md` (the real home).
 - **V6 host-side: forme-canonical authority inversion** (meerkat keeps the
   `Pane` tree canonical, forme + `TreeGeometry` persistence-only) and **routing
   meerkat tiles through pelt's in-surface `Document` lane** (today every tile is
