@@ -98,6 +98,18 @@ pub trait ScriptEngine: Sized {
     /// Evaluate `source` in the global scope, returning its completion value.
     fn eval(&mut self, source: &str) -> Result<Self::Value, Self::Error>;
 
+    /// Evaluate `source` as an ECMAScript **module** (module scope, strict mode,
+    /// `import` / `export`), driving its load → link → evaluate to completion.
+    /// Returns `Ok(Some(value))` on success, `Err` if the module throws, and
+    /// `Ok(None)` when this backend does not support module evaluation — the
+    /// default, so a backend without module support (or that has not wired it yet)
+    /// degrades gracefully rather than failing to compile. A backend that drives
+    /// imports does so through its own module loader; callers needing cross-module
+    /// imports must wire that on the backend.
+    fn eval_module(&mut self, _source: &str) -> Result<Option<Self::Value>, Self::Error> {
+        Ok(None)
+    }
+
     /// Like [`eval`](Self::eval), but bounded: a [`Budget::Steps`] cap stops a
     /// runaway script (e.g. `while true do end`) after roughly that many
     /// coarse VM steps and returns an error instead of hanging. The cap is on

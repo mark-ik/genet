@@ -137,6 +137,13 @@ impl<E: ScriptEngine> Runtime<E> {
         self.engine.eval(source)
     }
 
+    /// Evaluate `source` as an ECMAScript module (`<script type=module>`). Returns
+    /// `Ok(None)` when the backend does not support modules, so the host can log and
+    /// skip rather than fail. See [`ScriptEngine::eval_module`].
+    pub fn eval_module(&mut self, source: &str) -> Result<Option<E::Value>, E::Error> {
+        self.engine.eval_module(source)
+    }
+
     /// Populate the live document from a parsed source document (any
     /// [`LayoutDom`] — e.g. a `StaticDocument` of a test's HTML), so script can
     /// query it (`document.body`, `getElementById`, `querySelector`). Clones the

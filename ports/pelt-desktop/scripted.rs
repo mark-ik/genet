@@ -19,9 +19,12 @@
 //! guaranteed contract; `async` is unordered, and since the fetcher is synchronous,
 //! document order is a faithful realization). `async`/`defer` are ignored on inline
 //! scripts, per spec. A `type` that is neither empty nor a JavaScript MIME type nor
-//! `module` is a data block and is not executed; `type=module` is recognized and
-//! deferred but **not executed** — module loading (an import graph + engine
-//! module-eval) is a follow-up, blocked below pelt. A failed/missing/integrity-
+//! `module` is a data block and is not executed. `type=module` scripts (inline or
+//! `src`) are **deferred** (run after the parser-blocking pass, in document order)
+//! and evaluated with module scope via the engine's module path (`eval_module`); a
+//! backend without module support logs and skips. Cross-module `import` is the
+//! first-cut limitation — it needs a module loader wired on the engine — so a module
+//! that imports another reports an error and is skipped. A failed/missing/integrity-
 //! rejected external script is reported and skipped, like an inline error — a browser
 //! keeps rendering the rest of the document.
 //!
@@ -139,17 +142,32 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
                         eval_reporting(&mut rt, &source);
                     }
                 },
-                // defer / async: run after the parser-blocking pass.
-                ScriptSource::External { .. } => deferred.push(script),
+                // defer / async classic, and all modules: run after the parser-
+                // blocking pass, in document order.
+                ScriptSource::External { .. }
+                | ScriptSource::ModuleInline(_)
+                | ScriptSource::ModuleExternal { .. } => deferred.push(script),
             }
         }
         for script in deferred {
-            if let ScriptSource::External { src, charset, integrity, .. } = script {
-                if let Some(source) =
-                    fetch_external(loader, src, charset.as_deref(), integrity.as_deref())
-                {
-                    eval_reporting(&mut rt, &source);
-                }
+            match script {
+                ScriptSource::External { src, charset, integrity, .. } => {
+                    if let Some(source) =
+                        fetch_external(loader, src, charset.as_deref(), integrity.as_deref())
+                    {
+                        eval_reporting(&mut rt, &source);
+                    }
+                },
+                ScriptSource::ModuleInline(text) => eval_module_reporting(&mut rt, text),
+                ScriptSource::ModuleExternal { src, charset, integrity } => {
+                    if let Some(source) =
+                        fetch_external(loader, src, charset.as_deref(), integrity.as_deref())
+                    {
+                        eval_module_reporting(&mut rt, &source);
+                    }
+                },
+                // Inline classic never defers.
+                ScriptSource::Inline(_) => {},
             }
         }
         rt.run_microtasks();
@@ -359,6 +377,17 @@ enum ScriptSource {
         /// must match, else the script is blocked.
         integrity: Option<String>,
     },
+    /// `<script type=module>…</script>` — inline module source. Modules are always
+    /// deferred (run after the parser-blocking pass) and evaluated with module scope
+    /// via the engine's module path.
+    ModuleInline(String),
+    /// `<script type=module src=…>` — external module: fetched (with `charset` /
+    /// `integrity`) like a classic external, then evaluated as a module.
+    ModuleExternal {
+        src: String,
+        charset: Option<String>,
+        integrity: Option<String>,
+    },
 }
 
 /// How a `<script>`'s `type` attribute classifies it.
@@ -428,10 +457,26 @@ fn collect_scripts_rec(dom: &StaticDocument, node: StaticNodeId, out: &mut Vec<S
         match classify_script_type(attr("type")) {
             ScriptKind::Data => {} // a data block: not executed
             ScriptKind::Module => {
-                eprintln!(
-                    "[pelt-scripted] <script type=module> recognized but not executed \
-                     (module loading is a follow-up)"
-                );
+                let nonempty =
+                    |name: &str| attr(name).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                match nonempty("src") {
+                    Some(src) => out.push(ScriptSource::ModuleExternal {
+                        src,
+                        charset: nonempty("charset"),
+                        integrity: nonempty("integrity"),
+                    }),
+                    None => {
+                        let mut text = String::new();
+                        for child in dom.dom_children(node) {
+                            if let Some(t) = dom.text(child) {
+                                text.push_str(t);
+                            }
+                        }
+                        if !text.trim().is_empty() {
+                            out.push(ScriptSource::ModuleInline(text));
+                        }
+                    },
+                }
             },
             ScriptKind::Classic => {
                 let src = attr("src").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
@@ -568,6 +613,21 @@ fn decode_script_bytes(bytes: &[u8], charset: Option<&str>) -> String {
 fn eval_reporting<E: ScriptEngine>(rt: &mut Runtime<E>, source: &str) {
     if let Err(e) = rt.eval(source) {
         eprintln!("[pelt-scripted] script error: {e:?}");
+    }
+}
+
+/// Evaluate `source` as a module (`<script type=module>`), reporting (but not
+/// propagating) failures: an engine without module support (`Ok(None)`) is logged
+/// and skipped, and a module that throws — including one that `import`s another,
+/// which needs a module loader not yet wired — is reported, like a classic script
+/// error. A cross-module `import` is the known limitation of this first cut.
+fn eval_module_reporting<E: ScriptEngine>(rt: &mut Runtime<E>, source: &str) {
+    match rt.eval_module(source) {
+        Ok(Some(_)) => {},
+        Ok(None) => eprintln!(
+            "[pelt-scripted] <script type=module> not supported by this engine; skipped"
+        ),
+        Err(e) => eprintln!("[pelt-scripted] module error: {e:?}"),
     }
 }
 
@@ -872,18 +932,91 @@ mod tests {
         );
     }
 
-    /// `type=module` is recognized but not executed (module loading is a follow-up),
-    /// so its content does not run; a classic sibling does.
-    fn script_type_module_is_recognized_not_executed<E: ScriptEngine>() {
+    /// A `type=module` script never breaks the page: its classic siblings run
+    /// regardless of whether this backend supports modules. (Engine-agnostic: a
+    /// module-capable backend also runs the module — after the parser-blocking pass —
+    /// but that is asserted in the Boa-only module tests below.)
+    fn module_keeps_classic_siblings_running<E: ScriptEngine>() {
         let html = "<body>\
-            <script type=\"module\">console.log('module-ran');</script>\
+            <script type=\"module\">globalThis.__m = 1;</script>\
             <script>console.log('classic-ran');</script>\
          </body>";
         let doc = ScriptedDocument::<E>::parse(html).expect("loads");
+        assert!(
+            doc.console().iter().any(|l| l == "classic-ran"),
+            "the classic sibling runs regardless of module support: {:?}",
+            doc.console(),
+        );
+    }
+
+    /// (Boa) A `type=module` script executes with **module scope**: its top-level
+    /// `var` is module-local and does not leak to `globalThis` (a classic script's
+    /// `var` would). Proves modules run with real module semantics, not script eval.
+    #[test]
+    fn module_executes_with_module_scope_on_boa() {
+        let html = "<body><script type=\"module\">\
+            var moduleLocal = 7;\
+            console.log('module:' + moduleLocal + ',' + (typeof globalThis.moduleLocal));\
+            </script></body>";
+        let doc = ScriptedDocument::<BoaEngine>::parse(html).expect("loads");
+        assert!(
+            doc.console().iter().any(|l| l == "module:7,undefined"),
+            "module ran with module scope (local visible, not leaked): {:?}",
+            doc.console(),
+        );
+    }
+
+    /// (Boa) Modules are deferred: an inline classic script runs before a module that
+    /// precedes it in document order.
+    #[test]
+    fn module_runs_after_parser_blocking_on_boa() {
+        let html = "<body>\
+            <script type=\"module\">console.log('module');</script>\
+            <script>console.log('classic');</script>\
+         </body>";
+        let doc = ScriptedDocument::<BoaEngine>::parse(html).expect("loads");
         assert_eq!(
             doc.console(),
-            vec!["classic-ran".to_string()],
-            "the module script was recognized but not executed",
+            vec!["classic".to_string(), "module".to_string()],
+            "the classic script runs before the earlier-positioned module (modules defer)",
+        );
+    }
+
+    /// (Boa) A module that `import`s another fails gracefully — no module loader is
+    /// wired yet, so the import rejects, the module is reported and skipped, and a
+    /// classic sibling still runs (the page is not broken).
+    #[test]
+    fn module_import_fails_gracefully_on_boa() {
+        let html = "<body>\
+            <script type=\"module\">import x from './dep.js'; console.log('after-import');</script>\
+            <script>console.log('sibling');</script>\
+         </body>";
+        let doc = ScriptedDocument::<BoaEngine>::parse(html).expect("loads");
+        assert!(
+            !doc.console().iter().any(|l| l == "after-import"),
+            "the import rejected, so the module body past the import did not run: {:?}",
+            doc.console(),
+        );
+        assert!(
+            doc.console().iter().any(|l| l == "sibling"),
+            "the failed module is not fatal — the classic sibling still runs: {:?}",
+            doc.console(),
+        );
+    }
+
+    /// (Boa) An external `<script type=module src=…>` is fetched (like a classic
+    /// external) and evaluated as a module.
+    #[test]
+    fn external_module_runs_on_boa() {
+        let files = map_fetcher(&[
+            ("http://x/index.html", "<body><script type=\"module\" src=\"m.js\"></script></body>"),
+            ("http://x/m.js", "console.log('ext-module:' + (typeof globalThis.x));\nvar x = 1;"),
+        ]);
+        let doc = ScriptedDocument::<BoaEngine>::load(&files, "http://x/index.html").expect("loads");
+        assert!(
+            doc.console().iter().any(|l| l == "ext-module:undefined"),
+            "external module fetched and run with module scope: {:?}",
+            doc.console(),
         );
     }
 
@@ -1024,8 +1157,8 @@ mod tests {
         script_type_data_block_is_not_executed::<BoaEngine>();
     }
     #[test]
-    fn script_type_module_is_recognized_not_executed_on_boa() {
-        script_type_module_is_recognized_not_executed::<BoaEngine>();
+    fn module_keeps_classic_siblings_running_on_boa() {
+        module_keeps_classic_siblings_running::<BoaEngine>();
     }
     #[test]
     fn external_script_charset_decodes_on_boa() {
@@ -1122,8 +1255,8 @@ mod tests {
             script_type_data_block_is_not_executed::<NovaEngine>();
         }
         #[test]
-        fn script_type_module_is_recognized_not_executed_on_nova() {
-            script_type_module_is_recognized_not_executed::<NovaEngine>();
+        fn module_keeps_classic_siblings_running_on_nova() {
+            module_keeps_classic_siblings_running::<NovaEngine>();
         }
         #[test]
         fn external_script_charset_decodes_on_nova() {

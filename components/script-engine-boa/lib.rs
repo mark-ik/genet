@@ -198,6 +198,26 @@ impl ScriptEngine for BoaEngine {
         self.ctx.eval(Source::from_bytes(source))
     }
 
+    fn eval_module(&mut self, source: &str) -> Result<Option<Self::Value>, Self::Error> {
+        use boa_engine::builtins::promise::PromiseState;
+        use boa_engine::module::Module;
+
+        // Parse, then load → link → evaluate. `load_link_evaluate` returns a promise
+        // settled by the job queue; `run_jobs` drives it to completion (no-import
+        // modules settle immediately — a module that `import`s another needs a module
+        // loader wired on the context, not yet provided, so its load rejects).
+        let module = Module::parse(Source::from_bytes(source), None, &mut self.ctx)?;
+        let promise = module.load_link_evaluate(&mut self.ctx);
+        let _ = self.ctx.run_jobs();
+        match promise.state() {
+            PromiseState::Fulfilled(_) => Ok(Some(JsValue::undefined())),
+            PromiseState::Rejected(reason) => Err(JsError::from_opaque(reason)),
+            PromiseState::Pending => Err(JsNativeError::typ()
+                .with_message("module evaluation did not settle synchronously")
+                .into()),
+        }
+    }
+
     fn value_to_string(&mut self, value: &Self::Value) -> Result<String, Self::Error> {
         Ok(value.to_string(&mut self.ctx)?.to_std_string_escaped())
     }

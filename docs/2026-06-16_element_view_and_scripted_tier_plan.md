@@ -150,10 +150,15 @@ Ranked roughly by leverage toward real scripted pages:
      `async` unordered, document order a faithful realization of the synchronous
      fetch). `async`/`defer` ignored on inline scripts; `async` wins over `defer`.
    - **`<script type>` classification** (`classify_script_type`). Empty / a JS
-     MIME essence → classic; `module` → recognized but **not executed** (module
-     loading = an import graph + engine module-eval, blocked below pelt: the
-     runtime exposes only script-mode `eval`); anything else (`application/json`,
-     `text/plain`, import maps) → a data block, not executed.
+     MIME essence → classic; `module` → an ECMAScript module; anything else
+     (`application/json`, `text/plain`, import maps) → a data block, not executed.
+   - **`type=module` execution.** A new defaulted `ScriptEngine::eval_module`
+     (`Ok(None)` = backend unsupported, so Nova/piccolo degrade gracefully)
+     overridden on Boa (`Module::parse` → `load_link_evaluate` → `run_jobs` →
+     promise state). Module scripts (inline or `src`) are **deferred** and run with
+     module scope. First-cut limit: cross-module `import` needs a module loader not
+     yet wired, so an importing module rejects and is skipped (the page is not
+     broken); Nova module support is a follow-up.
    - **`charset`** — fetched bytes decoded via `encoding_rs` per the attribute
      (default UTF-8). **`integrity`** — Subresource-Integrity: strongest-algorithm
      sha256/384/512 digest checked against the metadata (raw-bytes compare via
@@ -161,11 +166,12 @@ Ranked roughly by leverage toward real scripted pages:
 
    Verified: `defer_runs_after_parser_blocking`,
    `defer_scripts_run_in_document_order`, `async_runs_after_parser_blocking`,
-   `script_type_data_block_is_not_executed`,
-   `script_type_module_is_recognized_not_executed`,
+   `script_type_data_block_is_not_executed`, `module_keeps_classic_siblings_running`,
+   and (Boa) `module_executes_with_module_scope`, `module_runs_after_parser_blocking`,
+   `module_import_fails_gracefully`, `external_module_runs`,
    `external_script_charset_decodes` (ISO-8859-1 → café),
-   `integrity_match_runs`, `integrity_mismatch_blocks`. Remaining follow-up:
-   **`type=module` execution** (an import-graph loader + engine module-eval).
+   `integrity_match_runs`, `integrity_mismatch_blocks`. Follow-ups: cross-module
+   `import` (a module loader threading the host fetcher) + Nova module support.
 2. **DOM node-type breadth — DONE (verified 2026-06-18; the `dom.rs:39-40`
    "Not yet" note was stale).** `Comment` / `DocumentFragment` (`createComment`
    / `createDocumentFragment`, nodeType 8 / 11), `cloneNode` (shallow + deep),
