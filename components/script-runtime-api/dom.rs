@@ -36,8 +36,15 @@
 //! namespace-gated `tagName`, `createElementNS`. A **reflected IDL attribute**
 //! layer on `Element.prototype` (DOMString / boolean / approximate-enumerated /
 //! long kinds, table-driven) and `TreeWalker` / `NodeIterator` / `NodeFilter`.
-//! Not yet: `Comment` / `DocumentFragment` node types, `cloneNode`, URL/tokenlist
-//! reflected kinds, live HTMLCollection. See
+//! `Comment` / `DocumentFragment` node types (`createComment` /
+//! `createDocumentFragment`, nodeType 8 / 11), `cloneNode` (shallow + deep), and
+//! **live** `HTMLCollection`s — `getElementsByTagName` / `getElementsByClassName` /
+//! `children` are Proxy-backed and re-walked per access, so they reflect later
+//! mutations — plus `DOMTokenList` (`classList` / `relList`), `dataset`, and
+//! `NodeList` (`childNodes`). Verified by `dom_fragment_clone`,
+//! `dom_collections_works`, `dom_tokenlist_dataset_works`. Not yet: URL / tokenlist
+//! *table-driven* reflected IDL-attribute kinds (tokenlists are served today by the
+//! hand-wired `classList` / `relList`, not the reflection table). See
 //! `docs/2026-05-26_pluggable_engines_testharness_plan.md`.
 
 use std::cell::RefCell;

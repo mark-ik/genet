@@ -166,8 +166,17 @@ Ranked roughly by leverage toward real scripted pages:
    `external_script_charset_decodes` (ISO-8859-1 → café),
    `integrity_match_runs`, `integrity_mismatch_blocks`. Remaining follow-up:
    **`type=module` execution** (an import-graph loader + engine module-eval).
-2. **DOM node-type breadth.** `Comment`, `DocumentFragment`, `cloneNode`, live
-   `HTMLCollection` (`dom.rs:39-40`).
+2. **DOM node-type breadth — DONE (verified 2026-06-18; the `dom.rs:39-40`
+   "Not yet" note was stale).** `Comment` / `DocumentFragment` (`createComment`
+   / `createDocumentFragment`, nodeType 8 / 11), `cloneNode` (shallow + deep),
+   and **live** `HTMLCollection`s (`getElementsByTagName` /
+   `getElementsByClassName` / `children` — Proxy-backed, re-walked per access, so
+   they reflect mutations) are all implemented + tested on Boa and Nova
+   (`dom_fragment_clone`, `dom_collections_works` — which asserts the length grows
+   after an `appendChild` — and `dom_tokenlist_dataset_works` for
+   `classList`/`relList`/`dataset`). Residual micro-gap: URL / tokenlist
+   *table-driven* reflected IDL-attribute kinds (tokenlists work today via the
+   hand-wired `classList`/`relList`, not the reflection table).
 3. **CSSOM + platform services.** `getComputedStyle`,
    `CSSStyleDeclaration`, `localStorage`, `history`/`location`: catalogued in
    `web_platform_api_shared_middle_plan.md:245-258`, unbuilt.
