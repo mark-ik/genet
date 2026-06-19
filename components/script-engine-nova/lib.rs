@@ -19,13 +19,20 @@ mod native {
 
     use nova_vm::{
         ecmascript::{
-            Agent, AgentOptions, ArgumentsList, Behaviour, BuiltinFunctionArgs, EmbedderObject,
-            ExceptionType, GcAgent, HostHooks, InternalMethods, Job, PromiseCapability,
-            PropertyDescriptor, PropertyKey, RealmRoot, String as JsString, Value,
-            clear_weak_ref_kept_objects, create_builtin_function, parse_script, script_evaluation,
+            AbstractModule, Agent, AgentOptions, ArgumentsList, Behaviour, BuiltinFunctionArgs,
+            EmbedderObject, ExceptionType, GcAgent, GraphLoadingStateRecord, HostDefined, HostHooks,
+            InternalMethods, Job, ModuleRequest, PromiseCapability, PropertyDescriptor, PropertyKey,
+            RealmRoot, Referrer, SourceTextModule, String as JsString, Value,
+            clear_weak_ref_kept_objects, create_builtin_function, finish_loading_imported_module,
+            parse_module, parse_script, script_evaluation,
         },
         engine::{Bindable, GcScope, Global, NoGcScope},
     };
+
+    /// The host module resolver for one `eval_module` call: maps an import
+    /// `(specifier, referrer_url)` to the imported module's `(resolved_url, source)`,
+    /// or `None` when it cannot be resolved/fetched.
+    type ModuleResolver<'a> = dyn FnMut(&str, &str) -> Option<(String, String)> + 'a;
 
     /// Host hooks that capture promise/generic/timeout jobs into a shared queue the
     /// engine drains in `pump_microtasks`. Nova hands jobs to the host via these
@@ -34,12 +41,37 @@ mod native {
     /// them across GC is safe.
     struct ServalHostHooks {
         jobs: Rc<RefCell<VecDeque<Job>>>,
+        /// Raw pointer to the active module resolver, set for one `eval_module` call
+        /// (`None` otherwise). The pointee outlives the call (an `eval_module` arg),
+        /// so the deref in `load_imported_module` is sound; single-threaded.
+        module_resolver: Cell<Option<*mut ModuleResolver<'static>>>,
+        /// Parsed modules by resolved URL — the per-call cache (cleared each call), so
+        /// a diamond / cycle resolves each module once. `Global` keeps each rooted
+        /// across the load (the heap-global root set, like the reflector cache).
+        module_cache: RefCell<HashMap<String, Global<SourceTextModule<'static>>>>,
     }
 
     // `HostHooks: Debug`, but `Job` is not `Debug`, so report the queue length only.
     impl std::fmt::Debug for ServalHostHooks {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_struct("ServalHostHooks").field("queued", &self.jobs.borrow().len()).finish()
+        }
+    }
+
+    impl ServalHostHooks {
+        /// Install `resolver` for the duration of `f`, then clear it and the module
+        /// cache (dropping the `Global` roots so they do not leak across calls). The
+        /// lifetime is erased to `'static` for storage in the leaked (`'static`)
+        /// hooks; it is never observed past `f`, where the real resolver lives.
+        fn with_resolver<R>(&self, resolver: &mut ModuleResolver<'_>, f: impl FnOnce() -> R) -> R {
+            let raw: *mut ModuleResolver<'_> = resolver;
+            // SAFETY: erases only the captured-data lifetime; same layout. Cleared below.
+            let erased: *mut ModuleResolver<'static> = unsafe { std::mem::transmute(raw) };
+            self.module_resolver.set(Some(erased));
+            let out = f();
+            self.module_resolver.set(None);
+            self.module_cache.borrow_mut().clear();
+            out
         }
     }
 
@@ -57,6 +89,73 @@ mod native {
             // Unused: serval reaches host state through the realm `[[HostDefined]]`
             // slot, not this hook.
             &()
+        }
+
+        fn load_imported_module<'gc>(
+            &self,
+            agent: &mut Agent,
+            referrer: Referrer<'gc>,
+            module_request: ModuleRequest<'gc>,
+            _host_defined: Option<HostDefined>,
+            payload: &mut GraphLoadingStateRecord<'gc>,
+            gc: NoGcScope<'gc, '_>,
+        ) {
+            // The import specifier, and the importing module's URL (its
+            // `[[HostDefined]]`, set to the URL string when we parsed it).
+            let specifier = module_request.specifier(agent).to_string_lossy(agent).into_owned();
+            let referrer_url = referrer
+                .host_defined(agent)
+                .and_then(|hd| hd.downcast::<String>().ok())
+                .map(|s| (*s).clone())
+                .unwrap_or_default();
+
+            // Resolve + fetch through the host resolver active for this call.
+            let resolved = self.module_resolver.get().and_then(|ptr| {
+                // SAFETY: set by `with_resolver` for the call's duration; single-threaded.
+                let resolve = unsafe { &mut *ptr };
+                resolve(&specifier, &referrer_url)
+            });
+
+            let result = match resolved {
+                Some((url, source)) => {
+                    // Cache hit: return the same rooted module (so a diamond loads it
+                    // once). `Global` is not `Clone`, so test membership first to drop
+                    // the borrow before the `else` branch's `borrow_mut` insert.
+                    if self.module_cache.borrow().contains_key(&url) {
+                        let cache = self.module_cache.borrow();
+                        let global = cache.get(&url).expect("just checked present");
+                        Ok(AbstractModule::from(global.get(agent, gc)))
+                    } else {
+                        let realm = agent.current_realm(gc);
+                        let src = JsString::from_string(agent, source, gc);
+                        match parse_module(
+                            agent,
+                            src,
+                            realm,
+                            Some(Rc::new(url.clone()) as HostDefined),
+                            gc,
+                        ) {
+                            Ok(module) => {
+                                self.module_cache
+                                    .borrow_mut()
+                                    .insert(url, Global::new(agent, module.unbind()));
+                                Ok(AbstractModule::from(module))
+                            },
+                            Err(_) => Err(agent.throw_exception_with_static_message(
+                                ExceptionType::SyntaxError,
+                                "module parse error",
+                                gc,
+                            )),
+                        }
+                    }
+                },
+                None => Err(agent.throw_exception_with_static_message(
+                    ExceptionType::Error,
+                    "could not resolve module",
+                    gc,
+                )),
+            };
+            finish_loading_imported_module(agent, referrer, module_request, payload, result, gc);
         }
     }
     use script_engine_api::{
@@ -279,6 +378,9 @@ mod native {
         agent: GcAgent,
         realm: RealmRoot,
         jobs: Rc<RefCell<VecDeque<Job>>>,
+        /// The leaked (`'static`) host hooks installed on `agent`; `eval_module` sets
+        /// their module resolver per call.
+        hooks: &'static ServalHostHooks,
     }
 
     impl ScriptEngine for NovaEngine {
@@ -292,14 +394,17 @@ mod native {
             // shared queue handle). Acceptable for the engine lifetime; the proper
             // fix is a non-'static hooks API upstream.
             let jobs: Rc<RefCell<VecDeque<Job>>> = Rc::new(RefCell::new(VecDeque::new()));
-            let hooks: &'static ServalHostHooks =
-                Box::leak(Box::new(ServalHostHooks { jobs: jobs.clone() }));
+            let hooks: &'static ServalHostHooks = Box::leak(Box::new(ServalHostHooks {
+                jobs: jobs.clone(),
+                module_resolver: Cell::new(None),
+                module_cache: RefCell::new(HashMap::new()),
+            }));
             let mut agent = GcAgent::new(AgentOptions::default(), hooks);
             let realm = agent.create_default_realm();
             // The realm owns the host slot (neutral DOM + reflector cache) for its
             // whole life; `set_host_data` later fills the neutral half.
             realm.initialize_host_defined(&mut agent, Rc::new(NovaHostSlot::new()));
-            Ok(Self { agent, realm, jobs })
+            Ok(Self { agent, realm, jobs, hooks })
         }
 
         fn eval(&mut self, source: &str) -> Result<Self::Value, Self::Error> {
@@ -333,6 +438,54 @@ mod native {
                         .unwrap_or_else(|_| "<unprintable>".to_string());
                     out = Err(format!("evaluation threw: {msg}"));
                 }
+            });
+            out
+        }
+
+        fn eval_module(
+            &mut self,
+            source: &str,
+            base_url: &str,
+            resolve: &mut dyn FnMut(&str, &str) -> Option<(String, String)>,
+        ) -> Result<Option<Self::Value>, Self::Error> {
+            let hooks = self.hooks; // `&'static`, Copy — does not borrow `self`.
+            let src = source.to_string();
+            let base = base_url.to_string();
+            let mut out: Result<Option<Global<Value<'static>>>, String> =
+                Err("eval_module did not run".to_string());
+            // The resolver is installed for this call so `load_imported_module` can
+            // fetch imports; the entry's `[[HostDefined]]` is `base_url`, the base its
+            // imports resolve against. `run_module` drives load → link → evaluate
+            // (synchronously, since the resolver fetches synchronously).
+            hooks.with_resolver(resolve, || {
+                self.agent.run_in_realm(&self.realm, |agent, mut gc| {
+                    let realm = agent.current_realm(gc.nogc());
+                    let source_text = JsString::from_string(agent, src, gc.nogc());
+                    let module = match parse_module(
+                        agent,
+                        source_text,
+                        realm,
+                        Some(Rc::new(base) as HostDefined),
+                        gc.nogc(),
+                    ) {
+                        Ok(m) => m,
+                        Err(_) => {
+                            out = Err("module parse error".to_string());
+                            return;
+                        },
+                    };
+                    match agent.run_module(module.unbind(), None, gc.reborrow()) {
+                        Ok(value) => out = Ok(Some(Global::new(agent, value.unbind()))),
+                        Err(err) => {
+                            let v = err.value().unbind();
+                            let msg = v
+                                .to_string(agent, gc.reborrow())
+                                .map(|s| s.to_string_lossy(agent).into_owned())
+                                .unwrap_or_else(|_| "<unprintable>".to_string());
+                            out = Err(format!("module threw: {msg}"));
+                        },
+                    }
+                });
             });
             out
         }

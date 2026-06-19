@@ -162,7 +162,12 @@ Ranked roughly by leverage toward real scripted pages:
      WHATWG-`url`-joined), caching by URL so a diamond / cycle loads once. The
      resolver borrows host state for one call, injected as a scoped raw pointer
      (the loader outlives the call). An unresolvable / throwing import rejects the
-     module, which is reported and skipped. Nova module support is a follow-up.
+     module, which is reported and skipped. **Nova** supports modules + imports too
+     (its `eval_module` parses with `parse_module`, drives `Agent::run_module`, and
+     overrides `HostHooks::load_imported_module` with the same scoped-resolver +
+     URL-keyed `Global` cache); verified on both engines. (Nova has two unrelated
+     pre-existing GC soak / orphan-reaping test failures — they pass on Boa and are
+     untouched by this module-only change.)
    - **`charset`** — fetched bytes decoded via `encoding_rs` per the attribute
      (default UTF-8). **`integrity`** — Subresource-Integrity: strongest-algorithm
      sha256/384/512 digest checked against the metadata (raw-bytes compare via
@@ -171,7 +176,8 @@ Ranked roughly by leverage toward real scripted pages:
    Verified: `defer_runs_after_parser_blocking`,
    `defer_scripts_run_in_document_order`, `async_runs_after_parser_blocking`,
    `script_type_data_block_is_not_executed`, `module_keeps_classic_siblings_running`,
-   and (Boa) `module_executes_with_module_scope`, `module_runs_after_parser_blocking`,
+   and (on **both** Boa and Nova) `module_executes_with_module_scope`,
+   `module_runs_after_parser_blocking`,
    `module_imports_dependency`, `module_import_diamond_loads_shared_once`,
    `module_import_fails_gracefully`, `external_module_runs`,
    `external_script_charset_decodes` (ISO-8859-1 → café),

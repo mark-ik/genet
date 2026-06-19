@@ -974,16 +974,15 @@ mod tests {
         );
     }
 
-    /// (Boa) A `type=module` script executes with **module scope**: its top-level
+    /// A `type=module` script executes with **module scope**: its top-level
     /// `var` is module-local and does not leak to `globalThis` (a classic script's
     /// `var` would). Proves modules run with real module semantics, not script eval.
-    #[test]
-    fn module_executes_with_module_scope_on_boa() {
+    fn module_executes_with_module_scope<E: ScriptEngine>() {
         let html = "<body><script type=\"module\">\
             var moduleLocal = 7;\
             console.log('module:' + moduleLocal + ',' + (typeof globalThis.moduleLocal));\
             </script></body>";
-        let doc = ScriptedDocument::<BoaEngine>::parse(html).expect("loads");
+        let doc = ScriptedDocument::<E>::parse(html).expect("loads");
         assert!(
             doc.console().iter().any(|l| l == "module:7,undefined"),
             "module ran with module scope (local visible, not leaked): {:?}",
@@ -991,15 +990,14 @@ mod tests {
         );
     }
 
-    /// (Boa) Modules are deferred: an inline classic script runs before a module that
+    /// Modules are deferred: an inline classic script runs before a module that
     /// precedes it in document order.
-    #[test]
-    fn module_runs_after_parser_blocking_on_boa() {
+    fn module_runs_after_parser_blocking<E: ScriptEngine>() {
         let html = "<body>\
             <script type=\"module\">console.log('module');</script>\
             <script>console.log('classic');</script>\
          </body>";
-        let doc = ScriptedDocument::<BoaEngine>::parse(html).expect("loads");
+        let doc = ScriptedDocument::<E>::parse(html).expect("loads");
         assert_eq!(
             doc.console(),
             vec!["classic".to_string(), "module".to_string()],
@@ -1007,16 +1005,15 @@ mod tests {
         );
     }
 
-    /// (Boa) A module that `import`s another but cannot fetch it (the fetch-free
+    /// A module that `import`s another but cannot fetch it (the fetch-free
     /// `parse` path has no loader) fails gracefully: the import rejects, the module is
     /// reported and skipped, and a classic sibling still runs (the page is not broken).
-    #[test]
-    fn module_import_fails_gracefully_on_boa() {
+    fn module_import_fails_gracefully<E: ScriptEngine>() {
         let html = "<body>\
             <script type=\"module\">import x from './dep.js'; console.log('after-import');</script>\
             <script>console.log('sibling');</script>\
          </body>";
-        let doc = ScriptedDocument::<BoaEngine>::parse(html).expect("loads");
+        let doc = ScriptedDocument::<E>::parse(html).expect("loads");
         assert!(
             !doc.console().iter().any(|l| l == "after-import"),
             "the import rejected, so the module body past the import did not run: {:?}",
@@ -1029,15 +1026,14 @@ mod tests {
         );
     }
 
-    /// (Boa) An external `<script type=module src=…>` is fetched (like a classic
+    /// An external `<script type=module src=…>` is fetched (like a classic
     /// external) and evaluated as a module.
-    #[test]
-    fn external_module_runs_on_boa() {
+    fn external_module_runs<E: ScriptEngine>() {
         let files = map_fetcher(&[
             ("http://x/index.html", "<body><script type=\"module\" src=\"m.js\"></script></body>"),
             ("http://x/m.js", "console.log('ext-module:' + (typeof globalThis.x));\nvar x = 1;"),
         ]);
-        let doc = ScriptedDocument::<BoaEngine>::load(&files, "http://x/index.html").expect("loads");
+        let doc = ScriptedDocument::<E>::load(&files, "http://x/index.html").expect("loads");
         assert!(
             doc.console().iter().any(|l| l == "ext-module:undefined"),
             "external module fetched and run with module scope: {:?}",
@@ -1045,17 +1041,16 @@ mod tests {
         );
     }
 
-    /// (Boa) Cross-module `import` works: an entry module imports a named export from
+    /// Cross-module `import` works: an entry module imports a named export from
     /// a relative dependency (resolved against the entry's URL and fetched through the
     /// host loader) and uses it.
-    #[test]
-    fn module_imports_dependency_on_boa() {
+    fn module_imports_dependency<E: ScriptEngine>() {
         let files = map_fetcher(&[
             ("http://x/index.html", "<body><script type=\"module\" src=\"main.js\"></script></body>"),
             ("http://x/main.js", "import { greet } from './dep.js';\nconsole.log(greet('world'));"),
             ("http://x/dep.js", "export function greet(name) { return 'hello ' + name; }"),
         ]);
-        let doc = ScriptedDocument::<BoaEngine>::load(&files, "http://x/index.html").expect("loads");
+        let doc = ScriptedDocument::<E>::load(&files, "http://x/index.html").expect("loads");
         assert!(
             doc.console().iter().any(|l| l == "hello world"),
             "the entry module imported and used the dependency's export: {:?}",
@@ -1063,10 +1058,9 @@ mod tests {
         );
     }
 
-    /// (Boa) A diamond import (`main` → `b`, `c` → `shared`) loads `shared` exactly
+    /// A diamond import (`main` → `b`, `c` → `shared`) loads `shared` exactly
     /// once: its top-level side effect fires a single time (the loader caches by URL).
-    #[test]
-    fn module_import_diamond_loads_shared_once_on_boa() {
+    fn module_import_diamond_loads_shared_once<E: ScriptEngine>() {
         let files = map_fetcher(&[
             ("http://x/index.html", "<body><script type=\"module\" src=\"main.js\"></script></body>"),
             (
@@ -1077,7 +1071,7 @@ mod tests {
             ("http://x/c.js", "import { x } from './shared.js';\nexport var c = x;"),
             ("http://x/shared.js", "console.log('shared-init');\nexport var x = 'S';"),
         ]);
-        let doc = ScriptedDocument::<BoaEngine>::load(&files, "http://x/index.html").expect("loads");
+        let doc = ScriptedDocument::<E>::load(&files, "http://x/index.html").expect("loads");
         let console = doc.console();
         assert_eq!(
             console.iter().filter(|l| *l == "shared-init").count(),
@@ -1231,6 +1225,30 @@ mod tests {
         module_keeps_classic_siblings_running::<BoaEngine>();
     }
     #[test]
+    fn module_executes_with_module_scope_on_boa() {
+        module_executes_with_module_scope::<BoaEngine>();
+    }
+    #[test]
+    fn module_runs_after_parser_blocking_on_boa() {
+        module_runs_after_parser_blocking::<BoaEngine>();
+    }
+    #[test]
+    fn module_import_fails_gracefully_on_boa() {
+        module_import_fails_gracefully::<BoaEngine>();
+    }
+    #[test]
+    fn external_module_runs_on_boa() {
+        external_module_runs::<BoaEngine>();
+    }
+    #[test]
+    fn module_imports_dependency_on_boa() {
+        module_imports_dependency::<BoaEngine>();
+    }
+    #[test]
+    fn module_import_diamond_loads_shared_once_on_boa() {
+        module_import_diamond_loads_shared_once::<BoaEngine>();
+    }
+    #[test]
     fn external_script_charset_decodes_on_boa() {
         external_script_charset_decodes::<BoaEngine>();
     }
@@ -1327,6 +1345,30 @@ mod tests {
         #[test]
         fn module_keeps_classic_siblings_running_on_nova() {
             module_keeps_classic_siblings_running::<NovaEngine>();
+        }
+        #[test]
+        fn module_executes_with_module_scope_on_nova() {
+            module_executes_with_module_scope::<NovaEngine>();
+        }
+        #[test]
+        fn module_runs_after_parser_blocking_on_nova() {
+            module_runs_after_parser_blocking::<NovaEngine>();
+        }
+        #[test]
+        fn module_import_fails_gracefully_on_nova() {
+            module_import_fails_gracefully::<NovaEngine>();
+        }
+        #[test]
+        fn external_module_runs_on_nova() {
+            external_module_runs::<NovaEngine>();
+        }
+        #[test]
+        fn module_imports_dependency_on_nova() {
+            module_imports_dependency::<NovaEngine>();
+        }
+        #[test]
+        fn module_import_diamond_loads_shared_once_on_nova() {
+            module_import_diamond_loads_shared_once::<NovaEngine>();
         }
         #[test]
         fn external_script_charset_decodes_on_nova() {
