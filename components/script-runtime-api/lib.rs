@@ -42,6 +42,7 @@ use serval_scripted_dom::{NodeId, ScriptedDom};
 mod dom;
 mod fetch;
 mod harness;
+mod platform;
 mod selector;
 mod webgl;
 
@@ -400,28 +401,9 @@ impl<E: ScriptEngine> Runtime<E> {
     pub fn set_base_url(&mut self, url: &str) -> Result<(), E::Error> {
         let Ok(u) = url::Url::parse(url) else { return Ok(()) };
         self.host.borrow_mut().base_url = Some(u.to_string());
-        let host = match (u.host_str(), u.port()) {
-            (Some(h), Some(p)) => format!("{h}:{p}"),
-            (Some(h), None) => h.to_owned(),
-            _ => String::new(),
-        };
-        let search = u.query().map(|q| format!("?{q}")).unwrap_or_default();
-        let hash = u.fragment().map(|f| format!("#{f}")).unwrap_or_default();
-        let js = format!(
-            "globalThis.location = {{ href:{}, protocol:{}, host:{}, hostname:{}, \
-             port:{}, pathname:{}, search:{}, hash:{}, origin:{} }};",
-            js_str(u.as_str()),
-            js_str(&format!("{}:", u.scheme())),
-            js_str(&host),
-            js_str(u.host_str().unwrap_or("")),
-            js_str(&u.port().map(|p| p.to_string()).unwrap_or_default()),
-            js_str(u.path()),
-            js_str(&search),
-            js_str(&hash),
-            js_str(&u.origin().ascii_serialization()),
-        );
-        self.engine.eval(&js)?;
-        self.engine.eval("globalThis.location.toString = function() { return this.href; };")?;
+        // `globalThis.location` is a live view of `base_url` (the `platform`
+        // surface's getters re-read it), so updating the host base URL is enough;
+        // no need to rebuild a location snapshot here.
         Ok(())
     }
 
@@ -484,6 +466,10 @@ fn install_host_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error>
     // Until step 2 wires `HTMLCanvasElement.getContext('webgl')`, JS reaches it
     // through the `__createWebGLContext()` helper.
     webgl::install_webgl_surface(engine)?;
+
+    // Window platform services: `location` (reflecting the document URL), plus
+    // `localStorage` / `history` as they land. After `dom` so `document` exists.
+    platform::install_platform_surface(engine)?;
 
     // The `__reportResult` sink for the testharness results bridge. The completion
     // callback that calls it is registered later (after testharness loads).
@@ -907,11 +893,8 @@ const SHELL_GLOBALS_BOOTSTRAP: &str = r#"
   globalThis.parent = globalThis;
   globalThis.top = globalThis;
   globalThis.opener = null;
-  globalThis.location = {
-    href: 'about:blank', protocol: 'about:', host: '', hostname: '',
-    port: '', pathname: '', search: '', hash: '', origin: 'null',
-    toString: function() { return this.href; }
-  };
+  // `globalThis.location` is installed by the `platform` surface (a live view of
+  // the document URL, defaulting to about:blank); not snapshotted here.
   globalThis.navigator = { userAgent: 'serval', platform: '', language: 'en-US' };
 
   // requestAnimationFrame as a 0-delay timer (no real frame clock yet).
