@@ -203,8 +203,8 @@ impl MacosCALayerBackend {
         }
 
         // Pull the wgpu Metal device's underlying `MTLDevice` out
-        // via wgpu-hal. Same pattern WNTI uses for the import side
-        // (see `wgpu-graft/wgpu-native-texture-interop/src/sync_metal.rs:67-80`).
+        // via wgpu-hal. Same pattern `grafting` uses for the import side
+        // (see `wgpu-graft/grafting/src/sync_metal.rs`).
         // The hal-device borrow ends with the explicit drop; the
         // `Retained<MTLDevice>` survives independently.
         let metal_device: Retained<ProtocolObject<dyn MTLDevice>> = unsafe {
