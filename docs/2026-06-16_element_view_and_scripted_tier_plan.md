@@ -165,9 +165,11 @@ Ranked roughly by leverage toward real scripted pages:
      module, which is reported and skipped. **Nova** supports modules + imports too
      (its `eval_module` parses with `parse_module`, drives `Agent::run_module`, and
      overrides `HostHooks::load_imported_module` with the same scoped-resolver +
-     URL-keyed `Global` cache); verified on both engines. (Nova has two unrelated
-     pre-existing GC soak / orphan-reaping test failures — they pass on Boa and are
-     untouched by this module-only change.)
+     URL-keyed `Global` cache); verified on both engines. (Two Nova GC soak /
+     orphan-reaping failures that passed on Boa were root-caused and **fixed**
+     2026-06-19: a per-call `Global` leak in the Nova adapter, since `Global` has
+     no `Drop`; `Self::Value` is now a deferred-release `NovaValue` wrapper. See
+     `2026-06-19_nova_reflector_global_leak.md`.)
    - **`charset`** — fetched bytes decoded via `encoding_rs` per the attribute
      (default UTF-8). **`integrity`** — Subresource-Integrity: strongest-algorithm
      sha256/384/512 digest checked against the metadata (raw-bytes compare via
@@ -181,8 +183,9 @@ Ranked roughly by leverage toward real scripted pages:
    `module_imports_dependency`, `module_import_diamond_loads_shared_once`,
    `module_import_fails_gracefully`, `external_module_runs`,
    `external_script_charset_decodes` (ISO-8859-1 → café),
-   `integrity_match_runs`, `integrity_mismatch_blocks`. Follow-up: **Nova module
-   support** (its `eval_module` override over `nova_vm`'s module records).
+   `integrity_match_runs`, `integrity_mismatch_blocks`. Nova module support (its
+   `eval_module` override over `nova_vm`'s module records) is **done** (2026-06-19),
+   as is the Nova GC fix that unblocked its soak/orphan tests.
 2. **DOM node-type breadth — DONE (verified 2026-06-18; the `dom.rs:39-40`
    "Not yet" note was stale).** `Comment` / `DocumentFragment` (`createComment`
    / `createDocumentFragment`, nodeType 8 / 11), `cloneNode` (shallow + deep),
