@@ -177,6 +177,15 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         &self.styles
     }
 
+    /// The serialized **computed** value of `property` (a CSS longhand) for
+    /// `node`, or `None` if the node has no computed style or the property is
+    /// outside the supported set. The host's `getComputedStyle` reads this off
+    /// the session's retained cascade (so script sees the prior frame's styles,
+    /// the standard tradeoff for a script-before-layout split).
+    pub fn computed_value(&self, node: Id, property: &str) -> Option<String> {
+        crate::computed_query::computed_value_string(&self.styles, node, property)
+    }
+
     /// The accumulated CSS-transform translate from the root to `node`, in scene px: what paint
     /// shifts the box (and its subtree) by, but the fragments omit (a transform is paint-tier).
     /// A fragment-positioned host overlay (the focus ring) adds this to track a transform-placed

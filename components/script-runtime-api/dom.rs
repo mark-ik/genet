@@ -50,6 +50,7 @@
 //! `docs/2026-05-26_pluggable_engines_testharness_plan.md`.
 
 use std::cell::RefCell;
+use std::rc::Rc;
 
 use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, NodeKind, QualName};
 use markup5ever::Prefix;
@@ -140,6 +141,7 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     engine.set_function::<PrefixOf>("__prefix", 1)?;
     engine.set_function::<CreateElementNS>("__createElementNS", 2)?;
     engine.set_function::<AttributeNames>("__attributeNames", 1)?;
+    engine.set_function::<ComputedStyleValue>("__computedStyleValue", 2)?;
     engine.eval(DOM_BOOTSTRAP)?;
     Ok(())
 }
@@ -168,6 +170,47 @@ fn with_dom<E: ScriptEngine, R>(
     let cell = data.downcast_ref::<RefCell<HostState>>()?;
     let mut host = cell.borrow_mut();
     Some(f(&mut host.dom))
+}
+
+/// The host's computed-style seam for `getComputedStyle`. Mirrors
+/// [`FetchHandler`](crate::FetchHandler): the runtime never links a layout
+/// engine, so a host that has one (e.g. pelt's `ScriptedDocument` over
+/// `IncrementalLayout`) implements this to serialize a node's **computed** value
+/// for a CSS longhand. `node` is the reflector's raw id; `property` is a longhand
+/// name. `None` (unstyled / unsupported / no handler) surfaces to script as `""`.
+/// Install with [`Runtime::set_computed_style_handler`](crate::Runtime::set_computed_style_handler).
+pub trait ComputedStyleHandler {
+    fn computed_value(&self, node: u64, property: &str) -> Option<String>;
+}
+
+/// Clone the computed-style handler out of host state (so it is not borrowed
+/// while invoked).
+fn host_computed_style<E: ScriptEngine>(
+    cx: &mut E::CallCx<'_>,
+) -> Option<Rc<dyn ComputedStyleHandler>> {
+    let data = cx.host_data()?;
+    let cell = data.downcast_ref::<RefCell<HostState>>()?;
+    let handler = cell.borrow().computed_style.clone();
+    handler
+}
+
+/// `__computedStyleValue(nodeRef, property)` -> the host's serialized computed
+/// value for the longhand, or `null` when there is no value / no handler.
+struct ComputedStyleValue;
+impl<E: ScriptEngine> NativeFn<E> for ComputedStyleValue {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let el = cx.arg(0);
+        let Some(node) = cx.reflector_data(&el) else {
+            return Ok(cx.make_null());
+        };
+        let a1 = cx.arg(1);
+        let property = cx.value_to_string(&a1)?;
+        let value = host_computed_style::<E>(cx).and_then(|h| h.computed_value(node, &property));
+        match value {
+            Some(v) => cx.make_string(&v),
+            None => Ok(cx.make_null()),
+        }
+    }
 }
 
 /// Hand script the **canonical** reflector for the node with raw id `raw`, and
@@ -1611,6 +1654,35 @@ const DOM_BOOTSTRAP: &str = r#"
     configurable: true,
     get: function() { return makeStyleDecl(this); },
   });
+
+  // window.getComputedStyle(el): a read-only CSSStyleDeclaration whose property
+  // reads go through the host computed-style seam (`__computedStyleValue`, which
+  // calls the host's ComputedStyleHandler over its layout). No handler / unstyled
+  // / unsupported property -> "". Enumeration (length / item / iteration over all
+  // computed longhands) is not supported in this first cut.
+  function makeComputedStyle(el) {
+    var ref = el ? el.__ref : 0;
+    function val(name) { var v = __computedStyleValue(ref, name); return v === null ? '' : v; }
+    var api = {
+      getPropertyValue: function(name) { return val(String(name).toLowerCase()); },
+      setProperty: function() {},          // read-only
+      removeProperty: function() { return ''; }, // read-only
+      item: function() { return ''; },     // enumeration unsupported (first cut)
+    };
+    Object.defineProperty(api, 'length', { configurable: true, get: function() { return 0; } });
+    Object.defineProperty(api, 'cssText', { configurable: true, get: function() { return ''; }, set: function() {} });
+    var reserved = { getPropertyValue: 1, setProperty: 1, removeProperty: 1, item: 1, length: 1, cssText: 1 };
+    return new Proxy(api, {
+      get: function(target, prop) {
+        if (typeof prop !== 'string' || reserved[prop]) { return target[prop]; }
+        if (/^[0-9]+$/.test(prop)) { return ''; }
+        return val(cssKebab(prop));
+      },
+      set: function() { return true; }, // read-only: ignore writes
+    });
+  }
+  globalThis.getComputedStyle = function(el) { return makeComputedStyle(el); };
+  if (globalThis.window) { globalThis.window.getComputedStyle = globalThis.getComputedStyle; }
 
   // querySelector / querySelectorAll, shared by Element and Document (scope is the
   // receiver). querySelectorAll returns an array (NodeList-approximate).
@@ -3060,6 +3132,52 @@ mod tests {
     #[test]
     fn element_style_inline_cssom_on_nova() {
         element_style_inline_cssom::<script_engine_nova::NovaEngine>();
+    }
+
+    /// `getComputedStyle(el)` reads through the host `ComputedStyleHandler` seam:
+    /// supported longhands resolve (camelCase + getPropertyValue), unsupported
+    /// ones yield "", and the declaration is read-only.
+    fn get_computed_style_reads_handler<E: ScriptEngine>() {
+        use serval_static_dom::StaticDocument;
+        struct Stub;
+        impl crate::ComputedStyleHandler for Stub {
+            fn computed_value(&self, _node: u64, property: &str) -> Option<String> {
+                match property {
+                    "color" => Some("rgb(0, 0, 0)".to_string()),
+                    "display" => Some("block".to_string()),
+                    "font-size" => Some("16px".to_string()),
+                    _ => None,
+                }
+            }
+        }
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.load_dom(&StaticDocument::parse("<html><body><div id='d'></div></body></html>"));
+        rt.set_computed_style_handler(Box::new(Stub));
+        rt.eval(
+            "var cs = getComputedStyle(document.getElementById('d'));\
+             console.log(cs.color + ',' + cs.fontSize + ',' + cs.getPropertyValue('display'));\
+             console.log(cs.getPropertyValue('margin-top') + '|' + cs.marginTop + '|' + cs.bogus);\
+             cs.color = 'red'; console.log(cs.color);",
+        )
+        .expect("computed-style script");
+        assert_eq!(
+            rt.host().borrow().console,
+            vec![
+                "rgb(0, 0, 0),16px,block", // color, fontSize (camelCase), getPropertyValue
+                "||",                       // unsupported longhands -> ""
+                "rgb(0, 0, 0)",             // read-only: the set was ignored
+            ],
+        );
+    }
+
+    #[test]
+    fn get_computed_style_reads_handler_on_boa() {
+        get_computed_style_reads_handler::<script_engine_boa::BoaEngine>();
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn get_computed_style_reads_handler_on_nova() {
+        get_computed_style_reads_handler::<script_engine_nova::NovaEngine>();
     }
 
     #[test]

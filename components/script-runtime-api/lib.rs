@@ -46,6 +46,7 @@ mod platform;
 mod selector;
 mod webgl;
 
+pub use dom::ComputedStyleHandler;
 pub use fetch::{FetchHandler, FetchOutcome, FetchRequest};
 pub use harness::TestResult;
 pub use webgl::{WebGlFactory, WebGlHandler};
@@ -94,6 +95,12 @@ pub struct HostState {
     /// before calling it (the handler must not run with a live borrow). No `Send`
     /// bound, so this crate links no network stack and stays `!Send`.
     pub fetch: Option<std::rc::Rc<dyn FetchHandler>>,
+    /// The host's computed-style seam for `getComputedStyle` (e.g. pelt's
+    /// `ScriptedDocument` over `IncrementalLayout`). `None` = no layout bound, so
+    /// `getComputedStyle(...).<prop>` yields "". Installed by
+    /// [`Runtime::set_computed_style_handler`]; an `Rc` so the native sink clones
+    /// it out before calling (no live `HostState` borrow during the call).
+    pub computed_style: Option<std::rc::Rc<dyn ComputedStyleHandler>>,
     /// The document base URL, against which relative `fetch()` / `Request` URLs
     /// resolve (the `__resolve_url` sink reads it). `None` = no base (relative URLs
     /// stay relative, so a network fetch of one is an error). Set by
@@ -300,6 +307,14 @@ impl<E: ScriptEngine> Runtime<E> {
     /// (overriding `start`) settles later via [`settle_fetch`](Self::settle_fetch).
     pub fn set_fetch_handler(&mut self, handler: Box<dyn FetchHandler>) {
         self.host.borrow_mut().fetch = Some(std::rc::Rc::from(handler));
+    }
+
+    /// Install the host's computed-style seam for `getComputedStyle` (e.g. a
+    /// handler over the host's `IncrementalLayout`). Until set, computed-style
+    /// reads yield "". The runtime itself links no layout engine — this is the
+    /// boundary, mirroring [`set_fetch_handler`](Self::set_fetch_handler).
+    pub fn set_computed_style_handler(&mut self, handler: Box<dyn ComputedStyleHandler>) {
+        self.host.borrow_mut().computed_style = Some(std::rc::Rc::from(handler));
     }
 
     /// Install the host's WebGL context factory (e.g. one that mints a

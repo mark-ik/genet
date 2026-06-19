@@ -31,6 +31,7 @@ mod box_tree;
 mod caret;
 mod cascade;
 mod cell;
+mod computed_query;
 mod construct;
 mod font_metrics;
 mod fragment;
