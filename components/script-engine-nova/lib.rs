@@ -719,6 +719,55 @@ mod native {
     mod tests {
         use super::*;
 
+        // KNOWN-FAILING (ignored): pins the pre-existing Nova reflector leak.
+        //
+        // `NovaCallCx::arg` (and the other minting methods) return `Global::new(...)`,
+        // and Nova's `Global` has no `Drop` — every heap-rooted `Global` occupies an
+        // `agent.heap.globals` slot that must be *explicitly* `take`n or it leaks a
+        // permanent root. The trampoline `take`s the original args + the result, but
+        // the per-call `Global`s the generic DOM code obtains via `cx.arg(i)` (and
+        // drops) are never freed. So any reflector passed as a native-fn argument —
+        // `parent.appendChild(child)`, `removeChild`, etc. — is pinned forever, which
+        // is why `pump_collects_orphans` / `gc_soak_bounds_memory` never reap on Nova
+        // (they pass on Boa, whose `JsValue` frees on drop). The fix is a
+        // deferred-release wrapper for Nova's `Self::Value` (a `Drop` that hands the
+        // `Global` to a release queue the engine drains with the agent); `Global` is
+        // neither `Copy` nor cheap-`Clone` to the same root, and its `RootRepr` is
+        // private, so a scratch-arena alone cannot reach the caller's handle.
+        #[test]
+        #[ignore = "pre-existing Nova per-call Global leak (cx.arg); needs a Drop-managed Self::Value"]
+        fn arg_reflector_dies_after_gc() {
+            // A reflector passed as an argument to a native fn must still die once
+            // script drops it. It does not today (the leak above), so this is ignored.
+            let mut engine = NovaEngine::new().unwrap();
+            struct Canonical;
+            impl NativeFn<NovaEngine> for Canonical {
+                fn call(cx: &mut NovaCallCx<'_>) -> Result<Global<Value<'static>>, String> {
+                    cx.reflector_for(0x99)
+                }
+            }
+            struct Consume;
+            impl NativeFn<NovaEngine> for Consume {
+                fn call(cx: &mut NovaCallCx<'_>) -> Result<Global<Value<'static>>, String> {
+                    let _ = cx.arg(0); // touch the arg, then let it drop
+                    Ok(cx.undefined())
+                }
+            }
+            engine.set_function::<Canonical>("canonical", 0).unwrap();
+            engine.set_function::<Consume>("consume", 1).unwrap();
+            engine
+                .eval("globalThis.x = canonical(); consume(x); globalThis.x = null;")
+                .unwrap();
+            engine.pump_microtasks();
+            engine.agent.gc();
+            engine.agent.gc();
+            assert_eq!(
+                engine.drain_dead_reflectors(),
+                vec![0x99],
+                "a reflector passed as a native-fn argument still dies after gc",
+            );
+        }
+
         #[test]
         fn reflector_round_trip_survives_gc() {
             let mut engine = NovaEngine::new().unwrap();
