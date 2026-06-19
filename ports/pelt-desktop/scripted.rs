@@ -41,11 +41,33 @@
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
 use netrender::Scene;
 use pelt_core::ResourceFetcher;
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use script_engine_api::ScriptEngine;
-use script_runtime_api::Runtime;
+use script_runtime_api::{ComputedStyleHandler, Runtime};
 use serval_layout::{inline_stylesheets, IncrementalLayout, ScrollKey, ScrollOffsets};
 use serval_render::scene_from_session_dom;
+use serval_scripted_dom::NodeId;
 use serval_static_dom::{StaticDocument, StaticNodeId};
+
+/// Shared handle to the most recently laid-out frame, so the `getComputedStyle`
+/// bridge can read computed values off it. `None` before the first frame.
+type RetainedLayout = Rc<RefCell<Option<IncrementalLayout<NodeId>>>>;
+
+/// The host side of `script_runtime_api`'s computed-style seam: serves
+/// `getComputedStyle` reads off the last rendered frame's cascade. One frame
+/// stale by construction (script runs before layout), the standard tradeoff for
+/// the split; `None` (no frame yet / unstyled / unsupported longhand) -> "".
+struct ComputedStyleBridge {
+    layout: RetainedLayout,
+}
+
+impl ComputedStyleHandler for ComputedStyleBridge {
+    fn computed_value(&self, node: u64, property: &str) -> Option<String> {
+        self.layout.borrow().as_ref()?.computed_value(NodeId::from_raw(node as usize), property)
+    }
+}
 
 /// A live document driven by script: a [`Runtime`] holding the mutable DOM, plus the
 /// host-owned viewport scroll the runtime mirrors. Generic over the JS engine `E`
@@ -72,6 +94,9 @@ pub struct ScriptedDocument<E: ScriptEngine> {
     /// A `url#id` fragment to scroll to once on the first frame (anchor-fragment
     /// navigation on load); cleared after applying.
     pending_fragment: Option<String>,
+    /// The last rendered frame's layout, shared with the `getComputedStyle` bridge
+    /// so script reads computed values off the most recent cascade.
+    layout: RetainedLayout,
 }
 
 impl<E: ScriptEngine> ScriptedDocument<E> {
@@ -117,6 +142,11 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         sheets.extend(inline_stylesheets(&doc));
 
         let mut rt = Runtime::<E>::new().map_err(|e| format!("script runtime init: {e:?}"))?;
+        // The computed-style seam: a bridge over the most recent rendered frame's
+        // cascade, so `getComputedStyle` returns real computed values (one frame
+        // stale). Set before scripts run (they see "" until the first frame).
+        let layout: RetainedLayout = Rc::new(RefCell::new(None));
+        rt.set_computed_style_handler(Box::new(ComputedStyleBridge { layout: layout.clone() }));
         // The document URL is the base for reflected URL attributes (`a.href`,
         // `img.src`, …) and for resolving fetches; set it from the loader when present
         // (the `parse()` path has no URL, so those reflect their raw values).
@@ -189,6 +219,7 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
             scroll_range: (0.0, 0.0),
             size: (0, 0),
             pending_fragment: None,
+            layout,
         })
     }
 
@@ -238,6 +269,9 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         let scene = scene_from_session_dom(&session, dom, w, h);
         drop(host);
 
+        // Retain this frame's cascade so the `getComputedStyle` bridge can read
+        // computed values off it until the next frame replaces it.
+        *self.layout.borrow_mut() = Some(session);
         self.scroll = scroll;
         self.scroll_range = range;
         self.size = (w, h);
@@ -1184,9 +1218,35 @@ mod tests {
         );
     }
 
+    /// End-to-end: `getComputedStyle` reads the rendered frame's cascade through
+    /// the `ComputedStyleBridge`. The page schedules the read in a timer; `frame()`
+    /// lays out (populating the bridge), then `pump()` fires the timer so the read
+    /// sees real computed values.
+    fn get_computed_style_reads_cascade<E: ScriptEngine>() {
+        let mut doc = ScriptedDocument::<E>::parse(
+            "<html><body><div id='d' style='color: red; display: inline'></div>\
+             <script>setTimeout(function(){\
+               var cs = getComputedStyle(document.getElementById('d'));\
+               console.log(cs.color + '|' + cs.display);\
+             }, 0);</script></body></html>",
+        )
+        .expect("doc");
+        let _ = doc.frame(400, 300); // lay out -> populate the bridge
+        doc.pump(16.0); // fire the timer -> getComputedStyle reads the cascade
+        assert!(
+            doc.console().iter().any(|l| l == "rgb(255, 0, 0)|inline"),
+            "getComputedStyle read the cascade: {:?}",
+            doc.console(),
+        );
+    }
+
     #[test]
     fn mutation_renders_on_boa() {
         mutation_renders::<BoaEngine>();
+    }
+    #[test]
+    fn get_computed_style_reads_cascade_on_boa() {
+        get_computed_style_reads_cascade::<BoaEngine>();
     }
     #[test]
     fn external_script_runs_on_boa() {
@@ -1293,6 +1353,10 @@ mod tests {
         #[test]
         fn mutation_renders_on_nova() {
             mutation_renders::<NovaEngine>();
+        }
+        #[test]
+        fn get_computed_style_reads_cascade_on_nova() {
+            get_computed_style_reads_cascade::<NovaEngine>();
         }
         #[test]
         fn scripted_content_scrolls_on_nova() {
