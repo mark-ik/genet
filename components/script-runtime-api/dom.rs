@@ -1528,6 +1528,90 @@ const DOM_BOOTSTRAP: &str = r#"
     configurable: true, get: function() { return makeDataset(this); }
   });
 
+  // element.style: a CSSStyleDeclaration over the inline `style` content
+  // attribute. The declaration string is parsed/serialized in JS (no engine CSS
+  // parser here); a value containing ';' (url(), quoted strings) is a known gap.
+  // Surface: getPropertyValue / setProperty / removeProperty / item / length /
+  // cssText, plus camelCase (`style.fontSize`) and numeric-index access via a
+  // Proxy. A fresh declaration is returned each access; all of them read/write
+  // the same live attribute, so it stays correct (identity `el.style === el.style`
+  // is not preserved — a later refinement).
+  function cssKebab(s) { return s.replace(/[A-Z]/g, function(m) { return '-' + m.toLowerCase(); }); }
+  function cssParse(text) {
+    var out = [];
+    if (!text) return out;
+    var decls = String(text).split(';');
+    for (var i = 0; i < decls.length; i++) {
+      var ci = decls[i].indexOf(':');
+      if (ci < 0) continue;
+      var name = decls[i].slice(0, ci).trim().toLowerCase();
+      var value = decls[i].slice(ci + 1).trim();
+      if (name) out.push([name, value]);
+    }
+    return out;
+  }
+  function cssSerialize(map) {
+    var parts = [];
+    for (var i = 0; i < map.length; i++) { parts.push(map[i][0] + ': ' + map[i][1] + ';'); }
+    return parts.join(' ');
+  }
+  function makeStyleDecl(el) {
+    function read() { return cssParse(el.getAttribute('style')); }
+    function write(map) {
+      if (map.length === 0) { el.removeAttribute('style'); } else { el.setAttribute('style', cssSerialize(map)); }
+    }
+    function idx(map, name) { for (var i = 0; i < map.length; i++) { if (map[i][0] === name) return i; } return -1; }
+    var api = {
+      getPropertyValue: function(name) { var m = read(); var i = idx(m, String(name).toLowerCase()); return i < 0 ? '' : m[i][1]; },
+      setProperty: function(name, value) {
+        name = String(name).toLowerCase();
+        value = (value === undefined || value === null) ? '' : String(value);
+        var m = read(); var i = idx(m, name);
+        if (value === '') { if (i >= 0) { m.splice(i, 1); write(m); } return; }
+        if (i >= 0) { m[i][1] = value; } else { m.push([name, value]); }
+        write(m);
+      },
+      removeProperty: function(name) {
+        name = String(name).toLowerCase();
+        var m = read(); var i = idx(m, name); var old = i < 0 ? '' : m[i][1];
+        if (i >= 0) { m.splice(i, 1); write(m); }
+        return old;
+      },
+      item: function(i) { var m = read(); i = i >>> 0; return i < m.length ? m[i][0] : ''; },
+    };
+    Object.defineProperty(api, 'length', { configurable: true, get: function() { return read().length; } });
+    Object.defineProperty(api, 'cssText', {
+      configurable: true,
+      get: function() { return cssSerialize(read()); },
+      set: function(v) { write(cssParse(v)); },
+    });
+    var reserved = { getPropertyValue: 1, setProperty: 1, removeProperty: 1, item: 1, length: 1, cssText: 1 };
+    return new Proxy(api, {
+      get: function(target, prop) {
+        if (typeof prop !== 'string' || reserved[prop]) { return target[prop]; }
+        if (/^[0-9]+$/.test(prop)) { return target.item(Number(prop)); }
+        return target.getPropertyValue(cssKebab(prop));
+      },
+      set: function(target, prop, value) {
+        if (typeof prop === 'string' && !reserved[prop] && !/^[0-9]+$/.test(prop)) {
+          target.setProperty(cssKebab(prop), value);
+        } else {
+          // reserved (e.g. `cssText`) / numeric: run the target's own setter.
+          target[prop] = value;
+        }
+        return true;
+      },
+      has: function(target, prop) {
+        if (typeof prop === 'string' && reserved[prop]) { return true; }
+        return typeof prop === 'string' && target.getPropertyValue(cssKebab(prop)) !== '';
+      },
+    });
+  }
+  Object.defineProperty(Element.prototype, 'style', {
+    configurable: true,
+    get: function() { return makeStyleDecl(this); },
+  });
+
   // querySelector / querySelectorAll, shared by Element and Document (scope is the
   // receiver). querySelectorAll returns an array (NodeList-approximate).
   function querySelector(sel) { return wrapNode(__querySelector(this.__ref, String(sel))); }
@@ -2934,6 +3018,48 @@ mod tests {
                 "root,urn:ns",           // createDocument: root element + namespace
             ],
         );
+    }
+
+    /// `element.style` is a CSSStyleDeclaration over the inline `style` attribute:
+    /// getPropertyValue / camelCase get + set / setProperty / removeProperty /
+    /// length / item / cssText / `in`, all writing back to the attribute.
+    fn element_style_inline_cssom<E: ScriptEngine>() {
+        use serval_static_dom::StaticDocument;
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.load_dom(&StaticDocument::parse(
+            "<html><body><div id='d' style='color: red; font-size: 12px'></div></body></html>",
+        ));
+        rt.eval(
+            "var s = document.getElementById('d').style;\
+             console.log(s.color + ',' + s.fontSize + ',' + s.getPropertyValue('font-size'));\
+             console.log(s.length + ',' + s.item(0) + ',' + s.item(1));\
+             s.color = 'blue'; s.setProperty('margin-top', '4px'); s.fontWeight = 'bold';\
+             console.log(document.getElementById('d').getAttribute('style'));\
+             console.log(s.removeProperty('font-size') + ',' + ('color' in s) + ',' + ('display' in s));\
+             s.cssText = 'padding: 1px; color: green';\
+             console.log(s.cssText + ',' + s.color);",
+        )
+        .expect("style script");
+        assert_eq!(
+            rt.host().borrow().console,
+            vec![
+                "red,12px,12px",   // .color, .fontSize (camelCase), getPropertyValue
+                "2,color,font-size", // length, item(0), item(1)
+                "color: blue; font-size: 12px; margin-top: 4px; font-weight: bold;",
+                "12px,true,false", // removeProperty returns old; 'color' in / 'display' in
+                "padding: 1px; color: green;,green", // cssText set + read; .color
+            ],
+        );
+    }
+
+    #[test]
+    fn element_style_inline_cssom_on_boa() {
+        element_style_inline_cssom::<script_engine_boa::BoaEngine>();
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn element_style_inline_cssom_on_nova() {
+        element_style_inline_cssom::<script_engine_nova::NovaEngine>();
     }
 
     #[test]
