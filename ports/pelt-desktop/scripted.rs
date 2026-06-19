@@ -13,10 +13,17 @@
 //! windowed present loop drives it exactly as it drives the static
 //! [`LoadedDocument`](crate::document::LoadedDocument).
 //!
-//! Script execution is synchronous in document order (the classic-script model);
-//! `async` / `defer` ordering and `type=module` are follow-ups. A failed or
-//! missing external script is reported and skipped, like an inline script error —
-//! a browser keeps rendering the rest of the document.
+//! Script timing follows the classic-script model: parser-blocking scripts (inline,
+//! and external with neither `async` nor `defer`) run in document order; `defer` and
+//! `async` external scripts run after that pass (`defer` in document order — the
+//! guaranteed contract; `async` is unordered, and since the fetcher is synchronous,
+//! document order is a faithful realization). `async`/`defer` are ignored on inline
+//! scripts, per spec. A `type` that is neither empty nor a JavaScript MIME type nor
+//! `module` is a data block and is not executed; `type=module` is recognized and
+//! deferred but **not executed** — module loading (an import graph + engine
+//! module-eval) is a follow-up, blocked below pelt. A failed/missing/integrity-
+//! rejected external script is reported and skipped, like an inline error — a browser
+//! keeps rendering the rest of the document.
 //!
 //! The script/layout split (recorded on [`script_runtime_api::HostState`]): the host
 //! owns the real viewport. Each frame it syncs the current scroll *into* the runtime
@@ -109,35 +116,29 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         // getElementById, querySelector) sees the page's elements.
         rt.load_dom(&doc);
 
-        // Run scripts in document order: inline text directly, external `src` fetched
-        // through the loader (resolving relative to the document URL). A classic
-        // synchronous model — each script runs before the next, inline and external
-        // alike — which is correct for non-`async`/`defer` scripts.
-        for script in collect_scripts(&doc) {
-            let source = match script {
-                ScriptSource::Inline(text) => Some(text),
-                ScriptSource::External(src) => match loader {
-                    Some((fetcher, base)) => {
-                        let url = crate::document::resolve_href(base, &src);
-                        match fetcher.fetch(&url) {
-                            Some(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
-                            None => {
-                                eprintln!("[pelt-scripted] could not fetch script {url}");
-                                None
-                            },
-                        }
-                    },
-                    None => {
-                        eprintln!(
-                            "[pelt-scripted] skipping external <script src=\"{src}\"> (no fetcher)"
-                        );
-                        None
-                    },
+        // Run scripts by the classic-script timing model. Parser-blocking pass:
+        // inline (run now) and classic external with no async/defer (fetch + run now),
+        // in document order. `defer`/`async` externals are queued and run after the
+        // pass — `defer` keeps document order (its guarantee); `async` is unordered,
+        // and document order is a faithful realization of our synchronous fetch.
+        let scripts = collect_scripts(&doc);
+        let mut deferred: Vec<&ScriptSource> = Vec::new();
+        for script in &scripts {
+            match script {
+                ScriptSource::Inline(text) => eval_reporting(&mut rt, text),
+                ScriptSource::External { src, timing: ScriptTiming::Blocking } => {
+                    if let Some(source) = fetch_external(loader, src) {
+                        eval_reporting(&mut rt, &source);
+                    }
                 },
-            };
-            if let Some(source) = source {
-                if let Err(e) = rt.eval(&source) {
-                    eprintln!("[pelt-scripted] script error: {e:?}");
+                // defer / async: run after the parser-blocking pass.
+                ScriptSource::External { .. } => deferred.push(script),
+            }
+        }
+        for script in deferred {
+            if let ScriptSource::External { src, .. } = script {
+                if let Some(source) = fetch_external(loader, src) {
+                    eval_reporting(&mut rt, &source);
                 }
             }
         }
@@ -317,20 +318,84 @@ impl ScriptedEngine {
     }
 }
 
-/// One `<script>` to run, in document order: inline text, or an external `src` URL
-/// (raw attribute value, resolved against the document URL at fetch time). An
-/// external `src` takes precedence over inline text (per HTML: a `<script>` with a
-/// `src` ignores its element content).
-enum ScriptSource {
-    Inline(String),
-    External(String),
+/// When a `<script>` runs relative to document parsing (the classic-script model).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScriptTiming {
+    /// Parser-blocking: runs at its document position (inline, or external with
+    /// neither `async` nor `defer`).
+    Blocking,
+    /// `defer`: runs after the parser-blocking pass, in document order.
+    Defer,
+    /// `async`: runs after the parser-blocking pass, order unspecified (we fetch
+    /// synchronously, so document order is a faithful realization).
+    Async,
 }
 
-/// Every runnable `<script>` in document order — `src` scripts as
-/// [`ScriptSource::External`], inline-text scripts as [`ScriptSource::Inline`].
-/// Empty/whitespace-only inline scripts and `src`-less empty scripts are dropped.
-/// Keeping one ordered list (rather than inline-only) is what lets external and
-/// inline scripts run in their authored order.
+/// One runnable `<script>` in document order: inline classic text, or an external
+/// classic `src` (raw attribute value, resolved against the document URL at fetch
+/// time) with its timing. An external `src` takes precedence over inline content
+/// (per HTML). `type=module` and non-JS `type`s are not runnable and are dropped at
+/// collection (see [`classify_script_type`]).
+enum ScriptSource {
+    Inline(String),
+    External { src: String, timing: ScriptTiming },
+}
+
+/// How a `<script>`'s `type` attribute classifies it.
+enum ScriptKind {
+    /// Empty/absent `type`, or a JavaScript MIME type — a runnable classic script.
+    Classic,
+    /// `type=module` — recognized but not yet executed (module loading is a
+    /// follow-up); deferred timing when it lands.
+    Module,
+    /// Any other `type` (`application/json`, `text/plain`, an import map, …) — a
+    /// data block, never executed.
+    Data,
+}
+
+/// Classify a `<script type>` value. Per HTML: empty/absent or a JavaScript MIME
+/// type essence → classic; `module` → module; anything else → a data block. The JS
+/// MIME essences mirror the WHATWG list (cf. `net::mime_classifier::is_javascript`).
+fn classify_script_type(ty: Option<&str>) -> ScriptKind {
+    let ty = match ty.map(str::trim) {
+        None | Some("") => return ScriptKind::Classic,
+        Some(t) => t.to_ascii_lowercase(),
+    };
+    if ty == "module" {
+        return ScriptKind::Module;
+    }
+    // Match on the MIME essence (drop any `;`-params), against the WHATWG JS set.
+    const JS_MIME: &[&str] = &[
+        "application/ecmascript",
+        "application/javascript",
+        "application/x-ecmascript",
+        "application/x-javascript",
+        "text/ecmascript",
+        "text/javascript",
+        "text/javascript1.0",
+        "text/javascript1.1",
+        "text/javascript1.2",
+        "text/javascript1.3",
+        "text/javascript1.4",
+        "text/javascript1.5",
+        "text/jscript",
+        "text/livescript",
+        "text/x-ecmascript",
+        "text/x-javascript",
+    ];
+    let essence = ty.split(';').next().unwrap_or("").trim();
+    if JS_MIME.contains(&essence) {
+        ScriptKind::Classic
+    } else {
+        ScriptKind::Data
+    }
+}
+
+/// Every runnable classic `<script>` in document order, with its timing. `src`
+/// scripts become [`ScriptSource::External`]; inline-text scripts
+/// [`ScriptSource::Inline`]. Empty inline scripts, non-JS `type` data blocks, and
+/// `type=module` (logged, execution unsupported) are dropped. One ordered list is
+/// what lets external and inline scripts interleave in authored order.
 fn collect_scripts(doc: &StaticDocument) -> Vec<ScriptSource> {
     let mut out = Vec::new();
     collect_scripts_rec(doc, doc.document(), &mut out);
@@ -339,28 +404,74 @@ fn collect_scripts(doc: &StaticDocument) -> Vec<ScriptSource> {
 
 fn collect_scripts_rec(dom: &StaticDocument, node: StaticNodeId, out: &mut Vec<ScriptSource>) {
     if dom.element_name(node).is_some_and(|q| q.local.as_ref() == "script") {
-        let src = dom
-            .attribute(node, &Namespace::default(), &LocalName::from("src"))
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-        match src {
-            // A `src` script ignores its element content (HTML spec); run the resource.
-            Some(src) => out.push(ScriptSource::External(src)),
-            None => {
-                let mut text = String::new();
-                for child in dom.dom_children(node) {
-                    if let Some(t) = dom.text(child) {
-                        text.push_str(t);
-                    }
-                }
-                if !text.trim().is_empty() {
-                    out.push(ScriptSource::Inline(text));
+        let attr = |name: &str| dom.attribute(node, &Namespace::default(), &LocalName::from(name));
+        match classify_script_type(attr("type")) {
+            ScriptKind::Data => {} // a data block: not executed
+            ScriptKind::Module => {
+                eprintln!(
+                    "[pelt-scripted] <script type=module> recognized but not executed \
+                     (module loading is a follow-up)"
+                );
+            },
+            ScriptKind::Classic => {
+                let src = attr("src").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                match src {
+                    // A `src` script ignores its element content (HTML spec). `async`
+                    // takes precedence over `defer` when both are present.
+                    Some(src) => {
+                        let timing = if attr("async").is_some() {
+                            ScriptTiming::Async
+                        } else if attr("defer").is_some() {
+                            ScriptTiming::Defer
+                        } else {
+                            ScriptTiming::Blocking
+                        };
+                        out.push(ScriptSource::External { src, timing });
+                    },
+                    // Inline classic: `async`/`defer` are ignored — it runs in place.
+                    None => {
+                        let mut text = String::new();
+                        for child in dom.dom_children(node) {
+                            if let Some(t) = dom.text(child) {
+                                text.push_str(t);
+                            }
+                        }
+                        if !text.trim().is_empty() {
+                            out.push(ScriptSource::Inline(text));
+                        }
+                    },
                 }
             },
         }
     }
     for child in dom.dom_children(node) {
         collect_scripts_rec(dom, child, out);
+    }
+}
+
+/// Fetch an external script's source through the `loader` (`(fetcher, base_url)`),
+/// resolving `src` against `base_url`. `None` (with a log) when there is no loader
+/// (the fetch-free [`ScriptedDocument::parse`] path) or the fetch fails.
+fn fetch_external(loader: Option<(&dyn ResourceFetcher, &str)>, src: &str) -> Option<String> {
+    let Some((fetcher, base)) = loader else {
+        eprintln!("[pelt-scripted] skipping external <script src=\"{src}\"> (no fetcher)");
+        return None;
+    };
+    let url = crate::document::resolve_href(base, src);
+    match fetcher.fetch(&url) {
+        Some(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+        None => {
+            eprintln!("[pelt-scripted] could not fetch script {url}");
+            None
+        },
+    }
+}
+
+/// Evaluate `source`, reporting (but not propagating) a script error — a browser
+/// keeps rendering the document after a script throws.
+fn eval_reporting<E: ScriptEngine>(rt: &mut Runtime<E>, source: &str) {
+    if let Err(e) = rt.eval(source) {
+        eprintln!("[pelt-scripted] script error: {e:?}");
     }
 }
 
@@ -585,6 +696,101 @@ mod tests {
         );
     }
 
+    /// `defer` runs the external script *after* the parser-blocking pass: a deferred
+    /// script that appears *before* a later inline script nonetheless runs *after* it.
+    /// Document-order execution would log `defer` first; deferral logs `inline` first.
+    fn defer_runs_after_parser_blocking<E: ScriptEngine>() {
+        let files = map_fetcher(&[
+            (
+                "http://x/index.html",
+                "<body>\
+                    <script src=\"defer.js\" defer></script>\
+                    <script>console.log('inline');</script>\
+                 </body>",
+            ),
+            ("http://x/defer.js", "console.log('defer');"),
+        ]);
+        let doc = ScriptedDocument::<E>::load(&files, "http://x/index.html").expect("loads");
+        assert_eq!(
+            doc.console(),
+            vec!["inline".to_string(), "defer".to_string()],
+            "the inline (parser-blocking) script runs before the earlier-positioned defer",
+        );
+    }
+
+    /// `defer` scripts run in document order among themselves (the deferral guarantee).
+    fn defer_scripts_run_in_document_order<E: ScriptEngine>() {
+        let files = map_fetcher(&[
+            (
+                "http://x/index.html",
+                "<body>\
+                    <script src=\"d1.js\" defer></script>\
+                    <script src=\"d2.js\" defer></script>\
+                 </body>",
+            ),
+            ("http://x/d1.js", "console.log('d1');"),
+            ("http://x/d2.js", "console.log('d2');"),
+        ]);
+        let doc = ScriptedDocument::<E>::load(&files, "http://x/index.html").expect("loads");
+        assert_eq!(
+            doc.console(),
+            vec!["d1".to_string(), "d2".to_string()],
+            "defer scripts keep document order",
+        );
+    }
+
+    /// `async` does not block the parser: an async script positioned before a later
+    /// inline script runs after it (the async script is deferred past the blocking pass).
+    fn async_runs_after_parser_blocking<E: ScriptEngine>() {
+        let files = map_fetcher(&[
+            (
+                "http://x/index.html",
+                "<body>\
+                    <script src=\"a.js\" async></script>\
+                    <script>console.log('inline');</script>\
+                 </body>",
+            ),
+            ("http://x/a.js", "console.log('async');"),
+        ]);
+        let doc = ScriptedDocument::<E>::load(&files, "http://x/index.html").expect("loads");
+        assert_eq!(
+            doc.console(),
+            vec!["inline".to_string(), "async".to_string()],
+            "the async script does not block the later inline script",
+        );
+    }
+
+    /// A non-JavaScript `type` (here `application/json`) is a data block: its content
+    /// is never executed, even though it is syntactically runnable JS. A classic
+    /// sibling still runs.
+    fn script_type_data_block_is_not_executed<E: ScriptEngine>() {
+        let html = "<body>\
+            <script type=\"application/json\">console.log('json-ran');</script>\
+            <script>console.log('classic-ran');</script>\
+         </body>";
+        let doc = ScriptedDocument::<E>::parse(html).expect("loads");
+        assert_eq!(
+            doc.console(),
+            vec!["classic-ran".to_string()],
+            "the application/json data block did not execute",
+        );
+    }
+
+    /// `type=module` is recognized but not executed (module loading is a follow-up),
+    /// so its content does not run; a classic sibling does.
+    fn script_type_module_is_recognized_not_executed<E: ScriptEngine>() {
+        let html = "<body>\
+            <script type=\"module\">console.log('module-ran');</script>\
+            <script>console.log('classic-ran');</script>\
+         </body>";
+        let doc = ScriptedDocument::<E>::parse(html).expect("loads");
+        assert_eq!(
+            doc.console(),
+            vec!["classic-ran".to_string()],
+            "the module script was recognized but not executed",
+        );
+    }
+
     #[test]
     fn mutation_renders_on_boa() {
         mutation_renders::<BoaEngine>();
@@ -604,6 +810,26 @@ mod tests {
     #[test]
     fn missing_external_script_is_skipped_on_boa() {
         missing_external_script_is_skipped::<BoaEngine>();
+    }
+    #[test]
+    fn defer_runs_after_parser_blocking_on_boa() {
+        defer_runs_after_parser_blocking::<BoaEngine>();
+    }
+    #[test]
+    fn defer_scripts_run_in_document_order_on_boa() {
+        defer_scripts_run_in_document_order::<BoaEngine>();
+    }
+    #[test]
+    fn async_runs_after_parser_blocking_on_boa() {
+        async_runs_after_parser_blocking::<BoaEngine>();
+    }
+    #[test]
+    fn script_type_data_block_is_not_executed_on_boa() {
+        script_type_data_block_is_not_executed::<BoaEngine>();
+    }
+    #[test]
+    fn script_type_module_is_recognized_not_executed_on_boa() {
+        script_type_module_is_recognized_not_executed::<BoaEngine>();
     }
     #[test]
     fn node_identity_is_stable_on_boa() {
@@ -666,6 +892,26 @@ mod tests {
         #[test]
         fn missing_external_script_is_skipped_on_nova() {
             missing_external_script_is_skipped::<NovaEngine>();
+        }
+        #[test]
+        fn defer_runs_after_parser_blocking_on_nova() {
+            defer_runs_after_parser_blocking::<NovaEngine>();
+        }
+        #[test]
+        fn defer_scripts_run_in_document_order_on_nova() {
+            defer_scripts_run_in_document_order::<NovaEngine>();
+        }
+        #[test]
+        fn async_runs_after_parser_blocking_on_nova() {
+            async_runs_after_parser_blocking::<NovaEngine>();
+        }
+        #[test]
+        fn script_type_data_block_is_not_executed_on_nova() {
+            script_type_data_block_is_not_executed::<NovaEngine>();
+        }
+        #[test]
+        fn script_type_module_is_recognized_not_executed_on_nova() {
+            script_type_module_is_recognized_not_executed::<NovaEngine>();
         }
     }
 }
