@@ -89,6 +89,12 @@ pub struct IncrementalLayout<Id: Copy + Eq + Hash> {
     /// stay valid without a relayout.
     built: BoxTree<Id>,
     text_ctx: TextMeasureCtx,
+    /// Decoded `<img>` images (data: URIs) keyed by node, rebuilt at every full
+    /// layout alongside `built` / `text_ctx`, so the cheap `RepaintOnly` emit paints
+    /// `<img>` content (e.g. the chrome card favicons) without re-decoding per frame.
+    /// Empty for a document with no `<img>`; remote URLs are skipped (data: only — the
+    /// session carries no host loader), which is exactly the chrome's data-URI favicons.
+    images: ImagePlane<Id>,
     /// Whether `built` / `text_ctx` still match `fragments`. Set by every full
     /// layout; cleared by a structural splice (which updates `fragments` but not
     /// the box-tree side-table). [`emit_paint_list`](Self::emit_paint_list)
@@ -149,6 +155,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             fragments,
             built,
             text_ctx,
+            images: ImagePlane::decode_from_dom(dom),
             paint_side_valid: true,
             width,
             height,
@@ -692,6 +699,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             self.fragments = fragments;
             self.built = built;
             self.paint_side_valid = true;
+            self.images = ImagePlane::decode_from_dom(dom);
             self.recompute_viewport(dom);
             Applied::Restyled
         } else {
@@ -715,7 +723,9 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     /// engine-agnostic command stream a host composites or lowers to a scene.
     /// Valid on the `RepaintOnly` path (a transform-only frame keeps box
     /// geometry, so the retained box tree + text context still match the
-    /// fragments). Empty image planes, matching the scripted layout path.
+    /// fragments). Paints the session's decoded `<img>` images (data: URIs,
+    /// refreshed at each full layout), so `<img>` content like the chrome favicons
+    /// appears on the cheap path; CSS `background-image` is not planed here yet.
     ///
     /// Requires the last [`apply`](Self::apply) to have been non-structural (a
     /// structural splice updates fragments but not the box-tree side-table); the
@@ -735,7 +745,6 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             "emit_paint_list after a structural splice: the box-tree side-table is \
              stale (relayout first). Attribute-only hosts never hit this.",
         );
-        let images = ImagePlane::new();
         let bg_images = BackgroundImagePlane::new();
         // Merge the session's retained per-element scroll (driven by `scroll_at`)
         // with the caller's own offsets, so a content document's inner scrollers
@@ -750,7 +759,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             &self.fragments,
             &self.built,
             &self.text_ctx,
-            &images,
+            &self.images,
             &bg_images,
             &merged,
             viewport,
@@ -937,6 +946,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         self.fragments = fragments;
         self.built = built;
         self.paint_side_valid = true;
+        self.images = ImagePlane::decode_from_dom(dom);
         self.recompute_viewport(dom);
         Applied::FullRecompute
     }
