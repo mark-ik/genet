@@ -10,8 +10,8 @@
 //! loaded over, in document order) — through [`script_runtime_api::Runtime`] on a
 //! chosen JS engine (Boa by default, Nova behind `scripted-nova`), and renders the
 //! *mutated* DOM each frame through `serval-render`. GPU-free and testable here; the
-//! windowed present loop drives it exactly as it drives the static
-//! [`LoadedDocument`](crate::document::LoadedDocument).
+//! windowed present loop drives it exactly as it drives the static `LoadedDocument`
+//! (the `document` module, present under `tile-surface`).
 //!
 //! Script timing follows the classic-script model: parser-blocking scripts (inline,
 //! and external with neither `async` nor `defer`) run in document order; `defer` and
@@ -168,7 +168,7 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
                 ScriptSource::ModuleExternal { src, charset, integrity } => {
                     // An external module's imports resolve against its own URL.
                     let base = loader
-                        .map(|(_, page)| crate::document::resolve_href(page, src))
+                        .map(|(_, page)| crate::href::resolve_href(page, src))
                         .unwrap_or_default();
                     if let Some(source) =
                         fetch_external(loader, src, charset.as_deref(), integrity.as_deref())
@@ -547,7 +547,7 @@ fn fetch_external(
         eprintln!("[pelt-scripted] skipping external <script src=\"{src}\"> (no fetcher)");
         return None;
     };
-    let url = crate::document::resolve_href(base, src);
+    let url = crate::href::resolve_href(base, src);
     let bytes = match fetcher.fetch(&url) {
         Some(bytes) => bytes,
         None => {

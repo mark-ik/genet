@@ -53,7 +53,8 @@ mod windowed {
 
     use super::{StaticViewerConfig, StaticViewerOutcome};
     use crate::chrome::{Chrome, ChromeIntent, StripSide};
-    use crate::document::{ClickOutcome, LoadedDocument, LocalFetcher, resolve_href};
+    use crate::document::{ClickOutcome, LoadedDocument, LocalFetcher};
+    use crate::href::resolve_href;
 
     /// A rect `(x, y, w, h)` in window pixels.
     type Rect = (u32, u32, u32, u32);

@@ -14,6 +14,12 @@ mod static_viewer;
 #[cfg(feature = "tile-surface")]
 mod document;
 
+// Dependency-free link resolution, shared by `document`, `scripted`, and the chrome
+// viewer. Lives outside `document` so the headless `scripted` profile can use it
+// without that module's render/`data-url` stack (mirrors `STRUCTURAL_SHEET`'s gate).
+#[cfg(any(feature = "tile-surface", feature = "scripted"))]
+mod href;
+
 #[cfg(feature = "netfetch")]
 mod net_fetch;
 
@@ -86,7 +92,9 @@ pub use smoke_wayland::{
 };
 pub use static_viewer::{StaticViewerConfig, StaticViewerOutcome, run_static_viewer};
 #[cfg(feature = "tile-surface")]
-pub use document::{ClickOutcome, LoadedDocument, LocalFetcher, resolve_href};
+pub use document::{ClickOutcome, LoadedDocument, LocalFetcher};
+#[cfg(any(feature = "tile-surface", feature = "scripted"))]
+pub use href::resolve_href;
 #[cfg(feature = "viewer")]
 pub use headless::{
     render_snapshot, run_reftests, Outcome, ReftestResult, DEFAULT_HEIGHT, DEFAULT_WIDTH,

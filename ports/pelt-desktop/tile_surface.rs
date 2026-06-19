@@ -34,7 +34,8 @@ use xilem_serval::{
     el, on_click, AnyView, DomHandle, PointerClick, ServalAppRunner, ServalCtx, ServalElement,
 };
 
-use crate::document::{resolve_href, ClickOutcome, LoadedDocument, LocalFetcher};
+use crate::document::{ClickOutcome, LoadedDocument, LocalFetcher};
+use crate::href::resolve_href;
 
 /// The erased tile-frame view type.
 pub type TileView = Box<dyn AnyView<TileState, (), ServalCtx, ServalElement>>;
