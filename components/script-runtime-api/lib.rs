@@ -99,6 +99,11 @@ pub struct HostState {
     /// stay relative, so a network fetch of one is an error). Set by
     /// [`Runtime::set_base_url`] for server-mode WPT runs.
     pub base_url: Option<String>,
+    /// `window.localStorage` backing: an ordered key→value store (insertion
+    /// order, for `key(n)` / `Object.keys`). In-memory only (no persistence yet);
+    /// one origin per runtime. Read/written by the `platform` surface's
+    /// `__storage*` sinks.
+    pub storage: Vec<(String, String)>,
     /// The host's WebGL context factory. `None` = no WebGL support (every
     /// `__webgl_*` sink no-ops or yields 0 / NO_ERROR, and contexts mint to
     /// index `-1`). Installed by [`Runtime::set_webgl_factory`]; invoked once

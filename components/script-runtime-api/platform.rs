@@ -92,9 +92,98 @@ impl<E: ScriptEngine> NativeFn<E> for LocationAssign {
     }
 }
 
+// ── localStorage ─────────────────────────────────────────────────────────────
+
+/// `__storageGet(key)` -> the stored value, or `null` if absent.
+struct StorageGet;
+impl<E: ScriptEngine> NativeFn<E> for StorageGet {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let a0 = cx.arg(0);
+        let key = cx.value_to_string(&a0)?;
+        let value =
+            with_host::<E, _>(cx, |h| h.storage.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone()))
+                .flatten();
+        match value {
+            Some(v) => cx.make_string(&v),
+            None => Ok(cx.make_null()),
+        }
+    }
+}
+
+/// `__storageSet(key, value)` -> insert or replace, preserving insertion order.
+struct StorageSet;
+impl<E: ScriptEngine> NativeFn<E> for StorageSet {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let a0 = cx.arg(0);
+        let key = cx.value_to_string(&a0)?;
+        let a1 = cx.arg(1);
+        let value = cx.value_to_string(&a1)?;
+        with_host::<E, _>(cx, |h| {
+            if let Some(entry) = h.storage.iter_mut().find(|(k, _)| *k == key) {
+                entry.1 = value;
+            } else {
+                h.storage.push((key, value));
+            }
+        });
+        Ok(cx.undefined())
+    }
+}
+
+/// `__storageRemove(key)` -> remove if present.
+struct StorageRemove;
+impl<E: ScriptEngine> NativeFn<E> for StorageRemove {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let a0 = cx.arg(0);
+        let key = cx.value_to_string(&a0)?;
+        with_host::<E, _>(cx, |h| h.storage.retain(|(k, _)| *k != key));
+        Ok(cx.undefined())
+    }
+}
+
+/// `__storageClear()` -> empty the store.
+struct StorageClear;
+impl<E: ScriptEngine> NativeFn<E> for StorageClear {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        with_host::<E, _>(cx, |h| h.storage.clear());
+        Ok(cx.undefined())
+    }
+}
+
+/// `__storageKey(index)` -> the nth key in insertion order, or `null`.
+struct StorageKey;
+impl<E: ScriptEngine> NativeFn<E> for StorageKey {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let a0 = cx.arg(0);
+        let index = cx.value_to_string(&a0)?.parse::<usize>().ok();
+        let key =
+            with_host::<E, _>(cx, |h| index.and_then(|i| h.storage.get(i)).map(|(k, _)| k.clone()))
+                .flatten();
+        match key {
+            Some(k) => cx.make_string(&k),
+            None => Ok(cx.make_null()),
+        }
+    }
+}
+
+/// `__storageLength()` -> the key count, as a string (no number-minting primitive
+/// yet, so JS does `Number(...)`).
+struct StorageLength;
+impl<E: ScriptEngine> NativeFn<E> for StorageLength {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let n = with_host::<E, _>(cx, |h| h.storage.len()).unwrap_or(0);
+        cx.make_string(&n.to_string())
+    }
+}
+
 pub(crate) fn install_platform_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error> {
     engine.set_function::<LocationField>("__locationField", 1)?;
     engine.set_function::<LocationAssign>("__locationAssign", 1)?;
+    engine.set_function::<StorageGet>("__storageGet", 1)?;
+    engine.set_function::<StorageSet>("__storageSet", 2)?;
+    engine.set_function::<StorageRemove>("__storageRemove", 1)?;
+    engine.set_function::<StorageClear>("__storageClear", 0)?;
+    engine.set_function::<StorageKey>("__storageKey", 1)?;
+    engine.set_function::<StorageLength>("__storageLength", 0)?;
     engine.eval(PLATFORM_BOOTSTRAP)?;
     Ok(())
 }
@@ -128,6 +217,55 @@ const PLATFORM_BOOTSTRAP: &str = r#"
   location.reload = function() {}; // real reload is host-driven
   location.toString = function() { return __locationField('href'); };
   globalThis.location = location;
+
+  // ── localStorage ── an in-memory Storage (one origin per runtime). The methods
+  // sit on a backing object; a Proxy adds the named-property access Storage has
+  // (`localStorage.foo`, `'foo' in localStorage`, `delete`, `Object.keys`).
+  var storageApi = {
+    getItem: function(k) { return __storageGet(String(k)); },
+    setItem: function(k, v) { __storageSet(String(k), String(v)); },
+    removeItem: function(k) { __storageRemove(String(k)); },
+    clear: function() { __storageClear(); },
+    key: function(i) { return __storageKey(String(i >>> 0)); },
+  };
+  Object.defineProperty(storageApi, 'length', {
+    configurable: true,
+    get: function() { return Number(__storageLength()); },
+  });
+  var reserved = { getItem: 1, setItem: 1, removeItem: 1, clear: 1, key: 1, length: 1 };
+  globalThis.localStorage = new Proxy(storageApi, {
+    get: function(target, prop) {
+      if (typeof prop !== 'string' || reserved[prop]) { return target[prop]; }
+      var v = __storageGet(prop);
+      return v === null ? undefined : v;
+    },
+    set: function(target, prop, value) {
+      if (typeof prop === 'string' && !reserved[prop]) { __storageSet(prop, String(value)); }
+      return true;
+    },
+    has: function(target, prop) {
+      if (typeof prop === 'string' && reserved[prop]) { return true; }
+      return typeof prop === 'string' && __storageGet(prop) !== null;
+    },
+    deleteProperty: function(target, prop) {
+      if (typeof prop === 'string' && !reserved[prop]) { __storageRemove(prop); }
+      return true;
+    },
+    ownKeys: function() {
+      var keys = [];
+      var n = Number(__storageLength());
+      for (var i = 0; i < n; i++) { keys.push(__storageKey(String(i))); }
+      return keys;
+    },
+    getOwnPropertyDescriptor: function(target, prop) {
+      if (typeof prop === 'string' && reserved[prop]) {
+        return Object.getOwnPropertyDescriptor(target, prop);
+      }
+      var v = __storageGet(String(prop));
+      if (v === null) { return undefined; }
+      return { value: v, writable: true, enumerable: true, configurable: true };
+    },
+  });
 })();
 "#;
 
@@ -192,9 +330,53 @@ mod tests {
         );
     }
 
+    /// `localStorage` round-trips via the methods and named access, reports
+    /// `length` / `key(n)` in insertion order, and supports `in` / `Object.keys`
+    /// / `removeItem` / `clear`.
+    fn local_storage_round_trips<E: ScriptEngine>() {
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.eval(
+            "localStorage.setItem('a', '1');\
+             localStorage.b = '2';\
+             console.log(localStorage.getItem('a') + ',' + localStorage.a + ',' + localStorage.b);\
+             console.log(String(localStorage.length));\
+             console.log(localStorage.key(0) + ',' + localStorage.key(1) + ',' + (localStorage.key(2) === null));\
+             console.log(localStorage.getItem('missing') === null);\
+             console.log(('a' in localStorage) + ',' + ('missing' in localStorage));\
+             console.log(Object.keys(localStorage).join('|'));\
+             localStorage.removeItem('a');\
+             console.log((localStorage.getItem('a') === null) + ',' + localStorage.length);\
+             localStorage.clear();\
+             console.log(String(localStorage.length));",
+        )
+        .expect("storage script");
+        assert_eq!(
+            rt.host().borrow().console,
+            vec![
+                "1,1,2",   // getItem('a'), .a, .b
+                "2",       // length
+                "a,b,true", // key(0), key(1), key(2)===null
+                "true",    // getItem('missing')===null
+                "true,false", // 'a' in / 'missing' in
+                "a|b",     // Object.keys (insertion order)
+                "true,1",  // getItem('a')===null after remove, length
+                "0",       // length after clear
+            ],
+        );
+    }
+
     #[test]
     fn location_reflects_base_url_on_boa() {
         location_reflects_base_url::<script_engine_boa::BoaEngine>();
+    }
+    #[test]
+    fn local_storage_round_trips_on_boa() {
+        local_storage_round_trips::<script_engine_boa::BoaEngine>();
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn local_storage_round_trips_on_nova() {
+        local_storage_round_trips::<script_engine_nova::NovaEngine>();
     }
     #[test]
     fn location_assign_updates_url_on_boa() {
