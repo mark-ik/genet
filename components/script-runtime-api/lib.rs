@@ -104,6 +104,15 @@ pub struct HostState {
     /// one origin per runtime. Read/written by the `platform` surface's
     /// `__storage*` sinks.
     pub storage: Vec<(String, String)>,
+    /// `window.history` entries: `(serialized state JSON, document URL)`, the
+    /// session history the `platform` surface's `__history*` sinks drive
+    /// (`pushState` / `replaceState` / `state` / `length` / `go`). The current
+    /// entry is [`history_index`](Self::history_index). Seeded with one entry on
+    /// first use. `popstate` / real navigation are not wired (the scripted tier
+    /// has none); the URL + state bookkeeping is correct.
+    pub history: Vec<(String, String)>,
+    /// Index of the current entry in [`history`](Self::history).
+    pub history_index: usize,
     /// The host's WebGL context factory. `None` = no WebGL support (every
     /// `__webgl_*` sink no-ops or yields 0 / NO_ERROR, and contexts mint to
     /// index `-1`). Installed by [`Runtime::set_webgl_factory`]; invoked once

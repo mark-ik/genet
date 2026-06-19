@@ -58,6 +58,25 @@ fn location_field(href: Option<&str>, field: &str) -> String {
     }
 }
 
+/// WHATWG-resolve `input` against the document `base` (if absolute); otherwise
+/// return `input` unchanged. Shared by `location` and `history`.
+fn resolve_against(base: Option<&str>, input: &str) -> String {
+    match base.and_then(|b| url::Url::parse(b).ok()) {
+        Some(b) => b.join(input).map(|u| u.to_string()).unwrap_or_else(|_| input.to_owned()),
+        None => input.to_owned(),
+    }
+}
+
+/// Seed the session history with one entry (the current document) on first use.
+/// The initial URL is the document base, defaulting to `about:blank`.
+fn ensure_history(h: &mut HostState) {
+    if h.history.is_empty() {
+        let url = h.base_url.clone().unwrap_or_else(|| "about:blank".to_string());
+        h.history.push(("null".to_string(), url));
+        h.history_index = 0;
+    }
+}
+
 /// `__locationField(field)` -> the named URL component of the document URL.
 struct LocationField;
 impl<E: ScriptEngine> NativeFn<E> for LocationField {
@@ -80,13 +99,7 @@ impl<E: ScriptEngine> NativeFn<E> for LocationAssign {
         let a0 = cx.arg(0);
         let input = cx.value_to_string(&a0)?;
         with_host::<E, _>(cx, |h| {
-            let resolved = match h.base_url.as_deref().and_then(|b| url::Url::parse(b).ok()) {
-                Some(base) => {
-                    base.join(&input).map(|u| u.to_string()).unwrap_or_else(|_| input.clone())
-                }
-                None => input.clone(),
-            };
-            h.base_url = Some(resolved);
+            h.base_url = Some(resolve_against(h.base_url.as_deref(), &input));
         });
         Ok(cx.undefined())
     }
@@ -175,9 +188,119 @@ impl<E: ScriptEngine> NativeFn<E> for StorageLength {
     }
 }
 
+// ── history ──────────────────────────────────────────────────────────────────
+
+/// `__historyPush(stateJson, url, hasUrl)` -> push a new entry (dropping any
+/// forward entries) and make it current. `hasUrl == "true"` resolves `url`
+/// against the current document URL and adopts it; otherwise the URL is unchanged.
+struct HistoryPush;
+impl<E: ScriptEngine> NativeFn<E> for HistoryPush {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let a0 = cx.arg(0);
+        let state = cx.value_to_string(&a0)?;
+        let a1 = cx.arg(1);
+        let url = cx.value_to_string(&a1)?;
+        let a2 = cx.arg(2);
+        let has_url = cx.value_to_string(&a2)? == "true";
+        with_host::<E, _>(cx, |h| {
+            ensure_history(h);
+            let entry_url = if has_url {
+                resolve_against(h.base_url.as_deref(), &url)
+            } else {
+                h.history[h.history_index].1.clone()
+            };
+            h.history.truncate(h.history_index + 1);
+            h.history.push((state, entry_url.clone()));
+            h.history_index = h.history.len() - 1;
+            if has_url {
+                h.base_url = Some(entry_url);
+            }
+        });
+        Ok(cx.undefined())
+    }
+}
+
+/// `__historyReplace(stateJson, url, hasUrl)` -> replace the current entry in
+/// place (same `hasUrl` semantics as push).
+struct HistoryReplace;
+impl<E: ScriptEngine> NativeFn<E> for HistoryReplace {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let a0 = cx.arg(0);
+        let state = cx.value_to_string(&a0)?;
+        let a1 = cx.arg(1);
+        let url = cx.value_to_string(&a1)?;
+        let a2 = cx.arg(2);
+        let has_url = cx.value_to_string(&a2)? == "true";
+        with_host::<E, _>(cx, |h| {
+            ensure_history(h);
+            let entry_url = if has_url {
+                resolve_against(h.base_url.as_deref(), &url)
+            } else {
+                h.history[h.history_index].1.clone()
+            };
+            let idx = h.history_index;
+            h.history[idx] = (state, entry_url.clone());
+            if has_url {
+                h.base_url = Some(entry_url);
+            }
+        });
+        Ok(cx.undefined())
+    }
+}
+
+/// `__historyState()` -> the current entry's serialized state JSON.
+struct HistoryState;
+impl<E: ScriptEngine> NativeFn<E> for HistoryState {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let state = with_host::<E, _>(cx, |h| {
+            ensure_history(h);
+            h.history[h.history_index].0.clone()
+        })
+        .unwrap_or_else(|| "null".to_string());
+        cx.make_string(&state)
+    }
+}
+
+/// `__historyLength()` -> the entry count, as a string.
+struct HistoryLength;
+impl<E: ScriptEngine> NativeFn<E> for HistoryLength {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let n = with_host::<E, _>(cx, |h| {
+            ensure_history(h);
+            h.history.len()
+        })
+        .unwrap_or(1);
+        cx.make_string(&n.to_string())
+    }
+}
+
+/// `__historyGo(delta)` -> move the current entry by `delta` (clamped to range)
+/// and adopt that entry's URL. No `popstate` is fired (the scripted tier has no
+/// navigation/event-loop integration); `state` / the document URL update.
+struct HistoryGo;
+impl<E: ScriptEngine> NativeFn<E> for HistoryGo {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let a0 = cx.arg(0);
+        let delta = cx.value_to_string(&a0)?.parse::<i64>().unwrap_or(0);
+        with_host::<E, _>(cx, |h| {
+            ensure_history(h);
+            let last = h.history.len() as i64 - 1;
+            let target = (h.history_index as i64 + delta).clamp(0, last);
+            h.history_index = target as usize;
+            h.base_url = Some(h.history[h.history_index].1.clone());
+        });
+        Ok(cx.undefined())
+    }
+}
+
 pub(crate) fn install_platform_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error> {
     engine.set_function::<LocationField>("__locationField", 1)?;
     engine.set_function::<LocationAssign>("__locationAssign", 1)?;
+    engine.set_function::<HistoryPush>("__historyPush", 3)?;
+    engine.set_function::<HistoryReplace>("__historyReplace", 3)?;
+    engine.set_function::<HistoryState>("__historyState", 0)?;
+    engine.set_function::<HistoryLength>("__historyLength", 0)?;
+    engine.set_function::<HistoryGo>("__historyGo", 1)?;
     engine.set_function::<StorageGet>("__storageGet", 1)?;
     engine.set_function::<StorageSet>("__storageSet", 2)?;
     engine.set_function::<StorageRemove>("__storageRemove", 1)?;
@@ -266,6 +389,34 @@ const PLATFORM_BOOTSTRAP: &str = r#"
       return { value: v, writable: true, enumerable: true, configurable: true };
     },
   });
+
+  // ── history ── pushState / replaceState / state / length / go / back / forward.
+  // No popstate / real navigation (the scripted tier has none); state + URL
+  // bookkeeping is correct. State round-trips through JSON (non-JSON state -> null).
+  function stateJson(state) {
+    var s = JSON.stringify(state);
+    return s === undefined ? 'null' : s;
+  }
+  var history = {
+    pushState: function(state, title, url) {
+      __historyPush(stateJson(state), url == null ? '' : String(url), url == null ? 'false' : 'true');
+    },
+    replaceState: function(state, title, url) {
+      __historyReplace(stateJson(state), url == null ? '' : String(url), url == null ? 'false' : 'true');
+    },
+    go: function(delta) { __historyGo(String((delta || 0) | 0)); },
+    back: function() { __historyGo('-1'); },
+    forward: function() { __historyGo('1'); },
+  };
+  Object.defineProperty(history, 'state', {
+    enumerable: true, configurable: true,
+    get: function() { return JSON.parse(__historyState()); },
+  });
+  Object.defineProperty(history, 'length', {
+    enumerable: true, configurable: true,
+    get: function() { return Number(__historyLength()); },
+  });
+  globalThis.history = history;
 })();
 "#;
 
@@ -365,6 +516,42 @@ mod tests {
         );
     }
 
+    /// `history` records state + URL across pushState / replaceState, keeps
+    /// `length` correct (dropping forward entries on a new push), navigates with
+    /// back / forward, and syncs the document URL.
+    fn history_navigation<E: ScriptEngine>() {
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.set_base_url("https://example.com/a").expect("base url");
+        rt.eval(
+            "history.pushState({n: 1}, '', '/b');\
+             console.log(history.length + ',' + location.pathname + ',' + history.state.n);\
+             history.pushState({n: 2}, '', 'c');\
+             console.log(history.length + ',' + location.pathname + ',' + history.state.n);\
+             history.back();\
+             console.log(location.pathname + ',' + history.state.n);\
+             history.replaceState({n: 9}, '');\
+             console.log(history.length + ',' + location.pathname + ',' + history.state.n);\
+             history.pushState({n: 3}, '', '/d');\
+             console.log(history.length + ',' + location.pathname);\
+             history.forward();\
+             console.log(history.length + ',' + location.pathname);\
+             console.log(String(history.state));",
+        )
+        .expect("history script");
+        assert_eq!(
+            rt.host().borrow().console,
+            vec![
+                "2,/b,1",          // pushState /b
+                "3,/c,2",          // pushState c (relative)
+                "/b,1",            // back -> entry 1
+                "3,/b,9",          // replaceState (no url) keeps length + url
+                "3,/d",            // pushState /d drops the dropped-forward /c entry
+                "3,/d",            // forward clamps at the last entry
+                "[object Object]", // history.state is the parsed object
+            ],
+        );
+    }
+
     #[test]
     fn location_reflects_base_url_on_boa() {
         location_reflects_base_url::<script_engine_boa::BoaEngine>();
@@ -372,6 +559,15 @@ mod tests {
     #[test]
     fn local_storage_round_trips_on_boa() {
         local_storage_round_trips::<script_engine_boa::BoaEngine>();
+    }
+    #[test]
+    fn history_navigation_on_boa() {
+        history_navigation::<script_engine_boa::BoaEngine>();
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn history_navigation_on_nova() {
+        history_navigation::<script_engine_nova::NovaEngine>();
     }
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
