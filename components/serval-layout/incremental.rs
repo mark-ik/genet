@@ -177,6 +177,17 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         &self.styles
     }
 
+    /// The accumulated CSS-transform translate from the root to `node`, in scene px: what paint
+    /// shifts the box (and its subtree) by, but the fragments omit (a transform is paint-tier).
+    /// A fragment-positioned host overlay (the focus ring) adds this to track a transform-placed
+    /// element such as an orrery card. `(0, 0)` for an untransformed path.
+    pub fn accumulated_translate<D>(&self, dom: &D, node: Id) -> (f32, f32)
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        crate::serval_lane::accumulated_translate(dom, &self.styles, node)
+    }
+
     /// The topmost (paint-order) DOM node containing scene point `(x, y)`, served
     /// from the session's retained planes through the `engine_observables_api`
     /// query surface — no re-cascade. The session companion to

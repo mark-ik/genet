@@ -460,6 +460,52 @@ fn walk_for_hit<D>(
     }
 }
 
+/// The accumulated CSS-transform translate from the document root down to `target`, in scene
+/// px: the sum of each node-on-the-path's `transform` translate component. Paint shifts a
+/// transformed box (and its subtree) by this, but the layout fragments do not carry it, so an
+/// overlay positioned from fragments (the host focus ring) adds this to land where the box
+/// paints — the paint-side complement to `walk_for_hit`'s transform-aware hit-testing.
+/// Translate-only (an orrery card translates); a full transform compose is a later refinement.
+/// `(0, 0)` for an untransformed path or an unreachable `target`.
+pub(crate) fn accumulated_translate<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    target: D::NodeId,
+) -> (f32, f32)
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    fn walk<D>(
+        dom: &D,
+        styles: &StylePlane<D::NodeId>,
+        id: D::NodeId,
+        target: D::NodeId,
+        acc: (f32, f32),
+    ) -> Option<(f32, f32)>
+    where
+        D: LayoutDom,
+        D::NodeId: Copy + Eq + Hash,
+    {
+        let cv = primary_cv(styles, id);
+        let m = cv
+            .as_deref()
+            .map(compute_transform_matrix)
+            .unwrap_or_else(LayoutTransform::identity);
+        let acc = (acc.0 + m.m41, acc.1 + m.m42);
+        if id == target {
+            return Some(acc);
+        }
+        for child in dom.dom_children(id) {
+            if let Some(found) = walk(dom, styles, child, target, acc) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    walk(dom, styles, dom.document(), target, (0.0, 0.0)).unwrap_or((0.0, 0.0))
+}
+
 /// Shrink a rect by the given four insets (top/right/bottom/left).
 /// Used to derive padding-box from border-box, content-box from
 /// padding-box. Negative dimensions clamp to zero — easier than
