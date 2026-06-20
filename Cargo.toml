@@ -463,6 +463,14 @@ nova_vm = { git = "https://github.com/mark-ik/nova", branch = "serval-embedder" 
 # See docs/2026-05-20_serval_script_engine_plan.md.
 boa_engine = { git = "https://github.com/mark-ik/boa.git", branch = "serval" }
 boa_gc = { git = "https://github.com/mark-ik/boa.git", branch = "serval" }
+# ipc-channel: in-process fork (mark-ik/ipc-channel). Servo's multiprocess IPC
+# transport is vestigial in serval's single-process embedding (pelt; and mere's
+# library use), so the fork defaults to ipc-channel's built-in force-inprocess
+# backend and makes the OS deps optional. That drops the windows 0.61 dependency,
+# whose loose <=0.62 range otherwise let gpu-allocator latch onto 0.61.3 while
+# wgpu-hal forces 0.62, breaking the dx12 suballocator in any build that compiles
+# the dx12 backend (meerkat, via scrying). Owned fork by branch, never a rev.
+ipc-channel = { git = "https://github.com/mark-ik/ipc-channel", branch = "main" }
 # stylo_taffy (serval-layout) depends on crates.io `stylo`/`stylo_atoms`
 # `^0.18` (stylo_taffy 0.3.0-alpha.5). serval pins the same crates from the
 # servo/stylo git rev, and `stylo` declares `links = "servo_style_crate"`
