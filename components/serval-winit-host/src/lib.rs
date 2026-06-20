@@ -45,16 +45,24 @@ impl RenderCore {
     /// wasm the WebGPU device request is async, so use [`boot_async`](Self::boot_async).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn boot(options: NetrenderOptions) -> Result<Self, String> {
-        let handles = netrender::boot().map_err(|e| format!("netrender wgpu boot failed: {e}"))?;
+        // `options.backends` lets a host force a backend (e.g. D3D12 for same-API
+        // system-WebView import); `None` honors `WGPU_BACKEND`, else all available.
+        let handles = match options.backends {
+            Some(b) => netrender::boot_with(b),
+            None => netrender::boot(),
+        }
+        .map_err(|e| format!("netrender wgpu boot failed: {e}"))?;
         Self::from_handles(handles, options)
     }
 
     /// Async boot: awaits netrender's `boot_async`. The only boot path on wasm
     /// (WebGPU device acquisition is asynchronous); works on every target.
     pub async fn boot_async(options: NetrenderOptions) -> Result<Self, String> {
-        let handles = netrender::boot_async()
-            .await
-            .map_err(|e| format!("netrender wgpu boot failed: {e}"))?;
+        let handles = match options.backends {
+            Some(b) => netrender::boot_async_with(b).await,
+            None => netrender::boot_async().await,
+        }
+        .map_err(|e| format!("netrender wgpu boot failed: {e}"))?;
         Self::from_handles(handles, options)
     }
 
