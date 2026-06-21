@@ -1,15 +1,19 @@
-# Local path overrides (gitignored; local-dev only) — mirrors
-# repos/mere/.cargo/config.toml. serval builds its renderer + script-engine
-# git-deps against the in-sync local checkouts, so a cross-repo version skew
-# can never block the build. Delete this file to fall back to the published
-# git-deps (a clean clone builds without it).
+# Local path overrides (gitignored, local-dev only) — OPTIONAL, never committed.
 #
-# serval needs no *committed* build settings: the inherited servo target
-# linkers (Android / UWP / Windows-non-x64) and the RUSTC_BOOTSTRAP whitelist
-# (crown / script / mozjs / style_tests, all workspace-excluded) were verified
-# unused, and the e2e builds + passes with the default linker and stack.
+# Convention: serval's committed manifests reference every sibling repo by GIT
+# (`git = "https://github.com/mark-ik/<repo>", branch = "main"`), so a bare clone
+# builds anywhere by fetching from GitHub. This file redirects those git-deps to
+# local working copies when present, so cross-repo edits rebuild without a push +
+# `cargo update`. A `paths` entry whose directory is absent is silently ignored by
+# cargo (resolution falls back to the committed git-dep), so deleting this file —
+# or cloning on a machine without these checkouts — Just Works.
+#
+# A `paths` entry overrides a crate of the same name + version found anywhere under
+# it; it coexists with a `[patch]` on the same crate (the path override wins). It is
+# a no-op for any build whose graph doesn't reference that crate.
 paths = [
     "C:/Users/mark_/Code/repos/netrender",
+    "C:/Users/mark_/Code/repos/netfetcher",
     "C:/Users/mark_/Code/crates/nova",
     "C:/Users/mark_/Code/crates/boa",
     "C:/Users/mark_/Code/crates/piccolo",

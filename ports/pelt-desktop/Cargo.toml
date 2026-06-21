@@ -136,7 +136,7 @@ data-url = { workspace = true, optional = true }
 # Remote document loading (behind the `netfetch` feature): the netfetcher engine
 # (sibling repo) for http(s), bridged onto the sync `ResourceFetcher` through a tokio
 # runtime. The same dep set serval-wpt's `fetch()` uses.
-netfetcher = { path = "../../../netfetcher", optional = true }
+netfetcher = { git = "https://github.com/mark-ik/netfetcher.git", branch = "main", optional = true }
 tokio = { version = "1", features = ["rt"], optional = true }
 bytes = { version = "1", optional = true }
 url = { workspace = true, optional = true }

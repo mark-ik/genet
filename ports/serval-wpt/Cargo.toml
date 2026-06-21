@@ -50,7 +50,7 @@ script-engine-nova = { path = "../../components/script-engine-nova" }
 # FetchHandler seam to the netfetcher engine (sibling repo). Off by default so the
 # normal runner stays free of the async network stack. fetch/ WPT tests
 # additionally need the WPT server + Fetch API JS objects (a larger lift).
-netfetcher = { path = "../../../netfetcher", optional = true }
+netfetcher = { git = "https://github.com/mark-ik/netfetcher.git", branch = "main", optional = true }
 tokio = { version = "1", features = ["rt"], optional = true }
 bytes = { version = "1", optional = true }
 url = { workspace = true, optional = true }
