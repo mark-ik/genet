@@ -14,7 +14,7 @@
 //! in a `FetcherPool` worker); serval and other renderers stay byte-consuming
 //! and never link this crate. The JS `fetch()` binding calls it *through the
 //! host*, not by linking it. See the plan:
-//! `mere/design_docs/mere_docs/implementation_strategy/2026-05-25_netfetcher_plan.md`.
+//! `mere/design_docs/archive_docs/2026-06-09_completed_plans/2026-05-25_netfetcher_plan.md`.
 //!
 //! ## Status — increments 1–5 (2026-05-26)
 //!
