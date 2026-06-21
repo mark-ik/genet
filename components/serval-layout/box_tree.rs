@@ -1109,7 +1109,11 @@ where
         parley::Layout<ColorBrush>,
         Vec<(usize, parley::Layout<ColorBrush>)>,
     );
-    let shaped: Vec<Shaped> = if leaves.len() >= PARALLEL_SHAPE_THRESHOLD {
+    // §0 web-lane probe: SERVAL_SHAPE_SERIAL forces the serial path, to size the
+    // no-threads (web-without-SAB, P-doc "state 1") penalty on the dominant shaping
+    // phase. Env-gated, native-only; off by default.
+    let force_serial = std::env::var_os("SERVAL_SHAPE_SERIAL").is_some();
+    let shaped: Vec<Shaped> = if leaves.len() >= PARALLEL_SHAPE_THRESHOLD && !force_serial {
         use rayon::prelude::*;
         // Each worker clones the base font context (cheap — shared `Collection`)
         // and spins up its own scratch `LayoutContext`.
@@ -1165,7 +1169,22 @@ where
     D::NodeId: Copy + Eq + Hash + Send + Sync,
 {
     text_ctx.reset();
+
+    // §0 phase-timing instrumentation (env-gated, native-only; off by default, so
+    // it never touches the wasm path where `Instant` panics). Set
+    // SERVAL_LAYOUT_TIMING to split the cold layout cost into its phases. See mere
+    // design_docs `2026-06-19_cross_platform_parallelism_strategy.md` §0.
+    let timing = std::env::var_os("SERVAL_LAYOUT_TIMING").is_some();
+
+    let t = timing.then(std::time::Instant::now);
     let mut tree = build_box_tree(dom, styles, images);
+    if let Some(t) = t {
+        eprintln!(
+            "[layout-timing] build_box_tree    {:>9.3} ms  ({} box nodes)",
+            t.elapsed().as_secs_f64() * 1e3,
+            tree.nodes.len()
+        );
+    }
     let root = nid(tree.root);
 
     // Shaping pre-pass. Inline-text shaping (glyph runs, font resolution) is the
@@ -1176,8 +1195,16 @@ where
     // of re-shaping. Large trees fan the shaping across a Rayon pool; small trees
     // (chrome UI) shape inline, where pool spin-up would not pay off. Shaping is
     // pure, so the parallel output is identical to serial — no pixel difference.
+    let t = timing.then(std::time::Instant::now);
     shape_inline_leaves::<D>(&tree, text_ctx);
+    if let Some(t) = t {
+        eprintln!(
+            "[layout-timing] shape_inline      {:>9.3} ms",
+            t.elapsed().as_secs_f64() * 1e3
+        );
+    }
 
+    let t = timing.then(std::time::Instant::now);
     {
         let mut view = BoxTreeView {
             tree: &mut tree,
@@ -1186,7 +1213,15 @@ where
         taffy::compute_root_layout(&mut view, root, viewport);
         taffy::round_layout(&mut view, root);
     }
+    if let Some(t) = t {
+        eprintln!(
+            "[layout-timing] taffy_compute     {:>9.3} ms",
+            t.elapsed().as_secs_f64() * 1e3
+        );
+    }
 
+    // Marker / ellipsis shaping + fragment readback (the "fragment" phase).
+    let t = timing.then(std::time::Instant::now);
     // Shape each list item's marker into a one-line parley layout keyed by the
     // item's Taffy id, so paint can hang it to the left of the content box.
     for i in 0..tree.nodes.len() {
@@ -1214,6 +1249,12 @@ where
     let mut fragments = FragmentPlane::new();
     for (dom_id, taffy_id) in tree.node_map.iter() {
         fragments.insert(*dom_id, tree.nodes[idx(*taffy_id)].final_layout);
+    }
+    if let Some(t) = t {
+        eprintln!(
+            "[layout-timing] fragment_readback {:>9.3} ms",
+            t.elapsed().as_secs_f64() * 1e3
+        );
     }
 
     (fragments, tree)
