@@ -182,12 +182,35 @@ pub fn run_cascade<D>(
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash + 'static,
 {
+    // §0 cascade phase-timing instrumentation (env-gated, native-only; off by
+    // default, so it never touches the wasm path where `Instant` panics). Set
+    // SERVAL_LAYOUT_TIMING to split the cascade cost into its sub-phases —
+    // mirrors the `[layout-timing]` split in `box_tree::layout_via_box_tree`,
+    // drilling the ~30 ms cascade phase to bound the parallel-cascade win (which
+    // can only touch the Rayon-parallelizable `traverse_dom`, not the serial
+    // Stylist build / snapshot setup). See mere design_docs
+    // `2026-06-19_cross_platform_parallelism_strategy.md` §0 and serval
+    // `docs/2026-06-13_parallel_cascade_scope.md`.
+    let timing = std::env::var_os("SERVAL_LAYOUT_TIMING").is_some();
+
     // One-shot: a throwaway Stylist (its rule tree dies with this call). Sound
     // because a full cascade builds fresh rule nodes and never reuses a prior
     // pass's — only the incremental replacement path needs a persistent tree.
     let lock = plane.shared_lock().clone();
     let quirks = selectors_quirks_mode(dom.quirks_mode());
+
+    // Sub-phase (1): parse the UA + author sheets and build/flush the `Stylist`
+    // (device + rule tree). Serial setup — Stylo's parallel mode would NOT touch
+    // it, so this slice is outside any thread-parallelism ceiling.
+    let t = timing.then(std::time::Instant::now);
     let stylist = build_stylist(viewport, stylesheets, base_url, &lock, quirks);
+    if let Some(t) = t {
+        eprintln!("[cascade-timing] stylist-build  {:>9.3} ms", t.elapsed().as_secs_f64() * 1e3);
+    }
+
+    // Sub-phases (2)-(5): populate + inline-style parse + the `traverse_dom`
+    // recalc + lazy `::marker` resolution + rule-tree GC. `cascade_traverse`
+    // prints each under the same env var.
     cascade_traverse(dom, plane, &stylist, base_url, None);
 }
 
@@ -623,6 +646,13 @@ fn cascade_traverse<D>(
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash + 'static,
 {
+    // §0 cascade phase-timing (env-gated, native-only; see `run_cascade`). Steps
+    // 1-4 below are the serial cascade *setup* — entry population, inline-style
+    // parse, lock/guard + context wiring — that Stylo's parallel mode does NOT
+    // touch; timed as one "setup" slice against the parallelizable `traverse_dom`.
+    let timing = std::env::var_os("SERVAL_LAYOUT_TIMING").is_some();
+    let t_setup = timing.then(std::time::Instant::now);
+
     let url_data = make_url_data(base_url);
     // Pre-populate StylePlane entries for every element. The cascade's
     // ensure_data() requires entries to exist (cascade-orchestration
@@ -685,9 +715,18 @@ fn cascade_traverse<D>(
     let plane_ref: &StylePlane<D::NodeId> = &*plane;
     let _guard = CascadeGuard::<D>::enter(dom, plane_ref, &lock, snapshots);
 
+    if let Some(t) = t_setup {
+        eprintln!("[cascade-timing] setup         {:>9.3} ms", t.elapsed().as_secs_f64() * 1e3);
+    }
+
     // 5. Drive the traversal. RecalcStyle's process_preorder calls
     //    recalc_style_at on each element, populating its ElementData
     //    in the StylePlane (via UnsafeCell interior mutability per entry).
+    //    This is the selector-matching + cascade + computed-value application —
+    //    the slice Stylo CAN parallelize (its Rayon pool / parallel traversal),
+    //    so the parallel-cascade win is bounded by *this* phase, not the cascade
+    //    as a whole. We pass `None` for the pool (serial) — measurement only.
+    let t_recalc = timing.then(std::time::Instant::now);
     if let Some(root_id) = first_element_descendant(dom, dom.document()) {
         let root_element: StyleNodeRef<'_, D> = StyleNodeRef::new(root_id);
         let token = RecalcStyle::pre_traverse(root_element, &context);
@@ -695,6 +734,9 @@ fn cascade_traverse<D>(
             let traverser = RecalcStyle::new(context);
             driver::traverse_dom(&traverser, token, None);
         }
+    }
+    if let Some(t) = t_recalc {
+        eprintln!("[cascade-timing] traverse_dom   {:>9.3} ms", t.elapsed().as_secs_f64() * 1e3);
     }
 
     // 5b. Resolve lazy `::marker` pseudo styles (not in the eager pseudo map)
@@ -707,7 +749,11 @@ fn cascade_traverse<D>(
         author: &read,
         ua_or_user: &read,
     };
+    let t_marker = timing.then(std::time::Instant::now);
     let resolved_markers = collect_marker_styles(dom, &*plane, stylist, &marker_guards);
+    if let Some(t) = t_marker {
+        eprintln!("[cascade-timing] marker-resolve {:>9.3} ms", t.elapsed().as_secs_f64() * 1e3);
+    }
 
     // 6. Drop guard (clears TLS), then exit thread state.
     drop(_guard);
@@ -726,7 +772,11 @@ fn cascade_traverse<D>(
     //    once the count crosses Stylo's threshold. Safe here: the traversal is
     //    done and we are single-threaded (no other accessor of the tree). A
     //    no-op on a throwaway one-shot Stylist (nothing freed yet).
+    let t_gc = timing.then(std::time::Instant::now);
     stylist.rule_tree().maybe_gc();
+    if let Some(t) = t_gc {
+        eprintln!("[cascade-timing] rule-tree-gc   {:>9.3} ms", t.elapsed().as_secs_f64() * 1e3);
+    }
 }
 
 /// Probe-resolve the lazy `::marker` pseudo style for every `<li>`, against its
