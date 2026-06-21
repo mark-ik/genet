@@ -1,46 +1,199 @@
 # serval
 
-serval is a prototype web engine derived from [Servo](https://servo.org), inspired by [Blitz](https://blitz.is/), and rebuilt on the [Linebender](https://linebender.org/) ecosystem. It keeps Servo's Rust foundation, extending it while removing mozjs, mozangle, and other legacy components.
+serval is a prototype web engine derived from [Servo](https://servo.org),
+inspired by [Blitz](https://blitz.is/), and rebuilt on the
+[Linebender](https://linebender.org/) ecosystem (vello, parley, peniko, kurbo,
+taffy). It keeps Servo's Rust foundation and the Stylo CSS cascade, while
+removing the SpiderMonkey scripting stack and the heavy multiprocess Servo
+subsystems, then layers its own modular layout, scripting, and rendering paths
+on top.
 
-serval is modular, scriptable, and profile-aware; it aspires to WPT-conformance, embeddability, and maintainability. The default workspace member is `ports/pelt`, a script-free validation viewer (and embedding example along the lines of servoshell).
+The workspace is a development monorepo, not a published library set. Every
+crate is `publish = false`. The default workspace member is `ports/pelt`, a
+reference browser and validation viewer (the serval-side analogue of
+servoshell).
 
-## How it differs from Servo
+**Made with AI**
 
-- **Scripting.** SpiderMonkey is removed. JavaScript is built around the Nova
-  engine on native, with Boa as the conformance oracle. The goal is true JS engine modularity.
-  See
-  `docs/2026-05-20_serval_script_engine_plan.md` and
+## How serval differs from Servo
+
+- **Scripting.** SpiderMonkey (`mozjs`) and the SpiderMonkey-backed
+  `components/script` / `script_bindings` are deleted from the build graph
+  (cut 2026-05-20; git history is the reference for the eventual rebuild).
+  Scripting is now an engine-neutral seam (`script-engine-api`) with pluggable
+  backends: Nova (`script-engine-nova`, the primary native engine, 64-bit only),
+  Boa (`script-engine-boa`, pure Rust, the wasm backend and conformance oracle),
+  and Piccolo (`script-engine-piccolo`, a stackless-Lua option backend for
+  mod-scripting). See `docs/2026-05-20_serval_script_engine_plan.md` and
   `docs/2026-05-25_js_execution_strategy.md`.
-- **Layout.** `serval-layout` is a profile-neutral engine: a box tree laid out
+- **Layout.** `serval-layout` is a profile-neutral engine that consumes any
+  `LayoutDom`-shaped DOM and emits a `ServalPaintList`. Its box tree is laid out
   by Taffy through `stylo_taffy`, styled by the Stylo cascade, with text shaped
-  by parley. See `docs/2026-05-25_box_tree_trait_impl_plan.md`.
+  by parley. See `docs/2026-05-17_serval_layout_planes_architecture.md` and
+  `docs/2026-06-16_serval_layout_roadmap.md`.
 - **Rendering.** serval emits a paint list that netrender (a vello-based
-  renderer) consumes.
-- **Profiles.** Capabilities are tiered (static-html, interactive-html,
-  scripted, fullweb) so each build pulls only what its profile needs. See
-  `docs/2026-05-12_serval_profile_ladder_plan.md`.
-- **Entrypoint.** `ports/pelt` is a script-free validation viewer and the
-  default workspace member.
+  renderer in a sibling repo) lowers into a `netrender::Scene`. The lowering and
+  paint-list contract crates (`paint_list_api`, `paint_list_render`) live in the
+  netrender workspace; serval is a consumer.
+- **Crypto / build environment.** `aws-lc-rs` was removed so the default build
+  needs no NASM. The in-process `ipc-channel` fork drops the multiprocess IPC
+  transport, which serval's single-process embedding does not use.
 
-## Build
+## Repository layout
 
-serval builds with cargo on the pinned toolchain (rust 1.95.0, set by
-`rust-toolchain.toml`; `rustup` applies it automatically).
-
-```shell
-cargo build
-cargo run -p pelt -- --engine viewer [URL]
+```
+components/   engine crates (layout, rendering, DOM providers, script engines, shared traits)
+ports/        runnable hosts and the WPT runner (pelt, pelt-core, pelt-desktop, serval-wpt)
+examples/     standalone smoke binaries (netrender_smoke)
+docs/         dated design docs and plans (current state lives here)
+support/      vendored patches (taffy, gpu-allocator, ipc-channel) and profile-gate scripts
+tests/        unit tests and the vendored web-platform-tests checkout (tests/wpt)
+resources/    bundled runtime resources (UA assets, fonts, prefs)
 ```
 
-Plain `cargo build` / `cargo run` target `ports/pelt`, the default member. The
-default build runs on a stock Windows toolchain. Re-including `tests/unit/script`
-in the workspace brings back the heavier mozjs build environment; see
-`docs/2026-05-16_workspace_audit_snapshot.md`.
+### Key component crates
 
-## Architecture
+- `serval-layout` — profile-neutral layout engine; styled DOM to fragment tree
+  to `ServalPaintList`. The engine of the project (~21k LOC across 27 modules,
+  `box_tree.rs` is the core).
+- `serval-render` — host render-driver: a `ScriptedDom` / `LayoutDom` to
+  `netrender::Scene` assembly (cascade, layout, paint emit, scene), plus host
+  spatial queries (hit-test, fragments, caret / selection rects) and
+  accessibility-tree emission. GPU-free; separate from presentation.
+- `serval-static-dom` — script-free static DOM provider for the low profiles.
+- `serval-static-html` — static HTML profile witness for the profile ladder.
+- `serval-scripted-dom` — mutable scripted-DOM provider (`LayoutDom` +
+  `LayoutDomMut` over a `NodeId` arena, recording `DomMutation`s for layout
+  invalidation).
+- `serval-scripted` — the scripted tier: binds a script engine to
+  `serval-scripted-dom` so JS mutates the DOM via `NodeId` reflectors.
+- `serval-winit-host` — shared serval-on-winit plumbing: a wgpu surface +
+  netrender renderer (boot / resize / rasterize / acquire) and winit-to-serval
+  input mapping. Consumed by pelt and by sibling hosts.
+- `script-engine-api` — engine-neutral scripting backend contract (names
+  capabilities only; engine-native types stay inside each backend).
+- `script-engine-nova` / `script-engine-boa` / `script-engine-piccolo` —
+  the three backends behind the seam.
+- `script-runtime-api` — browser host surface (global scope, `console`,
+  `location`, `localStorage`, `window.history`, `element.style`,
+  `getComputedStyle`) built on top of the engine-neutral VM primitives.
+- `xilem-serval` — a `xilem_core` backend that diffs a Xilem view tree into
+  serval's mutable `ScriptedDom`. `xilem-core` is a vendored verbatim mirror of
+  upstream xilem's `xilem_core` so a bare clone needs no fork checkout.
+- `serval-layout`'s neighbors: `paint`, `xpath`, `webgl-wgpu`, `webgl-essl`,
+  `webgpu`, `webxr`, `fonts`, `media`, plus the inherited Servo `shared`
+  trait/api crates.
 
-Design docs live in `docs/`, named by date. The most recent workspace-audit
-snapshot there describes current state.
+### Ports (runnable)
+
+- `pelt` — the reference browser / validation viewer. Default workspace member;
+  plain `cargo build` / `cargo run` target it.
+- `pelt-core` — host-shell core contracts (chrome, platform integration,
+  protocol UI, automation routing, kept distinct from the hosted engine).
+- `pelt-desktop` — desktop host contracts (winit windows, input translation,
+  native dialogs, present backends).
+- `serval-wpt` — serval-native web-platform-tests runner over a selectable
+  subset of `tests/wpt`. Phase 1 is a crash-smoke (load each test through
+  `serval_static_dom::parse` + `serval_layout::render`, no GPU, no JS).
+
+## Build and run
+
+serval builds with cargo on the pinned toolchain (rust 1.95.0, set by
+`rust-toolchain.toml`; `rustup` applies it automatically). The default member
+set builds on a stock Windows toolchain (no NASM, MOZILLABUILD, clang-cl, or
+vcvars).
+
+```shell
+# Build the default member (pelt).
+cargo build
+
+# Open the serval-native on-screen document viewer.
+# Accepts file://, a bare path, and data: URLs out of the box.
+cargo run -p pelt -- --engine static <url-or-file>
+```
+
+pelt is feature-gated by profile. The default features are
+`viewer-netrender`. Additional run modes:
+
+```shell
+# Chrome demo: wrap the viewer in a xilem-serval omnibar + back/forward strip.
+cargo run -p pelt --features chrome -- --chrome <url>
+
+# Tile demo: split the window into per-document tiles.
+cargo run -p pelt --features tiles -- --tiles <url>...
+
+# Scripted profile (V4): run a page's inline <script> on a JS engine and
+# render the mutated DOM. Boa by default; add scripted-nova for Nova.
+cargo run -p pelt --features scripted -- --engine scripted <file>
+cargo run -p pelt --features scripted-nova -- --engine scripted <file> --js nova
+
+# Headless reftest harness (V3): GPU-free scene snapshot, or a PNG with
+# the png-reftest feature.
+cargo run -p pelt -- --engine headless --out <file>.scene
+cargo run -p pelt --features png-reftest -- --engine headless --out <file>.png
+
+# Remote (http(s)) loading is opt-in behind the netfetch feature.
+cargo run -p pelt --features netfetch -- --engine static https://example.com
+
+# Present-backend smokes (platform-gated):
+cargo run -p pelt --features windows-present -- --windows-present-smoke
+cargo run -p pelt --features macos-present   -- --macos-present-smoke
+cargo run -p pelt --features linux-present   -- --wayland-present-smoke
+```
+
+`pelt --help` lists every profile, flag, and smoke runner.
+
+Note: `--engine viewer` (the Masonry-era CPU-readback Xilem viewer) was retired
+2026-06-12; `--engine static` is the live on-screen viewer.
+
+### Tests
+
+```shell
+# Workspace unit/lib tests (serval-layout carries ~205 inline tests).
+cargo test --workspace
+
+# WPT crash-smoke over a subset of tests/wpt.
+cargo run -p serval-wpt -- run <subset>   # e.g. css/CSS2/floats
+```
+
+## Engine profiles
+
+Capabilities are tiered so each build pulls only what its profile needs (see
+`docs/2026-05-12_serval_profile_ladder_plan.md`). pelt exposes the tiers as
+`--engine` modes: `static` (on-screen document viewer), `scripted` (live,
+script-driven DOM), and `headless` (GPU-free snapshot / reftest harness). The
+`browser` and `viewer` profile names are accepted by the CLI for compatibility.
+
+## Status
+
+Active prototype. The current state of each subsystem is tracked in `docs/`,
+named by date; the most recent docs are authoritative. Notable anchors:
+
+- `docs/2026-06-16_serval_layout_roadmap.md` — the layout-engine map and the
+  two open threads (real-web layout fidelity; element view + scripted tier).
+- `docs/2026-06-14_engine_capability_audit.md` — the current hit-testing and
+  browser-readiness capability ledger, grounded against file:line.
+- `docs/2026-05-16_workspace_audit_snapshot.md` — workspace shape, the
+  SpiderMonkey re-enable cost, and the dead-on-disk component list.
+
+Layout, hit-testing (including inline boxes and `pointer-events`), document and
+nested element scrolling, selection / caret / find-in-page, focus and Tab order,
+and the external-texture element view are landed and tested. Open threads
+include real-web layout fidelity (UA stylesheet, tables, float text-wrap,
+engine-rendered form controls) and the scripted-tier consumer wiring.
+
+## Relationship to sibling repos
+
+- **netrender** (`github.com/mark-ik/netrender`) — the vello-based renderer
+  serval emits into. Pulled as a git dependency (`branch = "main"`), and it owns
+  the engine-agnostic `paint_list_api` / `paint_list_render` crates.
+- **Forks** consumed as git deps: `nova_vm` (mark-ik/nova, `serval-embedder`
+  branch) and `boa_engine` / `boa_gc` (mark-ik/boa, `serval` branch), each
+  carrying additive reflector-liveness patches. The Stylo crates track the
+  servo/stylo v0.18.0 release tag by git rev.
+- serval is consumed as the engine/host layer by Mark's `mere` workspace
+  (meerkat chrome shell, orrery host). The dependency direction is one-way:
+  those consume serval, serval does not depend on them.
 
 ## License
 
