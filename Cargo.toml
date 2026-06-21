@@ -42,7 +42,7 @@ default-members = ["ports/pelt"]
 # the build graph (not workspace members, not reachable from `pelt`).
 # Git history is the reference for the eventual scripting rebuild. See
 # docs/2026-05-20_stylo_taffy_adoption_plan.md (and the cut commit).
-exclude = [".cargo", "support/crown"]
+exclude = [".cargo"]
 
 [workspace.package]
 version = "0.2.0"
