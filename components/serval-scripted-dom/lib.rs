@@ -24,6 +24,7 @@ use layout_dom_api::{
 };
 use serval_static_dom::{StaticDocument, StaticNodeId};
 
+mod forms;
 mod serialize;
 
 /// Opaque node identity: a stable index into the arena (slots are never reused, so
