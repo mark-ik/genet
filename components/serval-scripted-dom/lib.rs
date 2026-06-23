@@ -24,6 +24,8 @@ use layout_dom_api::{
 };
 use serval_static_dom::{StaticDocument, StaticNodeId};
 
+mod serialize;
+
 /// Opaque node identity: a stable index into the arena (slots are never reused, so
 /// ids stay valid for the document's lifetime).
 // `usize`-backed (pointer-sized): serval-layout's Stylo style-sharing cache asserts
