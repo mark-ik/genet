@@ -111,6 +111,8 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     engine.set_function::<GetAttribute>("__getAttribute", 2)?;
     engine.set_function::<TagName>("__tagName", 1)?;
     engine.set_function::<GetTextContent>("__getTextContent", 1)?;
+    engine.set_function::<CookieGet>("__cookieGet", 0)?;
+    engine.set_function::<CookieSet>("__cookieSet", 1)?;
     engine.set_function::<ParentNode>("__parentNode", 1)?;
     engine.set_function::<ElementsByTagNameCount>("__elementsByTagNameCount", 2)?;
     engine.set_function::<ElementsByTagNameItem>("__elementsByTagNameItem", 3)?;
@@ -210,6 +212,51 @@ impl<E: ScriptEngine> NativeFn<E> for ComputedStyleValue {
             Some(v) => cx.make_string(&v),
             None => Ok(cx.make_null()),
         }
+    }
+}
+
+/// The host's cookie store for `document.cookie` (e.g. meerkat's view over the
+/// netfetcher session jar). The runtime owns no networking, so the host supplies the
+/// document's cookies. [`get_cookies`](Self::get_cookies) returns the *script-visible*
+/// cookies for the current document — HttpOnly excluded, the host's job — as a
+/// `"n1=v1; n2=v2"` string; [`set_cookie`](Self::set_cookie) takes one
+/// `Set-Cookie`-style assignment (`"name=value; Path=/; ..."`). `None` = no store, so
+/// `document.cookie` reads `""` and a write is a no-op. Install with
+/// [`Runtime::set_cookie_provider`](crate::Runtime::set_cookie_provider).
+pub trait CookieProvider {
+    fn get_cookies(&self) -> String;
+    fn set_cookie(&self, cookie: &str);
+}
+
+/// Clone the cookie provider out of host state (so it is not borrowed while invoked).
+fn host_cookies<E: ScriptEngine>(cx: &mut E::CallCx<'_>) -> Option<Rc<dyn CookieProvider>> {
+    let data = cx.host_data()?;
+    let cell = data.downcast_ref::<RefCell<HostState>>()?;
+    let provider = cell.borrow().cookies.clone();
+    provider
+}
+
+/// `__cookieGet()` -> the document's script-visible cookies as a header string
+/// (`""` when there is no provider).
+struct CookieGet;
+impl<E: ScriptEngine> NativeFn<E> for CookieGet {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let cookies = host_cookies::<E>(cx).map(|h| h.get_cookies()).unwrap_or_default();
+        cx.make_string(&cookies)
+    }
+}
+
+/// `__cookieSet(value)` -> record one `Set-Cookie`-style assignment (no-op without a
+/// provider).
+struct CookieSet;
+impl<E: ScriptEngine> NativeFn<E> for CookieSet {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let a0 = cx.arg(0);
+        let cookie = cx.value_to_string(&a0)?;
+        if let Some(provider) = host_cookies::<E>(cx) {
+            provider.set_cookie(&cookie);
+        }
+        Ok(cx.undefined())
     }
 }
 
@@ -1780,6 +1827,15 @@ const DOM_BOOTSTRAP: &str = r#"
   // Document : Node, with the construction/lookup methods.
   function Document() {}
   Document.prototype = Object.create(Node.prototype);
+  // document.cookie reads/writes the host's cookie store (the session jar). The get
+  // returns the document's script-visible cookies ("n1=v1; n2=v2"); the set records
+  // one Set-Cookie-style assignment. No store -> "" / no-op.
+  Object.defineProperty(Document.prototype, 'cookie', {
+    get: function() { return __cookieGet(); },
+    set: function(v) { __cookieSet(String(v)); },
+    configurable: true,
+    enumerable: true
+  });
   Document.prototype.createElement = function(tag) {
     tag = String(tag); validateName(tag);
     // HTML document: the local name is lowercased.
@@ -3178,6 +3234,54 @@ mod tests {
     #[test]
     fn get_computed_style_reads_handler_on_nova() {
         get_computed_style_reads_handler::<script_engine_nova::NovaEngine>();
+    }
+
+    /// `document.cookie` reads the host `CookieProvider` (get) and forwards an
+    /// assignment (set), the cookie convergence seam (native session store).
+    fn document_cookie_reads_and_writes_provider<E: ScriptEngine>() {
+        use serval_static_dom::StaticDocument;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        struct Stub {
+            written: Rc<RefCell<Vec<String>>>,
+        }
+        impl crate::CookieProvider for Stub {
+            fn get_cookies(&self) -> String {
+                "sid=abc; theme=dark".to_string()
+            }
+            fn set_cookie(&self, cookie: &str) {
+                self.written.borrow_mut().push(cookie.to_string());
+            }
+        }
+
+        let written = Rc::new(RefCell::new(Vec::new()));
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.load_dom(&StaticDocument::parse("<html><body></body></html>"));
+        rt.set_cookie_provider(Box::new(Stub { written: written.clone() }));
+        rt.eval(
+            "console.log(document.cookie);\
+             document.cookie = 'new=1; Path=/';\
+             console.log(document.cookie);",
+        )
+        .expect("document.cookie script");
+
+        // The stub's get is constant, so both reads match; the write was forwarded.
+        assert_eq!(
+            rt.host().borrow().console,
+            vec!["sid=abc; theme=dark", "sid=abc; theme=dark"],
+        );
+        assert_eq!(*written.borrow(), vec!["new=1; Path=/".to_string()]);
+    }
+
+    #[test]
+    fn document_cookie_reads_and_writes_provider_on_boa() {
+        document_cookie_reads_and_writes_provider::<script_engine_boa::BoaEngine>();
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn document_cookie_reads_and_writes_provider_on_nova() {
+        document_cookie_reads_and_writes_provider::<script_engine_nova::NovaEngine>();
     }
 
     #[test]

@@ -46,7 +46,7 @@ mod platform;
 mod selector;
 mod webgl;
 
-pub use dom::ComputedStyleHandler;
+pub use dom::{ComputedStyleHandler, CookieProvider};
 pub use fetch::{FetchHandler, FetchOutcome, FetchRequest};
 pub use harness::TestResult;
 pub use webgl::{WebGlFactory, WebGlHandler};
@@ -101,6 +101,12 @@ pub struct HostState {
     /// [`Runtime::set_computed_style_handler`]; an `Rc` so the native sink clones
     /// it out before calling (no live `HostState` borrow during the call).
     pub computed_style: Option<std::rc::Rc<dyn ComputedStyleHandler>>,
+    /// The host's cookie store for `document.cookie` (e.g. meerkat's view over the
+    /// netfetcher session jar). `None` = no store, so `document.cookie` reads `""` and
+    /// a write is a no-op. Installed by [`Runtime::set_cookie_provider`]; an `Rc` so
+    /// the native sink clones it out before calling (no live `HostState` borrow during
+    /// the call).
+    pub cookies: Option<std::rc::Rc<dyn CookieProvider>>,
     /// The document base URL, against which relative `fetch()` / `Request` URLs
     /// resolve (the `__resolve_url` sink reads it). `None` = no base (relative URLs
     /// stay relative, so a network fetch of one is an error). Set by
@@ -315,6 +321,14 @@ impl<E: ScriptEngine> Runtime<E> {
     /// boundary, mirroring [`set_fetch_handler`](Self::set_fetch_handler).
     pub fn set_computed_style_handler(&mut self, handler: Box<dyn ComputedStyleHandler>) {
         self.host.borrow_mut().computed_style = Some(std::rc::Rc::from(handler));
+    }
+
+    /// Install the host's cookie store for `document.cookie` (e.g. meerkat's view over
+    /// the netfetcher session jar). Until set, `document.cookie` reads "" and writes
+    /// no-op. The runtime owns no networking — this is the boundary, mirroring
+    /// [`set_fetch_handler`](Self::set_fetch_handler).
+    pub fn set_cookie_provider(&mut self, provider: Box<dyn CookieProvider>) {
+        self.host.borrow_mut().cookies = Some(std::rc::Rc::from(provider));
     }
 
     /// Install the host's WebGL context factory (e.g. one that mints a
