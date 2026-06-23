@@ -188,6 +188,119 @@ where
     )
 }
 
+/// A retained cascade + layout over a **static content document** (a fetched HTML page),
+/// holding the planes a band emit / find query reuse, so the content host lays out ONCE
+/// and re-emits bands / runs find without re-cascading. The page does not mutate (unlike
+/// the chrome's [`IncrementalLayout`]), so this carries no Stylist / incremental machinery,
+/// just the planes. Built by [`lay_out_content`]; consumed by
+/// [`ContentLayout::emit_band`] / [`ContentLayout::find`]. The one-shot band / find
+/// convenience functions ([`paint_list_band_from_layout_dom`],
+/// [`find_text_rects_from_layout_dom`]) are thin wrappers over this split.
+pub struct ContentLayout<Id: Copy + Eq + Hash> {
+    styles: StylePlane<Id>,
+    images: ImagePlane<Id>,
+    bg_images: BackgroundImagePlane<Id>,
+    fragments: FragmentPlane<Id>,
+    built: BoxTree<Id>,
+    text_ctx: TextMeasureCtx,
+    width: u32,
+    height: u32,
+}
+
+/// Cascade + decode + lay out a static content `dom` at `(width, height)`, returning a
+/// retained [`ContentLayout`] the caller re-emits bands / queries find from with no
+/// re-cascade. Decodes replaced `<img>` (via `loader`, so remote images size correctly)
+/// and CSS `background-image`s (so page backgrounds paint). The viewport sizes `@media` /
+/// sizing at the real width/height. (The content lane's build half; cascade once, emit
+/// many.)
+pub fn lay_out_content<D, L>(
+    dom: &D,
+    stylesheets: &[&str],
+    loader: &L,
+    width: u32,
+    height: u32,
+) -> ContentLayout<D::NodeId>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + Send + Sync + 'static,
+    L: ImageLoader,
+{
+    let mut styles = StylePlane::new();
+    run_cascade(
+        dom,
+        &mut styles,
+        euclid::default::Size2D::new(width as f32, height as f32),
+        stylesheets,
+        None,
+    );
+    let images = ImagePlane::decode_from_dom_with_loader(dom, loader);
+    let bg_images = BackgroundImagePlane::decode_from_cascade(dom, &styles, loader);
+    let viewport = taffy::Size {
+        width: taffy::AvailableSpace::Definite(width as f32),
+        height: taffy::AvailableSpace::Definite(height as f32),
+    };
+    let (fragments, built, text_ctx) = layout(dom, &styles, &images, viewport);
+    ContentLayout { styles, images, bg_images, fragments, built, text_ctx, width, height }
+}
+
+impl<Id: Copy + Eq + Hash + Send + Sync + 'static> ContentLayout<Id> {
+    /// Emit ONE vertical band (`band_y`..`band_y + band_h`) off the retained layout, plus
+    /// the document scroll range and the `<a href>` hit rects in full-document px, exactly
+    /// as [`paint_list_band_from_layout_dom`] does but WITHOUT re-cascading: the content
+    /// host calls this per scroll band. (The content lane's emit half.)
+    pub fn emit_band<D>(
+        &self,
+        dom: &D,
+        band_y: u32,
+        band_h: u32,
+        scroll_offsets: &ScrollOffsets<Id>,
+    ) -> (ServalPaintList, (f32, f32), Vec<(String, [f32; 4])>)
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let scroll_range = document_scroll_range(
+            dom,
+            &self.styles,
+            &self.fragments,
+            paint_list_api::DeviceIntSize::new(self.width as i32, self.height as i32),
+        );
+        let links =
+            crate::link_harvest::harvest_link_rects(dom, &self.fragments, &self.built, &self.text_ctx);
+        let plist = emit_paint_list_scrolled(
+            dom,
+            &self.styles,
+            &self.fragments,
+            &self.built,
+            &self.text_ctx,
+            &self.images,
+            &self.bg_images,
+            scroll_offsets,
+            paint_list_api::DeviceIntSize::new(self.width as i32, band_h.max(1) as i32),
+            (0.0, band_y as f32),
+        );
+        (plist, scroll_range, links)
+    }
+
+    /// Find-in-page off the retained layout: the highlight rects for every `needle`
+    /// occurrence, one inner `Vec` per match (full-document px, unscrolled), without
+    /// re-cascading. The content host calls this per find keystroke. (The content lane's
+    /// find half.)
+    pub fn find<D>(&self, dom: &D, needle: &str) -> Vec<Vec<[f32; 4]>>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        find_text_rects(dom, &self.built, &self.text_ctx, &self.fragments, needle)
+            .into_iter()
+            .map(|rects| {
+                rects
+                    .into_iter()
+                    .map(|r| [r.x, r.y, r.x + r.width, r.y + r.height])
+                    .collect()
+            })
+            .collect()
+    }
+}
+
 /// Lay out at `(width, height)` (so `@media` / sizing cascade at the real viewport),
 /// then emit ONE vertical BAND of the document: the page scrolled to `band_y`, into a
 /// `band_h`-tall viewport. The translator culls paint commands outside the band
@@ -216,44 +329,11 @@ where
     D::NodeId: Copy + Eq + Hash + Send + Sync + 'static,
     L: ImageLoader,
 {
-    let mut styles = StylePlane::new();
-    run_cascade(
-        dom,
-        &mut styles,
-        euclid::default::Size2D::new(width as f32, height as f32),
-        stylesheets,
-        None,
-    );
-    let images = ImagePlane::decode_from_dom_with_loader(dom, loader);
-    let bg_images = BackgroundImagePlane::decode_from_cascade(dom, &styles, loader);
-    let viewport = taffy::Size {
-        width: taffy::AvailableSpace::Definite(width as f32),
-        height: taffy::AvailableSpace::Definite(height as f32),
-    };
-    let (fragments, built, text_ctx) = layout(dom, &styles, &images, viewport);
-    let scroll_range = crate::viewport::document_scroll_range(
-        dom,
-        &styles,
-        &fragments,
-        paint_list_api::DeviceIntSize::new(width as i32, height as i32),
-    );
-    // Harvest the link rects off the same layout pass (full-document px, band-
-    // independent): the flat scene the host gets is not queryable, so it hit-tests
-    // a click against this table instead of the scene.
-    let links = crate::link_harvest::harvest_link_rects(dom, &fragments, &built, &text_ctx);
-    let plist = emit_paint_list_scrolled(
-        dom,
-        &styles,
-        &fragments,
-        &built,
-        &text_ctx,
-        &images,
-        &bg_images,
-        scroll_offsets,
-        paint_list_api::DeviceIntSize::new(width as i32, band_h.max(1) as i32),
-        (0.0, band_y as f32),
-    );
-    (plist, scroll_range, links)
+    // Thin wrapper: build the retained layout, emit one band. One-shot callers keep
+    // working; the content host uses the split ([`lay_out_content`] + [`ContentLayout::emit_band`])
+    // directly so it cascades once and re-emits bands without re-cascading.
+    lay_out_content(dom, stylesheets, loader, width, height)
+        .emit_band(dom, band_y, band_h, scroll_offsets)
 }
 
 /// Find-in-page over a whole `LayoutDom`: cascade + decode + lay out at `(width,
@@ -277,29 +357,8 @@ where
     D::NodeId: Copy + Eq + Hash + Send + Sync + 'static,
     L: ImageLoader,
 {
-    let mut styles = StylePlane::new();
-    run_cascade(
-        dom,
-        &mut styles,
-        euclid::default::Size2D::new(width as f32, height as f32),
-        stylesheets,
-        None,
-    );
-    // `<img>` sizes can shift text, so decode replaced images (as the band path does);
-    // CSS backgrounds do not affect text geometry, so they are skipped here.
-    let images = ImagePlane::decode_from_dom_with_loader(dom, loader);
-    let viewport = taffy::Size {
-        width: taffy::AvailableSpace::Definite(width as f32),
-        height: taffy::AvailableSpace::Definite(height as f32),
-    };
-    let (fragments, built, text_ctx) = layout(dom, &styles, &images, viewport);
-    caret::find_text_rects(dom, &built, &text_ctx, &fragments, needle)
-        .into_iter()
-        .map(|rects| {
-            rects
-                .into_iter()
-                .map(|r| [r.x, r.y, r.x + r.width, r.y + r.height])
-                .collect()
-        })
-        .collect()
+    // Thin wrapper over the retained-layout split (build + find). `lay_out_content` also
+    // decodes backgrounds, which find ignores: a negligible extra decode for one fewer
+    // code path.
+    lay_out_content(dom, stylesheets, loader, width, height).find(dom, needle)
 }
