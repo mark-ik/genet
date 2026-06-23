@@ -12,6 +12,7 @@
 //! against), parsed WHATWG-correctly with `url::Url`.
 
 use std::cell::RefCell;
+use std::rc::Rc;
 
 use script_engine_api::{CallCx, NativeFn, ScriptEngine};
 
@@ -107,15 +108,44 @@ impl<E: ScriptEngine> NativeFn<E> for LocationAssign {
 
 // ── localStorage ─────────────────────────────────────────────────────────────
 
+/// The host's backing for `localStorage` (e.g. a durable, persona + origin-partitioned
+/// store over eidetic). When set, the `localStorage` sinks route through it instead of
+/// the in-memory [`HostState::storage`] default (kept for tests / WPT / no-host runs).
+/// Methods mirror the WHATWG `Storage` interface; the host owns persistence and the
+/// insertion order that `key(n)` / `length` report. Install with
+/// [`Runtime::set_local_storage_provider`](crate::Runtime::set_local_storage_provider).
+pub trait StorageProvider {
+    fn get(&self, key: &str) -> Option<String>;
+    fn set(&self, key: &str, value: &str);
+    fn remove(&self, key: &str);
+    fn clear(&self);
+    /// The nth key in insertion order, or `None` when out of range.
+    fn key(&self, index: usize) -> Option<String>;
+    fn length(&self) -> usize;
+}
+
+/// Clone the localStorage provider out of host state (so it is not borrowed while
+/// invoked). `None` = no provider, so the sinks fall back to in-memory storage.
+fn host_local_storage<E: ScriptEngine>(cx: &mut E::CallCx<'_>) -> Option<Rc<dyn StorageProvider>> {
+    let data = cx.host_data()?;
+    let cell = data.downcast_ref::<RefCell<HostState>>()?;
+    let provider = cell.borrow().local_storage.clone();
+    provider
+}
+
 /// `__storageGet(key)` -> the stored value, or `null` if absent.
 struct StorageGet;
 impl<E: ScriptEngine> NativeFn<E> for StorageGet {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
         let a0 = cx.arg(0);
         let key = cx.value_to_string(&a0)?;
-        let value =
-            with_host::<E, _>(cx, |h| h.storage.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone()))
-                .flatten();
+        let value = match host_local_storage::<E>(cx) {
+            Some(provider) => provider.get(&key),
+            None => with_host::<E, _>(cx, |h| {
+                h.storage.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone())
+            })
+            .flatten(),
+        };
         match value {
             Some(v) => cx.make_string(&v),
             None => Ok(cx.make_null()),
@@ -131,13 +161,17 @@ impl<E: ScriptEngine> NativeFn<E> for StorageSet {
         let key = cx.value_to_string(&a0)?;
         let a1 = cx.arg(1);
         let value = cx.value_to_string(&a1)?;
-        with_host::<E, _>(cx, |h| {
-            if let Some(entry) = h.storage.iter_mut().find(|(k, _)| *k == key) {
-                entry.1 = value;
-            } else {
-                h.storage.push((key, value));
-            }
-        });
+        if let Some(provider) = host_local_storage::<E>(cx) {
+            provider.set(&key, &value);
+        } else {
+            with_host::<E, _>(cx, |h| {
+                if let Some(entry) = h.storage.iter_mut().find(|(k, _)| *k == key) {
+                    entry.1 = value;
+                } else {
+                    h.storage.push((key, value));
+                }
+            });
+        }
         Ok(cx.undefined())
     }
 }
@@ -148,7 +182,11 @@ impl<E: ScriptEngine> NativeFn<E> for StorageRemove {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
         let a0 = cx.arg(0);
         let key = cx.value_to_string(&a0)?;
-        with_host::<E, _>(cx, |h| h.storage.retain(|(k, _)| *k != key));
+        if let Some(provider) = host_local_storage::<E>(cx) {
+            provider.remove(&key);
+        } else {
+            with_host::<E, _>(cx, |h| h.storage.retain(|(k, _)| *k != key));
+        }
         Ok(cx.undefined())
     }
 }
@@ -157,7 +195,11 @@ impl<E: ScriptEngine> NativeFn<E> for StorageRemove {
 struct StorageClear;
 impl<E: ScriptEngine> NativeFn<E> for StorageClear {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
-        with_host::<E, _>(cx, |h| h.storage.clear());
+        if let Some(provider) = host_local_storage::<E>(cx) {
+            provider.clear();
+        } else {
+            with_host::<E, _>(cx, |h| h.storage.clear());
+        }
         Ok(cx.undefined())
     }
 }
@@ -168,9 +210,13 @@ impl<E: ScriptEngine> NativeFn<E> for StorageKey {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
         let a0 = cx.arg(0);
         let index = cx.value_to_string(&a0)?.parse::<usize>().ok();
-        let key =
-            with_host::<E, _>(cx, |h| index.and_then(|i| h.storage.get(i)).map(|(k, _)| k.clone()))
-                .flatten();
+        let key = match host_local_storage::<E>(cx) {
+            Some(provider) => index.and_then(|i| provider.key(i)),
+            None => with_host::<E, _>(cx, |h| {
+                index.and_then(|i| h.storage.get(i)).map(|(k, _)| k.clone())
+            })
+            .flatten(),
+        };
         match key {
             Some(k) => cx.make_string(&k),
             None => Ok(cx.make_null()),
@@ -183,7 +229,10 @@ impl<E: ScriptEngine> NativeFn<E> for StorageKey {
 struct StorageLength;
 impl<E: ScriptEngine> NativeFn<E> for StorageLength {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
-        let n = with_host::<E, _>(cx, |h| h.storage.len()).unwrap_or(0);
+        let n = match host_local_storage::<E>(cx) {
+            Some(provider) => provider.length(),
+            None => with_host::<E, _>(cx, |h| h.storage.len()).unwrap_or(0),
+        };
         cx.make_string(&n.to_string())
     }
 }
@@ -516,6 +565,59 @@ mod tests {
         );
     }
 
+    /// With a host `StorageProvider` installed, the `localStorage` sinks route to it
+    /// (the durable host backing) instead of the in-memory default. (Native session
+    /// store 6b.)
+    fn local_storage_routes_to_provider<E: ScriptEngine>() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        struct Stub {
+            items: Rc<RefCell<Vec<(String, String)>>>,
+        }
+        impl crate::StorageProvider for Stub {
+            fn get(&self, key: &str) -> Option<String> {
+                self.items.borrow().iter().find(|(k, _)| k.as_str() == key).map(|(_, v)| v.clone())
+            }
+            fn set(&self, key: &str, value: &str) {
+                let mut items = self.items.borrow_mut();
+                if let Some(entry) = items.iter_mut().find(|(k, _)| k.as_str() == key) {
+                    entry.1 = value.to_string();
+                } else {
+                    items.push((key.to_string(), value.to_string()));
+                }
+            }
+            fn remove(&self, key: &str) {
+                self.items.borrow_mut().retain(|(k, _)| k.as_str() != key);
+            }
+            fn clear(&self) {
+                self.items.borrow_mut().clear();
+            }
+            fn key(&self, index: usize) -> Option<String> {
+                self.items.borrow().get(index).map(|(k, _)| k.clone())
+            }
+            fn length(&self) -> usize {
+                self.items.borrow().len()
+            }
+        }
+
+        let items = Rc::new(RefCell::new(Vec::new()));
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.set_local_storage_provider(Box::new(Stub { items: items.clone() }));
+        rt.eval(
+            "localStorage.setItem('a', '1');\
+             localStorage.setItem('b', '2');\
+             console.log(localStorage.getItem('a') + ',' + localStorage.length + ',' + localStorage.key(1));\
+             localStorage.removeItem('a');\
+             console.log((localStorage.getItem('a') === null) + ',' + localStorage.length);",
+        )
+        .expect("storage provider script");
+        assert_eq!(rt.host().borrow().console, vec!["1,2,b", "true,1"]);
+        // The writes landed in the host-backed store, not the in-memory default.
+        assert_eq!(*items.borrow(), vec![("b".to_string(), "2".to_string())]);
+        assert!(rt.host().borrow().storage.is_empty());
+    }
+
     /// `history` records state + URL across pushState / replaceState, keeps
     /// `length` correct (dropping forward entries on a new push), navigates with
     /// back / forward, and syncs the document URL.
@@ -559,6 +661,15 @@ mod tests {
     #[test]
     fn local_storage_round_trips_on_boa() {
         local_storage_round_trips::<script_engine_boa::BoaEngine>();
+    }
+    #[test]
+    fn local_storage_routes_to_provider_on_boa() {
+        local_storage_routes_to_provider::<script_engine_boa::BoaEngine>();
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn local_storage_routes_to_provider_on_nova() {
+        local_storage_routes_to_provider::<script_engine_nova::NovaEngine>();
     }
     #[test]
     fn history_navigation_on_boa() {

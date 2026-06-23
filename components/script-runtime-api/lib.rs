@@ -47,6 +47,7 @@ mod selector;
 mod webgl;
 
 pub use dom::{ComputedStyleHandler, CookieProvider};
+pub use platform::StorageProvider;
 pub use fetch::{FetchHandler, FetchOutcome, FetchRequest};
 pub use harness::TestResult;
 pub use webgl::{WebGlFactory, WebGlHandler};
@@ -113,10 +114,17 @@ pub struct HostState {
     /// [`Runtime::set_base_url`] for server-mode WPT runs.
     pub base_url: Option<String>,
     /// `window.localStorage` backing: an ordered key→value store (insertion
-    /// order, for `key(n)` / `Object.keys`). In-memory only (no persistence yet);
-    /// one origin per runtime. Read/written by the `platform` surface's
+    /// order, for `key(n)` / `Object.keys`). The in-memory default (tests / WPT /
+    /// no-host runs); a host that sets [`local_storage`](Self::local_storage) backs
+    /// localStorage durably instead. Read/written by the `platform` surface's
     /// `__storage*` sinks.
     pub storage: Vec<(String, String)>,
+    /// The host's durable backing for `localStorage`. `None` = use the in-memory
+    /// [`storage`](Self::storage); `Some` routes the `__storage*` sinks through the
+    /// host store (e.g. eidetic, persona + origin-partitioned). Installed by
+    /// [`Runtime::set_local_storage_provider`]; an `Rc` so the native sink clones it
+    /// out before calling (no live `HostState` borrow during the call).
+    pub local_storage: Option<std::rc::Rc<dyn StorageProvider>>,
     /// `window.history` entries: `(serialized state JSON, document URL)`, the
     /// session history the `platform` surface's `__history*` sinks drive
     /// (`pushState` / `replaceState` / `state` / `length` / `go`). The current
@@ -329,6 +337,14 @@ impl<E: ScriptEngine> Runtime<E> {
     /// [`set_fetch_handler`](Self::set_fetch_handler).
     pub fn set_cookie_provider(&mut self, provider: Box<dyn CookieProvider>) {
         self.host.borrow_mut().cookies = Some(std::rc::Rc::from(provider));
+    }
+
+    /// Install the host's durable backing for `localStorage` (e.g. an eidetic store,
+    /// persona + origin-partitioned). Until set, localStorage is the in-memory
+    /// [`HostState::storage`] default. The runtime owns no persistence — this is the
+    /// boundary, mirroring [`set_cookie_provider`](Self::set_cookie_provider).
+    pub fn set_local_storage_provider(&mut self, provider: Box<dyn StorageProvider>) {
+        self.host.borrow_mut().local_storage = Some(std::rc::Rc::from(provider));
     }
 
     /// Install the host's WebGL context factory (e.g. one that mints a
