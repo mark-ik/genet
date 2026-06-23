@@ -55,7 +55,12 @@ mod websocket;
 pub use altsvc::{AltSvcStore, InMemoryAltSvc};
 pub use cache::{HttpCache, InMemoryHttpCache, NoHttpCache, StoredResponse};
 pub use client::accept_invalid_certs;
-pub use context::{AllowAllCsp, CookieStore, CspChecker, FetchContext, SameSiteContext};
+pub use context::{
+    AllowAllCsp, CookieRecord, CookieStore, CspChecker, FetchContext, SameSiteContext,
+};
+// Re-exported so consumers can name a `CookieRecord`'s `same_site` without taking a
+// direct `cookie` crate dep.
+pub use cookie::SameSite;
 pub use cors::{InMemoryPreflightCache, PreflightCache};
 pub use cookie_jar::InMemoryCookieJar;
 pub use fetch::fetch;

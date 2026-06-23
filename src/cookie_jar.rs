@@ -24,7 +24,7 @@ use cookie::{Cookie, SameSite};
 use time::OffsetDateTime;
 use url::Url;
 
-use crate::context::{CookieStore, SameSiteContext};
+use crate::context::{CookieRecord, CookieStore, SameSiteContext};
 
 #[derive(Clone)]
 struct StoredCookie {
@@ -35,6 +35,7 @@ struct StoredCookie {
     host_only: bool,
     path: String,
     secure: bool,
+    http_only: bool,
     same_site: Option<SameSite>,
     /// `None` = session cookie (kept for the jar's lifetime).
     expiry: Option<OffsetDateTime>,
@@ -64,10 +65,13 @@ impl InMemoryCookieJar {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-}
 
-impl CookieStore for InMemoryCookieJar {
-    fn cookies_for(&self, url: &Url, ctx: SameSiteContext) -> Vec<String> {
+    /// The stored cookies that match a request to `url` under `ctx` (domain / path /
+    /// `Secure` / `SameSite` gating), sorted longest-path then oldest-first (the
+    /// spec's serialization order). Expired cookies are pruned as a side effect.
+    /// Shared by [`cookies_for`](CookieStore::cookies_for) (which renders `name=value`)
+    /// and [`records_for`](CookieStore::records_for) (which keeps the attributes).
+    fn matching(&self, url: &Url, ctx: SameSiteContext) -> Vec<StoredCookie> {
         let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
         let req_path = url.path();
         let secure_ctx = url.scheme() == "https";
@@ -78,7 +82,7 @@ impl CookieStore for InMemoryCookieJar {
         };
         jar.retain(|c| !expired(c, now));
 
-        let mut hits: Vec<&StoredCookie> = jar
+        let mut hits: Vec<StoredCookie> = jar
             .iter()
             .filter(|c| {
                 let domain_ok = if c.host_only {
@@ -97,11 +101,38 @@ impl CookieStore for InMemoryCookieJar {
                     && (!c.secure || secure_ctx)
                     && samesite_ok
             })
+            .cloned()
             .collect();
 
         // Longer paths first; ties broken by creation order (oldest first).
         hits.sort_by(|a, b| b.path.len().cmp(&a.path.len()).then(a.created.cmp(&b.created)));
-        hits.iter().map(|c| format!("{}={}", c.name, c.value)).collect()
+        hits
+    }
+}
+
+impl CookieStore for InMemoryCookieJar {
+    fn cookies_for(&self, url: &Url, ctx: SameSiteContext) -> Vec<String> {
+        self.matching(url, ctx)
+            .iter()
+            .map(|c| format!("{}={}", c.name, c.value))
+            .collect()
+    }
+
+    fn records_for(&self, url: &Url, ctx: SameSiteContext) -> Vec<CookieRecord> {
+        self.matching(url, ctx)
+            .into_iter()
+            .map(|c| CookieRecord {
+                name: c.name,
+                value: c.value,
+                domain: c.domain,
+                host_only: c.host_only,
+                path: c.path,
+                secure: c.secure,
+                http_only: c.http_only,
+                same_site: c.same_site,
+                expires: c.expiry.map(|e| e.unix_timestamp() as f64),
+            })
+            .collect()
     }
 
     fn set_cookie(&self, url: &Url, set_cookie_header: &str) {
@@ -135,6 +166,7 @@ impl CookieStore for InMemoryCookieJar {
             host_only,
             path,
             secure: parsed.secure().unwrap_or(false),
+            http_only: parsed.http_only().unwrap_or(false),
             same_site: parsed.same_site(),
             expiry,
             created: now,
@@ -268,6 +300,23 @@ mod tests {
             jar.cookies_for(&url("https://example.org/app/page"), ss()),
             vec!["b=2", "a=1"],
         );
+    }
+
+    #[test]
+    fn records_for_preserves_attributes() {
+        let jar = InMemoryCookieJar::new();
+        jar.set_cookie(
+            &url("https://example.org/app/"),
+            "sid=abc; Path=/app; Secure; HttpOnly; SameSite=Strict",
+        );
+        let records = jar.records_for(&url("https://example.org/app/x"), ss());
+        assert_eq!(records.len(), 1);
+        let r = &records[0];
+        assert_eq!((r.name.as_str(), r.value.as_str()), ("sid", "abc"));
+        assert_eq!(r.path, "/app");
+        assert!(r.secure && r.http_only && r.host_only);
+        assert_eq!(r.same_site, Some(SameSite::Strict));
+        assert_eq!(r.domain, "example.org");
     }
 
     #[test]

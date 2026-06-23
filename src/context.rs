@@ -16,6 +16,7 @@
 
 use std::sync::Arc;
 
+use cookie::SameSite;
 use url::Url;
 
 use crate::altsvc::{AltSvcStore, InMemoryAltSvc};
@@ -75,12 +76,57 @@ impl SameSiteContext {
     }
 }
 
+/// A stored cookie's full record: the structured form behind [`CookieStore::cookies_for`]'s
+/// header serialization. For consumers that need the attributes, not just the
+/// `name=value` request-header pair — e.g. carrying a live session into another
+/// engine (the verso flip), or persisting the jar durably.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CookieRecord {
+    pub name: String,
+    pub value: String,
+    /// The host for a host-only cookie, else the `Domain` value.
+    pub domain: String,
+    /// True when scoped to exactly `domain` (the `Set-Cookie` had no `Domain`).
+    pub host_only: bool,
+    pub path: String,
+    pub secure: bool,
+    pub http_only: bool,
+    pub same_site: Option<SameSite>,
+    /// Absolute expiry in Unix seconds, or `None` for a session cookie.
+    pub expires: Option<f64>,
+}
+
 /// RFC 6265bis cookie jar seam. In-memory default here; durable impls live in the
 /// host (eidetic / persona-scoped storage).
 pub trait CookieStore: Send + Sync {
     /// `Cookie` header value(s) to attach for a request to `url`, applying SameSite
     /// gating per `ctx`.
     fn cookies_for(&self, url: &Url, ctx: SameSiteContext) -> Vec<String>;
+    /// The same cookies as [`cookies_for`](Self::cookies_for), but as structured
+    /// [`CookieRecord`]s (attributes preserved). The default derives lossy records
+    /// from `cookies_for` (name + value only, attributes inferred from the URL); a
+    /// jar that holds the full record should override this for a lossless read.
+    fn records_for(&self, url: &Url, ctx: SameSiteContext) -> Vec<CookieRecord> {
+        let host = url.host_str().unwrap_or_default().to_string();
+        let secure = url.scheme() == "https";
+        self.cookies_for(url, ctx)
+            .into_iter()
+            .filter_map(|pair| {
+                let (name, value) = pair.split_once('=')?;
+                Some(CookieRecord {
+                    name: name.to_string(),
+                    value: value.to_string(),
+                    domain: host.clone(),
+                    host_only: true,
+                    path: "/".to_string(),
+                    secure,
+                    http_only: false,
+                    same_site: None,
+                    expires: None,
+                })
+            })
+            .collect()
+    }
     /// Record a `Set-Cookie` header received from `url`.
     fn set_cookie(&self, url: &Url, set_cookie_header: &str);
 }
