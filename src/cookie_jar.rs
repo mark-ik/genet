@@ -66,6 +66,63 @@ impl InMemoryCookieJar {
         self.len() == 0
     }
 
+    /// Every live (unexpired) stored cookie, as structured records — for persisting
+    /// the whole jar to a durable backing (the native session store). Unlike
+    /// [`records_for`](CookieStore::records_for) this is not URL-scoped; it is the
+    /// full jar snapshot.
+    pub fn all_records(&self) -> Vec<CookieRecord> {
+        let now = OffsetDateTime::now_utc();
+        let Ok(jar) = self.cookies.lock() else {
+            return Vec::new();
+        };
+        jar.iter()
+            .filter(|c| !expired(c, now))
+            .map(|c| CookieRecord {
+                name: c.name.clone(),
+                value: c.value.clone(),
+                domain: c.domain.clone(),
+                host_only: c.host_only,
+                path: c.path.clone(),
+                secure: c.secure,
+                http_only: c.http_only,
+                same_site: c.same_site,
+                expires: c.expiry.map(|e| e.unix_timestamp() as f64),
+            })
+            .collect()
+    }
+
+    /// Restore records into the jar (from a durable backing at startup). Each record
+    /// replaces any existing cookie with the same (name, domain, path) identity, the
+    /// same rule as a fresh `Set-Cookie`; already-expired records are dropped. The
+    /// `created` time is reset to now (it only breaks serialization-order ties).
+    pub fn load_records(&self, records: impl IntoIterator<Item = CookieRecord>) {
+        let now = OffsetDateTime::now_utc();
+        let Ok(mut jar) = self.cookies.lock() else {
+            return;
+        };
+        for r in records {
+            let expiry = r
+                .expires
+                .and_then(|s| OffsetDateTime::from_unix_timestamp(s as i64).ok());
+            if expiry.is_some_and(|e| e <= now) {
+                continue;
+            }
+            jar.retain(|c| !(c.name == r.name && c.domain == r.domain && c.path == r.path));
+            jar.push(StoredCookie {
+                name: r.name,
+                value: r.value,
+                domain: r.domain,
+                host_only: r.host_only,
+                path: r.path,
+                secure: r.secure,
+                http_only: r.http_only,
+                same_site: r.same_site,
+                expiry,
+                created: now,
+            });
+        }
+    }
+
     /// The stored cookies that match a request to `url` under `ctx` (domain / path /
     /// `Secure` / `SameSite` gating), sorted longest-path then oldest-first (the
     /// spec's serialization order). Expired cookies are pruned as a side effect.
@@ -300,6 +357,47 @@ mod tests {
             jar.cookies_for(&url("https://example.org/app/page"), ss()),
             vec!["b=2", "a=1"],
         );
+    }
+
+    #[test]
+    fn all_records_then_load_records_round_trips() {
+        let jar = InMemoryCookieJar::new();
+        jar.set_cookie(&url("https://example.org/app/"), "sid=abc; Path=/app; Secure; HttpOnly");
+        jar.set_cookie(&url("https://example.org/"), "pref=dark; Domain=example.org");
+        let saved = jar.all_records();
+        assert_eq!(saved.len(), 2);
+
+        // A fresh jar restored from the snapshot serves the same cookies.
+        let restored = InMemoryCookieJar::new();
+        restored.load_records(saved);
+        assert_eq!(
+            restored.cookies_for(&url("https://example.org/app/x"), ss()),
+            vec!["sid=abc", "pref=dark"], // longer path first
+        );
+        let r = &restored
+            .records_for(&url("https://example.org/app/x"), ss())
+            .into_iter()
+            .find(|r| r.name == "sid")
+            .unwrap();
+        assert!(r.secure && r.http_only); // attributes survived the round trip
+    }
+
+    #[test]
+    fn load_records_drops_expired() {
+        let jar = InMemoryCookieJar::new();
+        let expired = CookieRecord {
+            name: "old".into(),
+            value: "1".into(),
+            domain: "example.org".into(),
+            host_only: true,
+            path: "/".into(),
+            secure: false,
+            http_only: false,
+            same_site: None,
+            expires: Some(1.0), // 1970, long past
+        };
+        jar.load_records([expired]);
+        assert!(jar.is_empty());
     }
 
     #[test]
