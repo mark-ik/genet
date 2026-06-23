@@ -66,10 +66,14 @@ pub(crate) fn paint_context<Id>(
     // its absolute origin + bucket z; `walk` does not descend into them).
     let mut body = Vec::new();
     let mut layers: Vec<Deferred> = Vec::new();
-    // Each context root starts a fresh ancestor-transform accumulation: any
-    // transform on an ancestor *of this context* is re-established by the
-    // `paint_layer` wrap that placed this context (so it composes, not doubles).
-    walk(em, tree, text_ctx, node, origin, &mut body, &mut layers, true, LayoutTransform::identity());
+    // Each context root starts a fresh ancestor-transform *and* ancestor-scroll
+    // accumulation: any transform / scroll on an ancestor *of this context* is already
+    // folded into this context's placement (the `paint_layer` wrap and the deferred
+    // `origin`), so both restart at zero here and compose rather than double.
+    walk(
+        em, tree, text_ctx, node, origin, &mut body, &mut layers, true,
+        LayoutTransform::identity(), (0.0, 0.0),
+    );
     // Stable sort by (z, document order): same-z layers keep document order, the
     // Appendix E tiebreak.
     layers.sort_by_key(|d| (d.z, d.seq));

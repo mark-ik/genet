@@ -552,6 +552,13 @@ pub(crate) fn walk<Id>(
     // does not use it — the per-node `PushTransform` chain already carries the
     // transform for content painted in place.
     ancestor_transform: LayoutTransform,
+    // The accumulated scroll offset (device px) of this node's *scroll-container* ancestors
+    // within the current stacking context. In-flow content scrolls via the `-offset` paint
+    // transform pushed per container (below); a deferred positioned/absolute layer is painted
+    // on a clean stack by the stacking painter instead — never riding that transform — so it
+    // folds this into its recorded `origin` to scroll *with* its container rather than staying
+    // pinned. The scroll twin of `ancestor_transform`. (Absolute-in-scroll fix.)
+    accumulated_scroll: (f32, f32),
 ) where
     Id: Copy + Eq + Hash,
 {
@@ -566,7 +573,10 @@ pub(crate) fn walk<Id>(
     if !is_root && crate::paint_stacking::defers_to_stacking(cv) {
         deferred.push(Deferred {
             node: arena,
-            origin,
+            // Fold in the scroll of this layer's scroll-container ancestors, so it scrolls
+            // with its container instead of staying at the un-scrolled origin (the stacking
+            // painter paints it on a clean stack, off the `-offset` transform). (Abs-in-scroll.)
+            origin: (origin.0 - accumulated_scroll.0, origin.1 - accumulated_scroll.1),
             z: crate::paint_stacking::bucket_z(cv),
             seq: deferred.len(),
             ancestor_transform,
@@ -912,9 +922,18 @@ pub(crate) fn walk<Id>(
             kind: TransformKind::Standard,
         }));
     }
+    // This node's scroll adds to the accumulated scroll its deferred descendants must fold in
+    // (in-flow descendants ride the `-offset` transform above instead). (Absolute-in-scroll fix.)
+    let child_scroll = match scroll {
+        Some((ox, oy)) => (accumulated_scroll.0 + ox, accumulated_scroll.1 + oy),
+        None => accumulated_scroll,
+    };
 
     for &child in &node.children {
-        walk(em, tree, text_ctx, child, child_origin, commands, deferred, false, child_transform);
+        walk(
+            em, tree, text_ctx, child, child_origin, commands, deferred, false, child_transform,
+            child_scroll,
+        );
     }
 
     // Unwind in reverse: scroll transform, then clip, then the origin transform.
@@ -3754,6 +3773,96 @@ mod tests {
             },
             other => panic!("expected scroll PushTransform after PushClip, got {other:?}"),
         }
+    }
+
+    /// A `position: absolute` child of a scrolled `overflow` container scrolls *with* it:
+    /// the deferred layer's recorded origin folds in the container's scroll, so it does not
+    /// stay pinned while in-flow content scrolls under it. (Absolute-in-scroll fix — the bug
+    /// where the orrery/facet swatch's sprite stayed put as the menu scrolled.)
+    #[test]
+    fn absolute_child_scrolls_with_its_overflow_container() {
+        use crate::cascade::run_cascade;
+        use crate::image_decode::BackgroundImagePlane;
+
+        let document = StaticDocument::parse(
+            "<html><body><div class=\"scroller\"><div class=\"abs\"></div></div></body></html>",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[
+                "html, body, div { display: block; margin: 0; padding: 0; border: 0; }",
+                ".scroller { position: relative; overflow: scroll; width: 100px; height: 100px; }",
+                ".abs { position: absolute; top: 50px; left: 0; width: 20px; height: 20px; \
+                    background-color: rgb(255, 0, 0); }",
+            ],
+            None,
+        );
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
+
+        // The .scroller div.
+        let scroller = {
+            let mut q = vec![document.document()];
+            let mut found = None;
+            while let Some(id) = q.pop() {
+                if document.element_name(id).is_some_and(|n| n.local == local_name!("div")) {
+                    found = Some(id);
+                    break;
+                }
+                q.extend(document.dom_children(id));
+            }
+            found.expect("scroller div")
+        };
+
+        // The absolute y where the abs child's red rect lands, accumulating translate origins.
+        let red_y = |offsets: &FxHashMap<StaticNodeId, (f32, f32)>| -> f32 {
+            let plist = emit_paint_list_with_layouts(
+                &document,
+                &styles,
+                &fragments,
+                &built,
+                &text_ctx,
+                &ImagePlane::new(),
+                &BackgroundImagePlane::new(),
+                offsets,
+                DeviceIntSize::new(800, 600),
+            );
+            let mut acc_y = 0.0f32;
+            let mut stack: Vec<f32> = Vec::new();
+            for c in plist.commands() {
+                match c {
+                    PaintCmd::PushTransform(t) => {
+                        acc_y += t.origin.y;
+                        stack.push(t.origin.y);
+                    },
+                    PaintCmd::PopTransform => {
+                        if let Some(y) = stack.pop() {
+                            acc_y -= y;
+                        }
+                    },
+                    PaintCmd::DrawRect(r) if r.color.r > 0.9 && r.color.g < 0.1 && r.color.b < 0.1 => {
+                        return acc_y + r.placement.bounds.min.y;
+                    },
+                    _ => {},
+                }
+            }
+            panic!("the abs child's red rect was not emitted");
+        };
+
+        let unscrolled = red_y(&FxHashMap::default());
+        let mut offsets: FxHashMap<StaticNodeId, (f32, f32)> = FxHashMap::default();
+        offsets.insert(scroller, (0.0, 30.0));
+        let scrolled = red_y(&offsets);
+        assert!(
+            (unscrolled - scrolled - 30.0).abs() < 0.5,
+            "the absolute child scrolls 30px with its container: {unscrolled} -> {scrolled}",
+        );
     }
 
     /// z-index Tier 1: an out-of-flow (`position: absolute`) box declared
