@@ -337,15 +337,50 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         moved
     }
 
-    /// Handle a left click at scene point `(x, y)`: if it lands on an in-page link
-    /// (`<a href="#id">`), scroll its target into view. Returns whether the document
-    /// scrolled. A no-op before the first frame, or off a link. (Click → script event
-    /// dispatch is a V4 follow-up; this keeps the static viewer's anchor-nav parity.)
+    /// Handle a left click at scene point `(x, y)`: hit-test the live DOM, dispatch a
+    /// `click` event at the node under the point (capture → target → bubble, so the
+    /// page's listeners run and may mutate the DOM), then — unless a listener called
+    /// `preventDefault` — apply the default action: in-page anchor navigation
+    /// (`<a href="#id">` scrolls its target into view). Returns whether the document
+    /// scrolled. A no-op before the first frame.
+    ///
+    /// The hit-test and the dispatch are separated by a borrow boundary on purpose:
+    /// the layout session borrows the host DOM immutably, and
+    /// [`Runtime::dispatch_event`](script_runtime_api::Runtime::dispatch_event)
+    /// mutably re-enters the host, so the session is dropped before dispatch. The
+    /// default-action layout is rebuilt afterward because a click listener may have
+    /// changed the tree.
     pub fn click_at(&mut self, x: f32, y: f32) -> bool {
         if self.size == (0, 0) {
             return false;
         }
         let (w, h) = self.size;
+
+        // Hit-test the current frame for the click target. Scoped: the session borrows
+        // the DOM, so it must drop before dispatch re-enters the host mutably.
+        let target = {
+            let host = self.rt.host().borrow();
+            let dom = &host.dom;
+            let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
+            let mut session = IncrementalLayout::new(dom, &sheets, w as f32, h as f32);
+            session.set_viewport_scroll(dom, self.scroll);
+            session.hit_test(dom, x, y, &ScrollOffsets::default())
+        };
+
+        // Dispatch `click` at the target. `proceed` is false iff a listener called
+        // preventDefault — then the default action (anchor nav) is suppressed. A click
+        // off any fragment (no target) has no script target but still runs the
+        // default-action pass.
+        let proceed = match target {
+            Some(node) => self.rt.dispatch_event(node.raw(), "click").unwrap_or(true),
+            None => true,
+        };
+        if !proceed {
+            return false;
+        }
+
+        // Default action: in-page anchor navigation. Rebuild layout — a click listener
+        // may have mutated the DOM since the hit-test.
         let host = self.rt.host().borrow();
         let dom = &host.dom;
         let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
@@ -1320,6 +1355,65 @@ mod tests {
         );
     }
 
+    /// The input → event bridge end to end: a `click_at` over a laid-out element
+    /// hit-tests it and dispatches a `click` that runs the page's listener. This is
+    /// the path a host (meerkat) drives when forwarding a pointer click to a scripted
+    /// tile — script reacting to real input, not just running on load.
+    fn click_dispatches_to_script<E: ScriptEngine>() {
+        let html = "<body>\
+            <div id='hit' style='width:300px;height:200px'></div>\
+            <script>document.getElementById('hit')\
+                .addEventListener('click', function(){ console.log('clicked-div'); });</script>\
+            </body>";
+        let mut doc = ScriptedDocument::<E>::parse(html).expect("runtime inits");
+        let _ = doc.frame(400, 300); // lay out so hit-testing resolves the div
+        let _ = doc.click_at(50.0, 50.0); // inside the 300×200 div
+        assert!(
+            doc.console().iter().any(|l| l == "clicked-div"),
+            "the click dispatched to the div's listener: {:?}",
+            doc.console(),
+        );
+    }
+
+    /// A click listener calling `preventDefault` suppresses the default action: the
+    /// control (no listener) scrolls to the anchor's `#bot` target, while the same
+    /// page with a `preventDefault` listener does not. Proves the bridge's
+    /// preventDefault result actually gates the host-applied default action.
+    fn prevent_default_blocks_anchor_nav<E: ScriptEngine>() {
+        let page = |listener: &str| {
+            format!(
+                "<body>\
+                    <a id='lnk' href='#bot' style='display:block;width:300px;height:40px'>go</a>\
+                    <div style='height:2000px'></div>\
+                    <div id='bot'>end</div>\
+                    <script>{listener}</script>\
+                 </body>"
+            )
+        };
+        // Control: no preventDefault — clicking the anchor scrolls to #bot.
+        let mut nav = ScriptedDocument::<E>::parse(&page("")).expect("doc");
+        let _ = nav.frame(400, 300);
+        let moved = nav.click_at(20.0, 20.0);
+        assert!(
+            moved && nav.scroll().1 > 0.0,
+            "anchor nav scrolls without preventDefault: moved={moved} scroll={:?}",
+            nav.scroll(),
+        );
+        // preventDefault on the anchor's click suppresses that scroll.
+        let mut blocked = ScriptedDocument::<E>::parse(&page(
+            "document.getElementById('lnk')\
+             .addEventListener('click', function(e){ e.preventDefault(); });",
+        ))
+        .expect("doc");
+        let _ = blocked.frame(400, 300);
+        let moved = blocked.click_at(20.0, 20.0);
+        assert!(
+            !moved && blocked.scroll().1 == 0.0,
+            "preventDefault blocks anchor nav: moved={moved} scroll={:?}",
+            blocked.scroll(),
+        );
+    }
+
     #[test]
     fn mutation_renders_on_boa() {
         mutation_renders::<BoaEngine>();
@@ -1432,6 +1526,14 @@ mod tests {
     fn pump_collects_orphans_on_boa() {
         pump_collects_orphans::<BoaEngine>();
     }
+    #[test]
+    fn click_dispatches_to_script_on_boa() {
+        click_dispatches_to_script::<BoaEngine>();
+    }
+    #[test]
+    fn prevent_default_blocks_anchor_nav_on_boa() {
+        prevent_default_blocks_anchor_nav::<BoaEngine>();
+    }
 
     #[cfg(feature = "scripted-nova")]
     mod nova {
@@ -1542,6 +1644,14 @@ mod tests {
         #[test]
         fn url_attributes_resolve_against_page_url_on_nova() {
             url_attributes_resolve_against_page_url::<NovaEngine>();
+        }
+        #[test]
+        fn click_dispatches_to_script_on_nova() {
+            click_dispatches_to_script::<NovaEngine>();
+        }
+        #[test]
+        fn prevent_default_blocks_anchor_nav_on_nova() {
+            prevent_default_blocks_anchor_nav::<NovaEngine>();
         }
     }
 }
