@@ -79,9 +79,15 @@ pub struct PageExtract {
     pub headings: Vec<Heading>,
     /// The page's full **visible text**, whitespace-collapsed (non-rendered
     /// subtrees — `<script>` / `<style>` / `<head>` / … — excluded). This is the
-    /// indexing/corpus text, *not* a main-content/readability extraction (that
-    /// heuristic is a later slice).
+    /// indexing/corpus text (everything the reader could see, chrome included);
+    /// for the article body alone, see [`main_text`](Self::main_text).
     pub text: String,
+    /// The **reader-mode article body**: the main content block by a
+    /// readability heuristic (semantic landmarks + paragraph density + class/id
+    /// signals), with page chrome (nav / header / footer / aside) dropped. `None`
+    /// when no contentful block stands out (a link list, an app shell). This is the
+    /// per-page payload for a reader-mode crawl.
+    pub main_text: Option<String>,
     /// Every `<a href>` in document order — the crawl frontier's source.
     pub links: Vec<Link>,
 }
@@ -94,6 +100,7 @@ pub fn extract<D: LayoutDom>(dom: &D) -> PageExtract {
         metadata: extract_metadata(dom),
         headings: extract_headings(dom),
         text: extract_text(dom),
+        main_text: extract_main_text(dom),
         links: extract_links(dom),
     }
 }
@@ -244,6 +251,153 @@ fn collect_visible_text<D: LayoutDom>(dom: &D, id: D::NodeId, out: &mut String) 
     for child in dom.dom_children(id) {
         collect_visible_text(dom, child, out);
     }
+}
+
+// ---- reader-mode / main-content extraction ------------------------------------
+//
+// A compact readability heuristic (technique borrowed from readability.js): a
+// semantic `<main>` wins outright; otherwise score block containers by paragraph
+// density and class/id signal and take the best. Then emit that block's text with
+// chrome (nav / header / footer / aside) and non-rendered subtrees dropped. The
+// per-page payload for a reader-mode crawl.
+
+/// Positive class/id signals: an element whose `class`/`id` contains one of these is
+/// likely the article body (readability.js's positive lexicon, trimmed).
+const POSITIVE_HINTS: &[&str] = &[
+    "article", "body", "content", "entry", "main", "page", "post", "text", "blog",
+    "story", "column", "prose",
+];
+
+/// Negative class/id signals: chrome, boilerplate, furniture. An element matching one
+/// is penalized as unlikely to be the article body.
+const NEGATIVE_HINTS: &[&str] = &[
+    "nav", "menu", "header", "footer", "sidebar", "comment", "ads", "banner", "sponsor",
+    "social", "share", "related", "promo", "masthead", "widget", "byline", "breadcrumb",
+];
+
+/// The page's **reader-mode article body**: locate the main content block and return
+/// its chrome-free text, whitespace-collapsed. `None` when nothing contentful stands
+/// out (an app shell, a pure link list). The per-page payload for a reader-mode crawl.
+pub fn extract_main_text<D: LayoutDom>(dom: &D) -> Option<String> {
+    let root = main_content_root(dom)?;
+    let text = chrome_free_text(dom, root);
+    (!text.is_empty()).then_some(text)
+}
+
+/// The element most likely to hold the article body: a semantic `<main>` if present
+/// (the modern, unambiguous answer), else the best-scoring candidate block (score
+/// must be positive — a page with only chrome yields `None`).
+fn main_content_root<D: LayoutDom>(dom: &D) -> Option<D::NodeId> {
+    if let Some(main) = find_first(dom, dom.document(), "main") {
+        return Some(main);
+    }
+    let mut best: Option<(i32, D::NodeId)> = None;
+    score_candidates(dom, dom.document(), &mut best);
+    best.filter(|(score, _)| *score > 0).map(|(_, id)| id)
+}
+
+/// Score every candidate block in the tree, tracking the maximum.
+fn score_candidates<D: LayoutDom>(dom: &D, id: D::NodeId, best: &mut Option<(i32, D::NodeId)>) {
+    if is_candidate_block(dom, id) {
+        let score = score_block(dom, id);
+        let better = match *best {
+            Some((s, _)) => score > s,
+            None => true,
+        };
+        if better {
+            *best = Some((score, id));
+        }
+    }
+    for child in dom.dom_children(id) {
+        score_candidates(dom, child, best);
+    }
+}
+
+/// The block-level containers that can be the article root.
+fn is_candidate_block<D: LayoutDom>(dom: &D, id: D::NodeId) -> bool {
+    matches!(local_name(dom, id), Some("div" | "section" | "article" | "td"))
+}
+
+/// A block's readability score: a tag bonus, the class/id signal, and paragraph
+/// density (the dominant term — an article body is mostly paragraph text).
+fn score_block<D: LayoutDom>(dom: &D, id: D::NodeId) -> i32 {
+    let mut score = classid_signal(dom, id);
+    score += match local_name(dom, id) {
+        Some("article") => 25,
+        Some("section") => 8,
+        Some("td") => 3,
+        _ => 0,
+    };
+    // Paragraph density in ~50-char units, capped so one giant block doesn't wholly
+    // swamp the class/tag signal.
+    score += (paragraph_text_len(dom, id) / 50).min(50) as i32;
+    score
+}
+
+/// Sum of descendant `<p>` text lengths under `id` (tiny paragraphs ignored — UI
+/// labels, not prose).
+fn paragraph_text_len<D: LayoutDom>(dom: &D, id: D::NodeId) -> usize {
+    let mut total = 0;
+    walk_paragraph_len(dom, id, &mut total);
+    total
+}
+
+fn walk_paragraph_len<D: LayoutDom>(dom: &D, id: D::NodeId, total: &mut usize) {
+    if local_name(dom, id) == Some("p") {
+        let len = text_of(dom, id).len();
+        if len >= 25 {
+            *total += len;
+        }
+    }
+    for child in dom.dom_children(id) {
+        walk_paragraph_len(dom, child, total);
+    }
+}
+
+/// The class/id signal: `+25` if any positive hint and `-25` if any negative hint
+/// appears in the element's `class` or `id` (substring, lowercased), as readability does.
+fn classid_signal<D: LayoutDom>(dom: &D, id: D::NodeId) -> i32 {
+    let haystack = format!(
+        "{} {}",
+        attr(dom, id, "class").unwrap_or_default(),
+        attr(dom, id, "id").unwrap_or_default(),
+    )
+    .to_ascii_lowercase();
+    let mut score = 0;
+    if POSITIVE_HINTS.iter().any(|h| haystack.contains(h)) {
+        score += 25;
+    }
+    if NEGATIVE_HINTS.iter().any(|h| haystack.contains(h)) {
+        score -= 25;
+    }
+    score
+}
+
+/// Text under `root` with chrome (nav / header / footer / aside) and non-rendered
+/// (script / style / …) subtrees dropped — the reader-mode body text.
+fn chrome_free_text<D: LayoutDom>(dom: &D, root: D::NodeId) -> String {
+    let mut out = String::new();
+    collect_main_text(dom, root, &mut out);
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn collect_main_text<D: LayoutDom>(dom: &D, id: D::NodeId, out: &mut String) {
+    if local_name(dom, id).is_some_and(is_chrome_or_non_rendered) {
+        return; // skip chrome / non-rendered subtrees
+    }
+    if let Some(t) = dom.text(id) {
+        out.push_str(t);
+        out.push(' ');
+    }
+    for child in dom.dom_children(id) {
+        collect_main_text(dom, child, out);
+    }
+}
+
+/// Subtrees excluded from reader-mode body text: non-rendered content plus page
+/// chrome (the landmarks that are not the article).
+fn is_chrome_or_non_rendered(name: &str) -> bool {
+    is_non_rendered(name) || matches!(name, "nav" | "header" | "footer" | "aside")
 }
 
 // ---- small DOM helpers (rect-free, allocation-light) --------------------------
@@ -424,5 +578,73 @@ mod tests {
             "<html><head><title>T</title></head><body><p>Hello world.</p></body></html>",
         );
         assert_eq!(extract(&doc).text, "Hello world.");
+    }
+
+    #[test]
+    fn main_text_prefers_the_main_landmark_and_drops_chrome() {
+        let doc = StaticDocument::parse(
+            "<body>\
+                <nav><a href='/'>Home</a> Menu Junk Links</nav>\
+                <header>Site Title Boilerplate Banner</header>\
+                <main>\
+                    <h1>Article Heading</h1>\
+                    <p>This is the first paragraph of the real article body, long enough to count.</p>\
+                    <p>And a second paragraph continuing the genuine article content here.</p>\
+                    <aside>Inline aside promo junk to drop</aside>\
+                </main>\
+                <footer>Copyright Footer Junk</footer>\
+             </body>",
+        );
+        let main = extract_main_text(&doc).expect("an article body");
+        assert!(main.contains("first paragraph of the real article body"), "{main}");
+        assert!(main.contains("second paragraph"), "{main}");
+        // Chrome outside the landmark, and an aside *inside* it, are all dropped.
+        assert!(!main.contains("Menu Junk"), "nav dropped: {main}");
+        assert!(!main.contains("Footer Junk"), "footer dropped: {main}");
+        assert!(!main.contains("Boilerplate Banner"), "header dropped: {main}");
+        assert!(!main.contains("aside promo junk"), "inline aside dropped: {main}");
+    }
+
+    #[test]
+    fn main_text_scores_content_over_sidebar() {
+        // No <main>: the heuristic must pick the article div over the sidebar by
+        // paragraph density + class signal, and drop an inline footer within it.
+        let doc = StaticDocument::parse(
+            "<body>\
+                <div class='sidebar'><p>Ads and promo links and sponsor junk over here.</p></div>\
+                <div class='article-content'>\
+                    <p>The genuine article body paragraph one, with substantial readable prose.</p>\
+                    <p>Paragraph two of the genuine article, with more substantial readable content.</p>\
+                    <footer>inline footer junk to drop</footer>\
+                </div>\
+             </body>",
+        );
+        let main = extract_main_text(&doc).expect("an article body");
+        assert!(main.contains("genuine article body paragraph one"), "{main}");
+        assert!(main.contains("Paragraph two of the genuine article"), "{main}");
+        assert!(!main.contains("Ads and promo"), "sidebar lost to scoring: {main}");
+        assert!(!main.contains("footer junk"), "inline footer dropped: {main}");
+    }
+
+    #[test]
+    fn main_text_is_none_for_a_link_list() {
+        // A nav-only page (an app shell / index) has no article body.
+        let doc = StaticDocument::parse(
+            "<body><nav><a href='/a'>A</a><a href='/b'>B</a><a href='/c'>C</a></nav></body>",
+        );
+        assert_eq!(extract_main_text(&doc), None);
+    }
+
+    #[test]
+    fn full_extract_carries_main_text() {
+        let doc = StaticDocument::parse(
+            "<body><main><p>The article body paragraph with enough prose to register.</p></main></body>",
+        );
+        assert!(
+            extract(&doc)
+                .main_text
+                .as_deref()
+                .is_some_and(|m| m.contains("article body paragraph")),
+        );
     }
 }
