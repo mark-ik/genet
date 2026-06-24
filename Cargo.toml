@@ -9,6 +9,7 @@ members = [
     "components/webgl-essl",
     "components/serval-layout",
     "components/serval-static-dom",
+    "components/serval-extract",
     "components/serval-scripted-dom",
     "components/serval-scripted",
     "components/serval-static-html",

@@ -1,0 +1,23 @@
+[package]
+name = "serval-extract"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Render-free content extraction over the profile-neutral LayoutDom (the extraction lane: analyze, don't paint)."
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+# The ONLY dependency: the profile-neutral DOM trait. No serval-layout, no paint —
+# extraction is render-free by construction, and its dep graph is the witness (the
+# render ladder's discipline, applied to the extraction axis).
+layout_dom_api = { workspace = true }
+
+[dev-dependencies]
+# A concrete LayoutDom to extract from in tests; the no-JS parse tree.
+serval-static-dom = { path = "../serval-static-dom" }
