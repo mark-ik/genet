@@ -129,6 +129,20 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         Self::build(html, None)
     }
 
+    /// Parse an already-fetched `html` body and run its scripts, fetching external
+    /// `<script src>` through `fetcher` (each resolved against `base_url`). Like
+    /// [`parse`](Self::parse) but with external scripts; unlike [`load`](Self::load)
+    /// it does **not** re-fetch the document — the caller supplies the body it already
+    /// has (e.g. a host that fetched the page itself, then runs it on the scripted
+    /// rung). `Err` only if the runtime fails to initialize.
+    pub fn from_body(
+        html: &str,
+        fetcher: &dyn ResourceFetcher,
+        base_url: &str,
+    ) -> Result<Self, String> {
+        Self::build(html, Some((fetcher, base_url)))
+    }
+
     /// Parse `html` into a live DOM and run its scripts in document order. With a
     /// `loader` (`(fetcher, base_url)`), external `<script src>` is resolved against
     /// `base_url` and fetched; without one (the [`parse`](Self::parse) path), an
@@ -856,6 +870,27 @@ mod tests {
         );
     }
 
+    /// `from_body` runs an external `<script src>` against an already-fetched body,
+    /// without re-fetching the document: the caller supplies the page HTML, the fetcher
+    /// supplies only the script, and the injected text renders. (The host-render-rung
+    /// path: meerkat fetched the page, then runs it on the scripted rung.)
+    fn from_body_runs_external_script<E: ScriptEngine>() {
+        let files = map_fetcher(&[(
+            "http://x/app.js",
+            "var p=document.createElement('p');\
+             p.appendChild(document.createTextNode('ext'));\
+             document.body.appendChild(p);",
+        )]);
+        let body = "<body><script src=\"app.js\"></script></body>";
+        let mut doc = ScriptedDocument::<E>::from_body(body, &files, "http://x/index.html")
+            .expect("from_body");
+        let scene = doc.frame(400, 300);
+        assert!(
+            scene.ops.iter().any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
+            "external script run against a host-supplied body renders glyphs",
+        );
+    }
+
     /// Inline and external scripts run in document order: three scripts (inline,
     /// external, inline) each log a letter, and the console shows `A`, `B`, `C` in
     /// order — proving inline and external interleave in authored order (the ordering
@@ -1251,6 +1286,10 @@ mod tests {
     #[test]
     fn external_script_runs_on_boa() {
         external_script_runs::<BoaEngine>();
+    }
+    #[test]
+    fn from_body_runs_external_script_on_boa() {
+        from_body_runs_external_script::<BoaEngine>();
     }
     #[test]
     fn scripts_run_in_document_order_on_boa() {
