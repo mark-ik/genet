@@ -103,6 +103,11 @@ pub use headless::{
 pub use headless::{render_png, render_png_scrolled, png_within_fuzz, Fuzz};
 #[cfg(feature = "scripted")]
 pub use scripted::{ScriptedDocument, ScriptedEngine};
+// The host installs a cookie store on a scripted document (e.g. meerkat's session jar)
+// for `document.cookie`; re-export the seam so the host can name it without a direct
+// `script-runtime-api` dep. (Render ladder 2c.)
+#[cfg(feature = "scripted")]
+pub use script_runtime_api::CookieProvider;
 #[cfg(all(feature = "viewer", feature = "scripted"))]
 pub use scripted_viewer::run_scripted_viewer;
 #[cfg(feature = "chrome")]

@@ -45,7 +45,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use script_engine_api::ScriptEngine;
-use script_runtime_api::{ComputedStyleHandler, Runtime};
+use script_runtime_api::{ComputedStyleHandler, CookieProvider, Runtime};
 use serval_layout::{inline_stylesheets, IncrementalLayout, ScrollKey, ScrollOffsets};
 use serval_render::scene_from_session_dom;
 use serval_scripted_dom::NodeId;
@@ -116,7 +116,7 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
             .ok_or_else(|| format!("could not load {resource}"))?;
         // External scripts resolve against the document URL and fetch through the
         // same fetcher; pass both into the builder.
-        let mut me = Self::build(&String::from_utf8_lossy(&bytes), Some((fetcher, resource)))?;
+        let mut me = Self::build(&String::from_utf8_lossy(&bytes), Some((fetcher, resource)), None)?;
         me.pending_fragment = fragment;
         Ok(me)
     }
@@ -126,7 +126,7 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
     /// `data:` content — with no fetcher, external `<script src>` is reported and
     /// skipped. `Err` if the runtime fails to initialize.
     pub fn parse(html: &str) -> Result<Self, String> {
-        Self::build(html, None)
+        Self::build(html, None, None)
     }
 
     /// Parse an already-fetched `html` body and run its scripts, fetching external
@@ -135,12 +135,15 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
     /// it does **not** re-fetch the document — the caller supplies the body it already
     /// has (e.g. a host that fetched the page itself, then runs it on the scripted
     /// rung). `Err` only if the runtime fails to initialize.
+    /// `cookies` installs the host's cookie store (e.g. meerkat's session jar) so
+    /// `document.cookie` reads / writes it; `None` leaves the document cookieless.
     pub fn from_body(
         html: &str,
         fetcher: &dyn ResourceFetcher,
         base_url: &str,
+        cookies: Option<Box<dyn CookieProvider>>,
     ) -> Result<Self, String> {
-        Self::build(html, Some((fetcher, base_url)))
+        Self::build(html, Some((fetcher, base_url)), cookies)
     }
 
     /// Parse `html` into a live DOM and run its scripts in document order. With a
@@ -149,7 +152,11 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
     /// external script is reported and skipped. A script that errors (or whose fetch
     /// fails) is reported but does not abort the load — a browser keeps rendering the
     /// document. `Err` only if the runtime fails to initialize.
-    fn build(html: &str, loader: Option<(&dyn ResourceFetcher, &str)>) -> Result<Self, String> {
+    fn build(
+        html: &str,
+        loader: Option<(&dyn ResourceFetcher, &str)>,
+        cookies: Option<Box<dyn CookieProvider>>,
+    ) -> Result<Self, String> {
         let doc = StaticDocument::parse(html);
         let mut sheets: Vec<String> =
             crate::STRUCTURAL_SHEET.iter().map(|s| s.to_string()).collect();
@@ -166,6 +173,11 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         // (the `parse()` path has no URL, so those reflect their raw values).
         if let Some((_, base)) = loader {
             let _ = rt.set_base_url(base);
+        }
+        // Install the host's cookie store (the session jar) before any script runs, so
+        // a page reading / writing `document.cookie` on load sees the live session.
+        if let Some(cookies) = cookies {
+            rt.set_cookie_provider(cookies);
         }
         // The parsed body becomes the live DOM, so script querying it (document.body,
         // getElementById, querySelector) sees the page's elements.
@@ -882,13 +894,46 @@ mod tests {
              document.body.appendChild(p);",
         )]);
         let body = "<body><script src=\"app.js\"></script></body>";
-        let mut doc = ScriptedDocument::<E>::from_body(body, &files, "http://x/index.html")
+        let mut doc = ScriptedDocument::<E>::from_body(body, &files, "http://x/index.html", None)
             .expect("from_body");
         let scene = doc.frame(400, 300);
         assert!(
             scene.ops.iter().any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
             "external script run against a host-supplied body renders glyphs",
         );
+    }
+
+    /// A cookie provider passed to `from_body` is installed before scripts run: a page
+    /// reads `document.cookie` on load and a write reaches the host store. (Render
+    /// ladder 2c — `document.cookie` over the host's session jar.)
+    fn from_body_wires_document_cookie<E: ScriptEngine>() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct Jar {
+            written: Rc<RefCell<Vec<String>>>,
+        }
+        impl script_runtime_api::CookieProvider for Jar {
+            fn get_cookies(&self) -> String {
+                "sid=abc".to_string()
+            }
+            fn set_cookie(&self, cookie: &str) {
+                self.written.borrow_mut().push(cookie.to_string());
+            }
+        }
+        let written = Rc::new(RefCell::new(Vec::new()));
+        let body = "<body><script>\
+            document.title = document.cookie;\
+            document.cookie = 'theme=dark';\
+            console.log(document.cookie);\
+            </script></body>";
+        let _doc = ScriptedDocument::<E>::from_body(
+            body,
+            &map_fetcher(&[]),
+            "http://x/",
+            Some(Box::new(Jar { written: written.clone() })),
+        )
+        .expect("from_body with cookies");
+        assert_eq!(*written.borrow(), vec!["theme=dark".to_string()], "the write reached the jar");
     }
 
     /// Inline and external scripts run in document order: three scripts (inline,
@@ -1290,6 +1335,10 @@ mod tests {
     #[test]
     fn from_body_runs_external_script_on_boa() {
         from_body_runs_external_script::<BoaEngine>();
+    }
+    #[test]
+    fn from_body_wires_document_cookie_on_boa() {
+        from_body_wires_document_cookie::<BoaEngine>();
     }
     #[test]
     fn scripts_run_in_document_order_on_boa() {
