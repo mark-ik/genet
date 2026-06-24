@@ -419,6 +419,19 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
     pub fn console(&self) -> Vec<String> {
         self.rt.host().borrow().console.clone()
     }
+
+    /// Render-free extraction of the **post-JS** document: a
+    /// [`PageExtract`](serval_extract::PageExtract) over the live `ScriptedDom` as the
+    /// page's scripts have left it. This is the **headless-scripted-DOM scrape**: an
+    /// SPA whose content is injected by JavaScript yields its real content here, where
+    /// a static parse of the served HTML would find an empty shell. Same `extract()`
+    /// the static lane runs, just over the mutated DOM — extraction is orthogonal to
+    /// rendering, so no layout/paint is involved. Run after [`build`](Self::build) (and
+    /// any [`pump`](Self::pump)s) so deferred / timer-driven mutations are in.
+    pub fn extract(&self) -> serval_extract::PageExtract {
+        let host = self.rt.host().borrow();
+        serval_extract::extract(&host.dom)
+    }
 }
 
 /// Which JS engine the scripted profile runs on. Boa is pure Rust (all targets, the
@@ -1414,6 +1427,38 @@ mod tests {
         );
     }
 
+    /// The headless-scripted-DOM scrape: `extract()` reads the **post-JS** DOM, so a
+    /// page whose heading + link are injected by JavaScript yields them — where a
+    /// static parse of the served HTML sees only the empty shell. Proves the
+    /// extraction lane reaches JS-rendered (SPA) content.
+    fn extract_sees_post_js_dom<E: ScriptEngine>() {
+        let html = "<body><script>\
+            var h = document.createElement('h1');\
+            h.appendChild(document.createTextNode('Injected Title'));\
+            document.body.appendChild(h);\
+            var a = document.createElement('a');\
+            a.setAttribute('href', '/spa/route');\
+            a.appendChild(document.createTextNode('go'));\
+            document.body.appendChild(a);\
+            </script></body>";
+
+        // Control: a static parse of the same HTML sees the shell — no heading, no link.
+        let static_extract = serval_extract::extract(&StaticDocument::parse(html));
+        assert!(static_extract.headings.is_empty(), "static parse sees no JS-injected heading");
+        assert!(static_extract.links.is_empty(), "static parse sees no JS-injected link");
+
+        // Post-JS: the scripted document's extract has the injected content.
+        let doc = ScriptedDocument::<E>::parse(html).expect("runtime inits");
+        let page = doc.extract();
+        assert_eq!(
+            page.headings,
+            vec![serval_extract::Heading { level: 1, text: "Injected Title".into() }],
+        );
+        assert_eq!(page.links.len(), 1, "the injected link is extracted");
+        assert_eq!(page.links[0].href, "/spa/route");
+        assert_eq!(page.links[0].text, "go");
+    }
+
     #[test]
     fn mutation_renders_on_boa() {
         mutation_renders::<BoaEngine>();
@@ -1534,6 +1579,10 @@ mod tests {
     fn prevent_default_blocks_anchor_nav_on_boa() {
         prevent_default_blocks_anchor_nav::<BoaEngine>();
     }
+    #[test]
+    fn extract_sees_post_js_dom_on_boa() {
+        extract_sees_post_js_dom::<BoaEngine>();
+    }
 
     #[cfg(feature = "scripted-nova")]
     mod nova {
@@ -1652,6 +1701,10 @@ mod tests {
         #[test]
         fn prevent_default_blocks_anchor_nav_on_nova() {
             prevent_default_blocks_anchor_nav::<NovaEngine>();
+        }
+        #[test]
+        fn extract_sees_post_js_dom_on_nova() {
+            extract_sees_post_js_dom::<NovaEngine>();
         }
     }
 }

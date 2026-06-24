@@ -108,6 +108,10 @@ pub use scripted::{ScriptedDocument, ScriptedEngine};
 // `script-runtime-api` dep. (Render ladder 2c.)
 #[cfg(feature = "scripted")]
 pub use script_runtime_api::CookieProvider;
+// The headless-scripted-DOM scrape (`ScriptedDocument::extract`) returns these; re-export
+// so the host names the post-JS extract without a direct `serval-extract` dep. (Phase 4.)
+#[cfg(feature = "scripted")]
+pub use serval_extract::{Heading, Link, Metadata, PageExtract};
 #[cfg(all(feature = "viewer", feature = "scripted"))]
 pub use scripted_viewer::run_scripted_viewer;
 #[cfg(feature = "chrome")]

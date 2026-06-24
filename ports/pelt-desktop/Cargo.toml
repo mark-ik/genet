@@ -42,6 +42,7 @@ scripted = [
     "dep:netrender", "dep:serval-render", "dep:serval-static-dom", "dep:serval-layout",
     "dep:script-runtime-api", "dep:script-engine-api",
     "dep:serval-scripted-dom", "dep:script-engine-boa", "dep:layout-dom-api",
+    "dep:serval-extract",
     "dep:encoding_rs", "dep:sha2", "dep:base64", "dep:url",
 ]
 # Add the Nova engine to the scripted profile (native-only). Off by default; enabling
@@ -129,6 +130,9 @@ winit = { workspace = true }
 serval-render = { path = "../../components/serval-render", optional = true }
 serval-static-dom = { path = "../../components/serval-static-dom", optional = true }
 serval-layout = { path = "../../components/serval-layout", optional = true }
+# The render-free extraction lane: extract a PageExtract from the live post-JS DOM
+# (the headless-scripted-DOM scrape path for SPAs). Depends only on layout-dom-api.
+serval-extract = { path = "../../components/serval-extract", optional = true }
 serval-winit-host = { path = "../../components/serval-winit-host", optional = true }
 # Spec `data:` URL decoding for the LocalFetcher (percent-encoded + base64 bodies).
 data-url = { workspace = true, optional = true }
