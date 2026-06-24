@@ -77,6 +77,11 @@ pub struct PageExtract {
     pub metadata: Metadata,
     /// The `<h1>`–`<h6>` outline in document order.
     pub headings: Vec<Heading>,
+    /// The page's full **visible text**, whitespace-collapsed (non-rendered
+    /// subtrees — `<script>` / `<style>` / `<head>` / … — excluded). This is the
+    /// indexing/corpus text, *not* a main-content/readability extraction (that
+    /// heuristic is a later slice).
+    pub text: String,
     /// Every `<a href>` in document order — the crawl frontier's source.
     pub links: Vec<Link>,
 }
@@ -88,6 +93,7 @@ pub fn extract<D: LayoutDom>(dom: &D) -> PageExtract {
         title: extract_title(dom),
         metadata: extract_metadata(dom),
         headings: extract_headings(dom),
+        text: extract_text(dom),
         links: extract_links(dom),
     }
 }
@@ -209,6 +215,35 @@ fn rel_has<D: LayoutDom>(dom: &D, id: D::NodeId, token: &str) -> bool {
     attr(dom, id, "rel").is_some_and(|rel| {
         rel.split_whitespace().any(|t| t.eq_ignore_ascii_case(token))
     })
+}
+
+/// The page's full **visible text**, whitespace-collapsed: every text node except
+/// those under non-rendered elements (`<script>` / `<style>` / `<template>` /
+/// `<noscript>` / the document `<head>`). The indexing/corpus text — deliberately
+/// *not* a main-content heuristic (which would drop nav/footer chrome); that
+/// readability pass is a later slice that can build on this.
+pub fn extract_text<D: LayoutDom>(dom: &D) -> String {
+    let mut out = String::new();
+    collect_visible_text(dom, dom.document(), &mut out);
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Names of subtrees that carry no visible page text and are skipped wholesale.
+fn is_non_rendered(name: &str) -> bool {
+    matches!(name, "script" | "style" | "template" | "noscript" | "head")
+}
+
+fn collect_visible_text<D: LayoutDom>(dom: &D, id: D::NodeId, out: &mut String) {
+    if local_name(dom, id).is_some_and(is_non_rendered) {
+        return; // skip the whole subtree
+    }
+    if let Some(t) = dom.text(id) {
+        out.push_str(t);
+        out.push(' '); // separator so adjacent inline runs don't fuse
+    }
+    for child in dom.dom_children(id) {
+        collect_visible_text(dom, child, out);
+    }
 }
 
 // ---- small DOM helpers (rect-free, allocation-light) --------------------------
@@ -368,5 +403,26 @@ mod tests {
     fn missing_metadata_is_all_none() {
         let doc = StaticDocument::parse("<body><p>no meta</p></body>");
         assert_eq!(extract_metadata(&doc), Metadata::default());
+    }
+
+    #[test]
+    fn visible_text_excludes_script_and_style() {
+        let doc = StaticDocument::parse(
+            "<html><head><title>T</title><style>p{color:red}</style></head>\
+             <body><h1>Heading</h1><p>Para one.</p>\
+             <script>var x = 'not visible';</script>\
+             <p>Para two.</p></body></html>",
+        );
+        // <head> (title + style) and the inline <script> are excluded; body text is
+        // concatenated and whitespace-collapsed.
+        assert_eq!(extract_text(&doc), "Heading Para one. Para two.");
+    }
+
+    #[test]
+    fn full_extract_carries_text() {
+        let doc = StaticDocument::parse(
+            "<html><head><title>T</title></head><body><p>Hello world.</p></body></html>",
+        );
+        assert_eq!(extract(&doc).text, "Hello world.");
     }
 }
