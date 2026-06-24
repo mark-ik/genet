@@ -204,6 +204,34 @@ impl<E: ScriptEngine> Runtime<E> {
         self.engine.pump_microtasks();
     }
 
+    /// The **input → event bridge**: dispatch a synthetic DOM event of `event_type`
+    /// (`"click"`, `"keydown"`, …) at the node with raw id `raw_node_id`, running its
+    /// registered listeners with full capture→target→bubble propagation. The host
+    /// supplies the target (e.g. from `serval-layout`'s `hit_test`); the runtime owns
+    /// no layout, so it cannot hit-test itself.
+    ///
+    /// Returns `true` if the default action should proceed, `false` if a listener
+    /// called `preventDefault` (so the host can suppress link-follow, form submit,
+    /// etc.). A microtask checkpoint runs after dispatch so listener-scheduled
+    /// continuations settle. Bubbling and cancelable by default; an unknown id is a
+    /// no-op that returns `false`.
+    pub fn dispatch_event(
+        &mut self,
+        raw_node_id: usize,
+        event_type: &str,
+    ) -> Result<bool, E::Error> {
+        let v = self
+            .engine
+            .eval(&format!("__dispatchSynthetic({raw_node_id}, {event_type:?})"))?;
+        let proceed = self
+            .engine
+            .value_to_string(&v)
+            .map(|s| s != "false")
+            .unwrap_or(true);
+        self.engine.pump_microtasks();
+        Ok(proceed)
+    }
+
     /// The scripted-tier GC tick (G3): retire the reflectors the engine reports
     /// dead (unpinning their nodes), then mark-sweep the live document with the
     /// surviving pins as extra roots. An orphan script can no longer reach is

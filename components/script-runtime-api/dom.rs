@@ -102,6 +102,7 @@ fn first_element_child(dom: &ScriptedDom, node: NodeId) -> Option<NodeId> {
 /// builds `document` and the node wrappers over them.
 pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error> {
     engine.set_function::<DocumentRoot>("__documentRoot", 0)?;
+    engine.set_function::<ReflectNode>("__reflectNode", 1)?;
     engine.set_function::<CreateElement>("__createElement", 1)?;
     engine.set_function::<CreateTextNode>("__createTextNode", 1)?;
     engine.set_function::<AppendChild>("__appendChild", 2)?;
@@ -304,6 +305,24 @@ impl<E: ScriptEngine> NativeFn<E> for DocumentRoot {
         match with_dom::<E, _>(cx, |dom| dom.document()) {
             Some(root) => reflect_pinned::<E>(cx,root.raw() as u64),
             None => Ok(cx.undefined()),
+        }
+    }
+}
+
+/// `__reflectNode(rawId)` → the canonical reflector for an **already-existing**
+/// node identified by its raw id (a host-side `NodeId::raw()`), pinned like any
+/// node handed to script. This is the inbound counterpart to the outbound
+/// node-returning natives: the host (e.g. a hit-test that yields a `NodeId`)
+/// needs a JS handle for a node it found in Rust, with no DOM query to reach it.
+/// `null` if the argument is not a parseable raw id. Paired in the bootstrap with
+/// `wrapNode(...)` and exposed to the host through `__dispatchSynthetic`.
+struct ReflectNode;
+impl<E: ScriptEngine> NativeFn<E> for ReflectNode {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let a0 = cx.arg(0);
+        match cx.value_to_string(&a0)?.parse::<u64>() {
+            Ok(raw) => reflect_pinned::<E>(cx, raw),
+            Err(_) => Ok(cx.make_null()),
         }
     }
 }
@@ -2485,6 +2504,18 @@ const DOM_BOOTSTRAP: &str = r#"
   wrappers.set(docRef, document);
   globalThis.document = document;
 
+  // Host-facing synthetic-event entry (the input -> event bridge). `wrapNode` is
+  // IIFE-local, so a host eval can't reach it directly; this exposes a minimal
+  // global the host calls with a raw NodeId (e.g. from a hit-test) and an event
+  // type. Returns dispatchEvent's value: false iff preventDefault was called, so
+  // the host knows whether to run the default action (follow the link, etc.).
+  globalThis.__dispatchSynthetic = function(rawId, type, opts) {
+    var node = wrapNode(__reflectNode(String(rawId)));
+    if (!node) { return false; }
+    var ev = new Event(String(type), opts || { bubbles: true, cancelable: true });
+    return node.dispatchEvent(ev);
+  };
+
   // window.frames is the window itself when there are no child browsing
   // contexts (the static-DOM harness has none).
   globalThis.frames = globalThis.window || globalThis;
@@ -3561,6 +3592,44 @@ mod tests {
                 "passive-noop:true",
             ]
         );
+    }
+
+    /// The **native dispatch entry** (`Runtime::dispatch_event`): the host hands a
+    /// raw NodeId (as a `hit_test` would) and an event type, and the runtime fires
+    /// the node's listeners with real propagation — the input → event bridge with no
+    /// script-side `dispatchEvent` call. `preventDefault` in a listener surfaces to
+    /// the caller as `false` (the host suppresses the default action). Twin of the
+    /// JS-column `dom_node_events_work`; same contract, different entry point.
+    fn dispatch_event_fires_a_listener<E: ScriptEngine>() {
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.eval(
+            "document.addEventListener('click', function(){ console.log('clicked'); });\
+             document.addEventListener('cancelme', function(e){ e.preventDefault(); });",
+        )
+        .expect("listener script");
+
+        // The host's target: the document node's raw id (stands in for a hit-test).
+        let root = rt.host().borrow().dom.document().raw();
+
+        // A click runs the listener; with no preventDefault the default may proceed.
+        let proceed = rt.dispatch_event(root, "click").expect("dispatch click");
+        assert!(proceed);
+        assert_eq!(rt.host().borrow().console, vec!["clicked"]);
+
+        // A listener calling preventDefault surfaces as `false` to the host.
+        let proceed = rt.dispatch_event(root, "cancelme").expect("dispatch cancelme");
+        assert!(!proceed);
+    }
+
+    #[test]
+    fn dispatch_event_fires_a_listener_on_boa() {
+        dispatch_event_fires_a_listener::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dispatch_event_fires_a_listener_on_nova() {
+        dispatch_event_fires_a_listener::<script_engine_nova::NovaEngine>();
     }
 
     #[test]
