@@ -40,14 +40,43 @@ pub struct Link {
     pub rel: Option<String>,
 }
 
+/// One extracted heading: its level (`1`–`6` for `<h1>`–`<h6>`) and collapsed text.
+/// The document outline — structure for the corpus and a summarization signal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Heading {
+    /// The heading level, `1`–`6`.
+    pub level: u8,
+    /// The heading's visible text, whitespace-collapsed.
+    pub text: String,
+}
+
+/// The document's self-description: the metadata a page declares about itself. All
+/// values are **unresolved** (a `canonical` href is the raw attribute). `Default` is
+/// "nothing declared".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Metadata {
+    /// `<meta name="description">` content — the page's own summary.
+    pub description: Option<String>,
+    /// `<link rel="canonical" href>` — the canonical URL the page claims (raw).
+    pub canonical: Option<String>,
+    /// OpenGraph `<meta property="og:*">` pairs with the `og:` prefix stripped, in
+    /// document order: `("title", …)`, `("description", …)`, `("image", …)`,
+    /// `("site_name", …)`, `("type", …)`, `("url", …)`, and the long tail.
+    pub open_graph: Vec<(String, String)>,
+}
+
 /// A render-free extraction of a parsed document: the structured content a crawler
 /// or the eidetic corpus wants, with no cascade / layout / paint. Grows field by
-/// field as the extraction lane lands (headings, main text, and metadata are the
-/// next slices); `Default` is the empty extract.
+/// field as the extraction lane lands (main text is the next slice); `Default` is
+/// the empty extract.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PageExtract {
     /// The document `<title>` text, whitespace-collapsed, if present and non-empty.
     pub title: Option<String>,
+    /// The page's declared metadata (description / canonical / OpenGraph).
+    pub metadata: Metadata,
+    /// The `<h1>`–`<h6>` outline in document order.
+    pub headings: Vec<Heading>,
     /// Every `<a href>` in document order — the crawl frontier's source.
     pub links: Vec<Link>,
 }
@@ -57,6 +86,8 @@ pub struct PageExtract {
 pub fn extract<D: LayoutDom>(dom: &D) -> PageExtract {
     PageExtract {
         title: extract_title(dom),
+        metadata: extract_metadata(dom),
+        headings: extract_headings(dom),
         links: extract_links(dom),
     }
 }
@@ -104,6 +135,80 @@ fn find_first<D: LayoutDom>(dom: &D, id: D::NodeId, name: &str) -> Option<D::Nod
         }
     }
     None
+}
+
+/// The `<h1>`–`<h6>` outline in document (pre-order) order, each with its level and
+/// collapsed text. Empty headings are skipped (no text to outline).
+pub fn extract_headings<D: LayoutDom>(dom: &D) -> Vec<Heading> {
+    let mut out = Vec::new();
+    walk_headings(dom, dom.document(), &mut out);
+    out
+}
+
+fn walk_headings<D: LayoutDom>(dom: &D, id: D::NodeId, out: &mut Vec<Heading>) {
+    if let Some(level) = local_name(dom, id).and_then(heading_level) {
+        let text = text_of(dom, id);
+        if !text.is_empty() {
+            out.push(Heading { level, text });
+        }
+    }
+    for child in dom.dom_children(id) {
+        walk_headings(dom, child, out);
+    }
+}
+
+/// `1`–`6` for `h1`–`h6`, else `None`.
+fn heading_level(name: &str) -> Option<u8> {
+    match name.as_bytes() {
+        [b'h', d @ b'1'..=b'6'] => Some(d - b'0'),
+        _ => None,
+    }
+}
+
+/// The page's declared [`Metadata`]: `<meta name="description">`, the
+/// `<link rel="canonical">` href, and OpenGraph `<meta property="og:*">` pairs.
+/// Walks the whole tree (not just `<head>`) since pages place these loosely.
+pub fn extract_metadata<D: LayoutDom>(dom: &D) -> Metadata {
+    let mut md = Metadata::default();
+    walk_metadata(dom, dom.document(), &mut md);
+    md
+}
+
+fn walk_metadata<D: LayoutDom>(dom: &D, id: D::NodeId, md: &mut Metadata) {
+    match local_name(dom, id) {
+        Some("meta") => {
+            // OpenGraph (`property="og:*"`) takes precedence over `name`; a `<meta>`
+            // carries one or the other. Only the *first* description wins.
+            if let Some(prop) = attr(dom, id, "property") {
+                if let Some(key) = prop.strip_prefix("og:") {
+                    if let Some(content) = attr(dom, id, "content") {
+                        md.open_graph.push((key.to_string(), content));
+                    }
+                }
+            } else if attr(dom, id, "name").as_deref() == Some("description") {
+                if md.description.is_none() {
+                    md.description = attr(dom, id, "content").filter(|c| !c.is_empty());
+                }
+            }
+        },
+        Some("link") => {
+            if md.canonical.is_none() && rel_has(dom, id, "canonical") {
+                md.canonical = attr(dom, id, "href").filter(|h| !h.is_empty());
+            }
+        },
+        _ => {},
+    }
+    for child in dom.dom_children(id) {
+        walk_metadata(dom, child, md);
+    }
+}
+
+/// Whether `id`'s `rel` attribute contains the (space-separated, case-insensitive)
+/// token `token` — `rel` is a token list (`"stylesheet preload"`, `"canonical"`).
+fn rel_has<D: LayoutDom>(dom: &D, id: D::NodeId, token: &str) -> bool {
+    attr(dom, id, "rel").is_some_and(|rel| {
+        rel.split_whitespace().any(|t| t.eq_ignore_ascii_case(token))
+    })
 }
 
 // ---- small DOM helpers (rect-free, allocation-light) --------------------------
@@ -204,5 +309,64 @@ mod tests {
     fn empty_document_extracts_nothing() {
         let doc = StaticDocument::parse("");
         assert_eq!(extract(&doc), PageExtract::default());
+    }
+
+    #[test]
+    fn extracts_the_heading_outline() {
+        let doc = StaticDocument::parse(
+            "<body>\
+                <h1>Title</h1>\
+                <h2>Section <em>one</em></h2>\
+                <p>body</p>\
+                <h3></h3>\
+                <h2>Section two</h2>\
+             </body>",
+        );
+        assert_eq!(
+            extract_headings(&doc),
+            vec![
+                Heading { level: 1, text: "Title".into() },
+                Heading { level: 2, text: "Section one".into() },
+                // the empty <h3> is skipped
+                Heading { level: 2, text: "Section two".into() },
+            ],
+        );
+    }
+
+    #[test]
+    fn extracts_description_canonical_and_open_graph() {
+        let doc = StaticDocument::parse(
+            "<html><head>\
+                <meta name=\"description\" content=\"A page about things.\">\
+                <link rel=\"canonical\" href=\"https://example.com/page\">\
+                <meta property=\"og:title\" content=\"Things\">\
+                <meta property=\"og:image\" content=\"https://example.com/og.png\">\
+             </head><body></body></html>",
+        );
+        let md = extract_metadata(&doc);
+        assert_eq!(md.description.as_deref(), Some("A page about things."));
+        assert_eq!(md.canonical.as_deref(), Some("https://example.com/page"));
+        assert_eq!(
+            md.open_graph,
+            vec![
+                ("title".to_string(), "Things".to_string()),
+                ("image".to_string(), "https://example.com/og.png".to_string()),
+            ],
+        );
+    }
+
+    #[test]
+    fn canonical_rel_is_a_token_list() {
+        // `rel` is a space-separated token list; `canonical` need not be the only token.
+        let doc = StaticDocument::parse(
+            "<head><link rel=\"alternate canonical\" href=\"/c\"></head>",
+        );
+        assert_eq!(extract_metadata(&doc).canonical.as_deref(), Some("/c"));
+    }
+
+    #[test]
+    fn missing_metadata_is_all_none() {
+        let doc = StaticDocument::parse("<body><p>no meta</p></body>");
+        assert_eq!(extract_metadata(&doc), Metadata::default());
     }
 }
