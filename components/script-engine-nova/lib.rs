@@ -2,15 +2,15 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Nova backend for [`script_engine_api`] — the primary backend, **native-only**.
+//! Nova backend for [`script_engine_api`] — the primary backend on 64-bit targets.
 //!
-//! Nova is 64-bit-bound (its data-oriented `Value` is `usize`-sized; wasm32 has
-//! 32-bit `usize`), so this crate is gated to non-wasm targets and compiles to an
-//! empty shell on wasm32. The wasm scripted tier uses `script-engine-boa`. The
+//! Nova is pointer-width-bound (its data-oriented `Value` is `usize`-sized), so
+//! this crate is gated to 64-bit targets and compiles to an empty shell on 32-bit
+//! targets. That includes Nova on wasm64 and Boa on wasm32. The
 //! native-data reflector rides on the patched `EmbedderObject` (serval-embedder
 //! branch of the fork). Engine-native types stay confined here.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(target_pointer_width = "64")]
 mod native {
     use std::any::Any;
     use std::cell::{Cell, RefCell};
@@ -20,9 +20,9 @@ mod native {
     use nova_vm::{
         ecmascript::{
             AbstractModule, Agent, AgentOptions, ArgumentsList, Behaviour, BuiltinFunctionArgs,
-            EmbedderObject, ExceptionType, GcAgent, GraphLoadingStateRecord, HostDefined, HostHooks,
-            InternalMethods, Job, ModuleRequest, PromiseCapability, PropertyDescriptor, PropertyKey,
-            RealmRoot, Referrer, SourceTextModule, String as JsString, Value,
+            EmbedderObject, ExceptionType, GcAgent, GraphLoadingStateRecord, HostDefined,
+            HostHooks, InternalMethods, Job, ModuleRequest, PromiseCapability, PropertyDescriptor,
+            PropertyKey, RealmRoot, Referrer, SourceTextModule, String as JsString, Value,
             clear_weak_ref_kept_objects, create_builtin_function, finish_loading_imported_module,
             parse_module, parse_script, script_evaluation,
         },
@@ -54,7 +54,9 @@ mod native {
     // `HostHooks: Debug`, but `Job` is not `Debug`, so report the queue length only.
     impl std::fmt::Debug for ServalHostHooks {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("ServalHostHooks").field("queued", &self.jobs.borrow().len()).finish()
+            f.debug_struct("ServalHostHooks")
+                .field("queued", &self.jobs.borrow().len())
+                .finish()
         }
     }
 
@@ -102,7 +104,10 @@ mod native {
         ) {
             // The import specifier, and the importing module's URL (its
             // `[[HostDefined]]`, set to the URL string when we parsed it).
-            let specifier = module_request.specifier(agent).to_string_lossy(agent).into_owned();
+            let specifier = module_request
+                .specifier(agent)
+                .to_string_lossy(agent)
+                .into_owned();
             let referrer_url = referrer
                 .host_defined(agent)
                 .and_then(|hd| hd.downcast::<String>().ok())
@@ -183,7 +188,10 @@ mod native {
 
     impl NovaValue {
         fn new(global: Global<Value<'static>>, release: &ReleaseQueue) -> Self {
-            Self { global: Some(global), release: release.clone() }
+            Self {
+                global: Some(global),
+                release: release.clone(),
+            }
         }
         /// Read the rooted value without releasing it.
         fn get(&self, agent: &Agent, gc: NoGcScope) -> Value<'static> {
@@ -264,8 +272,9 @@ mod native {
             .current_realm(gc)
             .host_defined(agent)
             .ok_or_else(|| "host slot missing".to_string())?;
-        let slot =
-            hd.downcast_ref::<NovaHostSlot>().ok_or_else(|| "host slot wrong type".to_string())?;
+        let slot = hd
+            .downcast_ref::<NovaHostSlot>()
+            .ok_or_else(|| "host slot wrong type".to_string())?;
         let token = slot.next_token.get();
         slot.next_token.set(token + 1);
         slot.promises.borrow_mut().insert(token, stored);
@@ -329,7 +338,10 @@ mod native {
             // `run_in_realm` (which can't nest). Mirrors the engine-level
             // `ScriptEngineLive::make_reflector`.
             let eo = EmbedderObject::create_with_data(self.agent, data);
-            Ok(NovaValue::new(Global::new(self.agent, Value::EmbedderObject(eo).unbind()), &self.release))
+            Ok(NovaValue::new(
+                Global::new(self.agent, Value::EmbedderObject(eo).unbind()),
+                &self.release,
+            ))
         }
 
         fn reflector_for(&mut self, data: ReflectorData) -> Result<Self::Value, Self::Error> {
@@ -384,7 +396,10 @@ mod native {
 
         fn make_string(&mut self, s: &str) -> Result<Self::Value, Self::Error> {
             let js = JsString::from_str(self.agent, s, self.gc.nogc());
-            Ok(NovaValue::new(Global::new(self.agent, Value::from(js).unbind()), &self.release))
+            Ok(NovaValue::new(
+                Global::new(self.agent, Value::from(js).unbind()),
+                &self.release,
+            ))
         }
 
         fn make_null(&mut self) -> Self::Value {
@@ -412,8 +427,9 @@ mod native {
         args: ArgumentsList,
         mut gc: GcScope<'gc, '_>,
     ) -> nova_vm::ecmascript::JsResult<'gc, Value<'gc>> {
-        let rooted: Vec<Global<Value<'static>>> =
-            (0..args.len()).map(|i| Global::new(agent, args.get(i).unbind())).collect();
+        let rooted: Vec<Global<Value<'static>>> = (0..args.len())
+            .map(|i| Global::new(agent, args.get(i).unbind()))
+            .collect();
         // The engine-wide release queue lives in the realm host slot (the trampoline
         // has only the `Agent`, not the engine). The callee's `cx.arg`/`make_*` values
         // park their `Global` here on drop; we drain it once the call returns.
@@ -421,7 +437,10 @@ mod native {
             let a: &Agent = agent;
             a.current_realm(gc.nogc())
                 .host_defined(a)
-                .and_then(|hd| hd.downcast_ref::<NovaHostSlot>().map(|slot| slot.release.clone()))
+                .and_then(|hd| {
+                    hd.downcast_ref::<NovaHostSlot>()
+                        .map(|slot| slot.release.clone())
+                })
                 .expect("host slot present")
         };
         let (result, args_to_release) = {
@@ -500,7 +519,13 @@ mod native {
             // The realm owns the host slot (neutral DOM + reflector cache) for its
             // whole life; `set_host_data` later fills the neutral half.
             realm.initialize_host_defined(&mut agent, Rc::new(NovaHostSlot::new(release.clone())));
-            Ok(Self { agent, realm, jobs, hooks, release })
+            Ok(Self {
+                agent,
+                realm,
+                jobs,
+                hooks,
+                release,
+            })
         }
 
         fn eval(&mut self, source: &str) -> Result<Self::Value, Self::Error> {
@@ -515,7 +540,7 @@ mod native {
                     Err(_) => {
                         out = Err("parse error".to_string());
                         return;
-                    }
+                    },
                 };
                 // The thrown value borrows the match's `gc`; unbind it out of the
                 // match, then stringify with a fresh reborrow (better than an opaque
@@ -573,7 +598,10 @@ mod native {
                     };
                     match agent.run_module(module.unbind(), None, gc.reborrow()) {
                         Ok(value) => {
-                            out = Ok(Some(NovaValue::new(Global::new(agent, value.unbind()), &release)))
+                            out = Ok(Some(NovaValue::new(
+                                Global::new(agent, value.unbind()),
+                                &release,
+                            )))
                         },
                         Err(err) => {
                             let v = err.value().unbind();
@@ -608,7 +636,10 @@ mod native {
                 let global = agent.current_realm(gc.nogc()).global_object(agent).unbind();
                 let key = PropertyKey::from_str(agent, &name, gc.nogc()).unbind();
                 let v = value.get(agent, gc.nogc()).unbind();
-                let desc = PropertyDescriptor { value: Some(v), ..Default::default() };
+                let desc = PropertyDescriptor {
+                    value: Some(v),
+                    ..Default::default()
+                };
                 match global.internal_define_own_property(agent, key, desc, gc.reborrow()) {
                     Ok(_) => out = Ok(()),
                     Err(_) => out = Err("define_own_property threw".to_string()),
@@ -646,8 +677,10 @@ mod native {
                 );
                 let global = agent.current_realm(gc.nogc()).global_object(agent).unbind();
                 let key = PropertyKey::from_str(agent, &name, gc.nogc()).unbind();
-                let desc =
-                    PropertyDescriptor { value: Some(func.unbind().into()), ..Default::default() };
+                let desc = PropertyDescriptor {
+                    value: Some(func.unbind().into()),
+                    ..Default::default()
+                };
                 match global.internal_define_own_property(agent, key, desc, gc.reborrow()) {
                     Ok(_) => out = Ok(()),
                     Err(_) => out = Err("define_own_property threw".to_string()),
@@ -702,7 +735,8 @@ mod native {
             let mut out: Result<(NovaValue, PromiseToken), String> =
                 Err("new_host_promise did not run".to_string());
             self.agent.run_in_realm(&self.realm, |agent, gc| {
-                out = mint_and_store(agent, gc.nogc()).map(|(g, t)| (NovaValue::new(g, &release), t));
+                out =
+                    mint_and_store(agent, gc.nogc()).map(|(g, t)| (NovaValue::new(g, &release), t));
             });
             out
         }
@@ -719,7 +753,9 @@ mod native {
                     let Some(hd) = agent.current_realm(gc.nogc()).host_defined(agent) else {
                         return;
                     };
-                    let Some(slot) = hd.downcast_ref::<NovaHostSlot>() else { return };
+                    let Some(slot) = hd.downcast_ref::<NovaHostSlot>() else {
+                        return;
+                    };
                     let removed = slot.promises.borrow_mut().remove(&token);
                     removed
                 };
@@ -772,7 +808,9 @@ mod native {
                     let Some(hd) = agent.current_realm(gc.nogc()).host_defined(agent) else {
                         return;
                     };
-                    let Some(slot) = hd.downcast_ref::<NovaHostSlot>() else { return };
+                    let Some(slot) = hd.downcast_ref::<NovaHostSlot>() else {
+                        return;
+                    };
                     let collected: Vec<(u64, Value)> = slot
                         .reflectors
                         .borrow()
@@ -792,7 +830,9 @@ mod native {
                     let Some(hd) = agent.current_realm(gc.nogc()).host_defined(agent) else {
                         return;
                     };
-                    let Some(slot) = hd.downcast_ref::<NovaHostSlot>() else { return };
+                    let Some(slot) = hd.downcast_ref::<NovaHostSlot>() else {
+                        return;
+                    };
                     let mut map = slot.reflectors.borrow_mut();
                     for d in &dead {
                         if let Some(g) = map.remove(d) {
@@ -1052,5 +1092,5 @@ mod native {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(target_pointer_width = "64")]
 pub use native::NovaEngine;

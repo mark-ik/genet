@@ -4,15 +4,18 @@
 // the public engine surface so a future engine swap or Nova rebase can't silently
 // regress them. Astral chars and surrogate-split match positions are exercised
 // because regress (non-Unicode mode) matches per code unit.
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(target_pointer_width = "64")]
 
 use script_engine_api::ScriptEngine;
 use script_engine_nova::NovaEngine;
 
 fn eval(src: &str) -> String {
     let mut e = NovaEngine::new().unwrap();
-    let v = e.eval(src).unwrap_or_else(|e| panic!("eval {src:?} errored: {e}"));
-    e.value_to_string(&v).unwrap_or_else(|e| panic!("value_to_string errored: {e}"))
+    let v = e
+        .eval(src)
+        .unwrap_or_else(|e| panic!("eval {src:?} errored: {e}"));
+    e.value_to_string(&v)
+        .unwrap_or_else(|e| panic!("value_to_string errored: {e}"))
 }
 
 #[test]
@@ -28,9 +31,18 @@ fn backtracking_features_the_regex_crate_cannot_do() {
 
 #[test]
 fn named_groups_and_captures() {
-    assert_eq!(eval(r#""2024-01".match(/(?<y>\d+)-(?<m>\d+)/).groups.y"#), "2024");
-    assert_eq!(eval(r#""2024-01".match(/(?<y>\d+)-(?<m>\d+)/).groups.m"#), "01");
-    assert_eq!(eval(r#""2024-01".replace(/(\d+)-(\d+)/, "$2/$1")"#), "01/2024");
+    assert_eq!(
+        eval(r#""2024-01".match(/(?<y>\d+)-(?<m>\d+)/).groups.y"#),
+        "2024"
+    );
+    assert_eq!(
+        eval(r#""2024-01".match(/(?<y>\d+)-(?<m>\d+)/).groups.m"#),
+        "01"
+    );
+    assert_eq!(
+        eval(r#""2024-01".replace(/(\d+)-(\d+)/, "$2/$1")"#),
+        "01/2024"
+    );
     assert_eq!(eval(r#""ab".replace(/(?<g>a)/, "[$<g>]")"#), "[a]b");
     assert_eq!(
         eval(r#"JSON.stringify([..."a,b,c".matchAll(/(\w)/g)].map(m => m[1]))"#),
@@ -62,9 +74,21 @@ fn replace_split_through_a_surrogate_pair_does_not_panic() {
 
 #[test]
 fn d_flag_has_indices() {
-    assert_eq!(eval(r#"JSON.stringify("abc".match(/b/d).indices[0])"#), "[1,2]");
-    assert_eq!(eval(r#"JSON.stringify("zabcz".match(/(a)(b)/d).indices[1])"#), "[1,2]");
-    assert_eq!(eval(r#"JSON.stringify("xab".match(/(?<g>a)/d).indices.groups.g)"#), "[1,2]");
+    assert_eq!(
+        eval(r#"JSON.stringify("abc".match(/b/d).indices[0])"#),
+        "[1,2]"
+    );
+    assert_eq!(
+        eval(r#"JSON.stringify("zabcz".match(/(a)(b)/d).indices[1])"#),
+        "[1,2]"
+    );
+    assert_eq!(
+        eval(r#"JSON.stringify("xab".match(/(?<g>a)/d).indices.groups.g)"#),
+        "[1,2]"
+    );
     // an unmatched optional group's index pair is undefined.
-    assert_eq!(eval(r#"String("b".match(/(a)?b/d).indices[1])"#), "undefined");
+    assert_eq!(
+        eval(r#"String("b".match(/(a)?b/d).indices[1])"#),
+        "undefined"
+    );
 }

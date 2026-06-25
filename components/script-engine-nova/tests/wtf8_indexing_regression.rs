@@ -7,7 +7,7 @@
 // public engine surface, so they fail loudly if a fix regresses (e.g. on a Nova
 // rebase). Surrogate halves are compared via charCodeAt so the terminal never has
 // to render a lone surrogate.
-#![cfg(not(target_arch = "wasm32"))]
+#![cfg(target_pointer_width = "64")]
 
 use script_engine_api::ScriptEngine;
 use script_engine_nova::NovaEngine;
@@ -15,8 +15,11 @@ use script_engine_nova::NovaEngine;
 /// Eval `src` and stringify the result (lossily; lone surrogates -> U+FFFD).
 fn eval(src: &str) -> String {
     let mut e = NovaEngine::new().unwrap();
-    let v = e.eval(src).unwrap_or_else(|e| panic!("eval {src:?} errored: {e}"));
-    e.value_to_string(&v).unwrap_or_else(|e| panic!("value_to_string errored: {e}"))
+    let v = e
+        .eval(src)
+        .unwrap_or_else(|e| panic!("eval {src:?} errored: {e}"));
+    e.value_to_string(&v)
+        .unwrap_or_else(|e| panic!("value_to_string errored: {e}"))
 }
 
 #[test]
@@ -42,15 +45,24 @@ fn regex_replace_on_non_ascii() {
     assert_eq!(eval(r#""￿foo".replace(/f/, "F")"#), "\u{FFFF}Foo");
     assert_eq!(eval(r#""Kabc".replace(/b/, "B")"#), "\u{212A}aBc");
     // Heap-sized (>7 byte) non-ASCII string through replace.
-    assert_eq!(eval(r#""ΔЙあ叶葉xy".replace(/x/, "_")"#), "\u{394}\u{419}\u{3042}\u{53f6}\u{8449}_y");
+    assert_eq!(
+        eval(r#""ΔЙあ叶葉xy".replace(/x/, "_")"#),
+        "\u{394}\u{419}\u{3042}\u{53f6}\u{8449}_y"
+    );
 }
 
 #[test]
 fn regex_split_on_non_ascii() {
     // RegExp[@@split]'s final segment sliced `(byte_start, utf16_len)` — a byte
     // index paired with a UTF-16 length — and panicked on a multi-byte tail.
-    assert_eq!(eval(r#"JSON.stringify("ΔЙあ叶葉".split(/,/))"#), "[\"\u{394}\u{419}\u{3042}\u{53f6}\u{8449}\"]");
-    assert_eq!(eval(r#"JSON.stringify("aΔbΔc".split(/Δ/))"#), r#"["a","b","c"]"#);
+    assert_eq!(
+        eval(r#"JSON.stringify("ΔЙあ叶葉".split(/,/))"#),
+        "[\"\u{394}\u{419}\u{3042}\u{53f6}\u{8449}\"]"
+    );
+    assert_eq!(
+        eval(r#"JSON.stringify("aΔbΔc".split(/Δ/))"#),
+        r#"["a","b","c"]"#
+    );
 }
 
 #[test]
@@ -62,8 +74,14 @@ fn regex_exec_lastindex_past_end_does_not_oob() {
     // bounds. A non-BMP string makes the two lengths differ. Each astral char
     // (𠮷 = U+20BB7) is 2 UTF-16 units, so /(?:)/gu yields one empty match per
     // code-point boundary.
-    assert_eq!(eval(r#"String(Array.from("𠮷a𠮷b𠮷".matchAll(/(?:)/gu)).length)"#), "6");
-    assert_eq!(eval(r#"String(Array.from("𠮷a𠮷b𠮷".matchAll(/(?:)/gv)).length)"#), "6");
+    assert_eq!(
+        eval(r#"String(Array.from("𠮷a𠮷b𠮷".matchAll(/(?:)/gu)).length)"#),
+        "6"
+    );
+    assert_eq!(
+        eval(r#"String(Array.from("𠮷a𠮷b𠮷".matchAll(/(?:)/gv)).length)"#),
+        "6"
+    );
     assert_eq!(eval(r#""𠮷".replace(/(?:)/gu, "-")"#), "-\u{20BB7}-");
     // The match indices themselves stay correct UTF-16 offsets.
     assert_eq!(
@@ -88,17 +106,24 @@ fn surrogate_splitting_substring_yields_lone_surrogates() {
     // (utf8_index returns None there; the slicing builtins unwrap-panicked).
     // "\u{1F320} test \u{1F320} TEST".substring(1,9) == "\uDF20 test \uD83C".
     assert_eq!(
-        eval(r#"(function(){var r="\u{1F320} test \u{1F320} TEST".substring(1,9);
-                 return r.length+":"+r.charCodeAt(0).toString(16)+".."+r.charCodeAt(r.length-1).toString(16);})()"#),
+        eval(
+            r#"(function(){var r="\u{1F320} test \u{1F320} TEST".substring(1,9);
+                 return r.length+":"+r.charCodeAt(0).toString(16)+".."+r.charCodeAt(r.length-1).toString(16);})()"#
+        ),
         "8:df20..d83c"
     );
     // slice through the leading pair: "\u{1F320}X".slice(1) == "\uDF20X".
     assert_eq!(
-        eval(r#"(function(){var r="\u{1F320}X".slice(1);return r.length+":"+r.charCodeAt(0).toString(16);})()"#),
+        eval(
+            r#"(function(){var r="\u{1F320}X".slice(1);return r.length+":"+r.charCodeAt(0).toString(16);})()"#
+        ),
         "2:df20"
     );
     // substring(0,1) keeps only the high half: "\uD83C".
-    assert_eq!(eval(r#""\u{1F320}X".substring(0,1).charCodeAt(0).toString(16)"#), "d83c");
+    assert_eq!(
+        eval(r#""\u{1F320}X".substring(0,1).charCodeAt(0).toString(16)"#),
+        "d83c"
+    );
 }
 
 #[test]

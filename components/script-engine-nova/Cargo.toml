@@ -1,8 +1,7 @@
-# Nova backend for script-engine-api — the PRIMARY backend, NATIVE-ONLY.
-# Nova is 64-bit-bound (its `Value` is usize-sized; wasm32 has 32-bit usize — see
-# Appendix B in docs/2026-05-20_serval_script_engine_plan.md), so `nova_vm` is gated
-# to non-wasm targets and this crate compiles to an empty shell on wasm32 (staying a
-# valid workspace member). The wasm scripted tier uses script-engine-boa instead.
+# Nova backend for script-engine-api — the primary backend on 64-bit targets.
+# Nova is pointer-width-bound (its `Value` is usize-sized), so `nova_vm` is gated
+# by pointer width rather than by native-vs-wasm. This admits wasm64 while keeping
+# every 32-bit target (including wasm32) on the Boa backend.
 #
 # `nova_vm` is redirected to the local fork checkout (serval-embedder branch, which
 # carries the EmbedderObject native-data patch) via [patch.crates-io] in the
@@ -21,5 +20,20 @@ path = "lib.rs"
 [dependencies]
 script-engine-api = { path = "../script-engine-api" }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(all(target_pointer_width = "64", not(target_family = "wasm")))'.dependencies]
 nova_vm = "1"
+
+[target.'cfg(all(target_pointer_width = "64", target_family = "wasm"))'.dependencies]
+# The first browser lane keeps ArrayBuffer/TypedArray but deliberately excludes
+# SharedArrayBuffer, Atomics, and Temporal. Shared JS memory is a later threaded
+# artifact; Temporal currently pulls a wasm32-only timezone provider.
+nova_vm = { version = "1", default-features = false, features = [
+    "math",
+    "json",
+    "date",
+    "array-buffer",
+    "weak-refs",
+    "regexp",
+    "set",
+    "annex-b",
+] }
