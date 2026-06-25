@@ -39,13 +39,15 @@ viewer = ["tile-surface", "dep:serval-winit-host", "dep:wgpu"]
 # targets); Nova is gated behind `scripted-nova` so the default build links a single
 # engine (Boa+Nova+wgpu together exceed the Windows image-size link limit).
 scripted = [
+    "dep:serval-scripted",
     "dep:netrender", "dep:serval-render", "dep:serval-static-dom", "dep:serval-layout",
     "dep:script-runtime-api", "dep:script-engine-api",
     "dep:serval-scripted-dom", "dep:script-engine-boa", "dep:layout-dom-api",
     "dep:serval-extract",
     "dep:encoding_rs", "dep:sha2", "dep:base64", "dep:url",
 ]
-# Add the Nova engine to the scripted profile (native-only). Off by default; enabling
+# Add the Nova engine to the scripted profile (64-bit targets, including wasm64).
+# Off by default; enabling
 # it links a second engine, which on Windows can exceed the linker's image-size limit
 # alongside wgpu — build it on Linux/macOS, or Windows without the present stack.
 scripted-nova = ["scripted", "dep:script-engine-nova"]
@@ -152,6 +154,7 @@ url = { workspace = true, optional = true }
 script-runtime-api = { path = "../../components/script-runtime-api", optional = true }
 script-engine-api = { path = "../../components/script-engine-api", optional = true }
 serval-scripted-dom = { path = "../../components/serval-scripted-dom", optional = true }
+serval-scripted = { path = "../../components/serval-scripted", optional = true }
 script-engine-boa = { path = "../../components/script-engine-boa", optional = true }
 script-engine-nova = { path = "../../components/script-engine-nova", optional = true }
 # The `LayoutDom` trait (for the inline-`<script>` DOM walk) + QualName parts.

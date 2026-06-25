@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Scripted tier — the reflector bridge (engine↔DOM, JS→DOM direction).
+//! Host-neutral scripted document/runtime tier.
 //!
 //! A JS script, handed a **reflector** (a value carrying a `NodeId`), can mutate
 //! the corresponding `serval-scripted-dom` node through a native callback: the
@@ -15,15 +15,56 @@
 //! reaches the callback through Nova host-defined data, not a `thread_local`. See
 //! `docs/2026-05-26_pluggable_engines_testharness_plan.md`.
 //!
-//! Native-only: Nova is 64-bit-bound, and JS is native-only by design (wasm ships
-//! no JS). On wasm32 the scripted tier carries no engine.
+//! Nova is available on 64-bit targets, including wasm64. Hosts can pair the same
+//! document/runtime surface with Boa on wasm32.
 
 #![cfg_attr(target_arch = "wasm32", allow(unused_crate_dependencies))]
 
+#[cfg(feature = "render")]
 use layout_dom_api::LayoutDomMut;
 use script_engine_api::ScriptEngine;
-use serval_layout::{render, FragmentPlane};
+#[cfg(feature = "render")]
+use serval_layout::{FragmentPlane, render};
 use serval_scripted_dom::{NodeId, ScriptedDom};
+
+mod document;
+
+pub use document::{ScriptedDocument, ScriptedEngine};
+
+/// Byte-loading seam supplied by a shell or worker host. Networking and filesystem
+/// policy stay above the scripted document owner.
+pub trait ResourceFetcher {
+    fn fetch(&self, url: &str) -> Option<Vec<u8>>;
+}
+
+/// Structural defaults shared by every host of [`ScriptedDocument`].
+pub const STRUCTURAL_SHEET: &[&str] = &[
+    "html, body, div, p, h1, h2, h3, h4, h5, h6, ul, ol, li, dl, dt, dd, \
+     section, article, header, footer, nav, main, aside, figure, figcaption, \
+     blockquote, pre, table, thead, tbody, tr, hr, form, fieldset { display: block; }",
+    "head, style, script, title, meta, link, base { display: none; }",
+    "body { padding: 8px; }",
+];
+
+/// Resolve browser URLs and local paths without treating a Windows drive as a URL
+/// scheme. Module resolution uses `url::Url::join` separately where normalization
+/// is required.
+pub fn resolve_href(base: &str, href: &str) -> String {
+    if has_scheme(href) || href.starts_with('/') || href.starts_with('\\') {
+        return href.to_string();
+    }
+    let cut = base.rfind(['/', '\\']).map_or(0, |i| i + 1);
+    format!("{}{}", &base[..cut], href)
+}
+
+fn has_scheme(url: &str) -> bool {
+    match url.find(':') {
+        Some(i) if i > 0 => url[..i]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')),
+        _ => false,
+    }
+}
 
 /// The live incremental layout engine. Re-exported as the scripted
 /// tier's relayout-on-mutation entry: a persistent cascade + layout
@@ -32,6 +73,7 @@ use serval_scripted_dom::{NodeId, ScriptedDom};
 /// changes — one engine for both, superseding the earlier stateless
 /// `relayout_incremental` splice. See `serval_layout::IncrementalLayout`
 /// and `docs/2026-05-25_fine_grained_restyle_plan.md`.
+#[cfg(feature = "render")]
 pub use serval_layout::{Applied, IncrementalLayout};
 
 /// Coarse relayout-on-mutation — the **correctness oracle**. Drain the DOM's
@@ -41,6 +83,7 @@ pub use serval_layout::{Applied, IncrementalLayout};
 /// incremental engine ([`IncrementalLayout`]) is diff-tested against. The live path
 /// uses `IncrementalLayout`; this stays as the oracle. Engine-agnostic (DOM + layout
 /// only), so it lives at the crate root, not the Nova module.
+#[cfg(feature = "render")]
 pub fn relayout_if_dirty(
     dom: &mut ScriptedDom,
     stylesheets: &[&str],
@@ -108,7 +151,7 @@ pub fn pump_retire_collect<E: ScriptEngine>(
     (unpinned, collected)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(target_pointer_width = "64")]
 mod native {
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -139,7 +182,8 @@ mod native {
             let text = cx.value_to_string(&text)?;
             if let Some(data) = cx.host_data() {
                 if let Some(dom) = data.downcast_ref::<HostDom>() {
-                    dom.borrow_mut().set_text(NodeId::from_raw(id as usize), &text);
+                    dom.borrow_mut()
+                        .set_text(NodeId::from_raw(id as usize), &text);
                 }
             }
             Ok(cx.undefined())
@@ -151,9 +195,13 @@ mod native {
     pub fn run_script(dom: Rc<RefCell<ScriptedDom>>, reflect: NodeId, source: &str) {
         let mut engine = NovaEngine::new().expect("NovaEngine");
         engine.set_host_data(dom);
-        engine.set_function::<SetText>("setText", 2).expect("install setText");
+        engine
+            .set_function::<SetText>("setText", 2)
+            .expect("install setText");
 
-        let reflector = engine.make_reflector(reflect.raw() as u64).expect("reflector");
+        let reflector = engine
+            .make_reflector(reflect.raw() as u64)
+            .expect("reflector");
         engine.set_global("node", &reflector).expect("install node");
 
         let _ = engine.eval(source);
@@ -196,7 +244,7 @@ mod native {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(target_pointer_width = "64")]
 pub use native::run_script;
 
 #[cfg(test)]
@@ -207,7 +255,7 @@ mod pin_tests {
     // guards the host helper `collect_dom` that feeds the pins into `collect`.
     #[test]
     fn collect_dom_uses_pins_as_roots() {
-        use layout_dom_api::{LayoutDom, LocalName, Namespace, QualName};
+        use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, QualName};
         let qual = |s: &str| QualName::new(None, Namespace::from(""), LocalName::from(s));
 
         let mut dom = ScriptedDom::new();
@@ -229,7 +277,7 @@ mod pin_tests {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(all(test, target_pointer_width = "64"))]
 mod drain_tests {
     use super::*;
     use script_engine_api::ScriptEngineLive;
@@ -265,7 +313,7 @@ mod drain_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "render"))]
 mod relayout_tests {
     use super::*;
     use layout_dom_api::{LayoutDom, LocalName, Namespace, QualName};
@@ -282,7 +330,7 @@ mod relayout_tests {
     /// updated layout — three stacked paragraphs are taller than one.
     #[test]
     fn coarse_relayout_reflects_mutation() {
-        const SHEET: &[&str] = &["html, body, p { display: block; }"];
+        const SHEET: &[&str] = &["html, body, p { display: block; margin: 0; padding: 0; }"];
 
         let mut dom = ScriptedDom::new();
         let root = dom.document();
@@ -326,7 +374,7 @@ mod relayout_tests {
     /// recompute against the coarse oracle (for the inheritance-neutral case).
     #[test]
     fn scoped_relayout_matches_coarse_interior() {
-        const SHEET: &[&str] = &["html, body, p { display: block; }"];
+        const SHEET: &[&str] = &["html, body, p { display: block; margin: 0; padding: 0; }"];
 
         let mut dom = ScriptedDom::new();
         let root = dom.document();

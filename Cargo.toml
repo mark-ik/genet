@@ -12,6 +12,7 @@ members = [
     "components/serval-extract",
     "components/serval-scripted-dom",
     "components/serval-scripted",
+    "components/serval-scripted-worker",
     "components/serval-static-html",
     "components/xilem-core",
     "components/xilem-serval",
@@ -436,6 +437,11 @@ codegen-units = 1
 # xml5ever = { path = "../html5ever/xml5ever" }
 # tendril = { path = "../html5ever/tendril" }
 gpu-allocator = { path = "support/patches/gpu-allocator" }
+# sonic-rs uses ahash with default features, whose `runtime-rng` pulled getrandom
+# 0.3 (hard-codes wasm32) onto the shared ahash. This vendored copy drops
+# runtime-rng on wasm (native keeps it), so the wasm graph carries no getrandom 0.3
+# and needs no getrandom patch. Retire when ahash ships a release on getrandom 0.4.
+sonic-rs = { path = "support/patches/sonic-rs-0.5.8" }
 # taffy fork carrying one fix to experimental float layout: `find_content_slot`
 # ignored the placed content's width, so a full-width float yielded a zero-width
 # slot at its right edge and a fixed-width BFC child was placed there (overflowing)

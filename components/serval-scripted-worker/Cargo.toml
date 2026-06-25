@@ -1,0 +1,30 @@
+[package]
+name = "serval-scripted-worker"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Backend-exclusive Web Worker entry for Serval scripted documents."
+
+[lib]
+name = "serval_scripted_worker"
+path = "lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["engine-boa"]
+engine-boa = ["dep:script-engine-boa"]
+engine-nova = ["dep:script-engine-nova"]
+
+[dependencies]
+serval-scripted = { path = "../serval-scripted", default-features = false }
+script-engine-boa = { path = "../script-engine-boa", optional = true }
+script-engine-nova = { path = "../script-engine-nova", optional = true }
+wasm-bindgen = "=0.2.125"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+# Force the JavaScript entropy backend across either engine's transitive graph.
+getrandom_04 = { package = "getrandom", version = "=0.4.3", features = ["wasm_js"] }
