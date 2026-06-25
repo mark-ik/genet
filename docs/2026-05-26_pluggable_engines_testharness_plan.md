@@ -84,7 +84,7 @@ the column is what differs.
 
 | Engine | Status | Reflector mechanism | Cost to testharness |
 | --- | --- | --- | --- |
-| **Nova** (default) | live, native-only | `EmbedderObject` carrying the `NodeId` (in use today; Appendix C: `get_or_create_backing_object`) | Implement the trait over the current Nova path; replace the `thread_local` host-DOM with Nova host-defined data. Native-only walls (the `Value == usize` 64-bit bind, `usdt` gate) constrain *where* it runs, not whether the harness loads. |
+| **Nova** (default) | live on 64-bit targets, including wasm64 | `EmbedderObject` carrying the `NodeId` (in use today; Appendix C: `get_or_create_backing_object`) | The trait and host data are live. The wasm64 lane gates USDT and uses the same reflector contract; wasm32 remains Boa-only. |
 | **Boa** | in workspace (fork, native + wasm) | `JsClass` / `NativeObject` with `Trace` | Second implementation; lowest friction (pure Rust, mature class + `HostDefined` story). The conformance oracle: when Nova and Boa disagree on a result, Boa is the language-axis reference (~94% test262 vs Nova ~80%). |
 | **QuickJS** | not yet | class-id + opaque pointer; refcount rooting (`JS_DupValue`/`JS_FreeValue`) | Bind through `rquickjs`; conceptually clean, adds a small C build dep and an FFI seam in the impl. wasm-ok. |
 | **SpiderMonkey** | excised (was mozjs) | reserved slots / private data; JSAPI rooting | Heaviest: re-admits the build environment the fork removed. Only behind a feature gate, fullweb-only, if a near-spec reference is needed. Structurally absent from the wasm graph (parent plan, "witness, don't gate"). |

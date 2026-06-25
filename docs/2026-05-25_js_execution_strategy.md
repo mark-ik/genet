@@ -6,6 +6,12 @@ contradictions, for review. Supersedes parts of
 [2026-05-20_serval_script_engine_plan.md](./2026-05-20_serval_script_engine_plan.md)
 if adopted (see [Contradictions](#contradictions-to-reconcile)).
 
+> **Superseded for browser backend selection (2026-06-24).** The implemented
+> [`Nova-on-Memory64 lane`](./2026-06-24_nova_memory64_browser_lane_plan.md) makes
+> Nova/wasm64 the preferred experimental Chrome/Firefox artifact and Boa/wasm32 the
+> Safari/failure fallback. The weval analysis remains research, not the active
+> delivery plan.
+
 ## The question
 
 How does serval run JS across its profiles — **native** (desktop app) and
@@ -78,10 +84,9 @@ upstream before relying):**
 - **No JS JIT anywhere.** Cranelift re-enters *only* if serval runs wasm
   **components/plugins** natively (Wasmtime backend, or `.cwasm` AOT) — a
   separate subsystem from either JS engine.
-- **Nova-on-wasm64 / "one engine everywhere":** deferred. weval removes the
-  *urgency* (Boa-on-wasm32 gets the speed without the tier-3 toolchain risk
-  + memory64 tax). Revisit if the wasm64 Rust toolchain matures **and** Nova
-  sheds its native-only deps.
+- **Nova-on-wasm64:** implemented as an experimental worker artifact. Tier-3 risk
+  and the Memory64 tax are promotion measurements, not reasons to defer the lane.
+  Boa/wasm32 remains the compatibility and failed-instantiation fallback.
 
 ## Why our own JS engine in-browser at all (the load-bearing question)
 
