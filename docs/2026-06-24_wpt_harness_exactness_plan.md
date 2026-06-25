@@ -1,0 +1,80 @@
+# WPT harness exactness + throughput plan
+
+**Date:** 2026-06-24
+**Status:** plan. Spun out of the grand audit (`2026-06-24_grand_audit.md` §2, levers 1/3/5); continues the WPT runner plan (`2026-05-26_wpt_runner_plan.md`, whose Discovery section already flags "no MANIFEST.json yet").
+**Thesis:** the binding constraint on serval's WPT scoreboard is the harness, not the engine. What runs and how much runs gates the value of every engine fix. This plan closes the three harness levers in dependency order: exactness (what runs), throughput (how much runs), then a tracked scoreboard + regression guard (so movement is real and stays).
+
+## Why this and not engine work first
+
+The audit re-measured the engine far ahead of its stale reputation (DOM core panic-free on both engines; CSS reftests 5-40x the circulated baselines). The remaining waste is that the runner discovers and scores the wrong set of tests, re-pays the testharness.js eval per test, and has no checked-in expectations, so nobody can trust a delta. Three harness levers fix that and are precondition for steering the CSS/DOM levers.
+
+## Phases (done-conditions, not dates)
+
+### H1 — MANIFEST.json reader (lever 1)
+
+Replace the ad-hoc directory walk and heuristic expansion with the upstream-generated manifest.
+- Today: `ports/serval-wpt/src/main.rs:174` collects via a raw walk; `:211` `synthesize_any_js` hand-expands `.any.*`; `:719` `parse_fuzzy` reconstructs fuzzy metadata; no `MANIFEST` reference exists in `src/`.
+- Build: run `wpt manifest` once into the checked-out tree, parse the generated JSON, and drive test classification, variant (`?query`) expansion, `.any.js` -> `.any.html`/`.any.worker.html` multi-global enumeration, per-test timeouts, expected-reference resolution, and fuzzy metadata from it.
+- **Done when** the runner enumerates and classifies tests from MANIFEST.json (the heuristic walk and `synthesize_any_js`/`parse_fuzzy` paths are deleted or demoted to a fallback), and a spot-check directory's runnable-test count matches `wpt run`'s enumeration.
+
+### H2 — Snapshot-clone Runtime pool (lever 3)
+
+Amortize the dominant per-test cost.
+- Today: each test builds a fresh `Runtime` and re-evals the 5,207-line testharness.js. The bench probe (`harness.rs:393-414`) proves the eval, not `Runtime::new()`, is the dominant cost, that naive Runtime reuse leaks the `tests` singleton across re-evals, and prescribes a post-(harness-eval) snapshot cloned per test via the `GcAgent::clone` path.
+- Build: eval testharness.js once into a base agent, then `GcAgent::clone` a fresh per-test agent from that snapshot so each test starts post-harness-eval with a clean `tests` singleton.
+- **Done when** a full dom/ subset run shows the per-test cost dominated by the test body, not the harness eval, and the `tests`-singleton leak is gone (re-runs are deterministic).
+
+### H3 — Corpora re-score + checked-in expectations + regression guard (lever 5)
+
+Turn measurement into a guardrail.
+- Re-run dom/ and fetch/ (and the CSS subsets the conformance plan tracks) on H1+H2, and publish current aggregates. The audit found several levers sized against numbers that no longer exist (floats 7 vs 42, css-backgrounds 15 vs 334, normal-flow 1 vs 462; css-multicol claimed 0 but 103/923; css-writing-modes claimed zeroed but 219/1829).
+- Add a checked-in expectations file (per-test expected status) and a script that diffs a run against it, so a regression is a failed check rather than an unnoticed count drop.
+- **Done when** a tracked aggregate exists per measured directory, and a CI/local check fails on regressions against the checked-in expectations (this is the difference between a measurement tool and a guardrail).
+
+## Sequencing
+
+H1 -> H2 -> H3. H1 makes the right set runnable; H2 makes running the full corpora cheap enough to do routinely; H3 only becomes trustworthy and repeatable once both land. H3's expectations file pairs with the serval-CI sidequest (capability-activation plan) so the guard runs automatically.
+
+## Non-goals
+
+- Engine fixes (owned by the CSS conformance + HTML interface-table plans).
+- A full `wpt serve` orchestration rewrite; the live-server fetch slice already works in server mode.
+- iframe/second-realm execution (a larger harness capability; note it as a known wall, do not scope it here).
+
+## H4 — Governance: green-by-default, with sub-WPT micro-tests (from the formal-web harvest)
+
+The gterzian/formal-web harvest (`2026-06-24_formal_web_lessons.md`) supplies a
+governance model worth adopting alongside H3, turning the runner from a noisy
+dashboard into a regression gate:
+
+- **Skip-by-default `include.ini` + per-file opt-in**, and **`meta/*.ini`
+  expected-result files** pinning expected pass/fail per sub-test with TODO
+  reasons, so the default run asserts **`unexpected = 0`**. A new pass becomes an
+  explicit metadata edit, not an invisible count drift. This is the policy layer
+  over H3's aggregates + expectations guard.
+- **Local deterministic micro-tests below the WPT level.** Small `.html` tests
+  reporting via testharness.js OR a plain `window.__formalWebTestResult` object
+  (same shape testharnessreport produces), mounted so they reuse upstream
+  `/resources/testharness.js`. These let serval lock an event-loop / parser /
+  streams milestone *before* the corresponding WPT directory is enabled — which
+  matters now, while whole directories are gated by the H1/H2 work. (The
+  `byob-debug.html`-style micro-test is the model; see the BYOB streams plan.)
+
+**Optional rigor capability — TLA+ trace validation of the scheduler.** Distinct
+from WPT, and architecture-agnostic (it needs only an event log + a model).
+serval's single-process model makes it *easier* than formal-web's (one in-process
+channel + a single counter clock, no cross-process monitor or channel-closure
+dance). Tap the five named task boundaries (`script-runtime-api/lib.rs:266`/`:309`,
+`dispatch_event`, `eval`, `pump_microtasks`) to emit NDJSON, write one base+trace
+TLA+ spec pair for one protocol, and run TLC in CI (the Cirstea/Kuppe method).
+This is a months-shaped investment; tracked as the rigor arm of serval's
+`2026-06-24_event_loop_rigor_plan.md`, not required for the harness levers here.
+
+## Findings
+
+- 2026-06-24 (from the grand audit, adversarially verified): the runner is 2,770 LOC (`main.rs` 1,671); no MANIFEST reader; `harness.rs` bench prescribes but does not implement the snapshot-clone pool. fetch/ runs only behind an off-by-default feature + a manual hosts-file edit; XHTML/.xht files are skipped (`main.rs:587-596`). CSP, websockets/, and h3 are unrunnable through the runner despite netfetcher shipping the transports.
+- The "re-score floats/normal-flow/css-backgrounds" sub-lever is already largely done inside the CSS conformance doc's scoreboard; H3's residual value is fresh dom/fetch aggregates + the expectations guard, not re-scoring CSS from scratch.
+
+## Progress
+
+- 2026-06-24 — Plan created from the grand audit. No code yet. H1 is the entry point.

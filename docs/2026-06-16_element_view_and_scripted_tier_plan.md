@@ -252,3 +252,47 @@ So from the roadmap's seat, neither thread carries open *engine* work. Part A's
 open work is meerkat wiring; Part B's is scripted-DOM breadth and external
 script loading. Both live outside serval-layout, which is why they are here and
 not in the layout roadmap proper.
+
+## Part C — xilem_serval directions (added 2026-06-24, grand audit §7)
+
+The grand audit (`2026-06-24_grand_audit.md` §7) audited xilem_serval (the third
+xilem_core backend; "xilem_web, but native, with serval as the engine"; ~6,801
+LOC, 54 tests, Stages 0-7 done) and ranked its next directions. The crate itself
+is in good shape; most of these are deepenings, and item 1 is the one real
+engine-gate.
+
+1. **Custom-layout element kind (Mechanism A).** `<external-texture>` (Part A) is
+   done end-to-end but is the *only* non-flow element, an output-only leaf with
+   no children and no input. The orrery-as-element payoff needs an element whose
+   DOM children are positioned by host/gyre transforms instead of CSS flow, plus
+   a position-only incremental layout path. Designed in Mere's unified-document-host
+   plan (2026-06-17) and spun out to its `orrery_custom_layout_element_plan`;
+   deferred, because the host-side `transform:translate` interim (proven
+   RepaintOnly) already holds the visible behavior. The biggest *ceiling*, not
+   urgent; the strategic move when the perf/correctness case forces it.
+2. **Deepen + relocate a11y onto `ServalLaneView`.** `accesskit_tree()`
+   (`components/serval-render/src/a11y.rs`) is a live DOM->AccessKit mapping but
+   maps only a handful of tags, folds text into the owner's label, and does not
+   read the ARIA attributes the controls already stamp (checkbox role/aria-checked,
+   etc.). Moving it engine-side onto `ServalLaneView` makes it reusable across
+   every consumer, not just the host. Cheap relative to payoff. (This is the same
+   move listed as a capability sidequest; it lives here as the xilem/a11y owner.)
+3. **Cross-path event-model conformance guard.** Two capture->target->bubble
+   dispatchers exist (the JS one in `script-runtime-api/dom.rs`, the native one in
+   `xilem-serval/src/runner.rs` `phase_ordered_paths`); they share a `Propagation`
+   cell but are separate code over different trees. Pin the contract with a
+   standing test over the long tail (MouseEvent subclasses, composedPath/shadow
+   retargeting, passive scroll-blocking) so a change to one cannot silently
+   diverge from the other.
+4. **Finish text-editing depth.** Click-to-place + soft-wrap ArrowUp/Down + a
+   sticky goal column over the existing `set_caret_byte`/parley seam
+   (`controls.rs` Tier 1 is hard `\n` lines only).
+5. **Evaluate a fine-grained update path.** `ServalAppRunner` reruns
+   `logic(&state)` and diffs the whole tree per dispatch (`runner.rs:150-176`).
+   Not yet a measured blocker (binding perf is an explicit non-goal), but a large
+   chrome will make whole-tree-rebuild-per-dispatch hot; a signals layer would be
+   the better impedance match to serval's mutation-recording incremental layout.
+
+Caveat: item 1 and the architecture-2 surface-migration tail are host-side
+(Mere/meerkat) work the engine plan generates asks for, not xilem_serval crate
+defects.

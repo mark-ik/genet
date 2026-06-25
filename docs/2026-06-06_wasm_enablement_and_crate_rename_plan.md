@@ -232,5 +232,70 @@ crates) and can land incrementally ahead of it.
   the IPC substrate. The build-loop (runtime verification) beat the dependency-graph
   analysis. Worktree `wasm-fonts-cut` holds it, uncommitted; the uuid gate is still
   the unconditional-`js` experiment (cfg-gate it to wasm for the landable form).
+
+## Forward direction + async granularity (added 2026-06-24, grand audit §6)
+
+**Implementation update (2026-06-24):** the Nova/wasm64 spike described below is
+now a first-class experimental lane, not a future option. The authoritative build,
+worker, fallback, and promotion contract is
+[`2026-06-24_nova_memory64_browser_lane_plan.md`](./2026-06-24_nova_memory64_browser_lane_plan.md).
+
+The grand audit (`2026-06-24_grand_audit.md` §6) re-grounded the wasm question and
+found the async/event-loop architecture much further along than this plan tracked.
+Two threads to fold into the roadmap here:
+
+**Delivery direction (ranked).**
+
+1. **Ship the reader-PWA wasm lane first.** serval-layout is wasm-green (P1) and
+   netfetcher binds the browser fetch, so a DOM-only / structured-HTML / smolweb
+   reader with a tiny omit-JS bundle is the strongest near-term case. Treat the
+   Boa-scripted wasm tier as the next milestone, not the v1 bar.
+2. **Finish netrender's wasm port (ordinary work, not a structural gate).** The
+   `wasm-portability-checklist.md` is **stale** (corrected 2026-06-24): it
+   describes the abandoned `wgpu-backend-0.68-minimal` WebRender/GL branch. On
+   `main` the GL code is deleted (vello is the sole rasterizer, `README.md:7-15`),
+   library src has zero threading and zero GL, boot is async-first with the
+   `pollster::block_on` wrappers `cfg`-gated off wasm32
+   (`netrender_device/src/core.rs:80-155`), and the device is embedder-supplied
+   (`init.rs:59-64`). Remaining: add the wgpu `webgpu`/`webgl` feature (the
+   manifest selects native backends only) and drive `boot_async` from a browser
+   executor. Mark or archive the stale checklist.
+3. **Orchestrate around Web Workers + postMessage**, not a ported thread pool;
+   production wasm threading (nightly + build-std + SharedArrayBuffer + COOP/COEP)
+   is an external constraint, consistent with the Isolation-backends direction
+   above. Extension nuance: a Chrome MV3 extension gets COOP/COEP via *manifest*
+   keys for extension-owned documents (not the MV3 service worker; use an
+   offscreen document); Firefox extensions have no such path yet (bug 1673477).
+4. **Boa-wasm32 is the portable baseline; Nova-on-wasm64 is the implemented
+   experimental Chrome/Firefox mode** *(corrected 2026-06-24; the earlier "Nova native-only /
+   don't bet on memory64 timing" framing was wrong).* Nova's only pointer-width
+   coupling is `value.rs:398`'s `size_of::<Value>() == size_of::<usize>()` (Value
+   is 8 bytes; passes on 64-bit usize) plus usize-typed `1 << 53` const-overflows;
+   all dissolve on wasm64. Memory64 is default-on in Chrome/Edge 133 (2025-02-04)
+   and Firefox 134 (2025-01-07), and the toolchain landed in 2026 Q2 (wasm-bindgen
+   0.2.120 added wasm64 via an f64 pointer ABI, wasm-pack 0.15.0, getrandom 0.4.3
+   `wasm_js`). The `ScriptEngine` trait keeps Nova-on-wasm64 a swap. Honest
+   implementation now gates USDT, supplies a single-worker atomics backend, and
+   links the wasm64 worker with Tier-3 `build-std`. Remaining gates are browser CI,
+   bundle/startup/memory measurement, and the known Memory64 performance cost.
+   Safari/iOS stays on the Boa/wasm32 fallback.
+5. **Worker isolation is the wasm threat model.** Boa has no preemption, so
+   hostile remote JS cannot be bounded in-VM (`set_deadline` is not a trust
+   boundary); the sandbox story must be Web-Worker isolation + an allow-listed
+   capability set.
+
+**Async granularity sub-thread (refine, do not rebuild).** `script-runtime-api`
+already models the WHATWG event loop on engine-neutral primitives (microtask
+checkpoint, timer task source over a virtual clock, capture/target/bubble
+dispatch, and a deferred-async fetch seam `new_host_promise`/`settle_host_promise`),
+tested on both Boa and Nova. The honest gaps are granularity, not architecture:
+the loop is cooperative (delays order tasks, they do not truly wait), microtask
+checkpoints are coarse (around timer batches, not per-task), and ReadableStream is
+buffered (no BYOB, no truly-async producers). Remaining work: per-task microtask
+checkpoints, true async timers/streams, BYOB readers, broader task sources, and
+wiring serval's own WPT runner to a real off-thread fetch source the way meerkat
+already does (`repos/mere/crates/meerkat/src/fetch.rs:145-195`).
+
+**Agent-cluster as the Web-Worker / Atomics boundary (added 2026-06-24, from the gterzian/formal-web harvest, `docs/2026-06-24_formal_web_lessons.md`).** formal-web models the spec's `Agent { id, can_block, event_loop_id }` / `AgentCluster` as plain data, decoupled from its OS process. That concept is exactly the isolation primitive this plan's Web-Worker direction needs: adopt **agent-cluster as the SharedArrayBuffer / Atomics boundary**, and bind `EventLoopId` to an armillary actor on native and to a **Web Worker** on wasm (not an OS process). Carry the spec's **`can_block`** flag — a worker agent may block on `Atomics.wait`, a window agent may not — so the same abstraction enforces the rule on both backends. This is the agent-level refinement of the "Web Worker is the browser-relevant isolation backend" point above: the transport-neutral boundary moves *agent clusters*, and `can_block` is per-agent metadata it carries. The deferred BYOB-reader / true-async-stream work is spun out to serval's `2026-06-24_byob_streams_plan.md`; the per-task microtask-checkpoint tightening + scheduler trace validation to `2026-06-24_event_loop_rigor_plan.md`.
   Next: P2 = orrery-host to wasm (the orrery's serval-layout-using path), which will
   surface orrery-host's own deps.

@@ -12,6 +12,13 @@ both coarse and incremental relayout — all committed and diff-tested (see the 
 build records inline below, and the [2026-05-24 state snapshot](./2026-05-24_workspace_audit_snapshot.md)).
 Remaining: the fine-grained Stylo-restyle arc and the incremental edges.
 
+**Memory64 authority (2026-06-24):**
+[`2026-06-24_nova_memory64_browser_lane_plan.md`](./2026-06-24_nova_memory64_browser_lane_plan.md)
+supersedes every "Nova native-only", "no JS in wasm", and "browsers do not run
+Memory64" conclusion below. Nova is 64-bit-target-only; the Nova/wasm64 and
+Boa/wasm32 worker artifacts now both build behind binary capability detection.
+The older passages remain only as decision history.
+
 **Revised 2026-05-20 (review pass).** Six corrections, all incorporated below:
 (1) `mark_dirty` removed from `LayoutDomMut` — DOM mutations emit `DomMutation`
 records; serval-layout (not the DOM provider) translates them into
@@ -43,8 +50,8 @@ gated fullweb feature) — a separate axis from whether `nova_vm` compiles *to* 
 **On that axis the verdict flipped (2026-05-22, [Appendix B](#appendix-b--wasm32-verification-2026-05-21)):
 `nova_vm` does NOT support wasm32 — its data-oriented `Value` is `usize`-sized and its
 arithmetic assumes 64-bit, which breaks on 32-bit wasm. Not a gate; core upstream work.**
-So the Nova bet is **native-only** — and that's fine. **Direction (2026-05-23): Nova
-native, period; no JS engine shipped into wasm.** The wasm target is the **no-JS profile**
+That 2026-05-23 conclusion is now superseded: Nova is **64-bit-target-only**, and the
+experimental wasm64 worker lane ships beside the Boa/wasm32 compatibility worker. The wasm target is no longer restricted to the **no-JS profile**
 (structured HTML + smolweb — the browser + middlenet offering, robust on its own); if
 you're in a browser you already have a JS engine, and where Mere genuinely needs JS it is
 the *native* host (Nova). Boa stays only as a **native conformance oracle, if/when** its
@@ -1336,7 +1343,10 @@ same-engine-everywhere**: the wasm scripted/fullweb cells run **Boa, not Nova**.
 / getrandom investigation edits (correct but moot given the 64-bit wall) were reverted;
 `serval-embedder` carries only the EmbedderObject reflector patch.
 
-**memory64 — the future escape hatch (assessed 2026-05-23, tracked, not viable yet).**
+**memory64 — the future escape hatch (assessed 2026-05-23; revised 2026-06-24, see update note).**
+
+> **Update 2026-06-24 (wasm64-claims audit; supersedes the browser + toolchain facts in this section and the "Nova-in-the-browser is blocked" line above).** The structural reasoning below is correct (wasm64's 64-bit `usize` dissolves the wall), but two premises have flipped: (1) **Memory64 is default-on in Chrome/Edge 133 (2025-02-04) and Firefox 134 (2025-01-07)** — not "Chrome production, Firefox flagged"; only Safari/WebKit (desktop + iOS) still lacks it. (2) **wasm-bindgen now supports wasm64** (0.2.120, 2026-04-28, via an f64 pointer ABI; wasm-pack 0.15.0; getrandom 0.4.3 `wasm_js`), so "the glue isn't there… the killer for our use" no longer holds. Revised verdict: a Nova-on-wasm64 spike is **worth running now** on the two extension targets (thin client covers iOS). Honest remaining blockers, none permanent: Rust Tier-3 (nightly + `-Z build-std`, no panic=unwind); the `usdt` `compile_error!` on non-x86_64/ARM64, which must be target-gated and does **not** self-resolve on wasm64 (it was the sole remaining wasm32 probe failure); `ecmascript_atomics` feature-drop; ~10%-2x memory64 perf. The revisit trigger flips from "Safari ships memory64 AND wasm-bindgen supports wasm64" to just **Safari ships memory64**. Also: the precise wasm32 overflow sites are usize-typed — `MAX_UTF16_LENGTH = (1usize << 53) - 1` (`string/data.rs:66`) and `2usize.pow(53)` (`data_block.rs:322`), not the i64 `SmallInteger` math. See `2026-06-24_grand_audit.md` §6.
+
 `wasm64-unknown-unknown` makes `usize` 64-bit, which *directly* dissolves this wall (the
 `Value`-size assert and the 53-bit shift both pass). It is the path that could one day
 collapse the native/wasm split back to Nova-everywhere. But shipping Nova-in-browser via

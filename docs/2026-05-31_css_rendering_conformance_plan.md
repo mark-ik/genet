@@ -687,8 +687,51 @@ slicing one.
 - The full WPT server (remote resources); reftests load files directly.
 - HTML serialization round-trips. Parse-in only.
 
+## Lever 3 — object-fit / object-position (re-grounded 2026-06-24, grand audit)
+
+The grand audit (`2026-06-24_grand_audit.md`) re-measured css-images live at
+172/713 and categorized the 226 fails: **object-fit / object-position is 123 of
+226** — by far the largest single bucket, and replaced-element fit/position is
+reused by `<img>`/`<video>`/`<canvas>` sizing across normal-flow, so the
+correctness spills well beyond css-images. It surfaces in this plan today only as
+a *regression* footnote (the 2026-06-09 scoreboard entry: an `<img>` change
+"regressed the object-fit / object-position corpus by 60"); it is in fact the top
+engine lever for css-images. It is unimplemented in layout
+(`components/serval-layout/construct.rs:113` is the only mention, a comment); no
+`ObjectFit` handling exists. Effort medium (replaced-box intrinsic-ratio fit +
+position offset; no new layout mode). Expected ~100 css-images reftests plus
+spillover. This is now the recommended next engine lever on the CSS axis.
+
+**Demotion confirmed:** gradient color-interpolation
+(`oklch`/`lch`/`hsl`/hue) is only ~20 of the 226 css-images fails (this plan's
+2026-06-09 note already hedged "smaller than the fail count suggests"), and it is
+**also partly GPU-blocked**: the netrender R9 canary is RED, vello's GPU path
+ignores `interpolation_cs`, so threading the color space serval-side would not
+flip GPU-rendered tests until vello honors it. CPU-side stop pre-conversion could
+land a few; it is not a top lever.
+
+**Cross-repo fidelity tail (netrender lowering).** serval already maps the full
+border/stroke/blend vocabulary in `paint_emit.rs`, but `paint_list_render`
+under-delivers it: `ScenePathStroke` is `{color,width}` only (cap/join/dash
+dropped), double/groove/ridge/inset/outset borders fall to the square-solid
+fallback, and several peniko blend modes fall to `Normal`. The full vocabulary
+exists in `paint_list_api/src/primitives.rs`; closing this is pure
+rasterizer-side translation work in netrender, spread across css-backgrounds
+border tail, css/compositing blend modes, and css-text-decor wavy/dotted. Tracked
+here as the renderer-side companion to the layout levers.
+
+**Baseline note:** this plan's founding-signal table (top, dated 2026-05-31) is a
+legitimate historical measurement; the current numbers live in the Scoreboard
+section above and are re-scored under the WPT-harness plan
+(`2026-06-24_wpt_harness_exactness_plan.md`, H3). Do not re-cite the 2026-05-31
+floats 7 / normal-flow 1 / css-backgrounds 15 figures as current.
+
 ## Relationship to other docs
 
+- [grand audit](./2026-06-24_grand_audit.md): re-grounded this plan's baselines
+  and promoted object-fit to the top CSS engine lever (§2, lever 2).
+- [WPT harness exactness plan](./2026-06-24_wpt_harness_exactness_plan.md): the
+  re-score + expectations guard (H3) that keeps this plan's scoreboard honest.
 - [two-lanes](./2026-05-29_serval_two_lanes.md): this is the Lane C Parsing +
   Paint + Layout axes, spun out.
 - [blitz float/linebox study](./2026-05-20_blitz_float_linebox_study.md): the
