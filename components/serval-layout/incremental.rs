@@ -816,6 +816,47 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         )
     }
 
+    /// The caret byte nearest the scene point `(x, y)` within `node`'s laid-out
+    /// text, served from the session's **retained** layout (no re-cascade) — the
+    /// inverse of [`caret_rect`](Self::caret_rect) and the point→caret primitive
+    /// behind click-to-place and the start/extend of a mouse text-selection. `None`
+    /// if `node` has no cached text layout / fragment. The session companion to
+    /// [`caret::caret_byte_at_point`](crate::caret::caret_byte_at_point), so a host
+    /// that overlays a focused field's caret hit-tests the same session it renders
+    /// through. Valid whenever [`emit_paint_list`](Self::emit_paint_list) is.
+    pub fn caret_byte_at_point<D>(&self, dom: &D, node: Id, x: f32, y: f32) -> Option<usize>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        crate::caret::caret_byte_at_point(
+            dom,
+            node,
+            x,
+            y,
+            &self.built,
+            &self.text_ctx,
+            &self.fragments,
+        )
+    }
+
+    /// The caret byte one *visual* line up (`delta < 0`) or down (`delta > 0`) from
+    /// `byte_offset` within `node`'s laid-out text, honouring parley's soft-wrap
+    /// rows — served from the session's retained layout. Drives ArrowUp / ArrowDown
+    /// in a textarea field over wrapped lines. Tier 1: no sticky goal column. `None`
+    /// if `node` has no cached text layout. The session companion to
+    /// [`caret::caret_byte_vertical`](crate::caret::caret_byte_vertical).
+    pub fn caret_byte_vertical<D>(
+        &self,
+        node: Id,
+        byte_offset: usize,
+        delta: isize,
+    ) -> Option<usize>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        crate::caret::caret_byte_vertical::<D>(node, byte_offset, &self.built, &self.text_ctx, delta)
+    }
+
     /// The selection-highlight rectangles for the byte range `[start, end)` within
     /// `node`'s laid-out text, in absolute scene coordinates, served from the
     /// session's retained layout. Empty when collapsed or `node` has no cached
