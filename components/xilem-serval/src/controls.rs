@@ -589,7 +589,7 @@ impl TextInput {
 /// * Any `Key::Character` / `Space` insert replaces a non-empty selection first.
 /// * [`NamedKey::Enter`], `Tab`, `Escape`, ↑/↓, and `Other` have no effect in a
 ///   single-line field (multi-line / commit are the [`textarea`] / host's job).
-fn edit(input: &mut TextInput, ev: KeyEvent) {
+pub(crate) fn edit(input: &mut TextInput, ev: KeyEvent) {
     let extend = ev.mods.shift;
     // Word motion on Ctrl (Win/Linux) or Alt/Option (macOS); `select_all` already
     // takes Ctrl/Cmd. The `if word` arms sit before the plain ones so they win.

@@ -21,7 +21,7 @@
 
 use std::ops::Range;
 
-use crate::controls::{edit_multiline, TextInput};
+use crate::controls::{edit, edit_multiline, TextInput};
 use crate::pod::ServalElement;
 use crate::{el, on_key, AnyView, KeyEvent, ServalCtx};
 
@@ -127,6 +127,18 @@ pub fn styled_textarea(input: &TextInput, styles: &[StyleRange]) -> crate::TextF
     on_key(
         el::<_, TextInput, ()>("textarea", field_children(input, styles)),
         edit_multiline as fn(&mut TextInput, KeyEvent),
+    )
+}
+
+/// A single-line text field with per-range highlighting from `styles` — the
+/// [`text_field`](crate::text_field) sibling (the `edit` handler and an `<input>`
+/// tag). Same caret / IME behaviour as the plain field; only the rendering carries
+/// the classes. Lets a host highlight the omnibar (urls, command tokens) the way the
+/// editor highlights a note.
+pub fn styled_text_field(input: &TextInput, styles: &[StyleRange]) -> crate::TextField {
+    on_key(
+        el::<_, TextInput, ()>("input", field_children(input, styles)),
+        edit as fn(&mut TextInput, KeyEvent),
     )
 }
 

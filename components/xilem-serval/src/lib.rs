@@ -85,7 +85,7 @@ pub use controls::{
     button, checkbox, checkbox_typed, text_field, text_field_typed, textarea, textarea_typed,
     toggle, Checkbox, TextField, TextInput,
 };
-pub use styled_field::{styled_textarea, FieldChild, StyleRange};
+pub use styled_field::{styled_text_field, styled_textarea, FieldChild, StyleRange};
 pub use element::{El, Element, ElementView, el};
 pub use event::{OnClick, OnClickState, PointerClick, clickable, on_click};
 pub use focusable::{Focusable, FocusableState, focusable};
