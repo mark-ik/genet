@@ -30,7 +30,7 @@ use xilem_core::{
 };
 
 use crate::pod::ServalElement;
-use crate::{El, ElementView, OptionalAction, ServalCtx};
+use crate::{El, ElementView, Focusable, OptionalAction, ServalCtx, focusable};
 
 // A distinctive number, mirroring `OnEvent`'s `ON_EVENT_VIEW_ID`, so a stray
 // message routed here on a wrong path is caught rather than silently matching.
@@ -169,6 +169,28 @@ where
         capture: false,
         phantom: PhantomData,
     }
+}
+
+/// An **accessibility-correct clickable**: [`focusable`]`(`[`on_click`]`(child, handler))`.
+///
+/// A bare `on_click(el(..), h)` reaches a pointer but is keyboard-unreachable and not
+/// screen-reader-activatable — it is not in the Tab order and has no synthetic activation.
+/// Wrapping in [`focusable`] puts it in the Tab order and lets Enter/Space synthesize the
+/// click. Use this for any clickable that is not already a native focusable control, so the
+/// a11y correctness is the default rather than per-caller discipline (the host re-expressed
+/// `focusable(on_click(..))` by hand at every list-pane / roster row before this).
+pub fn clickable<V, State, Action, OA, F>(
+    child: V,
+    handler: F,
+) -> Focusable<OnClick<V, State, Action, F>>
+where
+    State: 'static,
+    Action: 'static,
+    V: ElementView<State, Action>,
+    OA: OptionalAction<Action>,
+    F: Fn(&mut State, PointerClick) -> OA + 'static,
+{
+    focusable(on_click(child, handler))
 }
 
 /// Retained state for an [`OnClick`].

@@ -85,7 +85,7 @@ pub use controls::{
     toggle, Checkbox, TextField, TextInput,
 };
 pub use element::{El, Element, ElementView, el};
-pub use event::{OnClick, OnClickState, PointerClick, on_click};
+pub use event::{OnClick, OnClickState, PointerClick, clickable, on_click};
 pub use focusable::{Focusable, FocusableState, focusable};
 pub use key::{Key, KeyEvent, Modifiers, NamedKey, OnKey, OnKeyState, on_key};
 pub use optional_action::{Action, OptionalAction};
