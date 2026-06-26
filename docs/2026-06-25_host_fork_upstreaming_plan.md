@@ -89,3 +89,22 @@ only the orrery-specific host path does). So the host is not ahead on hit-testin
   serval-render` clean (the lone `private_interfaces` warning is pre-existing `PseudoKind`); 206
   serval-layout + 25 serval-render lib tests green. meerkat adoption (drop its `accumulate_origins` /
   `max_scroll` copies for these accessors) is the mere scroll-plan's P1/P4.
+- 2026-06-26: **P2-P5 landed (with the host adoption).**
+  - **P2 (origin maps):** public `accumulate_origins` (batch) + scroll-aware `accumulate_painted_origins`
+    on `serval_lane` (one `walk_origins` core also backing `absolute_origin`); `IncrementalLayout::
+    element_scroll` getter + `set_element_scroll` (carry scroll across a host layout rebuild). Retired
+    the internal copies: `caret.rs::absolute_origin` delegates to the canonical; `serval-render
+    a11y::build` reads the batch map. meerkat adopted all three (host `accumulate_origins` wrapper,
+    a11y/swatch via the painted map, `push_focus_ring`'s painted walk). (`viewport::extend_scrollable`
+    left — it is extent computation, not a pure origin copy.)
+  - **P3 (paint glue):** `caret-color: auto` wired into both serval-render caret paths;
+    `TextCursor.editable` added (gates caret/selection); the host focus ring ported into serval-render
+    (both paint paths draw `:focus-visible` at the painted bounds + `accumulated_translate`, now pub).
+  - **P4 (clickable):** `xilem_serval::clickable(child, handler)` = `focusable(on_click(..))`; meerkat's
+    7 hand-written `focusable(on_click(el(..)))` rows adopt it.
+  - **P5 (ergonomics):** `LayoutDom` gained `first_with_class`/`all_with_class`/`has_class`/`first_tag`
+    default methods (meerkat's free fns delegate); `anchor_point_clamped` (flip-on-overflow + clamp into
+    bounds) added and adopted by the submenu + `anchored_card_rect`. (Sized overlay `overlay_rect` was
+    already done in the overlay plan.)
+  - All green: 209 serval-layout, 26 serval-render, 56 xilem-serval, 87 + 160 meerkat. The host-scroll
+    rewire was runtime-verified in the app (a session-rebuild-wipes-`element_scroll` bug found + fixed).
