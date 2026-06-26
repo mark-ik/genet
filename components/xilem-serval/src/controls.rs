@@ -580,11 +580,15 @@ impl TextInput {
 /// * [`NamedKey::Backspace`] / [`NamedKey::Delete`] remove the selection if any,
 ///   else the char before / after the caret. [`NamedKey::ArrowLeft`] /
 ///   [`NamedKey::ArrowRight`] move one char and [`NamedKey::Home`] /
-///   [`NamedKey::End`] jump to the line ends — and with **Shift held**
+///   [`NamedKey::End`] jump to the buffer ends — and with **Shift held**
 ///   (`ev.mods.shift`) they *extend the selection* instead of collapsing it.
+/// * With **Ctrl** (or **Alt/Option** on macOS) held, ←/→ move by word and
+///   Backspace/Delete delete a word (UAX#29 boundaries, via
+///   [`move_word_left`](TextInput::move_word_left) /
+///   [`delete_word_left`](TextInput::delete_word_left) and their right twins).
 /// * Any `Key::Character` / `Space` insert replaces a non-empty selection first.
 /// * [`NamedKey::Enter`], `Tab`, `Escape`, ↑/↓, and `Other` have no effect in a
-///   single-line field yet (multi-line / commit are later slices).
+///   single-line field (multi-line / commit are the [`textarea`] / host's job).
 fn edit(input: &mut TextInput, ev: KeyEvent) {
     let extend = ev.mods.shift;
     // Word motion on Ctrl (Win/Linux) or Alt/Option (macOS); `select_all` already
@@ -620,6 +624,9 @@ pub(crate) fn edit_multiline(input: &mut TextInput, ev: KeyEvent) {
     let extend = ev.mods.shift;
     // Word motion on Ctrl (Win/Linux) or Alt/Option (macOS); document motion (Ctrl/Cmd
     // + Home/End → buffer start/end) on Ctrl or Cmd, while bare Home/End stay line-scoped.
+    // On Win/Linux a held Ctrl satisfies *both* flags, which is harmless: `word` gates only
+    // ←/→/Backspace/Delete and `doc` gates only Home/End (disjoint keys), and each guarded
+    // arm precedes its plain fallback, so the modified action always wins for its key.
     let word = ev.mods.ctrl || ev.mods.alt;
     let doc = ev.mods.ctrl || ev.mods.meta;
     match ev.key {
@@ -861,7 +868,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{TextInput, edit_multiline};
+    use super::{TextInput, edit, edit_multiline};
     use crate::{Key, KeyEvent, Modifiers, NamedKey};
 
     /// A `TextInput` with the caret at char index `caret`. Fixtures are ASCII, so a
@@ -968,5 +975,57 @@ mod tests {
         assert_eq!(t.caret(), 0); // Ctrl+Home: buffer start
         edit_multiline(&mut t, named(NamedKey::End, CTRL));
         assert_eq!(t.caret(), buf.chars().count()); // Ctrl+End: buffer end
+    }
+
+    #[test]
+    fn shift_vertical_extends_the_selection_keeping_the_goal() {
+        let mut t = at("aaaaa\nbb\nccccc", 3);
+        t.move_down(true); // extend onto "bb"; anchor stays at 3
+        assert!(t.has_selection());
+        assert_eq!(t.selection(), (3, 8));
+        t.move_down(true); // goal 3 restored on "ccccc" (index 12); anchor still 3
+        assert_eq!(t.selection(), (3, 12));
+    }
+
+    #[test]
+    fn goal_persists_across_a_top_bounce() {
+        let mut t = at("aaaaa\nbb\nccccc", 3); // line 0, column 3
+        t.move_up(false); // already the top line -> buffer start; the goal (3) stays
+        assert_eq!(t.caret(), 0);
+        t.move_down(false); // the goal 3 (not the landed col 0) drives the descent
+        assert_eq!(t.caret(), 8); // line "bb" clamps column 3 to its end (index 8)
+    }
+
+    #[test]
+    fn word_motion_handles_multibyte_utf8() {
+        // "héllo wörld": multi-byte é/ö, so byte offsets != char indices. Word motion must
+        // return CHAR indices and never split a codepoint.
+        let mut t = at("héllo wörld", 0);
+        t.move_word_right(false);
+        assert_eq!(t.caret(), 5); // end of "héllo" (5 chars), past the 2-byte é
+        t.move_word_right(false);
+        assert_eq!(t.caret(), 11); // end of "wörld" (11 chars total)
+        t.move_word_left(false);
+        assert_eq!(t.caret(), 6); // back to the start of "wörld"
+    }
+
+    #[test]
+    fn kill_word_deletes_the_selection_when_one_exists() {
+        let mut t = at("foo bar baz", 0);
+        t.move_word_right(true); // select "foo"
+        t.move_word_right(true); // select "foo bar"
+        assert_eq!(t.selection(), (0, 7));
+        t.delete_word_left(); // the selection wins; it is not a word-find beyond it
+        assert_eq!(t.text(), " baz");
+        assert_eq!(t.caret(), 0);
+    }
+
+    #[test]
+    fn single_line_field_supports_word_motion() {
+        let mut t = at("foo bar", 0);
+        edit(&mut t, named(NamedKey::ArrowRight, CTRL));
+        assert_eq!(t.caret(), 3); // word-right in the single-line field too
+        edit(&mut t, named(NamedKey::Backspace, CTRL));
+        assert_eq!(t.text(), " bar"); // Ctrl+Backspace kills "foo"
     }
 }
