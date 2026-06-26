@@ -38,7 +38,9 @@
 //! call, fixable with a reverse-index `FxHashMap<u64, D::NodeId>` cached on the
 //! view if a consumer pulls on perf.
 
+use std::collections::HashMap;
 use std::hash::Hash;
+use std::ops::ControlFlow;
 
 use engine_observables_api::{
     Affordance, AffordanceKind, BoxModel, FragmentHit, FragmentQuery, InteractionQuery,
@@ -530,12 +532,49 @@ fn outset_rect(rect: Rect, outsets: taffy::Rect<f32>) -> Rect {
     )
 }
 
-/// Walk from the document root to `target`, accumulating origins.
-/// Returns the absolute (layout-space, unscrolled) origin of `target`, or None if
-/// not reachable. O(n) — adequate for probe; a cached parent_id map would make this
-/// O(depth). Public so hosts and overlay producers (scrollbar thumbs, focus rings,
-/// anchored popups) can read an element's document-space origin off the fragment
-/// plane, instead of re-rolling the parent-relative accumulation themselves.
+/// Walk the DOM in document order from `id` (whose parent paints at `parent_origin`),
+/// computing each node's absolute origin by folding parent-relative taffy locations down
+/// the tree, and calling `visit(node, origin)` for each. When `scroll` is `Some`, a node
+/// that is a scroll container shifts its descendants' origin by its retained offset, so
+/// `visit` receives the **painted** origin (where the node lands after ancestors' scroll);
+/// when `None`, the unscrolled layout origin. `visit` returns [`ControlFlow`] so a
+/// single-target caller can stop early. The one origin-accumulation core for
+/// [`absolute_origin`], [`accumulate_origins`], and [`accumulate_painted_origins`].
+fn walk_origins<D, F>(
+    dom: &D,
+    fragments: &FragmentPlane<D::NodeId>,
+    id: D::NodeId,
+    parent_origin: Point,
+    scroll: Option<&ScrollOffsets<D::NodeId>>,
+    visit: &mut F,
+) -> ControlFlow<()>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+    F: FnMut(D::NodeId, Point) -> ControlFlow<()>,
+{
+    let origin = match fragments.rect_of(id) {
+        Some(l) => Point::new(parent_origin.x + l.location.x, parent_origin.y + l.location.y),
+        None => parent_origin,
+    };
+    visit(id, origin)?;
+    // A scroll container paints its descendants shifted by `-offset` (the content scrolls
+    // under the container's clip); a non-scrolled node passes its origin straight through.
+    let child_origin = match scroll.and_then(|s| s.get(&id)) {
+        Some(&(sx, sy)) => Point::new(origin.x - sx, origin.y - sy),
+        None => origin,
+    };
+    for child in dom.dom_children(id) {
+        walk_origins(dom, fragments, child, child_origin, scroll, visit)?;
+    }
+    ControlFlow::Continue(())
+}
+
+/// The absolute (layout-space, unscrolled) origin of `target`, or `None` if not reachable.
+/// O(n) worst case (stops early once `target` is reached). Public so hosts and overlay
+/// producers (scrollbar thumbs, focus rings, anchored popups) can read an element's
+/// document-space origin off the fragment plane instead of re-rolling the parent-relative
+/// accumulation. For many nodes at once use [`accumulate_origins`].
 pub fn absolute_origin<D>(
     dom: &D,
     fragments: &FragmentPlane<D::NodeId>,
@@ -545,34 +584,59 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    fn recurse<D>(
-        dom: &D,
-        fragments: &FragmentPlane<D::NodeId>,
-        id: D::NodeId,
-        target: D::NodeId,
-        parent_origin: Point,
-    ) -> Option<Point>
-    where
-        D: LayoutDom,
-        D::NodeId: Copy + Eq + Hash,
-    {
-        let layout = fragments.rect_of(id);
-        let origin = if let Some(l) = layout {
-            Point::new(parent_origin.x + l.location.x, parent_origin.y + l.location.y)
-        } else {
-            parent_origin
-        };
+    let mut found = None;
+    let _ = walk_origins(dom, fragments, dom.document(), Point::new(0.0, 0.0), None, &mut |id, o| {
         if id == target {
-            return Some(origin);
+            found = Some(o);
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
         }
-        for child in dom.dom_children(id) {
-            if let Some(p) = recurse(dom, fragments, child, target, origin) {
-                return Some(p);
-            }
-        }
-        None
-    }
-    recurse(dom, fragments, dom.document(), target, Point::new(0.0, 0.0))
+    });
+    found
+}
+
+/// The absolute (layout-space, unscrolled) origin of **every** laid-out node, keyed by node
+/// — one O(n) pass down the tree. The batch form of [`absolute_origin`], for a host or
+/// serval-render that needs many nodes' origins at once (a11y row bounds, scrollbar overlays)
+/// rather than re-rolling the accumulation per consumer.
+pub fn accumulate_origins<D>(
+    dom: &D,
+    fragments: &FragmentPlane<D::NodeId>,
+) -> HashMap<D::NodeId, Point>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut out = HashMap::new();
+    let _ = walk_origins(dom, fragments, dom.document(), Point::new(0.0, 0.0), None, &mut |id, o| {
+        out.insert(id, o);
+        ControlFlow::Continue(())
+    });
+    out
+}
+
+/// The **painted** origin of every laid-out node, keyed by node: like [`accumulate_origins`]
+/// but each scroll container's retained `scroll` offset shifts its descendants, so an entry
+/// is where the node actually paints after its ancestors' nested scroll. The scroll-aware
+/// answer serval otherwise has no public form of, for overlays / selection handles / IME
+/// anchoring / a11y bounds that must track scrolled content. Pass [`IncrementalLayout::
+/// element_scroll`](crate::IncrementalLayout::element_scroll) as `scroll`.
+pub fn accumulate_painted_origins<D>(
+    dom: &D,
+    fragments: &FragmentPlane<D::NodeId>,
+    scroll: &ScrollOffsets<D::NodeId>,
+) -> HashMap<D::NodeId, Point>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut out = HashMap::new();
+    let _ = walk_origins(dom, fragments, dom.document(), Point::new(0.0, 0.0), Some(scroll), &mut |id, o| {
+        out.insert(id, o);
+        ControlFlow::Continue(())
+    });
+    out
 }
 
 #[cfg(test)]
@@ -653,6 +717,61 @@ mod tests {
             "expected hit on <p> (opaque_id {expected_opaque}), got opaque_id {}",
             hit.source_node.0
         );
+    }
+
+    /// The batch `accumulate_origins` agrees with the single-target `absolute_origin` and
+    /// covers every laid-out node — the one O(n) pass a many-node consumer (a11y, scrollbars)
+    /// reads instead of re-rolling the accumulation.
+    #[test]
+    fn accumulate_origins_matches_per_node_walk() {
+        let document = StaticDocument::parse("<html><body><p>x</p></body></html>");
+        let styles = build_style_plane(&document);
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+
+        let map = accumulate_origins(&document, &fragments);
+        let p = find_element(NodeRef::document(&document), local_name!("p")).expect("<p>");
+        assert_eq!(
+            map.get(&p.id()).copied(),
+            absolute_origin(&document, &fragments, p.id()),
+            "the batch map agrees with the single-target walk for <p>",
+        );
+        assert!(map.len() >= 3, "html / body / p each get an entry");
+    }
+
+    /// `accumulate_painted_origins` shifts a scroll container's descendants by `-offset` (the
+    /// painted position after nested scroll) while leaving the container itself put — the
+    /// scroll-aware origin a11y / overlay / IME anchoring needs.
+    #[test]
+    fn painted_origins_subtract_an_ancestor_scroll() {
+        let document = StaticDocument::parse("<html><body><p>x</p></body></html>");
+        let styles = build_style_plane(&document);
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+
+        let body = find_element(NodeRef::document(&document), local_name!("body")).expect("<body>");
+        let p = find_element(NodeRef::document(&document), local_name!("p")).expect("<p>");
+
+        let unscrolled = accumulate_origins(&document, &fragments);
+        let mut scroll = ScrollOffsets::<StaticNodeId>::default();
+        scroll.insert(body.id(), (0.0, 40.0)); // body scrolled 40px down
+        let painted = accumulate_painted_origins(&document, &fragments, &scroll);
+
+        assert_eq!(
+            painted.get(&body.id()),
+            unscrolled.get(&body.id()),
+            "the scrolled container itself is the scrollport, so it is not shifted",
+        );
+        let up = unscrolled.get(&p.id()).expect("<p> origin");
+        let pp = painted.get(&p.id()).expect("<p> painted origin");
+        assert!((pp.y - (up.y - 40.0)).abs() < 0.5, "<p> paints 40px up under the scrolled body");
+        assert!((pp.x - up.x).abs() < 0.5, "x unchanged (no horizontal scroll)");
     }
 
     /// G1.2 transform-aware hit-testing: a `<p>` translated 120px right is
