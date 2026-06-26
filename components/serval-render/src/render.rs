@@ -29,7 +29,8 @@ use layout_dom_api::LayoutDom;
 use paint_list_api::{ColorF, DeviceIntSize};
 use serval_layout::{
     BackgroundImagePlane, BoxTree, FragmentPlane, ImageLoader, ImagePlane, IncrementalLayout,
-    ScrollOffsets, ServalLaneView, ServalPaintList, StylePlane, TextMeasureCtx, caret_byte_at_point,
+    ScrollOffsets, ServalLaneView, ServalPaintList, StylePlane, TextMeasureCtx, absolute_origin,
+    caret_byte_at_point,
     caret_byte_vertical, caret_rect, emit_paint_list_with_layouts, layout,
     paint_list_from_layout_dom, range_rects, run_cascade, selection_rects, selection_style,
     TextRange,
@@ -174,19 +175,21 @@ pub fn paint_list_from_scripted_dom(
         }
     }
 
-    push_scrollbars(&mut plist, &fragments, scroll_offsets);
+    push_scrollbars(&mut plist, dom, &fragments, scroll_offsets);
     plist
 }
 
 /// Append a scrollbar thumb onto `plist` for each scrolled container in
 /// `scroll_offsets`: a bar on the box's right edge, height ∝ visible/content,
-/// position ∝ offset/scrollable. Absolute coords (the scroller's parent-relative
-/// box ≈ absolute for a top-level container; nested scrollers would need origin
-/// accumulation). Shared by the stateless ([`paint_list_from_scripted_dom`]) and
+/// position ∝ offset/scrollable. The thumb sits at the container's **absolute**
+/// (document-space, unscrolled) origin via [`absolute_origin`], so it is placed
+/// correctly for a scroll container nested inside a positioned ancestor, not only a
+/// top-level one. Shared by the stateless ([`paint_list_from_scripted_dom`]) and
 /// session ([`paint_list_from_session`]) chrome paths so both draw identical
 /// scrollbars from the same fragment geometry.
 fn push_scrollbars(
     plist: &mut ServalPaintList,
+    dom: &ScriptedDom,
     fragments: &FragmentPlane<NodeId>,
     scroll_offsets: &ScrollOffsets<NodeId>,
 ) {
@@ -199,9 +202,14 @@ fn push_scrollbars(
         if scrollable <= 0.5 {
             continue;
         }
+        // Taffy fragment locations are parent-relative; the thumb needs the container's
+        // absolute top-left so a nested scroller's bar lands on its real right edge.
+        let (abs_x, abs_y) = absolute_origin(dom, fragments, node)
+            .map(|o| (o.x, o.y))
+            .unwrap_or((r.location.x, r.location.y));
         let thumb_h = (r.size.height * (inner_h / content_h)).max(24.0);
-        let thumb_y = r.location.y + (oy / scrollable) * (r.size.height - thumb_h);
-        let thumb_x = r.location.x + r.size.width - SCROLLBAR_WIDTH;
+        let thumb_y = abs_y + (oy / scrollable) * (r.size.height - thumb_h);
+        let thumb_x = abs_x + r.size.width - SCROLLBAR_WIDTH;
         plist.push_fill(thumb_x, thumb_y, SCROLLBAR_WIDTH, thumb_h, SCROLLBAR_COLOR);
     }
 }
@@ -286,7 +294,7 @@ pub fn paint_list_from_session(
         }
     }
 
-    push_scrollbars(&mut plist, session.fragments(), scroll_offsets);
+    push_scrollbars(&mut plist, dom, session.fragments(), scroll_offsets);
     plist
 }
 

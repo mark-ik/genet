@@ -170,6 +170,20 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         &self.fragments
     }
 
+    /// The absolute (document-space, unscrolled) rect `(x, y, w, h)` of `node`, or `None`
+    /// if it has no fragment. Folds the parent-relative taffy locations up the DOM chain
+    /// (via [`serval_lane::absolute_origin`](crate::serval_lane::absolute_origin)) so hosts
+    /// and overlay producers stop re-rolling the accumulation off the parent-relative
+    /// [`rect_of`](FragmentPlane::rect_of). Pairs with [`scroll_extent`](Self::scroll_extent).
+    pub fn absolute_rect<D>(&self, dom: &D, node: Id) -> Option<(f32, f32, f32, f32)>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let origin = crate::serval_lane::absolute_origin(dom, &self.fragments, node)?;
+        let r = self.fragments.rect_of(node)?;
+        Some((origin.x, origin.y, r.size.width, r.size.height))
+    }
+
     /// The current cascaded style plane — the other half (with [`fragments`](Self::fragments))
     /// a `ServalLaneView` hit-test reads, so a host can serve point queries off the
     /// session's retained layout instead of re-cascading.
@@ -567,7 +581,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     /// `position: fixed` subtrees and not descending past a nested clip container (its
     /// own box bounds its descendants). The precise region (rule 4: transformed /
     /// negative-margin descendant overflow) is a documented follow-on.
-    fn scroll_extent<D>(&self, dom: &D, node: Id) -> (f32, f32)
+    pub fn scroll_extent<D>(&self, dom: &D, node: Id) -> (f32, f32)
     where
         D: LayoutDom<NodeId = Id>,
     {
