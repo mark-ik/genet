@@ -72,6 +72,7 @@ mod runner;
 mod select;
 mod slider;
 mod splice;
+mod styled_field;
 mod tags;
 mod text;
 mod wheel;
@@ -84,6 +85,7 @@ pub use controls::{
     button, checkbox, checkbox_typed, text_field, text_field_typed, textarea, textarea_typed,
     toggle, Checkbox, TextField, TextInput,
 };
+pub use styled_field::{styled_textarea, StyleRange, StyledField};
 pub use element::{El, Element, ElementView, el};
 pub use event::{OnClick, OnClickState, PointerClick, clickable, on_click};
 pub use focusable::{Focusable, FocusableState, focusable};
