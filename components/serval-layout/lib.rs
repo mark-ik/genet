@@ -76,8 +76,8 @@ pub use image_decode::{
 pub use invalidate::{classify, coalesce, Invalidation};
 pub use layout::layout;
 pub use paint_emit::{
-    emit_paint_list, emit_paint_list_scrolled, emit_paint_list_with_layouts, ScrollOffsets,
-    ServalPaintList,
+    emit_paint_list, emit_paint_list_scrolled, emit_paint_list_with_layouts, push_scrollbars,
+    ScrollOffsets, ServalPaintList, SCROLLBAR_COLOR, SCROLLBAR_WIDTH,
 };
 pub use viewport::{document_scroll_range, ScrollKey, Viewport};
 pub use serval_lane::{

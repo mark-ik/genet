@@ -29,10 +29,10 @@ use layout_dom_api::LayoutDom;
 use paint_list_api::{ColorF, DeviceIntSize};
 use serval_layout::{
     BackgroundImagePlane, BoxTree, FragmentPlane, ImageLoader, ImagePlane, IncrementalLayout,
-    ScrollOffsets, ServalLaneView, ServalPaintList, StylePlane, TextMeasureCtx, absolute_origin,
+    ScrollOffsets, ServalLaneView, ServalPaintList, StylePlane, TextMeasureCtx,
     accumulate_painted_origins, accumulated_translate, caret_byte_at_point,
     caret_byte_vertical, caret_color, caret_rect, emit_paint_list_with_layouts, layout,
-    paint_list_from_layout_dom, range_rects, run_cascade, selection_rects, selection_style,
+    paint_list_from_layout_dom, push_scrollbars, range_rects, run_cascade, selection_rects, selection_style,
     TextRange,
 };
 use serval_scripted_dom::{NodeId, ScriptedDom};
@@ -44,10 +44,6 @@ const CARET_COLOR: ColorF = ColorF { r: 0.12, g: 0.12, b: 0.20, a: 1.0 };
 /// Selection highlight colour (translucent blue — text shows through, since the
 /// highlight paints over the text).
 const SELECTION_COLOR: ColorF = ColorF { r: 0.40, g: 0.60, b: 0.95, a: 0.40 };
-/// Scrollbar thumb colour (translucent dark grey, on the container's right edge).
-const SCROLLBAR_COLOR: ColorF = ColorF { r: 0.30, g: 0.30, b: 0.36, a: 0.65 };
-/// Scrollbar thumb width, device px.
-const SCROLLBAR_WIDTH: f32 = 8.0;
 /// Focus-ring outline colour (the `:focus-visible` indicator — a blue stroke).
 const FOCUS_RING_COLOR: ColorF = ColorF { r: 0.42, g: 0.62, b: 0.98, a: 0.95 };
 /// Focus-ring outline thickness, device px.
@@ -199,41 +195,6 @@ pub fn paint_list_from_scripted_dom(
 
     push_scrollbars(&mut plist, dom, &fragments, scroll_offsets);
     plist
-}
-
-/// Append a scrollbar thumb onto `plist` for each scrolled container in
-/// `scroll_offsets`: a bar on the box's right edge, height ∝ visible/content,
-/// position ∝ offset/scrollable. The thumb sits at the container's **absolute**
-/// (document-space, unscrolled) origin via [`absolute_origin`], so it is placed
-/// correctly for a scroll container nested inside a positioned ancestor, not only a
-/// top-level one. Shared by the stateless ([`paint_list_from_scripted_dom`]) and
-/// session ([`paint_list_from_session`]) chrome paths so both draw identical
-/// scrollbars from the same fragment geometry.
-fn push_scrollbars(
-    plist: &mut ServalPaintList,
-    dom: &ScriptedDom,
-    fragments: &FragmentPlane<NodeId>,
-    scroll_offsets: &ScrollOffsets<NodeId>,
-) {
-    for (&node, &(_ox, oy)) in scroll_offsets {
-        let Some(r) = fragments.rect_of(node) else { continue };
-        let inner_h =
-            r.size.height - r.padding.top - r.padding.bottom - r.border.top - r.border.bottom;
-        let content_h = r.content_size.height;
-        let scrollable = content_h - inner_h;
-        if scrollable <= 0.5 {
-            continue;
-        }
-        // Taffy fragment locations are parent-relative; the thumb needs the container's
-        // absolute top-left so a nested scroller's bar lands on its real right edge.
-        let (abs_x, abs_y) = absolute_origin(dom, fragments, node)
-            .map(|o| (o.x, o.y))
-            .unwrap_or((r.location.x, r.location.y));
-        let thumb_h = (r.size.height * (inner_h / content_h)).max(24.0);
-        let thumb_y = abs_y + (oy / scrollable) * (r.size.height - thumb_h);
-        let thumb_x = abs_x + r.size.width - SCROLLBAR_WIDTH;
-        plist.push_fill(thumb_x, thumb_y, SCROLLBAR_WIDTH, thumb_h, SCROLLBAR_COLOR);
-    }
 }
 
 /// `IncrementalLayout` session → `netrender::Scene`: the C3 chrome path. The

@@ -151,6 +151,55 @@ impl ServalPaintList {
     }
 }
 
+/// Scrollbar thumb colour (translucent dark grey, on the container's right edge).
+pub const SCROLLBAR_COLOR: ColorF = ColorF { r: 0.30, g: 0.30, b: 0.36, a: 0.65 };
+/// Scrollbar thumb width, device px.
+pub const SCROLLBAR_WIDTH: f32 = 8.0;
+
+/// Append a scrollbar thumb onto `plist` for each scrolled container in `scroll_offsets`: a bar
+/// on the box's right edge, height ∝ visible/content, position ∝ offset/scrollable. The thumb
+/// sits at the container's **absolute** (document-space, unscrolled) origin via the shared
+/// [`accumulate_origins`](crate::accumulate_origins) walk (one O(n) pass, then a map lookup per
+/// scroller), so it is placed correctly for a scroll container nested inside a positioned
+/// ancestor, not only a top-level one.
+///
+/// The caller decides what `scroll_offsets` holds: a host folds its own host-scroll and the
+/// retained `element_scroll` into one map; the engine's session path passes its offsets. Shared
+/// by serval-render's chrome paths and the meerkat host, so every scrollbar is drawn from the one
+/// fragment-geometry formula. (Upstreaming P2 — was a host copy plus a serval-render copy.)
+pub fn push_scrollbars<D>(
+    plist: &mut ServalPaintList,
+    dom: &D,
+    fragments: &FragmentPlane<D::NodeId>,
+    scroll_offsets: &ScrollOffsets<D::NodeId>,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    if scroll_offsets.is_empty() {
+        return;
+    }
+    let origins = crate::serval_lane::accumulate_origins(dom, fragments);
+    for (&node, &(_ox, oy)) in scroll_offsets {
+        let Some(r) = fragments.rect_of(node) else { continue };
+        let inner_h =
+            r.size.height - r.padding.top - r.padding.bottom - r.border.top - r.border.bottom;
+        let content_h = r.content_size.height;
+        let scrollable = content_h - inner_h;
+        if scrollable <= 0.5 {
+            continue;
+        }
+        // The container's absolute top-left (taffy locations are parent-relative), so a nested
+        // scroller's bar lands on its real right edge, not at `container_width` from the document
+        // left.
+        let Some(p) = origins.get(&node) else { continue };
+        let thumb_h = (r.size.height * (inner_h / content_h)).max(24.0);
+        let thumb_y = p.y + (oy / scrollable) * (r.size.height - thumb_h);
+        let thumb_x = p.x + r.size.width - SCROLLBAR_WIDTH;
+        plist.push_fill(thumb_x, thumb_y, SCROLLBAR_WIDTH, thumb_h, SCROLLBAR_COLOR);
+    }
+}
+
 impl PaintList for ServalPaintList {
     fn engine_id(&self) -> EngineId {
         EngineId::SERVAL
