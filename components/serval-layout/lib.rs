@@ -81,7 +81,8 @@ pub use paint_emit::{
 };
 pub use viewport::{document_scroll_range, ScrollKey, Viewport};
 pub use serval_lane::{
-    absolute_origin, accumulate_origins, accumulate_painted_origins, ServalLaneView,
+    absolute_origin, accumulate_origins, accumulate_painted_origins, accumulated_translate,
+    ServalLaneView,
 };
 pub use snapshot::build_snapshot_map;
 pub use style::{StyleEntry, StylePlane};

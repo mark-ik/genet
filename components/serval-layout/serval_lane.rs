@@ -469,7 +469,7 @@ fn walk_for_hit<D>(
 /// paints — the paint-side complement to `walk_for_hit`'s transform-aware hit-testing.
 /// Translate-only (an orrery card translates); a full transform compose is a later refinement.
 /// `(0, 0)` for an untransformed path or an unreachable `target`.
-pub(crate) fn accumulated_translate<D>(
+pub fn accumulated_translate<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
     target: D::NodeId,

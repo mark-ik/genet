@@ -30,7 +30,7 @@ use paint_list_api::{ColorF, DeviceIntSize};
 use serval_layout::{
     BackgroundImagePlane, BoxTree, FragmentPlane, ImageLoader, ImagePlane, IncrementalLayout,
     ScrollOffsets, ServalLaneView, ServalPaintList, StylePlane, TextMeasureCtx, absolute_origin,
-    caret_byte_at_point,
+    accumulate_painted_origins, accumulated_translate, caret_byte_at_point,
     caret_byte_vertical, caret_color, caret_rect, emit_paint_list_with_layouts, layout,
     paint_list_from_layout_dom, range_rects, run_cascade, selection_rects, selection_style,
     TextRange,
@@ -48,14 +48,23 @@ const SELECTION_COLOR: ColorF = ColorF { r: 0.40, g: 0.60, b: 0.95, a: 0.40 };
 const SCROLLBAR_COLOR: ColorF = ColorF { r: 0.30, g: 0.30, b: 0.36, a: 0.65 };
 /// Scrollbar thumb width, device px.
 const SCROLLBAR_WIDTH: f32 = 8.0;
+/// Focus-ring outline colour (the `:focus-visible` indicator — a blue stroke).
+const FOCUS_RING_COLOR: ColorF = ColorF { r: 0.42, g: 0.62, b: 0.98, a: 0.95 };
+/// Focus-ring outline thickness, device px.
+const FOCUS_RING_WIDTH: f32 = 2.0;
 
-/// What to paint for a focused text field's cursor: the element, the caret's
-/// byte offset, and an optional selected byte range. Byte offsets (the layer
-/// works in bytes); the host converts from its char-index model.
+/// What to paint for the focused element: the node, and — when it is an editable
+/// field (`editable`) — the caret's byte offset and an optional selected byte range.
+/// A focus ring is drawn on the node regardless; the caret/selection are gated on
+/// `editable`, so a focused **button** rings without a spurious caret. Byte offsets
+/// (the layer works in bytes); the host converts from its char-index model.
 pub struct TextCursor {
     pub node: NodeId,
     pub caret: usize,
     pub selection: Option<(usize, usize)>,
+    /// Whether the focused node is an editable text field — gates the caret + selection
+    /// paint. `false` for a focused non-text control (a button), which still rings.
+    pub editable: bool,
 }
 
 /// Run cascade → layout → paint-emit over `dom` and translate the paint list to
@@ -159,26 +168,33 @@ pub fn paint_list_from_scripted_dom(
     // both at absolute positions — appended after emit, so they draw over the
     // text at scene coordinates.
     if let Some(c) = cursor {
-        if let Some((start, end)) = c.selection {
-            let rects = selection_rects(dom, c.node, start, end, &built, &text_ctx, &fragments);
-            // `::selection { background }` when the field (or an ancestor) sets
-            // one, else the theme default highlight.
-            let highlight = selection_style(dom, &styles, c.node)
-                .map(|(bg, _fg)| ColorF { r: bg[0], g: bg[1], b: bg[2], a: bg[3] })
-                .unwrap_or(SELECTION_COLOR);
-            plist.push_selection(&rects, highlight);
+        // Caret + selection only for an editable field; a focused button rings without them.
+        if c.editable {
+            if let Some((start, end)) = c.selection {
+                let rects = selection_rects(dom, c.node, start, end, &built, &text_ctx, &fragments);
+                // `::selection { background }` when the field (or an ancestor) sets
+                // one, else the theme default highlight.
+                let highlight = selection_style(dom, &styles, c.node)
+                    .map(|(bg, _fg)| ColorF { r: bg[0], g: bg[1], b: bg[2], a: bg[3] })
+                    .unwrap_or(SELECTION_COLOR);
+                plist.push_selection(&rects, highlight);
+            }
+            if let Some(rect) =
+                caret_rect(dom, c.node, c.caret, &built, &text_ctx, &fragments, CARET_WIDTH)
+            {
+                // `caret-color: auto` — track the field's cascaded text colour so the caret stays
+                // legible on every theme (invisible near-black on a dark field otherwise); fall back
+                // to the dark default when the colour can't be resolved.
+                let caret = caret_color(dom, &styles, c.node)
+                    .map(|[r, g, b, a]| ColorF { r, g, b, a })
+                    .unwrap_or(CARET_COLOR);
+                plist.push_caret(rect, caret);
+            }
         }
-        if let Some(rect) =
-            caret_rect(dom, c.node, c.caret, &built, &text_ctx, &fragments, CARET_WIDTH)
-        {
-            // `caret-color: auto` — track the field's cascaded text colour so the caret stays
-            // legible on every theme (invisible near-black on a dark field otherwise); fall back
-            // to the dark default when the colour can't be resolved.
-            let caret = caret_color(dom, &styles, c.node)
-                .map(|[r, g, b, a]| ColorF { r, g, b, a })
-                .unwrap_or(CARET_COLOR);
-            plist.push_caret(rect, caret);
-        }
+        // The `:focus-visible` ring on the focused node (a CSS transform shifts where it paints;
+        // `accumulated_translate` is `(0, 0)` for untransformed content).
+        let translate = accumulated_translate(dom, &styles, c.node);
+        push_focus_ring(&mut plist, dom, &fragments, scroll_offsets, c.node, translate);
     }
 
     push_scrollbars(&mut plist, dom, &fragments, scroll_offsets);
@@ -287,26 +303,55 @@ pub fn paint_list_from_session(
     // caret (over), both at absolute coords, sourced from the session's retained
     // layout so a session-rendered field matches the stateless render byte for byte.
     if let Some(c) = cursor {
-        if let Some((start, end)) = c.selection {
-            let rects = session.selection_rects(dom, c.node, start, end);
-            let highlight = session
-                .selection_style(dom, c.node)
-                .map(|(bg, _fg)| ColorF { r: bg[0], g: bg[1], b: bg[2], a: bg[3] })
-                .unwrap_or(SELECTION_COLOR);
-            plist.push_selection(&rects, highlight);
+        if c.editable {
+            if let Some((start, end)) = c.selection {
+                let rects = session.selection_rects(dom, c.node, start, end);
+                let highlight = session
+                    .selection_style(dom, c.node)
+                    .map(|(bg, _fg)| ColorF { r: bg[0], g: bg[1], b: bg[2], a: bg[3] })
+                    .unwrap_or(SELECTION_COLOR);
+                plist.push_selection(&rects, highlight);
+            }
+            if let Some(rect) = session.caret_rect(dom, c.node, c.caret, CARET_WIDTH) {
+                // `caret-color: auto` (see the static path above): track the field's text colour.
+                let caret = session
+                    .caret_color(dom, c.node)
+                    .map(|[r, g, b, a]| ColorF { r, g, b, a })
+                    .unwrap_or(CARET_COLOR);
+                plist.push_caret(rect, caret);
+            }
         }
-        if let Some(rect) = session.caret_rect(dom, c.node, c.caret, CARET_WIDTH) {
-            // `caret-color: auto` (see the static path above): track the field's text colour.
-            let caret = session
-                .caret_color(dom, c.node)
-                .map(|[r, g, b, a]| ColorF { r, g, b, a })
-                .unwrap_or(CARET_COLOR);
-            plist.push_caret(rect, caret);
-        }
+        // The `:focus-visible` ring (the retained layout knows the node's accumulated transform).
+        let translate = session.accumulated_translate(dom, c.node);
+        push_focus_ring(&mut plist, dom, session.fragments(), scroll_offsets, c.node, translate);
     }
 
     push_scrollbars(&mut plist, dom, session.fragments(), scroll_offsets);
     plist
+}
+
+/// Draw a `:focus-visible` ring — a thin outline — on the focused `node` at its **painted**
+/// bounds (its painted origin shifted by `translate`, the accumulated CSS transform fragments
+/// omit). The caller passes whichever node carries focus (field or button), so this rings any
+/// focused element; the caret/selection above are gated on the field case. No-op for a node with
+/// no laid-out box. (Upstreaming P3 — ported from the meerkat host's focus ring.)
+fn push_focus_ring(
+    plist: &mut ServalPaintList,
+    dom: &ScriptedDom,
+    fragments: &FragmentPlane<NodeId>,
+    scroll_offsets: &ScrollOffsets<NodeId>,
+    node: NodeId,
+    translate: (f32, f32),
+) {
+    let Some(r) = fragments.rect_of(node) else { return };
+    let origins = accumulate_painted_origins(dom, fragments, scroll_offsets);
+    let Some(p) = origins.get(&node) else { return };
+    let (x, y) = (p.x + translate.0, p.y + translate.1);
+    let (w, h, t) = (r.size.width, r.size.height, FOCUS_RING_WIDTH);
+    plist.push_fill(x, y, w, t, FOCUS_RING_COLOR);
+    plist.push_fill(x, y + h - t, w, t, FOCUS_RING_COLOR);
+    plist.push_fill(x, y, t, h, FOCUS_RING_COLOR);
+    plist.push_fill(x + w - t, y, t, h, FOCUS_RING_COLOR);
 }
 
 /// The focused field's caret rect in scene coordinates `(x, y, w, h)`, or
@@ -587,7 +632,7 @@ mod tests {
         // (caret byte, optional selection range) per case; a fresh `TextCursor` per
         // call since it is `!Copy`.
         let cur = |c: Option<(usize, Option<(usize, usize)>)>| {
-            c.map(|(caret, selection)| TextCursor { node: field, caret, selection })
+            c.map(|(caret, selection)| TextCursor { node: field, caret, selection, editable: true })
         };
         let cases = [None, Some((3, None)), Some((6, Some((0, 5))))];
 
@@ -600,6 +645,30 @@ mod tests {
                 "case {i}: session render must match the stateless render op-for-op",
             );
         }
+    }
+
+    /// A focused field paints a `:focus-visible` ring **plus** its caret; a focused non-editable
+    /// node (a button) rings **without** a caret — `editable` gates the caret/selection while the
+    /// ring is unconditional. (Upstreaming P3 — focus ring.)
+    #[test]
+    fn focus_ring_rings_and_editable_gates_the_caret() {
+        const SHEET: &[&str] = &["html, body, div { display: block; margin: 0; }"];
+        let (w, h) = (400u32, 200u32);
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        dom.set_inner_html(root, "<div id=\"field\">hello</div>");
+        let field = first_named(&dom, root, "div").expect("a <div>");
+        let scroll = ScrollOffsets::<NodeId>::default();
+
+        let ops = |cursor| scene_from_scripted_dom(&dom, SHEET, w, h, cursor, &scroll).ops.len();
+        let none = ops(None);
+        let editable =
+            ops(Some(TextCursor { node: field, caret: 5, selection: None, editable: true }));
+        let button =
+            ops(Some(TextCursor { node: field, caret: 0, selection: None, editable: false }));
+
+        assert!(button > none, "a focused node adds the ring");
+        assert!(editable > button, "an editable focus adds the caret on top of the ring");
     }
 
     /// C2: a display surface rendered through `scene_from_session_dom` paints at the
