@@ -126,6 +126,45 @@ pub fn anchor_point(
     }
 }
 
+/// [`anchor_point`] with **overflow-aware flip + clamp** into an available `bounds` box: if the
+/// popup placed per `placement` would spill past the far edge of `bounds` on the placement axis,
+/// it flips to the opposite side; the result is then clamped to keep the popup inside `bounds`.
+/// The element-anchored placement a host would otherwise hand-roll (a submenu beside its parent
+/// row, a card beside its node — try one side, flip on overflow, clamp on-screen), in one call.
+///
+/// `bounds` is `(x0, y0, x1, y1)` — the area the popup must stay inside. The popup size is
+/// consulted on every side (unlike bare [`anchor_point`]), so pass a measured `popup`.
+pub fn anchor_point_clamped(
+    trigger: (f32, f32, f32, f32),
+    popup: (f32, f32),
+    placement: Placement,
+    bounds: (f32, f32, f32, f32),
+) -> (f32, f32) {
+    let (pw, ph) = popup;
+    let (bx0, by0, bx1, by1) = bounds;
+    // Flip to the opposite side when the chosen side overflows that edge of `bounds`.
+    let placement = match placement {
+        Placement::RightOf if anchor_point(trigger, popup, Placement::RightOf).0 + pw > bx1 => {
+            Placement::LeftOf
+        }
+        Placement::LeftOf if anchor_point(trigger, popup, Placement::LeftOf).0 < bx0 => {
+            Placement::RightOf
+        }
+        Placement::Below if anchor_point(trigger, popup, Placement::Below).1 + ph > by1 => {
+            Placement::Above
+        }
+        Placement::Above if anchor_point(trigger, popup, Placement::Above).1 < by0 => {
+            Placement::Below
+        }
+        p => p,
+    };
+    let (x, y) = anchor_point(trigger, popup, placement);
+    // A flip near the far edge can't run the popup off the near edge: clamp into `bounds`.
+    let x = x.clamp(bx0, (bx1 - pw).max(bx0));
+    let y = y.clamp(by0, (by1 - ph).max(by0));
+    (x, y)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,6 +186,29 @@ mod tests {
         assert_eq!(anchor_point(trigger, popup, Placement::RightOf), (180.0, 50.0));
         // LeftOf: same top, right at the trigger's left → left = 100 - popup.w.
         assert_eq!(anchor_point(trigger, popup, Placement::LeftOf), (60.0, 50.0));
+    }
+
+    /// `anchor_point_clamped` keeps the chosen side when it fits, flips to the opposite side
+    /// when it would overflow that edge of `bounds`, and clamps the popup inside `bounds`.
+    #[test]
+    fn anchor_point_clamped_flips_and_clamps() {
+        let trigger = (100.0, 50.0, 80.0, 20.0); // right edge at x=180
+        let popup = (40.0, 30.0);
+
+        // Wide bounds: RightOf fits (180 + 40 = 220 <= 300), so no flip.
+        assert_eq!(
+            anchor_point_clamped(trigger, popup, Placement::RightOf, (0.0, 0.0, 300.0, 300.0)),
+            (180.0, 50.0),
+        );
+        // Narrow bounds: RightOf would overflow (180 + 40 = 220 > 200) → flip to LeftOf (100 - 40 = 60).
+        assert_eq!(
+            anchor_point_clamped(trigger, popup, Placement::RightOf, (0.0, 0.0, 200.0, 300.0)),
+            (60.0, 50.0),
+        );
+        // A LeftOf that runs off the left edge clamps back to x0 (flip to RightOf first, then clamp).
+        let near_left = (10.0, 50.0, 20.0, 20.0); // LeftOf x = 10 - 40 = -30 < 0
+        let (x, _) = anchor_point_clamped(near_left, popup, Placement::LeftOf, (0.0, 0.0, 300.0, 300.0));
+        assert!(x >= 0.0, "the popup is clamped on-screen, not run off the left edge");
     }
 
     /// Below/RightOf ignore the popup size, so an unmeasured `(0, 0)` popup
