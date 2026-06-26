@@ -276,6 +276,15 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         self.viewport.scroll
     }
 
+    /// The retained per-container nested scroll offsets ([`element_scroll`](Self::element_scroll)),
+    /// written by [`scroll_at`](Self::scroll_at). `hit_test` and `emit_paint_list` already fold
+    /// these in via [`merged_scroll`](Self::merged_scroll); this read accessor is for a host that
+    /// also needs the offsets for its *own* geometry (a11y bounds, a scrollbar overlay, mapping a
+    /// pointer into a scrolled container) instead of carrying a parallel offset model.
+    pub fn element_scroll(&self) -> &ScrollOffsets<Id> {
+        &self.element_scroll
+    }
+
     /// The document's maximum scroll offset ([`document_scroll_range`]) — the
     /// extent of its scrollable-overflow region beyond the viewport (rule 4).
     pub fn scroll_range<D>(&self, dom: &D) -> (f32, f32)
@@ -2111,6 +2120,22 @@ mod tests {
             after.commands().iter().any(|c| matches!(c, PaintCmd::PushTransform(t)
                 if t.origin.x.abs() < 0.5 && (t.origin.y + 150.0).abs() < 0.5)),
             "the nested scroll paints the content at a -150 translate wrap",
+        );
+    }
+
+    /// `scroll_at` records the offset in the retained `element_scroll()`, so a host can read
+    /// a nested container's current scroll for its own geometry (a11y bounds, scrollbar overlay,
+    /// pointer mapping) without carrying a parallel offset model.
+    #[test]
+    fn scroll_at_is_readable_via_element_scroll() {
+        let (dom, scroller, _top, _bottom) = build_nested_scroller();
+        let mut layout = IncrementalLayout::new(&dom, NESTED_SCROLL_SHEET, W, H);
+        assert!(layout.element_scroll().is_empty(), "no nested scroll recorded yet");
+        assert!(layout.scroll_at(&dom, 50.0, 50.0, 0.0, 150.0), "scroll the container 150px");
+        assert_eq!(
+            layout.element_scroll().get(&scroller).copied(),
+            Some((0.0, 150.0)),
+            "element_scroll() exposes the scroller's retained offset",
         );
     }
 
