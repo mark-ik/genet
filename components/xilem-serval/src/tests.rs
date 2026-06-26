@@ -844,6 +844,31 @@ mod keyboard {
         assert_eq!(runner.state().count, 2, "a character key does not activate the button");
     }
 
+    /// `clickable(child, handler)` is `focusable(on_click(..))` in one combinator: the div is
+    /// Tab-reachable, Enter activates it (the synthesized click), and a pointer click does too.
+    #[test]
+    fn clickable_is_focusable_and_activatable() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            |_s: &Clicks| {
+                crate::clickable(
+                    el::<_, Clicks, ()>("div", "row"),
+                    |s: &mut Clicks, _ev: PointerClick| s.count += 1,
+                )
+            },
+            Clicks { count: 0 },
+        );
+        let row = runner.root();
+
+        runner.dispatch_key(tab(false));
+        assert_eq!(runner.focus(), Some(row), "clickable() puts the div in the Tab order");
+        runner.dispatch_key(named(NamedKey::Enter));
+        assert_eq!(runner.state().count, 1, "Enter activates the clickable");
+        runner.dispatch_click(row, PointerClick::at((0.0, 0.0)));
+        assert_eq!(runner.state().count, 2, "a pointer click activates it too");
+    }
+
     // --- Tab is overridable per-view (G2.3) -----------------------------------
 
     /// Tab is delivered to the focused element's `on_key` first; a handler that
