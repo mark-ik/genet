@@ -108,3 +108,21 @@ only the orrery-specific host path does). So the host is not ahead on hit-testin
     already done in the overlay plan.)
   - All green: 209 serval-layout, 26 serval-render, 56 xilem-serval, 87 + 160 meerkat. The host-scroll
     rewire was runtime-verified in the app (a session-rebuild-wipes-`element_scroll` bug found + fixed).
+- 2026-06-26: **Deferred items closed out.**
+  - **`extend_scrollable`** was *not* a pure origin copy (far-edge accumulation with `position:fixed` +
+    overflow-clip pruning), but `IncrementalLayout`'s nested `content_far_edge`/`accumulate_far_edge` was
+    an exact second copy of it (its own doc said so). `extend_scrollable` is now `pub(crate)` and the
+    nested extent calls it; the copy is deleted — the document scroll range and a nested container's
+    extent share one walk.
+  - **`push_scrollbars`** (a serval-render copy + a meerkat host copy) moves to `serval-layout`'s
+    `paint_emit` as a generic `pub fn` over `LayoutDom` (the batch-origins form), with the
+    `SCROLLBAR_COLOR/WIDTH` consts. Both consumers call it; the caller still owns the offsets (the host
+    folds `element_scroll` in). It is pure `ServalPaintList` + `FragmentPlane` + origins, so serval-layout
+    — which both already depend on — is the right home (meerkat has no serval-render dep).
+  - **`max_scroll`** (test-only `RosterPane`) now reads `PaneSession::scroll_extent` (a test-gated
+    accessor onto `IncrementalLayout::scroll_extent`, exposed through `ViewPane`) instead of re-deriving
+    `content_size - inner`.
+  - **`scroll_element_into_view`** already exists in serval (nearest-alignment, tested); no host pane does
+    a per-frame scroll-to-keep-visible today, so the meerkat adoption is a *future* focus-scrolls-into-view
+    feature, not a present dedup. Left as such.
+  - All green: 209 serval-layout, 26 serval-render, 87 + 160 meerkat.
