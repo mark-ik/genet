@@ -145,6 +145,48 @@ pub trait LayoutDom {
     {
         walk_subtree(self, self.document(), visitor)
     }
+
+    // ---- class / tag queries --------------------------------------------
+    //
+    // Pre-order subtree searches a host and serval-internal callers both reach for
+    // (find the element painting a class, collect a class's placeholders, hit-test a
+    // tag). Provided as defaults over `dom_children` / `attributes` / `element_name`
+    // so neither side re-rolls the walk.
+
+    /// Whether element `id` carries CSS class `class` (whitespace-split `class` attr).
+    fn has_class(&self, id: Self::NodeId, class: &str) -> bool {
+        self.attributes(id).any(|a| {
+            a.name.local.as_ref() == "class" && a.value.split_whitespace().any(|c| c == class)
+        })
+    }
+
+    /// The first element carrying CSS class `class` in pre-order under `id` (inclusive).
+    fn first_with_class(&self, id: Self::NodeId, class: &str) -> Option<Self::NodeId> {
+        if self.has_class(id, class) {
+            return Some(id);
+        }
+        self.dom_children(id).find_map(|c| self.first_with_class(c, class))
+    }
+
+    /// Every element carrying CSS class `class` in pre-order under `id` (inclusive).
+    fn all_with_class(&self, id: Self::NodeId, class: &str) -> Vec<Self::NodeId> {
+        let mut out = Vec::new();
+        if self.has_class(id, class) {
+            out.push(id);
+        }
+        for child in self.dom_children(id) {
+            out.extend(self.all_with_class(child, class));
+        }
+        out
+    }
+
+    /// The first element with local tag name `local` in pre-order under `id` (inclusive).
+    fn first_tag(&self, id: Self::NodeId, local: &str) -> Option<Self::NodeId> {
+        if self.element_name(id).is_some_and(|q| q.local.as_ref() == local) {
+            return Some(id);
+        }
+        self.dom_children(id).find_map(|c| self.first_tag(c, local))
+    }
 }
 
 /// Mutation extension for scripted DOMs (plan Part 3 / the layout_dom_api design's
