@@ -919,7 +919,7 @@ mod controls {
         AnyView, DomHandle, Key, KeyEvent, Modifiers, NamedKey, PointerClick, PointerEvent,
         PointerPhase, RadioGroup, SelectState, ServalAppRunner, ServalCtx, ServalElement, Slider,
         TextInput, View, WheelEvent, button, checkbox, el, lens, on_pointer, on_wheel, overlay_at,
-        radio_group, select, slider, text_field,
+        overlay_rect, radio_group, select, slider, text_field,
     };
 
     /// The text data of the single text child under `node`, if any.
@@ -1300,6 +1300,27 @@ mod controls {
         assert_eq!(
             attr(&dom.borrow(), ov, "style").as_deref(),
             Some("position: absolute; left: 30px; top: 15px;"),
+        );
+    }
+
+    /// `overlay_rect(x, y, w, h, content)`: a positioned `<div>` that also carries
+    /// `width`/`height` in its inline `style`, so the host can size a surface (a card,
+    /// the comms pane) from the view rather than re-stamping geometry each frame.
+    #[test]
+    fn overlay_rect_carries_inline_geometry() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            |_: &()| overlay_rect::<_, (), ()>(30.0, 15.0, 200.0, 120.0, "card"),
+            (),
+        );
+        let ov = runner.root();
+
+        assert_eq!(dom.borrow().element_name(ov).unwrap().local.as_ref(), "div");
+        assert_eq!(text_child(&dom.borrow(), ov).as_deref(), Some("card"));
+        assert_eq!(
+            attr(&dom.borrow(), ov, "style").as_deref(),
+            Some("position: absolute; left: 30px; top: 15px; width: 200px; height: 120px;"),
         );
     }
 
