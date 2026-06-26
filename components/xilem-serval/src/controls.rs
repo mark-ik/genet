@@ -466,7 +466,7 @@ fn edit(input: &mut TextInput, ev: KeyEvent) {
 /// scope to the current line (`home_line` / `end_line`). Everything else
 /// (typing, Backspace/Delete, ←/→, Shift to extend) matches the single-line
 /// field.
-fn edit_multiline(input: &mut TextInput, ev: KeyEvent) {
+pub(crate) fn edit_multiline(input: &mut TextInput, ev: KeyEvent) {
     let extend = ev.mods.shift;
     match ev.key {
         Key::Character(ref s) if (ev.mods.ctrl || ev.mods.meta) && s.eq_ignore_ascii_case("a") => {
