@@ -355,34 +355,71 @@ pub(crate) fn collect_text_leaves<D>(
 }
 
 /// The caret byte after moving `delta` visual lines (−1 = up, +1 = down) from
-/// `byte_offset` within `node`'s laid-out text, keeping the horizontal position
-/// — soft-wrap-aware ArrowUp / ArrowDown. `None` if `node` has no cached layout.
+/// `byte_offset` within `node`'s laid-out text, keeping a **sticky goal column** —
+/// soft-wrap-aware ArrowUp / ArrowDown that does not drift toward short visual rows.
+/// `None` if `node` has no cached layout.
 ///
-/// Unlike the buffer's `\n`-counting navigation (which jumps whole hard lines),
-/// this honours parley's *visual* line breaks: a long unwrapped paragraph that
-/// the layout wrapped across several rows moves one wrapped row at a time. At the
-/// first/last line it lands at the line start/end. parley clamps a too-wide
-/// horizontal position to the target line's end.
+/// Unlike the buffer's `\n`-counting navigation (which jumps whole hard lines), this
+/// honours parley's *visual* line breaks: a long unwrapped paragraph the layout
+/// wrapped across several rows moves one wrapped row at a time. At the first/last row
+/// it lands at the buffer start/end.
 ///
-/// Tier 1: a fresh [`Selection`] is built each call, so the goal column is the
-/// caret's current x — there is no sticky goal column preserved across a run of
-/// up/down presses (matching the hard-line navigation in `TextInput`).
+/// `goal_x` is the horizontal target in the layout's local coordinate space: pass
+/// `None` to seed it from the caret's current x, or the value returned by the previous
+/// call to keep the column across a run of up/down presses (Tier 2). Returns
+/// `(new_byte, goal_x)` — feed `goal_x` back on the next vertical move; reset it to
+/// `None` on any horizontal move or edit. (parley's own `Selection::move_lines` keeps
+/// this `h_pos` internally across a retained selection; we rebuild from a byte each
+/// call, so we thread the goal through the caller instead.)
 pub fn caret_byte_vertical<D>(
     node: D::NodeId,
     byte_offset: usize,
     built: &BoxTree<D::NodeId>,
     text_ctx: &TextMeasureCtx,
     delta: isize,
-) -> Option<usize>
+    goal_x: Option<f32>,
+) -> Option<(usize, f32)>
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
     let taffy_id = built.node_map.get(&node)?;
     let layout = text_ctx.layouts.get(taffy_id)?;
-    let moved = Selection::from_byte_index(layout, byte_offset, Affinity::default())
-        .move_lines(layout, delta, false);
-    Some(moved.focus().index())
+    let cursor = Cursor::from_byte_index(layout, byte_offset, Affinity::default());
+    // The caret's geometry gives both the row it sits on (its y) and the x to seed the
+    // goal from when the caller has none.
+    let geo = cursor.geometry(layout, 0.0);
+    let h_pos = goal_x.unwrap_or(geo.x0 as f32);
+
+    let line_count = layout.len();
+    if line_count == 0 {
+        return Some((byte_offset, h_pos));
+    }
+    // The visual row the caret sits on: the first whose block band reaches past the
+    // caret's y (rows run top-to-bottom). Keys off the caret's actual y, so a soft-wrap
+    // boundary resolves to the row the caret visually occupies, not just its byte.
+    let y = geo.y0 as f32;
+    let current = (0..line_count)
+        .find(|&i| layout.get(i).is_some_and(|l| y < l.metrics().block_max_coord))
+        .unwrap_or(line_count - 1);
+
+    let target = current as isize + delta;
+    if target < 0 {
+        return Some((0, h_pos)); // above the first row -> buffer start
+    }
+    if target as usize >= line_count {
+        // below the last row -> the last visual row's end (buffer end)
+        let end = layout.get(line_count - 1).map_or(byte_offset, |l| l.text_range().end);
+        return Some((end, h_pos));
+    }
+    // Place the caret at the goal x on the target row's text band; parley snaps the x to
+    // the nearest cluster, clamping a too-wide goal to that row's end (the sticky goal is
+    // preserved for the next move, not lost to the clamp).
+    let line = layout.get(target as usize)?;
+    let m = line.metrics();
+    let ty = m.block_max_coord - m.ascent * 0.5;
+    let moved = Cursor::from_point(layout, h_pos, ty);
+    Some((moved.index(), h_pos))
 }
 
 /// The caret byte nearest the scene point `(x, y)` within `node`'s laid-out text,
@@ -1671,12 +1708,13 @@ mod tests {
 
         // Down one visual line lands on a later row (greater y) at a byte past
         // the first wrapped word.
-        let down = caret_byte_vertical::<StaticDocument>(p, 0, &built, &text_ctx, 1).unwrap();
+        let (down, goal) = caret_byte_vertical::<StaticDocument>(p, 0, &built, &text_ctx, 1, None).unwrap();
         assert!(down > 0, "down moved off byte 0: {down}");
         assert!(rect_at(down).y > start.y, "down moved to a lower visual line");
 
-        // Up from there returns to the first row.
-        let up = caret_byte_vertical::<StaticDocument>(p, down, &built, &text_ctx, -1).unwrap();
+        // Up from there, feeding the goal back, returns to the first row.
+        let (up, _) =
+            caret_byte_vertical::<StaticDocument>(p, down, &built, &text_ctx, -1, Some(goal)).unwrap();
         assert!((rect_at(up).y - start.y).abs() < 0.5, "up returned to the first row");
 
         // A click on the wrapped row resolves to a caret on that same row.
@@ -1695,7 +1733,49 @@ mod tests {
 
         // A node with no cached text layout yields None for both.
         let root = doc.document();
-        assert!(caret_byte_vertical::<StaticDocument>(root, 0, &built, &text_ctx, 1).is_none());
+        assert!(caret_byte_vertical::<StaticDocument>(root, 0, &built, &text_ctx, 1, None).is_none());
         assert!(caret_byte_at_point(&doc, root, 1.0, 1.0, &built, &text_ctx, &fragments).is_none());
+    }
+
+    /// The sticky goal column (Tier 2): moving the caret down from a long visual row
+    /// through a SHORT row and on to another long row returns it to ~its original
+    /// column — the goal x, fed back each call, survives the short row's clamp instead
+    /// of drifting left.
+    #[test]
+    fn caret_vertical_keeps_a_sticky_goal_column() {
+        // Each word far exceeds 20px, so parley puts one per row: "aaaaaaaa" / "bb" /
+        // "cccccccc" — long, short, long.
+        let doc = StaticDocument::parse("<html><body><p>aaaaaaaa bb cccccccc</p></body></html>");
+        let sheet = &[
+            "html, body, p { display: block; margin: 0; padding: 0; border: 0; }",
+            "p { width: 20px; }",
+        ];
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        let images = ImagePlane::new();
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&doc, &styles, &images, viewport);
+        let p = find_p(&doc);
+        let rect_at = |byte| caret_rect(&doc, p, byte, &built, &text_ctx, &fragments, 2.0).unwrap();
+
+        // Start at the end of the long first row (after "aaaaaaaa", byte 8): a rightward x.
+        let start_x = rect_at(8).x;
+        // Down into the short row: the goal seeds from the rightward start (returned), and
+        // the caret clamps onto the short row at a smaller x.
+        let (on_short, goal) =
+            caret_byte_vertical::<StaticDocument>(p, 8, &built, &text_ctx, 1, None).unwrap();
+        assert!(rect_at(on_short).x < start_x - 5.0, "the short row clamps the caret leftward");
+        // Down again into the long row, feeding the goal back: the caret returns to ~its
+        // original column, well right of where the short row clamped it.
+        let (on_long, goal2) =
+            caret_byte_vertical::<StaticDocument>(p, on_short, &built, &text_ctx, 1, Some(goal)).unwrap();
+        assert!((goal2 - goal).abs() < 0.5, "the goal x is stable across the run: {goal} vs {goal2}");
+        assert!(
+            rect_at(on_long).x > rect_at(on_short).x + 5.0,
+            "the sticky goal returns the caret rightward on the long row, not stuck at the short row's column",
+        );
     }
 }

@@ -841,19 +841,29 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     /// The caret byte one *visual* line up (`delta < 0`) or down (`delta > 0`) from
     /// `byte_offset` within `node`'s laid-out text, honouring parley's soft-wrap
     /// rows — served from the session's retained layout. Drives ArrowUp / ArrowDown
-    /// in a textarea field over wrapped lines. Tier 1: no sticky goal column. `None`
-    /// if `node` has no cached text layout. The session companion to
+    /// in a textarea field over wrapped lines, with a **sticky goal column** (Tier 2):
+    /// pass `goal_x` `None` to seed it from the caret, or the previous call's returned
+    /// value to keep the column across a run. Returns `(new_byte, goal_x)`. `None` if
+    /// `node` has no cached text layout. The session companion to
     /// [`caret::caret_byte_vertical`](crate::caret::caret_byte_vertical).
     pub fn caret_byte_vertical<D>(
         &self,
         node: Id,
         byte_offset: usize,
         delta: isize,
-    ) -> Option<usize>
+        goal_x: Option<f32>,
+    ) -> Option<(usize, f32)>
     where
         D: LayoutDom<NodeId = Id>,
     {
-        crate::caret::caret_byte_vertical::<D>(node, byte_offset, &self.built, &self.text_ctx, delta)
+        crate::caret::caret_byte_vertical::<D>(
+            node,
+            byte_offset,
+            &self.built,
+            &self.text_ctx,
+            delta,
+            goal_x,
+        )
     }
 
     /// The selection-highlight rectangles for the byte range `[start, end)` within

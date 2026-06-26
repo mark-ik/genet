@@ -331,10 +331,12 @@ pub fn caret_screen_rect(
 }
 
 /// The caret byte after moving one visual line — `delta` is `-1` (up) or `+1`
-/// (down) — from `caret_byte` within `node`'s laid-out text. Runs cascade →
-/// layout, then [`caret_byte_vertical`], so ArrowUp / ArrowDown in a textarea
-/// follow parley's *wrapped* rows, not just `\n` breaks. `None` if `node` has no
-/// text layout. The host feeds the result to `TextInput::set_caret_byte`.
+/// (down) — from `caret_byte` within `node`'s laid-out text, keeping a sticky goal
+/// column. Runs cascade → layout, then [`caret_byte_vertical`], so ArrowUp / ArrowDown
+/// in a textarea follow parley's *wrapped* rows, not just `\n` breaks. Pass `goal_x`
+/// `None` to seed the column from the caret, or the previous call's returned value to
+/// hold it across a run; returns `(new_byte, goal_x)`. `None` if `node` has no text
+/// layout. The host feeds the byte to `TextInput::set_caret_byte` and keeps `goal_x`.
 pub fn soft_wrap_caret_byte(
     dom: &ScriptedDom,
     stylesheets: &[&str],
@@ -343,11 +345,13 @@ pub fn soft_wrap_caret_byte(
     node: NodeId,
     caret_byte: usize,
     delta: isize,
-) -> Option<usize> {
+    goal_x: Option<f32>,
+) -> Option<(usize, f32)> {
     LaidOutDocument::compute(dom, stylesheets, width, height).soft_wrap_caret_byte(
         node,
         caret_byte,
         delta,
+        goal_x,
     )
 }
 
@@ -485,10 +489,18 @@ impl<'a> LaidOutDocument<'a> {
         Some((r.x, r.y, r.width, r.height))
     }
 
-    /// Caret byte one soft-wrapped line `delta` (up `-1` / down `+1`) from
-    /// `caret_byte` within `node`.
-    pub fn soft_wrap_caret_byte(&self, node: NodeId, caret_byte: usize, delta: isize) -> Option<usize> {
-        caret_byte_vertical::<ScriptedDom>(node, caret_byte, &self.built, &self.text_ctx, delta)
+    /// Caret byte one soft-wrapped line `delta` (up `-1` / down `+1`) from `caret_byte`
+    /// within `node`, keeping a sticky goal column: pass `goal_x` `None` to seed it from
+    /// the caret, or the previous call's returned value to hold the column across a run.
+    /// Returns `(new_byte, goal_x)`.
+    pub fn soft_wrap_caret_byte(
+        &self,
+        node: NodeId,
+        caret_byte: usize,
+        delta: isize,
+        goal_x: Option<f32>,
+    ) -> Option<(usize, f32)> {
+        caret_byte_vertical::<ScriptedDom>(node, caret_byte, &self.built, &self.text_ctx, delta, goal_x)
     }
 
     /// Caret byte nearest scene point `(x, y)` within `node`'s laid-out text.
