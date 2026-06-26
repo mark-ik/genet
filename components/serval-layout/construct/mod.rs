@@ -1,0 +1,333 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+//! DOM inline-content gathering + cascade property readers.
+//!
+//! Shared helpers consumed by [`crate::box_tree`] when it builds the
+//! layout arena: inline-formatting-context detection, gathering an
+//! inline subtree into [`InlineContent`] (styled runs + replaced inline
+//! boxes), replaced-element sizing, and the per-element cascade reads
+//! (font + color) that style each text run.
+//!
+//! (Previously this module also built the `TaffyTree` directly; that
+//! owned-`Style` path was retired when the box tree — Taffy's trait-impl
+//! tree over `TaffyStyloStyle` — became the engine. See
+//! `docs/2026-05-25_box_tree_trait_impl_plan.md`.)
+
+use std::hash::Hash;
+use std::ops::Range;
+
+use layout_dom_api::{LayoutDom, NodeKind};
+
+use servo_arc::Arc as ServoArc;
+use style::properties::ComputedValues;
+
+use crate::adapter::NodeRef;
+use crate::box_tree::PseudoKind;
+use crate::image_decode::ImagePlane;
+use crate::style::StylePlane;
+use crate::text_measure::{
+    FontFamilySpec, GenericFamilyKind, InlineBlockBox, InlineBoxItem, InlineContent, InlineRun,
+    LineHeightSpec,
+};
+
+/// Default font size used for runs whose element has no cascaded
+/// `font-size` (hand-rolled style fixtures). 16 px matches the
+/// CSS/UA-stylesheet convention and parley's own default.
+const DEFAULT_FONT_SIZE: f32 = 16.0;
+
+/// Whether `elem` establishes an inline formatting context: every
+/// element child is either `display:inline` or a replaced inline box
+/// (`<img>`), text children flow inline by nature, and there is at
+/// least one piece of *inline text* (a text node or a non-replaced
+/// inline element) to flow.
+///
+/// The inline-text requirement keeps a lone `<img>` on the block path:
+/// `<body><img></body>` stays a block with the image as its own child
+/// box (the established, working behavior). Only when an `<img>` is
+/// mixed with text — `<p>before <img> after</p>` — does the element
+/// become an inline context where the image flows as a parley
+/// `InlineBox` among the runs.
+///
+/// Comments / PIs are ignored. With no cascade data (`is_inline_element`
+/// → `None`), non-replaced elements are treated as block — preserving
+/// the pre-inline behavior for hand-rolled style fixtures.
+
+mod gather;
+mod list_marker;
+mod style_read;
+
+pub(crate) use gather::*;
+pub(crate) use list_marker::*;
+pub(crate) use style_read::*;
+
+pub(crate) fn establishes_inline_context<'a, D>(
+    dom: &'a D,
+    styles: &StylePlane<D::NodeId>,
+    elem: NodeRef<'a, D>,
+) -> bool
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut has_inline_text = false;
+    let mut replaced_count = 0;
+    for child in elem.dom_children() {
+        match dom.kind(child.id()) {
+            // Whitespace-only text is collapsible formatting, not real inline
+            // content — it must not by itself turn a block container into an
+            // inline context.
+            NodeKind::Text => {
+                if dom.text(child.id()).is_some_and(|t| !t.trim().is_empty()) {
+                    has_inline_text = true;
+                }
+            },
+            NodeKind::Element => {
+                if is_replaced(dom, child.id()) {
+                    // A replaced element flows as an inline box. A *lone* img
+                    // with no other inline content stays on the block path
+                    // (intrinsic sizing); two or more flow inline, side by side.
+                    replaced_count += 1;
+                    continue;
+                }
+                // `inline-block` is an atomic inline-level box: it participates
+                // in the line like inline content (so it keeps this an inline
+                // context), but `gather_runs` reserves it as an atomic
+                // `InlineBox` rather than recursing into its content.
+                if is_inline_block(styles, child.id()) {
+                    has_inline_text = true;
+                } else if is_inline_element(styles, child.id()).unwrap_or(false) {
+                    has_inline_text = true;
+                } else {
+                    // A block-level child forces block layout.
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    // Inline context when there is real inline text / an inline element /
+    // inline-block, or when two or more replaced boxes flow side by side. A
+    // single lone img with nothing else stays on the block path.
+    has_inline_text || replaced_count >= 2
+}
+
+/// Whether an element is replaced content we render as its own box rather than
+/// as flowed inline text: `<img>`, plus `<iframe>` / `<canvas>`, which size to
+/// the 300×150 default object size when they have no intrinsic / CSS size.
+///
+/// `<video>` / `<object>` / `<embed>` are deliberately excluded: their content
+/// is image-like, and without decoding it a 300×150 placeholder mis-renders the
+/// `object-fit` / `object-position` corpus more than a 300×150 default helps.
+pub(crate) fn is_replaced<D>(dom: &D, id: D::NodeId) -> bool
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    use html5ever::local_name;
+    dom.element_name(id).is_some_and(|q| {
+        q.local == local_name!("img")
+            || q.local == local_name!("iframe")
+            || q.local == local_name!("canvas")
+            // `<external-texture>` is a host-composited replaced element (see
+            // `external_texture_key_of`): a custom name, so compared by string rather
+            // than a `local_name!` atom. It sizes like the default-object replaced
+            // elements (300×150, CSS-overridable).
+            || q.local.as_ref() == "external-texture"
+    })
+}
+
+/// The texture key of an `<external-texture key="…">` element, or `None` when `id` is
+/// not such an element (every other replaced element, e.g. `<img>`). The producer
+/// mints the `u64` key out of band and registers the matching `wgpu::Texture` with
+/// the renderer; the element only carries the stable key + a box, so paint emits a
+/// [`PaintCmd::DrawExternalTexture`](paint_list_api::PaintCmd) the host composites.
+/// `key` is the standards-neutral attribute the xilem-serval `external_texture` view
+/// sets; a missing / unparseable key yields `None` (the element paints nothing).
+pub(crate) fn external_texture_key_of<D>(dom: &D, id: D::NodeId) -> Option<u64>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    use html5ever::{ns, LocalName};
+    if dom.element_name(id)?.local.as_ref() != "external-texture" {
+        return None;
+    }
+    dom.attribute(id, &ns!(), &LocalName::from("key"))?.parse().ok()
+}
+
+/// Whether `id` is a replaced element that, lacking intrinsic content, falls
+/// back to the CSS default object size (300×150) — every replaced element except
+/// `<img>` (which sizes to its decoded pixels, or 0 when undecoded).
+fn uses_default_object_size<D>(dom: &D, id: D::NodeId) -> bool
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    dom.element_name(id)
+        .is_some_and(|q| q.local != html5ever::local_name!("img"))
+}
+
+/// Whether `id` has `white-space: nowrap` (CSS `text-wrap-mode: nowrap`) — its
+/// inline content lays out on a single line, not soft-wrapped to the available
+/// width. `false` (wrap) when the cascade has not run.
+fn no_wrap_of<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId) -> bool {
+    use style::properties::longhands::text_wrap_mode::computed_value::T as Mode;
+    styles
+        .get(id)
+        .and_then(|e| e.borrow_data())
+        .is_some_and(|d| matches!(d.styles.primary().get_inherited_text().text_wrap_mode, Mode::Nowrap))
+}
+
+/// Read an element's cascaded outer display: `Some(true)` for
+/// `display:inline`, `Some(false)` for block-level, `None` when the
+/// cascade hasn't run for this element.
+fn is_inline_element<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> Option<bool> {
+    use style::values::specified::box_::DisplayOutside;
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    let display = data.styles.primary().get_box().display;
+    Some(matches!(display.outside(), DisplayOutside::Inline))
+}
+
+/// Collapse each maximal run of ASCII/Unicode whitespace in `s` to a single
+/// space (CSS `white-space: normal` collapsing). Source newlines + indentation
+/// become a single space rather than a literal run or a forced line break.
+fn collapse_whitespace(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_ws = false;
+    for c in s.chars() {
+        if c.is_whitespace() {
+            if !prev_ws {
+                out.push(' ');
+            }
+            prev_ws = true;
+        } else {
+            out.push(c);
+            prev_ws = false;
+        }
+    }
+    out
+}
+
+/// Collapse runs of whitespace, but preserve forced line breaks: a run that
+/// contains a `\n` becomes a single `\n` (parley breaks there), any other run a
+/// single space (CSS `white-space-collapse: preserve-breaks`, i.e. `pre-line`).
+fn collapse_preserving_breaks(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut run_ws = false;
+    let mut run_has_break = false;
+    for c in s.chars() {
+        if c.is_whitespace() {
+            run_ws = true;
+            run_has_break |= c == '\n';
+        } else {
+            if run_ws {
+                out.push(if run_has_break { '\n' } else { ' ' });
+                run_ws = false;
+                run_has_break = false;
+            }
+            out.push(c);
+        }
+    }
+    if run_ws {
+        out.push(if run_has_break { '\n' } else { ' ' });
+    }
+    out
+}
+
+/// Apply `text`'s computed `white-space-collapse` to source `text`, the CSS
+/// step that turns formatting whitespace into rendered whitespace + forced
+/// breaks before it reaches parley. `Collapse` (the `white-space: normal` /
+/// `nowrap` default) folds every run to one space; `Preserve` / `BreakSpaces`
+/// (`pre` / `pre-wrap`) keep whitespace and newlines verbatim — parley breaks at
+/// each `\n`; `PreserveBreaks` (`pre-line`) collapses spaces but keeps newlines.
+fn apply_white_space_collapse<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+    text: &str,
+) -> String {
+    use style::computed_values::white_space_collapse::T as Collapse;
+    let mode = styles
+        .get(id)
+        .and_then(|e| e.borrow_data())
+        .map(|d| d.styles.primary().get_inherited_text().white_space_collapse)
+        .unwrap_or(Collapse::Collapse);
+    match mode {
+        Collapse::Collapse => collapse_whitespace(text),
+        Collapse::Preserve | Collapse::BreakSpaces => text.to_string(),
+        Collapse::PreserveBreaks => collapse_preserving_breaks(text),
+    }
+}
+
+/// Whether `id` is `display: inline-block` — inline-level outside, but an
+/// independent (flow-root) formatting context inside.
+pub(crate) fn is_inline_block<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> bool {
+    use style::values::specified::box_::{DisplayInside, DisplayOutside};
+    let Some(entry) = styles.get(id) else { return false };
+    let Some(data) = entry.borrow_data() else { return false };
+    let display = data.styles.primary().get_box().display;
+    matches!(display.outside(), DisplayOutside::Inline)
+        && matches!(display.inside(), DisplayInside::FlowRoot)
+}
+
+/// Pixel size for a replaced element: the decoded intrinsic size from `images`
+/// (for `<img>`), or the CSS default object size 300×150 for the embedded-content
+/// elements (`<iframe>` etc.) that have no intrinsic content, with each axis then
+/// overridden by a definite CSS `width`/`height`. Shared by the block-level
+/// replaced leaf ([`crate::box_tree`]) and the inline replaced box. Non-length
+/// dimensions (`auto`, percentages) leave the base size in place; an undecoded
+/// `<img>` with no CSS size reserves 0×0.
+pub(crate) fn replaced_px_size<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    images: &ImagePlane<D::NodeId>,
+    id: D::NodeId,
+) -> (f32, f32)
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let (mut w, mut h) = images
+        .get(id)
+        .map(|d| (d.width as f32, d.height as f32))
+        .unwrap_or_else(|| {
+            // No decoded pixels: embedded content defaults to 300×150; an
+            // undecoded <img> reserves 0×0.
+            if uses_default_object_size(dom, id) {
+                (300.0, 150.0)
+            } else {
+                (0.0, 0.0)
+            }
+        });
+
+    if let Some(entry) = styles.get(id) {
+        if let Some(data) = entry.borrow_data() {
+            let pos = data.styles.primary().get_position();
+            if let Some(cw) = definite_px(&pos.width) {
+                w = cw;
+            }
+            if let Some(ch) = definite_px(&pos.height) {
+                h = ch;
+            }
+        }
+    }
+    (w, h)
+}
+
+/// A CSS `Size` as definite pixels, or `None` for `auto` / percentage /
+/// intrinsic keywords.
+fn definite_px(size: &style::values::computed::Size) -> Option<f32> {
+    use style::values::computed::Size as CssSize;
+    match size {
+        CssSize::LengthPercentage(lp) => lp.0.to_length().map(|l| l.px()),
+        _ => None,
+    }
+}
