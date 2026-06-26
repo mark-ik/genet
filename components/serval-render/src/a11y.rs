@@ -30,8 +30,10 @@
 //! naturally onto `serval_layout::ServalLaneView` (which already bundles
 //! dom + styles + fragments).
 
-use accesskit::{Node as AccessNode, NodeId as AccessNodeId, Rect, Role, Tree, TreeId, TreeUpdate};
-use layout_dom_api::{LayoutDom, NodeKind};
+use accesskit::{
+    Node as AccessNode, NodeId as AccessNodeId, Rect, Role, Toggled, Tree, TreeId, TreeUpdate,
+};
+use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
 use serval_layout::FragmentPlane;
 use serval_scripted_dom::{NodeId, ScriptedDom};
 
@@ -41,13 +43,37 @@ fn access_id(node: NodeId) -> AccessNodeId {
     AccessNodeId(node.raw() as u64)
 }
 
-/// The accessibility [`Role`] for `node`, by node kind / element tag.
+/// Read `node`'s null-namespace attribute `name` — HTML/ARIA attributes
+/// (`role`, `aria-checked`, …) live in the null namespace.
+fn attr<'a>(dom: &'a ScriptedDom, node: NodeId, name: &str) -> Option<&'a str> {
+    dom.attribute(node, &Namespace::default(), &LocalName::from(name))
+}
+
+/// The accessibility [`Role`] for `node`, by ARIA `role` attribute, then node
+/// kind / element tag.
 ///
-/// The document root is the tree's [`Role::Window`]; the handful of tags the
-/// host views use map to their natural roles; anything else is a
-/// [`Role::GenericContainer`] (a neutral grouping node). Text nodes never reach
-/// here — their content is folded into the owning element's label.
+/// An explicit ARIA `role` wins over the tag, so a host control stamped on a
+/// styled `<div>`/`<button>` (`role="radio"` / `"switch"` / `"checkbox"`) reaches
+/// the screen reader as that control rather than a neutral container — the bridge
+/// previously dropped these (`docs/2026-06-24_grand_audit.md` direction 2). An
+/// unrecognised role token falls through to the tag mapping. The document root is
+/// the tree's [`Role::Window`]; the handful of tags the host views use map to
+/// their natural roles; anything else is a [`Role::GenericContainer`] (a neutral
+/// grouping node). Text nodes never reach here — their content is folded into the
+/// owning element's label.
 fn role_for(dom: &ScriptedDom, node: NodeId) -> Role {
+    if dom.kind(node) == NodeKind::Element {
+        if let Some(role) = attr(dom, node, "role") {
+            match role {
+                "button" => return Role::Button,
+                "checkbox" => return Role::CheckBox,
+                "radio" => return Role::RadioButton,
+                "radiogroup" => return Role::RadioGroup,
+                "switch" => return Role::Switch,
+                _ => {},
+            }
+        }
+    }
     match dom.kind(node) {
         NodeKind::Document => Role::Window,
         NodeKind::Element => match dom.element_name(node).map(|q| q.local.as_ref()) {
@@ -94,6 +120,17 @@ fn build(
     let name = direct_text(dom, node);
     if !name.is_empty() {
         access.set_label(name);
+    }
+
+    // A stamped `aria-checked` (on a radio / checkbox / switch role) becomes the
+    // accesskit toggled state, so a screen reader announces the current selection.
+    if let Some(toggled) = attr(dom, node, "aria-checked").and_then(|v| match v {
+        "true" => Some(Toggled::True),
+        "false" => Some(Toggled::False),
+        "mixed" => Some(Toggled::Mixed),
+        _ => None,
+    }) {
+        access.set_toggled(toggled);
     }
 
     // Absolute bounds from layout (taffy's `location` is parent-relative, so we
@@ -167,6 +204,11 @@ mod tests {
         )
     }
 
+    /// A null-namespace attribute name (where HTML/ARIA attributes live).
+    fn attr_name(local: &str) -> QualName {
+        QualName::new(None, Namespace::from(""), LocalName::from(local))
+    }
+
     /// Build `<div><p>13</p><button>+</button></div>`, lay it out, and assert the
     /// emitted accessibility tree: roles by tag, names from text, bounds from
     /// layout, the child relationships, and focus pointing at the focused node.
@@ -224,6 +266,47 @@ mod tests {
             tree.nodes.iter().all(|(id, _)| *id != access_id(plus)),
             "the '+' text node is folded into the button's label, not its own node"
         );
+    }
+
+    /// A stamped ARIA `role` overrides the tag, and `aria-checked` becomes the
+    /// accesskit toggled state — the radio-group / switch path the host controls
+    /// emit (grand_audit direction 2). A `<div role="radio" aria-checked="true">`
+    /// is a checked `RadioButton`; a `<button role="switch" aria-checked="false">`
+    /// is an off `Switch`, its `role` winning over the `<button>` tag.
+    #[test]
+    fn aria_role_and_checked_reach_the_tree() {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let div = dom.create_element(html("div"));
+        dom.append_child(root, div);
+
+        let radio = dom.create_element(html("div"));
+        dom.set_attribute(radio, attr_name("role"), "radio");
+        dom.set_attribute(radio, attr_name("aria-checked"), "true");
+        dom.append_child(div, radio);
+
+        let switch = dom.create_element(html("button"));
+        dom.set_attribute(switch, attr_name("role"), "switch");
+        dom.set_attribute(switch, attr_name("aria-checked"), "false");
+        dom.append_child(div, switch);
+
+        let fragments = fragments_from_scripted_dom(&dom, SHEET, 800, 600);
+        let tree = accesskit_tree(&dom, &fragments, None);
+        let node = |n: NodeId| {
+            tree.nodes
+                .iter()
+                .find(|(id, _)| *id == access_id(n))
+                .map(|(_, node)| node)
+                .unwrap_or_else(|| panic!("node missing from a11y tree"))
+        };
+
+        let radio_node = node(radio);
+        assert_eq!(radio_node.role(), Role::RadioButton, "role attr overrides the <div> tag");
+        assert_eq!(radio_node.toggled(), Some(Toggled::True), "aria-checked=true is checked");
+
+        let switch_node = node(switch);
+        assert_eq!(switch_node.role(), Role::Switch, "role attr overrides the <button> tag");
+        assert_eq!(switch_node.toggled(), Some(Toggled::False), "aria-checked=false is unchecked");
     }
 
     /// With nothing focused, the tree's focus falls back to the root (accesskit

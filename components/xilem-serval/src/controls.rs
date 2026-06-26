@@ -682,6 +682,9 @@ pub fn toggle(checked: bool) -> impl View<bool, (), ServalCtx, Element = ServalE
 /// A `<button>` view: `label` text plus an `on_click` handler — the ergonomic
 /// form of `on_click(el("button", label), handler)`. The handler may return an
 /// action (it is an [`OptionalAction`]) exactly as [`on_click`].
+///
+/// Add a `class` (or any attribute) with the fluent [`OnClick::attr`], e.g.
+/// `button("Save", on_save).attr("class", "primary")`.
 pub fn button<State, Action, OA, F>(
     label: impl Into<String>,
     handler: F,
