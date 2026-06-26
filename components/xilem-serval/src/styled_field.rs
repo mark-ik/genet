@@ -2,47 +2,48 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! A text field rendered as per-range styled `<span>` runs — the style channel a
-//! host paints syntax highlighting through.
+//! The field-rendering layer: one style-aware field body shared by the plain
+//! [`text_field`](crate::text_field) / [`textarea`](crate::textarea) and the
+//! highlighting [`styled_textarea`].
 //!
-//! [`controls`](crate::controls) renders a field's text as plain `before` / `after`
-//! strings split at the caret (plus the preedit + ghost spans). This module is the
-//! styled sibling: given [`StyleRange`]s (a byte range plus a CSS string), it renders
-//! the same text as a sequence of styled `<span>` runs. The styles are opaque CSS;
-//! this module knows nothing of djot or any language, so the host computes the ranges
-//! (for the knot editor, from jotdown highlight spans) and passes them in. The runs
-//! concatenate to the same text the plain field shows, so the host's `caret_rect`
-//! over them lines up exactly as over the plain field (the field is already laid out
-//! as several inline nodes: before-text, preedit span, after-text, ghost span).
+//! It renders a [`TextInput`]'s text as the children of the field element:
+//! unstyled runs as text nodes, styled runs as `<span class="…">` runs a host's
+//! stylesheet themes, with the IME preedit and ghost-completion spans spliced at
+//! the caret. The plain field passes no styles (the empty case), so there is one
+//! body, not a styled fork of the plain one.
 //!
-//! Style ranges are byte ranges over the same buffer the host highlighted, so their
-//! bounds fall on char boundaries; runs are sliced on those bounds.
+//! Styling carries a *class*, not inline CSS, so the host themes the highlight
+//! through one stylesheet (the colours derive from tinct's syntax palette). The
+//! runs concatenate to the same text, so the host's `caret_rect` lines up exactly
+//! as over the plain field (which is already several inline nodes: text, the
+//! preedit span, text, the ghost span). Style ranges are byte ranges over the same
+//! buffer the host highlighted, so their bounds fall on char boundaries.
 
 use std::ops::Range;
 
-use crate::controls::edit_multiline;
+use crate::controls::{edit_multiline, TextInput};
 use crate::pod::ServalElement;
-use crate::{el, on_key, AnyView, KeyEvent, ServalCtx, TextInput};
+use crate::{el, on_key, AnyView, KeyEvent, ServalCtx};
 
-/// A styled run over the field text: a byte `range` painted with a CSS `style`
-/// string (`"color: #c4a7e7; font-weight: 600;"`). Ranges may overlap and nest (a
-/// heading containing emphasis, a code block containing a keyword);
-/// [`styled_textarea`] flattens them innermost-wins into non-overlapping runs.
+/// A styled run over the field text: a byte `range` painted with a CSS `class`
+/// (`"syntax-keyword"`) the host's stylesheet themes. Ranges may overlap and nest
+/// (a heading containing emphasis, a code block containing a keyword);
+/// [`field_children`] flattens them innermost-wins into non-overlapping runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StyleRange {
     pub range: Range<usize>,
-    pub style: String,
+    pub class: String,
 }
 
-/// The boxed view a styled field returns. Its children are a dynamic `Vec` of span
-/// runs, unlike [`TextField`](crate::TextField)'s fixed tuple, so the type is erased.
-pub type StyledField = Box<dyn AnyView<TextInput, (), ServalCtx, ServalElement>>;
+/// One child of a field element: a text node or a styled `<span>`, type-erased so
+/// the field's children are a uniform `Vec`. Public so the [`TextField`] alias can
+/// name it.
+pub type FieldChild = Box<dyn AnyView<TextInput, (), ServalCtx, ServalElement>>;
 
-type Kid = Box<dyn AnyView<TextInput, (), ServalCtx, ServalElement>>;
-
-/// Flatten possibly-overlapping `styles` over `len` bytes into non-overlapping runs,
-/// the innermost (smallest) range winning on overlap. Runs cover `0..len` with no
-/// gaps; a `None` style is unstyled text.
+/// Flatten possibly-overlapping `styles` over `len` bytes into non-overlapping
+/// runs, the innermost (smallest) range winning on overlap. Runs cover `0..len`
+/// with no gaps; a `None` class is unstyled text. Empty `styles` yields a single
+/// `None` run (the plain field).
 fn flatten(len: usize, styles: &[StyleRange]) -> Vec<(Range<usize>, Option<String>)> {
     // Paint per byte, largest range first so a smaller (inner) range overwrites it.
     let mut ordered: Vec<&StyleRange> = styles
@@ -53,52 +54,53 @@ fn flatten(len: usize, styles: &[StyleRange]) -> Vec<(Range<usize>, Option<Strin
     let mut paint: Vec<Option<&str>> = vec![None; len];
     for s in ordered {
         for b in s.range.clone() {
-            paint[b] = Some(s.style.as_str());
+            paint[b] = Some(s.class.as_str());
         }
     }
-    // Coalesce adjacent bytes carrying the same style into one run.
+    // Coalesce adjacent bytes carrying the same class into one run.
     let mut runs = Vec::new();
     let mut i = 0;
     while i < len {
-        let style = paint[i];
+        let class = paint[i];
         let start = i;
-        while i < len && paint[i] == style {
+        while i < len && paint[i] == class {
             i += 1;
         }
-        runs.push((start..i, style.map(str::to_string)));
+        runs.push((start..i, class.map(str::to_string)));
     }
     runs
 }
 
-/// Emit the `runs` clipped to `[lo, hi)` as `<span>` children over `text`. A styled
-/// run carries its CSS as a `style` attribute; an unstyled run is a bare `<span>`.
-fn emit(kids: &mut Vec<Kid>, text: &str, runs: &[(Range<usize>, Option<String>)], lo: usize, hi: usize) {
-    for (r, style) in runs {
+/// Emit the `runs` clipped to `[lo, hi)` over `text`: a styled run as a
+/// `<span class="…">`, an unstyled run as a bare text node.
+fn emit(kids: &mut Vec<FieldChild>, text: &str, runs: &[(Range<usize>, Option<String>)], lo: usize, hi: usize) {
+    for (r, class) in runs {
         let start = r.start.max(lo);
         let end = r.end.min(hi);
         if start >= end {
             continue;
         }
-        let span = el::<_, TextInput, ()>("span", text[start..end].to_string());
-        let span = match style {
-            Some(css) => span.attr("style", css.clone()),
-            None => span,
-        };
-        kids.push(Box::new(span));
+        let slice = text[start..end].to_string();
+        match class {
+            Some(c) => kids.push(Box::new(
+                el::<_, TextInput, ()>("span", slice).attr("class", c.clone()),
+            )),
+            None => kids.push(Box::new(slice)),
+        }
     }
 }
 
-/// Build a styled field body: the committed text as styled `<span>` runs, split at
+/// The children of a field element: the committed text as (styled) runs split at
 /// the caret to splice the IME preedit (an underlined span), then the ghost suffix.
-/// Mirrors `controls`'s `field_body`, but with per-range styling and dynamic
-/// children. `tag` is `"textarea"` for the multi-line field.
-fn styled_body(tag: &str, input: &TextInput, styles: &[StyleRange]) -> StyledField {
+/// Empty `styles` renders the plain field (unstyled text nodes); non-empty paints
+/// the highlight classes. This is the one body behind the plain and styled fields.
+pub(crate) fn field_children(input: &TextInput, styles: &[StyleRange]) -> Vec<FieldChild> {
     let text = input.text();
     let (before, preedit, _after) = input.render_parts();
     let at = before.len();
     let runs = flatten(text.len(), styles);
 
-    let mut kids: Vec<Kid> = Vec::new();
+    let mut kids: Vec<FieldChild> = Vec::new();
     emit(&mut kids, text, &runs, 0, at);
     if !preedit.is_empty() {
         kids.push(Box::new(
@@ -113,16 +115,51 @@ fn styled_body(tag: &str, input: &TextInput, styles: &[StyleRange]) -> StyledFie
                 .attr("style", "color: #8b91a0; font-style: italic;"),
         ));
     }
-
-    let handler: fn(&mut TextInput, KeyEvent) = edit_multiline;
-    Box::new(on_key(el::<_, TextInput, ()>(tag, kids), handler))
+    kids
 }
 
-/// A multi-line text field whose text is rendered as per-range styled `<span>` runs
-/// from `styles` — the [`textarea`](crate::textarea) sibling that paints a host's
-/// syntax highlighting. The `edit_multiline` handler and the caret / IME behaviour
-/// are identical; only the rendering carries colour. The host recomputes `styles`
+/// A multi-line text field rendered with per-range syntax highlighting from
+/// `styles` (the [`textarea`](crate::textarea) sibling that paints a host's
+/// classes). Same `edit_multiline` handler and caret / IME behaviour as the plain
+/// field; only the rendering carries the classes. The host recomputes `styles`
 /// from the buffer (for example at view build) and passes them in.
-pub fn styled_textarea(input: &TextInput, styles: &[StyleRange]) -> StyledField {
-    styled_body("textarea", input, styles)
+pub fn styled_textarea(input: &TextInput, styles: &[StyleRange]) -> crate::TextField {
+    on_key(
+        el::<_, TextInput, ()>("textarea", field_children(input, styles)),
+        edit_multiline as fn(&mut TextInput, KeyEvent),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flatten_empty_styles_is_one_unstyled_run() {
+        assert_eq!(flatten(5, &[]), vec![(0..5, None)]);
+    }
+
+    #[test]
+    fn flatten_innermost_wins() {
+        // Outer 0..10 "a" with inner 2..5 "b": the inner range overrides.
+        let styles = vec![
+            StyleRange { range: 0..10, class: "a".into() },
+            StyleRange { range: 2..5, class: "b".into() },
+        ];
+        assert_eq!(
+            flatten(10, &styles),
+            vec![
+                (0..2, Some("a".into())),
+                (2..5, Some("b".into())),
+                (5..10, Some("a".into())),
+            ]
+        );
+    }
+
+    #[test]
+    fn flatten_drops_out_of_range_styles() {
+        let styles = vec![StyleRange { range: 3..99, class: "x".into() }];
+        // end past len is filtered, leaving a plain run.
+        assert_eq!(flatten(4, &styles), vec![(0..4, None)]);
+    }
 }

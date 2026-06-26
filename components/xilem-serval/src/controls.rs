@@ -663,54 +663,20 @@ pub(crate) fn edit_multiline(input: &mut TextInput, ev: KeyEvent) {
 /// View`; [`text_field_typed`] returns it *named*, for a host that must spell
 /// its concrete view type.
 pub type TextField = OnKey<
-    El<
-        (
-            String,
-            El<String, TextInput, ()>,
-            String,
-            El<String, TextInput, ()>,
-        ),
-        TextInput,
-        (),
-    >,
+    El<Vec<crate::styled_field::FieldChild>, TextInput, ()>,
     TextInput,
     (),
     fn(&mut TextInput, KeyEvent),
 >;
 
-/// Build the field's `<input>` / `<textarea>` body: the rendered text split at
-/// the caret into `(before, preedit, after)`, the preedit an underlined `<span>`
-/// (IME T2; empty when not composing), then the ghost-completion suffix as a dim
-/// trailing `<span>` (empty when there is no completion). The first three
-/// concatenate to the rendered text, so caret geometry over them lines up; the
-/// ghost sits past the caret and outside the committed buffer.
-fn field_body(
-    tag: &str,
-    input: &TextInput,
-) -> El<
-    (
-        String,
-        El<String, TextInput, ()>,
-        String,
-        El<String, TextInput, ()>,
-    ),
-    TextInput,
-    (),
-> {
-    let (before, preedit, after) = input.render_parts();
-    el::<_, TextInput, ()>(
-        tag,
-        (
-            before,
-            el::<_, TextInput, ()>("span", preedit).attr("style", "text-decoration: underline;"),
-            after,
-            // Ghost styled dim + italic via `color` / `font-style` (stylo-backed);
-            // `opacity` is not plumbed to serval's paint, so a muted colour is what
-            // actually distinguishes the suggestion from the typed text.
-            el::<_, TextInput, ()>("span", input.ghost().to_string())
-                .attr("style", "color: #8b91a0; font-style: italic;"),
-        ),
-    )
+/// Build the field's `<input>` / `<textarea>` body: the text as the element's
+/// children, split at the caret to splice the IME preedit, then the ghost suffix.
+/// Delegates to the one style-aware body in [`styled_field`](crate::styled_field)
+/// with no styles (the plain case); [`styled_textarea`](crate::styled_textarea) is
+/// the same body with highlight classes, so the plain and styled fields share one
+/// implementation.
+fn field_body(tag: &str, input: &TextInput) -> El<Vec<crate::styled_field::FieldChild>, TextInput, ()> {
+    el::<_, TextInput, ()>(tag, crate::styled_field::field_children(input, &[]))
 }
 
 /// Build the concrete [`TextField`] for `input` (the shared implementation
