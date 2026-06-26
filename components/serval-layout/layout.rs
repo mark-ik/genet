@@ -184,6 +184,43 @@ mod tests {
         assert!(h < 40.0, "expected single-line height (<40px), got {h}");
     }
 
+    /// The syntax-highlighting path: `xilem_serval::styled_textarea` paints highlight runs as
+    /// `<span style="…">` children. Confirm an **inline `style`** `font-weight` / `font-family`
+    /// lands on *that span's run only* (not the whole element) — so highlighting is not capped to
+    /// colour-only by a forced-uniform field font. Exercised through the same inline-`style` path
+    /// the editor emits, not UA `<b>`/a stylesheet.
+    #[test]
+    fn inline_style_span_carries_per_run_font() {
+        use crate::text_measure::{FontFamilySpec, GenericFamilyKind};
+        let html = "<html><body><p>\
+            <span>plain</span>\
+            <span style=\"font-weight: 700;\">heavy</span>\
+            <span style=\"font-family: monospace;\">mono</span>\
+            </p></body></html>";
+        let (document, styles) = cascade(html, &[]);
+        let images = ImagePlane::new();
+        let (_frags, built, _ctx) = layout(&document, &styles, &images, viewport());
+
+        let p = find_element(NodeRef::document(&document), local_name!("p")).unwrap();
+        let taffy_id = built.node_map.get(&p.id()).expect("<p> in node_map");
+        let content = built.get_node_context(*taffy_id).expect("<p> carries InlineContent");
+
+        // Per-span weight, from inline `style`: a plain span stays normal, the 700 span is bold.
+        assert!(content.runs.iter().any(|r| r.weight < 500.0), "a plain span keeps normal weight");
+        assert!(
+            content.runs.iter().any(|r| r.weight >= 600.0),
+            "the style=\"font-weight:700\" span shapes bold, per run",
+        );
+        // Per-span family: the monospace span carries the monospace family on its own run.
+        assert!(
+            content.runs.iter().any(|r| matches!(
+                r.font_family,
+                FontFamilySpec::Generic(GenericFamilyKind::Monospace)
+            )),
+            "the style=\"font-family:monospace\" span shapes monospace, per run",
+        );
+    }
+
     /// A `<p>` whose only child is text establishes an inline formatting
     /// context, so it's the measured leaf; parley gives it a non-zero
     /// size and it appears in the box tree's `node_map`.
