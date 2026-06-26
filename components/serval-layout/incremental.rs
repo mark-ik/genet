@@ -285,6 +285,16 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         &self.element_scroll
     }
 
+    /// Replace the retained nested scroll offsets wholesale. For a host that **rebuilds** its
+    /// retained layout (a fresh cascade+layout on a structural change) but wants the panes'
+    /// wheel scroll to persist across the rebuild: carry the prior layout's
+    /// [`element_scroll`](Self::element_scroll) into the new one. Offsets key by node, so a
+    /// container that survived the rebuild keeps its scroll; a stale key is inert (no such
+    /// node to paint/scroll) and is re-clamped on the next [`scroll_at`](Self::scroll_at).
+    pub fn set_element_scroll(&mut self, scroll: ScrollOffsets<Id>) {
+        self.element_scroll = scroll;
+    }
+
     /// The document's maximum scroll offset ([`document_scroll_range`]) — the
     /// extent of its scrollable-overflow region beyond the viewport (rule 4).
     pub fn scroll_range<D>(&self, dom: &D) -> (f32, f32)
@@ -2136,6 +2146,17 @@ mod tests {
             layout.element_scroll().get(&scroller).copied(),
             Some((0.0, 150.0)),
             "element_scroll() exposes the scroller's retained offset",
+        );
+
+        // A host that rebuilds its retained layout carries the scroll across via
+        // `set_element_scroll`, so a fresh layout keeps the panes' wheel offsets.
+        let mut rebuilt = IncrementalLayout::new(&dom, NESTED_SCROLL_SHEET, W, H);
+        assert!(rebuilt.element_scroll().is_empty(), "a fresh layout starts unscrolled");
+        rebuilt.set_element_scroll(layout.element_scroll().clone());
+        assert_eq!(
+            rebuilt.element_scroll().get(&scroller).copied(),
+            Some((0.0, 150.0)),
+            "set_element_scroll carries the scroll into the rebuilt layout",
         );
     }
 
