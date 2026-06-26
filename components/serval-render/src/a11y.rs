@@ -30,6 +30,8 @@
 //! naturally onto `serval_layout::ServalLaneView` (which already bundles
 //! dom + styles + fragments).
 
+use std::collections::HashMap;
+
 use accesskit::{
     Node as AccessNode, NodeId as AccessNodeId, Rect, Role, Toggled, Tree, TreeId, TreeUpdate,
 };
@@ -109,8 +111,8 @@ fn direct_text(dom: &ScriptedDom, node: NodeId) -> String {
 fn build(
     dom: &ScriptedDom,
     fragments: &FragmentPlane<NodeId>,
+    origins: &HashMap<NodeId, (f32, f32)>,
     node: NodeId,
-    parent_origin: (f64, f64),
     out: &mut Vec<(AccessNodeId, AccessNode)>,
 ) -> AccessNodeId {
     let id = access_id(node);
@@ -133,30 +135,25 @@ fn build(
         access.set_toggled(toggled);
     }
 
-    // Absolute bounds from layout (taffy's `location` is parent-relative, so we
-    // accumulate). A node with no fragment (e.g. the unlaid-out document root)
-    // contributes no bounds and passes its parent's origin through.
-    let origin = match fragments.rect_of(node) {
-        Some(layout) => {
-            let x0 = parent_origin.0 + layout.location.x as f64;
-            let y0 = parent_origin.1 + layout.location.y as f64;
-            access.set_bounds(Rect::new(
-                x0,
-                y0,
-                x0 + layout.size.width as f64,
-                y0 + layout.size.height as f64,
-            ));
-            (x0, y0)
-        },
-        None => parent_origin,
-    };
+    // Absolute bounds: the node's precomputed absolute origin (the engine's batch
+    // `accumulate_origins`, instead of re-rolling the parent-chain sum here) plus its own
+    // size. A node with no fragment (e.g. the unlaid-out document root) contributes no bounds.
+    if let (Some(&(x0, y0)), Some(layout)) = (origins.get(&node), fragments.rect_of(node)) {
+        let (x0, y0) = (x0 as f64, y0 as f64);
+        access.set_bounds(Rect::new(
+            x0,
+            y0,
+            x0 + layout.size.width as f64,
+            y0 + layout.size.height as f64,
+        ));
+    }
 
     // Element children become a11y children; text children were folded into the
     // label above, so they are not separate nodes.
     let mut children = Vec::new();
     for child in dom.dom_children(node) {
         if dom.kind(child) == NodeKind::Element {
-            children.push(build(dom, fragments, child, origin, out));
+            children.push(build(dom, fragments, origins, child, out));
         }
     }
     access.set_children(children);
@@ -178,8 +175,15 @@ pub fn accesskit_tree(
     focus: Option<NodeId>,
 ) -> TreeUpdate {
     let root = dom.document();
+    // Absolute origins from the engine's shared batch walk (upstreaming P2), adapted to the
+    // a11y bounds' `f64` tuples; `build` pairs each with the node's size, instead of re-rolling
+    // the parent-chain sum inline (the 4th copy the host-fork sweep flagged).
+    let origins: HashMap<NodeId, (f32, f32)> = serval_layout::accumulate_origins(dom, fragments)
+        .into_iter()
+        .map(|(id, p)| (id, (p.x, p.y)))
+        .collect();
     let mut nodes = Vec::new();
-    build(dom, fragments, root, (0.0, 0.0), &mut nodes);
+    build(dom, fragments, &origins, root, &mut nodes);
     TreeUpdate {
         nodes,
         tree: Some(Tree::new(access_id(root))),
