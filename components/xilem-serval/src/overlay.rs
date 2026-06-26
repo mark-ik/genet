@@ -58,6 +58,35 @@ where
     )
 }
 
+/// A sized overlay box: `content` in a `position: absolute` element at `(x, y)`
+/// with `width`×`height` (device px), relative to the nearest positioned ancestor.
+///
+/// The size-carrying companion to [`overlay_at`], for surfaces the host sizes as
+/// well as places (a floating card, the comms pane, the shellbar) and would
+/// otherwise re-stamp a full geometry `style` each frame. This element owns the
+/// geometry `style`, so visual styling (background, border-radius, shadow,
+/// `flex-direction`) belongs on the `content`'s own element, not here. See the
+/// [module docs](self) for the two caller responsibilities.
+pub fn overlay_rect<Seq, State, Action>(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    content: Seq,
+) -> El<Seq, State, Action>
+where
+    State: 'static,
+    Action: 'static,
+    Seq: ViewSequence<State, Action, ServalCtx, ServalElement>,
+{
+    el::<_, State, Action>("div", content).attr(
+        "style",
+        format!(
+            "position: absolute; left: {x}px; top: {y}px; width: {width}px; height: {height}px;"
+        ),
+    )
+}
+
 /// Where to place a popup relative to its trigger element. Consumed by
 /// [`anchor_point`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

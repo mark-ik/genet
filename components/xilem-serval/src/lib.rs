@@ -89,7 +89,7 @@ pub use event::{OnClick, OnClickState, PointerClick, on_click};
 pub use focusable::{Focusable, FocusableState, focusable};
 pub use key::{Key, KeyEvent, Modifiers, NamedKey, OnKey, OnKeyState, on_key};
 pub use optional_action::{Action, OptionalAction};
-pub use overlay::{anchor_point, overlay_at, Placement};
+pub use overlay::{anchor_point, overlay_at, overlay_rect, Placement};
 pub use pointer::{on_pointer, OnPointer, PointerEvent, PointerPhase};
 pub use propagation::Propagation;
 pub use radio::{radio_group, RadioGroup};
