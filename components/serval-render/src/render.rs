@@ -31,7 +31,7 @@ use serval_layout::{
     BackgroundImagePlane, BoxTree, FragmentPlane, ImageLoader, ImagePlane, IncrementalLayout,
     ScrollOffsets, ServalLaneView, ServalPaintList, StylePlane, TextMeasureCtx, absolute_origin,
     caret_byte_at_point,
-    caret_byte_vertical, caret_rect, emit_paint_list_with_layouts, layout,
+    caret_byte_vertical, caret_color, caret_rect, emit_paint_list_with_layouts, layout,
     paint_list_from_layout_dom, range_rects, run_cascade, selection_rects, selection_style,
     TextRange,
 };
@@ -171,7 +171,13 @@ pub fn paint_list_from_scripted_dom(
         if let Some(rect) =
             caret_rect(dom, c.node, c.caret, &built, &text_ctx, &fragments, CARET_WIDTH)
         {
-            plist.push_caret(rect, CARET_COLOR);
+            // `caret-color: auto` — track the field's cascaded text colour so the caret stays
+            // legible on every theme (invisible near-black on a dark field otherwise); fall back
+            // to the dark default when the colour can't be resolved.
+            let caret = caret_color(dom, &styles, c.node)
+                .map(|[r, g, b, a]| ColorF { r, g, b, a })
+                .unwrap_or(CARET_COLOR);
+            plist.push_caret(rect, caret);
         }
     }
 
@@ -290,7 +296,12 @@ pub fn paint_list_from_session(
             plist.push_selection(&rects, highlight);
         }
         if let Some(rect) = session.caret_rect(dom, c.node, c.caret, CARET_WIDTH) {
-            plist.push_caret(rect, CARET_COLOR);
+            // `caret-color: auto` (see the static path above): track the field's text colour.
+            let caret = session
+                .caret_color(dom, c.node)
+                .map(|[r, g, b, a]| ColorF { r, g, b, a })
+                .unwrap_or(CARET_COLOR);
+            plist.push_caret(rect, caret);
         }
     }
 

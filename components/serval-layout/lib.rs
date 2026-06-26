@@ -56,7 +56,7 @@ pub use adapter::NodeRef;
 pub use adapter_stylo::StyleNodeRef;
 pub use box_tree::{build_box_tree, layout_via_box_tree, BoxTree};
 pub use caret::{
-    caret_byte_at_point, caret_byte_vertical, caret_rect, find_text_rects, range_rects,
+    caret_byte_at_point, caret_byte_vertical, caret_color, caret_rect, find_text_rects, range_rects,
     selection_rects, selection_style, CaretRect, TextRange,
 };
 pub use cascade::{
