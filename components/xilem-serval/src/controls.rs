@@ -30,6 +30,8 @@
 //! *textual* representation for headless tests / debug, not what the field
 //! renders on screen.
 
+use unicode_segmentation::UnicodeSegmentation;
+
 use crate::pod::ServalElement;
 use crate::{
     El, Key, KeyEvent, NamedKey, OnClick, OnKey, OptionalAction, PointerClick, ServalCtx, View, el,
@@ -75,6 +77,12 @@ pub struct TextInput {
     /// [`render_text`](Self::render_text) and the caret geometry, so submitting
     /// evaluates only what was actually typed, never the suggestion.
     ghost: String,
+    /// The sticky **goal column** for vertical motion (ArrowUp/ArrowDown): the char
+    /// column the caret aims for, preserved across a *run* of up/down presses so the
+    /// caret does not drift toward shorter lines (Tier 2). `Some` only mid-run; any
+    /// horizontal move or edit clears it ([`reset_goal`](Self::reset_goal)) so the
+    /// next vertical move re-seeds it from the caret's actual column.
+    goal_col: Option<usize>,
 }
 
 impl TextInput {
@@ -82,7 +90,22 @@ impl TextInput {
     pub fn new(text: impl Into<String>) -> Self {
         let text = text.into();
         let caret = text.chars().count();
-        Self { text, caret, anchor: caret, preedit: String::new(), ghost: String::new() }
+        Self {
+            text,
+            caret,
+            anchor: caret,
+            preedit: String::new(),
+            ghost: String::new(),
+            goal_col: None,
+        }
+    }
+
+    /// Drop the sticky vertical [`goal_col`](Self::goal_col). Every caret move or
+    /// edit that is *not* ArrowUp/ArrowDown calls this, so the goal column lives only
+    /// for an uninterrupted run of vertical presses; the next one re-seeds it from the
+    /// caret's real column.
+    fn reset_goal(&mut self) {
+        self.goal_col = None;
     }
 
     /// The buffer, without the caret marker.
@@ -125,6 +148,7 @@ impl TextInput {
     /// Select the entire buffer (Ctrl / Cmd + A): anchor at the start, caret at
     /// the end, so the next edit replaces everything.
     pub fn select_all(&mut self) {
+        self.reset_goal();
         self.anchor = 0;
         self.caret = self.char_count();
     }
@@ -137,6 +161,7 @@ impl TextInput {
         if self.ghost.is_empty() {
             return;
         }
+        self.reset_goal();
         self.text.push_str(&self.ghost);
         self.ghost.clear();
         self.caret = self.char_count();
@@ -232,6 +257,7 @@ impl TextInput {
     /// Insert `s` at the caret, replacing any selection first; collapses the
     /// caret after the inserted text.
     pub fn insert_str(&mut self, s: &str) {
+        self.reset_goal();
         self.delete_selection();
         let at = self.byte_of(self.caret);
         self.text.insert_str(at, s);
@@ -242,6 +268,7 @@ impl TextInput {
     /// Backspace: delete the selection if any, else the character before the
     /// caret. No-op at the start of an unselected buffer.
     pub fn backspace(&mut self) {
+        self.reset_goal();
         if self.has_selection() {
             self.delete_selection();
             return;
@@ -259,6 +286,7 @@ impl TextInput {
     /// Delete: remove the selection if any, else the character after the caret.
     /// No-op at the end of an unselected buffer.
     pub fn delete(&mut self) {
+        self.reset_goal();
         if self.has_selection() {
             self.delete_selection();
             return;
@@ -276,6 +304,7 @@ impl TextInput {
     /// selection, Shift+←); otherwise it collapses — to the selection's left edge
     /// if one exists, else one char left.
     pub fn move_left(&mut self, extend: bool) {
+        self.reset_goal();
         if !extend && self.has_selection() {
             self.caret = self.selection().0;
         } else {
@@ -290,6 +319,7 @@ impl TextInput {
     /// otherwise it collapses to the selection's right edge if one exists, else
     /// one char right.
     pub fn move_right(&mut self, extend: bool) {
+        self.reset_goal();
         if !extend && self.has_selection() {
             self.caret = self.selection().1;
         } else if self.caret < self.char_count() {
@@ -303,6 +333,7 @@ impl TextInput {
     /// Move the caret to the start (Home). `extend` keeps the anchor (selecting
     /// to the start).
     pub fn home(&mut self, extend: bool) {
+        self.reset_goal();
         self.caret = 0;
         if !extend {
             self.anchor = 0;
@@ -312,6 +343,7 @@ impl TextInput {
     /// Move the caret to the end (End). `extend` keeps the anchor (selecting to
     /// the end).
     pub fn end(&mut self, extend: bool) {
+        self.reset_goal();
         self.caret = self.char_count();
         if !extend {
             self.anchor = self.caret;
@@ -322,7 +354,10 @@ impl TextInput {
     //
     // Lines are `\n`-delimited in the buffer (serval feeds the raw text to
     // parley, which breaks at `\n`); a column is the char offset within a line.
-    // No sticky goal column: up/down recompute the column each step (Tier 1).
+    // Up/down keep a sticky goal column ([`goal_col`](Self::goal_col)) across a run
+    // (Tier 2). These walk hard `\n` lines, not parley's soft-wrap visual rows — the
+    // soft-wrap caret (`serval_layout::caret_byte_vertical`) is a separate, layout-aware
+    // path a host can wire instead, where the goal would be an x-position not a column.
 
     /// Char offsets where each line begins: 0, then one past each `\n`.
     fn line_starts(&self) -> Vec<usize> {
@@ -355,22 +390,33 @@ impl TextInput {
         start.saturating_add(column).min(end)
     }
 
-    /// Move the caret up one line, keeping the column (ArrowUp). At the first
-    /// line it goes to the buffer start. `extend` grows the selection.
+    /// Move the caret up one line, keeping the **goal column** (ArrowUp). At the
+    /// first line it goes to the buffer start. `extend` grows the selection.
+    ///
+    /// The goal column ([`goal_col`](Self::goal_col)) is seeded from the caret's real
+    /// column at the start of a vertical run and reused (clamped per line) thereafter,
+    /// so arrowing up/down through varying-length lines does not drift toward the short
+    /// ones (Tier 2). It is *not* cleared here — only a horizontal move or edit clears
+    /// it (via [`reset_goal`](Self::reset_goal)).
     pub fn move_up(&mut self, extend: bool) {
         let (line, col) = self.line_col();
-        self.caret = if line == 0 { 0 } else { self.offset_at(line - 1, col) };
+        let goal = self.goal_col.unwrap_or(col);
+        self.goal_col = Some(goal);
+        self.caret = if line == 0 { 0 } else { self.offset_at(line - 1, goal) };
         if !extend {
             self.anchor = self.caret;
         }
     }
 
-    /// Move the caret down one line, keeping the column (ArrowDown). At the last
-    /// line it goes to the buffer end. `extend` grows the selection.
+    /// Move the caret down one line, keeping the **goal column** (ArrowDown). At the
+    /// last line it goes to the buffer end. `extend` grows the selection. See
+    /// [`move_up`](Self::move_up) for the goal-column contract.
     pub fn move_down(&mut self, extend: bool) {
         let (line, col) = self.line_col();
+        let goal = self.goal_col.unwrap_or(col);
+        self.goal_col = Some(goal);
         let last = self.line_starts().len() - 1;
-        self.caret = if line == last { self.char_count() } else { self.offset_at(line + 1, col) };
+        self.caret = if line == last { self.char_count() } else { self.offset_at(line + 1, goal) };
         if !extend {
             self.anchor = self.caret;
         }
@@ -379,6 +425,7 @@ impl TextInput {
     /// Move the caret to the start of its line (Home, multi-line). `extend`
     /// grows the selection.
     pub fn home_line(&mut self, extend: bool) {
+        self.reset_goal();
         let (line, _) = self.line_col();
         self.caret = self.offset_at(line, 0);
         if !extend {
@@ -389,6 +436,7 @@ impl TextInput {
     /// Move the caret to the end of its line (End, multi-line). `extend` grows
     /// the selection.
     pub fn end_line(&mut self, extend: bool) {
+        self.reset_goal();
         let (line, _) = self.line_col();
         self.caret = self.offset_at(line, usize::MAX);
         if !extend {
@@ -402,6 +450,7 @@ impl TextInput {
     /// ArrowUp/ArrowDown and click-to-place hit-test parley and yield a byte
     /// offset, which maps back to this char-index model here.
     pub fn set_caret_byte(&mut self, byte: usize, extend: bool) {
+        self.reset_goal();
         let byte = byte.min(self.text.len());
         // Snap to the char boundary at or below `byte` before counting chars
         // (parley returns cluster boundaries, but clamp defensively).
@@ -409,6 +458,99 @@ impl TextInput {
         self.caret = self.text[..byte].chars().count();
         if !extend {
             self.anchor = self.caret;
+        }
+    }
+
+    // --- word motion (Ctrl/Alt + ←/→, Backspace, Delete) ----------------------
+    //
+    // Word boundaries are UAX#29 (`unicode-segmentation`), computed over the buffer
+    // here — the buffer owns segmentation; the host only routes the modified key. A
+    // "word" is any non-whitespace segment, so motion stops at the edges of words and
+    // of punctuation runs (e.g. djot `**`, backticks), skipping the whitespace between.
+
+    /// The char index at byte offset `byte` (clamped) — inverse of
+    /// [`byte_of`](Self::byte_of), mapping a word boundary back to the char model.
+    fn char_of_byte(&self, byte: usize) -> usize {
+        let byte = byte.min(self.text.len());
+        self.text[..byte].chars().count()
+    }
+
+    /// Byte offset one word right of byte `from`: skip whitespace at/after `from`, then
+    /// land at the end of the next non-whitespace segment. Buffer end when none remains.
+    fn word_boundary_right(&self, from: usize) -> usize {
+        for (start, seg) in self.text.split_word_bound_indices() {
+            let end = start + seg.len();
+            if end <= from || seg.chars().all(char::is_whitespace) {
+                continue;
+            }
+            return end;
+        }
+        self.text.len()
+    }
+
+    /// Byte offset one word left of byte `from`: the start of the nearest non-whitespace
+    /// segment beginning before `from`. `0` when none precedes it.
+    fn word_boundary_left(&self, from: usize) -> usize {
+        let mut target = 0;
+        for (start, seg) in self.text.split_word_bound_indices() {
+            if start >= from {
+                break;
+            }
+            if !seg.chars().all(char::is_whitespace) {
+                target = start;
+            }
+        }
+        target
+    }
+
+    /// Move the caret one word left (Ctrl/Alt+←). `extend` grows the selection.
+    pub fn move_word_left(&mut self, extend: bool) {
+        self.reset_goal();
+        self.caret = self.char_of_byte(self.word_boundary_left(self.byte_of(self.caret)));
+        if !extend {
+            self.anchor = self.caret;
+        }
+    }
+
+    /// Move the caret one word right (Ctrl/Alt+→). `extend` grows the selection.
+    pub fn move_word_right(&mut self, extend: bool) {
+        self.reset_goal();
+        self.caret = self.char_of_byte(self.word_boundary_right(self.byte_of(self.caret)));
+        if !extend {
+            self.anchor = self.caret;
+        }
+    }
+
+    /// Delete to the previous word boundary (Ctrl/Alt+Backspace): the selection if one
+    /// exists, else the word before the caret. No-op at the buffer start.
+    pub fn delete_word_left(&mut self) {
+        self.reset_goal();
+        if self.has_selection() {
+            self.delete_selection();
+            return;
+        }
+        let from = self.byte_of(self.caret);
+        let target = self.word_boundary_left(from);
+        if target < from {
+            self.text.replace_range(target..from, "");
+            self.caret = self.char_of_byte(target);
+            self.anchor = self.caret;
+        }
+    }
+
+    /// Delete to the next word boundary (Ctrl/Alt+Delete): the selection if one exists,
+    /// else the word after the caret. No-op at the buffer end.
+    pub fn delete_word_right(&mut self) {
+        self.reset_goal();
+        if self.has_selection() {
+            self.delete_selection();
+            return;
+        }
+        let from = self.byte_of(self.caret);
+        let target = self.word_boundary_right(from);
+        if target > from {
+            self.text.replace_range(from..target, "");
+            self.anchor = self.caret; // the caret stays; the text after it shrank
         }
     }
 
@@ -445,15 +587,22 @@ impl TextInput {
 ///   single-line field yet (multi-line / commit are later slices).
 fn edit(input: &mut TextInput, ev: KeyEvent) {
     let extend = ev.mods.shift;
+    // Word motion on Ctrl (Win/Linux) or Alt/Option (macOS); `select_all` already
+    // takes Ctrl/Cmd. The `if word` arms sit before the plain ones so they win.
+    let word = ev.mods.ctrl || ev.mods.alt;
     match ev.key {
         Key::Character(ref s) if (ev.mods.ctrl || ev.mods.meta) && s.eq_ignore_ascii_case("a") => {
             input.select_all()
         }
         Key::Character(s) => input.insert_str(&s),
         Key::Named(NamedKey::Space) => input.insert_str(" "),
+        Key::Named(NamedKey::Backspace) if word => input.delete_word_left(),
         Key::Named(NamedKey::Backspace) => input.backspace(),
+        Key::Named(NamedKey::Delete) if word => input.delete_word_right(),
         Key::Named(NamedKey::Delete) => input.delete(),
+        Key::Named(NamedKey::ArrowLeft) if word => input.move_word_left(extend),
         Key::Named(NamedKey::ArrowLeft) => input.move_left(extend),
+        Key::Named(NamedKey::ArrowRight) if word => input.move_word_right(extend),
         Key::Named(NamedKey::ArrowRight) => input.move_right(extend),
         Key::Named(NamedKey::Home) => input.home(extend),
         Key::Named(NamedKey::End) => input.end(extend),
@@ -462,12 +611,17 @@ fn edit(input: &mut TextInput, ev: KeyEvent) {
 }
 
 /// The edit handler for [`textarea`]: like [`edit`] but multi-line. `Enter`
-/// inserts a newline; `ArrowUp` / `ArrowDown` move between lines; `Home` / `End`
-/// scope to the current line (`home_line` / `end_line`). Everything else
-/// (typing, Backspace/Delete, ←/→, Shift to extend) matches the single-line
-/// field.
+/// inserts a newline; `ArrowUp` / `ArrowDown` move between lines keeping a sticky
+/// goal column; bare `Home` / `End` scope to the current line (`home_line` /
+/// `end_line`) while `Ctrl`/`Cmd`+`Home`/`End` jump to the buffer ends. Word motion
+/// (`Ctrl`/`Alt`+`←`/`→`, `Ctrl`/`Alt`+`Backspace`/`Delete`) and everything else
+/// (typing, Shift to extend) matches the single-line field.
 pub(crate) fn edit_multiline(input: &mut TextInput, ev: KeyEvent) {
     let extend = ev.mods.shift;
+    // Word motion on Ctrl (Win/Linux) or Alt/Option (macOS); document motion (Ctrl/Cmd
+    // + Home/End → buffer start/end) on Ctrl or Cmd, while bare Home/End stay line-scoped.
+    let word = ev.mods.ctrl || ev.mods.alt;
+    let doc = ev.mods.ctrl || ev.mods.meta;
     match ev.key {
         Key::Character(ref s) if (ev.mods.ctrl || ev.mods.meta) && s.eq_ignore_ascii_case("a") => {
             input.select_all()
@@ -475,13 +629,19 @@ pub(crate) fn edit_multiline(input: &mut TextInput, ev: KeyEvent) {
         Key::Character(s) => input.insert_str(&s),
         Key::Named(NamedKey::Space) => input.insert_str(" "),
         Key::Named(NamedKey::Enter) => input.insert_str("\n"),
+        Key::Named(NamedKey::Backspace) if word => input.delete_word_left(),
         Key::Named(NamedKey::Backspace) => input.backspace(),
+        Key::Named(NamedKey::Delete) if word => input.delete_word_right(),
         Key::Named(NamedKey::Delete) => input.delete(),
+        Key::Named(NamedKey::ArrowLeft) if word => input.move_word_left(extend),
         Key::Named(NamedKey::ArrowLeft) => input.move_left(extend),
+        Key::Named(NamedKey::ArrowRight) if word => input.move_word_right(extend),
         Key::Named(NamedKey::ArrowRight) => input.move_right(extend),
         Key::Named(NamedKey::ArrowUp) => input.move_up(extend),
         Key::Named(NamedKey::ArrowDown) => input.move_down(extend),
+        Key::Named(NamedKey::Home) if doc => input.home(extend),
         Key::Named(NamedKey::Home) => input.home_line(extend),
+        Key::Named(NamedKey::End) if doc => input.end(extend),
         Key::Named(NamedKey::End) => input.end_line(extend),
         Key::Named(_) => {},
     }
@@ -605,8 +765,9 @@ fn build_textarea(input: &TextInput) -> TextField {
 /// `ArrowUp` / `ArrowDown` move between lines, `Home` / `End` scope to the line.
 /// Composable via [`lens`](crate::lens) like [`text_field`].
 ///
-/// Tier 1: lines are `\n`-delimited in the buffer; up/down navigate those hard
-/// lines (no soft-wrap visual-line navigation, which would need the layout).
+/// Lines are `\n`-delimited in the buffer; up/down navigate those hard lines with a
+/// sticky goal column. (Soft-wrap visual-line navigation needs the layout — the
+/// separate `serval_layout::caret_byte_vertical` path a host can wire instead.)
 pub fn textarea(input: &TextInput) -> impl View<TextInput, (), ServalCtx, Element = ServalElement> + use<> {
     build_textarea(input)
 }
@@ -696,4 +857,116 @@ where
     F: Fn(&mut State, PointerClick) -> OA + 'static,
 {
     on_click(el::<_, State, Action>("button", label.into()), handler)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TextInput, edit_multiline};
+    use crate::{Key, KeyEvent, Modifiers, NamedKey};
+
+    /// A `TextInput` with the caret at char index `caret`. Fixtures are ASCII, so a
+    /// char index equals a byte offset for [`TextInput::set_caret_byte`].
+    fn at(text: &str, caret: usize) -> TextInput {
+        let mut t = TextInput::new(text);
+        t.set_caret_byte(caret, false);
+        t
+    }
+
+    fn named(k: NamedKey, mods: Modifiers) -> KeyEvent {
+        KeyEvent::with_mods(Key::Named(k), mods)
+    }
+
+    const CTRL: Modifiers = Modifiers { shift: false, ctrl: true, alt: false, meta: false };
+
+    // --- sticky goal column (Tier 2) ------------------------------------------
+
+    #[test]
+    fn goal_column_sticks_through_a_short_line() {
+        // Line lengths 5 / 2 / 5; start at column 3 of the first line.
+        let mut t = at("aaaaa\nbb\nccccc", 3);
+        t.move_down(false); // line "bb" clamps the column to its end (2)
+        assert_eq!(t.caret(), 8); // index 8 == end of "bb"
+        t.move_down(false); // line 3: the *goal* (3) is restored, not the clamped 2
+        assert_eq!(t.caret(), 12); // line-3 start (9) + 3
+    }
+
+    #[test]
+    fn a_horizontal_move_resets_the_goal_column() {
+        let mut t = at("aaaaa\nbb\nccccc", 3);
+        t.move_down(false); // -> index 8, clamped onto "bb"
+        t.move_left(false); // resets the goal; caret now index 7, column 1
+        t.move_down(false); // line 3 at the *new* column 1, not the old goal 3
+        assert_eq!(t.caret(), 10); // 9 + 1
+    }
+
+    // --- word motion (UAX#29) -------------------------------------------------
+
+    #[test]
+    fn word_motion_skips_whitespace_and_stops_at_word_edges() {
+        let mut t = at("foo bar baz", 0);
+        t.move_word_right(false);
+        assert_eq!(t.caret(), 3); // end of "foo"
+        t.move_word_right(false);
+        assert_eq!(t.caret(), 7); // skip the space, end of "bar"
+        t.move_word_left(false);
+        assert_eq!(t.caret(), 4); // back to the start of "bar"
+        t.move_word_left(false);
+        assert_eq!(t.caret(), 0); // start of "foo"
+    }
+
+    #[test]
+    fn dotted_token_is_one_word_uax29() {
+        // UAX#29 joins a period between letters (URLs, filenames, `foo.bar()` in code),
+        // so Ctrl+→ jumps the whole token rather than stopping at each '.'.
+        let mut t = at("see foo.bar end", 0);
+        t.move_word_right(false);
+        assert_eq!(t.caret(), 3); // "see"
+        t.move_word_right(false);
+        assert_eq!(t.caret(), 11); // "foo.bar" as one token, not split at '.'
+    }
+
+    #[test]
+    fn shift_word_right_extends_the_selection() {
+        let mut t = at("foo bar", 0);
+        t.move_word_right(true);
+        assert!(t.has_selection());
+        assert_eq!(t.selection(), (0, 3));
+    }
+
+    #[test]
+    fn kill_word_left_removes_the_preceding_word() {
+        let mut t = TextInput::new("foo bar baz"); // caret at the end
+        t.delete_word_left();
+        assert_eq!(t.text(), "foo bar ");
+        assert_eq!(t.caret(), 8);
+    }
+
+    #[test]
+    fn kill_word_right_removes_the_following_word() {
+        let mut t = at("foo bar baz", 0);
+        t.delete_word_right();
+        assert_eq!(t.text(), " bar baz");
+        assert_eq!(t.caret(), 0);
+    }
+
+    // --- handler routing (modifiers) ------------------------------------------
+
+    #[test]
+    fn ctrl_arrow_routes_to_word_motion() {
+        let mut t = at("foo bar", 0);
+        edit_multiline(&mut t, named(NamedKey::ArrowRight, CTRL));
+        assert_eq!(t.caret(), 3); // word-right, not one char right
+    }
+
+    #[test]
+    fn home_end_are_line_scoped_but_ctrl_home_end_span_the_buffer() {
+        let buf = "line one\nline two";
+        let mut t = at(buf, 12); // somewhere on line two
+        edit_multiline(&mut t, named(NamedKey::Home, Modifiers::default()));
+        assert_eq!(t.caret(), 9); // bare Home: start of line two
+        edit_multiline(&mut t, named(NamedKey::Home, CTRL));
+        assert_eq!(t.caret(), 0); // Ctrl+Home: buffer start
+        edit_multiline(&mut t, named(NamedKey::End, CTRL));
+        assert_eq!(t.caret(), buf.chars().count()); // Ctrl+End: buffer end
+    }
 }

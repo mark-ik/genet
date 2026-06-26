@@ -26,3 +26,6 @@ path = "src/lib.rs"
 xilem_core = { path = "../xilem-core" }
 serval-scripted-dom = { path = "../serval-scripted-dom" }
 layout_dom_api = { package = "layout-dom-api", path = "../shared/layout-dom" }
+# UAX#29 word boundaries for Ctrl+←/→ word motion + Ctrl+Backspace/Delete kill-word
+# in `TextInput` (the buffer owns word segmentation; the host just sends the key).
+unicode-segmentation = { workspace = true }
