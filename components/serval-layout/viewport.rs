@@ -195,7 +195,12 @@ where
 /// through the DOM, as paint/hit-test do). Skips `position: fixed` subtrees
 /// (viewport-anchored) and does not descend past an overflow-clip container
 /// (its own box already bounds them).
-fn extend_scrollable<D>(
+///
+/// Shared with [`IncrementalLayout::scroll_extent`](crate::IncrementalLayout::scroll_extent)'s
+/// nested-container `content_far_edge` (one level down, container-relative): the document
+/// scroll range and a nested scroll container's extent are the same far-edge walk, so it lives
+/// here once.
+pub(crate) fn extend_scrollable<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,

@@ -627,48 +627,14 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     where
         D: LayoutDom<NodeId = Id>,
     {
+        // The same far-edge-with-fixed/clip-pruning walk the document scroll range uses, one
+        // level down (container-relative): children start at the container's border-box origin
+        // `(0, 0)`. Shared with `viewport::extend_scrollable` instead of a second copy.
         let mut extent = (0.0f32, 0.0f32);
         for child in dom.dom_children(node) {
-            self.accumulate_far_edge(dom, child, (0.0, 0.0), &mut extent);
+            crate::viewport::extend_scrollable(dom, &self.styles, &self.fragments, child, (0.0, 0.0), &mut extent);
         }
         extent
-    }
-
-    /// Accumulate the far (right, bottom) edge of `id`'s fragment and its scrollable
-    /// descendants into `extent`, in the host container's border-box coordinates
-    /// (`parent_origin` accumulated through the DOM, as paint/hit-test do). Mirrors
-    /// [`viewport::extend_scrollable`](crate::viewport) one level down: a `position:
-    /// fixed` subtree is viewport-anchored (it never scrolls the container), and a
-    /// nested overflow-clip container bounds its own descendants.
-    fn accumulate_far_edge<D>(
-        &self,
-        dom: &D,
-        id: Id,
-        parent_origin: (f32, f32),
-        extent: &mut (f32, f32),
-    ) where
-        D: LayoutDom<NodeId = Id>,
-    {
-        let cv = crate::paint_emit::primary_cv(&self.styles, id);
-        if cv.as_deref().is_some_and(crate::paint_emit::is_fixed) {
-            return;
-        }
-        let origin = match self.fragments.rect_of(id) {
-            Some(l) => {
-                let ox = parent_origin.0 + l.location.x;
-                let oy = parent_origin.1 + l.location.y;
-                extent.0 = extent.0.max(ox + l.size.width);
-                extent.1 = extent.1.max(oy + l.size.height);
-                (ox, oy)
-            },
-            None => parent_origin,
-        };
-        if cv.as_deref().is_some_and(crate::paint_emit::clips_overflow) {
-            return;
-        }
-        for child in dom.dom_children(id) {
-            self.accumulate_far_edge(dom, child, origin, extent);
-        }
     }
 
     /// Recompute the viewport's propagated overflow + size after a relayout,
