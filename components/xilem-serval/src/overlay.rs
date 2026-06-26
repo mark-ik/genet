@@ -4,11 +4,15 @@
 
 //! Host overlays / popups: an absolutely-positioned layer placed by a point.
 //!
-//! Roadmap item 4 of the serval-as-host track. Serval has no portal/teleport
-//! machinery and the paint walk is strict document order, so an overlay is the
-//! simplest possible thing: a `position: absolute` element placed by an inline
-//! `style` (serval gained inline-style support for exactly this), appended
-//! **last** among its siblings so it paints over everything before it.
+//! Roadmap item 4 of the serval-as-host track. An overlay is the simplest possible
+//! thing: a `position: absolute` element placed by an inline `style` (serval gained
+//! inline-style support for exactly this). serval-layout now implements full CSS 2.1
+//! Appendix E stacking with z-index (`serval-layout/paint_stacking.rs`), so an
+//! out-of-flow `position: absolute` box auto-lifts above in-flow content regardless
+//! of document order; overlapping positioned boxes order by `(z-index, document
+//! order)`. (No portal / teleport: an overlay stays a DOM child of wherever it is
+//! placed — it is lifted in *paint* order, not reparented, so its position still
+//! resolves against its containing block; see responsibility 1.)
 //!
 //! Two pieces, point-anchoring first:
 //!   * [`overlay_at`] — the primitive: a positioned box at an `(x, y)` in the
@@ -25,9 +29,12 @@
 //!    nearest positioned ancestor (serval/taffy has no true viewport-fixed
 //!    box). Make the app root `position: relative` so an overlay's `(x, y)` is
 //!    root-relative and predictable.
-//! 2. **Stacking = document order.** The paint walk has no `z-index`; the
-//!    overlay paints on top only if it is *last* among its siblings. Put the
-//!    overlay view last in the root's children.
+//! 2. **Stacking.** A `position: absolute` overlay auto-lifts above its in-flow
+//!    siblings (Appendix E out-of-flow lift), so no special ordering is needed to
+//!    sit over normal content. To order two overlapping overlays, give the one that
+//!    should win a higher `z-index`, or rely on document order as the tie-break at
+//!    equal `z` (the later sibling wins). The old "must be last sibling" rule is
+//!    obsolete.
 
 use crate::pod::ServalElement;
 use crate::{El, ServalCtx, el};
@@ -38,7 +45,7 @@ use xilem_core::ViewSequence;
 ///
 /// The positioning rides an inline `style` attribute, so it depends on serval's
 /// inline-style support. See the [module docs](self) for the two caller
-/// responsibilities (a positioned ancestor, and last-in-document for stacking).
+/// responsibilities (a positioned ancestor, and z-index/document-order stacking).
 pub fn overlay_at<Seq, State, Action>(x: f32, y: f32, content: Seq) -> El<Seq, State, Action>
 where
     State: 'static,

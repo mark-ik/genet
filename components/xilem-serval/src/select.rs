@@ -13,9 +13,10 @@
 //! makes `select` a fully self-contained, [`lens`](crate::lens)-composable
 //! control like [`checkbox`](crate::checkbox) / [`text_field`](crate::text_field).
 //!
-//! Stacking caveat: the paint walk has no `z-index`, so the list paints over
-//! earlier content but *under* later siblings of the select. Place the select
-//! after the content it should cover (or last) until stacking contexts land.
+//! Stacking: the option list is `position: absolute`, so it auto-lifts above
+//! in-flow content (serval-layout's CSS 2.1 Appendix E stacking + z-index). To sit
+//! above a *later positioned* sibling, give the open list (or the select) a higher
+//! `z-index`; the old "place the select last" workaround is no longer required.
 
 use crate::pod::ServalElement;
 use crate::{ServalCtx, View, el, on_click};
