@@ -30,7 +30,7 @@ use xilem_core::{
 };
 
 use crate::pod::ServalElement;
-use crate::{ElementView, OptionalAction, ServalCtx};
+use crate::{El, ElementView, OptionalAction, ServalCtx};
 
 // A distinctive number, mirroring `OnEvent`'s `ON_EVENT_VIEW_ID`, so a stray
 // message routed here on a wrong path is caught rather than silently matching.
@@ -122,6 +122,19 @@ impl<V, State, Action, F> OnClick<V, State, Action, F> {
     /// switching this never double-fires the same handler.
     pub fn capture(mut self, value: bool) -> Self {
         self.capture = value;
+        self
+    }
+}
+
+impl<Seq, State, Action, F> OnClick<El<Seq, State, Action>, State, Action, F> {
+    /// Set an attribute on the wrapped element, forwarding to [`El::attr`].
+    ///
+    /// This is what lets the ergonomic [`button`] (and any `on_click(el(..), h)`)
+    /// carry a `class` (or any attribute) *after* wrapping, since `.attr` is
+    /// otherwise inherent to [`El`] and hidden once the element is wrapped in an
+    /// `OnClick`. Repeated names overwrite, matching `El::attr`.
+    pub fn attr(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.child = self.child.attr(name, value);
         self
     }
 }

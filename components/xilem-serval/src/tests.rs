@@ -1258,6 +1258,30 @@ mod controls {
         assert_eq!(runner.state(), &1);
     }
 
+    /// `button(label, h).attr("class", ..)`: the fluent `OnClick::attr` forwards
+    /// to the wrapped `<button>`, so a class (or any attribute) can be set after
+    /// wrapping. The handler still fires.
+    #[test]
+    fn button_attr_stamps_class_and_keeps_handler() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let inc: fn(&mut u32, PointerClick) = |n, _| *n += 1;
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            move |_: &u32| button("inc", inc).attr("class", "primary"),
+            0u32,
+        );
+        let btn = runner.root();
+
+        assert_eq!(
+            dom.borrow().element_name(btn).unwrap().local.as_ref(),
+            "button"
+        );
+        assert_eq!(attr(&dom.borrow(), btn, "class").as_deref(), Some("primary"));
+
+        runner.dispatch_click(btn, PointerClick::at((0.0, 0.0)));
+        assert_eq!(runner.state(), &1);
+    }
+
     /// `overlay_at(x, y, content)`: a `<div>` carrying its position in an inline
     /// `style` (`position: absolute` + the insets), wrapping the content. The
     /// inline style is what serval's cascade reads to place the overlay.
