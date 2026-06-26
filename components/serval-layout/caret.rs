@@ -436,10 +436,11 @@ fn caret_band(layout: &Layout<ColorBrush>, byte: usize) -> (f32, f32) {
     (m.baseline - m.ascent, m.ascent)
 }
 
-/// Absolute border-box origin of `target`: walk from the document root,
-/// accumulating each ancestor's parent-relative `taffy::Layout.location`. `None`
-/// if `target` is unreachable / unlaid-out. Shared with [`crate::link_harvest`] for
-/// placing an inline replaced box (an image link) in absolute coordinates.
+/// Absolute border-box origin of `target` as an `(x, y)` tuple — a thin tuple-typed
+/// wrapper over the canonical [`serval_lane::absolute_origin`](crate::serval_lane::absolute_origin)
+/// (this module's own copy of the parent-chain walk is retired, upstreaming P2). `None` if
+/// `target` is unreachable / unlaid-out. Shared with [`crate::link_harvest`] for placing an
+/// inline replaced box (an image link) in absolute coordinates.
 pub(crate) fn absolute_origin<D>(
     dom: &D,
     fragments: &FragmentPlane<D::NodeId>,
@@ -449,32 +450,7 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    fn walk<D>(
-        dom: &D,
-        fragments: &FragmentPlane<D::NodeId>,
-        id: D::NodeId,
-        target: D::NodeId,
-        acc: (f32, f32),
-    ) -> Option<(f32, f32)>
-    where
-        D: LayoutDom,
-        D::NodeId: Copy + Eq + Hash,
-    {
-        let origin = match fragments.rect_of(id) {
-            Some(l) => (acc.0 + l.location.x, acc.1 + l.location.y),
-            None => acc,
-        };
-        if id == target {
-            return Some(origin);
-        }
-        for child in dom.dom_children(id) {
-            if let Some(found) = walk(dom, fragments, child, target, origin) {
-                return Some(found);
-            }
-        }
-        None
-    }
-    walk(dom, fragments, dom.document(), target, (0.0, 0.0))
+    crate::serval_lane::absolute_origin(dom, fragments, target).map(|p| (p.x, p.y))
 }
 
 #[cfg(test)]
