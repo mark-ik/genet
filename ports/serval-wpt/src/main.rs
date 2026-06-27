@@ -342,6 +342,7 @@ Usage:
     serval-wpt reftest     <subset>   render + pixel-compare reftests (needs a GPU)
     serval-wpt testharness <subset>   run testharness.js tests + collect results (Boa)
     serval-wpt manifest    <subset>   enumerate from MANIFEST.json (authoritative; H1)
+    serval-wpt compare     <subset>   run each testharness test on Boa + Nova, diff (H2b)
 
 Options:
     --tests-root <dir>   tests root (default: tests/wpt)
@@ -402,6 +403,7 @@ fn main() {
         "reftest" => reftest(&tests, &args),
         "dump" => dump(&tests, &args),
         "testharness" => testharness(&tests, &args),
+        "compare" => compare(&tests, &args),
         other => {
             eprintln!("unknown command: {other}\n{}", usage());
             std::process::exit(2);
@@ -553,6 +555,117 @@ fn setup_server(args: &Args) -> Option<net::ServerCtx> {
         Err(e) => {
             eprintln!("server mode setup failed: {e}");
             std::process::exit(2);
+        }
+    }
+}
+
+/// Disk-mode testharness HTML for a test path: the file's contents (testharness
+/// only; XHTML and non-testharness skipped) or a synthesized `.any.js` wrapper.
+/// Mirrors the disk branch of [`testharness`], shared by [`compare`].
+enum TestHtml {
+    Html(String),
+    Skip,
+}
+
+fn build_test_html_disk(path: &Path) -> TestHtml {
+    if is_any_js(path) {
+        return match synthesize_any_js(path) {
+            Some(h) => TestHtml::Html(h),
+            None => TestHtml::Skip, // worker-only
+        };
+    }
+    let Ok(bytes) = fs::read(path) else {
+        return TestHtml::Skip;
+    };
+    let raw = String::from_utf8_lossy(&bytes).into_owned();
+    if classify(path, &raw) != Kind::Testharness {
+        return TestHtml::Skip;
+    }
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if ext.eq_ignore_ascii_case("xhtml") || ext.eq_ignore_ascii_case("xht") {
+        return TestHtml::Skip; // XML parse mode serval's HTML parser doesn't handle
+    }
+    TestHtml::Html(raw)
+}
+
+/// The cross-engine pass predicate: a caught run that did not panic or throw,
+/// produced results, and every subtest passed.
+fn outcome_passes(result: &Result<harness::HarnessOutcome, Box<dyn std::any::Any + Send>>) -> bool {
+    matches!(
+        result,
+        Ok(harness::HarnessOutcome::Ran(results))
+            if !results.is_empty() && results.iter().all(|r| r.passed())
+    )
+}
+
+/// Phase 3 / harness-exactness H2b: run each testharness test on **both** engines
+/// (Boa + Nova) and diff. A test that passes on Boa but fails on Nova is a **Nova
+/// JS-engine gap** (Nova's worklist, the fork-improvement signal); a test that
+/// fails on both is a **serval-platform gap** (layout / DOM). Disk mode only.
+fn compare(tests: &[PathBuf], args: &Args) {
+    let tests_root = Path::new(&args.tests_root);
+    let testharness_js = match fs::read_to_string(tests_root.join("resources/testharness.js")) {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!("testharness.js not found under {}", tests_root.display());
+            std::process::exit(2);
+        }
+    };
+    // Boa / Nova can panic on unimplemented paths; swallow the hooks like `testharness`.
+    let prev = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+
+    let (mut both_pass, mut both_fail, mut boa_only, mut nova_only, mut skipped) = (0, 0, 0, 0, 0);
+    let mut nova_worklist: Vec<String> = Vec::new();
+
+    for path in tests {
+        let html = match build_test_html_disk(path) {
+            TestHtml::Html(h) => h,
+            TestHtml::Skip => {
+                skipped += 1;
+                continue;
+            }
+        };
+        let base_dir = path.parent().unwrap_or(tests_root);
+        let disk = harness::DiskLoader { base_dir, tests_root };
+        let run = |engine| {
+            panic::catch_unwind(AssertUnwindSafe(|| {
+                harness::run_test(&testharness_js, &html, &disk, None, None, None, engine)
+            }))
+        };
+        let boa = run(harness::Engine::Boa);
+        let nova = run(harness::Engine::Nova);
+        let name = rel(path, &args.tests_root);
+        match (outcome_passes(&boa), outcome_passes(&nova)) {
+            (true, true) => both_pass += 1,
+            (false, false) => both_fail += 1,
+            (false, true) => nova_only += 1,
+            (true, false) => {
+                boa_only += 1;
+                nova_worklist.push(name.clone());
+                if args.verbose {
+                    println!("NOVA-GAP  {name}");
+                }
+            }
+        }
+    }
+    panic::set_hook(prev);
+
+    println!(
+        "\ncompare [{}]: both-pass={both_pass} both-fail={both_fail} (serval-platform gap) \
+         boa-only={boa_only} (Nova gap) nova-only={nova_only} skipped={skipped}",
+        if args.subset.is_empty() { "<all>" } else { &args.subset },
+    );
+    if !nova_worklist.is_empty() {
+        println!(
+            "\nNova worklist (pass on Boa, fail on Nova) — {} test(s):",
+            nova_worklist.len()
+        );
+        for name in nova_worklist.iter().take(40) {
+            println!("  {name}");
+        }
+        if nova_worklist.len() > 40 {
+            println!("  … and {} more", nova_worklist.len() - 40);
         }
     }
 }
