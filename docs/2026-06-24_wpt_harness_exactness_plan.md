@@ -22,7 +22,14 @@ Replace the ad-hoc directory walk and heuristic expansion with the upstream-gene
 Amortize the dominant per-test cost.
 - Today: each test builds a fresh `Runtime` and re-evals the 5,207-line testharness.js. The bench probe (`harness.rs:393-414`) proves the eval, not `Runtime::new()`, is the dominant cost, that naive Runtime reuse leaks the `tests` singleton across re-evals, and prescribes a post-(harness-eval) snapshot cloned per test via the `GcAgent::clone` path.
 - Build: eval testharness.js once into a base agent, then `GcAgent::clone` a fresh per-test agent from that snapshot so each test starts post-harness-eval with a clean `tests` singleton.
-- **Done when** a full dom/ subset run shows the per-test cost dominated by the test body, not the harness eval, and the `tests`-singleton leak is gone (re-runs are deterministic).
+- **Engine target (corrected 2026-06-25, grounded):** the runner scores on **Boa** by default (`main.rs:297`), but `GcAgent` is **Nova-only and has no `clone`/`snapshot`** (only `new`), and Boa's `Context` has no clone either — the prescription is mismatched *and* unbuilt. Per the conformance-target doctrine (improve **Nova**, keep **Boa** pristine as the oracle), the snapshot belongs in **Nova**: build `GcAgent::clone` there for fast routine Nova-scored runs; Boa stays slow-but-pristine, run as the reference. Do **not** add a snapshot to Boa. The snapshot is an *optional per-engine capability* behind the `ScriptEngine` trait (a future V8 / SpiderMonkey / QuickJS brings its own, or none), so the harness must not assume any engine can clone.
+- **Done when** a full dom/ subset run on Nova shows the per-test cost dominated by the test body, not the harness eval, and the `tests`-singleton leak is gone (re-runs are deterministic).
+
+### H2b — Per-engine scoring + cross-engine diff (the Nova-improvement driver)
+
+`run_test` is already generic over `E: ScriptEngine`, so scoring both engines on one corpus and diffing is a small addition with outsized value. A test that **passes on Boa but fails on Nova is a Nova JS-engine gap** (a fork improvement; watching this bucket shrink is the Nova-to-Boa gap closing). A test that **fails on both is a serval-platform gap** (layout / DOM, not the engine). This converts the scoreboard into a per-test worklist routed to the right owner, and operationalizes the audit's keep-Nova-80-and-Boa-94-distinct: Nova is the primary "are we improving" number, Boa the platform ceiling, `Boa − Nova` the Nova fork's remaining JS work. The two engines also map to the two PWA lanes (Nova/wasm64 on Chrome/Firefox; Boa/wasm32 on WebKit). Buildable on subsets today (no snapshot needed); H2a's snapshot is what makes it affordable on the full corpus.
+
+- **Done when** a `compare <subset>` run reports the 2x2 (both-pass / both-fail / Boa-only / Nova-only) and the Boa-only set is surfaced as Nova's worklist.
 
 ### H3 — Corpora re-score + checked-in expectations + regression guard (lever 5)
 
@@ -78,3 +85,5 @@ This is a months-shaped investment; tracked as the rigor arm of serval's
 ## Progress
 
 - 2026-06-24 — Plan created from the grand audit. No code yet. H1 is the entry point.
+- 2026-06-25 — **H1 reader + `manifest` command landed** (serval `a9703342ecd`): a MANIFEST.json reader (`ports/serval-wpt/src/manifest.rs` — URLs / kind / refs / fuzzy / pre-expanded variants; unit-tested + integration-tested against the real ~39MB manifest) and `serval-wpt manifest <subset>`. **Validated vs the walk on `dom/nodes`:** manifest 319 runnable (testharness 302, reftest 3, crashtest 14) vs walk 342 — the walk over-counts (38 `load` + 2 `reference` non-tests) and under-counts variants (+17 testharness), confirming the heuristic enumeration scores the wrong set. Additive (the run path still walks; slice 3 wires the manifest through it).
+- 2026-06-25 — **H2 corrected** (above): the snapshot goes in **Nova**, not Boa (Boa is the pristine oracle); added **H2b** (per-engine scoring + cross-engine diff) as the Nova-improvement driver.
