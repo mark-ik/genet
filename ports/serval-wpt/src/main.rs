@@ -24,6 +24,7 @@ use layout_dom_api::{LayoutDom, LocalName};
 use serval_static_dom::StaticDocument;
 
 mod harness;
+mod manifest;
 mod render;
 #[cfg(test)]
 mod webgl_conformance;
@@ -340,6 +341,7 @@ Usage:
     serval-wpt run         <subset>   crash-smoke a subset (parse + layout)
     serval-wpt reftest     <subset>   render + pixel-compare reftests (needs a GPU)
     serval-wpt testharness <subset>   run testharness.js tests + collect results (Boa)
+    serval-wpt manifest    <subset>   enumerate from MANIFEST.json (authoritative; H1)
 
 Options:
     --tests-root <dir>   tests root (default: tests/wpt)
@@ -373,6 +375,14 @@ fn main() {
         return;
     }
 
+    // `manifest` enumerates from MANIFEST.json (the authoritative WPT test list),
+    // not the directory walk — handled before the corpus collection so it can be
+    // diffed against `collect` (harness-exactness H1: spot-check the counts match).
+    if args.command == "manifest" {
+        manifest_list(&args);
+        return;
+    }
+
     let root = Path::new(&args.tests_root).join(&args.subset);
     if !root.exists() {
         eprintln!("subset path does not exist: {}", root.display());
@@ -397,6 +407,45 @@ fn main() {
             std::process::exit(2);
         }
     }
+}
+
+/// Enumerate tests under a subset from MANIFEST.json (harness-exactness H1), for
+/// diffing the authoritative manifest enumeration against the directory walk. The
+/// manifest sits at `<tests-root>/../meta/MANIFEST.json`. Worker variants are counted
+/// but excluded from the runnable total (this window-shaped runner cannot host them).
+fn manifest_list(args: &Args) {
+    let manifest_path = Path::new(&args.tests_root)
+        .parent()
+        .map(|p| p.join("meta/MANIFEST.json"))
+        .unwrap_or_else(|| PathBuf::from("MANIFEST.json"));
+    let manifest = match manifest::Manifest::load(&manifest_path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("manifest load failed ({}): {e}", manifest_path.display());
+            std::process::exit(1);
+        }
+    };
+    let tests = manifest.tests_under(&args.subset);
+    let mut total = 0usize;
+    let mut workers = 0usize;
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for t in &tests {
+        if t.is_worker() {
+            workers += 1;
+            continue;
+        }
+        total += 1;
+        *counts.entry(t.kind.label()).or_default() += 1;
+        if args.verbose {
+            println!("{:<12} {}", t.kind.label(), t.url);
+        }
+    }
+    let by_kind: Vec<String> = counts.iter().map(|(k, n)| format!("{k}={n}")).collect();
+    println!(
+        "manifest: {total} runnable test(s) under '{}' ({}); {workers} worker variant(s) skipped",
+        if args.subset.is_empty() { "<all>" } else { &args.subset },
+        by_kind.join(", "),
+    );
 }
 
 fn rel(path: &Path, tests_root: &str) -> String {

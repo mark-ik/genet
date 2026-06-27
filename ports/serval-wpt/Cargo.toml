@@ -18,6 +18,8 @@ path = "src/main.rs"
 serval-static-dom = { path = "../../components/serval-static-dom" }
 serval-layout = { path = "../../components/serval-layout" }
 layout_dom_api = { workspace = true }
+# MANIFEST.json reader (harness-exactness H1): the upstream WPT manifest is JSON.
+serde_json = { workspace = true }
 
 # Phase 2 (reftests): render to pixels via the paint + netrender path
 # (the same public API the html_to_pixels_e2e test drives) and compare.
