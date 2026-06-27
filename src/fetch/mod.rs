@@ -26,7 +26,7 @@ mod util;
 #[cfg(test)]
 mod tests;
 
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use crate::cache;
 use crate::cors;
@@ -45,6 +45,25 @@ const MAX_REDIRECTS: u32 = 20;
 
 /// Default `User-Agent` sent when the request carries none.
 pub(super) const USER_AGENT: &str = "Mozilla/5.0 (compatible; serval netfetcher)";
+
+/// WHATWG [`fetch`]: runs [`fetch_inner`] and emits one per-fetch diagnostic on
+/// the `netfetcher` target — `debug` on completion (status + elapsed) and `warn`
+/// on a network error. This is the browsing pipeline's first leg, so every load's
+/// fetches and their faults reach the host's diagnostics ring (the app installs
+/// the subscriber; this crate only emits).
+pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
+    let url = request.url.clone();
+    let method = request.method.clone();
+    let started = Instant::now();
+    let response = fetch_inner(request, cx).await;
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    if response.is_network_error() {
+        tracing::warn!(target: "netfetcher", url = %url, ?method, elapsed_ms, "fetch network error");
+    } else {
+        tracing::debug!(target: "netfetcher", url = %url, status = response.status, elapsed_ms, "fetch complete");
+    }
+    response
+}
 
 /// Run the Fetch algorithm for `request` against `cx`.
 ///
@@ -65,7 +84,7 @@ pub(super) const USER_AGENT: &str = "Mozilla/5.0 (compatible; serval netfetcher)
 /// `connect-src` hook; and **HTTP/3** via Alt-Svc (a transport-abstracted h3 lane
 /// over quinn, with h1/h2 fallback). Deferred: the active/passive mixed-content
 /// split, public-suffix-accurate same-site, and h3 for requests with bodies.
-pub async fn fetch(request: Request, cx: &FetchContext) -> Response {
+async fn fetch_inner(request: Request, cx: &FetchContext) -> Response {
     // A `data:` URL is decoded in place (no network): the body and media type come
     // straight from the URL. Always a basic response.
     if request.url.scheme() == "data" {

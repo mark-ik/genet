@@ -13,6 +13,10 @@ path = "src/lib.rs"
 url = "2.5"
 bytes = "1"
 
+# Host-neutral diagnostics facade: emit spans/events here; the consuming app
+# (meerkat) installs the subscriber. The library never depends on the app.
+tracing = "0.1"
+
 # Transport: hyper 1.x (h1/h2) + the hyper-util legacy client (connection pool).
 hyper = { version = "1", features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }
