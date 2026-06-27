@@ -138,6 +138,22 @@ impl RenderCore {
         h: u32,
         clear: ColorLoad,
     ) -> (wgpu::Texture, wgpu::TextureView) {
+        self.rasterize_scaled(scene, w, h, clear, 1.0)
+    }
+
+    /// Like [`rasterize`](Self::rasterize) but for a scene laid out in **logical**
+    /// (DIP) coordinates: the texture is the physical `(w, h)` and `scale` is the
+    /// device-pixel-ratio, so the logical scene is rasterized crisply at physical
+    /// resolution (the scene's viewport must be `(w/scale, h/scale)`). The
+    /// device-pixel-ratio path for HiDPI content tiles. (Auto-DPI D2.)
+    pub fn rasterize_scaled(
+        &self,
+        scene: &Scene,
+        w: u32,
+        h: u32,
+        clear: ColorLoad,
+        scale: f32,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
         let device = self.device();
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("serval-winit-host scene"),
@@ -156,7 +172,7 @@ impl RenderCore {
             format: Some(wgpu::TextureFormat::Rgba8Unorm),
             ..Default::default()
         });
-        self.renderer.render_vello(scene, &view, clear);
+        self.renderer.render_vello_scaled(scene, &view, clear, scale);
         (tex, view)
     }
 }

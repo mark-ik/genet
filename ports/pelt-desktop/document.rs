@@ -17,8 +17,10 @@ use serval_static_dom::{StaticDocument, StaticNodeId};
 
 /// A local-scheme [`ResourceFetcher`]: `data:` decodes the inline payload,
 /// `file://` (and a bare filesystem path) read from disk. `http(s)` loads over the
-/// netfetcher engine when built with the `netfetch` feature; without it, a remote URL
-/// falls through to a failed read and a clean `None` (V1 is local-first by default).
+/// netfetcher engine when built with the `netfetch` feature; the smolweb schemes
+/// (gemini/gopher/nex/finger/spartan/guppy) load over the errand transport when built
+/// with the `smolweb` feature. Without those features a remote URL falls through to a
+/// failed read and a clean `None` (V1 is local-first by default).
 pub struct LocalFetcher;
 
 impl ResourceFetcher for LocalFetcher {
@@ -35,6 +37,17 @@ impl ResourceFetcher for LocalFetcher {
         #[cfg(feature = "netfetch")]
         if url.starts_with("http://") || url.starts_with("https://") {
             return crate::net_fetch::http_get_bytes(url);
+        }
+        // Smolweb schemes over the errand transport (the `smolweb` feature). Routed by
+        // scheme so a `gemini://` URL is not misread as a filesystem path by the
+        // bare-path fallthrough below.
+        #[cfg(feature = "smolweb")]
+        if url
+            .split_once("://")
+            .and_then(|(scheme, _)| errand::Scheme::parse(scheme))
+            .is_some()
+        {
+            return crate::net_fetch::smolweb_get_bytes(url);
         }
         if let Some(rest) = url.strip_prefix("file://") {
             return std::fs::read(file_url_to_path(rest)).ok();

@@ -20,7 +20,7 @@ mod document;
 #[cfg(any(feature = "tile-surface", feature = "scripted"))]
 mod href;
 
-#[cfg(feature = "netfetch")]
+#[cfg(any(feature = "netfetch", feature = "smolweb"))]
 mod net_fetch;
 
 #[cfg(feature = "viewer")]
