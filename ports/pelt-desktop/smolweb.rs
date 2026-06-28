@@ -21,8 +21,8 @@ use std::rc::Rc;
 use errand::parse::{feed, gemtext, gopher};
 use netrender::Scene;
 use pelt_core::ResourceFetcher;
-use serval_layout::{IncrementalLayout, ScrollOffsets};
-use serval_render::scene_from_scripted_dom;
+use serval_layout::{IncrementalLayout, ScrollKey, ScrollOffsets};
+use serval_render::scene_from_session_dom;
 use serval_scripted_dom::{NodeId, ScriptedDom};
 use smolweb_views::{feed_view, gemtext_view, gopher_view, stylesheet, SmolwebTheme, SmolwebView};
 use xilem_serval::{DomHandle, PointerClick, ServalAppRunner};
@@ -60,6 +60,12 @@ fn view(state: &SmolwebState) -> SmolwebView<SmolwebState, Navigate> {
 pub struct SmolwebDocument {
     runner: ServalAppRunner<SmolwebState, SmolwebLogic, SmolwebView<SmolwebState, Navigate>, Navigate>,
     sheets: Vec<String>,
+    /// The retained cascade + layout session, owner of the viewport scroll. Built
+    /// lazily at the first render size and rebuilt on resize; `None` before the first
+    /// frame. Mirrors `LoadedDocument`'s render-first session.
+    session: Option<IncrementalLayout<NodeId>>,
+    /// The size `session` was laid out at, to detect a resize.
+    size: (u32, u32),
 }
 
 impl SmolwebDocument {
@@ -86,42 +92,83 @@ impl SmolwebDocument {
         sheets.push(stylesheet(theme, url));
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
         let runner = ServalAppRunner::new(dom, view as SmolwebLogic, SmolwebState { content });
-        Self { runner, sheets }
+        Self { runner, sheets, session: None, size: (0, 0) }
     }
 
-    /// Render the document to a [`Scene`] at `width`×`height`.
-    pub fn frame(&self, width: u32, height: u32) -> Scene {
+    /// Build (or rebuild, on a size change) the retained layout session.
+    fn ensure_session(&mut self, width: u32, height: u32) {
+        if self.session.is_some() && self.size == (width, height) {
+            return;
+        }
         let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
+        let session = {
+            let dom = self.runner.dom();
+            let dom = dom.borrow();
+            // `&*dom`: `IncrementalLayout::new` is generic over `D: LayoutDom`.
+            IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32)
+        };
+        self.session = Some(session);
+        self.size = (width, height);
+    }
+
+    /// Render the document to a [`Scene`] at `width`×`height`, at the current scroll.
+    /// Rebuilds the session on a size change.
+    pub fn frame(&mut self, width: u32, height: u32) -> Scene {
+        self.ensure_session(width, height);
         let dom = self.runner.dom();
         let dom = dom.borrow();
-        scene_from_scripted_dom(
-            &dom,
-            &sheets,
-            width.max(1),
-            height.max(1),
-            None,
-            &ScrollOffsets::default(),
-        )
+        let session = self.session.as_ref().expect("session built by ensure_session");
+        scene_from_session_dom(session, &*dom, width.max(1), height.max(1))
     }
 
-    /// Resolve a click at scene-local `(x, y)` to a navigation target, if it landed
-    /// on a link. Lays out at `width`×`height` to hit-test, dispatches the click, and
-    /// returns the first navigation its handlers emitted.
+    /// Scroll by a device-px wheel delta; returns whether the viewport moved (false at
+    /// an edge or before the first frame).
+    pub fn scroll_by(&mut self, dx: f32, dy: f32) -> bool {
+        let Some(session) = self.session.as_mut() else {
+            return false;
+        };
+        let dom = self.runner.dom();
+        let dom = dom.borrow();
+        let before = session.viewport_scroll();
+        before != session.scroll_by(&*dom, dx, dy)
+    }
+
+    /// Scroll by a wheel delta at scene point `(x, y)`: a nested `overflow` container
+    /// under the pointer takes it first, else the viewport. Returns whether anything
+    /// moved. A no-op before the first frame.
+    pub fn scroll_at(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> bool {
+        let Some(session) = self.session.as_mut() else {
+            return false;
+        };
+        let dom = self.runner.dom();
+        let dom = dom.borrow();
+        session.scroll_at(&*dom, x, y, dx, dy)
+    }
+
+    /// Apply a keyboard scroll default (arrows / page / home-end); returns whether the
+    /// viewport moved. A no-op before the first frame.
+    pub fn scroll_for_key(&mut self, key: ScrollKey) -> bool {
+        let Some(session) = self.session.as_mut() else {
+            return false;
+        };
+        let dom = self.runner.dom();
+        let dom = dom.borrow();
+        session.scroll_for_key(&*dom, key)
+    }
+
+    /// Resolve a click at scene-local `(x, y)` to a navigation target, if it landed on
+    /// a link. Uses the current layout (built at `width`×`height` if needed), then
+    /// dispatches the click and returns the first navigation its handlers emitted.
     pub fn click_at(&mut self, x: f32, y: f32, width: u32, height: u32) -> Option<String> {
-        let node = self.hit_test(x, y, width, height)?;
+        self.ensure_session(width, height);
+        let node = {
+            let session = self.session.as_ref()?;
+            let dom = self.runner.dom();
+            let dom = dom.borrow();
+            session.hit_test(&*dom, x, y, &ScrollOffsets::default())?
+        };
         let actions = self.runner.dispatch_click(node, PointerClick::at((x, y)));
         actions.into_iter().next().map(|Navigate(url)| url)
-    }
-
-    fn hit_test(&self, x: f32, y: f32, width: u32, height: u32) -> Option<NodeId> {
-        let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
-        let dom = self.runner.dom();
-        let dom = dom.borrow();
-        // `&*dom` (not `&dom`): `IncrementalLayout::new` is generic over `D: LayoutDom`,
-        // so it must see `&ScriptedDom`, not `&Ref<ScriptedDom>`.
-        let session =
-            IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32);
-        session.hit_test(&*dom, x, y, &ScrollOffsets::default())
     }
 
     /// The document DOM handle (for the host's hit-testing / inspection).
@@ -160,13 +207,18 @@ impl crate::static_viewer::windowed::ViewerContent for SmolwebDocument {
     fn frame(&mut self, width: u32, height: u32) -> Scene {
         SmolwebDocument::frame(self, width, height)
     }
-    fn scroll_by(&mut self, _dx: f32, _dy: f32) -> bool {
-        false
+    fn scroll_by(&mut self, dx: f32, dy: f32) -> bool {
+        SmolwebDocument::scroll_by(self, dx, dy)
     }
-    fn scroll_for_key(&mut self, _key: serval_layout::ScrollKey) -> bool {
-        false
+    fn scroll_at(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> bool {
+        SmolwebDocument::scroll_at(self, x, y, dx, dy)
+    }
+    fn scroll_for_key(&mut self, key: serval_layout::ScrollKey) -> bool {
+        SmolwebDocument::scroll_for_key(self, key)
     }
     fn click_at(&mut self, _x: f32, _y: f32) -> bool {
+        // In-window navigation is the chrome/tile lane's job (the bare viewer has no
+        // history), so a click does not navigate here yet.
         false
     }
 }
@@ -196,7 +248,7 @@ mod tests {
     /// path produces glyphs (mirrors the chrome's render test).
     #[test]
     fn gemtext_renders_text() {
-        let doc = SmolwebDocument::parse("gemini://x.test/", "# Hello\n\nWorld.\n", SmolwebTheme::Site);
+        let mut doc = SmolwebDocument::parse("gemini://x.test/", "# Hello\n\nWorld.\n", SmolwebTheme::Site);
         let scene = doc.frame(800, 600);
         assert!(
             scene.ops.iter().any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
@@ -204,10 +256,21 @@ mod tests {
         );
     }
 
+    /// A long capsule scrolls: after a frame builds the session, a downward wheel
+    /// delta moves the viewport (the retained-session scroll path).
+    #[test]
+    fn long_capsule_scrolls() {
+        let body: String = (0..200).map(|i| format!("Line {i}\n")).collect();
+        let mut doc = SmolwebDocument::parse("gemini://x.test/", &body, SmolwebTheme::Plain);
+        let _ = doc.frame(400, 300); // build the session at a short viewport
+        assert!(!doc.scroll_by(0.0, -50.0), "at the top, scrolling up clamps (no move)");
+        assert!(doc.scroll_by(0.0, 240.0), "a capsule taller than the viewport scrolls down");
+    }
+
     /// A gopher menu is detected by scheme and renders a typed item line.
     #[test]
     fn gopher_scheme_detected() {
-        let doc = SmolwebDocument::parse(
+        let mut doc = SmolwebDocument::parse(
             "gopher://x.test/",
             "1Files\t/files\tx.test\t70\r\n",
             SmolwebTheme::Plain,
@@ -220,7 +283,7 @@ mod tests {
     #[test]
     fn feed_sniffed_from_xml_body() {
         let body = "<?xml version=\"1.0\"?><rss><channel><title>Log</title></channel></rss>";
-        let doc = SmolwebDocument::parse("gemini://x.test/feed", body, SmolwebTheme::Dark);
+        let mut doc = SmolwebDocument::parse("gemini://x.test/feed", body, SmolwebTheme::Dark);
         assert!(matches!(doc, SmolwebDocument { .. }));
         // The feed title paints.
         let scene = doc.frame(800, 600);
