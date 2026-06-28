@@ -80,7 +80,7 @@ netfetch = ["tile-surface", "dep:netfetcher", "dep:tokio", "dep:bytes", "dep:url
 # The host owns networking (pelt is the reference shell), matching meerkat driving
 # errand in the product; serval's engine components stay byte-consuming. errand pulls
 # its own tokio net/time/io-util features, which unify with the `rt` runtime here.
-smolweb = ["tile-surface", "dep:errand", "dep:tokio", "dep:url"]
+smolweb = ["tile-surface", "dep:errand", "dep:smolweb-views", "dep:tokio", "dep:url"]
 netrender = ["dep:netrender", "dep:webgl_wgpu", "dep:wgpu"]
 # The rasterized-PNG reftest lane (V3 follow-up): renders the headless `Scene`
 # through netrender's offscreen wgpu readback to a PNG — the "for human eyes"
@@ -160,6 +160,9 @@ url = { workspace = true, optional = true }
 # (sibling repo) for gemini/gopher/nex/finger/spartan/guppy, bridged onto the sync
 # `ResourceFetcher` through the shared tokio runtime. Brings its own tokio + rustls.
 errand = { git = "https://github.com/mark-ik/errand.git", branch = "main", optional = true }
+# The native smolweb views (gemtext / gopher / feed) + theming. errand parses, these
+# render to a ScriptedDom; pelt composes the result the same way it does the chrome.
+smolweb-views = { path = "../../components/smolweb-views", optional = true }
 
 # Scripted profile (behind the `scripted` feature): the browser host surface, the
 # live mutable DOM, and the JS engines. `script-engine-api` supplies the

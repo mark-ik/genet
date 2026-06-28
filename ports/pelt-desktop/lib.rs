@@ -23,6 +23,11 @@ mod href;
 #[cfg(any(feature = "netfetch", feature = "smolweb"))]
 mod net_fetch;
 
+#[cfg(feature = "smolweb")]
+mod smolweb;
+#[cfg(feature = "smolweb")]
+pub use smolweb::SmolwebDocument;
+
 #[cfg(feature = "viewer")]
 mod headless;
 

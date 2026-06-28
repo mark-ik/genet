@@ -1,0 +1,227 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+//! Smolweb documents as native serval views (the `smolweb` feature).
+//!
+//! The smolweb twin of [`Chrome`](crate::chrome::Chrome): errand parses a fetched
+//! capsule into a per-format AST, a `smolweb-views` view renders it into a
+//! `ScriptedDom`, and serval lays it out and paints it to a [`Scene`] through the
+//! same GPU-free path the chrome uses. Native, not gemtext-to-HTML — real focusable
+//! link elements, per-format classes, per-site theming. A link click resolves to a
+//! navigation target via the view's `on_navigate` action.
+//!
+//! This is the GPU-free foundation (load → parse → view → scene, plus click → URL);
+//! the windowed viewer that presents it is the integration step on top, mirroring
+//! [`static_viewer`](crate::static_viewer) / [`chrome_viewer`](crate::chrome_viewer).
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use errand::parse::{feed, gemtext, gopher};
+use netrender::Scene;
+use pelt_core::ResourceFetcher;
+use serval_layout::{IncrementalLayout, ScrollOffsets};
+use serval_render::scene_from_scripted_dom;
+use serval_scripted_dom::{NodeId, ScriptedDom};
+use smolweb_views::{feed_view, gemtext_view, gopher_view, stylesheet, SmolwebTheme, SmolwebView};
+use xilem_serval::{DomHandle, PointerClick, ServalAppRunner};
+
+/// A link-click navigation target, the action the smolweb views bubble.
+struct Navigate(String);
+impl xilem_serval::Action for Navigate {}
+
+/// A fetched capsule parsed into the AST its native view consumes.
+enum Content {
+    Gemtext(Vec<gemtext::GemLine>),
+    Gopher(Vec<gopher::GopherItem>),
+    Feed(feed::Feed),
+}
+
+/// The view's app state: just the parsed content (the view is a pure projection of
+/// it; navigation bubbles out as a [`Navigate`] action, not via state).
+struct SmolwebState {
+    content: Content,
+}
+
+type SmolwebLogic = fn(&SmolwebState) -> SmolwebView<SmolwebState, Navigate>;
+
+/// Project the parsed content onto its native view, each link emitting `Navigate`.
+fn view(state: &SmolwebState) -> SmolwebView<SmolwebState, Navigate> {
+    match &state.content {
+        Content::Gemtext(lines) => gemtext_view(lines, |url| Navigate(url.to_string())),
+        Content::Gopher(items) => gopher_view(items, |url| Navigate(url.to_string())),
+        Content::Feed(parsed) => feed_view(parsed, |url| Navigate(url.to_string())),
+    }
+}
+
+/// A loaded smolweb document: a serval `ScriptedDom` built from a native smolweb
+/// view, rendered GPU-free to a [`Scene`], with link clicks resolving to URLs.
+pub struct SmolwebDocument {
+    runner: ServalAppRunner<SmolwebState, SmolwebLogic, SmolwebView<SmolwebState, Navigate>, Navigate>,
+    sheets: Vec<String>,
+}
+
+impl SmolwebDocument {
+    /// Fetch `url` (a smolweb scheme) through `fetcher` and parse + theme it. `Err`
+    /// when the fetch fails (the caller surfaces a load error).
+    pub fn load(
+        fetcher: &impl ResourceFetcher,
+        url: &str,
+        theme: SmolwebTheme,
+    ) -> Result<Self, String> {
+        let bytes = fetcher
+            .fetch(url)
+            .ok_or_else(|| format!("could not load {url}"))?;
+        Ok(Self::parse(url, &String::from_utf8_lossy(&bytes), theme))
+    }
+
+    /// Parse already-fetched `body` for `url` (the fetch-free half, for tests).
+    pub fn parse(url: &str, body: &str, theme: SmolwebTheme) -> Self {
+        let content = detect(url, body);
+        // Structural display defaults (div/p/h1/… block) under the themed sheet, the
+        // same base the static document path layers its sheets over.
+        let mut sheets: Vec<String> =
+            crate::STRUCTURAL_SHEET.iter().map(|s| s.to_string()).collect();
+        sheets.push(stylesheet(theme, url));
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let runner = ServalAppRunner::new(dom, view as SmolwebLogic, SmolwebState { content });
+        Self { runner, sheets }
+    }
+
+    /// Render the document to a [`Scene`] at `width`×`height`.
+    pub fn frame(&self, width: u32, height: u32) -> Scene {
+        let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
+        let dom = self.runner.dom();
+        let dom = dom.borrow();
+        scene_from_scripted_dom(
+            &dom,
+            &sheets,
+            width.max(1),
+            height.max(1),
+            None,
+            &ScrollOffsets::default(),
+        )
+    }
+
+    /// Resolve a click at scene-local `(x, y)` to a navigation target, if it landed
+    /// on a link. Lays out at `width`×`height` to hit-test, dispatches the click, and
+    /// returns the first navigation its handlers emitted.
+    pub fn click_at(&mut self, x: f32, y: f32, width: u32, height: u32) -> Option<String> {
+        let node = self.hit_test(x, y, width, height)?;
+        let actions = self.runner.dispatch_click(node, PointerClick::at((x, y)));
+        actions.into_iter().next().map(|Navigate(url)| url)
+    }
+
+    fn hit_test(&self, x: f32, y: f32, width: u32, height: u32) -> Option<NodeId> {
+        let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
+        let dom = self.runner.dom();
+        let dom = dom.borrow();
+        // `&*dom` (not `&dom`): `IncrementalLayout::new` is generic over `D: LayoutDom`,
+        // so it must see `&ScriptedDom`, not `&Ref<ScriptedDom>`.
+        let session =
+            IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32);
+        session.hit_test(&*dom, x, y, &ScrollOffsets::default())
+    }
+
+    /// The document DOM handle (for the host's hit-testing / inspection).
+    pub fn dom(&self) -> DomHandle {
+        self.runner.dom()
+    }
+}
+
+/// Choose a parser by scheme, with a feed sniff for the gemini family (an XML body
+/// served over gemini is a feed; otherwise gemtext).
+fn detect(url: &str, body: &str) -> Content {
+    let scheme = url.split_once("://").map(|(s, _)| s).unwrap_or("");
+    match scheme {
+        "gopher" => Content::Gopher(gopher::parse(body)),
+        _ if looks_like_feed(body) => match feed::parse(body) {
+            Ok(parsed) => Content::Feed(parsed),
+            // A malformed "feed" falls back to gemtext rather than erroring.
+            Err(_) => Content::Gemtext(gemtext::parse(body)),
+        },
+        // gemini / spartan / guppy / nex / finger and anything else: gemtext.
+        _ => Content::Gemtext(gemtext::parse(body)),
+    }
+}
+
+fn looks_like_feed(body: &str) -> bool {
+    let trimmed = body.trim_start();
+    trimmed.starts_with("<?xml") || trimmed.starts_with("<rss") || trimmed.starts_with("<feed")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use layout_dom_api::LayoutDom;
+
+    /// A gemtext capsule renders to a scene with painted text — the GPU-free render
+    /// path produces glyphs (mirrors the chrome's render test).
+    #[test]
+    fn gemtext_renders_text() {
+        let doc = SmolwebDocument::parse("gemini://x.test/", "# Hello\n\nWorld.\n", SmolwebTheme::Site);
+        let scene = doc.frame(800, 600);
+        assert!(
+            scene.ops.iter().any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
+            "the capsule paints text",
+        );
+    }
+
+    /// A gopher menu is detected by scheme and renders a typed item line.
+    #[test]
+    fn gopher_scheme_detected() {
+        let doc = SmolwebDocument::parse(
+            "gopher://x.test/",
+            "1Files\t/files\tx.test\t70\r\n",
+            SmolwebTheme::Plain,
+        );
+        let scene = doc.frame(800, 600);
+        assert!(scene.ops.iter().any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))));
+    }
+
+    /// An RSS body served over gemini is detected as a feed.
+    #[test]
+    fn feed_sniffed_from_xml_body() {
+        let body = "<?xml version=\"1.0\"?><rss><channel><title>Log</title></channel></rss>";
+        let doc = SmolwebDocument::parse("gemini://x.test/feed", body, SmolwebTheme::Dark);
+        assert!(matches!(doc, SmolwebDocument { .. }));
+        // The feed title paints.
+        let scene = doc.frame(800, 600);
+        assert!(scene.ops.iter().any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))));
+    }
+
+    /// Clicking a gemtext link resolves to its navigation target — the `on_navigate`
+    /// action bubbles out of `dispatch_click`. Finds the anchor node directly (no
+    /// layout coords needed), the way the chrome's button test does.
+    #[test]
+    fn gemtext_link_click_resolves_to_url() {
+        let mut doc = SmolwebDocument::parse(
+            "gemini://x.test/",
+            "=> gemini://x.test/page  A link\n",
+            SmolwebTheme::Plain,
+        );
+        let anchor = find_anchor(&doc).expect("a link anchor in the DOM");
+        let actions = doc.runner.dispatch_click(anchor, PointerClick::at((0.0, 0.0)));
+        assert_eq!(
+            actions.into_iter().next().map(|Navigate(url)| url).as_deref(),
+            Some("gemini://x.test/page"),
+        );
+    }
+
+    /// Walk the document DOM for the first `<a>` element.
+    fn find_anchor(doc: &SmolwebDocument) -> Option<NodeId> {
+        let dom = doc.dom();
+        let dom = dom.borrow();
+        let mut stack = vec![dom.document()];
+        while let Some(node) = stack.pop() {
+            if dom.element_name(node).is_some_and(|q| q.local.as_ref() == "a") {
+                return Some(node);
+            }
+            for child in dom.dom_children(node) {
+                stack.push(child);
+            }
+        }
+        None
+    }
+}
