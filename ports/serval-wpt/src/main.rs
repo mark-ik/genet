@@ -21,6 +21,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 use layout_dom_api::{LayoutDom, LocalName};
+use script_engine_api::ScriptEngine;
 use serval_static_dom::StaticDocument;
 
 mod harness;
@@ -344,6 +345,7 @@ Usage:
     serval-wpt testharness <subset>   run testharness.js tests + collect results (Boa)
     serval-wpt manifest    <subset>   enumerate from MANIFEST.json (authoritative; H1)
     serval-wpt compare     <subset>   run each testharness test on Boa + Nova, diff (H2b)
+    serval-wpt test262     <subset>   run test262 on Boa + Nova, diff = Nova's worklist
 
 Options:
     --tests-root <dir>   tests root (default: tests/wpt)
@@ -382,6 +384,12 @@ fn main() {
     // diffed against `collect` (harness-exactness H1: spot-check the counts match).
     if args.command == "manifest" {
         manifest_list(&args);
+        return;
+    }
+
+    // `test262` runs its own vendored corpus (third_party/test262), not the WPT walk.
+    if args.command == "test262" {
+        test262_cmd(&args);
         return;
     }
 
@@ -662,6 +670,161 @@ fn compare(tests: &[PathBuf], args: &Args) {
             "\nNova worklist (pass on Boa, fail on Nova) — {} test(s):",
             nova_worklist.len()
         );
+        for name in nova_worklist.iter().take(40) {
+            println!("  {name}");
+        }
+        if nova_worklist.len() > 40 {
+            println!("  … and {} more", nova_worklist.len() - 40);
+        }
+    }
+}
+
+/// One test262 outcome.
+enum T262 {
+    Pass,
+    Fail,
+    Skip,
+}
+
+/// Run one test262 test on engine `E`: assemble (harness + includes + flags + test)
+/// for each strict variant, eval, and check the result against `negative:`. A
+/// positive test passes iff no variant throws; a negative test passes iff every
+/// variant throws. v1 skips `module` + `async` (need eval_module / `$DONE`) and a
+/// test whose include is missing.
+fn run_262<E: ScriptEngine>(
+    hns: &test262::Harness,
+    test_src: &str,
+    meta: &test262::Test262Meta,
+) -> T262 {
+    if meta.flags.module || meta.flags.r#async {
+        return T262::Skip;
+    }
+    let negative = meta.negative.is_some();
+    for &strict in &test262::strict_variants(&meta.flags) {
+        let Ok(script) = hns.assemble(test_src, meta, strict) else {
+            return T262::Skip; // a missing include file
+        };
+        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            match script_runtime_api::Runtime::<E>::new() {
+                Ok(mut rt) => rt.eval(&script).is_err(), // true = threw an uncaught error
+                Err(_) => true,
+            }
+        }));
+        let threw = match outcome {
+            Ok(t) => t,
+            Err(_) => return T262::Fail, // the engine panicked on this source
+        };
+        if threw != negative {
+            return T262::Fail; // positive must not throw; negative must throw
+        }
+    }
+    T262::Pass
+}
+
+/// Dispatch [`run_262`] to the concrete engine, mirroring `harness::run_test`.
+fn run_262_on(
+    engine: harness::Engine,
+    hns: &test262::Harness,
+    test_src: &str,
+    meta: &test262::Test262Meta,
+) -> T262 {
+    match engine {
+        harness::Engine::Boa => run_262::<script_engine_boa::BoaEngine>(hns, test_src, meta),
+        harness::Engine::Nova => run_262::<script_engine_nova::NovaEngine>(hns, test_src, meta),
+    }
+}
+
+fn is_262_test(p: &Path) -> bool {
+    p.extension().is_some_and(|e| e == "js")
+        && !p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with("_FIXTURE.js"))
+}
+
+fn collect_262(dir: &Path, out: &mut Vec<PathBuf>) {
+    if dir.is_file() {
+        if is_262_test(dir) {
+            out.push(dir.to_path_buf());
+        }
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    paths.sort();
+    for p in paths {
+        if p.is_dir() {
+            collect_262(&p, out);
+        } else if is_262_test(&p) {
+            out.push(p);
+        }
+    }
+}
+
+/// `test262 <subset>`: run each test262 test (under `third_party/test262/test/<subset>`)
+/// on **both** engines and diff. Boa-pass / Nova-fail is a **Nova JS-engine gap** —
+/// the actual Nova worklist, since WPT showed Boa/Nova at parity. Disk only; run in
+/// **release** (debug frames overflow on bounded-deep recursion).
+fn test262_cmd(args: &Args) {
+    let t262_root = Path::new(&args.tests_root).join("third_party/test262");
+    let hns = match test262::Harness::load(&t262_root.join("harness")) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("test262 harness load failed ({}): {e}", t262_root.display());
+            std::process::exit(2);
+        }
+    };
+    let subset_dir = t262_root.join("test").join(&args.subset);
+    if !subset_dir.exists() {
+        eprintln!("test262 subset path does not exist: {}", subset_dir.display());
+        std::process::exit(2);
+    }
+    let mut files = Vec::new();
+    collect_262(&subset_dir, &mut files);
+    let test_root = t262_root.join("test");
+
+    let prev = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+    let (mut both_pass, mut both_fail, mut boa_only, mut nova_only, mut skipped) = (0, 0, 0, 0, 0);
+    let mut nova_worklist: Vec<String> = Vec::new();
+
+    for path in &files {
+        let Ok(src) = fs::read_to_string(path) else {
+            skipped += 1;
+            continue;
+        };
+        let meta = test262::parse_meta(&src);
+        let name = path
+            .strip_prefix(&test_root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        match (
+            run_262_on(harness::Engine::Boa, &hns, &src, &meta),
+            run_262_on(harness::Engine::Nova, &hns, &src, &meta),
+        ) {
+            (T262::Skip, _) | (_, T262::Skip) => skipped += 1,
+            (T262::Pass, T262::Pass) => both_pass += 1,
+            (T262::Fail, T262::Fail) => both_fail += 1,
+            (T262::Pass, T262::Fail) => {
+                boa_only += 1;
+                nova_worklist.push(name.clone());
+                if args.verbose {
+                    println!("NOVA-GAP  {name}");
+                }
+            }
+            (T262::Fail, T262::Pass) => nova_only += 1,
+        }
+    }
+    panic::set_hook(prev);
+
+    println!(
+        "\ntest262 compare [{}]: both-pass={both_pass} both-fail={both_fail} \
+         boa-only={boa_only} (Nova gap) nova-only={nova_only} skipped={skipped} (module/async/missing)",
+        if args.subset.is_empty() { "<all>" } else { &args.subset },
+    );
+    if !nova_worklist.is_empty() {
+        println!("\nNova worklist (pass on Boa, fail on Nova) — {} test(s):", nova_worklist.len());
         for name in nova_worklist.iter().take(40) {
             println!("  {name}");
         }
