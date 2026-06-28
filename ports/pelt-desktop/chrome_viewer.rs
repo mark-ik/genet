@@ -30,11 +30,32 @@ pub fn run_chrome_viewer(
             created_window: false,
             redraws: 0,
         }),
-        WindowingMode::Headed => windowed::run(config, side, thickness),
+        WindowingMode::Headed => windowed::run::<crate::document::LoadedDocument>(config, side, thickness),
     }
 }
 
-mod windowed {
+/// Run the browser shell over a **smolweb** capsule (gemini/gopher/feed): the same
+/// chrome strip + navigation, with a [`SmolwebDocument`](crate::SmolwebDocument)
+/// content root rendered natively and themed per-site. Headless returns immediately.
+#[cfg(feature = "smolweb")]
+pub fn run_smolweb_browser(
+    config: StaticViewerConfig,
+    side: StripSide,
+    thickness: u32,
+) -> Result<StaticViewerOutcome, String> {
+    match config.profile.windowing {
+        WindowingMode::Headless => Ok(StaticViewerOutcome {
+            url: config.url,
+            created_window: false,
+            redraws: 0,
+        }),
+        WindowingMode::Headed => {
+            windowed::run::<crate::SmolwebDocument>(config, side, thickness)
+        }
+    }
+}
+
+pub(crate) mod windowed {
     use std::sync::Arc;
 
     use netrender::external_texture::ExternalTexturePlacement;
@@ -59,13 +80,64 @@ mod windowed {
     /// A rect `(x, y, w, h)` in window pixels.
     type Rect = (u32, u32, u32, u32);
 
-    pub(super) fn run(
+    /// Content the browser shell can host: load by URL, render, scroll, and report
+    /// what a click resolved to. `LoadedDocument` (HTML) and `SmolwebDocument`
+    /// (gemini/gopher/feed) both implement it, so they share this one chrome shell —
+    /// the same omnibar + back/forward + navigation, different document underneath.
+    pub(crate) trait BrowsableContent: Sized {
+        /// Fetch + parse `url` into a document (via the host's `LocalFetcher`).
+        fn load(url: &str) -> Result<Self, String>;
+        /// Render at `width`×`height` at the current scroll.
+        fn frame(&mut self, width: u32, height: u32) -> netrender::Scene;
+        /// Scroll by a device-px wheel delta at content-local `(x, y)`; return whether
+        /// anything moved.
+        fn scroll_at(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> bool;
+        /// Apply a keyboard scroll default; return whether the viewport moved.
+        fn scroll_for_key(&mut self, key: ScrollKey) -> bool;
+        /// Resolve a click at content-local `(x, y)` within a `width`×`height` content
+        /// area.
+        fn click_at(&mut self, x: f32, y: f32, width: u32, height: u32) -> ContentClick;
+    }
+
+    /// What a content click resolved to (the flavour-neutral `ClickOutcome`).
+    pub(crate) enum ContentClick {
+        /// Nothing actionable.
+        None,
+        /// An in-page scroll happened (the host redraws).
+        Scrolled,
+        /// A link to `target` (raw; the shell resolves it against the current URL).
+        Navigate(String),
+    }
+
+    impl BrowsableContent for LoadedDocument {
+        fn load(url: &str) -> Result<Self, String> {
+            LoadedDocument::load(&LocalFetcher, url)
+        }
+        fn frame(&mut self, width: u32, height: u32) -> netrender::Scene {
+            LoadedDocument::frame(self, width, height)
+        }
+        fn scroll_at(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> bool {
+            LoadedDocument::scroll_at(self, x, y, dx, dy)
+        }
+        fn scroll_for_key(&mut self, key: ScrollKey) -> bool {
+            LoadedDocument::scroll_for_key(self, key)
+        }
+        fn click_at(&mut self, x: f32, y: f32, _width: u32, _height: u32) -> ContentClick {
+            match LoadedDocument::click_at(self, x, y) {
+                ClickOutcome::None => ContentClick::None,
+                ClickOutcome::Scrolled => ContentClick::Scrolled,
+                ClickOutcome::Navigate(href) => ContentClick::Navigate(href),
+            }
+        }
+    }
+
+    pub(crate) fn run<C: BrowsableContent + 'static>(
         config: StaticViewerConfig,
         side: StripSide,
         thickness: u32,
     ) -> Result<StaticViewerOutcome, String> {
         // Load the content before opening a window, so a bad URL fails fast.
-        let content = LoadedDocument::load(&LocalFetcher, &config.url)?;
+        let content = C::load(&config.url)?;
         let chrome = Chrome::new(config.url.clone(), side, thickness);
         let event_loop =
             EventLoop::new().map_err(|error| format!("could not create event loop: {error}"))?;
@@ -76,11 +148,12 @@ mod windowed {
         Ok(app.outcome())
     }
 
-    /// The two-root browser: chrome + content + window + present stack.
-    struct BrowserApp {
+    /// The two-root browser: chrome + content + window + present stack. Generic over
+    /// the content document so the HTML and smolweb browsers share one shell.
+    struct BrowserApp<C: BrowsableContent> {
         config: StaticViewerConfig,
         chrome: Chrome,
-        content: LoadedDocument,
+        content: C,
         /// The URL currently loaded into `content`, so a back/forward to the same page
         /// (or an edge no-op) skips a reload.
         loaded_url: String,
@@ -93,8 +166,8 @@ mod windowed {
         redraws: u32,
     }
 
-    impl BrowserApp {
-        fn new(config: StaticViewerConfig, chrome: Chrome, content: LoadedDocument) -> Self {
+    impl<C: BrowsableContent> BrowserApp<C> {
+        fn new(config: StaticViewerConfig, chrome: Chrome, content: C) -> Self {
             let loaded_url = config.url.clone();
             Self {
                 config,
@@ -150,7 +223,7 @@ mod windowed {
             }
             let url = self.chrome.state().current().to_string();
             if url != self.loaded_url {
-                match LoadedDocument::load(&LocalFetcher, &url) {
+                match C::load(&url) {
                     Ok(doc) => {
                         self.content = doc;
                         self.loaded_url = url;
@@ -270,7 +343,7 @@ mod windowed {
         arboard::Clipboard::new().ok()?.get_text().ok()
     }
 
-    impl ApplicationHandler for BrowserApp {
+    impl<C: BrowsableContent> ApplicationHandler for BrowserApp<C> {
         fn resumed(&mut self, event_loop: &ActiveEventLoop) {
             if self.window.is_some() {
                 return;
@@ -348,9 +421,14 @@ mod windowed {
                             self.cursor.0 - content_rect.0 as f32,
                             self.cursor.1 - content_rect.1 as f32,
                         );
-                        match self.content.click_at(local.0, local.1) {
-                            ClickOutcome::Scrolled => self.request_redraw(),
-                            ClickOutcome::Navigate(href) => {
+                        match self.content.click_at(
+                            local.0,
+                            local.1,
+                            content_rect.2,
+                            content_rect.3,
+                        ) {
+                            ContentClick::Scrolled => self.request_redraw(),
+                            ContentClick::Navigate(href) => {
                                 // A content link: resolve against the current URL and
                                 // route it through the chrome's navigate path, so the
                                 // omnibar + history update and the content reloads.
@@ -358,7 +436,7 @@ mod windowed {
                                 self.chrome.navigate_to(url);
                                 self.apply_chrome_intents();
                             }
-                            ClickOutcome::None => {}
+                            ContentClick::None => {}
                         }
                     }
                 }

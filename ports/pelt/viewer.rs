@@ -229,24 +229,8 @@ pub(crate) fn main() {
         // viewer (errand transport + parse + native themed view), not the HTML path.
         #[cfg(feature = "smolweb")]
         if is_smolweb_url(&url) {
-            let config = pelt_desktop::StaticViewerConfig::new(
-                engine_profile,
-                pelt_desktop::WindowingMode::Headed,
-                url,
-            );
-            match pelt_desktop::run_smolweb_viewer(config) {
-                Ok(outcome) => {
-                    println!(
-                        "pelt smolweb viewer url={} window={} redraws={}",
-                        outcome.url, outcome.created_window, outcome.redraws
-                    );
-                    return;
-                },
-                Err(error) => {
-                    eprintln!("{error}");
-                    std::process::exit(1);
-                },
-            }
+            run_smolweb_profile(url, strip_side.clone(), engine_profile);
+            return;
         }
         // `--tiles`: split the window into tiles, one document each (V5's tile surface).
         if with_tiles {
@@ -310,6 +294,36 @@ fn is_smolweb_url(url: &str) -> bool {
     ["gemini://", "gopher://", "nex://", "finger://", "spartan://", "guppy://"]
         .iter()
         .any(|scheme| url.starts_with(scheme))
+}
+
+/// Dispatch a smolweb URL to the chrome browser over a native smolweb content root:
+/// omnibar + back/forward + link navigation, the same shell `--chrome` uses for HTML.
+#[cfg(feature = "smolweb")]
+fn run_smolweb_profile(url: String, side: String, profile: EngineProfile) {
+    use pelt_desktop::StripSide;
+    let side = match side.to_ascii_lowercase().as_str() {
+        "top" => StripSide::Top,
+        "bottom" => StripSide::Bottom,
+        "left" => StripSide::Left,
+        "right" => StripSide::Right,
+        other => {
+            eprintln!("--strip expects top, bottom, left, or right (got '{other}')");
+            std::process::exit(2);
+        },
+    };
+    let thickness = if matches!(side, StripSide::Left | StripSide::Right) { 280 } else { 40 };
+    let config =
+        pelt_desktop::StaticViewerConfig::new(profile, pelt_desktop::WindowingMode::Headed, url);
+    match pelt_desktop::run_smolweb_browser(config, side, thickness) {
+        Ok(outcome) => println!(
+            "pelt smolweb browser url={} window={} redraws={}",
+            outcome.url, outcome.created_window, outcome.redraws
+        ),
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        },
+    }
 }
 
 /// Dispatch the scripted profile to the on-screen scripted viewer on the chosen JS

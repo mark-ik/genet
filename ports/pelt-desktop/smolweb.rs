@@ -217,9 +217,42 @@ impl crate::static_viewer::windowed::ViewerContent for SmolwebDocument {
         SmolwebDocument::scroll_for_key(self, key)
     }
     fn click_at(&mut self, _x: f32, _y: f32) -> bool {
-        // In-window navigation is the chrome/tile lane's job (the bare viewer has no
-        // history), so a click does not navigate here yet.
+        // The bare viewer has no history; navigation is the chrome browser's job
+        // (see the `BrowsableContent` impl below), so a click is a no-op here.
         false
+    }
+}
+
+/// The smolweb document as [`BrowsableContent`](crate::chrome_viewer::windowed::BrowsableContent),
+/// so it hosts in the shared chrome browser (omnibar + back/forward + navigation), the
+/// same shell the HTML viewer uses. A link click resolves to its `on_navigate` URL,
+/// which the shell loads.
+#[cfg(all(feature = "viewer", feature = "chrome"))]
+impl crate::chrome_viewer::windowed::BrowsableContent for SmolwebDocument {
+    fn load(url: &str) -> Result<Self, String> {
+        SmolwebDocument::load(&crate::document::LocalFetcher, url, SmolwebTheme::default())
+    }
+    fn frame(&mut self, width: u32, height: u32) -> Scene {
+        SmolwebDocument::frame(self, width, height)
+    }
+    fn scroll_at(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> bool {
+        SmolwebDocument::scroll_at(self, x, y, dx, dy)
+    }
+    fn scroll_for_key(&mut self, key: ScrollKey) -> bool {
+        SmolwebDocument::scroll_for_key(self, key)
+    }
+    fn click_at(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: u32,
+        height: u32,
+    ) -> crate::chrome_viewer::windowed::ContentClick {
+        use crate::chrome_viewer::windowed::ContentClick;
+        match SmolwebDocument::click_at(self, x, y, width, height) {
+            Some(url) => ContentClick::Navigate(url),
+            None => ContentClick::None,
+        }
     }
 }
 

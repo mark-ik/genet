@@ -29,6 +29,8 @@ mod smolweb;
 pub use smolweb::SmolwebDocument;
 #[cfg(all(feature = "smolweb", feature = "viewer"))]
 pub use smolweb::run_smolweb_viewer;
+#[cfg(all(feature = "smolweb", feature = "viewer", feature = "chrome"))]
+pub use chrome_viewer::run_smolweb_browser;
 
 #[cfg(feature = "viewer")]
 mod headless;
