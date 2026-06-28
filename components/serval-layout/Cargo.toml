@@ -63,6 +63,10 @@ stylo_traits = { workspace = true }
 # docs/2026-05-20_stylo_taffy_adoption_plan.md.
 taffy = { version = "=0.11.0-experimental-cache-fix.3", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "detailed_layout_info"] }
 stylo_taffy = { version = "0.3.0-alpha.5", features = ["floats"] }
+# Host-neutral diagnostics facade: this crate only EMITS tracing events; the
+# consuming app (e.g. meerkat) installs the subscriber. No dep on any app or
+# diagnostics registry.
+tracing = "0.1"
 
 [dev-dependencies]
 base64 = { workspace = true }

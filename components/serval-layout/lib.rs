@@ -228,6 +228,11 @@ where
     D::NodeId: Copy + Eq + Hash + Send + Sync + 'static,
     L: ImageLoader,
 {
+    // Diagnostics: time the whole cascade+decode+layout pass and report the
+    // viewport + resulting fragment count. DEBUG so it is quiet by default; the
+    // consuming app raises the level. Hot per-load (and per scroll band via
+    // `paint_list_band_from_layout_dom`) — may want sampling later.
+    let _layout_start = std::time::Instant::now();
     let mut styles = StylePlane::new();
     run_cascade(
         dom,
@@ -243,6 +248,27 @@ where
         height: taffy::AvailableSpace::Definite(height as f32),
     };
     let (fragments, built, text_ctx) = layout(dom, &styles, &images, viewport);
+    let fragment_count = fragments.len();
+    if fragment_count == 0 {
+        tracing::warn!(
+            target: "serval_layout",
+            width,
+            height,
+            stylesheet_count = stylesheets.len(),
+            elapsed_ms = _layout_start.elapsed().as_secs_f64() * 1e3,
+            "lay_out_content produced no fragments",
+        );
+    } else {
+        tracing::debug!(
+            target: "serval_layout",
+            width,
+            height,
+            fragment_count,
+            image_count = images.len(),
+            elapsed_ms = _layout_start.elapsed().as_secs_f64() * 1e3,
+            "lay_out_content complete",
+        );
+    }
     ContentLayout { styles, images, bg_images, fragments, built, text_ctx, width, height }
 }
 
