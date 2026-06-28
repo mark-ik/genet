@@ -15,7 +15,7 @@
 //! document stylesheet (serval-layout's `inline_stylesheets`).
 
 /// How a smolweb document is colored.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SmolwebTheme {
     /// Default: a palette derived from the site's host, so each capsule has its
     /// own consistent color identity (the Lagrange approach).
@@ -26,11 +26,11 @@ pub enum SmolwebTheme {
     Light,
     /// A fixed dark theme.
     Dark,
-    /// The host application's palette. v1 falls back to [`Plain`](Self::Plain);
-    /// wire to the host's tinct seeds for the real app palette.
-    App,
-    /// Follow the OS light/dark scheme. The host resolves this to light or dark;
-    /// v1 treats it as [`Light`](Self::Light).
+    /// The host application's palette — the host supplies it (e.g. derived from its
+    /// tinct theme seeds), so smolweb pages match the surrounding app chrome.
+    App(SmolwebPalette),
+    /// Follow the OS light/dark scheme. The host resolves the OS scheme and passes
+    /// the matching theme; absent that, this renders light.
     System,
 }
 
@@ -40,29 +40,41 @@ impl Default for SmolwebTheme {
     }
 }
 
+/// A document palette: the colours the smolweb stylesheet is built from. The fixed
+/// themes construct one internally; a host supplies its own through
+/// [`SmolwebTheme::App`] (e.g. mapped from tinct), the seam that lets smolweb pages
+/// match the app theme.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SmolwebPalette {
+    /// Page background.
+    pub bg: String,
+    /// Body text.
+    pub fg: String,
+    /// Link colour.
+    pub link: String,
+    /// Quote text / border, and other muted accents.
+    pub quote: String,
+    /// Preformatted / code-block background.
+    pub pre_bg: String,
+}
+
 /// The CSS for a smolweb document under `theme`. `site_url` seeds the per-site
-/// palette for [`SmolwebTheme::Site`] (ignored by the fixed themes).
+/// palette for [`SmolwebTheme::Site`] (ignored by the fixed and app themes).
 pub fn stylesheet(theme: SmolwebTheme, site_url: &str) -> String {
     let palette = match theme {
         SmolwebTheme::Site => site_palette(site_url),
-        // v1: App has no host palette yet, System is not OS-resolved here.
-        SmolwebTheme::Plain | SmolwebTheme::App => plain(),
+        SmolwebTheme::Plain => plain(),
+        // System is host-resolved to light/dark before it reaches here; absent a
+        // resolution it renders light.
         SmolwebTheme::Light | SmolwebTheme::System => light(),
         SmolwebTheme::Dark => dark(),
+        SmolwebTheme::App(palette) => palette,
     };
     render_css(&palette)
 }
 
-struct Palette {
-    bg: String,
-    fg: String,
-    link: String,
-    quote: String,
-    pre_bg: String,
-}
-
-fn plain() -> Palette {
-    Palette {
+fn plain() -> SmolwebPalette {
+    SmolwebPalette {
         bg: "#ffffff".into(),
         fg: "#1a1a1a".into(),
         link: "#0b57d0".into(),
@@ -71,8 +83,8 @@ fn plain() -> Palette {
     }
 }
 
-fn light() -> Palette {
-    Palette {
+fn light() -> SmolwebPalette {
+    SmolwebPalette {
         bg: "#fbfaf7".into(),
         fg: "#23211c".into(),
         link: "#1a6e57".into(),
@@ -81,8 +93,8 @@ fn light() -> Palette {
     }
 }
 
-fn dark() -> Palette {
-    Palette {
+fn dark() -> SmolwebPalette {
+    SmolwebPalette {
         bg: "#16181c".into(),
         fg: "#e6e3dc".into(),
         link: "#7db4ff".into(),
@@ -92,9 +104,9 @@ fn dark() -> Palette {
 }
 
 /// A light palette tinted by the site's host hue — the Lagrange per-site look.
-fn site_palette(site_url: &str) -> Palette {
+fn site_palette(site_url: &str) -> SmolwebPalette {
     let hue = hue_from_host(site_url);
-    Palette {
+    SmolwebPalette {
         bg: format!("hsl({hue}, 30%, 97%)"),
         fg: format!("hsl({hue}, 25%, 15%)"),
         link: format!("hsl({hue}, 70%, 36%)"),
@@ -115,8 +127,8 @@ fn hue_from_host(site_url: &str) -> u16 {
     (hash % 360) as u16
 }
 
-fn render_css(p: &Palette) -> String {
-    let Palette { bg, fg, link, quote, pre_bg } = p;
+fn render_css(p: &SmolwebPalette) -> String {
+    let SmolwebPalette { bg, fg, link, quote, pre_bg } = p;
     format!(
         ".gemtext {{ background:{bg}; color:{fg}; padding:1.5rem 2rem; \
 line-height:1.5; font-family:serif; max-width:48rem; }}
@@ -184,5 +196,21 @@ mod tests {
     #[test]
     fn default_is_site() {
         assert_eq!(SmolwebTheme::default(), SmolwebTheme::Site);
+    }
+
+    #[test]
+    fn app_theme_uses_the_host_palette() {
+        let palette = SmolwebPalette {
+            bg: "#102030".into(),
+            fg: "#fafafa".into(),
+            link: "#33ccff".into(),
+            quote: "#99aabb".into(),
+            pre_bg: "#0a1622".into(),
+        };
+        let css = stylesheet(SmolwebTheme::App(palette), "gemini://x.test/");
+        // The host colours appear verbatim, and the site hue is ignored.
+        assert!(css.contains("#102030"), "uses the host background");
+        assert!(css.contains("color:#33ccff"), "uses the host link colour");
+        assert!(!css.contains("hsl("), "App does not derive a per-site hue");
     }
 }

@@ -25,7 +25,7 @@ use xilem_serval::{
 };
 
 mod theme;
-pub use theme::{stylesheet, SmolwebTheme};
+pub use theme::{stylesheet, SmolwebPalette, SmolwebTheme};
 
 /// A built smolweb view: a boxed, type-erased element view. Boxing erases the
 /// concrete view type (so a document's heterogeneous line elements share one child
