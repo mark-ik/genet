@@ -27,6 +27,8 @@ mod net_fetch;
 mod smolweb;
 #[cfg(feature = "smolweb")]
 pub use smolweb::SmolwebDocument;
+#[cfg(all(feature = "smolweb", feature = "viewer"))]
+pub use smolweb::run_smolweb_viewer;
 
 #[cfg(feature = "viewer")]
 mod headless;

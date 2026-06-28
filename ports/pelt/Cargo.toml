@@ -55,6 +55,10 @@ tiles = ["viewer-engine", "pelt-desktop/viewer", "pelt-desktop/tiles"]
 # static https://…` loads over the netfetcher engine. Off by default — the async
 # network stack is opt-in; the default build stays local-first.
 netfetch = ["viewer-engine", "pelt-desktop/viewer", "pelt-desktop/netfetch"]
+# Smolweb document loading: `pelt --features smolweb --engine static gemini://…`
+# renders a native, per-site-themed capsule (gemtext / gopher / feed) over the errand
+# transport. Off by default — the async network stack is opt-in.
+smolweb = ["viewer-engine", "pelt-desktop/viewer", "pelt-desktop/smolweb"]
 # C4 headed-presentation smoke. Pulls serval's `WindowsDxgiBackend`
 # in through `pelt-desktop`. Inner code is `cfg(target_os = "windows")`
 # gated so the feature still builds on non-Windows hosts.

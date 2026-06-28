@@ -225,6 +225,29 @@ pub(crate) fn main() {
     // viewer (the orrery-host present shape over the pelt-core / pelt-desktop
     // contracts). Static and Viewer are the script-free document profiles.
     if matches!(engine_profile, EngineProfile::Static | EngineProfile::Viewer) {
+        // A smolweb scheme (gemini/gopher/…) renders natively through the smolweb
+        // viewer (errand transport + parse + native themed view), not the HTML path.
+        #[cfg(feature = "smolweb")]
+        if is_smolweb_url(&url) {
+            let config = pelt_desktop::StaticViewerConfig::new(
+                engine_profile,
+                pelt_desktop::WindowingMode::Headed,
+                url,
+            );
+            match pelt_desktop::run_smolweb_viewer(config) {
+                Ok(outcome) => {
+                    println!(
+                        "pelt smolweb viewer url={} window={} redraws={}",
+                        outcome.url, outcome.created_window, outcome.redraws
+                    );
+                    return;
+                },
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                },
+            }
+        }
         // `--tiles`: split the window into tiles, one document each (V5's tile surface).
         if with_tiles {
             run_tiles_profile(tile_urls);
@@ -279,6 +302,14 @@ pub(crate) fn main() {
          or a smoke flag (--help)."
     );
     std::process::exit(2);
+}
+
+/// Whether `url` is a smolweb scheme the native smolweb viewer handles.
+#[cfg(feature = "smolweb")]
+fn is_smolweb_url(url: &str) -> bool {
+    ["gemini://", "gopher://", "nex://", "finger://", "spartan://", "guppy://"]
+        .iter()
+        .any(|scheme| url.starts_with(scheme))
 }
 
 /// Dispatch the scripted profile to the on-screen scripted viewer on the chosen JS

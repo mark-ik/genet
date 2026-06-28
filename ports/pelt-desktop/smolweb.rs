@@ -151,6 +151,42 @@ fn looks_like_feed(body: &str) -> bool {
     trimmed.starts_with("<?xml") || trimmed.starts_with("<rss") || trimmed.starts_with("<feed")
 }
 
+/// The smolweb document as windowed [`ViewerContent`](crate::static_viewer::windowed::ViewerContent),
+/// so it plugs into the shared winit shell like the static document. v1 is read-only:
+/// no scroll yet, and in-window link navigation is the chrome/tile lanes' job (the
+/// bare viewer has no history), so a click is a no-op here.
+#[cfg(feature = "viewer")]
+impl crate::static_viewer::windowed::ViewerContent for SmolwebDocument {
+    fn frame(&mut self, width: u32, height: u32) -> Scene {
+        SmolwebDocument::frame(self, width, height)
+    }
+    fn scroll_by(&mut self, _dx: f32, _dy: f32) -> bool {
+        false
+    }
+    fn scroll_for_key(&mut self, _key: serval_layout::ScrollKey) -> bool {
+        false
+    }
+    fn click_at(&mut self, _x: f32, _y: f32) -> bool {
+        false
+    }
+}
+
+/// Open a window and present the smolweb capsule at `config.url`, themed per-site by
+/// default (the Lagrange look). The smolweb twin of
+/// [`run_static_viewer`](crate::run_static_viewer); a bad URL fails fast before the
+/// window opens.
+#[cfg(feature = "viewer")]
+pub fn run_smolweb_viewer(
+    config: crate::StaticViewerConfig,
+) -> Result<crate::StaticViewerOutcome, String> {
+    let doc = SmolwebDocument::load(
+        &crate::document::LocalFetcher,
+        &config.url,
+        SmolwebTheme::default(),
+    )?;
+    crate::static_viewer::run_headed_with(config, doc)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
