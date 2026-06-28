@@ -26,6 +26,7 @@ use serval_static_dom::StaticDocument;
 mod harness;
 mod manifest;
 mod render;
+mod test262;
 #[cfg(test)]
 mod webgl_conformance;
 
