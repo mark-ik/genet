@@ -686,18 +686,24 @@ enum T262 {
     Skip,
 }
 
-/// Run one test262 test on engine `E`: assemble (harness + includes + flags + test)
-/// for each strict variant, eval, and check the result against `negative:`. A
-/// positive test passes iff no variant throws; a negative test passes iff every
-/// variant throws. v1 skips `module` + `async` (need eval_module / `$DONE`) and a
-/// test whose include is missing.
+/// Run one test262 test on engine `E` and classify it.
+///
+/// **module** (`flags: [module]`) installs the harness preamble as a script, then
+/// evaluates the test as a module (imports resolved against the test's directory).
+/// Otherwise it assembles (harness + includes + test) for each strict variant and
+/// evals. A positive test passes iff it does not throw; a negative test passes iff it
+/// throws (by occurrence, not yet by error type). `async` ($DONE) is the next slice.
 fn run_262<E: ScriptEngine>(
     hns: &test262::Harness,
     test_src: &str,
     meta: &test262::Test262Meta,
+    path: &Path,
 ) -> T262 {
-    if meta.flags.module || meta.flags.r#async {
-        return T262::Skip;
+    if meta.flags.r#async {
+        return T262::Skip; // async ($DONE) lands in the next slice
+    }
+    if meta.flags.module {
+        return run_262_module::<E>(hns, test_src, meta, path);
     }
     let negative = meta.negative.is_some();
     for &strict in &test262::strict_variants(&meta.flags) {
@@ -721,16 +727,57 @@ fn run_262<E: ScriptEngine>(
     T262::Pass
 }
 
+/// Module test: evaluate the harness preamble as a sloppy script (so its globals
+/// land on `globalThis`), then run the test as a module. Imports resolve against the
+/// importing file's directory (the entry module's referrer is its own path).
+fn run_262_module<E: ScriptEngine>(
+    hns: &test262::Harness,
+    test_src: &str,
+    meta: &test262::Test262Meta,
+    path: &Path,
+) -> T262 {
+    let Ok(preamble) = hns.preamble(meta) else {
+        return T262::Skip; // a missing include file
+    };
+    let negative = meta.negative.is_some();
+    let base = path.to_string_lossy().into_owned();
+    let test_src = test_src.to_string();
+    let outcome = std::panic::catch_unwind(AssertUnwindSafe(move || {
+        let Ok(mut rt) = script_runtime_api::Runtime::<E>::new() else {
+            return true;
+        };
+        if rt.eval(&preamble).is_err() {
+            return true; // the harness itself failed to load
+        }
+        let mut resolve = |specifier: &str, referrer: &str| -> Option<(String, String)> {
+            let target = Path::new(referrer).parent()?.join(specifier);
+            let src = std::fs::read_to_string(&target).ok()?;
+            Some((target.to_string_lossy().into_owned(), src))
+        };
+        rt.eval_module(&test_src, &base, &mut resolve).is_err()
+    }));
+    let threw = match outcome {
+        Ok(t) => t,
+        Err(_) => return T262::Fail,
+    };
+    if threw != negative {
+        T262::Fail
+    } else {
+        T262::Pass
+    }
+}
+
 /// Dispatch [`run_262`] to the concrete engine, mirroring `harness::run_test`.
 fn run_262_on(
     engine: harness::Engine,
     hns: &test262::Harness,
     test_src: &str,
     meta: &test262::Test262Meta,
+    path: &Path,
 ) -> T262 {
     match engine {
-        harness::Engine::Boa => run_262::<script_engine_boa::BoaEngine>(hns, test_src, meta),
-        harness::Engine::Nova => run_262::<script_engine_nova::NovaEngine>(hns, test_src, meta),
+        harness::Engine::Boa => run_262::<script_engine_boa::BoaEngine>(hns, test_src, meta, path),
+        harness::Engine::Nova => run_262::<script_engine_nova::NovaEngine>(hns, test_src, meta, path),
     }
 }
 
@@ -832,8 +879,8 @@ fn test262_cmd(args: &Args) {
                         };
                         let meta = test262::parse_meta(&src);
                         match (
-                            run_262_on(harness::Engine::Boa, hns, &src, &meta),
-                            run_262_on(harness::Engine::Nova, hns, &src, &meta),
+                            run_262_on(harness::Engine::Boa, hns, &src, &meta, path),
+                            run_262_on(harness::Engine::Nova, hns, &src, &meta, path),
                         ) {
                             (T262::Skip, _) | (_, T262::Skip) => t.skipped += 1,
                             (T262::Pass, T262::Pass) => t.both_pass += 1,

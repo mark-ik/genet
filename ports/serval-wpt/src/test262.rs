@@ -193,6 +193,29 @@ impl Harness {
         out.push_str(test_src);
         Ok(out)
     }
+
+    /// The harness preamble *without* the test body (`assert.js` + `sta.js` +
+    /// `doneprintHandle.js` if async + the includes). Used by the module + async run
+    /// paths, which evaluate this as a sloppy script to install the harness globals
+    /// (`assert`, `Test262Error`, …) and then run the test separately (a module, or a
+    /// script whose `$DONE` the harness reports). No strict prefix: the globals must
+    /// land on `globalThis` so the test (module or otherwise) can see them.
+    pub fn preamble(&self, meta: &Test262Meta) -> io::Result<String> {
+        let mut out = String::new();
+        out.push_str(&self.assert_js);
+        out.push('\n');
+        out.push_str(&self.sta_js);
+        out.push('\n');
+        if meta.flags.r#async {
+            out.push_str(&self.include("doneprintHandle.js")?);
+            out.push('\n');
+        }
+        for inc in &meta.includes {
+            out.push_str(&self.include(inc)?);
+            out.push('\n');
+        }
+        Ok(out)
+    }
 }
 
 /// Which strict-mode variants to run for a test: `raw`/`module` once
