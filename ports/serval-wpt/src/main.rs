@@ -783,45 +783,100 @@ fn test262_cmd(args: &Args) {
     collect_262(&subset_dir, &mut files);
     let test_root = t262_root.join("test");
 
+    // Each test pays a fresh `Runtime` (GcAgent::new + intrinsics + harness eval),
+    // ~40-96ms, so the full corpus is hours single-threaded. Both engines are
+    // thread-isolation-friendly (Nova's heap lives in its own `GcAgent`; Boa's GC is
+    // thread-local), so we shard the file list across cores — each thread builds and
+    // drops its own engines, nothing shared but the read-only `Harness`. This is the
+    // affordability lever; a per-engine post-harness snapshot (GcAgent::clone) is a
+    // deeper, fork-risky optimization deferred until parallelism is shown insufficient.
+    #[derive(Default)]
+    struct Tally {
+        both_pass: u64,
+        both_fail: u64,
+        boa_only: u64,
+        nova_only: u64,
+        skipped: u64,
+        worklist: Vec<String>,
+    }
+
+    let jobs = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let verbose = args.verbose;
+    let test_root = test_root.as_path();
+    let hns = &hns;
+    let files = &files;
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let next = &next;
+    let subset_label = if args.subset.is_empty() { "<all>" } else { &args.subset };
+    println!("test262 [{subset_label}]: {} tests x 2 engines on {jobs} threads…", files.len());
+
     let prev = panic::take_hook();
     panic::set_hook(Box::new(|_| {}));
-    let (mut both_pass, mut both_fail, mut boa_only, mut nova_only, mut skipped) = (0, 0, 0, 0, 0);
-    let mut nova_worklist: Vec<String> = Vec::new();
-
-    for path in &files {
-        let Ok(src) = fs::read_to_string(path) else {
-            skipped += 1;
-            continue;
-        };
-        let meta = test262::parse_meta(&src);
-        let name = path
-            .strip_prefix(&test_root)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .replace('\\', "/");
-        match (
-            run_262_on(harness::Engine::Boa, &hns, &src, &meta),
-            run_262_on(harness::Engine::Nova, &hns, &src, &meta),
-        ) {
-            (T262::Skip, _) | (_, T262::Skip) => skipped += 1,
-            (T262::Pass, T262::Pass) => both_pass += 1,
-            (T262::Fail, T262::Fail) => both_fail += 1,
-            (T262::Pass, T262::Fail) => {
-                boa_only += 1;
-                nova_worklist.push(name.clone());
-                if args.verbose {
-                    println!("NOVA-GAP  {name}");
-                }
-            }
-            (T262::Fail, T262::Pass) => nova_only += 1,
+    let tally = std::thread::scope(|scope| {
+        // A shared work index: threads pull the next test as they finish, so the
+        // heterogeneous corpus stays balanced (contiguous chunks imbalance when the
+        // slow both-pass tests cluster, as they do in the sorted corpus).
+        let handles: Vec<_> = (0..jobs)
+            .map(|_| {
+                scope.spawn(move || {
+                    let mut t = Tally::default();
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if i >= files.len() {
+                            break;
+                        }
+                        let path = &files[i];
+                        let Ok(src) = fs::read_to_string(path) else {
+                            t.skipped += 1;
+                            continue;
+                        };
+                        let meta = test262::parse_meta(&src);
+                        match (
+                            run_262_on(harness::Engine::Boa, hns, &src, &meta),
+                            run_262_on(harness::Engine::Nova, hns, &src, &meta),
+                        ) {
+                            (T262::Skip, _) | (_, T262::Skip) => t.skipped += 1,
+                            (T262::Pass, T262::Pass) => t.both_pass += 1,
+                            (T262::Fail, T262::Fail) => t.both_fail += 1,
+                            (T262::Pass, T262::Fail) => {
+                                let name = path
+                                    .strip_prefix(test_root)
+                                    .unwrap_or(path)
+                                    .to_string_lossy()
+                                    .replace('\\', "/");
+                                if verbose {
+                                    println!("NOVA-GAP  {name}");
+                                }
+                                t.boa_only += 1;
+                                t.worklist.push(name);
+                            }
+                            (T262::Fail, T262::Pass) => t.nova_only += 1,
+                        }
+                    }
+                    t
+                })
+            })
+            .collect();
+        let mut total = Tally::default();
+        for h in handles {
+            let t = h.join().unwrap_or_default();
+            total.both_pass += t.both_pass;
+            total.both_fail += t.both_fail;
+            total.boa_only += t.boa_only;
+            total.nova_only += t.nova_only;
+            total.skipped += t.skipped;
+            total.worklist.extend(t.worklist);
         }
-    }
+        total
+    });
     panic::set_hook(prev);
 
+    let mut nova_worklist = tally.worklist;
+    nova_worklist.sort();
     println!(
-        "\ntest262 compare [{}]: both-pass={both_pass} both-fail={both_fail} \
-         boa-only={boa_only} (Nova gap) nova-only={nova_only} skipped={skipped} (module/async/missing)",
-        if args.subset.is_empty() { "<all>" } else { &args.subset },
+        "\ntest262 compare [{subset_label}]: both-pass={} both-fail={} boa-only={} (Nova gap) \
+         nova-only={} skipped={} (module/async/missing)",
+        tally.both_pass, tally.both_fail, tally.boa_only, tally.nova_only, tally.skipped,
     );
     if !nova_worklist.is_empty() {
         println!("\nNova worklist (pass on Boa, fail on Nova) — {} test(s):", nova_worklist.len());
