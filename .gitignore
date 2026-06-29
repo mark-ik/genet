@@ -24,6 +24,9 @@ Cargo.lock
 /.vs
 /android-toolchains
 /target
+# Generated wasm-bindgen browser worker artifacts. Source lives in
+# components/serval-scripted-worker and support/build-scripted-workers.ps1.
+/dist/scripted-workers/
 # Sub-workspace build outputs. Each of these crates has its own
 # [workspace], so the root `/target` (anchored) doesn't cover them.
 # Explicit paths on purpose: a blanket `target/` would also ignore the

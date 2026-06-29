@@ -9,7 +9,7 @@ production browsers do not support Memory64, or that wasm64 glue is unavailable.
 
 Memory64 is a Phase 4 WebAssembly feature and is available in Chrome/Edge 133+ and
 Firefox 134+. Safari/WebKit remains the unsupported platform. `wasm-bindgen`
-supports wasm64 and Serval locks 0.2.125. Rust's `wasm64-unknown-unknown` target is
+supports wasm64 and Serval locks 0.2.126. Rust's `wasm64-unknown-unknown` target is
 still Tier 3, so the Nova build stays on a pinned nightly with `rust-src` and
 `-Z build-std=std,panic_abort`.
 
@@ -48,7 +48,7 @@ References: [Memory64 status](https://github.com/WebAssembly/memory64),
   original initialization input. The ready handshake reports engine, pointer
   width, shared-memory profile, and the initial neutral DOM snapshot.
 - `support/build-scripted-workers.ps1` pins nightly `nightly-2026-06-22`, requires
-  `wasm-bindgen` CLI 0.2.125, and emits:
+  `wasm-bindgen` CLI 0.2.126, and emits:
   - `serval-scripted-nova-wasm64`
   - `serval-scripted-boa-wasm32`
 

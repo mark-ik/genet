@@ -13,11 +13,11 @@ $target = $metadata.target_directory
 
 $wasmBindgen = Get-Command wasm-bindgen -ErrorAction SilentlyContinue
 if (-not $wasmBindgen) {
-    throw "wasm-bindgen CLI 0.2.125 is required: cargo install wasm-bindgen-cli --version 0.2.125 --locked"
+    throw "wasm-bindgen CLI 0.2.126 is required: cargo install wasm-bindgen-cli --version 0.2.126 --locked"
 }
 $version = & $wasmBindgen.Source --version
-if ($version -notmatch "0\.2\.125$") {
-    throw "wasm-bindgen CLI must be 0.2.125; found: $version"
+if ($version -notmatch "0\.2\.126$") {
+    throw "wasm-bindgen CLI must be 0.2.126; found: $version"
 }
 
 rustup run $Wasm64Toolchain rustc --version | Out-Null
