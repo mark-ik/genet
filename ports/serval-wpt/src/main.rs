@@ -294,6 +294,10 @@ struct Args {
     /// running longer is killed and recorded as a timeout. Generous enough for slow
     /// (but finite) tests; bounds true infinite hangs.
     timeout_secs: u64,
+    /// Write the full `test262` worklist (every Nova gap + every timeout, not just the
+    /// printed sample) to this path. Essential for a full-corpus run, whose lists run to
+    /// thousands.
+    worklist_out: Option<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -305,6 +309,7 @@ fn parse_args() -> Result<Args, String> {
     let mut server_base = None;
     let mut spawn_server = false;
     let mut timeout_secs = 30u64;
+    let mut worklist_out = None;
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -324,6 +329,9 @@ fn parse_args() -> Result<Args, String> {
                 let v = it.next().ok_or("--timeout needs a value (seconds)")?;
                 timeout_secs = v.parse().map_err(|_| format!("invalid --timeout: {v}"))?;
             }
+            "--worklist-out" => {
+                worklist_out = Some(it.next().ok_or("--worklist-out needs a path")?);
+            }
             "-v" | "--verbose" => verbose = true,
             "-h" | "--help" => return Err(usage()),
             _ if arg.starts_with('-') => return Err(format!("unknown flag: {arg}\n{}", usage())),
@@ -341,6 +349,7 @@ fn parse_args() -> Result<Args, String> {
         server_base,
         spawn_server,
         timeout_secs,
+        worklist_out,
     })
 }
 
@@ -360,6 +369,7 @@ Usage:
 Options:
     --tests-root <dir>   tests root (default: tests/wpt)
     --timeout <secs>     per-test worker timeout for `test262` (default: 30)
+    --worklist-out <f>   write the full `test262` Nova-gap + timeout list to <f>
     --engine <name>      testharness JS engine: boa (default) | nova
     --server-base <url>  run testharness against a live `wpt serve` at <url>
                          (server mode; needs --features netfetch)
@@ -1092,6 +1102,39 @@ fn test262_cmd(args: &Args) {
         }
         if nova_worklist.len() > 40 {
             println!("  … and {} more", nova_worklist.len() - 40);
+        }
+    }
+
+    if let Some(out_path) = &args.worklist_out {
+        use std::io::Write;
+        let mut buf = format!(
+            "# test262 worklist [{subset_label}]\n\
+             # both-pass={} both-fail={} boa-only={} nova-only={} timeout={} skipped={}\n",
+            tally.both_pass, tally.both_fail, tally.boa_only, tally.nova_only, tally.timeout, tally.skipped,
+        );
+        buf.push_str(&format!(
+            "\n## Timeouts (hang or pathological slowness; engine) — {}\n",
+            timeouts.len()
+        ));
+        for t in &timeouts {
+            buf.push_str(t);
+            buf.push('\n');
+        }
+        buf.push_str(&format!(
+            "\n## Nova gaps (pass on Boa, fail on Nova) — {}\n",
+            nova_worklist.len()
+        ));
+        for n in &nova_worklist {
+            buf.push_str(n);
+            buf.push('\n');
+        }
+        match std::fs::File::create(out_path).and_then(|mut f| f.write_all(buf.as_bytes())) {
+            Ok(()) => println!(
+                "\nworklist written to {out_path} ({} Nova gaps, {} timeouts)",
+                nova_worklist.len(),
+                timeouts.len()
+            ),
+            Err(e) => eprintln!("failed to write worklist to {out_path}: {e}"),
         }
     }
 }
