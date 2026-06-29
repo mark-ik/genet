@@ -1,7 +1,7 @@
 # WPT harness exactness + throughput plan
 
 **Date:** 2026-06-24
-**Status:** plan. Spun out of the grand audit (`2026-06-24_grand_audit.md` §2, levers 1/3/5); continues the WPT runner plan (`2026-05-26_wpt_runner_plan.md`, whose Discovery section already flags "no MANIFEST.json yet").
+**Status:** in progress — H1 (manifest reader), H2b (cross-engine compare), and **H5 (test262 runner + hang-safe full-corpus run)** landed; **H2a (Nova `GcAgent::clone` snapshot) deferred** as measured-unnecessary for a corpus-safe run (parallel worker subprocesses suffice); H3/H4 open. Spun out of the grand audit (`2026-06-24_grand_audit.md` §2, levers 1/3/5); continues the WPT runner plan (`2026-05-26_wpt_runner_plan.md`, whose Discovery section already flags "no MANIFEST.json yet").
 **Thesis:** the binding constraint on serval's WPT scoreboard is the harness, not the engine. What runs and how much runs gates the value of every engine fix. This plan closes the three harness levers in dependency order: exactness (what runs), throughput (how much runs), then a tracked scoreboard + regression guard (so movement is real and stays).
 
 ## Why this and not engine work first
@@ -78,6 +78,62 @@ TLA+ spec pair for one protocol, and run TLC in CI (the Cirstea/Kuppe method).
 This is a months-shaped investment; tracked as the rigor arm of serval's
 `2026-06-24_event_loop_rigor_plan.md`, not required for the harness levers here.
 
+## H5 — test262 runner (the Nova worklist, realized)
+
+H2b's finding (WPT excludes ECMAScript, so the Nova-vs-Boa gap lives in test262) made a
+test262 runner the actual Nova-improvement lever. The full corpus (53,166 tests) is vendored
+at `tests/wpt/tests/third_party/test262`.
+
+- **Built** (`ports/serval-wpt/src/test262.rs` + `main.rs`): frontmatter parse (includes /
+  flags / negative / features), harness assembly (assert.js + sta.js + includes, strict
+  variants, raw), per-engine run + pass/fail vs `negative:`, and `test262 <subset>` running
+  **both engines and diffing** (Boa-pass / Nova-fail = a Nova gap). Module tests run via
+  `eval_module` (harness preamble as a sloppy script, then the test as a module). Negative
+  tests match the **expected error type** (`ScriptEngine::describe_error` — Boa stringifies
+  the opaque `JsError` via `into_opaque`+`toString`; Nova's `Error` is already the message),
+  not merely "threw".
+- **Hang-safety (load-bearing):** Boa and Nova **cannot be step-metered** (`eval_bounded` is
+  unbounded for both; only a fuel-metered backend like piccolo could), so a pathological test
+  (an infinite loop) would stall the whole run, and an in-process watchdog can't interrupt a
+  spinning eval. The runner isolates **each test in a worker subprocess** (`test262-one`) with
+  a wall-clock `--timeout` (default 30s): a hang kills only that process, is recorded as a
+  timeout **attributed to whichever engine never reported**, and the run continues. A pool of
+  `nproc` workers pulls from a shared atomic work index. This *is* the parallelism (it
+  subsumes the earlier in-process thread-scope) and the affordability lever, so **H2a's
+  `GcAgent::clone` is deferred** — not needed for a corpus-safe run, and fork-risky. (jemalloc
+  is already linked; per-test cost is engine-bound, ~0.1s subprocess startup is the price.)
+- **`async` is deferred:** built and validated per-test (correct, finds gaps), but at corpus
+  scale the async event-loop path accumulated memory; reverted pending investigation. The
+  ~5,582 skipped are mostly async + missing-includes.
+- **Done when** a full-corpus run completes without stalling and writes a triageable Nova
+  worklist (`--worklist-out`). **Done.**
+
+### Full-corpus result (2026-06-29, all 53,166 tests, 30s timeout)
+
+```text
+both-pass=35858  both-fail=3374  boa-only=7818 (Nova gap)  nova-only=513  timeout=21  skipped=5582
+```
+
+Of the 47,563 that ran on both engines: **Nova 76.5%, Boa 91.8%** (matches the audit's
+~80/~94 in shape). The **7,818-test Nova worklist** is overwhelmingly concentrated:
+
+- **Temporal = 5,873 (75% of the entire gap)** — built-ins/Temporal 3,967 + intl402/Temporal
+  1,896. Completing Temporal in Nova closes three-quarters of the Nova-vs-Boa gap; it is THE
+  convergence lever.
+- Next tiers: RegExp 225, staging/sm 221, Iterator-helpers 217, Set-methods 152, Promise 141.
+- **Language-core (533)** — the more fundamental gaps (not proposal builtins): literals/regexp
+  172, statements/with 107, class 106, compound-assignment 44 (`&&=`/`||=`/`??=`), `using` 18.
+  Smaller count, higher correctness priority than proposal-stage builtins.
+
+**Timeouts (21), attributed by engine** — the runner doubles as a hang/perf-cliff finder:
+
+- **13 Nova**, including a **systematic Promise iterator-close hang family** (`Promise.all` /
+  `allSettled` / `race` × `invoke-then-error-close` / `invoke-then-get-error-close` — 6 tests,
+  one infinite-loop root cause), plus perf cliffs (Array/defineProperty `length`,
+  `decodeURI`/`decodeURIComponent`, a Date caching test).
+- **8 Boa** — `staging/sm/Date/dst-offset-caching` (7) + `String/replace-math` (1). So **Boa
+  is not a flawless oracle** (the 513 nova-only confirm it); the diff catches both directions.
+
 ## Findings
 
 - 2026-06-24 (from the grand audit, adversarially verified): the runner is 2,770 LOC (`main.rs` 1,671); no MANIFEST reader; `harness.rs` bench prescribes but does not implement the snapshot-clone pool. fetch/ runs only behind an off-by-default feature + a manual hosts-file edit; XHTML/.xht files are skipped (`main.rs:587-596`). CSP, websockets/, and h3 are unrunnable through the runner despite netfetcher shipping the transports.
@@ -89,3 +145,6 @@ This is a months-shaped investment; tracked as the rigor arm of serval's
 - 2026-06-25 — **H1 reader + `manifest` command landed** (serval `a9703342ecd`): a MANIFEST.json reader (`ports/serval-wpt/src/manifest.rs` — URLs / kind / refs / fuzzy / pre-expanded variants; unit-tested + integration-tested against the real ~39MB manifest) and `serval-wpt manifest <subset>`. **Validated vs the walk on `dom/nodes`:** manifest 319 runnable (testharness 302, reftest 3, crashtest 14) vs walk 342 — the walk over-counts (38 `load` + 2 `reference` non-tests) and under-counts variants (+17 testharness), confirming the heuristic enumeration scores the wrong set. Additive (the run path still walks; slice 3 wires the manifest through it).
 - 2026-06-25 — **H2 corrected** (above): the snapshot goes in **Nova**, not Boa (Boa is the pristine oracle); added **H2b** (per-engine scoring + cross-engine diff) as the Nova-improvement driver.
 - 2026-06-25 — **H2b `compare` landed** (serval `c27d98d4145`): runs each testharness test on Boa + Nova and routes failures (both-fail = serval-platform, Boa-only = Nova gap). **Finding:** Boa/Nova at exact parity on `dom/abort`, `dom/nodes`, `html/webappapis/timers` (0 Nova gaps); WPT failures are serval-platform, so the Nova worklist is a **test262** matter, and WPT-`compare`'s role is regression-detection. Gotcha: run the runner in **release** (debug frames overflow the stack on bounded-deep recursion; the audit's "panic-free on both engines" holds in release).
+- 2026-06-28 — **H5 test262 runner landed**: core + run-path + cross-engine `test262 <subset>` (`5df84ab9e23`, `d133f56350f`), confirming the H2b finding empirically (`built-ins/Temporal/Now` 66/66 boa-only — Nova lacks Temporal; `optional-chaining` at parity). Parallelized across cores (shared work-index, `8a5a393b1bb`); **measured ~3.2x, not the hoped ~14x** — jemalloc (`servo-allocator`) is already linked, so the ceiling is memory-bandwidth + per-test agent churn, not the allocator. Module support via `eval_module` (`d149fc649e5`); negative **error-type** matching via `ScriptEngine::describe_error` (`016dffea9fd`); `--worklist-out` full dump (`1b5feddb8d8`).
+- 2026-06-28 — **hang-safe runner** (`90ae2edc268`, `aefc0db6103`, `f690f364f22`): the engines can't be step-metered (`eval_bounded` is unbounded for Boa+Nova) and a *non-async* `Promise.race` iterator-close test hangs serval, so a corpus run needs **per-test worker-subprocess isolation** + kill-on-`--timeout` (default 30s), not an in-process watchdog. Each timeout is attributed to the engine that never reported. This subsumes the parallelism and **defers H2a's `GcAgent::clone`** (measured unnecessary for corpus-safety). `async` was built + validated per-test but reverted (corpus-scale memory accumulation; pending investigation).
+- 2026-06-29 — **full corpus run** (53,166 tests): `both-pass=35858 both-fail=3374 boa-only=7818 (Nova gap) nova-only=513 timeout=21 skipped=5582` → Nova 76.5% / Boa 91.8%. **The Nova worklist is 75% Temporal** (5,873 of 7,818); next tiers RegExp/Iterator/Set/Promise + a 533-test language-core tail; see the H5 result section. Found a systematic Nova Promise-combinator iterator-close **hang family** (6 tests) and perf cliffs on both engines (Nova: Array/defineProperty `length`, `decodeURI`; Boa: `Date/dst-offset-caching`).
