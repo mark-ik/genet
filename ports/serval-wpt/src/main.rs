@@ -392,6 +392,11 @@ fn main() {
         test262_cmd(&args);
         return;
     }
+    // The per-test worker the parent `test262` run spawns for hang isolation.
+    if args.command == "test262-one" {
+        test262_one(&args);
+        return;
+    }
 
     let root = Path::new(&args.tests_root).join(&args.subset);
     if !root.exists() {
@@ -781,6 +786,59 @@ fn run_262_on(
     }
 }
 
+/// Worker mode: run ONE test262 test (both engines) and print per-engine results,
+/// each line flushed, so the parent ([`test262_cmd`]) can attribute a hang to the
+/// engine that never reported. The parent spawns this as a subprocess per test, so a
+/// hanging test (the engines cannot be step-metered) kills only this process.
+fn test262_one(args: &Args) {
+    use std::io::Write;
+    // A panicking test is caught by run_262's catch_unwind (→ Fail); silence the hook.
+    panic::set_hook(Box::new(|_| {}));
+
+    let t262_root = Path::new(&args.tests_root).join("third_party/test262");
+    let hns = match test262::Harness::load(&t262_root.join("harness")) {
+        Ok(h) => h,
+        Err(_) => std::process::exit(2), // parent sees no output → counts as skip
+    };
+    let path = t262_root.join("test").join(&args.subset);
+    let Ok(src) = fs::read_to_string(&path) else {
+        std::process::exit(2);
+    };
+    let meta = test262::parse_meta(&src);
+
+    let mut so = std::io::stdout();
+    let boa = run_262_on(harness::Engine::Boa, &hns, &src, &meta, &path);
+    let _ = writeln!(so, "boa {}", t262_word(&boa));
+    let _ = so.flush();
+    let nova = run_262_on(harness::Engine::Nova, &hns, &src, &meta, &path);
+    let _ = writeln!(so, "nova {}", t262_word(&nova));
+    let _ = so.flush();
+}
+
+/// The wire word for one engine's outcome (the `test262-one` worker protocol).
+fn t262_word(t: &T262) -> &'static str {
+    match t {
+        T262::Pass => "pass",
+        T262::Fail => "fail",
+        T262::Skip => "skip",
+    }
+}
+
+/// Parse a `<engine> <pass|fail|skip>` line from a worker's output. `None` if the
+/// engine never reported (it hung, or the worker died before reaching it).
+fn parse_engine_result(out: &str, engine: &str) -> Option<T262> {
+    for line in out.lines() {
+        if let Some(rest) = line.strip_prefix(engine) {
+            return Some(match rest.trim() {
+                "pass" => T262::Pass,
+                "fail" => T262::Fail,
+                _ => T262::Skip,
+            });
+        }
+    }
+    None
+}
+
 fn is_262_test(p: &Path) -> bool {
     p.extension().is_some_and(|e| e == "js")
         && !p
@@ -814,13 +872,12 @@ fn collect_262(dir: &Path, out: &mut Vec<PathBuf>) {
 /// **release** (debug frames overflow on bounded-deep recursion).
 fn test262_cmd(args: &Args) {
     let t262_root = Path::new(&args.tests_root).join("third_party/test262");
-    let hns = match test262::Harness::load(&t262_root.join("harness")) {
-        Ok(h) => h,
-        Err(e) => {
-            eprintln!("test262 harness load failed ({}): {e}", t262_root.display());
-            std::process::exit(2);
-        }
-    };
+    // Preflight: fail fast with a clear message if the harness is missing. The actual
+    // runs happen in `test262-one` worker subprocesses, which load it themselves.
+    if let Err(e) = test262::Harness::load(&t262_root.join("harness")) {
+        eprintln!("test262 harness load failed ({}): {e}", t262_root.display());
+        std::process::exit(2);
+    }
     let subset_dir = t262_root.join("test").join(&args.subset);
     if !subset_dir.exists() {
         eprintln!("test262 subset path does not exist: {}", subset_dir.display());
@@ -830,13 +887,16 @@ fn test262_cmd(args: &Args) {
     collect_262(&subset_dir, &mut files);
     let test_root = t262_root.join("test");
 
-    // Each test pays a fresh `Runtime` (GcAgent::new + intrinsics + harness eval),
-    // ~40-96ms, so the full corpus is hours single-threaded. Both engines are
-    // thread-isolation-friendly (Nova's heap lives in its own `GcAgent`; Boa's GC is
-    // thread-local), so we shard the file list across cores — each thread builds and
-    // drops its own engines, nothing shared but the read-only `Harness`. This is the
-    // affordability lever; a per-engine post-harness snapshot (GcAgent::clone) is a
-    // deeper, fork-risky optimization deferred until parallelism is shown insufficient.
+    // Boa and Nova cannot be step-metered (eval_bounded is unbounded for both), so a
+    // pathological test (e.g. a Promise.race iterator-close infinite loop) would hang
+    // the whole run. We isolate each test in a worker subprocess (`test262-one`) with a
+    // wall-clock timeout: a hang kills only that process, is recorded as a timeout
+    // (attributed to whichever engine never reported), and the run continues. A shared
+    // work index keeps the worker pool balanced across the sorted corpus; jemalloc is
+    // already linked, so per-test cost is engine-bound, not allocator-bound. Process
+    // startup (~0.1s) is modest against per-test engine work, the price of hang-safety.
+    const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
     #[derive(Default)]
     struct Tally {
         both_pass: u64,
@@ -844,53 +904,107 @@ fn test262_cmd(args: &Args) {
         boa_only: u64,
         nova_only: u64,
         skipped: u64,
+        timeout: u64,
         worklist: Vec<String>,
+        timeouts: Vec<String>,
     }
 
     let jobs = std::thread::available_parallelism().map_or(4, |n| n.get());
     let verbose = args.verbose;
     let test_root = test_root.as_path();
-    let hns = &hns;
     let files = &files;
     let next = std::sync::atomic::AtomicUsize::new(0);
     let next = &next;
+    let tests_root = args.tests_root.as_str();
+    let exe = std::env::current_exe().ok();
+    let exe = exe.as_deref();
     let subset_label = if args.subset.is_empty() { "<all>" } else { &args.subset };
-    println!("test262 [{subset_label}]: {} tests x 2 engines on {jobs} threads…", files.len());
+    println!(
+        "test262 [{subset_label}]: {} tests x 2 engines on {jobs} worker procs (timeout {}s)…",
+        files.len(),
+        TEST_TIMEOUT.as_secs(),
+    );
 
-    let prev = panic::take_hook();
-    panic::set_hook(Box::new(|_| {}));
     let tally = std::thread::scope(|scope| {
-        // A shared work index: threads pull the next test as they finish, so the
+        // A shared work index: workers pull the next test as they finish, so the
         // heterogeneous corpus stays balanced (contiguous chunks imbalance when the
         // slow both-pass tests cluster, as they do in the sorted corpus).
         let handles: Vec<_> = (0..jobs)
             .map(|_| {
                 scope.spawn(move || {
                     let mut t = Tally::default();
+                    let Some(exe) = exe else {
+                        return t; // cannot locate our own binary to spawn workers
+                    };
                     loop {
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         if i >= files.len() {
                             break;
                         }
                         let path = &files[i];
-                        let Ok(src) = fs::read_to_string(path) else {
+                        let rel = path.strip_prefix(test_root).unwrap_or(path);
+                        let name = rel.to_string_lossy().replace('\\', "/");
+
+                        let spawned = std::process::Command::new(exe)
+                            .arg("test262-one")
+                            .arg(rel.as_os_str())
+                            .arg("--tests-root")
+                            .arg(tests_root)
+                            .stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::piped())
+                            .stderr(std::process::Stdio::null())
+                            .spawn();
+                        let Ok(mut child) = spawned else {
                             t.skipped += 1;
                             continue;
                         };
-                        let meta = test262::parse_meta(&src);
-                        match (
-                            run_262_on(harness::Engine::Boa, hns, &src, &meta, path),
-                            run_262_on(harness::Engine::Nova, hns, &src, &meta, path),
-                        ) {
+
+                        let start = std::time::Instant::now();
+                        let timed_out = loop {
+                            match child.try_wait() {
+                                Ok(Some(_)) => break false,
+                                Ok(None) => {}
+                                Err(_) => break false,
+                            }
+                            if start.elapsed() >= TEST_TIMEOUT {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                break true;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        };
+                        let mut out = String::new();
+                        if let Some(mut so) = child.stdout.take() {
+                            use std::io::Read;
+                            let _ = so.read_to_string(&mut out);
+                        }
+                        let boa = parse_engine_result(&out, "boa");
+                        let nova = parse_engine_result(&out, "nova");
+
+                        if timed_out {
+                            // Whichever engine never reported is the one still spinning.
+                            let eng = if boa.is_none() { "boa" } else { "nova" };
+                            if verbose {
+                                println!("TIMEOUT[{eng}]  {name}");
+                            }
+                            t.timeout += 1;
+                            t.timeouts.push(format!("{name} ({eng})"));
+                            continue;
+                        }
+                        let (b, n) = match (boa, nova) {
+                            (Some(b), Some(n)) => (b, n),
+                            (Some(b), None) => (b, T262::Fail), // nova crashed mid-test
+                            (None, Some(n)) => (T262::Fail, n), // boa crashed mid-test
+                            (None, None) => {
+                                t.skipped += 1; // worker produced nothing (load/early crash)
+                                continue;
+                            }
+                        };
+                        match (b, n) {
                             (T262::Skip, _) | (_, T262::Skip) => t.skipped += 1,
                             (T262::Pass, T262::Pass) => t.both_pass += 1,
                             (T262::Fail, T262::Fail) => t.both_fail += 1,
                             (T262::Pass, T262::Fail) => {
-                                let name = path
-                                    .strip_prefix(test_root)
-                                    .unwrap_or(path)
-                                    .to_string_lossy()
-                                    .replace('\\', "/");
                                 if verbose {
                                     println!("NOVA-GAP  {name}");
                                 }
@@ -912,19 +1026,35 @@ fn test262_cmd(args: &Args) {
             total.boa_only += t.boa_only;
             total.nova_only += t.nova_only;
             total.skipped += t.skipped;
+            total.timeout += t.timeout;
             total.worklist.extend(t.worklist);
+            total.timeouts.extend(t.timeouts);
         }
         total
     });
-    panic::set_hook(prev);
 
     let mut nova_worklist = tally.worklist;
     nova_worklist.sort();
+    let mut timeouts = tally.timeouts;
+    timeouts.sort();
     println!(
         "\ntest262 compare [{subset_label}]: both-pass={} both-fail={} boa-only={} (Nova gap) \
-         nova-only={} skipped={} (module/async/missing)",
-        tally.both_pass, tally.both_fail, tally.boa_only, tally.nova_only, tally.skipped,
+         nova-only={} timeout={} skipped={} (module/async/missing)",
+        tally.both_pass, tally.both_fail, tally.boa_only, tally.nova_only, tally.timeout, tally.skipped,
     );
+    if !timeouts.is_empty() {
+        println!(
+            "\nTimed out (hung > {}s; the engine that never reported) — {} test(s):",
+            TEST_TIMEOUT.as_secs(),
+            timeouts.len()
+        );
+        for name in timeouts.iter().take(40) {
+            println!("  {name}");
+        }
+        if timeouts.len() > 40 {
+            println!("  … and {} more", timeouts.len() - 40);
+        }
+    }
     if !nova_worklist.is_empty() {
         println!("\nNova worklist (pass on Boa, fail on Nova) — {} test(s):", nova_worklist.len());
         for name in nova_worklist.iter().take(40) {
