@@ -290,6 +290,10 @@ struct Args {
     server_base: Option<String>,
     /// Spawn (and tear down) a `wpt serve` for the run (server mode).
     spawn_server: bool,
+    /// Per-test wall-clock timeout (seconds) for `test262` worker subprocesses: a test
+    /// running longer is killed and recorded as a timeout. Generous enough for slow
+    /// (but finite) tests; bounds true infinite hangs.
+    timeout_secs: u64,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -300,6 +304,7 @@ fn parse_args() -> Result<Args, String> {
     let mut engine = harness::Engine::default();
     let mut server_base = None;
     let mut spawn_server = false;
+    let mut timeout_secs = 30u64;
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -315,6 +320,10 @@ fn parse_args() -> Result<Args, String> {
                 server_base = Some(it.next().ok_or("--server-base needs a URL")?);
             }
             "--spawn-server" => spawn_server = true,
+            "--timeout" => {
+                let v = it.next().ok_or("--timeout needs a value (seconds)")?;
+                timeout_secs = v.parse().map_err(|_| format!("invalid --timeout: {v}"))?;
+            }
             "-v" | "--verbose" => verbose = true,
             "-h" | "--help" => return Err(usage()),
             _ if arg.starts_with('-') => return Err(format!("unknown flag: {arg}\n{}", usage())),
@@ -331,6 +340,7 @@ fn parse_args() -> Result<Args, String> {
         engine,
         server_base,
         spawn_server,
+        timeout_secs,
     })
 }
 
@@ -349,6 +359,7 @@ Usage:
 
 Options:
     --tests-root <dir>   tests root (default: tests/wpt)
+    --timeout <secs>     per-test worker timeout for `test262` (default: 30)
     --engine <name>      testharness JS engine: boa (default) | nova
     --server-base <url>  run testharness against a live `wpt serve` at <url>
                          (server mode; needs --features netfetch)
@@ -895,7 +906,7 @@ fn test262_cmd(args: &Args) {
     // work index keeps the worker pool balanced across the sorted corpus; jemalloc is
     // already linked, so per-test cost is engine-bound, not allocator-bound. Process
     // startup (~0.1s) is modest against per-test engine work, the price of hang-safety.
-    const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+    let test_timeout = std::time::Duration::from_secs(args.timeout_secs);
 
     #[derive(Default)]
     struct Tally {
@@ -922,7 +933,7 @@ fn test262_cmd(args: &Args) {
     println!(
         "test262 [{subset_label}]: {} tests x 2 engines on {jobs} worker procs (timeout {}s)…",
         files.len(),
-        TEST_TIMEOUT.as_secs(),
+        test_timeout.as_secs(),
     );
 
     let tally = std::thread::scope(|scope| {
@@ -966,7 +977,7 @@ fn test262_cmd(args: &Args) {
                                 Ok(None) => {}
                                 Err(_) => break false,
                             }
-                            if start.elapsed() >= TEST_TIMEOUT {
+                            if start.elapsed() >= test_timeout {
                                 let _ = child.kill();
                                 let _ = child.wait();
                                 break true;
@@ -1045,7 +1056,7 @@ fn test262_cmd(args: &Args) {
     if !timeouts.is_empty() {
         println!(
             "\nTimed out (hung > {}s; the engine that never reported) — {} test(s):",
-            TEST_TIMEOUT.as_secs(),
+            test_timeout.as_secs(),
             timeouts.len()
         );
         for name in timeouts.iter().take(40) {
