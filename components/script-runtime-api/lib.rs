@@ -173,6 +173,12 @@ impl<E: ScriptEngine> Runtime<E> {
         self.engine.eval(source)
     }
 
+    /// Render an engine error to a diagnostic string (the thrown value's `toString`).
+    /// Used by the test262 runner to match a `negative:` test's expected error type.
+    pub fn describe_error(&mut self, error: &E::Error) -> String {
+        self.engine.describe_error(error)
+    }
+
     /// Evaluate `source` as an ECMAScript module (`<script type=module>`), resolving
     /// `import`s against `base_url` through the host `resolve` callback (which fetches
     /// dependency source). Returns `Ok(None)` when the backend does not support

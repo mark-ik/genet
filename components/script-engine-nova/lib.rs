@@ -617,6 +617,12 @@ mod native {
             out
         }
 
+        fn describe_error(&mut self, error: &Self::Error) -> String {
+            // Nova's `Error` is already the thrown value's message (e.g. "evaluation
+            // threw: TypeError: …" or "parse error").
+            error.clone()
+        }
+
         fn value_to_string(&mut self, value: &Self::Value) -> Result<String, Self::Error> {
             let mut out = Err("value_to_string did not run".to_string());
             self.agent.run_in_realm(&self.realm, |agent, gc| {

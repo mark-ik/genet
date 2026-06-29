@@ -144,6 +144,14 @@ pub trait ScriptEngine: Sized {
     /// Coerce a value to a Rust string (`ToString`).
     fn value_to_string(&mut self, value: &Self::Value) -> Result<String, Self::Error>;
 
+    /// Render an error to a diagnostic string — the thrown value's `toString`, e.g.
+    /// `"TypeError: …"`. The test262 runner uses it to match a `negative:` test's
+    /// expected error type. The default uses `Debug`; a backend whose `Error` is
+    /// opaque (Boa's `JsError`) overrides it to stringify through the engine.
+    fn describe_error(&mut self, error: &Self::Error) -> String {
+        format!("{error:?}")
+    }
+
     /// Define `name` on the global object with `value`. The primitive the host
     /// (runtime layer) installs globals from: reflectors (`node`), and later the
     /// browser host objects (`self`, `document`, `addEventListener`, …). Native

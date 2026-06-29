@@ -322,6 +322,17 @@ impl ScriptEngine for BoaEngine {
         Ok(value.to_string(&mut self.ctx)?.to_std_string_escaped())
     }
 
+    fn describe_error(&mut self, error: &Self::Error) -> String {
+        // `JsError` is opaque; the thrown value's `toString` ("TypeError: …") is what
+        // a `negative:` match needs. Fall back to the error's own Debug.
+        if let Ok(thrown) = error.clone().into_opaque(&mut self.ctx) {
+            if let Ok(s) = thrown.to_string(&mut self.ctx) {
+                return s.to_std_string_escaped();
+            }
+        }
+        format!("{error:?}")
+    }
+
     fn set_global(&mut self, name: &str, value: &Self::Value) -> Result<(), Self::Error> {
         let global = self.ctx.global_object();
         global.set(JsString::from(name), value.clone(), false, &mut self.ctx)?;

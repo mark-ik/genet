@@ -708,7 +708,8 @@ enum T262 {
 /// evaluates the test as a module (imports resolved against the test's directory).
 /// Otherwise it assembles (harness + includes + test) for each strict variant and
 /// evals. A positive test passes iff it does not throw; a negative test passes iff it
-/// throws (by occurrence, not yet by error type). `async` ($DONE) is the next slice.
+/// throws an error of the expected type (matched against the thrown value's toString).
+/// `async` ($DONE) is the next slice.
 fn run_262<E: ScriptEngine>(
     hns: &test262::Harness,
     test_src: &str,
@@ -721,26 +722,43 @@ fn run_262<E: ScriptEngine>(
     if meta.flags.module {
         return run_262_module::<E>(hns, test_src, meta, path);
     }
-    let negative = meta.negative.is_some();
+    let negative = meta.negative.as_ref();
     for &strict in &test262::strict_variants(&meta.flags) {
         let Ok(script) = hns.assemble(test_src, meta, strict) else {
             return T262::Skip; // a missing include file
         };
-        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            match script_runtime_api::Runtime::<E>::new() {
-                Ok(mut rt) => rt.eval(&script).is_err(), // true = threw an uncaught error
-                Err(_) => true,
+        // Ok(()) = ran without throwing; Err(desc) = threw, with the error's toString.
+        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
+            let mut rt = script_runtime_api::Runtime::<E>::new().map_err(|_| String::new())?;
+            match rt.eval(&script) {
+                Ok(_) => Ok(()),
+                Err(e) => Err(rt.describe_error(&e)),
             }
         }));
-        let threw = match outcome {
-            Ok(t) => t,
+        let ran = match outcome {
+            Ok(r) => r,
             Err(_) => return T262::Fail, // the engine panicked on this source
         };
-        if threw != negative {
-            return T262::Fail; // positive must not throw; negative must throw
+        let ok = match (negative, ran) {
+            (None, Ok(())) => true,                                  // positive: must not throw
+            (None, Err(_)) => false,                                // positive: threw
+            (Some(_), Ok(())) => false,                             // negative: must throw
+            (Some(neg), Err(desc)) => negative_matches(&desc, neg), // negative: right type
+        };
+        if !ok {
+            return T262::Fail;
         }
     }
     T262::Pass
+}
+
+/// Whether a thrown error's description satisfies a `negative:` expectation. Both
+/// engines name the JS constructor (e.g. "TypeError") in the thrown value's `toString`;
+/// Nova additionally reports a parse failure as the literal "parse error", so a
+/// parse-phase negative also matches that.
+fn negative_matches(desc: &str, neg: &test262::Negative) -> bool {
+    desc.contains(&neg.error_type)
+        || (matches!(neg.phase.as_str(), "parse" | "early") && desc.contains("parse error"))
 }
 
 /// Module test: evaluate the harness preamble as a sloppy script (so its globals
