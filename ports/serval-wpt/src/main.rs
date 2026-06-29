@@ -1055,7 +1055,8 @@ fn test262_cmd(args: &Args) {
     );
     if !timeouts.is_empty() {
         println!(
-            "\nTimed out (hung > {}s; the engine that never reported) — {} test(s):",
+            "\nExceeded {}s — infinite hang or pathological slowness (the engine that \
+             never reported) — {} test(s):",
             test_timeout.as_secs(),
             timeouts.len()
         );
