@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  rust:
+    name: Rust checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install wasm target
+        run: rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Dependency-cone witnesses
+        run: python3 support/ci/check_dependency_cones.py
+      - name: Workspace check
+        run: cargo check --workspace --all-targets
+      - name: Workspace tests
+        run: cargo test --workspace --all-targets
+      - name: Layout wasm witness
+        run: cargo check -p serval-layout --target wasm32-unknown-unknown
