@@ -83,14 +83,18 @@ impl<'a, D: LayoutDom> NodeRef<'a, D> {
     /// DOM-tree children as fresh adapters.
     pub fn dom_children(&self) -> impl Iterator<Item = Self> + '_ {
         let dom = self.dom;
-        self.dom.dom_children(self.id).map(move |id| Self { dom, id })
+        self.dom
+            .dom_children(self.id)
+            .map(move |id| Self { dom, id })
     }
 
     /// Flat-tree children (shadow-aware) as fresh adapters. Defaults to
     /// `dom_children` for backends without shadow DOM.
     pub fn flat_children(&self) -> impl Iterator<Item = Self> + '_ {
         let dom = self.dom;
-        self.dom.flat_children(self.id).map(move |id| Self { dom, id })
+        self.dom
+            .flat_children(self.id)
+            .map(move |id| Self { dom, id })
     }
 
     /// What kind of node this is.
@@ -158,10 +162,9 @@ mod tests {
         let document = StaticDocument::parse("<html><body><p>Hello</p></body></html>");
         let root = NodeRef::document(&document);
 
-        let body = find_element_descendant(&root, local_name!("body"))
-            .expect("body element exists");
-        let p = find_element_descendant(&body, local_name!("p"))
-            .expect("p element under body");
+        let body =
+            find_element_descendant(&root, local_name!("body")).expect("body element exists");
+        let p = find_element_descendant(&body, local_name!("p")).expect("p element under body");
 
         let text = p.dom_children().next().expect("text node under p");
         assert!(matches!(text.kind(), layout_dom_api::NodeKind::Text));
@@ -170,12 +173,10 @@ mod tests {
 
     #[test]
     fn adapter_sibling_navigation() {
-        let document = StaticDocument::parse(
-            "<html><body><p>a</p><p>b</p><p>c</p></body></html>",
-        );
+        let document = StaticDocument::parse("<html><body><p>a</p><p>b</p><p>c</p></body></html>");
         let root = NodeRef::document(&document);
-        let body = find_element_descendant(&root, local_name!("body"))
-            .expect("body element exists");
+        let body =
+            find_element_descendant(&root, local_name!("body")).expect("body element exists");
 
         let ps: Vec<_> = body
             .dom_children()

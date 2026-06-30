@@ -32,7 +32,10 @@ impl ResourceResolver {
     /// A resolver rooted at a single document directory (the common
     /// case: a live page with no corpus root).
     pub fn at(base_dir: impl Into<PathBuf>) -> Self {
-        Self { base_dir: Some(base_dir.into()), tests_root: None }
+        Self {
+            base_dir: Some(base_dir.into()),
+            tests_root: None,
+        }
     }
 
     /// The document's base URL as a `file://` string, for the cascade's
@@ -50,7 +53,9 @@ impl ResourceResolver {
         // no local base (resources come from the host loader). (wasm de-IPC pass.)
         #[cfg(any(unix, windows, target_os = "redox", target_os = "wasi"))]
         {
-            url::Url::from_directory_path(&abs).ok().map(|u| u.to_string())
+            url::Url::from_directory_path(&abs)
+                .ok()
+                .map(|u| u.to_string())
         }
         #[cfg(not(any(unix, windows, target_os = "redox", target_os = "wasi")))]
         {
@@ -82,7 +87,9 @@ impl ResourceResolver {
         if url.starts_with("file:") {
             #[cfg(any(unix, windows, target_os = "redox", target_os = "wasi"))]
             {
-                return url::Url::parse(url).ok().and_then(|u| u.to_file_path().ok());
+                return url::Url::parse(url)
+                    .ok()
+                    .and_then(|u| u.to_file_path().ok());
             }
             #[cfg(not(any(unix, windows, target_os = "redox", target_os = "wasi")))]
             {
@@ -123,7 +130,10 @@ pub fn inline_stylesheets<D: LayoutDom>(dom: &D) -> Vec<String> {
     let mut sheets = Vec::new();
     let mut stack = vec![dom.document()];
     while let Some(id) = stack.pop() {
-        if dom.element_name(id).is_some_and(|q| q.local.as_ref() == "style") {
+        if dom
+            .element_name(id)
+            .is_some_and(|q| q.local.as_ref() == "style")
+        {
             let mut css = String::new();
             for child in dom.dom_children(id) {
                 if let Some(text) = dom.text(child) {
@@ -150,9 +160,13 @@ pub fn inline_stylesheets_from_source(html: &str) -> Vec<String> {
     let mut from = 0;
     while let Some(open) = lower[from..].find("<style") {
         let open = from + open;
-        let Some(gt) = lower[open..].find('>') else { break };
+        let Some(gt) = lower[open..].find('>') else {
+            break;
+        };
         let content_start = open + gt + 1;
-        let Some(close_rel) = lower[content_start..].find("</style>") else { break };
+        let Some(close_rel) = lower[content_start..].find("</style>") else {
+            break;
+        };
         let close = content_start + close_rel;
         out.push(html[content_start..close].to_string());
         from = close + "</style>".len();
@@ -187,13 +201,18 @@ where
     let mut sheets = Vec::new();
     let mut stack = vec![dom.document()];
     while let Some(id) = stack.pop() {
-        let is_stylesheet = dom.element_name(id).is_some_and(|q| q.local.as_ref() == "link")
+        let is_stylesheet = dom
+            .element_name(id)
+            .is_some_and(|q| q.local.as_ref() == "link")
             && dom
                 .attribute(id, &no_ns, &rel_attr)
                 .is_some_and(|rel| rel.eq_ignore_ascii_case("stylesheet"));
         if is_stylesheet {
             if let Some(href) = dom.attribute(id, &no_ns, &href_attr) {
-                if let Some(css) = loader.load(href).and_then(|bytes| String::from_utf8(bytes).ok()) {
+                if let Some(css) = loader
+                    .load(href)
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+                {
                     sheets.push(css);
                 }
             }
@@ -220,9 +239,12 @@ where
 
     let mut stack = vec![dom.document()];
     while let Some(id) = stack.pop() {
-        let is_icon = dom.element_name(id).is_some_and(|q| q.local.as_ref() == "link")
+        let is_icon = dom
+            .element_name(id)
+            .is_some_and(|q| q.local.as_ref() == "link")
             && dom.attribute(id, &no_ns, &rel_attr).is_some_and(|rel| {
-                rel.split_ascii_whitespace().any(|t| t.eq_ignore_ascii_case("icon"))
+                rel.split_ascii_whitespace()
+                    .any(|t| t.eq_ignore_ascii_case("icon"))
             });
         if is_icon {
             if let Some(href) = dom.attribute(id, &no_ns, &href_attr) {
@@ -297,8 +319,7 @@ mod tests {
         struct FakeFetcher;
         impl ImageLoader for FakeFetcher {
             fn load(&self, url: &str) -> Option<Vec<u8>> {
-                (url == "https://cdn.example/site.css")
-                    .then(|| b"body { color: purple; }".to_vec())
+                (url == "https://cdn.example/site.css").then(|| b"body { color: purple; }".to_vec())
             }
         }
 
@@ -317,13 +338,19 @@ mod tests {
 
     #[test]
     fn resolver_rejects_remote_and_data_urls() {
-        let r = ResourceResolver { base_dir: Some("/base".into()), tests_root: Some("/root".into()) };
+        let r = ResourceResolver {
+            base_dir: Some("/base".into()),
+            tests_root: Some("/root".into()),
+        };
         assert!(r.resolve("https://example.com/a.css").is_none());
         assert!(r.resolve("//cdn/a.css").is_none());
         assert!(r.resolve("data:text/css,body{}").is_none());
         assert!(r.resolve("").is_none());
         assert_eq!(r.resolve("a/b.css"), Some(PathBuf::from("/base/a/b.css")));
         assert_eq!(r.resolve("/x/y.css"), Some(PathBuf::from("/root/x/y.css")));
-        assert_eq!(r.resolve("a.css#frag?q=1"), Some(PathBuf::from("/base/a.css")));
+        assert_eq!(
+            r.resolve("a.css#frag?q=1"),
+            Some(PathBuf::from("/base/a.css"))
+        );
     }
 }

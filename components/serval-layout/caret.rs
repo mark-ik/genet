@@ -75,11 +75,7 @@ where
 /// Reading the text colour makes the caret track the theme automatically (the
 /// sheet already colours the text per theme); an explicit `caret-color` override
 /// is a later refinement.
-pub fn caret_color<D>(
-    dom: &D,
-    styles: &StylePlane<D::NodeId>,
-    node: D::NodeId,
-) -> Option<[f32; 4]>
+pub fn caret_color<D>(dom: &D, styles: &StylePlane<D::NodeId>, node: D::NodeId) -> Option<[f32; 4]>
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -266,12 +262,14 @@ where
     for i in si..=ei {
         let node = leaves[i];
         let (start, end) = match (i == si, i == ei) {
-            (true, true) => (soff, eoff), // single leaf
+            (true, true) => (soff, eoff),        // single leaf
             (true, false) => (soff, usize::MAX), // first leaf: to its end
-            (false, true) => (0, eoff), // last leaf: from its start
-            (false, false) => (0, usize::MAX), // interior leaf: whole
+            (false, true) => (0, eoff),          // last leaf: from its start
+            (false, false) => (0, usize::MAX),   // interior leaf: whole
         };
-        rects.extend(selection_rects(dom, node, start, end, built, text_ctx, fragments));
+        rects.extend(selection_rects(
+            dom, node, start, end, built, text_ctx, fragments,
+        ));
     }
     rects
 }
@@ -400,7 +398,11 @@ where
     // boundary resolves to the row the caret visually occupies, not just its byte.
     let y = geo.y0 as f32;
     let current = (0..line_count)
-        .find(|&i| layout.get(i).is_some_and(|l| y < l.metrics().block_max_coord))
+        .find(|&i| {
+            layout
+                .get(i)
+                .is_some_and(|l| y < l.metrics().block_max_coord)
+        })
         .unwrap_or(line_count - 1);
 
     let target = current as isize + delta;
@@ -409,7 +411,9 @@ where
     }
     if target as usize >= line_count {
         // below the last row -> the last visual row's end (buffer end)
-        let end = layout.get(line_count - 1).map_or(byte_offset, |l| l.text_range().end);
+        let end = layout
+            .get(line_count - 1)
+            .map_or(byte_offset, |l| l.text_range().end);
         return Some((end, h_pos));
     }
     // Place the caret at the goal x on the target row's text band; parley snaps the x to
@@ -503,7 +507,10 @@ mod tests {
     fn find_p(doc: &StaticDocument) -> StaticNodeId {
         let mut q = vec![doc.document()];
         while let Some(id) = q.pop() {
-            if doc.element_name(id).is_some_and(|n| n.local == LocalName::from("p")) {
+            if doc
+                .element_name(id)
+                .is_some_and(|n| n.local == LocalName::from("p"))
+            {
                 return id;
             }
             q.extend(doc.dom_children(id));
@@ -528,11 +535,23 @@ mod tests {
             None,
         );
         let (bg, _fg) = selection_style(&doc, &styles, p).expect("::selection background");
-        assert!(bg[1] > 0.99 && bg[0] < 0.01, "::selection bg green, got {bg:?}");
+        assert!(
+            bg[1] > 0.99 && bg[0] < 0.01,
+            "::selection bg green, got {bg:?}"
+        );
 
         let mut bare: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut bare, euclid::Size2D::new(800.0, 600.0), &[], None);
-        assert!(selection_style(&doc, &bare, p).is_none(), "no ::selection rule → None");
+        run_cascade(
+            &doc,
+            &mut bare,
+            euclid::Size2D::new(800.0, 600.0),
+            &[],
+            None,
+        );
+        assert!(
+            selection_style(&doc, &bare, p).is_none(),
+            "no ::selection rule → None"
+        );
     }
 
     /// The caret colour tracks the cascaded text `color` (`caret-color: auto`), so
@@ -551,7 +570,10 @@ mod tests {
             None,
         );
         let c = caret_color(&doc, &styles, p).expect("a cascaded text colour");
-        assert!(c[2] > 0.99 && c[0] < 0.01, "caret tracks the text colour (blue), got {c:?}");
+        assert!(
+            c[2] > 0.99 && c[0] < 0.01,
+            "caret tracks the text colour (blue), got {c:?}"
+        );
     }
 
     /// A selection range spanning two block paragraphs highlights text in both
@@ -560,12 +582,17 @@ mod tests {
     /// rects, and a collapsed range yields none. (Pseudo follow-ups §3.)
     #[test]
     fn range_rects_span_two_paragraphs() {
-        let doc = StaticDocument::parse(
-            "<html><body><p>first para</p><p>second para</p></body></html>",
-        );
+        let doc =
+            StaticDocument::parse("<html><body><p>first para</p><p>second para</p></body></html>");
         let sheet = &["html, body, p { display: block; margin: 0; font-size: 20px; }"];
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
@@ -575,7 +602,10 @@ mod tests {
         let mut ps = Vec::new();
         let mut q = vec![doc.document()];
         while let Some(id) = q.pop() {
-            if doc.element_name(id).is_some_and(|n| n.local == LocalName::from("p")) {
+            if doc
+                .element_name(id)
+                .is_some_and(|n| n.local == LocalName::from("p"))
+            {
                 ps.push(id);
             }
             q.extend(doc.dom_children(id));
@@ -583,7 +613,11 @@ mod tests {
         assert_eq!(ps.len(), 2, "two paragraphs");
         let y0 = fragments.rect_of(ps[0]).unwrap().location.y;
         let y1 = fragments.rect_of(ps[1]).unwrap().location.y;
-        let (top_p, bot_p) = if y0 <= y1 { (ps[0], ps[1]) } else { (ps[1], ps[0]) };
+        let (top_p, bot_p) = if y0 <= y1 {
+            (ps[0], ps[1])
+        } else {
+            (ps[1], ps[0])
+        };
         let mid = (fragments.rect_of(top_p).unwrap().location.y
             + fragments.rect_of(bot_p).unwrap().location.y)
             / 2.0;
@@ -596,8 +630,14 @@ mod tests {
         };
         let rects = range_rects(&doc, range, &built, &text_ctx, &fragments);
         assert!(!rects.is_empty(), "spanning range highlights something");
-        assert!(rects.iter().any(|r| r.y < mid), "highlight in the first paragraph");
-        assert!(rects.iter().any(|r| r.y >= mid), "highlight in the second paragraph");
+        assert!(
+            rects.iter().any(|r| r.y < mid),
+            "highlight in the first paragraph"
+        );
+        assert!(
+            rects.iter().any(|r| r.y >= mid),
+            "highlight in the second paragraph"
+        );
 
         // A backwards drag (anchor after focus in document order) is normalised
         // to the same span.
@@ -633,7 +673,13 @@ mod tests {
         );
         let sheet = &["html, body, p { display: block; margin: 0; font-size: 20px; }"];
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
@@ -642,13 +688,23 @@ mod tests {
 
         // "fox" / "Fox" — one per paragraph, matched case-insensitively.
         let matches = find_text_rects(&doc, &built, &text_ctx, &fragments, "FOX");
-        assert_eq!(matches.len(), 2, "two case-insensitive 'fox' matches, got {matches:?}");
+        assert_eq!(
+            matches.len(),
+            2,
+            "two case-insensitive 'fox' matches, got {matches:?}"
+        );
         for m in &matches {
             let r = m.first().expect("each match has a rect");
-            assert!(r.width > 0.0 && r.height > 0.0, "positive-area highlight, got {r:?}");
+            assert!(
+                r.width > 0.0 && r.height > 0.0,
+                "positive-area highlight, got {r:?}"
+            );
         }
         // Document order: the second match (second paragraph) sits below the first.
-        assert!(matches[1][0].y > matches[0][0].y, "second match is below the first");
+        assert!(
+            matches[1][0].y > matches[0][0].y,
+            "second match is below the first"
+        );
 
         assert!(
             find_text_rects(&doc, &built, &text_ctx, &fragments, "zebra").is_empty(),
@@ -677,7 +733,13 @@ mod tests {
         let sheet = &["html, body, p { display: block; margin: 0; border: 0; \
             font-size: 40px; } p { padding-left: 30px; }"];
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
@@ -707,9 +769,14 @@ mod tests {
                 _ => None,
             })
             .expect("a glyph run");
-        let caret0 = caret_rect(&doc, p, 0, &built, &text_ctx, &fragments, 2.0).unwrap().x;
+        let caret0 = caret_rect(&doc, p, 0, &built, &text_ctx, &fragments, 2.0)
+            .unwrap()
+            .x;
 
-        assert!(glyph_x >= 25.0, "glyphs inset by ~padding (30 px), got {glyph_x}");
+        assert!(
+            glyph_x >= 25.0,
+            "glyphs inset by ~padding (30 px), got {glyph_x}"
+        );
         assert!(
             (glyph_x - caret0).abs() < 1.0,
             "first glyph x ({glyph_x}) coincides with the byte-0 caret x ({caret0})"
@@ -731,7 +798,13 @@ mod tests {
             div { width: 100px; height: 50px; \
             background-image: linear-gradient(to bottom, rgb(255, 0, 0), rgb(0, 0, 255)); }"];
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
@@ -758,8 +831,14 @@ mod tests {
             })
             .expect("a linear-gradient background emits a DrawLinearGradient");
         assert_eq!(grad.gradient.stops.len(), 2, "two color stops");
-        assert!((grad.gradient.stops[0].offset - 0.0).abs() < 1e-3, "first stop at 0");
-        assert!((grad.gradient.stops[1].offset - 1.0).abs() < 1e-3, "last stop at 1");
+        assert!(
+            (grad.gradient.stops[0].offset - 0.0).abs() < 1e-3,
+            "first stop at 0"
+        );
+        assert!(
+            (grad.gradient.stops[1].offset - 1.0).abs() < 1e-3,
+            "last stop at 1"
+        );
         // `to bottom`: the line runs top (start) to bottom (end), vertical.
         assert!(
             grad.gradient.start_point.y < grad.gradient.end_point.y,
@@ -786,7 +865,13 @@ mod tests {
             div { width: 100px; height: 50px; \
             background-image: radial-gradient(rgb(255, 0, 0), rgb(0, 0, 255)); }"];
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
@@ -812,8 +897,14 @@ mod tests {
                 _ => None,
             })
             .expect("a radial-gradient background emits a DrawRadialGradient");
-        assert!((grad.gradient.center.x - 50.0).abs() < 1e-3, "center x at box midpoint");
-        assert!((grad.gradient.center.y - 25.0).abs() < 1e-3, "center y at box midpoint");
+        assert!(
+            (grad.gradient.center.x - 50.0).abs() < 1e-3,
+            "center x at box midpoint"
+        );
+        assert!(
+            (grad.gradient.center.y - 25.0).abs() < 1e-3,
+            "center y at box midpoint"
+        );
         let sqrt2 = std::f32::consts::SQRT_2;
         assert!(
             (grad.gradient.radius.width - 50.0 * sqrt2).abs() < 1e-2,
@@ -824,8 +915,14 @@ mod tests {
             "ry = farthest-side y * sqrt(2)"
         );
         assert_eq!(grad.gradient.stops.len(), 2, "two color stops");
-        assert!((grad.gradient.stops[0].offset - 0.0).abs() < 1e-3, "first stop at 0");
-        assert!((grad.gradient.stops[1].offset - 1.0).abs() < 1e-3, "last stop at 1");
+        assert!(
+            (grad.gradient.stops[0].offset - 0.0).abs() < 1e-3,
+            "first stop at 0"
+        );
+        assert!(
+            (grad.gradient.stops[1].offset - 1.0).abs() < 1e-3,
+            "last stop at 1"
+        );
     }
 
     /// `radial-gradient(circle <r> at <x> <y>, ...)` emits equal radii (a circle)
@@ -843,7 +940,13 @@ mod tests {
             background-image: radial-gradient(circle 40px at 30px 10px, \
             rgb(255, 0, 0), rgb(0, 0, 255)); }"];
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
@@ -871,7 +974,10 @@ mod tests {
             .expect("a radial circle gradient emits a DrawRadialGradient");
         assert!((grad.gradient.center.x - 30.0).abs() < 1e-3, "center x");
         assert!((grad.gradient.center.y - 10.0).abs() < 1e-3, "center y");
-        assert!((grad.gradient.radius.width - 40.0).abs() < 1e-3, "circle rx");
+        assert!(
+            (grad.gradient.radius.width - 40.0).abs() < 1e-3,
+            "circle rx"
+        );
         assert!(
             (grad.gradient.radius.height - grad.gradient.radius.width).abs() < 1e-3,
             "circle ry = rx"
@@ -893,7 +999,13 @@ mod tests {
             div { width: 100px; height: 50px; \
             background-image: conic-gradient(rgb(255, 0, 0), rgb(0, 0, 255)); }"];
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
@@ -919,8 +1031,14 @@ mod tests {
                 _ => None,
             })
             .expect("a conic-gradient background emits a DrawConicGradient");
-        assert!((grad.gradient.center.x - 50.0).abs() < 1e-3, "center x at box midpoint");
-        assert!((grad.gradient.center.y - 25.0).abs() < 1e-3, "center y at box midpoint");
+        assert!(
+            (grad.gradient.center.x - 50.0).abs() < 1e-3,
+            "center x at box midpoint"
+        );
+        assert!(
+            (grad.gradient.center.y - 25.0).abs() < 1e-3,
+            "center y at box midpoint"
+        );
         assert!(
             (grad.gradient.angle - (-std::f32::consts::FRAC_PI_2)).abs() < 1e-3,
             "default seam (from 0deg) rotated to the top: start angle -pi/2"
@@ -944,7 +1062,13 @@ mod tests {
             background-image: conic-gradient(from 90deg at 10px 20px, \
             rgb(255, 0, 0) 0deg, rgb(0, 255, 0) 90deg, rgb(0, 0, 255) 360deg); }"];
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
@@ -977,9 +1101,18 @@ mod tests {
             "from 90deg - 90deg top-rotation = 0 start angle"
         );
         assert_eq!(grad.gradient.stops.len(), 3, "three color stops");
-        assert!((grad.gradient.stops[0].offset - 0.0).abs() < 1e-3, "0deg -> 0.0");
-        assert!((grad.gradient.stops[1].offset - 0.25).abs() < 1e-3, "90deg -> 0.25");
-        assert!((grad.gradient.stops[2].offset - 1.0).abs() < 1e-3, "360deg -> 1.0");
+        assert!(
+            (grad.gradient.stops[0].offset - 0.0).abs() < 1e-3,
+            "0deg -> 0.0"
+        );
+        assert!(
+            (grad.gradient.stops[1].offset - 0.25).abs() < 1e-3,
+            "90deg -> 0.25"
+        );
+        assert!(
+            (grad.gradient.stops[2].offset - 1.0).abs() < 1e-3,
+            "360deg -> 1.0"
+        );
     }
 
     /// `text-decoration: line-through` emits a thin decoration rect through the
@@ -1003,7 +1136,13 @@ mod tests {
             );
             let sheet: &[&str] = &[css.as_str()];
             let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-            run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+            run_cascade(
+                &doc,
+                &mut styles,
+                euclid::Size2D::new(800.0, 600.0),
+                sheet,
+                None,
+            );
             let viewport = taffy::Size {
                 width: taffy::AvailableSpace::Definite(800.0),
                 height: taffy::AvailableSpace::Definite(600.0),
@@ -1038,8 +1177,7 @@ mod tests {
             strike_y < underline_y,
             "line-through ({strike_y}) sits above the underline ({underline_y})"
         );
-        let overline_y =
-            decoration_y("text-decoration: overline;").expect("overline emits a rect");
+        let overline_y = decoration_y("text-decoration: overline;").expect("overline emits a rect");
         assert!(
             overline_y < strike_y,
             "overline ({overline_y}) sits above line-through ({strike_y})"
@@ -1061,7 +1199,13 @@ mod tests {
             p { font-size: 40px; color: rgb(0, 0, 255); \
             text-decoration: underline; text-decoration-color: rgb(255, 0, 0); }"];
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
@@ -1091,7 +1235,10 @@ mod tests {
                 _ => None,
             })
             .expect("underline emits a decoration rect");
-        assert!(deco.r > 0.9 && deco.b < 0.1, "decoration is red, got {deco:?}");
+        assert!(
+            deco.r > 0.9 && deco.b < 0.1,
+            "decoration is red, got {deco:?}"
+        );
         // The glyph text stays blue.
         let text = plist
             .commands()
@@ -1120,7 +1267,13 @@ mod tests {
             linear-gradient(rgb(255, 0, 0), rgb(0, 0, 255)), \
             radial-gradient(rgb(0, 255, 0), rgb(0, 0, 0)); }"];
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
@@ -1170,7 +1323,13 @@ mod tests {
             div { width: 100px; height: 50px; background-image: \
             repeating-linear-gradient(to right, rgb(255, 0, 0), rgb(0, 0, 255) 20px); }"];
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
@@ -1201,7 +1360,10 @@ mod tests {
             "repeating gradient uses ExtendMode::Repeat"
         );
         let span = (grad.gradient.end_point.x - grad.gradient.start_point.x).abs();
-        assert!((span - 20.0).abs() < 1.0, "endpoints span one 20px period, got {span}");
+        assert!(
+            (span - 20.0).abs() < 1.0,
+            "endpoints span one 20px period, got {span}"
+        );
         assert!(
             (grad.gradient.stops.first().unwrap().offset - 0.0).abs() < 1e-3,
             "first stop renormalized to 0"
@@ -1223,7 +1385,13 @@ mod tests {
 
         let doc = StaticDocument::parse("<html><body><ul><li>Item</li></ul></body></html>");
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), &[], None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[],
+            None,
+        );
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
@@ -1245,7 +1413,10 @@ mod tests {
             matches!(c, PaintCmd::DrawText(t)
                 if !t.glyphs.is_empty() && t.placement.bounds.min.x < 0.0)
         });
-        assert!(hanging, "unordered list item emits a marker hanging left (x < 0)");
+        assert!(
+            hanging,
+            "unordered list item emits a marker hanging left (x < 0)"
+        );
     }
 
     /// Ordered-list items get distinct ordinal markers (`1.`, `2.`), each hanging
@@ -1259,7 +1430,13 @@ mod tests {
 
         let doc = StaticDocument::parse("<html><body><ol><li>A</li><li>B</li></ol></body></html>");
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), &[], None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[],
+            None,
+        );
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
@@ -1281,16 +1458,17 @@ mod tests {
             .commands()
             .iter()
             .filter_map(|c| match c {
-                PaintCmd::DrawText(t)
-                    if t.placement.bounds.min.x < 0.0 && !t.glyphs.is_empty() =>
-                {
+                PaintCmd::DrawText(t) if t.placement.bounds.min.x < 0.0 && !t.glyphs.is_empty() => {
                     Some(t.glyphs.iter().map(|g| g.index).collect())
                 },
                 _ => None,
             })
             .collect();
         assert_eq!(markers.len(), 2, "two list items -> two hanging markers");
-        assert_ne!(markers[0], markers[1], "ordinals `1.` and `2.` differ in glyphs");
+        assert_ne!(
+            markers[0], markers[1],
+            "ordinals `1.` and `2.` differ in glyphs"
+        );
     }
 
     /// `list-style-type` selects the marker: `decimal`, `lower-alpha`, and
@@ -1309,7 +1487,13 @@ mod tests {
             let doc = StaticDocument::parse("<html><body><ol><li>x</li></ol></body></html>");
             let sheet: &[&str] = &[decl];
             let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-            run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+            run_cascade(
+                &doc,
+                &mut styles,
+                euclid::Size2D::new(800.0, 600.0),
+                sheet,
+                None,
+            );
             let viewport = taffy::Size {
                 width: taffy::AvailableSpace::Definite(800.0),
                 height: taffy::AvailableSpace::Definite(600.0),
@@ -1365,7 +1549,13 @@ mod tests {
         let doc = StaticDocument::parse("<html><body><ul><li>x</li></ul></body></html>");
         let sheet = &["li { display: none; }"];
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
@@ -1387,7 +1577,10 @@ mod tests {
             matches!(c, PaintCmd::DrawText(t)
                 if !t.glyphs.is_empty() && t.placement.bounds.min.x < 0.0)
         });
-        assert!(!has_marker, "display:none list item must not paint a marker");
+        assert!(
+            !has_marker,
+            "display:none list item must not paint a marker"
+        );
     }
 
     /// `<ol start>` and `<li value>` offset the ordinals (HTML's counting): a
@@ -1404,7 +1597,13 @@ mod tests {
         let all_markers = |html: &str| -> Vec<Vec<u32>> {
             let doc = StaticDocument::parse(html);
             let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-            run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), &[], None);
+            run_cascade(
+                &doc,
+                &mut styles,
+                euclid::Size2D::new(800.0, 600.0),
+                &[],
+                None,
+            );
             let viewport = taffy::Size {
                 width: taffy::AvailableSpace::Definite(800.0),
                 height: taffy::AvailableSpace::Definite(600.0),
@@ -1470,7 +1669,13 @@ mod tests {
         let all_markers = |html: &str| -> Vec<Vec<u32>> {
             let doc = StaticDocument::parse(html);
             let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-            run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), &[], None);
+            run_cascade(
+                &doc,
+                &mut styles,
+                euclid::Size2D::new(800.0, 600.0),
+                &[],
+                None,
+            );
             let viewport = taffy::Size {
                 width: taffy::AvailableSpace::Definite(800.0),
                 height: taffy::AvailableSpace::Definite(600.0),
@@ -1502,9 +1707,11 @@ mod tests {
                 .collect()
         };
 
-        let plain = all_markers("<html><body><ol><li>a</li><li>b</li><li>c</li></ol></body></html>");
-        let rev =
-            all_markers("<html><body><ol reversed><li>a</li><li>b</li><li>c</li></ol></body></html>");
+        let plain =
+            all_markers("<html><body><ol><li>a</li><li>b</li><li>c</li></ol></body></html>");
+        let rev = all_markers(
+            "<html><body><ol reversed><li>a</li><li>b</li><li>c</li></ol></body></html>",
+        );
         assert_eq!(rev.len(), 3, "three reversed markers");
         assert_eq!(rev[0], plain[2], "first item counts down from 3 (`3.`)");
         assert_eq!(rev[1], plain[1], "`2.`");
@@ -1525,7 +1732,13 @@ mod tests {
         let analyze = |sheet: &[&str]| -> (usize, usize) {
             let doc = StaticDocument::parse("<html><body><ul><li>Item</li></ul></body></html>");
             let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-            run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+            run_cascade(
+                &doc,
+                &mut styles,
+                euclid::Size2D::new(800.0, 600.0),
+                sheet,
+                None,
+            );
             let viewport = taffy::Size {
                 width: taffy::AvailableSpace::Definite(800.0),
                 height: taffy::AvailableSpace::Definite(600.0),
@@ -1555,7 +1768,9 @@ mod tests {
                 .commands()
                 .iter()
                 .filter_map(|c| match c {
-                    PaintCmd::DrawText(t) if t.placement.bounds.min.x >= 0.0 => Some(t.glyphs.len()),
+                    PaintCmd::DrawText(t) if t.placement.bounds.min.x >= 0.0 => {
+                        Some(t.glyphs.len())
+                    },
                     _ => None,
                 })
                 .sum();
@@ -1583,7 +1798,13 @@ mod tests {
         let line_box_height = |sheet: &[&str]| {
             let doc = StaticDocument::parse("<html><body><p>yep</p></body></html>");
             let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-            run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+            run_cascade(
+                &doc,
+                &mut styles,
+                euclid::Size2D::new(800.0, 600.0),
+                sheet,
+                None,
+            );
             let viewport = taffy::Size {
                 width: taffy::AvailableSpace::Definite(800.0),
                 height: taffy::AvailableSpace::Definite(600.0),
@@ -1603,8 +1824,14 @@ mod tests {
             "html, body, p { display: block; margin: 0; font-size: 40px; line-height: 70px; }",
         ]);
 
-        assert!((factor - 80.0).abs() < 1.0, "line-height:2 → ~80px line box, got {factor}");
-        assert!((absolute - 70.0).abs() < 1.0, "line-height:70px → ~70px line box, got {absolute}");
+        assert!(
+            (factor - 80.0).abs() < 1.0,
+            "line-height:2 → ~80px line box, got {factor}"
+        );
+        assert!(
+            (absolute - 70.0).abs() < 1.0,
+            "line-height:70px → ~70px line box, got {absolute}"
+        );
         assert!(
             factor > normal + 20.0,
             "line-height:2 ({factor}) is taller than normal ({normal})"
@@ -1620,7 +1847,13 @@ mod tests {
         let doc = StaticDocument::parse("<html><body><p>abc</p></body></html>");
         let sheet = &["html, body, p { display: block; margin: 0; padding: 0; border: 0; }"];
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
         let images = ImagePlane::new();
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
@@ -1629,14 +1862,17 @@ mod tests {
         let (fragments, built, text_ctx) = layout(&doc, &styles, &images, viewport);
         let p = find_p(&doc);
 
-        let at0 = caret_rect(&doc, p, 0, &built, &text_ctx, &fragments, 2.0)
-            .expect("caret at offset 0");
+        let at0 =
+            caret_rect(&doc, p, 0, &built, &text_ctx, &fragments, 2.0).expect("caret at offset 0");
         let at3 = caret_rect(&doc, p, 3, &built, &text_ctx, &fragments, 2.0)
             .expect("caret at end of 'abc'");
 
         // Positive height (a line-tall bar) and the requested thickness.
         assert!(at0.height > 0.0, "caret has height: {at0:?}");
-        assert!((at0.width - 2.0).abs() < 0.01, "caret width is the thickness");
+        assert!(
+            (at0.width - 2.0).abs() < 0.01,
+            "caret width is the thickness"
+        );
         // The caret moves right as the offset grows past the glyphs.
         assert!(
             at3.x > at0.x,
@@ -1659,7 +1895,13 @@ mod tests {
         let doc = StaticDocument::parse("<html><body><p>abc</p></body></html>");
         let sheet = &["html, body, p { display: block; margin: 0; padding: 0; border: 0; }"];
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
         let images = ImagePlane::new();
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
@@ -1692,7 +1934,13 @@ mod tests {
             "p { width: 20px; }",
         ];
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
         let images = ImagePlane::new();
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
@@ -1704,18 +1952,29 @@ mod tests {
 
         // Sanity: the run wrapped (the caret at the end sits below the start).
         let start = rect_at(0);
-        assert!(rect_at(19).y > start.y, "text wrapped to multiple visual lines");
+        assert!(
+            rect_at(19).y > start.y,
+            "text wrapped to multiple visual lines"
+        );
 
         // Down one visual line lands on a later row (greater y) at a byte past
         // the first wrapped word.
-        let (down, goal) = caret_byte_vertical::<StaticDocument>(p, 0, &built, &text_ctx, 1, None).unwrap();
+        let (down, goal) =
+            caret_byte_vertical::<StaticDocument>(p, 0, &built, &text_ctx, 1, None).unwrap();
         assert!(down > 0, "down moved off byte 0: {down}");
-        assert!(rect_at(down).y > start.y, "down moved to a lower visual line");
+        assert!(
+            rect_at(down).y > start.y,
+            "down moved to a lower visual line"
+        );
 
         // Up from there, feeding the goal back, returns to the first row.
         let (up, _) =
-            caret_byte_vertical::<StaticDocument>(p, down, &built, &text_ctx, -1, Some(goal)).unwrap();
-        assert!((rect_at(up).y - start.y).abs() < 0.5, "up returned to the first row");
+            caret_byte_vertical::<StaticDocument>(p, down, &built, &text_ctx, -1, Some(goal))
+                .unwrap();
+        assert!(
+            (rect_at(up).y - start.y).abs() < 0.5,
+            "up returned to the first row"
+        );
 
         // A click on the wrapped row resolves to a caret on that same row.
         let down_rect = rect_at(down);
@@ -1729,11 +1988,16 @@ mod tests {
             &fragments,
         )
         .unwrap();
-        assert!((rect_at(hit).y - down_rect.y).abs() < 0.5, "click maps to the clicked row");
+        assert!(
+            (rect_at(hit).y - down_rect.y).abs() < 0.5,
+            "click maps to the clicked row"
+        );
 
         // A node with no cached text layout yields None for both.
         let root = doc.document();
-        assert!(caret_byte_vertical::<StaticDocument>(root, 0, &built, &text_ctx, 1, None).is_none());
+        assert!(
+            caret_byte_vertical::<StaticDocument>(root, 0, &built, &text_ctx, 1, None).is_none()
+        );
         assert!(caret_byte_at_point(&doc, root, 1.0, 1.0, &built, &text_ctx, &fragments).is_none());
     }
 
@@ -1751,7 +2015,13 @@ mod tests {
             "p { width: 20px; }",
         ];
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
         let images = ImagePlane::new();
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
@@ -1767,12 +2037,19 @@ mod tests {
         // the caret clamps onto the short row at a smaller x.
         let (on_short, goal) =
             caret_byte_vertical::<StaticDocument>(p, 8, &built, &text_ctx, 1, None).unwrap();
-        assert!(rect_at(on_short).x < start_x - 5.0, "the short row clamps the caret leftward");
+        assert!(
+            rect_at(on_short).x < start_x - 5.0,
+            "the short row clamps the caret leftward"
+        );
         // Down again into the long row, feeding the goal back: the caret returns to ~its
         // original column, well right of where the short row clamped it.
         let (on_long, goal2) =
-            caret_byte_vertical::<StaticDocument>(p, on_short, &built, &text_ctx, 1, Some(goal)).unwrap();
-        assert!((goal2 - goal).abs() < 0.5, "the goal x is stable across the run: {goal} vs {goal2}");
+            caret_byte_vertical::<StaticDocument>(p, on_short, &built, &text_ctx, 1, Some(goal))
+                .unwrap();
+        assert!(
+            (goal2 - goal).abs() < 0.5,
+            "the goal x is stable across the run: {goal} vs {goal2}"
+        );
         assert!(
             rect_at(on_long).x > rect_at(on_short).x + 5.0,
             "the sticky goal returns the caret rightward on the long row, not stuck at the short row's column",

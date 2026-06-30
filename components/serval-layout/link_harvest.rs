@@ -125,14 +125,16 @@ fn image_anchor_rects<D>(
         let Some(&taffy_id) = built.node_map.get(&leaf) else {
             continue;
         };
-        let (Some(layout), Some(content)) =
-            (text_ctx.layouts.get(&taffy_id), built.get_node_context(taffy_id))
-        else {
+        let (Some(layout), Some(content)) = (
+            text_ctx.layouts.get(&taffy_id),
+            built.get_node_context(taffy_id),
+        ) else {
             continue;
         };
-        let (Some((ox, oy)), Some(frame)) =
-            (absolute_origin(dom, fragments, leaf), fragments.rect_of(leaf))
-        else {
+        let (Some((ox, oy)), Some(frame)) = (
+            absolute_origin(dom, fragments, leaf),
+            fragments.rect_of(leaf),
+        ) else {
             continue;
         };
         // The leaf content-box origin — the space parley positions inline boxes in.
@@ -214,7 +216,12 @@ fn boxed_anchor_rects<D>(
     if let (Some(href), Some(l)) = (anchor_href(dom, id), fragments.rect_of(id)) {
         out.push((
             href,
-            [origin.0, origin.1, origin.0 + l.size.width, origin.1 + l.size.height],
+            [
+                origin.0,
+                origin.1,
+                origin.0 + l.size.width,
+                origin.1 + l.size.height,
+            ],
         ));
     }
     for child in dom.dom_children(id) {
@@ -231,10 +238,24 @@ mod tests {
     use crate::style::StylePlane;
     use serval_static_dom::{StaticDocument, StaticNodeId};
 
-    fn lay(body: &str, sheet: &[&str]) -> (StaticDocument, crate::fragment::FragmentPlane<StaticNodeId>, BoxTree<StaticNodeId>, TextMeasureCtx) {
+    fn lay(
+        body: &str,
+        sheet: &[&str],
+    ) -> (
+        StaticDocument,
+        crate::fragment::FragmentPlane<StaticNodeId>,
+        BoxTree<StaticNodeId>,
+        TextMeasureCtx,
+    ) {
         let doc = StaticDocument::parse(body);
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&doc, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
@@ -252,12 +273,23 @@ mod tests {
             &["html, body, p { display: block; margin: 0; font-size: 20px; }"],
         );
         let links = harvest_link_rects(&doc, &fragments, &built, &text_ctx);
-        assert_eq!(links.len(), 1, "one inline link -> one line rect, got {links:?}");
+        assert_eq!(
+            links.len(),
+            1,
+            "one inline link -> one line rect, got {links:?}"
+        );
         let (href, rect) = &links[0];
         assert_eq!(href, "https://example.test/spec");
-        assert!(rect[2] > rect[0] && rect[3] > rect[1], "positive area, got {rect:?}");
+        assert!(
+            rect[2] > rect[0] && rect[3] > rect[1],
+            "positive area, got {rect:?}"
+        );
         // "the spec" follows "see " so the link rect starts a little right of x=0.
-        assert!(rect[0] > 0.0, "link starts after the leading text, got x0={}", rect[0]);
+        assert!(
+            rect[0] > 0.0,
+            "link starts after the leading text, got x0={}",
+            rect[0]
+        );
     }
 
     /// A `display:block` `<a href>` contributes its full border-box rect (the whole
@@ -266,11 +298,16 @@ mod tests {
     fn block_anchor_harvests_its_box() {
         let (doc, fragments, built, text_ctx) = lay(
             "<html><body><a href=\"/home\">Home</a></body></html>",
-            &["html, body { display: block; margin: 0; } a { display: block; width: 200px; height: 40px; }"],
+            &[
+                "html, body { display: block; margin: 0; } a { display: block; width: 200px; height: 40px; }",
+            ],
         );
         let links = harvest_link_rects(&doc, &fragments, &built, &text_ctx);
         assert!(!links.is_empty(), "block anchor harvests rects");
-        assert!(links.iter().all(|(h, _)| h == "/home"), "all rects carry the href");
+        assert!(
+            links.iter().all(|(h, _)| h == "/home"),
+            "all rects carry the href"
+        );
         // The border-box rect spans the declared 200x40 row.
         let has_box = links
             .iter()
@@ -289,17 +326,30 @@ mod tests {
         );
         let links = harvest_link_rects(&doc, &fragments, &built, &text_ctx);
         let hit = links.iter().find(|(h, _)| h == "https://example.test/home");
-        assert!(hit.is_some(), "an image-only inline link harvests a rect, got {links:?}");
+        assert!(
+            hit.is_some(),
+            "an image-only inline link harvests a rect, got {links:?}"
+        );
         let (_, rect) = hit.unwrap();
-        assert!((rect[2] - rect[0] - 40.0).abs() < 2.0, "~40px wide image box, got {}", rect[2] - rect[0]);
-        assert!((rect[3] - rect[1] - 30.0).abs() < 2.0, "~30px tall image box, got {}", rect[3] - rect[1]);
+        assert!(
+            (rect[2] - rect[0] - 40.0).abs() < 2.0,
+            "~40px wide image box, got {}",
+            rect[2] - rect[0]
+        );
+        assert!(
+            (rect[3] - rect[1] - 30.0).abs() < 2.0,
+            "~30px tall image box, got {}",
+            rect[3] - rect[1]
+        );
     }
 
     /// A page with no links harvests nothing.
     #[test]
     fn no_links_harvests_empty() {
-        let (doc, fragments, built, text_ctx) =
-            lay("<html><body><p>plain text</p></body></html>", &["p { display: block; }"]);
+        let (doc, fragments, built, text_ctx) = lay(
+            "<html><body><p>plain text</p></body></html>",
+            &["p { display: block; }"],
+        );
         assert!(harvest_link_rects(&doc, &fragments, &built, &text_ctx).is_empty());
     }
 }

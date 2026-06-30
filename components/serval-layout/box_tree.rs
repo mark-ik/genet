@@ -31,8 +31,8 @@ use layout_dom_api::{LayoutDom, NodeKind};
 use parley::LayoutContext;
 use rustc_hash::FxHashMap;
 use servo_arc::Arc as ServoArc;
-use style::properties::style_structs::Font;
 use style::properties::ComputedValues;
+use style::properties::style_structs::Font;
 use stylo_taffy::TaffyStyloStyle;
 use taffy::{
     AvailableSpace, Cache, CacheTree, Layout, LayoutBlockContainer, LayoutFlexboxContainer,
@@ -44,13 +44,13 @@ use crate::adapter::NodeRef;
 use crate::construct::{
     block_pseudo_content, establishes_inline_context, flows_inline, gather_inline_content,
     gather_inline_group, is_replaced, list_marker_content, list_marker_inline_run,
-    list_marker_is_inside, replaced_px_size, run_for_element,
+    list_marker_is_inside, replaced_intrinsic_size, replaced_px_size,
 };
 use crate::fragment::FragmentPlane;
 use crate::image_decode::ImagePlane;
 use crate::style::StylePlane;
 use crate::text_measure::{
-    measure_inline_content, shape_leaf, ColorBrush, InlineContent, TextMeasureCtx,
+    ColorBrush, InlineContent, TextMeasureCtx, measure_inline_content, shape_leaf,
 };
 
 /// Shared initial `ComputedValues` for anonymous/text leaves, which have
@@ -142,6 +142,10 @@ pub(crate) struct BoxNode<Id> {
     /// (intrinsic from the `ImagePlane`, overridden by definite CSS
     /// width/height). Mutually exclusive with `inline_content`.
     pub(crate) replaced_size: Option<(f32, f32)>,
+    /// The content object's intrinsic/default size before CSS width/height
+    /// overrides. Paint uses this for `object-fit` on compositor-backed replaced
+    /// content.
+    pub(crate) replaced_intrinsic_size: Option<(f32, f32)>,
     /// `Some(key)` => an `<external-texture>` leaf: instead of serval-painted
     /// content, paint emits a [`PaintCmd::DrawExternalTexture`](paint_list_api::PaintCmd)
     /// at this box, and the host composites the texture the producer registered under
@@ -174,6 +178,7 @@ impl<Id> BoxNode<Id> {
             inline_content: None,
             marker: None,
             replaced_size: None,
+            replaced_intrinsic_size: None,
             external_texture_key: None,
             grid_placement: None,
             source,
@@ -214,7 +219,9 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
     /// extract positioned glyphs. `None` for block nodes / replaced
     /// leaves. Mirrors `TaffyTree::get_node_context` on the old oracle.
     pub fn get_node_context(&self, id: NodeId) -> Option<&InlineContent<Id>> {
-        self.nodes.get(idx(id)).and_then(|n| n.inline_content.as_ref())
+        self.nodes
+            .get(idx(id))
+            .and_then(|n| n.inline_content.as_ref())
     }
 
     /// The byte-range → source-element index for inline-formatting leaf `id` (keyed
@@ -257,7 +264,9 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
         I: IntoIterator<Item = Id>,
     {
         for id in mutated {
-            let Some(&node_id) = self.node_map.get(&id) else { continue };
+            let Some(&node_id) = self.node_map.get(&id) else {
+                continue;
+            };
             let i = idx(node_id);
             if matches!(self.nodes[i].source, BoxSource::Element(eid) if eid == id) {
                 self.nodes[i].style = style_of(styles, id);
@@ -347,6 +356,7 @@ where
     // inline-context leaf and are handled there, not here).
     if !has_block_pseudo && is_replaced(dom, elem.id()) {
         let mut node = BoxNode::new(style, BoxSource::Element(elem.id()));
+        node.replaced_intrinsic_size = replaced_intrinsic_size(dom, images, elem.id());
         node.replaced_size = Some(replaced_px_size(dom, styles, images, elem.id()));
         // `<external-texture>` carries a host-composited texture key; every other
         // replaced element yields `None` here.
@@ -409,19 +419,38 @@ where
     for child in elem.dom_children() {
         match dom.kind(child.id()) {
             NodeKind::Text => {
-                if dom.text(child.id()).is_some_and(|t| !t.chars().all(char::is_whitespace)) {
+                if dom
+                    .text(child.id())
+                    .is_some_and(|t| !t.chars().all(char::is_whitespace))
+                {
                     group.push(child);
                 }
             },
             NodeKind::Element if flows_inline(dom, styles, child.id()) => group.push(child),
             NodeKind::Element => {
-                flush_anon_group(dom, styles, images, elem.id(), &mut group, &mut children, tree);
+                flush_anon_group(
+                    dom,
+                    styles,
+                    images,
+                    elem.id(),
+                    &mut group,
+                    &mut children,
+                    tree,
+                );
                 children.push(build_node(dom, styles, images, child, tree));
             },
             _ => {},
         }
     }
-    flush_anon_group(dom, styles, images, elem.id(), &mut group, &mut children, tree);
+    flush_anon_group(
+        dom,
+        styles,
+        images,
+        elem.id(),
+        &mut group,
+        &mut children,
+        tree,
+    );
     // A block `::after` is the last in-flow child.
     children.extend(after);
     let mut node = BoxNode::new(style, BoxSource::Element(elem.id()));
@@ -499,7 +528,10 @@ fn collect_table_rows<'a, D>(
             Some(DisplayInside::TableRow) => {
                 let mut col = 0u16;
                 for cell in child.dom_children() {
-                    if matches!(display_inside_of(styles, cell.id()), Some(DisplayInside::TableCell)) {
+                    if matches!(
+                        display_inside_of(styles, cell.id()),
+                        Some(DisplayInside::TableCell)
+                    ) {
                         let ci = build_node(dom, styles, images, cell, tree);
                         tree.nodes[ci].grid_placement = Some((*row, col));
                         children.push(ci);
@@ -507,7 +539,7 @@ fn collect_table_rows<'a, D>(
                     }
                 }
                 *row += 1;
-            }
+            },
             Some(
                 DisplayInside::TableRowGroup
                 | DisplayInside::TableHeaderGroup
@@ -515,7 +547,7 @@ fn collect_table_rows<'a, D>(
             ) => collect_table_rows(dom, styles, images, child, row, children, tree),
             // `<caption>`, `<colgroup>`, stray content: not laid out in the
             // first-cut grid (deferred).
-            _ => {}
+            _ => {},
         }
     }
 }
@@ -616,12 +648,20 @@ struct CssStyle {
 impl CssStyle {
     #[inline]
     fn new(inner: NodeStyle) -> Self {
-        Self { inner, size_override: None, grid_placement: None }
+        Self {
+            inner,
+            size_override: None,
+            grid_placement: None,
+        }
     }
 
     #[inline]
     fn with_size(inner: NodeStyle, size: taffy::Size<taffy::Dimension>) -> Self {
-        Self { inner, size_override: Some(size), grid_placement: None }
+        Self {
+            inner,
+            size_override: Some(size),
+            grid_placement: None,
+        }
     }
 }
 
@@ -877,7 +917,10 @@ impl<Id: Copy + Eq + Hash> BoxTreeView<'_, Id> {
                             inputs,
                             &style,
                             |_, _| 0.0,
-                            |_, _| Size { width: w, height: h },
+                            |_, _| Size {
+                                width: w,
+                                height: h,
+                            },
                         ),
                         // Text / inline formatting context: parley measures.
                         None => taffy::compute_leaf_layout(
@@ -940,8 +983,8 @@ impl<Id: Copy + Eq + Hash> LayoutPartialTree for BoxTreeView<'_, Id> {
 
     #[inline]
     fn resolve_calc_value(&self, val: *const (), basis: f32) -> f32 {
-        use style::values::computed::length_percentage::CalcLengthPercentage;
         use style::values::computed::Length;
+        use style::values::computed::length_percentage::CalcLengthPercentage;
         // SAFETY: `val` is the pointer `stylo_taffy::convert::length_percentage`
         // packed into `CompactLength::calc` — a `*const CalcLengthPercentage`
         // borrowed from the live `ComputedValues` this tree holds (kept
@@ -1281,7 +1324,13 @@ mod tests {
     fn lay(html: &str, sheets: &[&str]) -> (StaticDocument, FragmentPlane<StaticNodeId>) {
         let document = StaticDocument::parse(html);
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&document, &mut styles, euclid::Size2D::new(VIEWPORT, VIEWPORT), sheets, None);
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(VIEWPORT, VIEWPORT),
+            sheets,
+            None,
+        );
         let images = ImagePlane::decode_from_dom(&document);
         let viewport = Size {
             width: AvailableSpace::Definite(VIEWPORT),
@@ -1325,14 +1374,29 @@ mod tests {
     fn block_siblings_stack_vertically() {
         let (doc, frags) = lay(
             "<html><body><div class=\"a\"></div><div class=\"b\"></div></body></html>",
-            &[".a { width: 60px; height: 40px; }", ".b { width: 60px; height: 40px; }"],
+            &[
+                ".a { width: 60px; height: 40px; }",
+                ".b { width: 60px; height: 40px; }",
+            ],
         );
         let divs = find_all(&doc, html5ever::local_name!("div"));
         let a = frags.rect_of(divs[0]).expect(".a fragment");
         let b = frags.rect_of(divs[1]).expect(".b fragment");
-        assert!(approx(a.location.y, 0.0), ".a at top, got y={}", a.location.y);
-        assert!(approx(a.size.height, 40.0), ".a height 40, got {}", a.size.height);
-        assert!(approx(b.location.y, 40.0), ".b stacks below .a (y=40), got y={}", b.location.y);
+        assert!(
+            approx(a.location.y, 0.0),
+            ".a at top, got y={}",
+            a.location.y
+        );
+        assert!(
+            approx(a.size.height, 40.0),
+            ".a height 40, got {}",
+            a.size.height
+        );
+        assert!(
+            approx(b.location.y, 40.0),
+            ".b stacks below .a (y=40), got y={}",
+            b.location.y
+        );
     }
 
     /// UA default heading scale: `h1 { font-size: 2em }` makes an `<h1>`'s line
@@ -1340,10 +1404,7 @@ mod tests {
     /// font-size scale cascades into layout (not just `display: block`).
     #[test]
     fn ua_heading_scale_makes_h1_taller_than_p() {
-        let (doc, frags) = lay(
-            "<html><body><h1>Aa</h1><p>Aa</p></body></html>",
-            &[],
-        );
+        let (doc, frags) = lay("<html><body><h1>Aa</h1><p>Aa</p></body></html>", &[]);
         let h1 = frags
             .rect_of(find_all(&doc, html5ever::local_name!("h1"))[0])
             .expect("h1 fragment");
@@ -1370,8 +1431,16 @@ mod tests {
         let body = frags
             .rect_of(find_all(&doc, html5ever::local_name!("body"))[0])
             .expect("body fragment");
-        assert!(approx(body.location.x, 8.0), "body left gutter 8px, got {}", body.location.x);
-        assert!(approx(body.location.y, 8.0), "body top gutter 8px, got {}", body.location.y);
+        assert!(
+            approx(body.location.x, 8.0),
+            "body left gutter 8px, got {}",
+            body.location.x
+        );
+        assert!(
+            approx(body.location.y, 8.0),
+            "body top gutter 8px, got {}",
+            body.location.y
+        );
     }
 
     /// UA default `p { margin: 1em 0 }` spaces stacked paragraphs by one line.
@@ -1411,10 +1480,26 @@ mod tests {
             let l = frags.rect_of(cells[i]).expect("cell");
             (l.location.x, l.location.y)
         };
-        assert!(approx(at(0).0, 0.0) && approx(at(0).1, 0.0), "cell 0 at (0,0): {:?}", at(0));
-        assert!(approx(at(1).0, 50.0) && approx(at(1).1, 0.0), "cell 1 at (50,0): {:?}", at(1));
-        assert!(approx(at(2).0, 0.0) && approx(at(2).1, 30.0), "cell 2 at (0,30): {:?}", at(2));
-        assert!(approx(at(3).0, 50.0) && approx(at(3).1, 30.0), "cell 3 at (50,30): {:?}", at(3));
+        assert!(
+            approx(at(0).0, 0.0) && approx(at(0).1, 0.0),
+            "cell 0 at (0,0): {:?}",
+            at(0)
+        );
+        assert!(
+            approx(at(1).0, 50.0) && approx(at(1).1, 0.0),
+            "cell 1 at (50,0): {:?}",
+            at(1)
+        );
+        assert!(
+            approx(at(2).0, 0.0) && approx(at(2).1, 30.0),
+            "cell 2 at (0,30): {:?}",
+            at(2)
+        );
+        assert!(
+            approx(at(3).0, 50.0) && approx(at(3).1, 30.0),
+            "cell 3 at (50,30): {:?}",
+            at(3)
+        );
     }
 
     /// A `<table>` lays out as a grid of its cells (first cut): a 2x2 table flattens
@@ -1437,10 +1522,26 @@ mod tests {
             (l.location.x, l.location.y)
         };
         // Cells relative to the table grid: a 2x2 layout, not a vertical stack.
-        assert!(approx(at(0).0, 0.0) && approx(at(0).1, 0.0), "A at (0,0): {:?}", at(0));
-        assert!(approx(at(1).0, 30.0) && approx(at(1).1, 0.0), "B right of A (30,0): {:?}", at(1));
-        assert!(approx(at(2).0, 0.0) && approx(at(2).1, 20.0), "C below A (0,20): {:?}", at(2));
-        assert!(approx(at(3).0, 30.0) && approx(at(3).1, 20.0), "D at (30,20): {:?}", at(3));
+        assert!(
+            approx(at(0).0, 0.0) && approx(at(0).1, 0.0),
+            "A at (0,0): {:?}",
+            at(0)
+        );
+        assert!(
+            approx(at(1).0, 30.0) && approx(at(1).1, 0.0),
+            "B right of A (30,0): {:?}",
+            at(1)
+        );
+        assert!(
+            approx(at(2).0, 0.0) && approx(at(2).1, 20.0),
+            "C below A (0,20): {:?}",
+            at(2)
+        );
+        assert!(
+            approx(at(3).0, 30.0) && approx(at(3).1, 20.0),
+            "D at (30,20): {:?}",
+            at(3)
+        );
     }
 
     // ---- Flex / grid measurement fidelity (item 6 of the layout fidelity plan) ----
@@ -1476,8 +1577,14 @@ mod tests {
         );
         let a = div_rect(&doc, &frags, 1);
         let b = div_rect(&doc, &frags, 2);
-        assert!(approx(a.0, 0.0) && approx(a.1, 0.0), ".a at row start (0,0): {a:?}");
-        assert!(approx(b.0, 40.0) && approx(b.1, 0.0), ".b after .a (40,0): {b:?}");
+        assert!(
+            approx(a.0, 0.0) && approx(a.1, 0.0),
+            ".a at row start (0,0): {a:?}"
+        );
+        assert!(
+            approx(b.0, 40.0) && approx(b.1, 0.0),
+            ".b after .a (40,0): {b:?}"
+        );
     }
 
     /// `flex-grow` distributes free space in proportion to the grow factors:
@@ -1494,8 +1601,15 @@ mod tests {
         );
         let a = div_rect(&doc, &frags, 1);
         let b = div_rect(&doc, &frags, 2);
-        assert!(approx(a.2, 25.0), ".a gets 1/4 of free space (25px), got {}", a.2);
-        assert!(approx(b.2, 75.0) && approx(b.0, 25.0), ".b gets 3/4 (75px) at x=25: {b:?}");
+        assert!(
+            approx(a.2, 25.0),
+            ".a gets 1/4 of free space (25px), got {}",
+            a.2
+        );
+        assert!(
+            approx(b.2, 75.0) && approx(b.0, 25.0),
+            ".b gets 3/4 (75px) at x=25: {b:?}"
+        );
     }
 
     /// `flex-shrink` distributes overflow in proportion to scaled shrink factors
@@ -1514,7 +1628,10 @@ mod tests {
         let a = div_rect(&doc, &frags, 1);
         let b = div_rect(&doc, &frags, 2);
         assert!(approx(a.2, 50.0), ".a shrinks 80->50, got {}", a.2);
-        assert!(approx(b.2, 50.0) && approx(b.0, 50.0), ".b shrinks to 50 at x=50: {b:?}");
+        assert!(
+            approx(b.2, 50.0) && approx(b.0, 50.0),
+            ".b shrinks to 50 at x=50: {b:?}"
+        );
     }
 
     /// Default `align-items: stretch`: a flex item with no cross-axis (height)
@@ -1531,7 +1648,11 @@ mod tests {
             ],
         );
         let a = div_rect(&doc, &frags, 1);
-        assert!(approx(a.3, 40.0), ".a stretches to container height 40, got {}", a.3);
+        assert!(
+            approx(a.3, 40.0),
+            ".a stretches to container height 40, got {}",
+            a.3
+        );
         assert!(approx(a.2, 30.0), ".a keeps its 30px width, got {}", a.2);
     }
 
@@ -1565,8 +1686,14 @@ mod tests {
         );
         let a = div_rect(&doc, &frags, 1);
         let b = div_rect(&doc, &frags, 2);
-        assert!(approx(a.0, 0.0) && approx(a.2, 25.0), "cell 0: 1fr -> 25px at x=0: {a:?}");
-        assert!(approx(b.0, 25.0) && approx(b.2, 75.0), "cell 1: 3fr -> 75px at x=25: {b:?}");
+        assert!(
+            approx(a.0, 0.0) && approx(a.2, 25.0),
+            "cell 0: 1fr -> 25px at x=0: {a:?}"
+        );
+        assert!(
+            approx(b.0, 25.0) && approx(b.2, 75.0),
+            "cell 1: 3fr -> 75px at x=25: {b:?}"
+        );
     }
 
     /// Grid `minmax(80px, 1fr)` clamps the flexible track: with a fixed 20px
@@ -1582,8 +1709,15 @@ mod tests {
         );
         let a = div_rect(&doc, &frags, 1);
         let b = div_rect(&doc, &frags, 2);
-        assert!(approx(a.2, 80.0), "minmax track resolves to 80px, got {}", a.2);
-        assert!(approx(b.0, 80.0) && approx(b.2, 20.0), "fixed track 20px at x=80: {b:?}");
+        assert!(
+            approx(a.2, 80.0),
+            "minmax track resolves to 80px, got {}",
+            a.2
+        );
+        assert!(
+            approx(b.0, 80.0) && approx(b.2, 20.0),
+            "fixed track 20px at x=80: {b:?}"
+        );
     }
 
     /// Numeric line-based placement: `grid-column: 2 / 4` / `grid-row: 1 / 3`
@@ -1601,8 +1735,14 @@ mod tests {
         );
         let s = div_rect(&doc, &frags, 1);
         // cols 2-3: x = 30, width = 30 + 40 = 70; rows 1-2: y = 0, height = 40.
-        assert!(approx(s.0, 30.0) && approx(s.1, 0.0), "span starts at col 2 / row 1 (30,0): {s:?}");
-        assert!(approx(s.2, 70.0) && approx(s.3, 40.0), "span covers cols 2-3 x both rows (70x40): {s:?}");
+        assert!(
+            approx(s.0, 30.0) && approx(s.1, 0.0),
+            "span starts at col 2 / row 1 (30,0): {s:?}"
+        );
+        assert!(
+            approx(s.2, 70.0) && approx(s.3, 40.0),
+            "span covers cols 2-3 x both rows (70x40): {s:?}"
+        );
     }
 
     /// `justify-items: center` + `align-items: center` center a smaller item in
@@ -1620,7 +1760,10 @@ mod tests {
         );
         let it = div_rect(&doc, &frags, 1);
         // centered in the 100x60 cell: x = (100-40)/2 = 30, y = (60-20)/2 = 20.
-        assert!(approx(it.0, 30.0) && approx(it.1, 20.0), "item centered in cell (30,20): {it:?}");
+        assert!(
+            approx(it.0, 30.0) && approx(it.1, 20.0),
+            "item centered in cell (30,20): {it:?}"
+        );
     }
 
     /// `grid-template-areas` (the holy-grail layout): a header/sidebar/main/footer
@@ -1652,14 +1795,34 @@ mod tests {
         let side = div_rect(&doc, &frags, 2);
         let main = div_rect(&doc, &frags, 3);
         let footer = div_rect(&doc, &frags, 4);
-        assert!(approx(header.0, 0.0) && approx(header.1, 0.0) && approx(header.2, 100.0) && approx(header.3, 20.0),
-            "header spans the top row (0,0,100,20): {header:?}");
-        assert!(approx(side.0, 0.0) && approx(side.1, 20.0) && approx(side.2, 30.0) && approx(side.3, 60.0),
-            "side is the left-middle cell (0,20,30,60): {side:?}");
-        assert!(approx(main.0, 30.0) && approx(main.1, 20.0) && approx(main.2, 70.0) && approx(main.3, 60.0),
-            "main is the right-middle cell (30,20,70,60): {main:?}");
-        assert!(approx(footer.0, 0.0) && approx(footer.1, 80.0) && approx(footer.2, 100.0) && approx(footer.3, 20.0),
-            "footer spans the bottom row (0,80,100,20): {footer:?}");
+        assert!(
+            approx(header.0, 0.0)
+                && approx(header.1, 0.0)
+                && approx(header.2, 100.0)
+                && approx(header.3, 20.0),
+            "header spans the top row (0,0,100,20): {header:?}"
+        );
+        assert!(
+            approx(side.0, 0.0)
+                && approx(side.1, 20.0)
+                && approx(side.2, 30.0)
+                && approx(side.3, 60.0),
+            "side is the left-middle cell (0,20,30,60): {side:?}"
+        );
+        assert!(
+            approx(main.0, 30.0)
+                && approx(main.1, 20.0)
+                && approx(main.2, 70.0)
+                && approx(main.3, 60.0),
+            "main is the right-middle cell (30,20,70,60): {main:?}"
+        );
+        assert!(
+            approx(footer.0, 0.0)
+                && approx(footer.1, 80.0)
+                && approx(footer.2, 100.0)
+                && approx(footer.3, 20.0),
+            "footer spans the bottom row (0,80,100,20): {footer:?}"
+        );
     }
 
     /// CSS `order` lays flex items out in order-modified document order: items
@@ -1710,8 +1873,16 @@ mod tests {
         let b = div_rect(&doc, &frags, 2);
         let c = div_rect(&doc, &frags, 3);
         assert!(approx(b.0, 0.0), "order:-1 .b first (x=0), got {}", b.0);
-        assert!(approx(a.0, 30.0), ".a (order 0, doc-first) second (x=30), got {}", a.0);
-        assert!(approx(c.0, 60.0), ".c (order 0, doc-second) third (x=60), got {}", c.0);
+        assert!(
+            approx(a.0, 30.0),
+            ".a (order 0, doc-first) second (x=30), got {}",
+            a.0
+        );
+        assert!(
+            approx(c.0, 60.0),
+            ".c (order 0, doc-second) third (x=60), got {}",
+            c.0
+        );
     }
 
     /// `order` feeds line wrapping, not just within-line placement: the sort
@@ -1737,9 +1908,18 @@ mod tests {
         let c = div_rect(&doc, &frags, 3);
         // order-modified [c(-1), a(0), b(0)], wrapping 2-per-line:
         // line 1 = [c, a] at y=0; line 2 = [b] at y=20.
-        assert!(approx(c.0, 0.0) && approx(c.1, 0.0), ".c leads line 1 (0,0): {c:?}");
-        assert!(approx(a.0, 30.0) && approx(a.1, 0.0), ".a fills line 1 (30,0): {a:?}");
-        assert!(approx(b.0, 0.0) && approx(b.1, 20.0), ".b pushed to line 2 (0,20): {b:?}");
+        assert!(
+            approx(c.0, 0.0) && approx(c.1, 0.0),
+            ".c leads line 1 (0,0): {c:?}"
+        );
+        assert!(
+            approx(a.0, 30.0) && approx(a.1, 0.0),
+            ".a fills line 1 (30,0): {a:?}"
+        );
+        assert!(
+            approx(b.0, 0.0) && approx(b.1, 20.0),
+            ".b pushed to line 2 (0,20): {b:?}"
+        );
     }
 
     /// UA `pre { white-space: pre }` preserves source newlines as forced line
@@ -1808,23 +1988,47 @@ mod tests {
         );
         let images = ImagePlane::decode_from_dom(&document);
         let p = find_all(&document, html5ever::local_name!("p"))[0];
-        let (content, _sources) = gather_inline_content(&document, &styles, &images, NodeRef::new(&document, p));
+        let (content, _sources) =
+            gather_inline_content(&document, &styles, &images, NodeRef::new(&document, p));
 
         let texts: Vec<&str> = content.runs.iter().map(|r| r.text.as_str()).collect();
-        assert_eq!(texts.first().copied(), Some("X"), "::before run first, got {texts:?}");
-        assert_eq!(texts.last().copied(), Some("Z"), "::after run last, got {texts:?}");
-        assert!(texts.iter().any(|t| t.contains("hi")), "element text present, got {texts:?}");
+        assert_eq!(
+            texts.first().copied(),
+            Some("X"),
+            "::before run first, got {texts:?}"
+        );
+        assert_eq!(
+            texts.last().copied(),
+            Some("Z"),
+            "::after run last, got {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("hi")),
+            "element text present, got {texts:?}"
+        );
 
         // The ::before run uses the pseudo's own red color, the text run the
         // element's blue — proving run_from_computed reads the pseudo cascade.
-        let before = content.runs.iter().find(|r| r.text == "X").expect("::before run");
+        let before = content
+            .runs
+            .iter()
+            .find(|r| r.text == "X")
+            .expect("::before run");
         assert!(
             before.color[0] > 0.99 && before.color[2] < 0.01,
             "::before is its own red, got {:?}",
             before.color
         );
-        let hi = content.runs.iter().find(|r| r.text.contains("hi")).expect("text run");
-        assert!(hi.color[2] > 0.99 && hi.color[0] < 0.01, "element text is blue, got {:?}", hi.color);
+        let hi = content
+            .runs
+            .iter()
+            .find(|r| r.text.contains("hi"))
+            .expect("text run");
+        assert!(
+            hi.color[2] > 0.99 && hi.color[0] < 0.01,
+            "element text is blue, got {:?}",
+            hi.color
+        );
     }
 
     /// `::first-letter` splits the block's first run at the first typographic
@@ -1849,12 +2053,21 @@ mod tests {
         );
         let images = ImagePlane::decode_from_dom(&document);
         let p = find_all(&document, html5ever::local_name!("p"))[0];
-        let (content, _sources) = gather_inline_content(&document, &styles, &images, NodeRef::new(&document, p));
+        let (content, _sources) =
+            gather_inline_content(&document, &styles, &images, NodeRef::new(&document, p));
 
         let texts: Vec<&str> = content.runs.iter().map(|r| r.text.as_str()).collect();
-        assert_eq!(texts.first().copied(), Some("(H"), "leading punct rides the letter, got {texts:?}");
         assert_eq!(
-            content.runs.iter().map(|r| r.text.as_str()).collect::<String>(),
+            texts.first().copied(),
+            Some("(H"),
+            "leading punct rides the letter, got {texts:?}"
+        );
+        assert_eq!(
+            content
+                .runs
+                .iter()
+                .map(|r| r.text.as_str())
+                .collect::<String>(),
             "(Hello world",
             "split preserves the text exactly"
         );
@@ -1880,11 +2093,22 @@ mod tests {
 
         let document = StaticDocument::parse("<html><body><p>Hello</p></body></html>");
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&document, &mut styles, euclid::Size2D::new(VIEWPORT, VIEWPORT), &[], None);
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(VIEWPORT, VIEWPORT),
+            &[],
+            None,
+        );
         let images = ImagePlane::decode_from_dom(&document);
         let p = find_all(&document, html5ever::local_name!("p"))[0];
-        let (content, _sources) = gather_inline_content(&document, &styles, &images, NodeRef::new(&document, p));
-        assert_eq!(content.runs.len(), 1, "no split without a ::first-letter rule");
+        let (content, _sources) =
+            gather_inline_content(&document, &styles, &images, NodeRef::new(&document, p));
+        assert_eq!(
+            content.runs.len(),
+            1,
+            "no split without a ::first-letter rule"
+        );
     }
 
     /// A list marker takes its `::marker` pseudo's cascade when present, so
@@ -1900,7 +2124,10 @@ mod tests {
             &document,
             &mut styles,
             euclid::Size2D::new(VIEWPORT, VIEWPORT),
-            &["li { color: rgb(0, 0, 255); }", "li::marker { color: rgb(255, 0, 0); }"],
+            &[
+                "li { color: rgb(0, 0, 255); }",
+                "li::marker { color: rgb(255, 0, 0); }",
+            ],
             None,
         );
         let li = find_all(&document, html5ever::local_name!("li"))[0];
@@ -1919,8 +2146,9 @@ mod tests {
     #[test]
     fn white_space_nowrap_stays_one_line() {
         let line_count = |nowrap: bool| {
-            let document =
-                StaticDocument::parse("<html><body><p>one two three four five six</p></body></html>");
+            let document = StaticDocument::parse(
+                "<html><body><p>one two three four five six</p></body></html>",
+            );
             let ws = if nowrap { "white-space: nowrap;" } else { "" };
             let sheet = format!("p {{ display: block; width: 40px; font-size: 16px; {ws} }}");
             let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
@@ -1941,10 +2169,17 @@ mod tests {
                 layout_via_box_tree(&document, &styles, &images, viewport, &mut text_ctx);
             let p = find_all(&document, html5ever::local_name!("p"))[0];
             let taffy_id = *built.node_map.get(&p).expect("p box");
-            text_ctx.layouts.get(&taffy_id).expect("p text laid out").len()
+            text_ctx
+                .layouts
+                .get(&taffy_id)
+                .expect("p text laid out")
+                .len()
         };
         assert_eq!(line_count(true), 1, "nowrap → a single line");
-        assert!(line_count(false) > 1, "wrapping → multiple lines in a 40px box");
+        assert!(
+            line_count(false) > 1,
+            "wrapping → multiple lines in a 40px box"
+        );
     }
 
     /// A block-`display` `::before` / `::after` becomes a synthetic block box
@@ -1993,9 +2228,18 @@ mod tests {
 
         // Block flow: each pseudo box stretches to the 100px container width and
         // takes its own height; ::before is at the top, ::after below the text.
-        assert!(approx(before.final_layout.size.width, 100.0), "::before stretches to width");
-        assert!(approx(before.final_layout.size.height, 20.0), "::before is 20px tall");
-        assert!(approx(before.final_layout.location.y, 0.0), "::before at the top");
+        assert!(
+            approx(before.final_layout.size.width, 100.0),
+            "::before stretches to width"
+        );
+        assert!(
+            approx(before.final_layout.size.height, 20.0),
+            "::before is 20px tall"
+        );
+        assert!(
+            approx(before.final_layout.location.y, 0.0),
+            "::before at the top"
+        );
         assert!(
             after.final_layout.location.y > before.final_layout.location.y,
             "::after ({}) sits below ::before ({})",
@@ -2043,8 +2287,14 @@ mod tests {
         };
 
         // Two passes through the SAME context, different widths.
-        assert!(approx(lay_one(30, &mut text_ctx), 30.0), "first pass width 30");
-        assert!(approx(lay_one(50, &mut text_ctx), 50.0), "reused-ctx second pass width 50");
+        assert!(
+            approx(lay_one(30, &mut text_ctx), 30.0),
+            "first pass width 30"
+        );
+        assert!(
+            approx(lay_one(50, &mut text_ctx), 50.0),
+            "reused-ctx second pass width 50"
+        );
     }
 
     /// Block-level floats: two `float: left` divs sit side by side on one
@@ -2062,9 +2312,72 @@ mod tests {
         let divs = find_all(&doc, html5ever::local_name!("div"));
         let a = frags.rect_of(divs[0]).expect(".a fragment");
         let b = frags.rect_of(divs[1]).expect(".b fragment");
-        assert!(approx(a.location.x, 0.0), ".a at left, got x={}", a.location.x);
-        assert!(approx(b.location.x, 40.0), ".b beside .a (x=40), got x={}", b.location.x);
-        assert!(approx(b.location.y, 0.0), ".b on the same line as .a (y=0), got y={}", b.location.y);
+        assert!(
+            approx(a.location.x, 0.0),
+            ".a at left, got x={}",
+            a.location.x
+        );
+        assert!(
+            approx(b.location.x, 40.0),
+            ".b beside .a (x=40), got x={}",
+            b.location.x
+        );
+        assert!(
+            approx(b.location.y, 0.0),
+            ".b on the same line as .a (y=0), got y={}",
+            b.location.y
+        );
+    }
+
+    /// A floated `<img>` starts as `display:inline`, but CSS blockifies floats.
+    /// Keep it on the block path so Taffy's float/clear layout can place it.
+    #[test]
+    fn floated_imgs_clear_after_br() {
+        let src = blue_png_data_uri();
+        let html = format!(
+            "<html><body>\
+             <img class=\"a\" src=\"{src}\"><img class=\"b\" src=\"{src}\">\
+             <br>\
+             <img class=\"c\" src=\"{src}\">\
+             </body></html>"
+        );
+        let (doc, frags) = lay(
+            &html,
+            &[
+                "html, body { margin: 0; padding: 0; }",
+                "img { float: left; width: 40px; height: 20px; }",
+                "br { clear: both; }",
+            ],
+        );
+        let imgs = find_all(&doc, html5ever::local_name!("img"));
+        let a = frags.rect_of(imgs[0]).expect(".a fragment");
+        let b = frags.rect_of(imgs[1]).expect(".b fragment");
+        let c = frags.rect_of(imgs[2]).expect(".c fragment");
+        assert!(
+            approx(a.location.x, 0.0),
+            ".a at left, got {}",
+            a.location.x
+        );
+        assert!(
+            approx(b.location.x, 40.0),
+            ".b beside .a, got {}",
+            b.location.x
+        );
+        assert!(
+            approx(b.location.y, 0.0),
+            ".b same row, got {}",
+            b.location.y
+        );
+        assert!(
+            approx(c.location.x, 0.0),
+            ".c after clear at left, got {}",
+            c.location.x
+        );
+        assert!(
+            c.location.y >= 20.0,
+            ".c should clear the floated row, got y={}",
+            c.location.y
+        );
     }
 
     /// Inline float wrap-around: a paragraph after a `float: left` wraps its
@@ -2077,7 +2390,10 @@ mod tests {
     fn inline_text_wraps_around_left_float() {
         // A long run so it spans several 20px lines: at least two beside the
         // 40px-tall float and several reclaiming the full width below it.
-        let words = std::iter::repeat("word").take(40).collect::<Vec<_>>().join(" ");
+        let words = std::iter::repeat("word")
+            .take(40)
+            .collect::<Vec<_>>()
+            .join(" ");
         let html = format!("<html><body><div class=\"fl\"></div><p>{words}</p></body></html>");
         let document = StaticDocument::parse(&html);
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
@@ -2137,7 +2453,10 @@ mod tests {
             }
         }
         assert!(beside_float > 0, "expected lines wrapping beside the float");
-        assert!(below_float > 0, "expected lines reclaiming the column below the float");
+        assert!(
+            below_float > 0,
+            "expected lines reclaiming the column below the float"
+        );
     }
 
     /// `position: relative` offsets the box by its inset from in-flow.
@@ -2149,8 +2468,16 @@ mod tests {
         );
         let div = find_all(&doc, html5ever::local_name!("div"))[0];
         let r = frags.rect_of(div).expect("div fragment");
-        assert!(approx(r.location.x, 20.0), "left:20 → x=20, got {}", r.location.x);
-        assert!(approx(r.location.y, 20.0), "top:20 → y=20, got {}", r.location.y);
+        assert!(
+            approx(r.location.x, 20.0),
+            "left:20 → x=20, got {}",
+            r.location.x
+        );
+        assert!(
+            approx(r.location.y, 20.0),
+            "top:20 → y=20, got {}",
+            r.location.y
+        );
     }
 
     /// `position: absolute` takes the box out of flow and places it by its
@@ -2175,11 +2502,27 @@ mod tests {
         let flow = frags.rect_of(divs[1]).expect(".flow fragment");
         let pop = frags.rect_of(divs[2]).expect(".pop fragment");
         // In-flow sibling at the container origin.
-        assert!(approx(flow.location.y, 0.0), ".flow in flow at y=0, got {}", flow.location.y);
+        assert!(
+            approx(flow.location.y, 0.0),
+            ".flow in flow at y=0, got {}",
+            flow.location.y
+        );
         // Absolute box placed by its own inset, not after the sibling.
-        assert!(approx(pop.location.x, 30.0), "left:30 → x=30, got {}", pop.location.x);
-        assert!(approx(pop.location.y, 10.0), "top:10 → y=10, got {}", pop.location.y);
-        assert!(approx(pop.size.width, 50.0), ".pop width 50, got {}", pop.size.width);
+        assert!(
+            approx(pop.location.x, 30.0),
+            "left:30 → x=30, got {}",
+            pop.location.x
+        );
+        assert!(
+            approx(pop.location.y, 10.0),
+            "top:10 → y=10, got {}",
+            pop.location.y
+        );
+        assert!(
+            approx(pop.size.width, 50.0),
+            ".pop width 50, got {}",
+            pop.size.width
+        );
     }
 
     /// Inline `style="…"` cascades and drives layout: a box positioned by
@@ -2203,9 +2546,21 @@ mod tests {
         let divs = find_all(&doc, html5ever::local_name!("div"));
         // [.box, the inline-styled child]
         let pop = frags.rect_of(divs[1]).expect("inline-styled box fragment");
-        assert!(approx(pop.location.x, 25.0), "inline left:25 → x=25, got {}", pop.location.x);
-        assert!(approx(pop.location.y, 15.0), "inline top:15 → y=15, got {}", pop.location.y);
-        assert!(approx(pop.size.width, 40.0), "inline width:40 → w=40, got {}", pop.size.width);
+        assert!(
+            approx(pop.location.x, 25.0),
+            "inline left:25 → x=25, got {}",
+            pop.location.x
+        );
+        assert!(
+            approx(pop.location.y, 15.0),
+            "inline top:15 → y=15, got {}",
+            pop.location.y
+        );
+        assert!(
+            approx(pop.size.width, 40.0),
+            "inline width:40 → w=40, got {}",
+            pop.size.width
+        );
     }
 
     /// A percentage inset on an absolutely-positioned box resolves against its
@@ -2225,7 +2580,11 @@ mod tests {
         let divs = find_all(&doc, html5ever::local_name!("div"));
         let pop = frags.rect_of(divs[1]).expect(".pop fragment");
         // top: 100% of the 60px-tall container → y = 60 (the box's bottom edge).
-        assert!(approx(pop.location.y, 60.0), "top:100% → y=60, got {}", pop.location.y);
+        assert!(
+            approx(pop.location.y, 60.0),
+            "top:100% → y=60, got {}",
+            pop.location.y
+        );
     }
 
     /// Border-box layout: content `width/height: 40` + `border: 10`
@@ -2238,8 +2597,16 @@ mod tests {
         );
         let div = find_all(&doc, html5ever::local_name!("div"))[0];
         let r = frags.rect_of(div).expect("div fragment");
-        assert!(approx(r.size.width, 60.0), "40 content + 20 border = 60, got {}", r.size.width);
-        assert!(approx(r.size.height, 60.0), "40 content + 20 border = 60, got {}", r.size.height);
+        assert!(
+            approx(r.size.width, 60.0),
+            "40 content + 20 border = 60, got {}",
+            r.size.width
+        );
+        assert!(
+            approx(r.size.height, 60.0),
+            "40 content + 20 border = 60, got {}",
+            r.size.height
+        );
     }
 
     /// Replaced element: a lone `<img>` (data URI) takes its decoded
@@ -2251,20 +2618,84 @@ mod tests {
         let (doc, frags) = lay(&html, &[]);
         let img = find_all(&doc, html5ever::local_name!("img"))[0];
         let r = frags.rect_of(img).expect("img fragment");
-        assert!(approx(r.size.width, 16.0), "intrinsic width 16, got {}", r.size.width);
-        assert!(approx(r.size.height, 16.0), "intrinsic height 16, got {}", r.size.height);
+        assert!(
+            approx(r.size.width, 16.0),
+            "intrinsic width 16, got {}",
+            r.size.width
+        );
+        assert!(
+            approx(r.size.height, 16.0),
+            "intrinsic height 16, got {}",
+            r.size.height
+        );
     }
 
-    /// A definite CSS `width` overrides the intrinsic on that axis;
-    /// the unspecified `height` stays intrinsic.
+    /// A definite CSS `width` resolves the auto height through the intrinsic
+    /// ratio, not by leaving the old intrinsic height in place.
     #[test]
-    fn img_css_width_overrides_intrinsic() {
+    fn img_css_width_preserves_intrinsic_ratio() {
         let html = img_html();
         let (doc, frags) = lay(&html, &["img { width: 50px; }"]);
         let img = find_all(&doc, html5ever::local_name!("img"))[0];
         let r = frags.rect_of(img).expect("img fragment");
-        assert!(approx(r.size.width, 50.0), "css width 50, got {}", r.size.width);
-        assert!(approx(r.size.height, 16.0), "intrinsic height 16, got {}", r.size.height);
+        assert!(
+            approx(r.size.width, 50.0),
+            "css width 50, got {}",
+            r.size.width
+        );
+        assert!(
+            approx(r.size.height, 50.0),
+            "auto height from 1:1 intrinsic ratio = 50, got {}",
+            r.size.height
+        );
+    }
+
+    /// Size-contained replaced elements use `contain-intrinsic-*` as their
+    /// sizing intrinsic, while paint still keeps the decoded image intrinsic for
+    /// `object-fit`.
+    #[test]
+    fn img_contain_size_uses_contain_intrinsic_dimensions() {
+        let html = img_html();
+        let (doc, frags) = lay(
+            &html,
+            &[
+                "img { contain: size; contain-intrinsic-width: 32px; contain-intrinsic-height: 48px; }",
+            ],
+        );
+        let img = find_all(&doc, html5ever::local_name!("img"))[0];
+        let r = frags.rect_of(img).expect("img fragment");
+        assert!(
+            approx(r.size.width, 32.0),
+            "contain-intrinsic-width 32, got {}",
+            r.size.width
+        );
+        assert!(
+            approx(r.size.height, 48.0),
+            "contain-intrinsic-height 48, got {}",
+            r.size.height
+        );
+    }
+
+    /// A canvas has the default replaced-object ratio 300×150 when no content
+    /// dimensions are available, so `width` with auto `height` becomes 2:1.
+    #[test]
+    fn canvas_css_width_preserves_default_object_ratio() {
+        let (doc, frags) = lay(
+            "<html><body><canvas style=\"width:100px\"></canvas></body></html>",
+            &[],
+        );
+        let canvas = find_all(&doc, html5ever::local_name!("canvas"))[0];
+        let r = frags.rect_of(canvas).expect("canvas fragment");
+        assert!(
+            approx(r.size.width, 100.0),
+            "css width 100, got {}",
+            r.size.width
+        );
+        assert!(
+            approx(r.size.height, 50.0),
+            "auto height from 300x150 default ratio = 50, got {}",
+            r.size.height
+        );
     }
 
     /// Two absolutely-positioned siblings with `top: auto` both resolve to the
@@ -2288,10 +2719,26 @@ mod tests {
         // [.outer, .left, .right]
         let left = frags.rect_of(divs[1]).expect(".left fragment");
         let right = frags.rect_of(divs[2]).expect(".right fragment");
-        assert!(approx(left.location.x, 80.0), ".left left:80 → x=80, got {}", left.location.x);
-        assert!(approx(right.location.x, 380.0), ".right left:380 → x=380, got {}", right.location.x);
-        assert!(approx(left.location.y, 0.0), ".left static y=0, got {}", left.location.y);
-        assert!(approx(right.location.y, 0.0), ".right static y=0 (not stacked), got {}", right.location.y);
+        assert!(
+            approx(left.location.x, 80.0),
+            ".left left:80 → x=80, got {}",
+            left.location.x
+        );
+        assert!(
+            approx(right.location.x, 380.0),
+            ".right left:380 → x=380, got {}",
+            right.location.x
+        );
+        assert!(
+            approx(left.location.y, 0.0),
+            ".left static y=0, got {}",
+            left.location.y
+        );
+        assert!(
+            approx(right.location.y, 0.0),
+            ".right static y=0 (not stacked), got {}",
+            right.location.y
+        );
     }
 
     /// Whitespace-only text between block children is collapsible and generates
@@ -2343,18 +2790,50 @@ mod tests {
         let (doc, frags) = lay("<html><body><iframe></iframe></body></html>", &[]);
         let iframe = find_all(&doc, html5ever::local_name!("iframe"))[0];
         let r = frags.rect_of(iframe).expect("iframe fragment");
-        assert!(approx(r.size.width, 300.0), "iframe default width 300, got {}", r.size.width);
-        assert!(approx(r.size.height, 150.0), "iframe default height 150, got {}", r.size.height);
+        assert!(
+            approx(r.size.width, 300.0),
+            "iframe default width 300, got {}",
+            r.size.width
+        );
+        assert!(
+            approx(r.size.height, 150.0),
+            "iframe default height 150, got {}",
+            r.size.height
+        );
     }
 
-    /// A 16×16 blue PNG as a data-URI `<img>` document.
-    fn img_html() -> String {
+    /// `<video>` participates as a replaced element in normal flow even before
+    /// a host supplies decoded frames or an external texture.
+    #[test]
+    fn video_uses_default_object_size() {
+        let (doc, frags) = lay("<html><body><video></video></body></html>", &[]);
+        let video = find_all(&doc, html5ever::local_name!("video"))[0];
+        let r = frags.rect_of(video).expect("video fragment");
+        assert!(
+            approx(r.size.width, 300.0),
+            "video default width 300, got {}",
+            r.size.width
+        );
+        assert!(
+            approx(r.size.height, 150.0),
+            "video default height 150, got {}",
+            r.size.height
+        );
+    }
+
+    fn blue_png_data_uri() -> String {
         use base64::Engine as _;
         let blue = image::RgbaImage::from_pixel(16, 16, image::Rgba([0, 0, 255, 255]));
         let mut png = Vec::new();
         blue.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .expect("encode test PNG");
         let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
-        format!("<html><body><img src=\"data:image/png;base64,{b64}\"></body></html>")
+        format!("data:image/png;base64,{b64}")
+    }
+
+    /// A 16×16 blue PNG as a data-URI `<img>` document.
+    fn img_html() -> String {
+        let src = blue_png_data_uri();
+        format!("<html><body><img src=\"{src}\"></body></html>")
     }
 }

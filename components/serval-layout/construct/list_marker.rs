@@ -56,8 +56,19 @@ pub(crate) fn roman_marker(mut n: usize, upper: bool) -> String {
         return n.to_string();
     }
     const VALUES: [(usize, &str); 13] = [
-        (1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
-        (50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i"),
+        (1000, "m"),
+        (900, "cm"),
+        (500, "d"),
+        (400, "cd"),
+        (100, "c"),
+        (90, "xc"),
+        (50, "l"),
+        (40, "xl"),
+        (10, "x"),
+        (9, "ix"),
+        (5, "v"),
+        (4, "iv"),
+        (1, "i"),
     ];
     let mut s = String::new();
     for (value, sym) in VALUES {
@@ -100,7 +111,10 @@ where
     // for that item and the ones after.
     let parent = dom.parent(id)?;
     let no_ns: html5ever::Namespace = html5ever::ns!();
-    let is_li = |n| dom.element_name(n).is_some_and(|q| q.local == html5ever::local_name!("li"));
+    let is_li = |n| {
+        dom.element_name(n)
+            .is_some_and(|q| q.local == html5ever::local_name!("li"))
+    };
     let reversed = dom
         .attribute(parent, &no_ns, &html5ever::LocalName::from("reversed"))
         .is_some();
@@ -179,7 +193,11 @@ where
 {
     let text = list_marker_text(dom, styles, id)?;
     let run = marker_run(styles, id, text);
-    Some(InlineContent { runs: vec![run], boxes: Vec::new(), no_wrap: false })
+    Some(InlineContent {
+        runs: vec![run],
+        boxes: Vec::new(),
+        no_wrap: false,
+    })
 }
 
 /// Whether an element's cascaded `list-style-position` is `inside` (the marker
@@ -210,4 +228,3 @@ where
     let text = list_marker_text(dom, styles, id)?;
     Some(marker_run(styles, id, format!("{text} ")))
 }
-

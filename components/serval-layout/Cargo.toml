@@ -13,9 +13,11 @@ description = "Profile-neutral layout engine for serval; consumes any LayoutDom-
 path = "lib.rs"
 
 [dependencies]
+accesskit = { workspace = true }
 app_units = { workspace = true }
 atomic_refcell = { workspace = true }
 data-url = { workspace = true }
+cssparser = { workspace = true }
 euclid = { workspace = true }
 # Font enumeration + family resolution (fontique) and font metrics reading
 # (skrifa) — the same stack parley uses, so the cascade's font-metrics provider

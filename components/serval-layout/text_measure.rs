@@ -30,9 +30,9 @@ use parley::{
     InlineBox, InlineBoxKind, Layout, LayoutContext, LineHeight, StyleProperty,
 };
 use rustc_hash::FxHashMap;
+use taffy::InlineFloatBand;
 use taffy::geometry::Size;
 use taffy::style::AvailableSpace;
-use taffy::InlineFloatBand;
 
 /// CSS generic font family. Serval-local mirror of the subset of
 /// Stylo's `GenericFontFamily` we map to parley — keeps the leaf
@@ -439,7 +439,10 @@ pub fn measure_inline_content<NodeId>(
     // Short-circuit when both axes are explicitly known. (Don't cache
     // — there's no shaped Layout to give back; emit sees no entry.)
     if let (Some(w), Some(h)) = (known_dimensions.width, known_dimensions.height) {
-        return Size { width: w, height: h };
+        return Size {
+            width: w,
+            height: h,
+        };
     }
 
     // Empty content (no text and no inline boxes) measures as
@@ -475,11 +478,11 @@ pub fn measure_inline_content<NodeId>(
     // unchanged (so every non-float inline test is byte-identical). The bands
     // are only ever populated on the definite-width final block-layout pass, so
     // the intrinsic min/max-content probes never see them.
-    let float_bands: Option<Vec<InlineFloatBand>> = match (ctx.float_bands.get(&taffy_id), max_advance)
-    {
-        (Some(b), Some(_)) if !content.no_wrap && !b.is_empty() => Some(b.clone()),
-        _ => None,
-    };
+    let float_bands: Option<Vec<InlineFloatBand>> =
+        match (ctx.float_bands.get(&taffy_id), max_advance) {
+            (Some(b), Some(_)) if !content.no_wrap && !b.is_empty() => Some(b.clone()),
+            _ => None,
+        };
 
     // Re-measure fast path. Taffy probes each leaf at min-content, then
     // max-content, then its resolved width, so this runs 2-3× per leaf. The
@@ -490,7 +493,9 @@ pub fn measure_inline_content<NodeId>(
     // break wins, leaving the cached layout broken at the final width for paint.
     if let Some(layout) = ctx.layouts.get_mut(&taffy_id) {
         match (&float_bands, max_advance) {
-            (Some(bands), Some(content_width)) => break_and_align_floats(layout, bands, content_width),
+            (Some(bands), Some(content_width)) => {
+                break_and_align_floats(layout, bands, content_width)
+            },
             _ => break_and_align(layout, max_advance),
         }
         return Size {
@@ -509,7 +514,9 @@ pub fn measure_inline_content<NodeId>(
         ctx.inline_block_layouts.insert((taffy_id, i), l);
     }
     match (&float_bands, max_advance) {
-        (Some(bands), Some(content_width)) => break_and_align_floats(&mut layout, bands, content_width),
+        (Some(bands), Some(content_width)) => {
+            break_and_align_floats(&mut layout, bands, content_width)
+        },
         _ => break_and_align(&mut layout, max_advance),
     }
     let size = Size {
@@ -639,7 +646,8 @@ fn band_for_line(bands: &[InlineFloatBand], y: f32, content_width: f32) -> (f32,
     for band in bands {
         if y >= band.y_start && y < band.y_end {
             let line_x = band.left.clamp(0.0, content_width);
-            let line_max_advance = (content_width - band.left - band.right).clamp(0.0, content_width);
+            let line_max_advance =
+                (content_width - band.left - band.right).clamp(0.0, content_width);
             return (line_x, line_max_advance);
         }
     }
@@ -712,7 +720,10 @@ fn shape_inline_layout<NodeId>(
         // (0 = `normal` = parley's default). Pushed only when set, to keep the
         // common no-spacing path free of redundant spans.
         if run.letter_spacing != 0.0 {
-            builder.push(StyleProperty::LetterSpacing(run.letter_spacing), range.clone());
+            builder.push(
+                StyleProperty::LetterSpacing(run.letter_spacing),
+                range.clone(),
+            );
         }
         if run.word_spacing != 0.0 {
             builder.push(StyleProperty::WordSpacing(run.word_spacing), range.clone());
@@ -722,10 +733,16 @@ fn shape_inline_layout<NodeId>(
         match run.line_height {
             LineHeightSpec::Normal => {},
             LineHeightSpec::Factor(f) => {
-                builder.push(StyleProperty::LineHeight(LineHeight::FontSizeRelative(f)), range.clone());
+                builder.push(
+                    StyleProperty::LineHeight(LineHeight::FontSizeRelative(f)),
+                    range.clone(),
+                );
             },
             LineHeightSpec::Px(px) => {
-                builder.push(StyleProperty::LineHeight(LineHeight::Absolute(px)), range.clone());
+                builder.push(
+                    StyleProperty::LineHeight(LineHeight::Absolute(px)),
+                    range.clone(),
+                );
             },
         }
     }
@@ -766,7 +783,10 @@ mod tests {
             &mut ctx,
             &content,
             fake_taffy_id(),
-            Size { width: None, height: None },
+            Size {
+                width: None,
+                height: None,
+            },
             Size {
                 width: AvailableSpace::Definite(800.0),
                 height: AvailableSpace::Definite(600.0),
@@ -788,7 +808,10 @@ mod tests {
             &mut ctx,
             &content,
             taffy_id,
-            Size { width: None, height: None },
+            Size {
+                width: None,
+                height: None,
+            },
             Size {
                 width: AvailableSpace::Definite(800.0),
                 height: AvailableSpace::Definite(600.0),
@@ -817,7 +840,10 @@ mod tests {
             &mut ctx,
             &content,
             fake_taffy_id(),
-            Size { width: Some(100.0), height: Some(50.0) },
+            Size {
+                width: Some(100.0),
+                height: Some(50.0),
+            },
             Size {
                 width: AvailableSpace::MaxContent,
                 height: AvailableSpace::MaxContent,
@@ -842,18 +868,21 @@ mod tests {
             width: AvailableSpace::MaxContent,
             height: AvailableSpace::MaxContent,
         };
-        let none = Size { width: None, height: None };
-        let combined_w = measure_inline_content(
+        let none = Size {
+            width: None,
+            height: None,
+        };
+        let combined_w =
+            measure_inline_content(&mut ctx, &combined, taffy::NodeId::from(1u64), none, avail)
+                .width;
+        let hello_w = measure_inline_content(
             &mut ctx,
-            &combined,
-            taffy::NodeId::from(1u64),
+            &just_hello,
+            taffy::NodeId::from(2u64),
             none,
             avail,
         )
         .width;
-        let hello_w =
-            measure_inline_content(&mut ctx, &just_hello, taffy::NodeId::from(2u64), none, avail)
-                .width;
         assert!(
             combined_w > hello_w,
             "combined run width {combined_w} should exceed 'Hello ' alone {hello_w}"

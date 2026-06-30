@@ -101,5 +101,8 @@ pub(crate) fn inline_source_at<NodeId: Copy>(
     // components carry their own bytes, so the trailing half still resolves to its
     // own source.
     let byte = cluster.text_range().start;
-    sources.iter().find(|(r, _)| r.contains(&byte)).map(|(_, src)| *src)
+    sources
+        .iter()
+        .find(|(r, _)| r.contains(&byte))
+        .map(|(_, src)| *src)
 }

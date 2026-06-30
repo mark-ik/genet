@@ -53,7 +53,6 @@ const DEFAULT_FONT_SIZE: f32 = 16.0;
 /// Comments / PIs are ignored. With no cascade data (`is_inline_element`
 /// → `None`), non-replaced elements are treated as block — preserving
 /// the pre-inline behavior for hand-rolled style fixtures.
-
 mod gather;
 mod list_marker;
 mod style_read;
@@ -85,11 +84,17 @@ where
             },
             NodeKind::Element => {
                 if is_replaced(dom, child.id()) {
+                    if is_floating(styles, child.id()) {
+                        return false;
+                    }
                     // A replaced element flows as an inline box. A *lone* img
                     // with no other inline content stays on the block path
                     // (intrinsic sizing); two or more flow inline, side by side.
                     replaced_count += 1;
                     continue;
+                }
+                if has_clearance(styles, child.id()) {
+                    return false;
                 }
                 // `inline-block` is an atomic inline-level box: it participates
                 // in the line like inline content (so it keeps this an inline
@@ -103,8 +108,8 @@ where
                     // A block-level child forces block layout.
                     return false;
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
     // Inline context when there is real inline text / an inline element /
@@ -114,12 +119,8 @@ where
 }
 
 /// Whether an element is replaced content we render as its own box rather than
-/// as flowed inline text: `<img>`, plus `<iframe>` / `<canvas>`, which size to
-/// the 300×150 default object size when they have no intrinsic / CSS size.
-///
-/// `<video>` / `<object>` / `<embed>` are deliberately excluded: their content
-/// is image-like, and without decoding it a 300×150 placeholder mis-renders the
-/// `object-fit` / `object-position` corpus more than a 300×150 default helps.
+/// as flowed inline text: decoded `<img>`, embedded content with the CSS default
+/// object size, and host-composited media/canvas lanes.
 pub(crate) fn is_replaced<D>(dom: &D, id: D::NodeId) -> bool
 where
     D: LayoutDom,
@@ -130,6 +131,9 @@ where
         q.local == local_name!("img")
             || q.local == local_name!("iframe")
             || q.local == local_name!("canvas")
+            || q.local == local_name!("video")
+            || q.local == local_name!("object")
+            || q.local == local_name!("embed")
             // `<external-texture>` is a host-composited replaced element (see
             // `external_texture_key_of`): a custom name, so compared by string rather
             // than a `local_name!` atom. It sizes like the default-object replaced
@@ -138,23 +142,29 @@ where
     })
 }
 
-/// The texture key of an `<external-texture key="…">` element, or `None` when `id` is
-/// not such an element (every other replaced element, e.g. `<img>`). The producer
-/// mints the `u64` key out of band and registers the matching `wgpu::Texture` with
-/// the renderer; the element only carries the stable key + a box, so paint emits a
+/// The texture key of an `<external-texture key="…">` element or a WebGL-backed
+/// `<canvas data-serval-external-texture-key="…">` / media element. The producer
+/// mints the `u64` key out of band and registers the matching `wgpu::Texture`
+/// with the renderer; the element only carries the stable key + a box, so paint emits a
 /// [`PaintCmd::DrawExternalTexture`](paint_list_api::PaintCmd) the host composites.
-/// `key` is the standards-neutral attribute the xilem-serval `external_texture` view
-/// sets; a missing / unparseable key yields `None` (the element paints nothing).
+/// Missing / unparseable keys yield `None` (the element paints nothing).
 pub(crate) fn external_texture_key_of<D>(dom: &D, id: D::NodeId) -> Option<u64>
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    use html5ever::{ns, LocalName};
-    if dom.element_name(id)?.local.as_ref() != "external-texture" {
+    use html5ever::{LocalName, ns};
+    let local = dom.element_name(id)?.local.as_ref();
+    let attr = if local == "external-texture" {
+        "key"
+    } else if local == "canvas" || local == "video" {
+        "data-serval-external-texture-key"
+    } else {
         return None;
-    }
-    dom.attribute(id, &ns!(), &LocalName::from("key"))?.parse().ok()
+    };
+    dom.attribute(id, &ns!(), &LocalName::from(attr))?
+        .parse()
+        .ok()
 }
 
 /// Whether `id` is a replaced element that, lacking intrinsic content, falls
@@ -177,7 +187,12 @@ fn no_wrap_of<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId)
     styles
         .get(id)
         .and_then(|e| e.borrow_data())
-        .is_some_and(|d| matches!(d.styles.primary().get_inherited_text().text_wrap_mode, Mode::Nowrap))
+        .is_some_and(|d| {
+            matches!(
+                d.styles.primary().get_inherited_text().text_wrap_mode,
+                Mode::Nowrap
+            )
+        })
 }
 
 /// Read an element's cascaded outer display: `Some(true)` for
@@ -192,6 +207,27 @@ fn is_inline_element<NodeId: Copy + Eq + Hash>(
     let data = entry.borrow_data()?;
     let display = data.styles.primary().get_box().display;
     Some(matches!(display.outside(), DisplayOutside::Inline))
+}
+
+fn is_floating<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId) -> bool {
+    styles
+        .get(id)
+        .and_then(|e| e.borrow_data())
+        .is_some_and(|d| {
+            stylo_taffy::convert::float(d.styles.primary().get_box().clone_float()).is_floated()
+        })
+}
+
+fn has_clearance<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId) -> bool {
+    styles
+        .get(id)
+        .and_then(|e| e.borrow_data())
+        .is_some_and(|d| {
+            !matches!(
+                stylo_taffy::convert::clear(d.styles.primary().get_box().clone_clear()),
+                taffy::Clear::None
+            )
+        })
 }
 
 /// Collapse each maximal run of ASCII/Unicode whitespace in `s` to a single
@@ -271,20 +307,69 @@ pub(crate) fn is_inline_block<NodeId: Copy + Eq + Hash>(
     id: NodeId,
 ) -> bool {
     use style::values::specified::box_::{DisplayInside, DisplayOutside};
-    let Some(entry) = styles.get(id) else { return false };
-    let Some(data) = entry.borrow_data() else { return false };
+    let Some(entry) = styles.get(id) else {
+        return false;
+    };
+    let Some(data) = entry.borrow_data() else {
+        return false;
+    };
     let display = data.styles.primary().get_box().display;
     matches!(display.outside(), DisplayOutside::Inline)
         && matches!(display.inside(), DisplayInside::FlowRoot)
 }
 
-/// Pixel size for a replaced element: the decoded intrinsic size from `images`
-/// (for `<img>`), or the CSS default object size 300×150 for the embedded-content
-/// elements (`<iframe>` etc.) that have no intrinsic content, with each axis then
-/// overridden by a definite CSS `width`/`height`. Shared by the block-level
-/// replaced leaf ([`crate::box_tree`]) and the inline replaced box. Non-length
-/// dimensions (`auto`, percentages) leave the base size in place; an undecoded
-/// `<img>` with no CSS size reserves 0×0.
+/// Intrinsic content size for replaced elements. Decoded image-backed content
+/// uses its pixels; host/media/canvas lanes use dimension attributes when
+/// present, otherwise the CSS default object size, 300×150. An undecoded `<img>`
+/// has no intrinsic size.
+pub(crate) fn replaced_intrinsic_size<D>(
+    dom: &D,
+    images: &ImagePlane<D::NodeId>,
+    id: D::NodeId,
+) -> Option<(f32, f32)>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    if let Some(decoded) = images.get(id) {
+        return Some((decoded.width as f32, decoded.height as f32));
+    }
+    if uses_default_object_size(dom, id) {
+        return Some(default_object_size_from_attrs(dom, id));
+    }
+    None
+}
+
+fn default_object_size_from_attrs<D>(dom: &D, id: D::NodeId) -> (f32, f32)
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    (
+        dimension_attr(dom, id, "width").unwrap_or(300.0),
+        dimension_attr(dom, id, "height").unwrap_or(150.0),
+    )
+}
+
+fn dimension_attr<D>(dom: &D, id: D::NodeId, name: &str) -> Option<f32>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    use html5ever::{LocalName, ns};
+    let value = dom.attribute(id, &ns!(), &LocalName::from(name))?;
+    let parsed = value.trim().parse::<f32>().ok()?;
+    (parsed > 0.0 && parsed.is_finite()).then_some(parsed)
+}
+
+/// Pixel size for a replaced element: intrinsic/default object size plus definite
+/// CSS width/height. When only one axis is definite, the other axis is resolved
+/// from the sizing intrinsic ratio. `contain: size` can override the sizing
+/// intrinsic through `contain-intrinsic-width` / `contain-intrinsic-height`, but
+/// the content intrinsic remains unchanged for paint's `object-fit` ratio.
+/// Shared by the block-level replaced leaf ([`crate::box_tree`]) and inline
+/// replaced boxes. Non-length dimensions (`auto`, percentages) otherwise leave
+/// the intrinsic/default size in place.
 pub(crate) fn replaced_px_size<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
@@ -295,31 +380,51 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    let (mut w, mut h) = images
-        .get(id)
-        .map(|d| (d.width as f32, d.height as f32))
-        .unwrap_or_else(|| {
-            // No decoded pixels: embedded content defaults to 300×150; an
-            // undecoded <img> reserves 0×0.
-            if uses_default_object_size(dom, id) {
-                (300.0, 150.0)
-            } else {
-                (0.0, 0.0)
-            }
-        });
+    let (base_w, base_h) = replaced_sizing_intrinsic_size(dom, styles, images, id)
+        .or_else(|| replaced_intrinsic_size(dom, images, id))
+        .unwrap_or((0.0, 0.0));
 
-    if let Some(entry) = styles.get(id) {
-        if let Some(data) = entry.borrow_data() {
+    let css_size = styles
+        .get(id)
+        .and_then(|entry| entry.borrow_data())
+        .map(|data| {
             let pos = data.styles.primary().get_position();
-            if let Some(cw) = definite_px(&pos.width) {
-                w = cw;
-            }
-            if let Some(ch) = definite_px(&pos.height) {
-                h = ch;
-            }
-        }
+            (definite_px(&pos.width), definite_px(&pos.height))
+        })
+        .unwrap_or((None, None));
+
+    match css_size {
+        (Some(w), Some(h)) => (w, h),
+        (Some(w), None) if base_w > 0.0 && base_h > 0.0 => (w, w * base_h / base_w),
+        (None, Some(h)) if base_w > 0.0 && base_h > 0.0 => (h * base_w / base_h, h),
+        (Some(w), None) => (w, base_h),
+        (None, Some(h)) => (base_w, h),
+        (None, None) => (base_w, base_h),
     }
-    (w, h)
+}
+
+fn replaced_sizing_intrinsic_size<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    images: &ImagePlane<D::NodeId>,
+    id: D::NodeId,
+) -> Option<(f32, f32)>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let (intrinsic_w, intrinsic_h) = replaced_intrinsic_size(dom, images, id)?;
+    let entry = styles.get(id)?;
+    let data = entry.borrow_data()?;
+    let primary = data.styles.primary();
+    let contain = primary.get_box().clone_contain();
+    if !contain.contains(style::values::specified::box_::Contain::SIZE) {
+        return None;
+    }
+    let override_size = styles.contain_intrinsic_override(id)?;
+    let width = override_size.width.unwrap_or(intrinsic_w);
+    let height = override_size.height.unwrap_or(intrinsic_h);
+    Some((width, height))
 }
 
 /// A CSS `Size` as definite pixels, or `None` for `auto` / percentage /

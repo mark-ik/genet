@@ -100,8 +100,12 @@ pub(crate) fn inline_block_css_size<NodeId: Copy + Eq + Hash>(
     styles: &StylePlane<NodeId>,
     id: NodeId,
 ) -> (Option<f32>, Option<f32>) {
-    let Some(entry) = styles.get(id) else { return (None, None) };
-    let Some(data) = entry.borrow_data() else { return (None, None) };
+    let Some(entry) = styles.get(id) else {
+        return (None, None);
+    };
+    let Some(data) = entry.borrow_data() else {
+        return (None, None);
+    };
     let pos = data.styles.primary().get_position();
     (definite_px(&pos.width), definite_px(&pos.height))
 }
@@ -112,8 +116,12 @@ pub(crate) fn inline_block_bg_of<NodeId: Copy + Eq + Hash>(
     styles: &StylePlane<NodeId>,
     id: NodeId,
 ) -> [f32; 4] {
-    let Some(entry) = styles.get(id) else { return [0.0; 4] };
-    let Some(data) = entry.borrow_data() else { return [0.0; 4] };
+    let Some(entry) = styles.get(id) else {
+        return [0.0; 4];
+    };
+    let Some(data) = entry.borrow_data() else {
+        return [0.0; 4];
+    };
     let primary = data.styles.primary();
     let current = primary.get_inherited_text().color;
     let absolute = primary
@@ -134,7 +142,10 @@ pub(crate) fn text_decoration_color_of<NodeId: Copy + Eq + Hash>(
     let data = entry.borrow_data()?;
     let primary = data.styles.primary();
     let current = primary.get_inherited_text().color;
-    let absolute = primary.get_text().text_decoration_color.resolve_to_absolute(&current);
+    let absolute = primary
+        .get_text()
+        .text_decoration_color
+        .resolve_to_absolute(&current);
     let srgb = absolute.into_srgb_legacy();
     Some(*srgb.raw_components())
 }
@@ -150,7 +161,6 @@ pub(crate) enum MarkerKind {
     UpperRoman,
 }
 
-
 /// Read an element's cascaded `font-size` in CSS px. Returns `None`
 /// when the cascade hasn't been applied to that element (hand-rolled
 /// style fixtures); the caller defaults to `DEFAULT_FONT_SIZE`.
@@ -160,7 +170,14 @@ pub(crate) fn font_size_of<NodeId: Copy + Eq + Hash>(
 ) -> Option<f32> {
     let entry = styles.get(id)?;
     let data = entry.borrow_data()?;
-    Some(data.styles.primary().get_font().font_size.computed_size().px())
+    Some(
+        data.styles
+            .primary()
+            .get_font()
+            .font_size
+            .computed_size()
+            .px(),
+    )
 }
 
 /// An element's cascaded `letter-spacing` in CSS px (`normal` resolves to 0).
@@ -174,7 +191,14 @@ pub(crate) fn letter_spacing_of<NodeId: Copy + Eq + Hash>(
     let data = entry.borrow_data()?;
     let primary = data.styles.primary();
     let fs = primary.get_font().font_size.computed_size().px();
-    Some(primary.get_inherited_text().letter_spacing.0.resolve(Length::new(fs)).px())
+    Some(
+        primary
+            .get_inherited_text()
+            .letter_spacing
+            .0
+            .resolve(Length::new(fs))
+            .px(),
+    )
 }
 
 /// An element's cascaded `word-spacing` in CSS px (`normal` resolves to 0).
@@ -188,7 +212,13 @@ pub(crate) fn word_spacing_of<NodeId: Copy + Eq + Hash>(
     let data = entry.borrow_data()?;
     let primary = data.styles.primary();
     let fs = primary.get_font().font_size.computed_size().px();
-    Some(primary.get_inherited_text().word_spacing.resolve(Length::new(fs)).px())
+    Some(
+        primary
+            .get_inherited_text()
+            .word_spacing
+            .resolve(Length::new(fs))
+            .px(),
+    )
 }
 
 /// Read an element's cascaded `font-family` and collapse the family

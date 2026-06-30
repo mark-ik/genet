@@ -45,7 +45,7 @@ use paint_list_api::{LayoutPoint, LayoutTransform, PaintCmd, TransformSpec};
 use style::properties::ComputedValues;
 
 use crate::box_tree::BoxTree;
-use crate::paint_emit::{is_out_of_flow, walk, Deferred, Emitter};
+use crate::paint_emit::{Deferred, Emitter, is_out_of_flow, walk};
 use crate::text_measure::TextMeasureCtx;
 
 /// Paint the box at arena index `node` and its subtree as a stacking context
@@ -71,8 +71,16 @@ pub(crate) fn paint_context<Id>(
     // folded into this context's placement (the `paint_layer` wrap and the deferred
     // `origin`), so both restart at zero here and compose rather than double.
     walk(
-        em, tree, text_ctx, node, origin, &mut body, &mut layers, true,
-        LayoutTransform::identity(), (0.0, 0.0),
+        em,
+        tree,
+        text_ctx,
+        node,
+        origin,
+        &mut body,
+        &mut layers,
+        true,
+        LayoutTransform::identity(),
+        (0.0, 0.0),
     );
     // Stable sort by (z, document order): same-z layers keep document order, the
     // Appendix E tiebreak.
@@ -202,15 +210,27 @@ mod tests {
     fn paint(html: &str, sheet: &[&str]) -> Vec<PaintCmd> {
         let document = StaticDocument::parse(html);
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&document, &mut styles, euclid::Size2D::new(800.0, 600.0), sheet, None);
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
         let viewport = Size {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
         let (fragments, built, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
-        emit_paint_list(&document, &styles, &fragments, &built, DeviceIntSize::new(800, 600))
-            .commands()
-            .to_vec()
+        emit_paint_list(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            DeviceIntSize::new(800, 600),
+        )
+        .commands()
+        .to_vec()
     }
 
     /// A negative `z-index` out-of-flow box paints *behind* later in-flow content
@@ -231,7 +251,10 @@ mod tests {
         );
         let red = rect_index(&cmds, 1.0, 0.0, 0.0, ".behind (z:-1)");
         let blue = rect_index(&cmds, 0.0, 0.0, 1.0, ".flow");
-        assert!(red < blue, "z:-1 .behind (idx {red}) paints before in-flow .flow (idx {blue})");
+        assert!(
+            red < blue,
+            "z:-1 .behind (idx {red}) paints before in-flow .flow (idx {blue})"
+        );
     }
 
     /// z-index is scoped to each stacking context: a child's `z-index` orders it
@@ -294,7 +317,10 @@ mod tests {
                         && (r.color.b - 0.784).abs() < 0.05)
             })
             .count();
-        assert_eq!(thumbs, 1, "the absolute thumb paints exactly once, not split");
+        assert_eq!(
+            thumbs, 1,
+            "the absolute thumb paints exactly once, not split"
+        );
     }
 
     /// An abs-pos child of a `transform`ed ancestor inherits that transform (the

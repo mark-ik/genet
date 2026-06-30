@@ -172,9 +172,16 @@ mod tests {
             Invalidation::RestyleSubtree(3),  // descendant of 1
             Invalidation::RestyleSubtree(4),  // sibling subtree
         ];
-        let mut nodes: Vec<u32> = coalesce(&invs, parent_of).iter().map(|i| i.node()).collect();
+        let mut nodes: Vec<u32> = coalesce(&invs, parent_of)
+            .iter()
+            .map(|i| i.node())
+            .collect();
         nodes.sort();
-        assert_eq!(nodes, vec![1, 4], "1's descendants subsumed; sibling 4 kept");
+        assert_eq!(
+            nodes,
+            vec![1, 4],
+            "1's descendants subsumed; sibling 4 kept"
+        );
     }
 
     #[test]

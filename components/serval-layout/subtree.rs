@@ -22,7 +22,7 @@ use std::hash::Hash;
 
 use layout_dom_api::{AttributeView, LayoutDom, LocalName, Namespace, NodeKind, QualName};
 
-use crate::{render, FragmentPlane};
+use crate::{FragmentPlane, render};
 
 /// A view of `dom` re-rooted at `root`: `document()` is `root`, `root` has no parent
 /// or siblings, and traversal below is delegated unchanged.

@@ -36,9 +36,32 @@ where
     // then `::after`, appended. Both are inline text runs here (the common case
     // — block-`display` generated content is a later slice), so they style and
     // paint through the existing run path with the pseudo's own cascade.
-    push_pseudo_content(styles, elem.id(), PseudoElement::Before, &mut runs, &mut sources, &mut offset);
-    gather_runs(dom, styles, images, elem, &mut runs, &mut boxes, &mut sources, &mut offset);
-    push_pseudo_content(styles, elem.id(), PseudoElement::After, &mut runs, &mut sources, &mut offset);
+    push_pseudo_content(
+        styles,
+        elem.id(),
+        PseudoElement::Before,
+        &mut runs,
+        &mut sources,
+        &mut offset,
+    );
+    gather_runs(
+        dom,
+        styles,
+        images,
+        elem,
+        &mut runs,
+        &mut boxes,
+        &mut sources,
+        &mut offset,
+    );
+    push_pseudo_content(
+        styles,
+        elem.id(),
+        PseudoElement::After,
+        &mut runs,
+        &mut sources,
+        &mut offset,
+    );
     // `::first-letter` restyles the first typographic letter of the block's
     // content. Applied after the runs are gathered (so it sees `::before`'s
     // generated text as the first letter when present), and only here at the
@@ -46,7 +69,14 @@ where
     // this path, matching the spec's block-container restriction. It splits a run
     // at a byte boundary without moving any byte, so the `sources` ranges stay valid.
     apply_first_letter(styles, elem.id(), &mut runs);
-    (InlineContent { runs, boxes, no_wrap: no_wrap_of(styles, elem.id()) }, sources)
+    (
+        InlineContent {
+            runs,
+            boxes,
+            no_wrap: no_wrap_of(styles, elem.id()),
+        },
+        sources,
+    )
 }
 
 /// Split the first content run at the `::first-letter` boundary, restyling the
@@ -63,13 +93,21 @@ pub(crate) fn apply_first_letter<NodeId: Copy + Eq + Hash>(
     use style::selector_parser::PseudoElement;
 
     let Some(entry) = styles.get(id) else { return };
-    let Some(data) = entry.borrow_data() else { return };
-    let Some(cv) = data.styles.pseudos.get(&PseudoElement::FirstLetter) else { return };
+    let Some(data) = entry.borrow_data() else {
+        return;
+    };
+    let Some(cv) = data.styles.pseudos.get(&PseudoElement::FirstLetter) else {
+        return;
+    };
 
     // The first run carrying non-whitespace content owns the first letter (a
     // leading whitespace-only run, e.g. from `::before { content: " " }`, stays).
-    let Some(ri) = runs.iter().position(|r| !r.text.trim().is_empty()) else { return };
-    let Some((a, b)) = first_letter_boundary(&runs[ri].text) else { return };
+    let Some(ri) = runs.iter().position(|r| !r.text.trim().is_empty()) else {
+        return;
+    };
+    let Some((a, b)) = first_letter_boundary(&runs[ri].text) else {
+        return;
+    };
 
     let original = runs[ri].clone();
     let prefix = original.text[..a].to_string();
@@ -101,7 +139,10 @@ pub(crate) fn apply_first_letter<NodeId: Copy + Eq + Hash>(
 /// the unit ends at the first letter. Combining marks *after* that letter are not
 /// yet folded in (the documented §4 edge).
 pub(crate) fn first_letter_boundary(text: &str) -> Option<(usize, usize)> {
-    let a = text.char_indices().find(|(_, c)| !c.is_whitespace()).map(|(i, _)| i)?;
+    let a = text
+        .char_indices()
+        .find(|(_, c)| !c.is_whitespace())
+        .map(|(i, _)| i)?;
     for (rel, c) in text[a..].char_indices() {
         if c.is_whitespace() {
             return None; // whitespace before any letter: no unit on this run
@@ -125,8 +166,12 @@ pub(crate) fn push_pseudo_content<NodeId: Copy + Eq + Hash>(
     offset: &mut usize,
 ) {
     let Some(entry) = styles.get(id) else { return };
-    let Some(data) = entry.borrow_data() else { return };
-    let Some(cv) = data.styles.pseudos.get(&pseudo) else { return };
+    let Some(data) = entry.borrow_data() else {
+        return;
+    };
+    let Some(cv) = data.styles.pseudos.get(&pseudo) else {
+        return;
+    };
     // A block-level pseudo is realized as its own block box (see
     // [`block_pseudo_content`]), not an inline run in the flow.
     use style::values::specified::box_::DisplayOutside;
@@ -181,8 +226,11 @@ pub(crate) fn block_pseudo_content<NodeId: Copy + Eq + Hash>(
             text.push_str(s);
         }
     }
-    let content =
-        InlineContent { runs: vec![run_from_computed(cv, text)], boxes: Vec::new(), no_wrap: false };
+    let content = InlineContent {
+        runs: vec![run_from_computed(cv, text)],
+        boxes: Vec::new(),
+        no_wrap: false,
+    };
     Some((cv.clone(), content))
 }
 
@@ -207,7 +255,17 @@ pub(crate) fn gather_runs<'a, D>(
     D::NodeId: Copy + Eq + Hash,
 {
     for child in node.dom_children() {
-        gather_child(dom, styles, images, node.id(), child, runs, boxes, sources, offset);
+        gather_child(
+            dom,
+            styles,
+            images,
+            node.id(),
+            child,
+            runs,
+            boxes,
+            sources,
+            offset,
+        );
     }
 }
 
@@ -241,7 +299,8 @@ pub(crate) fn gather_child<'a, D>(
             // whitespace + newlines (each source `\n` becomes a parley break);
             // `pre-line` collapses spaces but keeps newlines. (Leading/trailing-
             // edge trimming is a follow-up.) A real break also comes from `<br>`.
-            let text = apply_white_space_collapse(styles, styling, dom.text(child.id()).unwrap_or(""));
+            let text =
+                apply_white_space_collapse(styles, styling, dom.text(child.id()).unwrap_or(""));
             if !text.is_empty() {
                 let start = *offset;
                 *offset += text.len();
@@ -251,7 +310,7 @@ pub(crate) fn gather_child<'a, D>(
                 // text resolves to the `<a>`.
                 sources.push((start..*offset, styling));
             }
-        }
+        },
         NodeKind::Element => {
             if dom
                 .element_name(child.id())
@@ -299,8 +358,8 @@ pub(crate) fn gather_child<'a, D>(
                 // sourced to it (the innermost inline wins).
                 gather_runs(dom, styles, images, child, runs, boxes, sources, offset);
             }
-        }
-        _ => {}
+        },
+        _ => {},
     }
 }
 
@@ -316,14 +375,25 @@ where
     D::NodeId: Copy + Eq + Hash,
 {
     use style::values::specified::box_::{DisplayInside, DisplayOutside};
-    if !matches!(dom.kind(id), NodeKind::Element) || is_replaced(dom, id) {
+    if !matches!(dom.kind(id), NodeKind::Element)
+        || is_replaced(dom, id)
+        || is_floating(styles, id)
+        || has_clearance(styles, id)
+    {
         return false;
     }
-    let Some(entry) = styles.get(id) else { return false };
-    let Some(data) = entry.borrow_data() else { return false };
+    let Some(entry) = styles.get(id) else {
+        return false;
+    };
+    let Some(data) = entry.borrow_data() else {
+        return false;
+    };
     let display = data.styles.primary().get_box().display;
     matches!(display.outside(), DisplayOutside::Inline)
-        && matches!(display.inside(), DisplayInside::Flow | DisplayInside::FlowRoot)
+        && matches!(
+            display.inside(),
+            DisplayInside::Flow | DisplayInside::FlowRoot
+        )
 }
 
 /// Gather a run of a block container's inline-level children (`group`) into one
@@ -345,9 +415,26 @@ where
     let mut sources = Vec::new();
     let mut offset = 0usize;
     for &child in group {
-        gather_child(dom, styles, images, styling, child, &mut runs, &mut boxes, &mut sources, &mut offset);
+        gather_child(
+            dom,
+            styles,
+            images,
+            styling,
+            child,
+            &mut runs,
+            &mut boxes,
+            &mut sources,
+            &mut offset,
+        );
     }
-    (InlineContent { runs, boxes, no_wrap: no_wrap_of(styles, styling) }, sources)
+    (
+        InlineContent {
+            runs,
+            boxes,
+            no_wrap: no_wrap_of(styles, styling),
+        },
+        sources,
+    )
 }
 
 /// Build an [`InlineRun`] for `text` styled by element `id`'s cascade
@@ -451,8 +538,7 @@ pub(crate) fn pseudo_content_text(cv: &ComputedValues) -> Option<String> {
                 }
             }
             (!out.is_empty()).then_some(out)
-        }
+        },
         _ => None,
     }
 }
-

@@ -29,8 +29,8 @@
 use std::time::Instant;
 
 use serval_layout::{
-    inline_stylesheets_from_source, layout_via_box_tree, run_cascade, ImagePlane, StylePlane,
-    TextMeasureCtx,
+    ImagePlane, StylePlane, TextMeasureCtx, inline_stylesheets_from_source, layout_via_box_tree,
+    run_cascade,
 };
 use serval_static_dom::StaticDocument;
 
@@ -132,7 +132,11 @@ fn main() {
     println!("  cascade           {cmin:>9.3} {cmed:>9.3} ms");
     println!("  layout total      {lmin:>9.3} {lmed:>9.3} ms");
     println!("  ----------------------------------------");
-    println!("  cascade+layout    {:>9.3} {:>9.3} ms", cmin + lmin, cmed + lmed);
+    println!(
+        "  cascade+layout    {:>9.3} {:>9.3} ms",
+        cmin + lmin,
+        cmed + lmed
+    );
     println!();
     println!("cold first paint ~= parse + font discovery + cascade + layout");
     if lib_timing {

@@ -22,7 +22,7 @@ use std::hash::Hash;
 
 use layout_dom_api::LayoutDom;
 
-use crate::box_tree::{layout_via_box_tree, BoxTree};
+use crate::box_tree::{BoxTree, layout_via_box_tree};
 use crate::fragment::FragmentPlane;
 use crate::image_decode::ImagePlane;
 use crate::style::StylePlane;
@@ -90,7 +90,13 @@ mod tests {
     fn cascade(html: &str, sheets: &[&str]) -> (StaticDocument, StylePlane<StaticNodeId>) {
         let document = StaticDocument::parse(html);
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&document, &mut styles, euclid::Size2D::new(800.0, 600.0), sheets, None);
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheets,
+            None,
+        );
         (document, styles)
     }
 
@@ -108,7 +114,10 @@ mod tests {
     /// proportional to font-size for single-line text.
     #[test]
     fn parley_inherits_font_size_from_cascade() {
-        let (doc_big, styles_big) = cascade("<html><body><p>Hello</p></body></html>", &["p { font-size: 32px; }"]);
+        let (doc_big, styles_big) = cascade(
+            "<html><body><p>Hello</p></body></html>",
+            &["p { font-size: 32px; }"],
+        );
         let (doc_def, styles_def) = cascade("<html><body><p>Hello</p></body></html>", &[]);
         let images = ImagePlane::new();
 
@@ -118,7 +127,9 @@ mod tests {
         let p_big = find_element(NodeRef::document(&doc_big), local_name!("p")).unwrap();
         let p_def = find_element(NodeRef::document(&doc_def), local_name!("p")).unwrap();
         let big = frags_big.rect_of(p_big.id()).expect("big <p> fragment");
-        let default = frags_default.rect_of(p_def.id()).expect("default <p> fragment");
+        let default = frags_default
+            .rect_of(p_def.id())
+            .expect("default <p> fragment");
 
         assert!(
             big.size.height > default.size.height * 1.5,
@@ -134,8 +145,10 @@ mod tests {
     fn cascade_font_family_flows_into_text_leaf() {
         use crate::text_measure::{FontFamilySpec, GenericFamilyKind};
 
-        let (document, styles) =
-            cascade("<html><body><p>x</p></body></html>", &["p { font-family: monospace; }"]);
+        let (document, styles) = cascade(
+            "<html><body><p>x</p></body></html>",
+            &["p { font-family: monospace; }"],
+        );
         let images = ImagePlane::new();
         let (_frags, built, _ctx) = layout(&document, &styles, &images, viewport());
 
@@ -169,15 +182,23 @@ mod tests {
 
         let p = find_element(NodeRef::document(&document), local_name!("p")).unwrap();
         let taffy_id = built.node_map.get(&p.id()).expect("<p> in node_map");
-        let content = built.get_node_context(*taffy_id).expect("<p> carries InlineContent");
+        let content = built
+            .get_node_context(*taffy_id)
+            .expect("<p> carries InlineContent");
 
         assert!(
             content.runs.len() >= 2,
             "expected multiple runs (text + <b>), got {}",
             content.runs.len()
         );
-        assert!(content.runs.iter().any(|r| r.weight < 500.0), "expected a normal-weight run");
-        assert!(content.runs.iter().any(|r| r.weight >= 600.0), "expected a bold run from <b>");
+        assert!(
+            content.runs.iter().any(|r| r.weight < 500.0),
+            "expected a normal-weight run"
+        );
+        assert!(
+            content.runs.iter().any(|r| r.weight >= 600.0),
+            "expected a bold run from <b>"
+        );
 
         // One line: p's height is about a single line, well under two.
         let h = fragments.rect_of(p.id()).expect("<p> fragment").size.height;
@@ -203,10 +224,15 @@ mod tests {
 
         let p = find_element(NodeRef::document(&document), local_name!("p")).unwrap();
         let taffy_id = built.node_map.get(&p.id()).expect("<p> in node_map");
-        let content = built.get_node_context(*taffy_id).expect("<p> carries InlineContent");
+        let content = built
+            .get_node_context(*taffy_id)
+            .expect("<p> carries InlineContent");
 
         // Per-span weight, from inline `style`: a plain span stays normal, the 700 span is bold.
-        assert!(content.runs.iter().any(|r| r.weight < 500.0), "a plain span keeps normal weight");
+        assert!(
+            content.runs.iter().any(|r| r.weight < 500.0),
+            "a plain span keeps normal weight"
+        );
         assert!(
             content.runs.iter().any(|r| r.weight >= 600.0),
             "the style=\"font-weight:700\" span shapes bold, per run",
@@ -231,11 +257,22 @@ mod tests {
         let (fragments, built, _ctx) = layout(&document, &styles, &images, viewport());
 
         let p = find_element(NodeRef::document(&document), local_name!("p")).unwrap();
-        assert!(built.node_map.contains_key(&p.id()), "expected <p> in node_map");
+        assert!(
+            built.node_map.contains_key(&p.id()),
+            "expected <p> in node_map"
+        );
 
         let rect = fragments.rect_of(p.id()).expect("<p> has a fragment");
-        assert!(rect.size.width > 0.0, "expected positive width, got {}", rect.size.width);
-        assert!(rect.size.height > 0.0, "expected positive height, got {}", rect.size.height);
+        assert!(
+            rect.size.width > 0.0,
+            "expected positive width, got {}",
+            rect.size.width
+        );
+        assert!(
+            rect.size.height > 0.0,
+            "expected positive height, got {}",
+            rect.size.height
+        );
     }
 
     /// `letter-spacing` widens the measured inline run: parley adds the spacing
@@ -249,7 +286,10 @@ mod tests {
             let (_frags, built, ctx) = layout(&doc, &styles, &images, viewport());
             let p = find_element(NodeRef::document(&doc), local_name!("p")).unwrap();
             let taffy_id = built.node_map.get(&p.id()).expect("<p> in node_map");
-            ctx.layouts.get(taffy_id).expect("<p> cached layout").width()
+            ctx.layouts
+                .get(taffy_id)
+                .expect("<p> cached layout")
+                .width()
         };
         let plain = measured_width(&[]);
         let spaced = measured_width(&["p { letter-spacing: 10px; }"]);
@@ -267,7 +307,8 @@ mod tests {
     #[test]
     fn font_relative_units_use_real_font_metrics() {
         let width_for = |w: &str| -> f32 {
-            let css = format!("div {{ display: block; font-size: 100px; height: 1px; width: {w}; }}");
+            let css =
+                format!("div {{ display: block; font-size: 100px; height: 1px; width: {w}; }}");
             let (doc, styles) = cascade("<html><body><div></div></body></html>", &[css.as_str()]);
             let images = ImagePlane::new();
             let (frags, _, _) = layout(&doc, &styles, &images, viewport());
@@ -280,9 +321,18 @@ mod tests {
         let cap = width_for("1cap");
         let ch = width_for("1ch");
 
-        assert!((em - 100.0).abs() < 0.5, "1em is exactly the font-size (100px): {em}");
-        assert!(ex > 30.0 && ex < 80.0, "1ex is the real x-height (~half an em): {ex}");
-        assert!(cap > ex && cap < em, "cap-height sits between x-height and em: cap={cap} ex={ex}");
+        assert!(
+            (em - 100.0).abs() < 0.5,
+            "1em is exactly the font-size (100px): {em}"
+        );
+        assert!(
+            ex > 30.0 && ex < 80.0,
+            "1ex is the real x-height (~half an em): {ex}"
+        );
+        assert!(
+            cap > ex && cap < em,
+            "cap-height sits between x-height and em: cap={cap} ex={ex}"
+        );
         assert!(ch > 20.0 && ch < em, "1ch is the real `0` advance: {ch}");
     }
 
@@ -297,9 +347,18 @@ mod tests {
     ) -> (StaticDocument, FragmentPlane<StaticNodeId>) {
         let document = StaticDocument::parse(html);
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&document, &mut styles, euclid::Size2D::new(w, h), sheets, None);
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(w, h),
+            sheets,
+            None,
+        );
         let images = ImagePlane::new();
-        let vp = Size { width: AvailableSpace::Definite(w), height: AvailableSpace::Definite(h) };
+        let vp = Size {
+            width: AvailableSpace::Definite(w),
+            height: AvailableSpace::Definite(h),
+        };
         let (frags, _, _) = layout(&document, &styles, &images, vp);
         (document, frags)
     }
@@ -316,8 +375,16 @@ mod tests {
         );
         let div = find_element(NodeRef::document(&doc), local_name!("div")).unwrap();
         let r = frags.rect_of(div.id()).expect("div fragment");
-        assert!((r.size.width - 400.0).abs() < 1.0, "50vw of 800 = 400: {}", r.size.width);
-        assert!((r.size.height - 300.0).abs() < 1.0, "50vh of 600 = 300: {}", r.size.height);
+        assert!(
+            (r.size.width - 400.0).abs() < 1.0,
+            "50vw of 800 = 400: {}",
+            r.size.width
+        );
+        assert!(
+            (r.size.height - 300.0).abs() < 1.0,
+            "50vh of 600 = 300: {}",
+            r.size.height
+        );
     }
 
     /// Phase B — viewport units re-resolve when the viewport changes: the same
@@ -328,7 +395,9 @@ mod tests {
         let measure = |w: f32, h: f32| {
             let (doc, frags) = layout_at(
                 "<html><body><div></div></body></html>",
-                &["html, body, div { display: block; margin: 0; } div { width: 50vw; height: 50vh; }"],
+                &[
+                    "html, body, div { display: block; margin: 0; } div { width: 50vw; height: 50vh; }",
+                ],
                 w,
                 h,
             );
@@ -337,9 +406,21 @@ mod tests {
         };
         let small = measure(800.0, 600.0);
         let large = measure(1000.0, 800.0);
-        assert!((small.width - 400.0).abs() < 1.0, "50vw@800 = 400: {}", small.width);
-        assert!((large.width - 500.0).abs() < 1.0, "50vw@1000 = 500: {}", large.width);
-        assert!((large.height - 400.0).abs() < 1.0, "50vh@800 = 400: {}", large.height);
+        assert!(
+            (small.width - 400.0).abs() < 1.0,
+            "50vw@800 = 400: {}",
+            small.width
+        );
+        assert!(
+            (large.width - 500.0).abs() < 1.0,
+            "50vw@1000 = 500: {}",
+            large.width
+        );
+        assert!(
+            (large.height - 400.0).abs() < 1.0,
+            "50vh@800 = 400: {}",
+            large.height
+        );
     }
 
     /// Phase B — the `%`-height chain: `html`/`body { height: 100% }` resolves
@@ -358,8 +439,14 @@ mod tests {
         let body = find_element(NodeRef::document(&doc), local_name!("body")).unwrap();
         let html_h = frags.rect_of(html.id()).expect("html fragment").size.height;
         let body_h = frags.rect_of(body.id()).expect("body fragment").size.height;
-        assert!((html_h - 600.0).abs() < 1.0, "html height:100% = viewport 600: {html_h}");
-        assert!((body_h - 600.0).abs() < 1.0, "body height:100% = html 600: {body_h}");
+        assert!(
+            (html_h - 600.0).abs() < 1.0,
+            "html height:100% = viewport 600: {html_h}"
+        );
+        assert!(
+            (body_h - 600.0).abs() < 1.0,
+            "body height:100% = html 600: {body_h}"
+        );
     }
 
     /// The body box is content-height, not viewport-stretched: a short page's
@@ -378,7 +465,10 @@ mod tests {
         let body = find_element(NodeRef::document(&doc), local_name!("body")).unwrap();
         let html_h = frags.rect_of(html.id()).expect("html fragment").size.height;
         let body_h = frags.rect_of(body.id()).expect("body fragment").size.height;
-        assert!((html_h - 600.0).abs() < 1.0, "the root <html> still fills the viewport: {html_h}");
+        assert!(
+            (html_h - 600.0).abs() < 1.0,
+            "the root <html> still fills the viewport: {html_h}"
+        );
         assert!(
             body_h < 100.0,
             "<body> is content-height (~one line + 16px padding), not viewport-stretched: {body_h}",

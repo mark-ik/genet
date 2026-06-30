@@ -23,8 +23,8 @@
 use std::cell::RefCell;
 
 use fontique::{
-    Attributes, Collection, CollectionOptions, FontStyle as FontiqueStyle, FontWeight,
-    FontWidth, GenericFamily, QueryFamily, QueryFont, QueryStatus, SourceCache,
+    Attributes, Collection, CollectionOptions, FontStyle as FontiqueStyle, FontWeight, FontWidth,
+    GenericFamily, QueryFamily, QueryFont, QueryStatus, SourceCache,
 };
 use rustc_hash::FxHashMap;
 use skrifa::instance::{LocationRef, Size};
@@ -111,7 +111,11 @@ impl FontResolver {
             .collect();
         let attributes = Attributes::new(
             FontWidth::NORMAL,
-            if italic { FontiqueStyle::Italic } else { FontiqueStyle::Normal },
+            if italic {
+                FontiqueStyle::Italic
+            } else {
+                FontiqueStyle::Normal
+            },
             FontWeight::new(weight),
         );
 

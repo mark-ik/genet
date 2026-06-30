@@ -41,7 +41,8 @@ use engine_observables_api::{InteractionState, SourceNodeId};
 use layout_dom_api::LayoutDom;
 use rustc_hash::FxHashMap;
 use selectors::matching::QuirksMode;
-use stylo_dom::ElementState;
+use servo_arc::Arc as ServoArc;
+use style::Atom;
 use style::animation::DocumentAnimationSet;
 use style::context::{
     RegisteredSpeculativePainter, RegisteredSpeculativePainters, SharedStyleContext, StyleContext,
@@ -49,14 +50,13 @@ use style::context::{
 use style::device::Device;
 use style::driver;
 use style::global_style_data::GLOBAL_STYLE_DATA;
+use style::media_queries::MediaList;
 use style::media_queries::MediaType;
 use style::properties::ComputedValues;
 use style::properties::declaration_block::parse_style_attribute;
 use style::properties::style_structs::Font;
 use style::queries::values::PrefersColorScheme;
 use style::selector_parser::{RestyleDamage, SnapshotMap};
-use servo_arc::Arc as ServoArc;
-use style::media_queries::MediaList;
 use style::shared_lock::{SharedRwLock, StylesheetGuards};
 use style::stylesheets::{
     AllowImportRules, CssRuleType, DocumentStyleSheet, Origin, Stylesheet, UrlExtraData,
@@ -65,11 +65,11 @@ use style::stylist::Stylist;
 use style::thread_state::{self, ThreadState};
 use style::traversal::{DomTraversal, PerLevelTraversalData, recalc_style_at};
 use style::traversal_flags::TraversalFlags;
-use style::Atom;
+use stylo_dom::ElementState;
 
-use crate::adapter_stylo::{selectors_quirks_mode, CascadeGuard, StyleNodeRef};
+use crate::adapter_stylo::{CascadeGuard, StyleNodeRef, selectors_quirks_mode};
 use crate::font_metrics::SkrifaFontMetricsProvider;
-use crate::style::StylePlane;
+use crate::style::{ContainIntrinsicOverride, StylePlane};
 
 // =============================================================================
 // Stub RegisteredSpeculativePainters
@@ -205,13 +205,17 @@ pub fn run_cascade<D>(
     let t = timing.then(std::time::Instant::now);
     let stylist = build_stylist(viewport, stylesheets, base_url, &lock, quirks);
     if let Some(t) = t {
-        eprintln!("[cascade-timing] stylist-build  {:>9.3} ms", t.elapsed().as_secs_f64() * 1e3);
+        eprintln!(
+            "[cascade-timing] stylist-build  {:>9.3} ms",
+            t.elapsed().as_secs_f64() * 1e3
+        );
     }
 
     // Sub-phases (2)-(5): populate + inline-style parse + the `traverse_dom`
     // recalc + lazy `::marker` resolution + rule-tree GC. `cascade_traverse`
     // prints each under the same env var.
     cascade_traverse(dom, plane, &stylist, base_url, None);
+    populate_contain_intrinsic_overrides(dom, plane, stylesheets);
 }
 
 /// Build + flush a [`Stylist`] for `viewport`, the baseline UA stylesheet
@@ -281,7 +285,10 @@ pub fn build_stylist(
         let sheet = parse_stylesheet(css, Origin::Author, lock, &url_data, quirks);
         stylist.append_stylesheet(sheet, &read);
     }
-    let guards = StylesheetGuards { author: &read, ua_or_user: &read };
+    let guards = StylesheetGuards {
+        author: &read,
+        ua_or_user: &read,
+    };
     stylist.flush(&guards);
     stylist
 }
@@ -292,11 +299,8 @@ pub fn build_stylist(
 /// the incremental passes later reuse is the one already referenced by the
 /// `ElementData` this populates. `base_url` is `None` (incremental sessions have
 /// no document base yet; same as the prior behaviour).
-pub fn run_cascade_with_stylist<D>(
-    dom: &D,
-    plane: &mut StylePlane<D::NodeId>,
-    stylist: &Stylist,
-) where
+pub fn run_cascade_with_stylist<D>(dom: &D, plane: &mut StylePlane<D::NodeId>, stylist: &Stylist)
+where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash + 'static,
 {
@@ -716,7 +720,10 @@ fn cascade_traverse<D>(
     let _guard = CascadeGuard::<D>::enter(dom, plane_ref, &lock, snapshots);
 
     if let Some(t) = t_setup {
-        eprintln!("[cascade-timing] setup         {:>9.3} ms", t.elapsed().as_secs_f64() * 1e3);
+        eprintln!(
+            "[cascade-timing] setup         {:>9.3} ms",
+            t.elapsed().as_secs_f64() * 1e3
+        );
     }
 
     // 5. Drive the traversal. RecalcStyle's process_preorder calls
@@ -736,7 +743,10 @@ fn cascade_traverse<D>(
         }
     }
     if let Some(t) = t_recalc {
-        eprintln!("[cascade-timing] traverse_dom   {:>9.3} ms", t.elapsed().as_secs_f64() * 1e3);
+        eprintln!(
+            "[cascade-timing] traverse_dom   {:>9.3} ms",
+            t.elapsed().as_secs_f64() * 1e3
+        );
     }
 
     // 5b. Resolve lazy `::marker` pseudo styles (not in the eager pseudo map)
@@ -752,7 +762,10 @@ fn cascade_traverse<D>(
     let t_marker = timing.then(std::time::Instant::now);
     let resolved_markers = collect_marker_styles(dom, &*plane, stylist, &marker_guards);
     if let Some(t) = t_marker {
-        eprintln!("[cascade-timing] marker-resolve {:>9.3} ms", t.elapsed().as_secs_f64() * 1e3);
+        eprintln!(
+            "[cascade-timing] marker-resolve {:>9.3} ms",
+            t.elapsed().as_secs_f64() * 1e3
+        );
     }
 
     // 6. Drop guard (clears TLS), then exit thread state.
@@ -775,7 +788,10 @@ fn cascade_traverse<D>(
     let t_gc = timing.then(std::time::Instant::now);
     stylist.rule_tree().maybe_gc();
     if let Some(t) = t_gc {
-        eprintln!("[cascade-timing] rule-tree-gc   {:>9.3} ms", t.elapsed().as_secs_f64() * 1e3);
+        eprintln!(
+            "[cascade-timing] rule-tree-gc   {:>9.3} ms",
+            t.elapsed().as_secs_f64() * 1e3
+        );
     }
 }
 
@@ -848,7 +864,7 @@ fn parse_inline_styles<D>(
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    use html5ever::{ns, LocalName, Namespace};
+    use html5ever::{LocalName, Namespace, ns};
     let no_ns: Namespace = ns!();
     let style_local = LocalName::from("style");
     let quirks = selectors_quirks_mode(dom.quirks_mode());
@@ -870,6 +886,327 @@ fn parse_inline_styles<D>(
             }
         }
         queue.extend(dom.dom_children(id));
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SupplementalRule {
+    selector: SimpleSelector,
+    value: ContainIntrinsicOverride,
+    order: usize,
+}
+
+#[derive(Clone, Debug)]
+struct SimpleSelector {
+    local: Option<String>,
+    id: Option<String>,
+    classes: Vec<String>,
+    specificity: u16,
+}
+
+#[derive(Clone, Copy)]
+struct AxisCandidate {
+    value: f32,
+    specificity: u16,
+    order: usize,
+}
+
+#[derive(Default)]
+struct CascadedContainIntrinsic {
+    width: Option<AxisCandidate>,
+    height: Option<AxisCandidate>,
+}
+
+fn populate_contain_intrinsic_overrides<D>(
+    dom: &D,
+    plane: &mut StylePlane<D::NodeId>,
+    stylesheets: &[&str],
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    use html5ever::{LocalName, Namespace, ns};
+
+    plane.clear_contain_intrinsic_overrides();
+    let no_ns: Namespace = ns!();
+    let style_local = LocalName::from("style");
+    let has_inline = {
+        let mut queue = vec![dom.document()];
+        let mut found = false;
+        while let Some(id) = queue.pop() {
+            if matches!(dom.kind(id), layout_dom_api::NodeKind::Element)
+                && dom
+                    .attribute(id, &no_ns, &style_local)
+                    .is_some_and(|css| css.contains("contain-intrinsic"))
+            {
+                found = true;
+                break;
+            }
+            queue.extend(dom.dom_children(id));
+        }
+        found
+    };
+    if !has_inline
+        && !stylesheets
+            .iter()
+            .any(|css| css.contains("contain-intrinsic"))
+    {
+        return;
+    }
+
+    let mut rules = Vec::new();
+    let mut order = 0;
+    for css in stylesheets {
+        collect_contain_intrinsic_rules(css, &mut order, &mut rules);
+    }
+
+    let mut queue = vec![dom.document()];
+    while let Some(id) = queue.pop() {
+        if matches!(dom.kind(id), layout_dom_api::NodeKind::Element) {
+            let mut cascaded = CascadedContainIntrinsic::default();
+            for rule in &rules {
+                if rule.selector.matches(dom, id) {
+                    cascaded.apply(rule.value, rule.selector.specificity, rule.order);
+                }
+            }
+            if let Some(css) = dom.attribute(id, &no_ns, &style_local) {
+                if css.contains("contain-intrinsic") {
+                    cascaded.apply(parse_contain_intrinsic_declarations(css), u16::MAX, order);
+                    order += 1;
+                }
+            }
+            let value = cascaded.finish();
+            if value.width.is_some() || value.height.is_some() {
+                plane.set_contain_intrinsic_override(id, value);
+            }
+        }
+        queue.extend(dom.dom_children(id));
+    }
+}
+
+fn collect_contain_intrinsic_rules(
+    css: &str,
+    order: &mut usize,
+    rules: &mut Vec<SupplementalRule>,
+) {
+    let mut rest = css;
+    while let Some(open) = rest.find('{') {
+        let selector_text = &rest[..open];
+        let after_open = &rest[open + 1..];
+        let Some(close) = after_open.find('}') else {
+            break;
+        };
+        let body = &after_open[..close];
+        rest = &after_open[close + 1..];
+        if selector_text.trim_start().starts_with('@') || !body.contains("contain-intrinsic") {
+            continue;
+        }
+        let value = parse_contain_intrinsic_declarations(body);
+        if value.width.is_none() && value.height.is_none() {
+            continue;
+        }
+        for selector in selector_text.split(',') {
+            if let Some(selector) = SimpleSelector::parse(selector) {
+                rules.push(SupplementalRule {
+                    selector,
+                    value,
+                    order: *order,
+                });
+                *order += 1;
+            }
+        }
+    }
+}
+
+fn parse_contain_intrinsic_declarations(css: &str) -> ContainIntrinsicOverride {
+    let mut value = ContainIntrinsicOverride::default();
+    for decl in css.split(';') {
+        let Some((name, raw_value)) = decl.split_once(':') else {
+            continue;
+        };
+        match name.trim().to_ascii_lowercase().as_str() {
+            "contain-intrinsic-width" => {
+                value.width = first_px_length(raw_value);
+            },
+            "contain-intrinsic-height" => {
+                value.height = first_px_length(raw_value);
+            },
+            "contain-intrinsic-size" => {
+                let lengths = px_lengths(raw_value);
+                if let Some(width) = lengths.first().copied() {
+                    value.width = Some(width);
+                    value.height = Some(lengths.get(1).copied().unwrap_or(width));
+                }
+            },
+            _ => {},
+        }
+    }
+    value
+}
+
+fn first_px_length(value: &str) -> Option<f32> {
+    px_lengths(value).into_iter().next()
+}
+
+fn px_lengths(value: &str) -> Vec<f32> {
+    use cssparser::{Parser, ParserInput, Token};
+
+    let mut input = ParserInput::new(value);
+    let mut parser = Parser::new(&mut input);
+    let mut out = Vec::new();
+    while let Ok(token) = parser.next_including_whitespace_and_comments() {
+        match token {
+            Token::Dimension { value, unit, .. } if unit.eq_ignore_ascii_case("px") => {
+                if *value >= 0.0 && value.is_finite() {
+                    out.push(*value);
+                }
+            },
+            Token::Number { value, .. } if *value == 0.0 => out.push(0.0),
+            _ => {},
+        }
+    }
+    out
+}
+
+impl SimpleSelector {
+    fn parse(raw: &str) -> Option<Self> {
+        let raw = raw.trim();
+        if raw.is_empty()
+            || raw
+                .chars()
+                .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '>' | '+' | '~' | '[' | ':'))
+        {
+            return None;
+        }
+
+        let mut local = None;
+        let mut id = None;
+        let mut classes = Vec::new();
+        let mut i = 0;
+        let bytes = raw.as_bytes();
+
+        if bytes.get(i) == Some(&b'*') {
+            i += 1;
+        } else if bytes
+            .get(i)
+            .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'-')
+        {
+            let start = i;
+            while bytes
+                .get(i)
+                .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'-')
+            {
+                i += 1;
+            }
+            local = Some(raw[start..i].to_ascii_lowercase());
+        }
+
+        while i < raw.len() {
+            let marker = bytes[i];
+            if marker != b'.' && marker != b'#' {
+                return None;
+            }
+            i += 1;
+            let start = i;
+            while bytes
+                .get(i)
+                .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'-' || *b == b'_')
+            {
+                i += 1;
+            }
+            if start == i {
+                return None;
+            }
+            let ident = raw[start..i].to_string();
+            if marker == b'.' {
+                classes.push(ident);
+            } else if id.replace(ident).is_some() {
+                return None;
+            }
+        }
+
+        let specificity = u16::from(local.is_some())
+            + (classes.len() as u16 * 10)
+            + u16::from(id.is_some()) * 100;
+        Some(Self {
+            local,
+            id,
+            classes,
+            specificity,
+        })
+    }
+
+    fn matches<D>(&self, dom: &D, id: D::NodeId) -> bool
+    where
+        D: LayoutDom,
+    {
+        use html5ever::{LocalName, Namespace, ns};
+        let no_ns: Namespace = ns!();
+        if let Some(local) = &self.local {
+            let Some(name) = dom.element_name(id) else {
+                return false;
+            };
+            if !name.local.as_ref().eq_ignore_ascii_case(local) {
+                return false;
+            }
+        }
+        if let Some(expected_id) = &self.id {
+            let id_local = LocalName::from("id");
+            if dom.attribute(id, &no_ns, &id_local) != Some(expected_id.as_str()) {
+                return false;
+            }
+        }
+        if !self.classes.is_empty() {
+            let class_local = LocalName::from("class");
+            let Some(class_attr) = dom.attribute(id, &no_ns, &class_local) else {
+                return false;
+            };
+            for class in &self.classes {
+                if !class_attr
+                    .split_ascii_whitespace()
+                    .any(|token| token == class)
+                {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+}
+
+impl CascadedContainIntrinsic {
+    fn apply(&mut self, value: ContainIntrinsicOverride, specificity: u16, order: usize) {
+        if let Some(width) = value.width {
+            self.width = choose_axis(self.width, width, specificity, order);
+        }
+        if let Some(height) = value.height {
+            self.height = choose_axis(self.height, height, specificity, order);
+        }
+    }
+
+    fn finish(self) -> ContainIntrinsicOverride {
+        ContainIntrinsicOverride {
+            width: self.width.map(|axis| axis.value),
+            height: self.height.map(|axis| axis.value),
+        }
+    }
+}
+
+fn choose_axis(
+    old: Option<AxisCandidate>,
+    value: f32,
+    specificity: u16,
+    order: usize,
+) -> Option<AxisCandidate> {
+    let new = AxisCandidate {
+        value,
+        specificity,
+        order,
+    };
+    match old {
+        Some(old) if old.specificity > specificity => Some(old),
+        Some(old) if old.specificity == specificity && old.order > order => Some(old),
+        _ => Some(new),
     }
 }
 
@@ -956,8 +1293,7 @@ mod tests {
     /// assertion passes and the cascade runs end-to-end.
     #[test]
     fn cascade_populates_element_data_for_every_element() {
-        let document =
-            StaticDocument::parse("<html><body><p>Hello</p></body></html>");
+        let document = StaticDocument::parse("<html><body><p>Hello</p></body></html>");
         let mut plane: StylePlane<_> = StylePlane::new();
 
         run_cascade(
@@ -974,8 +1310,13 @@ mod tests {
         let p_id = find_element(&document, local_name!("p")).expect("p exists");
 
         for (name, id) in [("html", html_id), ("body", body_id), ("p", p_id)] {
-            let entry = plane.get(id).unwrap_or_else(|| panic!("{name}: no StyleEntry"));
-            assert!(entry.has_data(), "{name}: no ElementData populated by cascade");
+            let entry = plane
+                .get(id)
+                .unwrap_or_else(|| panic!("{name}: no StyleEntry"));
+            assert!(
+                entry.has_data(),
+                "{name}: no ElementData populated by cascade"
+            );
         }
     }
 
@@ -985,8 +1326,7 @@ mod tests {
     /// values and assert the sRGB components match.
     #[test]
     fn cascade_applies_loaded_stylesheet_to_matched_elements() {
-        let document =
-            StaticDocument::parse("<html><body><p>Hello</p></body></html>");
+        let document = StaticDocument::parse("<html><body><p>Hello</p></body></html>");
         let mut plane: StylePlane<_> = StylePlane::new();
 
         run_cascade(
@@ -1062,10 +1402,8 @@ mod tests {
             &document,
             &mut plane,
             euclid::Size2D::new(800.0, 600.0),
-            &[
-                ".highlight { background-color: rgb(0, 0, 255); } \
-                 #title { color: rgb(0, 255, 0); }",
-            ],
+            &[".highlight { background-color: rgb(0, 0, 255); } \
+                 #title { color: rgb(0, 255, 0); }"],
             None,
         );
 
@@ -1115,10 +1453,8 @@ mod tests {
             &document,
             &mut plane,
             euclid::Size2D::new(800.0, 600.0),
-            &[
-                "[data-state=\"on\"] { color: rgb(0, 255, 0); } \
-                 [hidden] { color: rgb(0, 0, 255); }",
-            ],
+            &["[data-state=\"on\"] { color: rgb(0, 255, 0); } \
+                 [hidden] { color: rgb(0, 0, 255); }"],
             None,
         );
 
@@ -1126,7 +1462,10 @@ mod tests {
             let mut out = Vec::new();
             let mut q = vec![document.document()];
             while let Some(id) = q.pop() {
-                if document.element_name(id).is_some_and(|n| n.local == local_name!("p")) {
+                if document
+                    .element_name(id)
+                    .is_some_and(|n| n.local == local_name!("p"))
+                {
                     out.push(id);
                 }
                 let mut kids: Vec<_> = document.dom_children(id).collect();
@@ -1142,10 +1481,19 @@ mod tests {
 
         // p[0] = data-state=on → green; p[1] = hidden → blue; p[2] =
         // data-state=off → neither rule (default black).
-        assert!(green(color_of::<StaticDocument>(&plane, ps[0])), "[data-state=on] → green");
-        assert!(blue(color_of::<StaticDocument>(&plane, ps[1])), "[hidden] → blue");
+        assert!(
+            green(color_of::<StaticDocument>(&plane, ps[0])),
+            "[data-state=on] → green"
+        );
+        assert!(
+            blue(color_of::<StaticDocument>(&plane, ps[1])),
+            "[hidden] → blue"
+        );
         let c2 = color_of::<StaticDocument>(&plane, ps[2]);
-        assert!(!green(c2) && !blue(c2), "data-state=off matches neither rule");
+        assert!(
+            !green(c2) && !blue(c2),
+            "data-state=off matches neither rule"
+        );
     }
 
     /// State-backed pseudo-classes match against the element's
@@ -1157,13 +1505,15 @@ mod tests {
     fn cascade_matches_hover_pseudo_class() {
         use stylo_dom::ElementState;
 
-        let document =
-            StaticDocument::parse("<html><body><p>A</p><p>B</p></body></html>");
+        let document = StaticDocument::parse("<html><body><p>A</p><p>B</p></body></html>");
         let ps: Vec<_> = {
             let mut out = Vec::new();
             let mut q = vec![document.document()];
             while let Some(id) = q.pop() {
-                if document.element_name(id).is_some_and(|n| n.local == local_name!("p")) {
+                if document
+                    .element_name(id)
+                    .is_some_and(|n| n.local == local_name!("p"))
+                {
                     out.push(id);
                 }
                 let mut kids: Vec<_> = document.dom_children(id).collect();
@@ -1187,8 +1537,14 @@ mod tests {
 
         let hovered = color_of::<StaticDocument>(&plane, ps[0]);
         let plain = color_of::<StaticDocument>(&plane, ps[1]);
-        assert!(hovered[0] > 0.99 && hovered[1] < 0.01, ":hover <p> should be red, got {hovered:?}");
-        assert!(plain[0] < 0.01, "non-hovered <p> should stay default, got {plain:?}");
+        assert!(
+            hovered[0] > 0.99 && hovered[1] < 0.01,
+            ":hover <p> should be red, got {hovered:?}"
+        );
+        assert!(
+            plain[0] < 0.01,
+            "non-hovered <p> should stay default, got {plain:?}"
+        );
     }
 
     /// A host [`InteractionState`] hover drives a `:hover` restyle, and moving
@@ -1218,21 +1574,40 @@ mod tests {
 
         let mut plane: StylePlane<_> = StylePlane::new();
         let stylist = cascade_persistent(&dom, &mut plane, SHEET);
-        assert!(color_of::<ScriptedDom>(&plane, p0)[0] < 0.01, "p0 starts non-red");
+        assert!(
+            color_of::<ScriptedDom>(&plane, p0)[0] < 0.01,
+            "p0 starts non-red"
+        );
 
         // Hover p0 → red; p1 untouched.
-        let hover0 =
-            InteractionState { hovered: Some(SourceNodeId(dom.opaque_id(p0))), ..Default::default() };
+        let hover0 = InteractionState {
+            hovered: Some(SourceNodeId(dom.opaque_id(p0))),
+            ..Default::default()
+        };
         restyle_for_interaction(&dom, &mut plane, &stylist, &hover0);
-        assert!(color_of::<ScriptedDom>(&plane, p0)[0] > 0.99, "hovered p0 → red");
-        assert!(color_of::<ScriptedDom>(&plane, p1)[0] < 0.01, "p1 stays default");
+        assert!(
+            color_of::<ScriptedDom>(&plane, p0)[0] > 0.99,
+            "hovered p0 → red"
+        );
+        assert!(
+            color_of::<ScriptedDom>(&plane, p1)[0] < 0.01,
+            "p1 stays default"
+        );
 
         // Move hover to p1 → p1 red, p0 reverts.
-        let hover1 =
-            InteractionState { hovered: Some(SourceNodeId(dom.opaque_id(p1))), ..Default::default() };
+        let hover1 = InteractionState {
+            hovered: Some(SourceNodeId(dom.opaque_id(p1))),
+            ..Default::default()
+        };
         restyle_for_interaction(&dom, &mut plane, &stylist, &hover1);
-        assert!(color_of::<ScriptedDom>(&plane, p1)[0] > 0.99, "now-hovered p1 → red");
-        assert!(color_of::<ScriptedDom>(&plane, p0)[0] < 0.01, "p0 reverts to default");
+        assert!(
+            color_of::<ScriptedDom>(&plane, p1)[0] > 0.99,
+            "now-hovered p1 → red"
+        );
+        assert!(
+            color_of::<ScriptedDom>(&plane, p0)[0] < 0.01,
+            "p0 reverts to default"
+        );
     }
 
     /// `:focus` matches only the focused element while `:focus-within` matches
@@ -1264,14 +1639,22 @@ mod tests {
         let mut plane: StylePlane<_> = StylePlane::new();
         let stylist = cascade_persistent(&dom, &mut plane, SHEET);
 
-        let focus =
-            InteractionState { focused: Some(SourceNodeId(dom.opaque_id(p))), ..Default::default() };
+        let focus = InteractionState {
+            focused: Some(SourceNodeId(dom.opaque_id(p))),
+            ..Default::default()
+        };
         restyle_for_interaction(&dom, &mut plane, &stylist, &focus);
 
         let p_c = color_of::<ScriptedDom>(&plane, p);
         let div_c = color_of::<ScriptedDom>(&plane, div);
-        assert!(p_c[0] > 0.99 && p_c[1] < 0.01, "focused <p> → red (:focus), got {p_c:?}");
-        assert!(div_c[1] > 0.99 && div_c[0] < 0.01, "ancestor <div> → green (:focus-within), got {div_c:?}");
+        assert!(
+            p_c[0] > 0.99 && p_c[1] < 0.01,
+            "focused <p> → red (:focus), got {p_c:?}"
+        );
+        assert!(
+            div_c[1] > 0.99 && div_c[0] < 0.01,
+            "ancestor <div> → green (:focus-within), got {div_c:?}"
+        );
     }
 
     /// `:checked` matches a checked checkbox `<input>` (from its `checked`
@@ -1285,7 +1668,10 @@ mod tests {
             let mut out = Vec::new();
             let mut q = vec![document.document()];
             while let Some(id) = q.pop() {
-                if document.element_name(id).is_some_and(|n| n.local == local_name!("input")) {
+                if document
+                    .element_name(id)
+                    .is_some_and(|n| n.local == local_name!("input"))
+                {
                     out.push(id);
                 }
                 let mut kids: Vec<_> = document.dom_children(id).collect();
@@ -1306,8 +1692,14 @@ mod tests {
         );
         let checked = color_of::<StaticDocument>(&plane, inputs[0]);
         let unchecked = color_of::<StaticDocument>(&plane, inputs[1]);
-        assert!(checked[0] > 0.99 && checked[1] < 0.01, "checked input → red, got {checked:?}");
-        assert!(unchecked[0] < 0.01, "unchecked input stays default, got {unchecked:?}");
+        assert!(
+            checked[0] > 0.99 && checked[1] < 0.01,
+            "checked input → red, got {checked:?}"
+        );
+        assert!(
+            unchecked[0] < 0.01,
+            "unchecked input stays default, got {unchecked:?}"
+        );
     }
 
     /// The parser's quirks-mode selection flows through `LayoutDom::quirks_mode`
@@ -1325,13 +1717,25 @@ mod tests {
         assert_eq!(qm, layout_dom_api::QuirksMode::Quirks);
 
         let lock = SharedRwLock::new();
-        let stylist =
-            build_stylist(euclid::Size2D::new(800.0, 600.0), &[], None, &lock, selectors_quirks_mode(qm));
-        assert_eq!(stylist.quirks_mode(), QuirksMode::Quirks, "stylist carries quirks mode");
+        let stylist = build_stylist(
+            euclid::Size2D::new(800.0, 600.0),
+            &[],
+            None,
+            &lock,
+            selectors_quirks_mode(qm),
+        );
+        assert_eq!(
+            stylist.quirks_mode(),
+            QuirksMode::Quirks,
+            "stylist carries quirks mode"
+        );
 
         // `<!DOCTYPE html>` → standards mode.
         let std_doc = StaticDocument::parse("<!DOCTYPE html><html><body></body></html>");
-        assert_eq!(LayoutDom::quirks_mode(&std_doc), layout_dom_api::QuirksMode::NoQuirks);
+        assert_eq!(
+            LayoutDom::quirks_mode(&std_doc),
+            layout_dom_api::QuirksMode::NoQuirks
+        );
     }
 
     /// The text `color` an element's cascade resolved to, as straight RGBA.
@@ -1360,7 +1764,13 @@ mod tests {
     {
         let lock = plane.shared_lock().clone();
         let quirks = selectors_quirks_mode(dom.quirks_mode());
-        let stylist = build_stylist(euclid::Size2D::new(800.0, 600.0), sheets, None, &lock, quirks);
+        let stylist = build_stylist(
+            euclid::Size2D::new(800.0, 600.0),
+            sheets,
+            None,
+            &lock,
+            quirks,
+        );
         run_cascade_with_stylist(dom, plane, &stylist);
         stylist
     }
@@ -1377,8 +1787,9 @@ mod tests {
         use layout_dom_api::{LayoutDomMut, QualName};
         use serval_scripted_dom::ScriptedDom;
 
-        const SHEET: &[&str] =
-            &[".a { color: rgb(255,0,0); } .b { color: rgb(0,0,255); } .keep { color: rgb(0,255,0); }"];
+        const SHEET: &[&str] = &[
+            ".a { color: rgb(255,0,0); } .b { color: rgb(0,0,255); } .keep { color: rgb(0,255,0); }",
+        ];
         let html = |l: &str| QualName::new(None, ns!(html), l.into());
         let attr = |l: &str| QualName::new(None, ns!(), l.into());
 
@@ -1411,18 +1822,36 @@ mod tests {
 
         // Oracle: a fresh full cascade of the mutated DOM.
         let mut oracle: StylePlane<_> = StylePlane::new();
-        run_cascade(&dom, &mut oracle, euclid::Size2D::new(800.0, 600.0), SHEET, None);
+        run_cascade(
+            &dom,
+            &mut oracle,
+            euclid::Size2D::new(800.0, 600.0),
+            SHEET,
+            None,
+        );
 
         let p_inc = color_of::<ScriptedDom>(&plane, p);
         let p_full = color_of::<ScriptedDom>(&oracle, p);
-        assert_eq!(p_inc, p_full, "incremental <p> color must match full re-cascade");
-        assert!((p_inc[2] - 1.0).abs() < 0.001, "<p> should be blue after a→b, got {p_inc:?}");
+        assert_eq!(
+            p_inc, p_full,
+            "incremental <p> color must match full re-cascade"
+        );
+        assert!(
+            (p_inc[2] - 1.0).abs() < 0.001,
+            "<p> should be blue after a→b, got {p_inc:?}"
+        );
 
         // The untouched sibling matches too (still green).
         let span_inc = color_of::<ScriptedDom>(&plane, span);
         let span_full = color_of::<ScriptedDom>(&oracle, span);
-        assert_eq!(span_inc, span_full, "untouched <span> must match full re-cascade");
-        assert!((span_inc[1] - 1.0).abs() < 0.001, "<span> should stay green, got {span_inc:?}");
+        assert_eq!(
+            span_inc, span_full,
+            "untouched <span> must match full re-cascade"
+        );
+        assert!(
+            (span_inc[1] - 1.0).abs() < 0.001,
+            "<span> should stay green, got {span_inc:?}"
+        );
     }
 
     /// Invalidation must **propagate to descendants**, not just the
@@ -1455,7 +1884,10 @@ mod tests {
 
         let mut plane: StylePlane<_> = StylePlane::new();
         let stylist = cascade_persistent(&dom, &mut plane, SHEET);
-        assert!(color_of::<ScriptedDom>(&plane, p)[2] < 0.001, "p starts black (no .box ancestor)");
+        assert!(
+            color_of::<ScriptedDom>(&plane, p)[2] < 0.001,
+            "p starts black (no .box ancestor)"
+        );
 
         // Add class="box" to the div; the descendant <p> must recolor.
         let mut sink = Vec::new();
@@ -1466,7 +1898,13 @@ mod tests {
         restyle_with_snapshots(&dom, &mut plane, &stylist, &muts);
 
         let mut oracle: StylePlane<_> = StylePlane::new();
-        run_cascade(&dom, &mut oracle, euclid::Size2D::new(800.0, 600.0), SHEET, None);
+        run_cascade(
+            &dom,
+            &mut oracle,
+            euclid::Size2D::new(800.0, 600.0),
+            SHEET,
+            None,
+        );
 
         let p_inc = color_of::<ScriptedDom>(&plane, p);
         assert_eq!(
@@ -1474,7 +1912,10 @@ mod tests {
             color_of::<ScriptedDom>(&oracle, p),
             "descendant <p> must match full re-cascade after the container's class change"
         );
-        assert!((p_inc[2] - 1.0).abs() < 0.001, "descendant <p> should be blue via `.box p`, got {p_inc:?}");
+        assert!(
+            (p_inc[2] - 1.0).abs() < 0.001,
+            "descendant <p> should be blue via `.box p`, got {p_inc:?}"
+        );
     }
 
     /// Incremental restyle handles **attribute-selector** dependencies:
@@ -1487,7 +1928,8 @@ mod tests {
         use layout_dom_api::{LayoutDomMut, QualName};
         use serval_scripted_dom::ScriptedDom;
 
-        const SHEET: &[&str] = &["p { color: rgb(0,0,0); } p[data-state=\"on\"] { color: rgb(0,255,0); }"];
+        const SHEET: &[&str] =
+            &["p { color: rgb(0,0,0); } p[data-state=\"on\"] { color: rgb(0,255,0); }"];
         let html = |l: &str| QualName::new(None, ns!(html), l.into());
         let attr = |l: &str| QualName::new(None, ns!(), l.into());
 
@@ -1503,7 +1945,10 @@ mod tests {
 
         let mut plane: StylePlane<_> = StylePlane::new();
         let stylist = cascade_persistent(&dom, &mut plane, SHEET);
-        assert!(color_of::<ScriptedDom>(&plane, p)[1] < 0.01, "p starts black (data-state=off)");
+        assert!(
+            color_of::<ScriptedDom>(&plane, p)[1] < 0.01,
+            "p starts black (data-state=off)"
+        );
 
         // Toggle data-state off → on.
         let mut sink = Vec::new();
@@ -1514,11 +1959,24 @@ mod tests {
         restyle_with_snapshots(&dom, &mut plane, &stylist, &muts);
 
         let mut oracle: StylePlane<_> = StylePlane::new();
-        run_cascade(&dom, &mut oracle, euclid::Size2D::new(800.0, 600.0), SHEET, None);
+        run_cascade(
+            &dom,
+            &mut oracle,
+            euclid::Size2D::new(800.0, 600.0),
+            SHEET,
+            None,
+        );
 
         let inc = color_of::<ScriptedDom>(&plane, p);
-        assert_eq!(inc, color_of::<ScriptedDom>(&oracle, p), "attr restyle must match full re-cascade");
-        assert!(inc[1] > 0.99, "p should be green after data-state→on, got {inc:?}");
+        assert_eq!(
+            inc,
+            color_of::<ScriptedDom>(&oracle, p),
+            "attr restyle must match full re-cascade"
+        );
+        assert!(
+            inc[1] > 0.99,
+            "p should be green after data-state→on, got {inc:?}"
+        );
     }
 
     /// RestyleDamage drives the repaint-vs-relayout decision: a `color`-only
@@ -1561,8 +2019,7 @@ mod tests {
             dom.set_attribute(p, attr("class"), "blue");
             let mut muts = Vec::new();
             dom.drain_mutations(&mut muts);
-            let outcome =
-                restyle_with_snapshots(&dom, &mut plane, &stylist, &muts);
+            let outcome = restyle_with_snapshots(&dom, &mut plane, &stylist, &muts);
             assert!(!outcome.needs_relayout, "color swap should be repaint-only");
         }
 
@@ -1577,9 +2034,11 @@ mod tests {
             dom.set_attribute(p, attr("class"), "wide");
             let mut muts = Vec::new();
             dom.drain_mutations(&mut muts);
-            let outcome =
-                restyle_with_snapshots(&dom, &mut plane, &stylist, &muts);
-            assert!(outcome.needs_relayout, "width change should require relayout");
+            let outcome = restyle_with_snapshots(&dom, &mut plane, &stylist, &muts);
+            assert!(
+                outcome.needs_relayout,
+                "width change should require relayout"
+            );
         }
     }
 }

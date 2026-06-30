@@ -372,11 +372,7 @@ impl<'a, D: LayoutDom> TShadowRoot for StyleNodeRef<'a, D> {
 // =============================================================================
 
 impl<'a, D: LayoutDom> AttributeProvider for StyleNodeRef<'a, D> {
-    fn get_attr(
-        &self,
-        attr: &style::LocalName,
-        namespace: &style::Namespace,
-    ) -> Option<String> {
+    fn get_attr(&self, attr: &style::LocalName, namespace: &style::Namespace) -> Option<String> {
         self.dom()
             .attribute(self.id, &namespace.0, &attr.0)
             .map(|s| s.to_string())
@@ -471,8 +467,7 @@ impl<'a, D: LayoutDom> SelectorsElement for StyleNodeRef<'a, D> {
         // fake `NonNull<()>` (matching Blitz's pattern). The `+1` ensures
         // non-null even for `opaque_id == 0`.
         let raw = self.dom().opaque_id(self.id).wrapping_add(1) as usize;
-        let ptr = std::ptr::NonNull::new(raw as *mut ())
-            .expect("opaque_id + 1 cannot be zero");
+        let ptr = std::ptr::NonNull::new(raw as *mut ()).expect("opaque_id + 1 cannot be zero");
         OpaqueElement::from_non_null_ptr(ptr)
     }
 
@@ -540,7 +535,10 @@ impl<'a, D: LayoutDom> SelectorsElement for StyleNodeRef<'a, D> {
     }
 
     fn is_same_type(&self, other: &Self) -> bool {
-        match (self.dom().element_name(self.id), other.dom().element_name(other.id)) {
+        match (
+            self.dom().element_name(self.id),
+            other.dom().element_name(other.id),
+        ) {
             (Some(a), Some(b)) => a.local == b.local && a.ns == b.ns,
             _ => false,
         }
@@ -562,9 +560,9 @@ impl<'a, D: LayoutDom> SelectorsElement for StyleNodeRef<'a, D> {
             NamespaceConstraint::Specific(ns) => dom
                 .attribute(self.id, &ns.0, &local_name.0)
                 .is_some_and(|value| operation.eval_str(value)),
-            NamespaceConstraint::Any => dom.attributes(self.id).any(|attr| {
-                attr.name.local == local_name.0 && operation.eval_str(attr.value)
-            }),
+            NamespaceConstraint::Any => dom
+                .attributes(self.id)
+                .any(|attr| attr.name.local == local_name.0 && operation.eval_str(attr.value)),
         }
     }
 
@@ -733,7 +731,9 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
     }
 
     fn state(&self) -> ElementState {
-        self.entry().map(|e| e.state).unwrap_or_else(ElementState::empty)
+        self.entry()
+            .map(|e| e.state)
+            .unwrap_or_else(ElementState::empty)
     }
 
     fn has_part_attr(&self) -> bool {
@@ -897,11 +897,7 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
         None
     }
 
-    fn match_element_lang(
-        &self,
-        _override_lang: Option<Option<AttrValue>>,
-        _value: &Lang,
-    ) -> bool {
+    fn match_element_lang(&self, _override_lang: Option<Option<AttrValue>>, _value: &Lang) -> bool {
         false
     }
 
@@ -955,13 +951,13 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
                     ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR_SIBLING,
                 ) {
                     ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR_SIBLING
-                } else if f.contains(
-                    ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR,
-                ) {
+                } else if f
+                    .contains(ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR)
+                {
                     ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR
-                } else if f.contains(
-                    ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_SIBLING,
-                ) {
+                } else if f
+                    .contains(ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_SIBLING)
+                {
                     ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_SIBLING
                 } else {
                     ElementSelectorFlags::empty()

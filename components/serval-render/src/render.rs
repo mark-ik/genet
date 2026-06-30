@@ -29,23 +29,37 @@ use layout_dom_api::LayoutDom;
 use paint_list_api::{ColorF, DeviceIntSize};
 use serval_layout::{
     BackgroundImagePlane, BoxTree, FragmentPlane, ImageLoader, ImagePlane, IncrementalLayout,
-    ScrollOffsets, ServalLaneView, ServalPaintList, StylePlane, TextMeasureCtx,
-    accumulate_painted_origins, accumulated_translate, caret_byte_at_point,
-    caret_byte_vertical, caret_color, caret_rect, emit_paint_list_with_layouts, layout,
-    paint_list_from_layout_dom, push_scrollbars, range_rects, run_cascade, selection_rects, selection_style,
-    TextRange,
+    ScrollOffsets, ServalLaneView, ServalPaintList, StylePlane, TextMeasureCtx, TextRange,
+    accumulate_painted_origins, accumulated_translate, caret_byte_at_point, caret_byte_vertical,
+    caret_color, caret_rect, emit_paint_list_with_layouts, layout, paint_list_from_layout_dom,
+    push_scrollbars, range_rects, run_cascade, selection_rects, selection_style,
 };
 use serval_scripted_dom::{NodeId, ScriptedDom};
 
 /// Caret bar thickness, device px.
 const CARET_WIDTH: f32 = 2.0;
 /// Caret bar colour (near-black, opaque).
-const CARET_COLOR: ColorF = ColorF { r: 0.12, g: 0.12, b: 0.20, a: 1.0 };
+const CARET_COLOR: ColorF = ColorF {
+    r: 0.12,
+    g: 0.12,
+    b: 0.20,
+    a: 1.0,
+};
 /// Selection highlight colour (translucent blue — text shows through, since the
 /// highlight paints over the text).
-const SELECTION_COLOR: ColorF = ColorF { r: 0.40, g: 0.60, b: 0.95, a: 0.40 };
+const SELECTION_COLOR: ColorF = ColorF {
+    r: 0.40,
+    g: 0.60,
+    b: 0.95,
+    a: 0.40,
+};
 /// Focus-ring outline colour (the `:focus-visible` indicator — a blue stroke).
-const FOCUS_RING_COLOR: ColorF = ColorF { r: 0.42, g: 0.62, b: 0.98, a: 0.95 };
+const FOCUS_RING_COLOR: ColorF = ColorF {
+    r: 0.42,
+    g: 0.62,
+    b: 0.98,
+    a: 0.95,
+};
 /// Focus-ring outline thickness, device px.
 const FOCUS_RING_WIDTH: f32 = 2.0;
 
@@ -84,7 +98,8 @@ pub fn scene_from_scripted_dom(
     cursor: Option<TextCursor>,
     scroll_offsets: &ScrollOffsets<NodeId>,
 ) -> netrender::Scene {
-    let plist = paint_list_from_scripted_dom(dom, stylesheets, width, height, cursor, scroll_offsets);
+    let plist =
+        paint_list_from_scripted_dom(dom, stylesheets, width, height, cursor, scroll_offsets);
     paint::translate_paint_list(&plist)
 }
 
@@ -171,13 +186,24 @@ pub fn paint_list_from_scripted_dom(
                 // `::selection { background }` when the field (or an ancestor) sets
                 // one, else the theme default highlight.
                 let highlight = selection_style(dom, &styles, c.node)
-                    .map(|(bg, _fg)| ColorF { r: bg[0], g: bg[1], b: bg[2], a: bg[3] })
+                    .map(|(bg, _fg)| ColorF {
+                        r: bg[0],
+                        g: bg[1],
+                        b: bg[2],
+                        a: bg[3],
+                    })
                     .unwrap_or(SELECTION_COLOR);
                 plist.push_selection(&rects, highlight);
             }
-            if let Some(rect) =
-                caret_rect(dom, c.node, c.caret, &built, &text_ctx, &fragments, CARET_WIDTH)
-            {
+            if let Some(rect) = caret_rect(
+                dom,
+                c.node,
+                c.caret,
+                &built,
+                &text_ctx,
+                &fragments,
+                CARET_WIDTH,
+            ) {
                 // `caret-color: auto` — track the field's cascaded text colour so the caret stays
                 // legible on every theme (invisible near-black on a dark field otherwise); fall back
                 // to the dark default when the colour can't be resolved.
@@ -190,7 +216,14 @@ pub fn paint_list_from_scripted_dom(
         // The `:focus-visible` ring on the focused node (a CSS transform shifts where it paints;
         // `accumulated_translate` is `(0, 0)` for untransformed content).
         let translate = accumulated_translate(dom, &styles, c.node);
-        push_focus_ring(&mut plist, dom, &fragments, scroll_offsets, c.node, translate);
+        push_focus_ring(
+            &mut plist,
+            dom,
+            &fragments,
+            scroll_offsets,
+            c.node,
+            translate,
+        );
     }
 
     push_scrollbars(&mut plist, dom, &fragments, scroll_offsets);
@@ -257,8 +290,11 @@ pub fn paint_list_from_session(
     width: u32,
     height: u32,
 ) -> ServalPaintList {
-    let mut plist =
-        session.emit_paint_list(dom, scroll_offsets, DeviceIntSize::new(width as i32, height as i32));
+    let mut plist = session.emit_paint_list(
+        dom,
+        scroll_offsets,
+        DeviceIntSize::new(width as i32, height as i32),
+    );
 
     // Same overlay order as the stateless path: selection highlight (under) then
     // caret (over), both at absolute coords, sourced from the session's retained
@@ -269,7 +305,12 @@ pub fn paint_list_from_session(
                 let rects = session.selection_rects(dom, c.node, start, end);
                 let highlight = session
                     .selection_style(dom, c.node)
-                    .map(|(bg, _fg)| ColorF { r: bg[0], g: bg[1], b: bg[2], a: bg[3] })
+                    .map(|(bg, _fg)| ColorF {
+                        r: bg[0],
+                        g: bg[1],
+                        b: bg[2],
+                        a: bg[3],
+                    })
                     .unwrap_or(SELECTION_COLOR);
                 plist.push_selection(&rects, highlight);
             }
@@ -284,7 +325,14 @@ pub fn paint_list_from_session(
         }
         // The `:focus-visible` ring (the retained layout knows the node's accumulated transform).
         let translate = session.accumulated_translate(dom, c.node);
-        push_focus_ring(&mut plist, dom, session.fragments(), scroll_offsets, c.node, translate);
+        push_focus_ring(
+            &mut plist,
+            dom,
+            session.fragments(),
+            scroll_offsets,
+            c.node,
+            translate,
+        );
     }
 
     push_scrollbars(&mut plist, dom, session.fragments(), scroll_offsets);
@@ -304,7 +352,9 @@ fn push_focus_ring(
     node: NodeId,
     translate: (f32, f32),
 ) {
-    let Some(r) = fragments.rect_of(node) else { return };
+    let Some(r) = fragments.rect_of(node) else {
+        return;
+    };
     let origins = accumulate_painted_origins(dom, fragments, scroll_offsets);
     let Some(p) = origins.get(&node) else { return };
     let (x, y) = (p.x + translate.0, p.y + translate.1);
@@ -347,12 +397,8 @@ pub fn soft_wrap_caret_byte(
     delta: isize,
     goal_x: Option<f32>,
 ) -> Option<(usize, f32)> {
-    LaidOutDocument::compute(dom, stylesheets, width, height).soft_wrap_caret_byte(
-        node,
-        caret_byte,
-        delta,
-        goal_x,
-    )
+    LaidOutDocument::compute(dom, stylesheets, width, height)
+        .soft_wrap_caret_byte(node, caret_byte, delta, goal_x)
 }
 
 /// The caret byte nearest scene point `(x, y)` within `node`'s laid-out text —
@@ -454,7 +500,13 @@ impl<'a> LaidOutDocument<'a> {
             height: taffy::AvailableSpace::Definite(height as f32),
         };
         let (fragments, built, text_ctx) = layout(dom, &styles, &images, viewport);
-        Self { dom, styles, fragments, built, text_ctx }
+        Self {
+            dom,
+            styles,
+            fragments,
+            built,
+            text_ctx,
+        }
     }
 
     /// The per-node fragment plane (borrowed; `into_fragments` to own it).
@@ -468,7 +520,12 @@ impl<'a> LaidOutDocument<'a> {
     }
 
     /// Topmost (paint-order) node containing `(x, y)`, or `None`.
-    pub fn hit_test(&self, x: f32, y: f32, scroll_offsets: &ScrollOffsets<NodeId>) -> Option<NodeId> {
+    pub fn hit_test(
+        &self,
+        x: f32,
+        y: f32,
+        scroll_offsets: &ScrollOffsets<NodeId>,
+    ) -> Option<NodeId> {
         let view = ServalLaneView::new(self.dom, &self.styles, &self.fragments)
             .with_scroll_offsets(scroll_offsets);
         view.hit_test(Point::new(x, y))
@@ -476,7 +533,11 @@ impl<'a> LaidOutDocument<'a> {
     }
 
     /// Screen rect `(x, y, w, h)` of the caret at `caret_byte` within `node`.
-    pub fn caret_screen_rect(&self, node: NodeId, caret_byte: usize) -> Option<(f32, f32, f32, f32)> {
+    pub fn caret_screen_rect(
+        &self,
+        node: NodeId,
+        caret_byte: usize,
+    ) -> Option<(f32, f32, f32, f32)> {
         let r = caret_rect(
             self.dom,
             node,
@@ -500,12 +561,27 @@ impl<'a> LaidOutDocument<'a> {
         delta: isize,
         goal_x: Option<f32>,
     ) -> Option<(usize, f32)> {
-        caret_byte_vertical::<ScriptedDom>(node, caret_byte, &self.built, &self.text_ctx, delta, goal_x)
+        caret_byte_vertical::<ScriptedDom>(
+            node,
+            caret_byte,
+            &self.built,
+            &self.text_ctx,
+            delta,
+            goal_x,
+        )
     }
 
     /// Caret byte nearest scene point `(x, y)` within `node`'s laid-out text.
     pub fn caret_byte_at(&self, node: NodeId, x: f32, y: f32) -> Option<usize> {
-        caret_byte_at_point(self.dom, node, x, y, &self.built, &self.text_ctx, &self.fragments)
+        caret_byte_at_point(
+            self.dom,
+            node,
+            x,
+            y,
+            &self.built,
+            &self.text_ctx,
+            &self.fragments,
+        )
     }
 
     /// Highlight rects `(x, y, w, h)` for a selection `range` that may span several
@@ -514,15 +590,21 @@ impl<'a> LaidOutDocument<'a> {
     /// `(inline-formatting-leaf, byte offset)` pairs in the caller's selection
     /// order (a backwards drag is fine). Empty when the range is collapsed.
     pub fn range_rects(&self, range: TextRange<NodeId>) -> Vec<(f32, f32, f32, f32)> {
-        range_rects(self.dom, range, &self.built, &self.text_ctx, &self.fragments)
-            .into_iter()
-            .map(|r| (r.x, r.y, r.width, r.height))
-            .collect()
+        range_rects(
+            self.dom,
+            range,
+            &self.built,
+            &self.text_ctx,
+            &self.fragments,
+        )
+        .into_iter()
+        .map(|r| (r.x, r.y, r.width, r.height))
+        .collect()
     }
 
     /// The accesskit accessibility tree derived from this layout.
     pub fn accesskit_tree(&self, focus: Option<NodeId>) -> accesskit::TreeUpdate {
-        crate::a11y::accesskit_tree(self.dom, &self.fragments, focus)
+        ServalLaneView::new(self.dom, &self.styles, &self.fragments).accesskit_tree(focus)
     }
 }
 
@@ -532,7 +614,11 @@ mod tests {
     use layout_dom_api::{LayoutDomMut, LocalName, Namespace, QualName};
 
     fn html(local: &str) -> QualName {
-        QualName::new(None, Namespace::from("http://www.w3.org/1999/xhtml"), LocalName::from(local))
+        QualName::new(
+            None,
+            Namespace::from("http://www.w3.org/1999/xhtml"),
+            LocalName::from(local),
+        )
     }
 
     fn attr(local: &str) -> QualName {
@@ -552,14 +638,21 @@ mod tests {
 
         let doc = LaidOutDocument::compute(
             &dom,
-            &["div { display: block; }", ".x { width: 40px; height: 20px; }"],
+            &[
+                "div { display: block; }",
+                ".x { width: 40px; height: 20px; }",
+            ],
             200,
             100,
         );
 
         // Fragment query.
         let rect = doc.fragments().rect_of(div).expect("div fragment");
-        assert!((rect.size.width - 40.0).abs() < 0.5, "div width 40, got {}", rect.size.width);
+        assert!(
+            (rect.size.width - 40.0).abs() < 0.5,
+            "div width 40, got {}",
+            rect.size.width
+        );
 
         // Hit-test query off the same computed layout.
         let offsets = ScrollOffsets::default();
@@ -572,10 +665,14 @@ mod tests {
 
     /// First element named `name` in `node`'s subtree (pre-order), or `None`.
     fn first_named(dom: &ScriptedDom, node: NodeId, name: &str) -> Option<NodeId> {
-        if dom.element_name(node).is_some_and(|q| q.local.as_ref() == name) {
+        if dom
+            .element_name(node)
+            .is_some_and(|q| q.local.as_ref() == name)
+        {
             return Some(node);
         }
-        dom.dom_children(node).find_map(|c| first_named(dom, c, name))
+        dom.dom_children(node)
+            .find_map(|c| first_named(dom, c, name))
     }
 
     /// C3 parity fixture: the chrome rendered through an `IncrementalLayout`
@@ -605,7 +702,12 @@ mod tests {
         // (caret byte, optional selection range) per case; a fresh `TextCursor` per
         // call since it is `!Copy`.
         let cur = |c: Option<(usize, Option<(usize, usize)>)>| {
-            c.map(|(caret, selection)| TextCursor { node: field, caret, selection, editable: true })
+            c.map(|(caret, selection)| TextCursor {
+                node: field,
+                caret,
+                selection,
+                editable: true,
+            })
         };
         let cases = [None, Some((3, None)), Some((6, Some((0, 5))))];
 
@@ -633,15 +735,30 @@ mod tests {
         let field = first_named(&dom, root, "div").expect("a <div>");
         let scroll = ScrollOffsets::<NodeId>::default();
 
-        let ops = |cursor| scene_from_scripted_dom(&dom, SHEET, w, h, cursor, &scroll).ops.len();
+        let ops = |cursor| {
+            scene_from_scripted_dom(&dom, SHEET, w, h, cursor, &scroll)
+                .ops
+                .len()
+        };
         let none = ops(None);
-        let editable =
-            ops(Some(TextCursor { node: field, caret: 5, selection: None, editable: true }));
-        let button =
-            ops(Some(TextCursor { node: field, caret: 0, selection: None, editable: false }));
+        let editable = ops(Some(TextCursor {
+            node: field,
+            caret: 5,
+            selection: None,
+            editable: true,
+        }));
+        let button = ops(Some(TextCursor {
+            node: field,
+            caret: 0,
+            selection: None,
+            editable: false,
+        }));
 
         assert!(button > none, "a focused node adds the ring");
-        assert!(editable > button, "an editable focus adds the caret on top of the ring");
+        assert!(
+            editable > button,
+            "an editable focus adds the caret on top of the ring"
+        );
     }
 
     /// C2: a display surface rendered through `scene_from_session_dom` paints at the
@@ -649,8 +766,10 @@ mod tests {
     /// session→scene path threads the document offset (the render-first viewer path).
     #[test]
     fn scene_from_session_paints_at_the_document_scroll() {
-        const SHEET: &[&str] =
-            &["html, body, div { display: block; margin: 0; }", ".tall { height: 2000px; }"];
+        const SHEET: &[&str] = &[
+            "html, body, div { display: block; margin: 0; }",
+            ".tall { height: 2000px; }",
+        ];
         let (w, h) = (400u32, 300u32);
         let mut dom = ScriptedDom::new();
         let root = dom.document();
@@ -658,7 +777,10 @@ mod tests {
 
         let mut session = IncrementalLayout::new(&dom, SHEET, w as f32, h as f32);
         let still = scene_from_session_dom(&session, &dom, w, h);
-        assert!(!still.ops.is_empty(), "the document renders a non-empty scene");
+        assert!(
+            !still.ops.is_empty(),
+            "the document renders a non-empty scene"
+        );
 
         // Scroll the document; the session repaints translated, so the scene differs.
         session.set_viewport_scroll(&dom, (0.0, 400.0));

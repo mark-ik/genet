@@ -28,6 +28,15 @@ use style::selector_parser::RestyleDamage;
 use style::shared_lock::{Locked, SharedRwLock};
 use stylo_dom::ElementState;
 
+/// Supplemental computed values for longhands that this Servo-profile Stylo
+/// build parses only behind Gecko features. Kept narrow: concrete px intrinsic
+/// sizes for `contain: size` replaced-element sizing.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ContainIntrinsicOverride {
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+}
+
 /// Per-node style entry.
 ///
 /// Holds the cascade's per-element state. Layout reads the computed style
@@ -191,9 +200,11 @@ fn dom_checked<D>(dom: &D, id: D::NodeId) -> bool
 where
     D: layout_dom_api::LayoutDom,
 {
-    use html5ever::{ns, LocalName};
+    use html5ever::{LocalName, ns};
     let no_ns = ns!();
-    let Some(name) = dom.element_name(id) else { return false };
+    let Some(name) = dom.element_name(id) else {
+        return false;
+    };
     let has = |a: &str| dom.attribute(id, &no_ns, &LocalName::from(a)).is_some();
     match name.local.as_ref() {
         "input" => {
@@ -202,7 +213,7 @@ where
                 .unwrap_or("")
                 .to_ascii_lowercase();
             matches!(ty.as_str(), "checkbox" | "radio") && has("checked")
-        }
+        },
         "option" => has("selected"),
         _ => false,
     }
@@ -224,6 +235,11 @@ pub struct StylePlane<NodeId: Copy + Eq + Hash> {
     /// stashes it here; the marker-construction path reads it back to style the
     /// marker run. Empty when no element has a matching `::marker` rule.
     marker_styles: FxHashMap<NodeId, Arc<ComputedValues>>,
+    /// Supplemental `contain-intrinsic-*` longhand values keyed by element.
+    /// Stylo's Servo feature set does not expose these on `ComputedValues`, but
+    /// the object-fit tentative tests need them for size-contained replaced
+    /// elements.
+    contain_intrinsic_overrides: FxHashMap<NodeId, ContainIntrinsicOverride>,
     /// One `SharedRwLock` for the lifetime of this plane. Stylesheet contents and
     /// inline-`style` blocks are wrapped under it, and the cascade reads them
     /// under guards from it. It MUST be stable across cascade passes: incremental
@@ -239,6 +255,7 @@ impl<NodeId: Copy + Eq + Hash> Default for StylePlane<NodeId> {
             entries: FxHashMap::default(),
             interaction_nodes: Vec::new(),
             marker_styles: FxHashMap::default(),
+            contain_intrinsic_overrides: FxHashMap::default(),
             lock: SharedRwLock::new(),
         }
     }
@@ -284,16 +301,14 @@ impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
     where
         D: layout_dom_api::LayoutDom<NodeId = NodeId>,
     {
-        use html5ever::{namespace_url, ns, LocalName, Namespace};
+        use html5ever::{LocalName, Namespace, namespace_url, ns};
         let no_ns: Namespace = ns!();
         let id_local = LocalName::from("id");
 
         let mut queue = vec![dom.document()];
         while let Some(id) = queue.pop() {
             if matches!(dom.kind(id), layout_dom_api::NodeKind::Element) {
-                let id_atom = dom
-                    .attribute(id, &no_ns, &id_local)
-                    .map(style::Atom::from);
+                let id_atom = dom.attribute(id, &no_ns, &id_local).map(style::Atom::from);
                 let checked = dom_checked(dom, id);
                 let entry = self.ensure_entry(id);
                 entry.id_atom = id_atom;
@@ -348,6 +363,22 @@ impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
         self.marker_styles.get(&id)
     }
 
+    pub fn set_contain_intrinsic_override(&mut self, id: NodeId, value: ContainIntrinsicOverride) {
+        if value.width.is_some() || value.height.is_some() {
+            self.contain_intrinsic_overrides.insert(id, value);
+        } else {
+            self.contain_intrinsic_overrides.remove(&id);
+        }
+    }
+
+    pub fn contain_intrinsic_override(&self, id: NodeId) -> Option<ContainIntrinsicOverride> {
+        self.contain_intrinsic_overrides.get(&id).copied()
+    }
+
+    pub fn clear_contain_intrinsic_overrides(&mut self) {
+        self.contain_intrinsic_overrides.clear();
+    }
+
     /// Drop all stashed `::marker` styles, so a re-resolve does not leave a
     /// stale entry behind for an item whose `::marker` rule was removed.
     pub fn clear_marker_styles(&mut self) {
@@ -356,7 +387,9 @@ impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
 
     /// An element's current [`ElementState`], or empty if it has no entry yet.
     pub fn element_state(&self, id: NodeId) -> ElementState {
-        self.get(id).map(|e| e.state).unwrap_or_else(ElementState::empty)
+        self.get(id)
+            .map(|e| e.state)
+            .unwrap_or_else(ElementState::empty)
     }
 
     /// Apply a resolved interaction-bit map (`node -> the HOVER / ACTIVE /
@@ -384,7 +417,10 @@ impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
         let mut changed = Vec::new();
         for node in touched {
             let cur = self.element_state(node);
-            let want = desired.get(&node).copied().unwrap_or_else(ElementState::empty);
+            let want = desired
+                .get(&node)
+                .copied()
+                .unwrap_or_else(ElementState::empty);
             let new = (cur & !mask) | (want & mask);
             if new != cur {
                 changed.push((node, cur));

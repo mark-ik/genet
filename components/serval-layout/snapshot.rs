@@ -52,7 +52,12 @@ where
     // an attr wins for the old value — same as servo's early-return).
     let mut by_node: FxHashMap<D::NodeId, Vec<(&QualName, &Option<String>)>> = FxHashMap::default();
     for m in mutations {
-        if let DomMutation::AttributeChanged { node, name, old_value } = m {
+        if let DomMutation::AttributeChanged {
+            node,
+            name,
+            old_value,
+        } = m
+        {
             by_node.entry(*node).or_default().push((name, old_value));
         }
     }
@@ -89,11 +94,7 @@ where
 }
 
 /// Build one element's [`Snapshot`] from its attribute changes.
-fn build_snapshot<D>(
-    dom: &D,
-    node: D::NodeId,
-    changes: &[(&QualName, &Option<String>)],
-) -> Snapshot
+fn build_snapshot<D>(dom: &D, node: D::NodeId, changes: &[(&QualName, &Option<String>)]) -> Snapshot
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -102,8 +103,10 @@ where
 
     // First recorded old value per (ns, local) — the value before *any*
     // change in this batch, which is what the pre-mutation set needs.
-    let mut first_old: FxHashMap<(layout_dom_api::Namespace, layout_dom_api::LocalName), Option<String>> =
-        FxHashMap::default();
+    let mut first_old: FxHashMap<
+        (layout_dom_api::Namespace, layout_dom_api::LocalName),
+        Option<String>,
+    > = FxHashMap::default();
 
     for (name, old) in changes {
         let key = (name.ns.clone(), name.local.clone());
@@ -130,9 +133,9 @@ where
     for attr in dom.attributes(node) {
         let key = (attr.name.ns.clone(), attr.name.local.clone());
         let old_str = match first_old.get(&key) {
-            Some(Some(old)) => old.clone(),       // changed: the prior value
-            Some(None) => continue,               // newly added: didn't exist before
-            None => attr.value.to_string(),       // unchanged: current == old
+            Some(Some(old)) => old.clone(), // changed: the prior value
+            Some(None) => continue,         // newly added: didn't exist before
+            None => attr.value.to_string(), // unchanged: current == old
         };
         old_attrs.push((make_ident(attr.name), make_value(attr.name, old_str)));
     }
@@ -167,13 +170,13 @@ fn make_value(name: &QualName, value: String) -> AttrValue {
 
 #[cfg(test)]
 mod tests {
-    use html5ever::{ns, QualName};
+    use html5ever::{QualName, ns};
     use layout_dom_api::{LayoutDom, LayoutDomMut};
     use selectors::attr::CaseSensitivity;
     use serval_scripted_dom::ScriptedDom;
+    use style::Atom;
     use style::invalidation::element::element_wrapper::ElementSnapshot;
     use style::values::AtomIdent;
-    use style::Atom;
 
     use super::*;
 
@@ -213,18 +216,25 @@ mod tests {
         dom.drain_mutations(&mut muts);
 
         let map = build_snapshot_map(&dom, &muts);
-        let snap = (*map).get(&OpaqueNode(dom.opaque_id(p) as usize))
+        let snap = (*map)
+            .get(&OpaqueNode(dom.opaque_id(p) as usize))
             .expect("snapshot for <p>");
 
         assert!(snap.class_changed(), "class_changed should be set");
         assert!(snap.has_attrs(), "snapshot should carry the old attr set");
         // The snapshot reports the OLD class ("old"), not the live "new".
         assert!(
-            snap.has_class(&AtomIdent::new(Atom::from("old")), CaseSensitivity::CaseSensitive),
+            snap.has_class(
+                &AtomIdent::new(Atom::from("old")),
+                CaseSensitivity::CaseSensitive
+            ),
             "snapshot should report the old class 'old'"
         );
         assert!(
-            !snap.has_class(&AtomIdent::new(Atom::from("new")), CaseSensitivity::CaseSensitive),
+            !snap.has_class(
+                &AtomIdent::new(Atom::from("new")),
+                CaseSensitivity::CaseSensitive
+            ),
             "snapshot must not report the post-mutation class 'new'"
         );
     }
@@ -241,7 +251,8 @@ mod tests {
         dom.drain_mutations(&mut muts);
 
         let map = build_snapshot_map(&dom, &muts);
-        let snap = (*map).get(&OpaqueNode(dom.opaque_id(p) as usize))
+        let snap = (*map)
+            .get(&OpaqueNode(dom.opaque_id(p) as usize))
             .expect("snapshot for <p>");
 
         assert!(snap.id_changed(), "id_changed should be set");
@@ -260,9 +271,13 @@ mod tests {
         dom.drain_mutations(&mut muts);
 
         let map = build_snapshot_map(&dom, &muts);
-        let snap = (*map).get(&OpaqueNode(dom.opaque_id(p) as usize))
+        let snap = (*map)
+            .get(&OpaqueNode(dom.opaque_id(p) as usize))
             .expect("snapshot for <p>");
-        assert!(snap.other_attr_changed(), "other_attributes_changed should be set");
+        assert!(
+            snap.other_attr_changed(),
+            "other_attributes_changed should be set"
+        );
         assert!(!snap.class_changed(), "class_changed should be false");
         assert!(!snap.id_changed(), "id_changed should be false");
     }

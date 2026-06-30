@@ -51,8 +51,8 @@ use paint_list_api::{LayoutPoint, LayoutTransform};
 
 use crate::fragment::FragmentPlane;
 use crate::paint_emit::{
-    clips_overflow, compute_transform_matrix, conjugate_at, is_fixed, pointer_events_none,
-    primary_cv, ScrollOffsets,
+    ScrollOffsets, clips_overflow, compute_transform_matrix, conjugate_at, is_fixed,
+    pointer_events_none, primary_cv,
 };
 use crate::style::StylePlane;
 
@@ -150,6 +150,15 @@ impl<'a, D: LayoutDom> ServalLaneView<'a, D> {
         self
     }
 
+    /// Emit an AccessKit tree from this laid-out lane. The platform adapter
+    /// remains host-owned; the DOM-to-tree mapping is engine-owned here.
+    pub fn accesskit_tree(&self, focus: Option<D::NodeId>) -> accesskit::TreeUpdate
+    where
+        D::NodeId: Copy + Eq + Hash,
+    {
+        crate::a11y::accesskit_tree(self.dom, self.fragments, focus)
+    }
+
     /// Reverse-lookup a `D::NodeId` for a given `SourceNodeId`.
     /// O(n) over the DOM; acceptable for probe-stage. Cf. module doc.
     /// `pub(crate)` so the `IncrementalLayout` session can serve a hit-test
@@ -220,7 +229,12 @@ where
         let content = inset_rect(padding, layout.padding);
         let margin = outset_rect(border, layout.margin);
 
-        Some(BoxModel { content, padding, border, margin })
+        Some(BoxModel {
+            content,
+            padding,
+            border,
+            margin,
+        })
     }
 
     fn fragments_for_anchor<'b>(
@@ -257,7 +271,9 @@ where
     }
 
     fn affordances_at(&self, point: Point) -> Vec<Affordance> {
-        let Some(hit) = self.hit_test(point) else { return Vec::new() };
+        let Some(hit) = self.hit_test(point) else {
+            return Vec::new();
+        };
         let Some(start) = self.find_by_source_id(hit.source_node) else {
             return Vec::new();
         };
@@ -272,7 +288,10 @@ where
                     source_node: SourceNodeId(self.dom.opaque_id(id)),
                     label: affordance_label(self.dom, id, kind),
                 });
-            } else if primary_cv(self.styles, id).as_deref().is_some_and(clips_overflow) {
+            } else if primary_cv(self.styles, id)
+                .as_deref()
+                .is_some_and(clips_overflow)
+            {
                 out.push(Affordance {
                     kind: AffordanceKind::Scrollable,
                     source_node: SourceNodeId(self.dom.opaque_id(id)),
@@ -343,9 +362,9 @@ fn affordance_kind<D: LayoutDom>(dom: &D, id: D::NodeId) -> Option<AffordanceKin
 fn affordance_label<D: LayoutDom>(dom: &D, id: D::NodeId, kind: AffordanceKind) -> Option<String> {
     use html5ever::{local_name, ns};
     match kind {
-        AffordanceKind::Link => {
-            dom.attribute(id, &ns!(), &local_name!("href")).map(str::to_owned)
-        },
+        AffordanceKind::Link => dom
+            .attribute(id, &ns!(), &local_name!("href"))
+            .map(str::to_owned),
         _ => None,
     }
 }
@@ -379,7 +398,10 @@ fn walk_for_hit<D>(
 {
     let layout = fragments.rect_of(id);
     let origin = if let Some(l) = layout {
-        Point::new(parent_origin.x + l.location.x, parent_origin.y + l.location.y)
+        Point::new(
+            parent_origin.x + l.location.x,
+            parent_origin.y + l.location.y,
+        )
     } else {
         parent_origin
     };
@@ -405,13 +427,17 @@ fn walk_for_hit<D>(
     // telescopes through nesting because each node maps the already-mapped point
     // it receives. A singular transform (a degenerate scale) collapses the
     // subtree, so nothing in it can be hit.
-    let node_transform =
-        cv.as_deref().map(compute_transform_matrix).unwrap_or_else(LayoutTransform::identity);
+    let node_transform = cv
+        .as_deref()
+        .map(compute_transform_matrix)
+        .unwrap_or_else(LayoutTransform::identity);
     let local = if node_transform == LayoutTransform::identity() {
         point
     } else {
         let eff = conjugate_at((origin.x, origin.y), node_transform);
-        match eff.inverse().and_then(|inv| inv.transform_point2d(LayoutPoint::new(point.x, point.y)))
+        match eff
+            .inverse()
+            .and_then(|inv| inv.transform_point2d(LayoutPoint::new(point.x, point.y)))
         {
             Some(p) => Point::new(p.x, p.y),
             None => return,
@@ -456,7 +482,14 @@ fn walk_for_hit<D>(
 
     for child in dom.dom_children(id) {
         walk_for_hit(
-            dom, styles, fragments, scroll_offsets, viewport_scroll, child, origin, child_point,
+            dom,
+            styles,
+            fragments,
+            scroll_offsets,
+            viewport_scroll,
+            child,
+            origin,
+            child_point,
             out,
         );
     }
@@ -554,7 +587,10 @@ where
     F: FnMut(D::NodeId, Point) -> ControlFlow<()>,
 {
     let origin = match fragments.rect_of(id) {
-        Some(l) => Point::new(parent_origin.x + l.location.x, parent_origin.y + l.location.y),
+        Some(l) => Point::new(
+            parent_origin.x + l.location.x,
+            parent_origin.y + l.location.y,
+        ),
         None => parent_origin,
     };
     visit(id, origin)?;
@@ -585,14 +621,21 @@ where
     D::NodeId: Copy + Eq + Hash,
 {
     let mut found = None;
-    let _ = walk_origins(dom, fragments, dom.document(), Point::new(0.0, 0.0), None, &mut |id, o| {
-        if id == target {
-            found = Some(o);
-            ControlFlow::Break(())
-        } else {
-            ControlFlow::Continue(())
-        }
-    });
+    let _ = walk_origins(
+        dom,
+        fragments,
+        dom.document(),
+        Point::new(0.0, 0.0),
+        None,
+        &mut |id, o| {
+            if id == target {
+                found = Some(o);
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        },
+    );
     found
 }
 
@@ -609,10 +652,17 @@ where
     D::NodeId: Copy + Eq + Hash,
 {
     let mut out = HashMap::new();
-    let _ = walk_origins(dom, fragments, dom.document(), Point::new(0.0, 0.0), None, &mut |id, o| {
-        out.insert(id, o);
-        ControlFlow::Continue(())
-    });
+    let _ = walk_origins(
+        dom,
+        fragments,
+        dom.document(),
+        Point::new(0.0, 0.0),
+        None,
+        &mut |id, o| {
+            out.insert(id, o);
+            ControlFlow::Continue(())
+        },
+    );
     out
 }
 
@@ -632,10 +682,17 @@ where
     D::NodeId: Copy + Eq + Hash,
 {
     let mut out = HashMap::new();
-    let _ = walk_origins(dom, fragments, dom.document(), Point::new(0.0, 0.0), Some(scroll), &mut |id, o| {
-        out.insert(id, o);
-        ControlFlow::Continue(())
-    });
+    let _ = walk_origins(
+        dom,
+        fragments,
+        dom.document(),
+        Point::new(0.0, 0.0),
+        Some(scroll),
+        &mut |id, o| {
+            out.insert(id, o);
+            ControlFlow::Continue(())
+        },
+    );
     out
 }
 
@@ -661,7 +718,9 @@ mod tests {
             document,
             &mut plane,
             euclid::Size2D::new(800.0, 600.0),
-            &["p, div { display: block; width: 200px; height: 50px; margin: 0; padding: 0; border: 0; }"],
+            &[
+                "p, div { display: block; width: 200px; height: 50px; margin: 0; padding: 0; border: 0; }",
+            ],
             None,
         );
         plane
@@ -697,10 +756,8 @@ mod tests {
         // Compute a point known to be inside <p>'s rect (avoids
         // depending on html5ever's auto-inserted <head> stacking the
         // body lower than expected).
-        let p = find_element(NodeRef::document(&document), local_name!("p"))
-            .expect("<p> exists");
-        let p_origin = absolute_origin(&document, &fragments, p.id())
-            .expect("<p> has an origin");
+        let p = find_element(NodeRef::document(&document), local_name!("p")).expect("<p> exists");
+        let p_origin = absolute_origin(&document, &fragments, p.id()).expect("<p> has an origin");
         let p_layout = fragments.rect_of(p.id()).expect("<p> has a fragment");
         let point = Point::new(
             p_origin.x + p_layout.size.width * 0.5,
@@ -770,8 +827,14 @@ mod tests {
         );
         let up = unscrolled.get(&p.id()).expect("<p> origin");
         let pp = painted.get(&p.id()).expect("<p> painted origin");
-        assert!((pp.y - (up.y - 40.0)).abs() < 0.5, "<p> paints 40px up under the scrolled body");
-        assert!((pp.x - up.x).abs() < 0.5, "x unchanged (no horizontal scroll)");
+        assert!(
+            (pp.y - (up.y - 40.0)).abs() < 0.5,
+            "<p> paints 40px up under the scrolled body"
+        );
+        assert!(
+            (pp.x - up.x).abs() < 0.5,
+            "x unchanged (no horizontal scroll)"
+        );
     }
 
     /// G1.2 transform-aware hit-testing: a `<p>` translated 120px right is
@@ -782,8 +845,7 @@ mod tests {
     /// node's transform inverse (mirroring paint), so hit matches where it drew.
     #[test]
     fn hit_test_resolves_a_point_inside_a_translated_subtree() {
-        let document =
-            StaticDocument::parse(r#"<html><body><p class="moved">x</p></body></html>"#);
+        let document = StaticDocument::parse(r#"<html><body><p class="moved">x</p></body></html>"#);
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
         crate::cascade::run_cascade(
             &document,
@@ -813,7 +875,9 @@ mod tests {
             p_origin.y + p_layout.size.height * 0.5,
         );
 
-        let hit = view.hit_test(point).expect("hit something at the painted position");
+        let hit = view
+            .hit_test(point)
+            .expect("hit something at the painted position");
         let expected = document.opaque_id(p.id());
         assert_eq!(
             hit.source_node.0, expected,
@@ -830,8 +894,7 @@ mod tests {
     /// transform conjugated at the box origin (not a naive translate).
     #[test]
     fn hit_test_resolves_a_point_inside_a_scaled_subtree() {
-        let document =
-            StaticDocument::parse(r#"<html><body><p class="big">x</p></body></html>"#);
+        let document = StaticDocument::parse(r#"<html><body><p class="big">x</p></body></html>"#);
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
         crate::cascade::run_cascade(
             &document,
@@ -856,7 +919,9 @@ mod tests {
         // inside the painted [origin, origin+400]; y = origin + 25 is inside both.
         let point = Point::new(p_origin.x + 250.0, p_origin.y + 25.0);
 
-        let hit = view.hit_test(point).expect("hit something at the painted position");
+        let hit = view
+            .hit_test(point)
+            .expect("hit something at the painted position");
         let expected = document.opaque_id(p.id());
         assert_eq!(
             hit.source_node.0, expected,
@@ -931,8 +996,7 @@ mod tests {
         let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
         let view = ServalLaneView::new(&document, &styles, &fragments);
 
-        let p = find_element(NodeRef::document(&document), local_name!("p"))
-            .expect("<p> exists");
+        let p = find_element(NodeRef::document(&document), local_name!("p")).expect("<p> exists");
         let p_source = SourceNodeId(document.opaque_id(p.id()));
 
         let bm = view.box_model(p_source).expect("<p> has a box_model");
@@ -954,18 +1018,14 @@ mod tests {
     fn box_model_returns_distinct_rects_with_cascade_styling() {
         use crate::cascade::run_cascade;
 
-        let document = StaticDocument::parse(
-            "<html><body><p>x</p></body></html>",
-        );
+        let document = StaticDocument::parse("<html><body><p>x</p></body></html>");
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
         run_cascade(
             &document,
             &mut styles,
             euclid::Size2D::new(800.0, 600.0),
-            &[
-                "p { display: block; width: 100px; height: 50px; \
-                    border: 4px solid black; padding: 8px; margin: 16px; }",
-            ],
+            &["p { display: block; width: 100px; height: 50px; \
+                    border: 4px solid black; padding: 8px; margin: 16px; }"],
             None,
         );
 
@@ -976,8 +1036,7 @@ mod tests {
         let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
         let view = ServalLaneView::new(&document, &styles, &fragments);
 
-        let p = find_element(NodeRef::document(&document), local_name!("p"))
-            .expect("<p> exists");
+        let p = find_element(NodeRef::document(&document), local_name!("p")).expect("<p> exists");
         let p_source = SourceNodeId(document.opaque_id(p.id()));
         let bm = view.box_model(p_source).expect("<p> has a box_model");
 
@@ -1076,8 +1135,7 @@ mod tests {
     /// (Inline links need inline hit-testing, a follow-on.)
     #[test]
     fn interaction_query_derives_affordances_and_reflects_host_state() {
-        let document =
-            StaticDocument::parse("<html><body><a href=\"u\">link</a></body></html>");
+        let document = StaticDocument::parse("<html><body><a href=\"u\">link</a></body></html>");
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
         crate::cascade::run_cascade(
             &document,
@@ -1101,8 +1159,10 @@ mod tests {
         let a_src = SourceNodeId(document.opaque_id(a.id()));
         let origin = absolute_origin(&document, &fragments, a.id()).expect("<a> origin");
         let rect = fragments.rect_of(a.id()).expect("<a> fragment");
-        let point =
-            Point::new(origin.x + rect.size.width * 0.5, origin.y + rect.size.height * 0.5);
+        let point = Point::new(
+            origin.x + rect.size.width * 0.5,
+            origin.y + rect.size.height * 0.5,
+        );
 
         let affs = view.affordances_at(point);
         assert!(
@@ -1111,7 +1171,11 @@ mod tests {
                 && aff.label.as_deref() == Some("u")),
             "link affordance with href label at the <a>: {affs:?}"
         );
-        assert_eq!(view.activation_target(point), Some(a_src), "activation = the link");
+        assert_eq!(
+            view.activation_target(point),
+            Some(a_src),
+            "activation = the link"
+        );
 
         // Host focus flows through `with_interaction`.
         let focused = view.with_interaction(Some(a_src), None);
@@ -1120,7 +1184,10 @@ mod tests {
         // The same focus, supplied as a full `InteractionState` snapshot — the
         // identical source the cascade's `restyle_for_interaction` consumes, so
         // read-back and dynamic-pseudo-class restyle share one snapshot.
-        let snapshot = InteractionState { focused: Some(a_src), ..Default::default() };
+        let snapshot = InteractionState {
+            focused: Some(a_src),
+            ..Default::default()
+        };
         let via_state =
             ServalLaneView::new(&document, &styles, &fragments).with_interaction_state(&snapshot);
         assert_eq!(via_state.focus_target(), Some(a_src));
@@ -1184,15 +1251,17 @@ mod tests {
         collect_divs(NodeRef::document(&document), &mut divs);
         assert_eq!(divs.len(), 3, "box, inner, below");
         let id_of = |n: &NodeRef<StaticDocument>| SourceNodeId(document.opaque_id(n.id()));
-        let (box_id, inner_id, below_id) =
-            (id_of(&divs[0]), id_of(&divs[1]), id_of(&divs[2]));
+        let (box_id, inner_id, below_id) = (id_of(&divs[0]), id_of(&divs[1]), id_of(&divs[2]));
         let _ = box_id;
 
         // (1) Clip: a point below the 40px box hits `below`, NOT the 200px
         // `inner` clipped inside the box.
         let view = ServalLaneView::new(&document, &styles, &fragments);
         let hit = view.hit_test(Point::new(5.0, 50.0)).expect("hits below");
-        assert_eq!(hit.source_node, below_id, "click below the box hits `below`");
+        assert_eq!(
+            hit.source_node, below_id,
+            "click below the box hits `below`"
+        );
 
         // (2) Scroll: with the box scrolled down 80px, a click at its top maps
         // through the offset and hits `inner` at content-y ≈ 85.
@@ -1201,7 +1270,10 @@ mod tests {
         let scrolled =
             ServalLaneView::new(&document, &styles, &fragments).with_scroll_offsets(&offsets);
         let hit = scrolled.hit_test(Point::new(5.0, 5.0)).expect("hits inner");
-        assert_eq!(hit.source_node, inner_id, "click in the scrolled box hits `inner`");
+        assert_eq!(
+            hit.source_node, inner_id,
+            "click in the scrolled box hits `inner`"
+        );
         assert!(
             (hit.local_point.y - 85.0).abs() < 0.1,
             "local point maps through the scroll offset: {}",
@@ -1250,17 +1322,25 @@ mod tests {
         // Unscrolled: a screen point at y=150 hits `mid` (layout y 100..200).
         let still = ServalLaneView::new(&document, &styles, &fragments);
         assert_eq!(
-            still.hit_test(Point::new(5.0, 150.0)).expect("hit").source_node,
+            still
+                .hit_test(Point::new(5.0, 150.0))
+                .expect("hit")
+                .source_node,
             mid_id,
             "unscrolled, y=150 is in `mid`",
         );
 
         // Scrolled down 100px: the document shifts up by 100, so the same screen
         // point now maps to content-y 250 and hits `bot` (layout y 200..300).
-        let scrolled = ServalLaneView::new(&document, &styles, &fragments)
-            .with_viewport_scroll((0.0, 100.0));
-        let hit = scrolled.hit_test(Point::new(5.0, 150.0)).expect("hit under scroll");
-        assert_eq!(hit.source_node, bot_id, "scrolled, the same point is over `bot`");
+        let scrolled =
+            ServalLaneView::new(&document, &styles, &fragments).with_viewport_scroll((0.0, 100.0));
+        let hit = scrolled
+            .hit_test(Point::new(5.0, 150.0))
+            .expect("hit under scroll");
+        assert_eq!(
+            hit.source_node, bot_id,
+            "scrolled, the same point is over `bot`"
+        );
         assert!(
             (hit.local_point.y - 50.0).abs() < 0.1,
             "local point maps through the viewport scroll: {}",
@@ -1310,24 +1390,33 @@ mod tests {
         // Unscrolled, a point in the fixed box (top-left) hits it.
         let still = ServalLaneView::new(&document, &styles, &fragments);
         assert_eq!(
-            still.hit_test(Point::new(5.0, 5.0)).expect("hit").source_node,
+            still
+                .hit_test(Point::new(5.0, 5.0))
+                .expect("hit")
+                .source_node,
             fixed_id,
             "the fixed box is hit at its screen position",
         );
 
         // Scrolled down 300px: the fixed box stays pinned (hit-tested unscrolled),
         // so the same screen point still hits it, not the scrolled-in `tall`.
-        let scrolled = ServalLaneView::new(&document, &styles, &fragments)
-            .with_viewport_scroll((0.0, 300.0));
+        let scrolled =
+            ServalLaneView::new(&document, &styles, &fragments).with_viewport_scroll((0.0, 300.0));
         assert_eq!(
-            scrolled.hit_test(Point::new(5.0, 5.0)).expect("hit under scroll").source_node,
+            scrolled
+                .hit_test(Point::new(5.0, 5.0))
+                .expect("hit under scroll")
+                .source_node,
             fixed_id,
             "the fixed box stays pinned under document scroll",
         );
         // Below the fixed box (y=100, outside its 50px height), the point maps
         // through the scroll into `tall`'s scrolled-in content.
         assert_eq!(
-            scrolled.hit_test(Point::new(5.0, 100.0)).expect("hit below fixed").source_node,
+            scrolled
+                .hit_test(Point::new(5.0, 100.0))
+                .expect("hit below fixed")
+                .source_node,
             tall_id,
             "below the fixed box, the scrolled-in in-flow content is hit",
         );

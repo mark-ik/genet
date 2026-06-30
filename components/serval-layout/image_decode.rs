@@ -2,11 +2,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! `<img>` decode pass — DOM → decoded RGBA8 pixels keyed by `NodeId`.
+//! Replaced-image decode pass - DOM to decoded RGBA8 pixels keyed by `NodeId`.
 //!
-//! Walks the DOM for `<img>` elements, reads their `src`, and decodes
-//! the referenced image to RGBA8. The result feeds two consumers:
-//! - **Layout** reads intrinsic dimensions to size `<img>` boxes
+//! Walks the DOM for image-backed replaced elements (`<img>`, `<embed>`,
+//! `<object>`, and `<video poster>`), reads their image URL attribute, and
+//! decodes the referenced image to RGBA8. The result feeds two consumers:
+//! - **Layout** reads intrinsic dimensions to size replaced boxes
 //!   whose CSS leaves width/height `auto` (the box tree's
 //!   replaced-leaf sizing, `construct::replaced_px_size`).
 //! - **Paint emission** reads the pixels to emit `DrawImage` +
@@ -25,8 +26,8 @@
 //! [`ImageLoader`]: callers that have already fetched a URL hand its
 //! bytes back through the loader, and [`ImagePlane::decode_from_dom_with_loader`]
 //! decodes them. The default [`ImagePlane::decode_from_dom`] uses a
-//! no-op loader, so unfetched remote `<img>`s lay out at 0×0 with no
-//! paint (same as a broken image).
+//! no-op loader, so unfetched remote image-backed replaced content lays out
+//! at its default object size with no paint.
 
 use std::hash::Hash;
 
@@ -86,11 +87,15 @@ impl DecodedImage {
             let end = start + (sw * 4) as usize;
             rgba.extend_from_slice(&self.rgba[start..end]);
         }
-        Some(DecodedImage { width: sw, height: sh, rgba })
+        Some(DecodedImage {
+            width: sw,
+            height: sh,
+            rgba,
+        })
     }
 }
 
-/// Decoded `<img>` images keyed by their DOM `NodeId`. Built by
+/// Decoded replaced images keyed by their DOM `NodeId`. Built by
 /// [`ImagePlane::decode_from_dom`] before layout.
 pub struct ImagePlane<NodeId: Copy + Eq + Hash> {
     images: FxHashMap<NodeId, DecodedImage>,
@@ -109,8 +114,8 @@ impl<NodeId: Copy + Eq + Hash> ImagePlane<NodeId> {
         Self::default()
     }
 
-    /// Walk `dom`, decode every `<img>` whose `src` is a `data:` URI,
-    /// keyed by the `<img>` element's `NodeId`. Remote URLs are
+    /// Walk `dom`, decode every image-backed replaced element whose URL is a
+    /// `data:` URI, keyed by that element's `NodeId`. Remote URLs are
     /// skipped (use [`Self::decode_from_dom_with_loader`] to supply
     /// their bytes).
     pub fn decode_from_dom<D>(dom: &D) -> Self
@@ -120,7 +125,7 @@ impl<NodeId: Copy + Eq + Hash> ImagePlane<NodeId> {
         Self::decode_from_dom_with_loader(dom, &NoImageLoader)
     }
 
-    /// Like [`Self::decode_from_dom`], but resolves non-`data:` `src`
+    /// Like [`Self::decode_from_dom`], but resolves non-`data:` image
     /// URLs through `loader` (the host's resource cache / fetcher).
     /// `data:` URIs are still decoded inline.
     pub fn decode_from_dom_with_loader<D, L>(dom: &D, loader: &L) -> Self
@@ -131,22 +136,23 @@ impl<NodeId: Copy + Eq + Hash> ImagePlane<NodeId> {
         let mut images = FxHashMap::default();
         let no_ns = markup5ever::Namespace::default();
         let src_local = markup5ever::LocalName::from("src");
+        let data_local = markup5ever::LocalName::from("data");
+        let poster_local = markup5ever::LocalName::from("poster");
 
         let mut queue = vec![dom.document()];
         while let Some(id) = queue.pop() {
-            if dom
-                .element_name(id)
-                .is_some_and(|q| q.local == html5ever::local_name!("img"))
+            if let Some(src) =
+                replaced_image_url(dom, id, &no_ns, &src_local, &data_local, &poster_local)
             {
-                if let Some(src) = dom.attribute(id, &no_ns, &src_local) {
-                    let decoded = if src.starts_with("data:") {
-                        decode_data_uri(src)
-                    } else {
-                        loader.load(src).and_then(|bytes| decode_image_bytes(&bytes))
-                    };
-                    if let Some(decoded) = decoded {
-                        images.insert(id, decoded);
-                    }
+                let decoded = if src.starts_with("data:") {
+                    decode_data_uri(src)
+                } else {
+                    loader
+                        .load(src)
+                        .and_then(|bytes| decode_image_bytes(&bytes))
+                };
+                if let Some(decoded) = decoded {
+                    images.insert(id, decoded);
                 }
             }
             queue.extend(dom.dom_children(id));
@@ -171,8 +177,32 @@ impl<NodeId: Copy + Eq + Hash> ImagePlane<NodeId> {
     }
 }
 
+fn replaced_image_url<'a, D>(
+    dom: &'a D,
+    id: D::NodeId,
+    no_ns: &markup5ever::Namespace,
+    src_local: &markup5ever::LocalName,
+    data_local: &markup5ever::LocalName,
+    poster_local: &markup5ever::LocalName,
+) -> Option<&'a str>
+where
+    D: LayoutDom,
+{
+    let name = dom.element_name(id)?;
+    if name.local == html5ever::local_name!("img") || name.local == html5ever::local_name!("embed")
+    {
+        dom.attribute(id, no_ns, src_local)
+    } else if name.local == html5ever::local_name!("object") {
+        dom.attribute(id, no_ns, data_local)
+    } else if name.local == html5ever::local_name!("video") {
+        dom.attribute(id, no_ns, poster_local)
+    } else {
+        None
+    }
+}
+
 /// Decoded CSS `background-image` images keyed by their element's DOM
-/// `NodeId`. Distinct from [`ImagePlane`] (the `<img>` replaced-content
+/// `NodeId`. Distinct from [`ImagePlane`] (the replaced-content image
 /// plane) on purpose: background images must **not** size their box
 /// (only `<img>` replaced content does), so they never feed the box
 /// tree's replaced-leaf sizing. Built by
@@ -223,7 +253,9 @@ impl<NodeId: Copy + Eq + Hash> BackgroundImagePlane<NodeId> {
             if src.starts_with("data:") {
                 decode_data_uri(&src)
             } else {
-                loader.load(&src).and_then(|bytes| decode_image_bytes(&bytes))
+                loader
+                    .load(&src)
+                    .and_then(|bytes| decode_image_bytes(&bytes))
             }
         };
         let mut images = FxHashMap::default();
@@ -237,7 +269,8 @@ impl<NodeId: Copy + Eq + Hash> BackgroundImagePlane<NodeId> {
             // Block `::before` / `::after` boxes carry their own background, keyed
             // by `(element, kind)` since they have no DOM id of their own.
             for kind in [PseudoKind::Before, PseudoKind::After] {
-                if let Some(decoded) = pseudo_background_image_url(styles, id, kind).and_then(decode)
+                if let Some(decoded) =
+                    pseudo_background_image_url(styles, id, kind).and_then(decode)
                 {
                     pseudo_images.insert((id, kind), decoded);
                 }
@@ -247,7 +280,11 @@ impl<NodeId: Copy + Eq + Hash> BackgroundImagePlane<NodeId> {
             }
             queue.extend(dom.dom_children(id));
         }
-        Self { images, pseudo_images, border_images }
+        Self {
+            images,
+            pseudo_images,
+            border_images,
+        }
     }
 
     pub fn get(&self, id: NodeId) -> Option<&DecodedImage> {
@@ -353,7 +390,11 @@ pub fn decode_image_bytes(bytes: &[u8]) -> Option<DecodedImage> {
     if let Ok(dynamic) = image::load_from_memory(bytes) {
         let rgba = dynamic.to_rgba8();
         let (width, height) = rgba.dimensions();
-        return Some(DecodedImage { width, height, rgba: rgba.into_raw() });
+        return Some(DecodedImage {
+            width,
+            height,
+            rgba: rgba.into_raw(),
+        });
     }
     decode_svg_bytes(bytes)
 }
@@ -376,7 +417,11 @@ fn decode_svg_bytes(bytes: &[u8]) -> Option<DecodedImage> {
         return None;
     }
     let mut pixmap = tiny_skia::Pixmap::new(width, height)?;
-    resvg::render(&tree, tiny_skia::Transform::identity(), &mut pixmap.as_mut());
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::identity(),
+        &mut pixmap.as_mut(),
+    );
     // tiny_skia pixmaps are premultiplied RGBA8; the paint path wants
     // straight (un-premultiplied) RGBA8, so un-premultiply per pixel.
     let mut rgba = pixmap.take();
@@ -389,12 +434,32 @@ fn decode_svg_bytes(bytes: &[u8]) -> Option<DecodedImage> {
             px[2] = unmul(px[2]);
         }
     }
-    Some(DecodedImage { width, height, rgba })
+    Some(DecodedImage {
+        width,
+        height,
+        rgba,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serval_static_dom::StaticDocument;
+
+    const BLUE_SVG_DATA_URI: &str = "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='8'%20height='4'%3E%3Crect%20width='8'%20height='4'%20fill='blue'/%3E%3C/svg%3E";
+
+    #[test]
+    fn decodes_embed_object_and_video_poster_image_resources() {
+        let document = StaticDocument::parse(&format!(
+            "<html><body><embed src=\"{BLUE_SVG_DATA_URI}\"><object data=\"{BLUE_SVG_DATA_URI}\"></object><video poster=\"{BLUE_SVG_DATA_URI}\"></video></body></html>"
+        ));
+        let images = ImagePlane::decode_from_dom(&document);
+
+        assert_eq!(images.len(), 3);
+        for (_, decoded) in images.iter() {
+            assert_eq!((decoded.width, decoded.height), (8, 4));
+        }
+    }
 
     /// SVG bytes rasterize at the document's intrinsic size, through the same
     /// `decode_image_bytes` entry the raster path uses (the `image` crate fails
@@ -408,9 +473,17 @@ mod tests {
         assert_eq!((decoded.width, decoded.height), (20, 20), "intrinsic 20x20");
         // Center pixel (10, 10): straight RGBA8, opaque mid-green (#008000).
         let i = ((10 * decoded.width + 10) * 4) as usize;
-        let (r, g, b, a) = (decoded.rgba[i], decoded.rgba[i + 1], decoded.rgba[i + 2], decoded.rgba[i + 3]);
+        let (r, g, b, a) = (
+            decoded.rgba[i],
+            decoded.rgba[i + 1],
+            decoded.rgba[i + 2],
+            decoded.rgba[i + 3],
+        );
         assert_eq!(a, 255, "opaque");
-        assert!(r < 40 && g > 100 && b < 40, "green center, got ({r},{g},{b})");
+        assert!(
+            r < 40 && g > 100 && b < 40,
+            "green center, got ({r},{g},{b})"
+        );
     }
 
     /// `DecodedImage::crop` carves a sub-rect (border-image's 9-slice primitive):
@@ -421,17 +494,32 @@ mod tests {
         let mut rgba = Vec::new();
         for _y in 0..2 {
             for x in 0..4 {
-                rgba.extend_from_slice(if x < 2 { &[255, 0, 0, 255] } else { &[0, 0, 255, 255] });
+                rgba.extend_from_slice(if x < 2 {
+                    &[255, 0, 0, 255]
+                } else {
+                    &[0, 0, 255, 255]
+                });
             }
         }
-        let img = DecodedImage { width: 4, height: 2, rgba };
+        let img = DecodedImage {
+            width: 4,
+            height: 2,
+            rgba,
+        };
 
         let right = img.crop(2, 0, 2, 2).expect("non-empty crop");
         assert_eq!((right.width, right.height), (2, 2));
-        assert_eq!(&right.rgba[0..4], &[0, 0, 255, 255], "crop top-left is blue");
+        assert_eq!(
+            &right.rgba[0..4],
+            &[0, 0, 255, 255],
+            "crop top-left is blue"
+        );
         assert_eq!(right.rgba.len(), 2 * 2 * 4, "tightly packed");
 
-        assert!(img.crop(4, 0, 2, 2).is_none(), "rect at the right edge clamps to zero width → None");
+        assert!(
+            img.crop(4, 0, 2, 2).is_none(),
+            "rect at the right edge clamps to zero width → None"
+        );
     }
 
     #[test]
@@ -449,7 +537,11 @@ mod tests {
         };
         eprintln!("DBG top-center(4,8)={:?}", px(4, 8));
         eprintln!("DBG bot-center(4,24)={:?}", px(4, 24));
-        eprintln!("DBG top-left(0,8)={:?} top-right(7,8)={:?}", px(0, 8), px(7, 8));
+        eprintln!(
+            "DBG top-left(0,8)={:?} top-right(7,8)={:?}",
+            px(0, 8),
+            px(7, 8)
+        );
     }
 
     /// A `data:image/svg+xml` URI decodes through `decode_data_uri` → the same

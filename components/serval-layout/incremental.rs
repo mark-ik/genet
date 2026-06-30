@@ -34,12 +34,12 @@ use crate::cascade::{
 use crate::fragment::FragmentPlane;
 use crate::image_decode::{BackgroundImagePlane, ImagePlane};
 use crate::invalidate::{classify, coalesce};
-use crate::paint_emit::{emit_paint_list_scrolled, ScrollOffsets, ServalPaintList};
+use crate::paint_emit::{ScrollOffsets, ServalPaintList, emit_paint_list_scrolled};
 use crate::serval_lane::ServalLaneView;
 use crate::style::StylePlane;
 use crate::subtree::SubtreeView;
 use crate::text_measure::TextMeasureCtx;
-use crate::viewport::{document_scroll_range, ScrollKey, Viewport};
+use crate::viewport::{ScrollKey, Viewport, document_scroll_range};
 
 /// What [`IncrementalLayout::apply`] did for a mutation batch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -139,15 +139,24 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         // guards all share one `SharedRwLock` (Stylo's `same_lock_as`).
         let lock = styles.shared_lock().clone();
         let quirks = crate::adapter_stylo::selectors_quirks_mode(dom.quirks_mode());
-        let stylist =
-            build_stylist(euclid::Size2D::new(width, height), stylesheets, None, &lock, quirks);
+        let stylist = build_stylist(
+            euclid::Size2D::new(width, height),
+            stylesheets,
+            None,
+            &lock,
+            quirks,
+        );
         run_cascade_with_stylist(dom, &mut styles, &stylist);
         let mut text_ctx = TextMeasureCtx::new();
         let (fragments, built) = full_layout(dom, &styles, width, height, &mut text_ctx);
         // The document viewport: propagated overflow over the first cascade, scroll
         // at the origin. Recomputed on every relayout (overflow + size), the host's
         // scroll preserved and re-clamped (see `recompute_viewport`).
-        let viewport = Viewport::for_document(dom, &styles, DeviceIntSize::new(width as i32, height as i32));
+        let viewport = Viewport::for_document(
+            dom,
+            &styles,
+            DeviceIntSize::new(width as i32, height as i32),
+        );
         Self {
             styles,
             stylist,
@@ -579,9 +588,21 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             return None;
         }
         let (mx, my) = self.scroll_extent(dom, node);
-        let cur = self.element_scroll.get(&node).copied().unwrap_or((0.0, 0.0));
-        let nx = if sx { (cur.0 + dx).clamp(0.0, mx) } else { cur.0 };
-        let ny = if sy { (cur.1 + dy).clamp(0.0, my) } else { cur.1 };
+        let cur = self
+            .element_scroll
+            .get(&node)
+            .copied()
+            .unwrap_or((0.0, 0.0));
+        let nx = if sx {
+            (cur.0 + dx).clamp(0.0, mx)
+        } else {
+            cur.0
+        };
+        let ny = if sy {
+            (cur.1 + dy).clamp(0.0, my)
+        } else {
+            cur.1
+        };
         if (nx - cur.0).abs() < f32::EPSILON && (ny - cur.1).abs() < f32::EPSILON {
             return None;
         }
@@ -632,7 +653,14 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         // `(0, 0)`. Shared with `viewport::extend_scrollable` instead of a second copy.
         let mut extent = (0.0f32, 0.0f32);
         for child in dom.dom_children(node) {
-            crate::viewport::extend_scrollable(dom, &self.styles, &self.fragments, child, (0.0, 0.0), &mut extent);
+            crate::viewport::extend_scrollable(
+                dom,
+                &self.styles,
+                &self.fragments,
+                child,
+                (0.0, 0.0),
+                &mut extent,
+            );
         }
         extent
     }
@@ -713,8 +741,13 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         let outcome = restyle_with_snapshots(dom, &mut self.styles, &self.stylist, mutations);
         self.last_damage = outcome.damage;
         if outcome.needs_relayout {
-            let (fragments, built) =
-                full_layout(dom, &self.styles, self.width, self.height, &mut self.text_ctx);
+            let (fragments, built) = full_layout(
+                dom,
+                &self.styles,
+                self.width,
+                self.height,
+                &mut self.text_ctx,
+            );
             self.fragments = fragments;
             self.built = built;
             self.paint_side_valid = true;
@@ -923,11 +956,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     /// position. Falls back to a full layout when a subtree's outer size
     /// changed (ancestors would reflow) or a root wasn't previously laid
     /// out — the same boundary the coarse-oracle diff-test guards.
-    fn apply_structural<D>(
-        &mut self,
-        dom: &D,
-        mutations: &[DomMutation<Id>],
-    ) -> Applied
+    fn apply_structural<D>(&mut self, dom: &D, mutations: &[DomMutation<Id>]) -> Applied
     where
         D: LayoutDom<NodeId = Id>,
     {
@@ -951,7 +980,12 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
                 return self.full_relayout(dom);
             };
             // Lay out just this subtree (re-rooted) over the persistent styles.
-            let scoped = lay_out(&SubtreeView::new(dom, root), &self.styles, self.width, self.height);
+            let scoped = lay_out(
+                &SubtreeView::new(dom, root),
+                &self.styles,
+                self.width,
+                self.height,
+            );
             let Some(scoped_root) = scoped.rect_of(root).copied() else {
                 return self.full_relayout(dom);
             };
@@ -1011,8 +1045,13 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     where
         D: LayoutDom<NodeId = Id>,
     {
-        let (fragments, built) =
-            full_layout(dom, &self.styles, self.width, self.height, &mut self.text_ctx);
+        let (fragments, built) = full_layout(
+            dom,
+            &self.styles,
+            self.width,
+            self.height,
+            &mut self.text_ctx,
+        );
         self.fragments = fragments;
         self.built = built;
         self.paint_side_valid = true;
@@ -1086,7 +1125,10 @@ where
     let b = cv.get_box();
     !matches!(b.overflow_x, Overflow::Visible)
         || !matches!(b.overflow_y, Overflow::Visible)
-        || matches!(b.position, PositionProperty::Absolute | PositionProperty::Fixed)
+        || matches!(
+            b.position,
+            PositionProperty::Absolute | PositionProperty::Fixed
+        )
         || !matches!(b.display.inside(), DisplayInside::Flow)
 }
 
@@ -1101,7 +1143,10 @@ where
     let Some(cv) = crate::paint_emit::primary_cv(styles, node) else {
         return false;
     };
-    !matches!(cv.get_box().position, PositionProperty::Absolute | PositionProperty::Fixed)
+    !matches!(
+        cv.get_box().position,
+        PositionProperty::Absolute | PositionProperty::Fixed
+    )
 }
 
 /// The first element (pre-order) whose `id` attribute equals `id`, or `None` — the
@@ -1127,7 +1172,9 @@ fn anchor_fragment<D: LayoutDom>(dom: &D, node: D::NodeId) -> Option<String> {
         return None;
     }
     let href = dom.attribute(node, &ns!(), &local_name!("href"))?;
-    href.strip_prefix('#').filter(|f| !f.is_empty()).map(str::to_string)
+    href.strip_prefix('#')
+        .filter(|f| !f.is_empty())
+        .map(str::to_string)
 }
 
 /// The full, non-empty `href` of an `<a>` element (in-page or cross-document), or
@@ -1144,7 +1191,12 @@ pub(crate) fn anchor_href<D: LayoutDom>(dom: &D, node: D::NodeId) -> Option<Stri
 
 /// Lay out over an already-cascaded plane (no images in the scripted
 /// path), hiding the taffy viewport type.
-fn lay_out<D>(dom: &D, styles: &StylePlane<D::NodeId>, width: f32, height: f32) -> FragmentPlane<D::NodeId>
+fn lay_out<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    width: f32,
+    height: f32,
+) -> FragmentPlane<D::NodeId>
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash + Send + Sync,
@@ -1199,10 +1251,19 @@ mod tests {
     }
 
     /// The text color a node's persistent plane resolved to.
-    fn color(layout: &IncrementalLayout<<ScriptedDom as LayoutDom>::NodeId>, id: <ScriptedDom as LayoutDom>::NodeId) -> [f32; 4] {
+    fn color(
+        layout: &IncrementalLayout<<ScriptedDom as LayoutDom>::NodeId>,
+        id: <ScriptedDom as LayoutDom>::NodeId,
+    ) -> [f32; 4] {
         let entry = layout.styles.get(id).expect("entry");
         let data = entry.borrow_data().expect("data");
-        *data.styles.primary().get_inherited_text().color.into_srgb_legacy().raw_components()
+        *data
+            .styles
+            .primary()
+            .get_inherited_text()
+            .color
+            .into_srgb_legacy()
+            .raw_components()
     }
 
     fn drain(dom: &mut ScriptedDom) -> Vec<DomMutation<<ScriptedDom as LayoutDom>::NodeId>> {
@@ -1238,10 +1299,20 @@ mod tests {
         let muts = drain(&mut dom);
         let applied = layout.apply(&dom, SHEET, &muts);
 
-        assert_eq!(applied, Applied::RepaintOnly, "color swap should skip layout");
-        assert!((color(&layout, p)[2] - 1.0).abs() < 0.001, "p should be blue after restyle");
+        assert_eq!(
+            applied,
+            Applied::RepaintOnly,
+            "color swap should skip layout"
+        );
+        assert!(
+            (color(&layout, p)[2] - 1.0).abs() < 0.001,
+            "p should be blue after restyle"
+        );
         let rect_after = *layout.fragments().rect_of(p).expect("p rect");
-        assert_eq!(rect_before, rect_after, "color change must not move the box");
+        assert_eq!(
+            rect_before, rect_after,
+            "color change must not move the box"
+        );
     }
 
     /// `emit_paint_list` produces a glyph-bearing list, and keeps producing one
@@ -1273,7 +1344,10 @@ mod tests {
                 .any(|c| matches!(c, PaintCmd::DrawText(t) if !t.glyphs.is_empty()))
         };
 
-        assert!(has_glyphs(&layout.emit_paint_list(&dom, &scroll, dev)), "emits text initially");
+        assert!(
+            has_glyphs(&layout.emit_paint_list(&dom, &scroll, dev)),
+            "emits text initially"
+        );
 
         // Transform-only change → RepaintOnly; emit must still produce the scene.
         let _ = drain(&mut dom);
@@ -1330,7 +1404,10 @@ mod tests {
         };
 
         let before = translate_x(&layout.emit_paint_list(&dom, &scroll, dev));
-        assert!((before - 10.0).abs() < 0.5, "starts at translate-x 10, got {before}");
+        assert!(
+            (before - 10.0).abs() < 0.5,
+            "starts at translate-x 10, got {before}"
+        );
 
         // Transform-only change → RepaintOnly; the emitted translate must follow.
         let _ = drain(&mut dom);
@@ -1352,8 +1429,7 @@ mod tests {
     /// (`Restyled`), and the new rect matches a full cascade + layout.
     #[test]
     fn width_change_restyles_and_relayouts_matching_full() {
-        const SHEET: &[&str] =
-            &["p{height:20px}.narrow{width:50px}.wide{width:200px}"];
+        const SHEET: &[&str] = &["p{height:20px}.narrow{width:50px}.wide{width:200px}"];
         let build = || {
             let mut dom = ScriptedDom::new();
             let root = dom.document();
@@ -1379,13 +1455,25 @@ mod tests {
 
         // Oracle: a fresh full cascade + layout of the mutated DOM.
         let mut oracle_styles = StylePlane::new();
-        run_cascade(&dom, &mut oracle_styles, euclid::Size2D::new(W, H), SHEET, None);
+        run_cascade(
+            &dom,
+            &mut oracle_styles,
+            euclid::Size2D::new(W, H),
+            SHEET,
+            None,
+        );
         let oracle = lay_out(&dom, &oracle_styles, W, H);
 
         let inc = layout.fragments().rect_of(p).unwrap();
         let full = oracle.rect_of(p).unwrap();
-        assert!((inc.size.width - full.size.width).abs() < 0.5, "width must match full layout");
-        assert!((inc.size.width - 200.0).abs() < 0.5, "p should be 200px wide after restyle");
+        assert!(
+            (inc.size.width - full.size.width).abs() < 0.5,
+            "width must match full layout"
+        );
+        assert!(
+            (inc.size.width - 200.0).abs() < 0.5,
+            "p should be 200px wide after restyle"
+        );
     }
 
     /// A structural change whose subtree keeps its outer size splices
@@ -1415,12 +1503,24 @@ mod tests {
 
         // The new <p> matches a full cascade + layout of the mutated DOM.
         let mut oracle_styles = StylePlane::new();
-        run_cascade(&dom, &mut oracle_styles, euclid::Size2D::new(W, H), SHEET, None);
+        run_cascade(
+            &dom,
+            &mut oracle_styles,
+            euclid::Size2D::new(W, H),
+            SHEET,
+            None,
+        );
         let oracle = lay_out(&dom, &oracle_styles, W, H);
         let spliced = layout.fragments().rect_of(p).expect("new <p> laid out");
         let full = oracle.rect_of(p).expect("oracle <p>");
-        assert!((spliced.location.y - full.location.y).abs() < 0.5, "spliced <p> y must match full");
-        assert!((spliced.size.height - full.size.height).abs() < 0.5, "spliced <p> height must match full");
+        assert!(
+            (spliced.location.y - full.location.y).abs() < 0.5,
+            "spliced <p> y must match full"
+        );
+        assert!(
+            (spliced.size.height - full.size.height).abs() < 0.5,
+            "spliced <p> height must match full"
+        );
     }
 
     /// Margin-collapse parity (fix B): a fixed-size, non-BFC subtree root
@@ -1449,11 +1549,22 @@ mod tests {
 
         // And the result matches a from-scratch full layout (the collapse is honored).
         let mut oracle_styles = StylePlane::new();
-        run_cascade(&dom, &mut oracle_styles, euclid::Size2D::new(W, H), SHEET, None);
+        run_cascade(
+            &dom,
+            &mut oracle_styles,
+            euclid::Size2D::new(W, H),
+            SHEET,
+            None,
+        );
         let oracle = lay_out(&dom, &oracle_styles, W, H);
         let got = layout.fragments().rect_of(p).expect("new <p> laid out");
         let want = oracle.rect_of(p).expect("oracle <p>");
-        assert!((got.location.y - want.location.y).abs() < 0.5, "p y must match full: {} vs {}", got.location.y, want.location.y);
+        assert!(
+            (got.location.y - want.location.y).abs() < 0.5,
+            "p y must match full: {} vs {}",
+            got.location.y,
+            want.location.y
+        );
     }
 
     /// When a structural change grows its subtree's outer size (an
@@ -1481,7 +1592,10 @@ mod tests {
         dom.append_child(div, p2);
         let muts = drain(&mut dom);
         assert_eq!(layout.apply(&dom, SHEET, &muts), Applied::FullRecompute);
-        assert!(layout.fragments().rect_of(p2).is_some(), "new <p> laid out after fallback");
+        assert!(
+            layout.fragments().rect_of(p2).is_some(),
+            "new <p> laid out after fallback"
+        );
     }
 
     /// The partial structural cascade re-matches **existing** siblings,
@@ -1503,7 +1617,10 @@ mod tests {
         dom.append_child(body, p1);
 
         let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
-        assert!((color(&layout, p1)[0] - 1.0).abs() < 0.01, "p1 starts red (only/last child)");
+        assert!(
+            (color(&layout, p1)[0] - 1.0).abs() < 0.01,
+            "p1 starts red (only/last child)"
+        );
 
         // Append p2: p1 is no longer :last-child, p2 is.
         let _ = drain(&mut dom);
@@ -1516,14 +1633,39 @@ mod tests {
         let mut oracle = StylePlane::new();
         run_cascade(&dom, &mut oracle, euclid::Size2D::new(W, H), SHEET, None);
         let oracle_color = |id| {
-            *oracle.get(id).unwrap().borrow_data().unwrap()
-                .styles.primary().get_inherited_text().color.into_srgb_legacy().raw_components()
+            *oracle
+                .get(id)
+                .unwrap()
+                .borrow_data()
+                .unwrap()
+                .styles
+                .primary()
+                .get_inherited_text()
+                .color
+                .into_srgb_legacy()
+                .raw_components()
         };
 
-        assert_eq!(color(&layout, p1), oracle_color(p1), "p1 must match full re-cascade");
-        assert_eq!(color(&layout, p2), oracle_color(p2), "p2 must match full re-cascade");
-        assert!(color(&layout, p1)[0] < 0.01, "p1 recolored black (no longer last-child), got {:?}", color(&layout, p1));
-        assert!((color(&layout, p2)[0] - 1.0).abs() < 0.01, "p2 is red (now last-child), got {:?}", color(&layout, p2));
+        assert_eq!(
+            color(&layout, p1),
+            oracle_color(p1),
+            "p1 must match full re-cascade"
+        );
+        assert_eq!(
+            color(&layout, p2),
+            oracle_color(p2),
+            "p2 must match full re-cascade"
+        );
+        assert!(
+            color(&layout, p1)[0] < 0.01,
+            "p1 recolored black (no longer last-child), got {:?}",
+            color(&layout, p1)
+        );
+        assert!(
+            (color(&layout, p2)[0] - 1.0).abs() < 0.01,
+            "p2 is red (now last-child), got {:?}",
+            color(&layout, p2)
+        );
     }
 
     /// `innerHTML` replace (a `SubtreeReplaced`) under a fixed-height `<body>`
@@ -1555,7 +1697,13 @@ mod tests {
 
         // Oracle: full cascade + layout of the mutated DOM.
         let mut oracle_styles = StylePlane::new();
-        run_cascade(&dom, &mut oracle_styles, euclid::Size2D::new(W, H), SHEET, None);
+        run_cascade(
+            &dom,
+            &mut oracle_styles,
+            euclid::Size2D::new(W, H),
+            SHEET,
+            None,
+        );
         let oracle = lay_out(&dom, &oracle_styles, W, H);
 
         let kids: Vec<_> = dom.dom_children(body).collect();
@@ -1564,9 +1712,13 @@ mod tests {
             let c = oracle.rect_of(p).expect("oracle paragraph");
             let i = layout.fragments().rect_of(p).expect("spliced paragraph");
             assert!(
-                (c.location.x - i.location.x).abs() < 0.5 && (c.location.y - i.location.y).abs() < 0.5,
+                (c.location.x - i.location.x).abs() < 0.5
+                    && (c.location.y - i.location.y).abs() < 0.5,
                 "paragraph abs pos: oracle=({},{}) spliced=({},{})",
-                c.location.x, c.location.y, i.location.x, i.location.y,
+                c.location.x,
+                c.location.y,
+                i.location.x,
+                i.location.y,
             );
         }
     }
@@ -1641,8 +1793,10 @@ mod tests {
         for n in [200usize, 1000] {
             let (mut dom, nodes) = build_nodes(n, "n t0");
             let mut layout = IncrementalLayout::new(&dom, T_SHEET, W, H);
-            let sizes0: Vec<_> =
-                nodes.iter().map(|&node| layout.fragments().rect_of(node).unwrap().size).collect();
+            let sizes0: Vec<_> = nodes
+                .iter()
+                .map(|&node| layout.fragments().rect_of(node).unwrap().size)
+                .collect();
             let _ = drain(&mut dom);
 
             for cls in ["n t1", "n t2", "n t3", "n t4"] {
@@ -1651,9 +1805,15 @@ mod tests {
                 }
                 let muts = drain(&mut dom);
                 let applied = layout.apply(&dom, T_SHEET, &muts);
-                assert_eq!(applied, Applied::RepaintOnly, "N={n} {cls}: transform change must skip layout");
+                assert_eq!(
+                    applied,
+                    Applied::RepaintOnly,
+                    "N={n} {cls}: transform change must skip layout"
+                );
                 assert!(
-                    layout.last_damage().contains(RestyleDamage::RECALCULATE_OVERFLOW),
+                    layout
+                        .last_damage()
+                        .contains(RestyleDamage::RECALCULATE_OVERFLOW),
                     "N={n} {cls}: transform must register paint-tier damage",
                 );
                 assert!(
@@ -1664,7 +1824,8 @@ mod tests {
             for (&node, size0) in nodes.iter().zip(&sizes0) {
                 let now = layout.fragments().rect_of(node).unwrap().size;
                 assert!(
-                    (now.width - size0.width).abs() < 0.5 && (now.height - size0.height).abs() < 0.5,
+                    (now.width - size0.width).abs() < 0.5
+                        && (now.height - size0.height).abs() < 0.5,
                     "N={n}: transform must not resize the box",
                 );
             }
@@ -1689,9 +1850,15 @@ mod tests {
             }
             let muts = drain(&mut dom);
             let applied = layout.apply(&dom, T_SHEET, &muts);
-            assert_eq!(applied, Applied::RepaintOnly, "{cls}: paint-tier, skip layout");
+            assert_eq!(
+                applied,
+                Applied::RepaintOnly,
+                "{cls}: paint-tier, skip layout"
+            );
             assert!(
-                layout.last_damage().contains(RestyleDamage::RECALCULATE_OVERFLOW),
+                layout
+                    .last_damage()
+                    .contains(RestyleDamage::RECALCULATE_OVERFLOW),
                 "{cls}: each sequential transform change must re-register (prereq B)",
             );
         }
@@ -1712,8 +1879,15 @@ mod tests {
         }
         let muts = drain(&mut dom);
         let applied = layout.apply(&dom, SHEET, &muts);
-        assert_eq!(applied, Applied::Restyled, "width change must relayout (harness sees the bad case)");
-        assert!(layout.last_damage().contains(RestyleDamage::RELAYOUT), "width must register RELAYOUT");
+        assert_eq!(
+            applied,
+            Applied::Restyled,
+            "width change must relayout (harness sees the bad case)"
+        );
+        assert!(
+            layout.last_damage().contains(RestyleDamage::RELAYOUT),
+            "width must register RELAYOUT"
+        );
     }
 
     /// Prereq A (fixed): the orrery's mechanism — mutate each node's inline
@@ -1742,12 +1916,22 @@ mod tests {
         let _ = drain(&mut dom);
 
         for (x, y) in [(40, 40), (90, 15), (5, 70)] {
-            dom.set_attribute(node, attr("style"), &format!("transform:translate({x}px,{y}px)"));
+            dom.set_attribute(
+                node,
+                attr("style"),
+                &format!("transform:translate({x}px,{y}px)"),
+            );
             let muts = drain(&mut dom);
             let applied = layout.apply(&dom, SHEET, &muts);
-            assert_eq!(applied, Applied::RepaintOnly, "inline transform value→value is paint-tier → skip layout");
+            assert_eq!(
+                applied,
+                Applied::RepaintOnly,
+                "inline transform value→value is paint-tier → skip layout"
+            );
             assert!(
-                layout.last_damage().contains(RestyleDamage::RECALCULATE_OVERFLOW),
+                layout
+                    .last_damage()
+                    .contains(RestyleDamage::RECALCULATE_OVERFLOW),
                 "inline transform must register paint-tier damage (prereq A)",
             );
             assert!(
@@ -1773,12 +1957,17 @@ mod tests {
 
         dom.set_attribute(node, attr("style"), "transform:translate(10px,10px)");
         let muts = drain(&mut dom);
-        assert_eq!(layout.apply(&dom, SHEET, &muts), Applied::Restyled, "gaining a transform relayouts once");
+        assert_eq!(
+            layout.apply(&dom, SHEET, &muts),
+            Applied::Restyled,
+            "gaining a transform relayouts once"
+        );
 
         dom.set_attribute(node, attr("style"), "transform:translate(20px,30px)");
         let muts = drain(&mut dom);
         assert_eq!(
-            layout.apply(&dom, SHEET, &muts), Applied::RepaintOnly,
+            layout.apply(&dom, SHEET, &muts),
+            Applied::RepaintOnly,
             "subsequent transform changes skip layout",
         );
     }
@@ -1818,12 +2007,22 @@ mod tests {
         for i in 1..=400u32 {
             // Distinct from the prior frame each time (x advances by 1 mod 100).
             let (x, y) = (i % 100, (i * 3) % 100);
-            dom.set_attribute(node, attr("style"), &format!("transform:translate({x}px,{y}px)"));
+            dom.set_attribute(
+                node,
+                attr("style"),
+                &format!("transform:translate({x}px,{y}px)"),
+            );
             let muts = drain(&mut dom);
             let applied = layout.apply(&dom, SHEET, &muts);
-            assert_eq!(applied, Applied::RepaintOnly, "frame {i}: sustained inline transform must stay paint-tier");
+            assert_eq!(
+                applied,
+                Applied::RepaintOnly,
+                "frame {i}: sustained inline transform must stay paint-tier"
+            );
             assert!(
-                layout.last_damage().contains(RestyleDamage::RECALCULATE_OVERFLOW)
+                layout
+                    .last_damage()
+                    .contains(RestyleDamage::RECALCULATE_OVERFLOW)
                     && !layout.last_damage().contains(RestyleDamage::RELAYOUT),
                 "frame {i}: transform-only damage, no relayout",
             );
@@ -1848,7 +2047,11 @@ mod tests {
 
         // 2000px of content in a 600px viewport → 1400px of vertical scroll.
         let range = layout.scroll_range(&dom);
-        assert!((range.1 - 1400.0).abs() < 1.0, "range.y = content(2000) - viewport(600): {}", range.1);
+        assert!(
+            (range.1 - 1400.0).abs() < 1.0,
+            "range.y = content(2000) - viewport(600): {}",
+            range.1
+        );
 
         // An over-scroll clamps to the range.
         layout.set_viewport_scroll(&dom, (0.0, 5000.0));
@@ -1863,7 +2066,9 @@ mod tests {
         let dev = DeviceIntSize::new(W as i32, H as i32);
         let pl = layout.emit_paint_list(&dom, &scroll, dev);
         assert!(
-            pl.commands().iter().any(|c| matches!(c, PaintCmd::PushTransform(t)
+            pl.commands()
+                .iter()
+                .any(|c| matches!(c, PaintCmd::PushTransform(t)
                 if t.origin.x.abs() < 0.5 && (t.origin.y + 1400.0).abs() < 0.5)),
             "emit carries the document scroll as a -1400 translate wrap",
         );
@@ -1919,12 +2124,18 @@ mod tests {
             "End = bottom 1400: {:?}",
             layout.viewport_scroll(),
         );
-        assert!(!layout.scroll_for_key(&dom, ScrollKey::PageDown), "no movement past the bottom");
+        assert!(
+            !layout.scroll_for_key(&dom, ScrollKey::PageDown),
+            "no movement past the bottom"
+        );
 
         // Home jumps back to the top; another arrow up is a no-op.
         assert!(layout.scroll_for_key(&dom, ScrollKey::Home));
         assert_eq!(layout.viewport_scroll(), (0.0, 0.0), "Home = top");
-        assert!(!layout.scroll_for_key(&dom, ScrollKey::Up), "no movement above the top");
+        assert!(
+            !layout.scroll_for_key(&dom, ScrollKey::Up),
+            "no movement above the top"
+        );
     }
 
     /// V2 — `scroll_to_element` brings an element's top to the viewport top
@@ -1960,7 +2171,10 @@ mod tests {
             layout.viewport_scroll(),
         );
         // Scrolling to it again is a no-op (already in position).
-        assert!(!layout.scroll_to_element(&dom, target), "already in position");
+        assert!(
+            !layout.scroll_to_element(&dom, target),
+            "already in position"
+        );
     }
 
     /// `scroll_element_into_view` uses "nearest" alignment (focus / Tab), the minimum
@@ -1970,9 +2184,8 @@ mod tests {
     /// brings its top down to the viewport top.
     #[test]
     fn scroll_element_into_view_uses_nearest_alignment() {
-        const SHEET: &[&str] = &[
-            "html,body,div{display:block;margin:0}.spacer{height:1000px}.target{height:50px}",
-        ];
+        const SHEET: &[&str] =
+            &["html,body,div{display:block;margin:0}.spacer{height:1000px}.target{height:50px}"];
         let mut dom = ScriptedDom::new();
         let root = dom.document();
         let h = dom.create_element(html("html"));
@@ -2002,7 +2215,10 @@ mod tests {
             layout.viewport_scroll(),
         );
         // Now fully visible (1000..1050 within 450..1050) → no-op.
-        assert!(!layout.scroll_element_into_view(&dom, target), "already visible: no jump");
+        assert!(
+            !layout.scroll_element_into_view(&dom, target),
+            "already visible: no jump"
+        );
 
         // Scroll past it, then bring it back: now above the window, so its top (1000)
         // comes to the viewport top.
@@ -2037,11 +2253,10 @@ mod tests {
         (dom, scroller, top, bottom)
     }
 
-    const NESTED_SCROLL_SHEET: &[&str] = &[
-        "html,body,div{display:block;margin:0;padding:0;border:0} \
+    const NESTED_SCROLL_SHEET: &[&str] =
+        &["html,body,div{display:block;margin:0;padding:0;border:0} \
          .scroller{overflow:scroll;width:100px;height:100px} \
-         .top{height:250px} .bottom{height:250px}",
-    ];
+         .top{height:250px} .bottom{height:250px}"];
 
     /// Nested element scrolling: `scroll_at` over an `overflow:scroll` container
     /// routes the wheel delta into *that* container (not the document), clamps to its
@@ -2055,11 +2270,18 @@ mod tests {
         let scroll = ScrollOffsets::default();
 
         // Unscrolled: scene (50,50) is over the first 250px block.
-        assert_eq!(layout.hit_test(&dom, 50.0, 50.0, &scroll), Some(top), "starts over .top");
+        assert_eq!(
+            layout.hit_test(&dom, 50.0, 50.0, &scroll),
+            Some(top),
+            "starts over .top"
+        );
 
         // Wheel down 300px inside the scroller → routes to the container (true), and
         // the same scene point now resolves to the second block scrolled under it.
-        assert!(layout.scroll_at(&dom, 50.0, 50.0, 0.0, 300.0), "the scroller consumes the delta");
+        assert!(
+            layout.scroll_at(&dom, 50.0, 50.0, 0.0, 300.0),
+            "the scroller consumes the delta"
+        );
         assert_eq!(
             layout.hit_test(&dom, 50.0, 50.0, &scroll),
             Some(bottom),
@@ -2070,8 +2292,15 @@ mod tests {
         // it still moves (clamps to 400, still .bottom), but a further wheel at the
         // limit is a no-op: the container is pinned and the document does not scroll
         // (it fits), so `scroll_at` returns false (chaining found no taker).
-        assert!(layout.scroll_at(&dom, 50.0, 50.0, 0.0, 1000.0), "over-scroll clamps but still moves to the limit");
-        assert_eq!(layout.hit_test(&dom, 50.0, 50.0, &scroll), Some(bottom), "still over .bottom at the limit");
+        assert!(
+            layout.scroll_at(&dom, 50.0, 50.0, 0.0, 1000.0),
+            "over-scroll clamps but still moves to the limit"
+        );
+        assert_eq!(
+            layout.hit_test(&dom, 50.0, 50.0, &scroll),
+            Some(bottom),
+            "still over .bottom at the limit"
+        );
         assert!(
             !layout.scroll_at(&dom, 50.0, 50.0, 0.0, 1000.0),
             "at the scroll limit with a non-scrolling document, the wheel is a no-op",
@@ -2093,17 +2322,26 @@ mod tests {
         // Before scrolling, no -150 translate exists.
         let before = layout.emit_paint_list(&dom, &scroll, dev);
         assert!(
-            !before.commands().iter().any(|c| matches!(c, PaintCmd::PushTransform(t)
+            !before
+                .commands()
+                .iter()
+                .any(|c| matches!(c, PaintCmd::PushTransform(t)
                 if (t.origin.y + 150.0).abs() < 0.5)),
             "unscrolled: no scroll translate yet",
         );
 
-        assert!(layout.scroll_at(&dom, 50.0, 50.0, 0.0, 150.0), "scroll the container 150px");
+        assert!(
+            layout.scroll_at(&dom, 50.0, 50.0, 0.0, 150.0),
+            "scroll the container 150px"
+        );
 
         // After: the scroller's content is translated by (0, -150).
         let after = layout.emit_paint_list(&dom, &scroll, dev);
         assert!(
-            after.commands().iter().any(|c| matches!(c, PaintCmd::PushTransform(t)
+            after
+                .commands()
+                .iter()
+                .any(|c| matches!(c, PaintCmd::PushTransform(t)
                 if t.origin.x.abs() < 0.5 && (t.origin.y + 150.0).abs() < 0.5)),
             "the nested scroll paints the content at a -150 translate wrap",
         );
@@ -2116,8 +2354,14 @@ mod tests {
     fn scroll_at_is_readable_via_element_scroll() {
         let (dom, scroller, _top, _bottom) = build_nested_scroller();
         let mut layout = IncrementalLayout::new(&dom, NESTED_SCROLL_SHEET, W, H);
-        assert!(layout.element_scroll().is_empty(), "no nested scroll recorded yet");
-        assert!(layout.scroll_at(&dom, 50.0, 50.0, 0.0, 150.0), "scroll the container 150px");
+        assert!(
+            layout.element_scroll().is_empty(),
+            "no nested scroll recorded yet"
+        );
+        assert!(
+            layout.scroll_at(&dom, 50.0, 50.0, 0.0, 150.0),
+            "scroll the container 150px"
+        );
         assert_eq!(
             layout.element_scroll().get(&scroller).copied(),
             Some((0.0, 150.0)),
@@ -2127,7 +2371,10 @@ mod tests {
         // A host that rebuilds its retained layout carries the scroll across via
         // `set_element_scroll`, so a fresh layout keeps the panes' wheel offsets.
         let mut rebuilt = IncrementalLayout::new(&dom, NESTED_SCROLL_SHEET, W, H);
-        assert!(rebuilt.element_scroll().is_empty(), "a fresh layout starts unscrolled");
+        assert!(
+            rebuilt.element_scroll().is_empty(),
+            "a fresh layout starts unscrolled"
+        );
         rebuilt.set_element_scroll(layout.element_scroll().clone());
         assert_eq!(
             rebuilt.element_scroll().get(&scroller).copied(),
@@ -2146,7 +2393,10 @@ mod tests {
         let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
 
         // No scroll container under the point → the document viewport takes the delta.
-        assert!(layout.scroll_at(&dom, 50.0, 50.0, 0.0, 40.0), "the document consumes the wheel");
+        assert!(
+            layout.scroll_at(&dom, 50.0, 50.0, 0.0, 40.0),
+            "the document consumes the wheel"
+        );
         assert!(
             (layout.viewport_scroll().1 - 40.0).abs() < 0.5,
             "the document scrolled 40px: {:?}",
@@ -2190,7 +2440,11 @@ mod tests {
         // Past the link text on the same line (x=200, beyond the 80px run): the empty
         // trailing space is not the link — resolves to the containing <p>.
         let off = layout.hit_test(&dom, 200.0, 10.0, &scroll);
-        assert_ne!(off, Some(a), "a click past the link text must not hit the <a>");
+        assert_ne!(
+            off,
+            Some(a),
+            "a click past the link text must not hit the <a>"
+        );
         assert_eq!(off, Some(p), "...it resolves to the containing block <p>");
     }
 
@@ -2224,13 +2478,29 @@ mod tests {
         let layout = IncrementalLayout::new(&dom, SHEET, W, H);
         let scroll = ScrollOffsets::default();
         // Line 1 "AAAA" (y~10, x 0..80) and line 2 "BB" (y~30, x 0..40) are the anchor.
-        assert_eq!(layout.hit_test(&dom, 60.0, 10.0, &scroll), Some(a), "line 1, on AAAA");
-        assert_eq!(layout.hit_test(&dom, 20.0, 30.0, &scroll), Some(a), "line 2, on BB");
+        assert_eq!(
+            layout.hit_test(&dom, 60.0, 10.0, &scroll),
+            Some(a),
+            "line 1, on AAAA"
+        );
+        assert_eq!(
+            layout.hit_test(&dom, 20.0, 30.0, &scroll),
+            Some(a),
+            "line 2, on BB"
+        );
         // Line 2, x=60: past "BB" (0..40) but within line 1's "AAAA" x-extent. The set
         // does not hit; a union rect (0..80 × 0..40) would. Must resolve to <p>.
         let gutter = layout.hit_test(&dom, 60.0, 30.0, &scroll);
-        assert_ne!(gutter, Some(a), "a union rect would false-hit here; the set must not");
-        assert_eq!(gutter, Some(p), "...it resolves to the containing block <p>");
+        assert_ne!(
+            gutter,
+            Some(a),
+            "a union rect would false-hit here; the set must not"
+        );
+        assert_eq!(
+            gutter,
+            Some(p),
+            "...it resolves to the containing block <p>"
+        );
     }
 
     /// A colour-only inline `<a>` mid-paragraph is hit-testable. parley does not
@@ -2295,12 +2565,10 @@ mod tests {
     /// encodes for free).
     #[test]
     fn pointer_events_none_falls_through_but_auto_descendant_still_hits() {
-        const SHEET: &[&str] = &[
-            "html,body{margin:0} \
+        const SHEET: &[&str] = &["html,body{margin:0} \
              .target{position:absolute;left:0;top:0;width:100px;height:100px} \
              .overlay{position:absolute;left:0;top:0;width:100px;height:100px;pointer-events:none} \
-             .live{position:absolute;left:0;top:0;width:50px;height:50px;pointer-events:auto}",
-        ];
+             .live{position:absolute;left:0;top:0;width:50px;height:50px;pointer-events:auto}"];
         let mut dom = ScriptedDom::new();
         let root = dom.document();
         let h = dom.create_element(html("html"));

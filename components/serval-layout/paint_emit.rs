@@ -34,21 +34,20 @@
 use std::hash::Hash;
 
 use layout_dom_api::{LayoutDom, NodeKind};
-use paint_list_api::{
-    AlphaType, BorderRadius, BorderSide, BorderStyle, BoxShadowClipMode, ColorF, CommonPlacement,
-    ConicGradientItem, ConicGradientPayload, DeviceIntSideOffsets,
-    DeviceIntSize, EngineId, ExtendMode, FontInstanceKey, FontResource, GlyphInstance, GradientStop,
-    IdNamespace, ImageItem, ImageKey, ImageRendering, ImageResource, LayoutPoint, LayoutRect,
-    LayoutSideOffsets, LayoutSize, LayoutTransform, LayoutVector2D, LinearGradientItem,
-    LinearGradientPayload, MixBlendMode, NormalBorder, PaintCmd, PaintList, RadialGradientItem,
-    RadialGradientPayload, RectItem, RepeatMode, RepeatingImageItem, TextOptions, TextRunItem,
-    TransformSpec,
-};
 use paint_list_api::items::{
     BorderDetails, BorderItem, ExternalTextureItem, NinePatchBorder, NinePatchSource, PathCommand,
     PathData, ShadowItem,
 };
 use paint_list_api::specs::{ClipKind, ClipSpec, FilterOp, LayerSpec, TransformKind};
+use paint_list_api::{
+    AlphaType, BorderRadius, BorderSide, BorderStyle, BoxShadowClipMode, ColorF, CommonPlacement,
+    ConicGradientItem, ConicGradientPayload, DeviceIntSideOffsets, DeviceIntSize, EngineId,
+    ExtendMode, FontInstanceKey, FontResource, GlyphInstance, GradientStop, IdNamespace, ImageItem,
+    ImageKey, ImageRendering, ImageResource, LayoutPoint, LayoutRect, LayoutSideOffsets,
+    LayoutSize, LayoutTransform, LayoutVector2D, LinearGradientItem, LinearGradientPayload,
+    MixBlendMode, NormalBorder, PaintCmd, PaintList, RadialGradientItem, RadialGradientPayload,
+    RectItem, RepeatMode, RepeatingImageItem, TextOptions, TextRunItem, TransformSpec,
+};
 use parley::PositionedLayoutItem;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -71,7 +70,9 @@ pub(crate) fn primary_cv<NodeId: Copy + Eq + Hash>(
     styles: &StylePlane<NodeId>,
     id: NodeId,
 ) -> Option<ServoArc<ComputedValues>> {
-    styles.get(id).and_then(|e| e.borrow_data().map(|d| d.styles.primary().clone()))
+    styles
+        .get(id)
+        .and_then(|e| e.borrow_data().map(|d| d.styles.primary().clone()))
 }
 
 /// Per-node scroll offsets (device px), keyed by DOM node. An overflow
@@ -152,7 +153,12 @@ impl ServalPaintList {
 }
 
 /// Scrollbar thumb colour (translucent dark grey, on the container's right edge).
-pub const SCROLLBAR_COLOR: ColorF = ColorF { r: 0.30, g: 0.30, b: 0.36, a: 0.65 };
+pub const SCROLLBAR_COLOR: ColorF = ColorF {
+    r: 0.30,
+    g: 0.30,
+    b: 0.36,
+    a: 0.65,
+};
 /// Scrollbar thumb width, device px.
 pub const SCROLLBAR_WIDTH: f32 = 8.0;
 
@@ -181,7 +187,9 @@ pub fn push_scrollbars<D>(
     }
     let origins = crate::serval_lane::accumulate_origins(dom, fragments);
     for (&node, &(_ox, oy)) in scroll_offsets {
-        let Some(r) = fragments.rect_of(node) else { continue };
+        let Some(r) = fragments.rect_of(node) else {
+            continue;
+        };
         let inner_h =
             r.size.height - r.padding.top - r.padding.bottom - r.border.top - r.border.bottom;
         let content_h = r.content_size.height;
@@ -192,7 +200,9 @@ pub fn push_scrollbars<D>(
         // The container's absolute top-left (taffy locations are parent-relative), so a nested
         // scroller's bar lands on its real right edge, not at `container_width` from the document
         // left.
-        let Some(p) = origins.get(&node) else { continue };
+        let Some(p) = origins.get(&node) else {
+            continue;
+        };
         let thumb_h = (r.size.height * (inner_h / content_h)).max(24.0);
         let thumb_y = p.y + (oy / scrollable) * (r.size.height - thumb_h);
         let thumb_x = p.x + r.size.width - SCROLLBAR_WIDTH;
@@ -294,6 +304,9 @@ impl ImageCollector {
 /// sources, so the recursive `walk` takes one `&mut Emitter` rather
 /// than a half-dozen separate parameters.
 pub(crate) struct Emitter<'a, NodeId: Copy + Eq + Hash> {
+    /// Cascaded styles keyed by NodeId. Block boxes carry their own cloned
+    /// style, but inline replaced boxes need to look up their source element.
+    styles: &'a StylePlane<NodeId>,
     /// Decoded `<img>` images keyed by NodeId.
     images_plane: &'a ImagePlane<NodeId>,
     /// Decoded CSS `background-image`s keyed by NodeId.
@@ -359,7 +372,15 @@ where
     // document scroll on this path — the host wires the viewport offset through the
     // live pipeline.
     emit_inner(
-        dom, styles, fragments, constructed, None, &empty_images, &empty_bg, &no_scroll, viewport,
+        dom,
+        styles,
+        fragments,
+        constructed,
+        None,
+        &empty_images,
+        &empty_bg,
+        &no_scroll,
+        viewport,
         (0.0, 0.0),
     )
 }
@@ -429,8 +450,16 @@ where
     D::NodeId: Copy + Eq + Hash,
 {
     emit_inner(
-        dom, styles, fragments, constructed, Some(text_ctx), images, bg_images, scroll_offsets,
-        viewport, viewport_scroll,
+        dom,
+        styles,
+        fragments,
+        constructed,
+        Some(text_ctx),
+        images,
+        bg_images,
+        scroll_offsets,
+        viewport,
+        viewport_scroll,
     )
 }
 
@@ -453,6 +482,7 @@ where
 {
     let mut commands = Vec::new();
     let mut emitter = Emitter {
+        styles,
         images_plane,
         bg_images_plane,
         scroll_offsets,
@@ -547,7 +577,10 @@ pub(crate) struct Deferred {
 /// (see [`crate::paint_stacking::defers_to_stacking`]).
 pub(crate) fn is_out_of_flow(cv: &ComputedValues) -> bool {
     use style::values::computed::PositionProperty;
-    matches!(cv.get_box().position, PositionProperty::Absolute | PositionProperty::Fixed)
+    matches!(
+        cv.get_box().position,
+        PositionProperty::Absolute | PositionProperty::Fixed
+    )
 }
 
 /// Whether `id` is `position: fixed`. A fixed box attaches to the viewport: its
@@ -625,7 +658,10 @@ pub(crate) fn walk<Id>(
             // Fold in the scroll of this layer's scroll-container ancestors, so it scrolls
             // with its container instead of staying at the un-scrolled origin (the stacking
             // painter paints it on a clean stack, off the `-offset` transform). (Abs-in-scroll.)
-            origin: (origin.0 - accumulated_scroll.0, origin.1 - accumulated_scroll.1),
+            origin: (
+                origin.0 - accumulated_scroll.0,
+                origin.1 - accumulated_scroll.1,
+            ),
             z: crate::paint_stacking::bucket_z(cv),
             seq: deferred.len(),
             ancestor_transform,
@@ -752,7 +788,11 @@ pub(crate) fn walk<Id>(
     };
     if let Some(radius) = bg_radius {
         commands.push(PaintCmd::PushClip(ClipSpec {
-            kind: ClipKind::RoundedRect { rect: local_bounds, radius, clip_out: false },
+            kind: ClipKind::RoundedRect {
+                rect: local_bounds,
+                radius,
+                clip_out: false,
+            },
         }));
     }
     // Background, then replaced content (image), then border — CSS paint order. The
@@ -766,7 +806,12 @@ pub(crate) fn walk<Id>(
         }));
         // Background-image gradient layers paint over the color (back-to-front).
         let border = [l.border.left, l.border.top, l.border.right, l.border.bottom];
-        let padding = [l.padding.left, l.padding.top, l.padding.right, l.padding.bottom];
+        let padding = [
+            l.padding.left,
+            l.padding.top,
+            l.padding.right,
+            l.padding.bottom,
+        ];
         for cmd in background_gradient_layers(cv, local_bounds, border, padding, local_bounds) {
             commands.push(cmd);
         }
@@ -803,8 +848,14 @@ pub(crate) fn walk<Id>(
                 ),
             }
         };
-        let origin_box = bg_style.as_ref().map(|s| s.origin).unwrap_or(BgBox::PaddingBox);
-        let clip_box = bg_style.as_ref().map(|s| s.clip).unwrap_or(BgBox::BorderBox);
+        let origin_box = bg_style
+            .as_ref()
+            .map(|s| s.origin)
+            .unwrap_or(BgBox::PaddingBox);
+        let clip_box = bg_style
+            .as_ref()
+            .map(|s| s.clip)
+            .unwrap_or(BgBox::BorderBox);
         let (orx, ory, aw, ah) = box_for(origin_box);
         let (tw, th, ox, oy) = match (&bg_style, int_w > 0.0 && int_h > 0.0) {
             (Some(s), true) => resolve_bg_tile(s, aw, ah, int_w, int_h),
@@ -823,23 +874,59 @@ pub(crate) fn walk<Id>(
             _ => (0.0, ah),
         };
         let (cx, cy, cw, ch) = box_for(clip_box);
-        let px0 = (orx + x0).max(cx);
-        let py0 = (ory + y0).max(cy);
-        let px1 = (orx + x0 + sw).min(cx + cw);
-        let py1 = (ory + y0 + sh).min(cy + ch);
-        if tw > 0.0 && th > 0.0 && px1 > px0 && py1 > py0 {
-            commands.push(PaintCmd::DrawRepeatingImage(RepeatingImageItem {
-                placement: CommonPlacement::new(LayoutRect::new(
-                    LayoutPoint::new(px0, py0),
-                    LayoutPoint::new(px1, py1),
-                )),
-                image_key: key,
-                stretch_size: LayoutSize::new(tw, th),
-                tile_spacing: LayoutSize::zero(),
-                image_rendering: ImageRendering::Auto,
-                alpha_type: AlphaType::PremultipliedAlpha,
-                color: ColorF::WHITE, // identity tint
-            }));
+        let clip_rect =
+            LayoutRect::new(LayoutPoint::new(cx, cy), LayoutPoint::new(cx + cw, cy + ch));
+        if tw > 0.0 && th > 0.0 {
+            if rx == BgRepeat::NoRepeat && ry == BgRepeat::NoRepeat {
+                let tile_rect = LayoutRect::new(
+                    LayoutPoint::new(orx + ox, ory + oy),
+                    LayoutPoint::new(orx + ox + tw, ory + oy + th),
+                );
+                if rects_intersect(tile_rect, clip_rect) {
+                    if rect_contains(clip_rect, tile_rect) {
+                        commands.push(PaintCmd::DrawRepeatingImage(RepeatingImageItem {
+                            placement: CommonPlacement::new(tile_rect),
+                            image_key: key,
+                            stretch_size: LayoutSize::new(tw, th),
+                            tile_spacing: LayoutSize::zero(),
+                            image_rendering: ImageRendering::Auto,
+                            alpha_type: AlphaType::PremultipliedAlpha,
+                            color: ColorF::WHITE, // identity tint
+                        }));
+                    } else {
+                        commands.push(PaintCmd::PushClip(ClipSpec {
+                            kind: ClipKind::Rect(clip_rect),
+                        }));
+                        commands.push(PaintCmd::DrawImage(ImageItem {
+                            placement: CommonPlacement::new(tile_rect),
+                            image_key: key,
+                            image_rendering: ImageRendering::Auto,
+                            alpha_type: AlphaType::PremultipliedAlpha,
+                            color: ColorF::WHITE, // identity tint
+                        }));
+                        commands.push(PaintCmd::PopClip);
+                    }
+                }
+            } else {
+                let px0 = (orx + x0).max(cx);
+                let py0 = (ory + y0).max(cy);
+                let px1 = (orx + x0 + sw).min(cx + cw);
+                let py1 = (ory + y0 + sh).min(cy + ch);
+                if px1 > px0 && py1 > py0 {
+                    commands.push(PaintCmd::DrawRepeatingImage(RepeatingImageItem {
+                        placement: CommonPlacement::new(LayoutRect::new(
+                            LayoutPoint::new(px0, py0),
+                            LayoutPoint::new(px1, py1),
+                        )),
+                        image_key: key,
+                        stretch_size: LayoutSize::new(tw, th),
+                        tile_spacing: LayoutSize::zero(),
+                        image_rendering: ImageRendering::Auto,
+                        alpha_type: AlphaType::PremultipliedAlpha,
+                        color: ColorF::WHITE, // identity tint
+                    }));
+                }
+            }
         }
     }
     // Close the border-radius clip around the background layers.
@@ -853,7 +940,10 @@ pub(crate) fn walk<Id>(
     if !is_anon {
         let pad = LayoutRect::new(
             LayoutPoint::new(l.border.left, l.border.top),
-            LayoutPoint::new(l.size.width - l.border.right, l.size.height - l.border.bottom),
+            LayoutPoint::new(
+                l.size.width - l.border.right,
+                l.size.height - l.border.bottom,
+            ),
         );
         for shadow in box_shadows_of(cv).into_iter().filter(|s| s.inset) {
             commands.push(PaintCmd::DrawShadow(ShadowItem {
@@ -869,28 +959,18 @@ pub(crate) fn walk<Id>(
         }
     }
     if let Some(texture_key) = node.external_texture_key {
-        // An `<external-texture>` paints no serval content: emit a compositor-pass
-        // command at its border box. The renderer lowers `DrawExternalTexture` to a
-        // per-frame composite of the `wgpu::Texture` the producer registered under
-        // `texture_key` (`paint_list_api`'s PM-3 contract), so a constellation actor
-        // scene / scrying WebView / pelt tile lane the host owns appears here. CSS
-        // opacity rides the node's opacity layer (as for `DrawImage`), so the item is
-        // identity-opacity.
-        commands.push(PaintCmd::DrawExternalTexture(ExternalTextureItem {
-            placement: CommonPlacement::new(local_bounds),
-            texture_key,
-            opacity: 1.0,
-            content_generation: None,
-        }));
+        if let Some((intrinsic_w, intrinsic_h)) = node.replaced_intrinsic_size {
+            emit_object_external_texture(
+                cv,
+                content_box(&l),
+                texture_key,
+                intrinsic_w,
+                intrinsic_h,
+                commands,
+            );
+        }
     } else if let Some(decoded) = em.images_plane.get(dom_id) {
-        let key = em.images.add(decoded);
-        commands.push(PaintCmd::DrawImage(ImageItem {
-            placement: CommonPlacement::new(local_bounds),
-            image_key: key,
-            image_rendering: ImageRendering::Auto,
-            alpha_type: AlphaType::PremultipliedAlpha,
-            color: ColorF::WHITE, // identity tint
-        }));
+        emit_object_image(cv, content_box(&l), decoded, &mut em.images, commands);
     }
     // A loaded `border-image` replaces the normal border (CSS Backgrounds-3 §6):
     // paint the 9-slice and skip the regular border below. Anonymous boxes never
@@ -918,9 +998,8 @@ pub(crate) fn walk<Id>(
     // `text-overflow: ellipsis`: pass the content-box width so a single
     // overflowing line is truncated with a `…` (the leaf's ellipsis was shaped at
     // layout time). `None` = no truncation.
-    let ellipsis = text_ellipsis(cv).then(|| {
-        l.size.width - l.border.left - l.border.right - l.padding.left - l.padding.right
-    });
+    let ellipsis = text_ellipsis(cv)
+        .then(|| l.size.width - l.border.left - l.border.right - l.padding.left - l.padding.right);
     let emitted = emit_inline_content(
         taffy_id,
         text_ctx,
@@ -928,6 +1007,7 @@ pub(crate) fn walk<Id>(
         local_bounds,
         content_offset,
         ellipsis,
+        em.styles,
         em.images_plane,
         &mut em.fonts,
         &mut em.images,
@@ -936,7 +1016,11 @@ pub(crate) fn walk<Id>(
     if !emitted && node.inline_content.is_some() {
         // Cache-less path (no shaped layout): emit one empty text run so the
         // command structure still reflects the leaf's text.
-        let [r, g, b, a] = *cv.get_inherited_text().color.into_srgb_legacy().raw_components();
+        let [r, g, b, a] = *cv
+            .get_inherited_text()
+            .color
+            .into_srgb_legacy()
+            .raw_components();
         commands.push(PaintCmd::DrawText(TextRunItem {
             placement: CommonPlacement::new(local_bounds),
             font_instance: FontInstanceKey::default(),
@@ -953,13 +1037,18 @@ pub(crate) fn walk<Id>(
     if clips_overflow(cv) {
         clip_rect = Some(LayoutRect::new(
             LayoutPoint::new(l.border.left, l.border.top),
-            LayoutPoint::new(l.size.width - l.border.right, l.size.height - l.border.bottom),
+            LayoutPoint::new(
+                l.size.width - l.border.right,
+                l.size.height - l.border.bottom,
+            ),
         ));
     }
     // Clip the descendants of an overflow container to its padding box. The
     // container's own background/border (emitted above) are outside the clip.
     if let Some(rect) = clip_rect {
-        commands.push(PaintCmd::PushClip(ClipSpec { kind: ClipKind::Rect(rect) }));
+        commands.push(PaintCmd::PushClip(ClipSpec {
+            kind: ClipKind::Rect(rect),
+        }));
     }
     // Scroll: inside the clip, translate the content by `-offset` so it scrolls
     // under the fixed clip window. Only a clipping (overflow) container scrolls.
@@ -980,7 +1069,15 @@ pub(crate) fn walk<Id>(
 
     for &child in &node.children {
         walk(
-            em, tree, text_ctx, child, child_origin, commands, deferred, false, child_transform,
+            em,
+            tree,
+            text_ctx,
+            child,
+            child_origin,
+            commands,
+            deferred,
+            false,
+            child_transform,
             child_scroll,
         );
     }
@@ -1078,6 +1175,7 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
     bounds: LayoutRect,
     content_offset: (f32, f32),
     ellipsis: Option<f32>,
+    styles: &StylePlane<NodeId>,
     images_plane: &ImagePlane<NodeId>,
     fonts: &mut FontCollector,
     images: &mut ImageCollector,
@@ -1110,10 +1208,11 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
     // trailing `…` at that cutoff. The ellipsis was shaped at layout time in the
     // leaf's font/size (cached under `taffy_id`), so its ascent — and therefore
     // baseline — matches the run it follows. `None` keep = no truncation.
-    let truncate: Option<(f32, &parley::Layout<crate::text_measure::ColorBrush>)> = ellipsis.and_then(|cw| {
-        let ell = text_ctx.ellipsis_layouts.get(&taffy_id)?;
-        (layout.width() > cw).then_some((cw - ell.width(), ell))
-    });
+    let truncate: Option<(f32, &parley::Layout<crate::text_measure::ColorBrush>)> = ellipsis
+        .and_then(|cw| {
+            let ell = text_ctx.ellipsis_layouts.get(&taffy_id)?;
+            (layout.width() > cw).then_some((cw - ell.width(), ell))
+        });
     let mut emitted = false;
     for line in layout.lines() {
         for item in line.items() {
@@ -1247,8 +1346,9 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                         }
                         // The inline-block's own content glyphs, placed at the box
                         // origin (its Layout was cached under (this leaf, box id)).
-                        if let Some(ib_layout) =
-                            text_ctx.inline_block_layouts.get(&(taffy_id, pbox.id as usize))
+                        if let Some(ib_layout) = text_ctx
+                            .inline_block_layouts
+                            .get(&(taffy_id, pbox.id as usize))
                         {
                             for ib_line in ib_layout.lines() {
                                 for ib_item in ib_line.items() {
@@ -1284,14 +1384,11 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                         }
                         emitted = true;
                     } else if let Some(decoded) = images_plane.get(item.source) {
-                        let key = images.add(decoded);
-                        commands.push(PaintCmd::DrawImage(ImageItem {
-                            placement: CommonPlacement::new(rect),
-                            image_key: key,
-                            image_rendering: ImageRendering::Auto,
-                            alpha_type: AlphaType::PremultipliedAlpha,
-                            color: ColorF::WHITE, // identity tint
-                        }));
+                        if let Some(cv) = primary_cv(styles, item.source) {
+                            emit_object_image(&cv, rect, decoded, images, commands);
+                        } else {
+                            emit_image_rect(rect, decoded, images, commands);
+                        }
                         emitted = true;
                     }
                 },
@@ -1432,8 +1529,8 @@ fn resolve_bg_tile(
     int_w: f32,
     int_h: f32,
 ) -> (f32, f32, f32, f32) {
-    use style::values::computed::length::NonNegativeLengthPercentageOrAuto as Lpa;
     use style::values::computed::Length;
+    use style::values::computed::length::NonNegativeLengthPercentageOrAuto as Lpa;
     use style::values::generics::background::BackgroundSize as Bs;
     use style::values::generics::length::GenericLengthPercentageOrAuto as Loa;
 
@@ -1449,7 +1546,10 @@ fn resolve_bg_tile(
             };
             (int_w * scale, int_h * scale)
         },
-        Bs::ExplicitSize { ref width, ref height } => {
+        Bs::ExplicitSize {
+            ref width,
+            ref height,
+        } => {
             let resolve = |v: &Lpa, basis: f32| -> Option<f32> {
                 match v {
                     Loa::Auto => None,
@@ -1467,11 +1567,170 @@ fn resolve_bg_tile(
         },
     };
     let pos = |lp: &style::values::computed::LengthPercentage, basis: f32| -> f32 {
-        lp.resolve(Length::new(basis.max(0.0))).px()
+        lp.resolve(Length::new(basis)).px()
     };
     let ox = pos(&bg.pos_x, area_w - tw);
     let oy = pos(&bg.pos_y, area_h - th);
     (tw, th, ox, oy)
+}
+
+/// A laid-out box's CSS content box in the node's local border-box coordinate
+/// space. Replaced content is drawn into this box; background and border still
+/// use their own CSS paint areas.
+fn content_box(l: &taffy::Layout) -> LayoutRect {
+    let x0 = l.border.left + l.padding.left;
+    let y0 = l.border.top + l.padding.top;
+    let x1 = (l.size.width - l.border.right - l.padding.right).max(x0);
+    let y1 = (l.size.height - l.border.bottom - l.padding.bottom).max(y0);
+    LayoutRect::new(LayoutPoint::new(x0, y0), LayoutPoint::new(x1, y1))
+}
+
+fn rects_intersect(a: LayoutRect, b: LayoutRect) -> bool {
+    a.min.x < b.max.x && a.max.x > b.min.x && a.min.y < b.max.y && a.max.y > b.min.y
+}
+
+fn rect_contains(outer: LayoutRect, inner: LayoutRect) -> bool {
+    inner.min.x >= outer.min.x
+        && inner.min.y >= outer.min.y
+        && inner.max.x <= outer.max.x
+        && inner.max.y <= outer.max.y
+}
+
+/// Emit an `<img>` content object, applying `object-fit` and
+/// `object-position` against the element's content box.
+fn emit_object_image(
+    cv: &ComputedValues,
+    content_rect: LayoutRect,
+    decoded: &DecodedImage,
+    images: &mut ImageCollector,
+    commands: &mut Vec<PaintCmd>,
+) {
+    let Some((object_rect, clips)) = object_fit_rect(
+        cv,
+        content_rect,
+        decoded.width as f32,
+        decoded.height as f32,
+    ) else {
+        return;
+    };
+
+    if clips {
+        commands.push(PaintCmd::PushClip(ClipSpec {
+            kind: ClipKind::Rect(content_rect),
+        }));
+    }
+    emit_image_rect(object_rect, decoded, images, commands);
+    if clips {
+        commands.push(PaintCmd::PopClip);
+    }
+}
+
+fn emit_image_rect(
+    rect: LayoutRect,
+    decoded: &DecodedImage,
+    images: &mut ImageCollector,
+    commands: &mut Vec<PaintCmd>,
+) {
+    let key = images.add(decoded);
+    commands.push(PaintCmd::DrawImage(ImageItem {
+        placement: CommonPlacement::new(rect),
+        image_key: key,
+        image_rendering: ImageRendering::Auto,
+        alpha_type: AlphaType::PremultipliedAlpha,
+        color: ColorF::WHITE, // identity tint
+    }));
+}
+
+/// Emit a host-composited replaced content object, applying the same concrete
+/// object geometry as `<img>`.
+fn emit_object_external_texture(
+    cv: &ComputedValues,
+    content_rect: LayoutRect,
+    texture_key: u64,
+    intrinsic_w: f32,
+    intrinsic_h: f32,
+    commands: &mut Vec<PaintCmd>,
+) {
+    let Some((object_rect, clips)) = object_fit_rect(cv, content_rect, intrinsic_w, intrinsic_h)
+    else {
+        return;
+    };
+
+    if clips {
+        commands.push(PaintCmd::PushClip(ClipSpec {
+            kind: ClipKind::Rect(content_rect),
+        }));
+    }
+    commands.push(PaintCmd::DrawExternalTexture(ExternalTextureItem {
+        placement: CommonPlacement::new(object_rect),
+        texture_key,
+        opacity: 1.0,
+        content_generation: None,
+    }));
+    if clips {
+        commands.push(PaintCmd::PopClip);
+    }
+}
+
+/// Resolve CSS Images' concrete object size and position for a replaced content
+/// object. Returns the object draw rect and whether it needs a content-box clip.
+fn object_fit_rect(
+    cv: &ComputedValues,
+    content_rect: LayoutRect,
+    intrinsic_w: f32,
+    intrinsic_h: f32,
+) -> Option<(LayoutRect, bool)> {
+    use style::computed_values::object_fit::T as Fit;
+    use style::values::computed::Length;
+
+    let content_w = content_rect.width();
+    let content_h = content_rect.height();
+    if intrinsic_w <= 0.0 || intrinsic_h <= 0.0 || content_w <= 0.0 || content_h <= 0.0 {
+        return None;
+    }
+
+    let contain_scale = (content_w / intrinsic_w).min(content_h / intrinsic_h);
+    let pos = cv.get_position();
+    let (object_w, object_h) = match pos.object_fit {
+        Fit::Fill => (content_w, content_h),
+        Fit::Contain => (intrinsic_w * contain_scale, intrinsic_h * contain_scale),
+        Fit::Cover => {
+            let scale = (content_w / intrinsic_w).max(content_h / intrinsic_h);
+            (intrinsic_w * scale, intrinsic_h * scale)
+        },
+        Fit::None => (intrinsic_w, intrinsic_h),
+        Fit::ScaleDown => {
+            if contain_scale < 1.0 {
+                (intrinsic_w * contain_scale, intrinsic_h * contain_scale)
+            } else {
+                (intrinsic_w, intrinsic_h)
+            }
+        },
+    };
+
+    let free_x = content_w - object_w;
+    let free_y = content_h - object_h;
+    let object_x = content_rect.min.x
+        + pos
+            .object_position
+            .horizontal
+            .resolve(Length::new(free_x))
+            .px();
+    let object_y = content_rect.min.y
+        + pos
+            .object_position
+            .vertical
+            .resolve(Length::new(free_y))
+            .px();
+    let object_rect = LayoutRect::new(
+        LayoutPoint::new(object_x, object_y),
+        LayoutPoint::new(object_x + object_w, object_y + object_h),
+    );
+    let clips = object_rect.min.x < content_rect.min.x
+        || object_rect.min.y < content_rect.min.y
+        || object_rect.max.x > content_rect.max.x
+        || object_rect.max.y > content_rect.max.y;
+    Some((object_rect, clips))
 }
 
 /// Read an element's background color from its `ComputedValues`.
@@ -1487,7 +1746,11 @@ fn background_color_of(cv: &ComputedValues) -> ColorF {
 /// CSS gradient-line angle in radians (0 = "to top", increasing clockwise) for a
 /// `w`x`h` box. `to <side>` / `to <corner>` resolve to angles per CSS Images
 /// (corners use the box aspect).
-fn line_direction_angle(dir: &style::values::computed::image::LineDirection, w: f32, h: f32) -> f32 {
+fn line_direction_angle(
+    dir: &style::values::computed::image::LineDirection,
+    w: f32,
+    h: f32,
+) -> f32 {
     use std::f32::consts::{FRAC_PI_2, PI};
 
     use style::values::computed::image::LineDirection;
@@ -1588,7 +1851,9 @@ where
     } else {
         let body = dom.dom_children(root).find(|&c| {
             dom.kind(c) == NodeKind::Element
-                && dom.element_name(c).is_some_and(|q| q.local == local_name!("body"))
+                && dom
+                    .element_name(c)
+                    .is_some_and(|q| q.local == local_name!("body"))
         })?;
         let body_cv = primary_cv(styles, body)?;
         if generates_box(&body_cv) && has_canvas_background(&body_cv) {
@@ -1629,7 +1894,12 @@ where
                     LayoutPoint::new(x + l.size.width, y + l.size.height),
                 ),
                 [l.border.left, l.border.top, l.border.right, l.border.bottom],
-                [l.padding.left, l.padding.top, l.padding.right, l.padding.bottom],
+                [
+                    l.padding.left,
+                    l.padding.top,
+                    l.padding.right,
+                    l.padding.bottom,
+                ],
             )
         })
         .unwrap_or((canvas, [0.0; 4], [0.0; 4]));
@@ -1671,7 +1941,12 @@ const MAX_GRADIENT_TILES: usize = 4096;
 /// The `background-origin` box: `border_box` inset by `border` (padding-box) or
 /// `border + padding` (content-box), or `border_box` itself (border-box). Insets
 /// are `[left, top, right, bottom]`.
-fn origin_box(border_box: LayoutRect, border: [f32; 4], padding: [f32; 4], which: BgBox) -> LayoutRect {
+fn origin_box(
+    border_box: LayoutRect,
+    border: [f32; 4],
+    padding: [f32; 4],
+    which: BgBox,
+) -> LayoutRect {
     let inset = |l: f32, t: f32, r: f32, b: f32| {
         LayoutRect::new(
             LayoutPoint::new(border_box.min.x + l, border_box.min.y + t),
@@ -1723,7 +1998,14 @@ fn background_gradient_layers(
     // `space` fit their tiles); `[lo, hi]` is the painting extent (where `repeat`
     // tiles); `off` is the resolved `background-position` offset. `None` ⇒ caller
     // falls back to a single area-filling gradient.
-    let axis = |pos0: f32, ext: f32, lo: f32, hi: f32, tile: f32, off: f32, repeat: BgRepeat, cap: usize|
+    let axis = |pos0: f32,
+                ext: f32,
+                lo: f32,
+                hi: f32,
+                tile: f32,
+                off: f32,
+                repeat: BgRepeat,
+                cap: usize|
      -> Option<(Vec<f32>, f32)> {
         if tile <= 0.0 || ext <= 0.0 {
             return None;
@@ -1735,7 +2017,8 @@ fn background_gradient_layers(
             let k0 = ((lo - start) / step).floor() as i64;
             let k1 = ((hi - start) / step).ceil() as i64;
             let count = (k1 - k0).max(0) as usize;
-            (count != 0 && count <= cap).then(|| (k0..k1).map(|k| start + k as f32 * step).collect())
+            (count != 0 && count <= cap)
+                .then(|| (k0..k1).map(|k| start + k as f32 * step).collect())
         };
         match repeat {
             BgRepeat::NoRepeat => Some((vec![pos0 + off], tile)),
@@ -1773,7 +2056,10 @@ fn background_gradient_layers(
         // content-box). `background-attachment: fixed` instead positions against
         // the painting area, which for canvas propagation is the viewport (a
         // fixed canvas layer is viewport-anchored, not root-box-anchored).
-        let origin = style.as_ref().map(|s| s.origin).unwrap_or(BgBox::PaddingBox);
+        let origin = style
+            .as_ref()
+            .map(|s| s.origin)
+            .unwrap_or(BgBox::PaddingBox);
         let pos_area = if style.as_ref().is_some_and(|s| s.fixed) {
             paint_area
         } else {
@@ -1789,8 +2075,26 @@ fn background_gradient_layers(
             .map(|s| (s.repeat_x, s.repeat_y))
             .unwrap_or((BgRepeat::Repeat, BgRepeat::Repeat));
         let cap = (MAX_GRADIENT_TILES as f64).sqrt() as usize;
-        let xs = axis(pos_area.min.x, aw, paint_area.min.x, paint_area.max.x, tw, ox, rx, cap);
-        let ys = axis(pos_area.min.y, ah, paint_area.min.y, paint_area.max.y, th, oy, ry, cap);
+        let xs = axis(
+            pos_area.min.x,
+            aw,
+            paint_area.min.x,
+            paint_area.max.x,
+            tw,
+            ox,
+            rx,
+            cap,
+        );
+        let ys = axis(
+            pos_area.min.y,
+            ah,
+            paint_area.min.y,
+            paint_area.max.y,
+            th,
+            oy,
+            ry,
+            cap,
+        );
         let mut cmds = Vec::new();
         match (xs, ys) {
             // A tile grid within the cap: one gradient per cell at the per-axis
@@ -1849,14 +2153,20 @@ fn gradient_layer_tile_style(
         K::Round => BgRepeat::Round,
     };
     use style::computed_values::background_origin::single_value::T as Origin;
-    let origin = match bg.background_origin.0.get(i % bg.background_origin.0.len().max(1)) {
+    let origin = match bg
+        .background_origin
+        .0
+        .get(i % bg.background_origin.0.len().max(1))
+    {
         Some(Origin::ContentBox) => BgBox::ContentBox,
         Some(Origin::BorderBox) => BgBox::BorderBox,
         _ => BgBox::PaddingBox, // CSS default
     };
     use style::computed_values::background_attachment::single_value::T as Attach;
     let fixed = matches!(
-        bg.background_attachment.0.get(i % bg.background_attachment.0.len().max(1)),
+        bg.background_attachment
+            .0
+            .get(i % bg.background_attachment.0.len().max(1)),
         Some(Attach::Fixed)
     );
     let repeat = &reps[i % reps.len()];
@@ -1889,23 +2199,28 @@ struct GradientTileStyle {
 /// fills the area; explicit lengths/percentages resolve against the area.
 /// `background-position` anchors the tile within `area - tile`.
 fn resolve_gradient_tile(s: &GradientTileStyle, w: f32, h: f32) -> (f32, f32, f32, f32) {
-    use style::values::computed::length::NonNegativeLengthPercentageOrAuto as Lpa;
     use style::values::computed::Length;
+    use style::values::computed::length::NonNegativeLengthPercentageOrAuto as Lpa;
     use style::values::generics::background::BackgroundSize as Bs;
     use style::values::generics::length::GenericLengthPercentageOrAuto as Loa;
 
     let (tw, th) = match s.size {
         Bs::Cover | Bs::Contain => (w, h),
-        Bs::ExplicitSize { ref width, ref height } => {
+        Bs::ExplicitSize {
+            ref width,
+            ref height,
+        } => {
             let axis = |v: &Lpa, area: f32| match v {
                 Loa::Auto => area,
-                Loa::LengthPercentage(npl) => npl.0.resolve(Length::new(area.max(0.0))).px().max(0.0),
+                Loa::LengthPercentage(npl) => {
+                    npl.0.resolve(Length::new(area.max(0.0))).px().max(0.0)
+                },
             };
             (axis(width, w), axis(height, h))
         },
     };
-    let ox = s.pos_x.resolve(Length::new((w - tw).max(0.0))).px();
-    let oy = s.pos_y.resolve(Length::new((h - th).max(0.0))).px();
+    let ox = s.pos_x.resolve(Length::new(w - tw)).px();
+    let oy = s.pos_y.resolve(Length::new(h - th)).px();
     (tw, th, ox, oy)
 }
 
@@ -1968,8 +2283,18 @@ fn linear_gradient_layer(
 ) -> Option<LinearGradientItem> {
     use style::values::generics::image::{Gradient, GradientFlags, Image};
 
-    let Image::Gradient(gradient) = image else { return None };
-    let Gradient::Linear { direction, items, flags, .. } = &**gradient else { return None };
+    let Image::Gradient(gradient) = image else {
+        return None;
+    };
+    let Gradient::Linear {
+        direction,
+        items,
+        flags,
+        ..
+    } = &**gradient
+    else {
+        return None;
+    };
     let repeating = flags.contains(GradientFlags::REPEATING);
 
     let angle = line_direction_angle(direction, w, h);
@@ -1986,9 +2311,7 @@ fn linear_gradient_layer(
 
     // Color stops resolve to 0..1 offsets along the gradient line (length `len`).
     use style::values::computed::Length;
-    let stops = resolve_gradient_stops(items, current, |p| {
-        p.resolve(Length::new(len)).px() / len
-    })?;
+    let stops = resolve_gradient_stops(items, current, |p| p.resolve(Length::new(len)).px() / len)?;
 
     // `repeating-linear-gradient`: shrink the endpoints to one period (first to
     // last stop) and re-normalize the stops over it, so the renderer's Repeat
@@ -1997,9 +2320,7 @@ fn linear_gradient_layer(
     let (start_point, end_point, stops, extend_mode) =
         match repeating.then(|| repeating_period(&stops)).flatten() {
             Some((first, last, renorm)) => {
-                let at = |f: f32| {
-                    LayoutPoint::new(start.x + dx * f * len, start.y + dy * f * len)
-                };
+                let at = |f: f32| LayoutPoint::new(start.x + dx * f * len, start.y + dy * f * len);
                 (at(first), at(last), renorm, ExtendMode::Repeat)
             },
             None => (start, end, stops, ExtendMode::Clamp),
@@ -2089,7 +2410,10 @@ fn resolve_gradient_stops<T>(
 
     Some(
         raw.into_iter()
-            .map(|(off, color)| GradientStop { offset: off.unwrap(), color })
+            .map(|(off, color)| GradientStop {
+                offset: off.unwrap(),
+                color,
+            })
             .collect(),
     )
 }
@@ -2109,8 +2433,18 @@ fn radial_gradient_layer(
     use style::values::computed::Length;
     use style::values::generics::image::{Circle, Ellipse, EndingShape, Gradient, Image};
 
-    let Image::Gradient(gradient) = image else { return None };
-    let Gradient::Radial { shape, position, items, .. } = &**gradient else { return None };
+    let Image::Gradient(gradient) = image else {
+        return None;
+    };
+    let Gradient::Radial {
+        shape,
+        position,
+        items,
+        ..
+    } = &**gradient
+    else {
+        return None;
+    };
 
     // Center: resolve the position against the box (percentages vs each axis).
     let cx = position.horizontal.resolve(Length::new(w)).px();
@@ -2127,7 +2461,9 @@ fn radial_gradient_layer(
             rx_lp.0.resolve(Length::new(w)).px(),
             ry_lp.0.resolve(Length::new(h)).px(),
         ),
-        EndingShape::Ellipse(Ellipse::Extent(ext)) => resolve_extent_radii(*ext, false, cx, cy, w, h),
+        EndingShape::Ellipse(Ellipse::Extent(ext)) => {
+            resolve_extent_radii(*ext, false, cx, cy, w, h)
+        },
     };
     if rx <= 0.0 || ry <= 0.0 {
         return None;
@@ -2226,8 +2562,18 @@ fn conic_gradient_layer(
     use style::values::computed::Length;
     use style::values::generics::image::{Gradient, Image};
 
-    let Image::Gradient(gradient) = image else { return None };
-    let Gradient::Conic { angle, position, items, .. } = &**gradient else { return None };
+    let Image::Gradient(gradient) = image else {
+        return None;
+    };
+    let Gradient::Conic {
+        angle,
+        position,
+        items,
+        ..
+    } = &**gradient
+    else {
+        return None;
+    };
 
     let cx = position.horizontal.resolve(Length::new(w)).px();
     let cy = position.vertical.resolve(Length::new(h)).px();
@@ -2336,8 +2682,10 @@ fn border_radius_of(cv: &ComputedValues, w: f32, h: f32) -> Option<BorderRadius>
         bottom_left: corner(&b.border_bottom_left_radius),
     };
     let zero = |s: LayoutSize| s.width <= 0.0 && s.height <= 0.0;
-    if zero(radius.top_left) && zero(radius.top_right)
-        && zero(radius.bottom_right) && zero(radius.bottom_left)
+    if zero(radius.top_left)
+        && zero(radius.top_right)
+        && zero(radius.bottom_right)
+        && zero(radius.bottom_left)
     {
         return None;
     }
@@ -2363,9 +2711,8 @@ fn border_of(cv: &ComputedValues, w: f32, h: f32) -> Option<(LayoutSideOffsets, 
     let left_style = stylo_border_style(border.border_left_style);
 
     // No-op early-out: every side is zero-width or none/hidden style.
-    let renderable = |w: f32, s: BorderStyle| {
-        w > 0.0 && !matches!(s, BorderStyle::None | BorderStyle::Hidden)
-    };
+    let renderable =
+        |w: f32, s: BorderStyle| w > 0.0 && !matches!(s, BorderStyle::None | BorderStyle::Hidden);
     if !renderable(top_w, top_style)
         && !renderable(right_w, right_style)
         && !renderable(bottom_w, bottom_style)
@@ -2465,23 +2812,29 @@ fn emit_border_image(
         match v {
             SideW::Number(n) => n.0 * border_w,
             SideW::LengthPercentage(lp) => {
-                lp.0.resolve(style::values::computed::Length::new(area_dim)).px()
-            }
+                lp.0.resolve(style::values::computed::Length::new(area_dim))
+                    .px()
+            },
             SideW::Auto => intrinsic,
         }
         .max(0.0)
     };
     // --- Outset (px) per side: length, or number × border-width. ---
-    let outset_px = |v: &style::values::computed::NonNegativeLengthOrNumber, border_w: f32| -> f32 {
-        match v {
-            LoN::Number(n) => n.0 * border_w,
-            LoN::Length(len) => len.0.px(),
-        }
-        .max(0.0)
-    };
+    let outset_px =
+        |v: &style::values::computed::NonNegativeLengthOrNumber, border_w: f32| -> f32 {
+            match v {
+                LoN::Number(n) => n.0 * border_w,
+                LoN::Length(len) => len.0.px(),
+            }
+            .max(0.0)
+        };
     let ow = &b.border_image_outset;
-    let (ot, or, ob, ol) =
-        (outset_px(&ow.0, bw_t), outset_px(&ow.1, bw_r), outset_px(&ow.2, bw_b), outset_px(&ow.3, bw_l));
+    let (ot, or, ob, ol) = (
+        outset_px(&ow.0, bw_t),
+        outset_px(&ow.1, bw_r),
+        outset_px(&ow.2, bw_b),
+        outset_px(&ow.3, bw_l),
+    );
 
     // The border-image area is the border box expanded outward by outset. `l.size`
     // is the border-box size; local coords have its top-left at (0, 0).
@@ -2585,10 +2938,26 @@ fn ellipse_path(cx: f32, cy: f32, rx: f32, ry: f32) -> PathData {
     PathData {
         commands: vec![
             PathCommand::MoveTo(pt(cx + rx, cy)),
-            PathCommand::CurveTo { control1: pt(cx + rx, cy + oy), control2: pt(cx + ox, cy + ry), to: pt(cx, cy + ry) },
-            PathCommand::CurveTo { control1: pt(cx - ox, cy + ry), control2: pt(cx - rx, cy + oy), to: pt(cx - rx, cy) },
-            PathCommand::CurveTo { control1: pt(cx - rx, cy - oy), control2: pt(cx - ox, cy - ry), to: pt(cx, cy - ry) },
-            PathCommand::CurveTo { control1: pt(cx + ox, cy - ry), control2: pt(cx + rx, cy - oy), to: pt(cx + rx, cy) },
+            PathCommand::CurveTo {
+                control1: pt(cx + rx, cy + oy),
+                control2: pt(cx + ox, cy + ry),
+                to: pt(cx, cy + ry),
+            },
+            PathCommand::CurveTo {
+                control1: pt(cx - ox, cy + ry),
+                control2: pt(cx - rx, cy + oy),
+                to: pt(cx - rx, cy),
+            },
+            PathCommand::CurveTo {
+                control1: pt(cx - rx, cy - oy),
+                control2: pt(cx - ox, cy - ry),
+                to: pt(cx, cy - ry),
+            },
+            PathCommand::CurveTo {
+                control1: pt(cx + ox, cy - ry),
+                control2: pt(cx + rx, cy - oy),
+                to: pt(cx + rx, cy),
+            },
             PathCommand::Close,
         ],
     }
@@ -2635,7 +3004,11 @@ fn clip_path_of(cv: &ComputedValues, w: f32, h: f32) -> Option<ClipKind> {
                         c.0.resolve(Length::new(cw)).px(),
                         c.1.resolve(Length::new(ch)).px(),
                     );
-                    if i == 0 { PathCommand::MoveTo(pt) } else { PathCommand::LineTo(pt) }
+                    if i == 0 {
+                        PathCommand::MoveTo(pt)
+                    } else {
+                        PathCommand::LineTo(pt)
+                    }
                 })
                 .chain(std::iter::once(PathCommand::Close))
                 .collect();
@@ -2656,7 +3029,11 @@ fn clip_path_of(cv: &ComputedValues, w: f32, h: f32) -> Option<ClipKind> {
         },
         BasicShape::Ellipse(ref e) => {
             let (cx, cy) = center(&e.position);
-            let axis = |r: &ShapeRadius<style::values::computed::LengthPercentage>, c: f32, near: f32, basis: f32| -> f32 {
+            let axis = |r: &ShapeRadius<style::values::computed::LengthPercentage>,
+                        c: f32,
+                        near: f32,
+                        basis: f32|
+             -> f32 {
                 match r {
                     ShapeRadius::Length(nn) => nn.0.resolve(Length::new(basis)).px(),
                     ShapeRadius::ClosestSide => c.min(near).max(0.0),
@@ -2755,7 +3132,12 @@ fn filter_op_of(f: &style::values::computed::effects::Filter) -> Option<FilterOp
 /// A non-empty chain wraps the element + subtree in an isolated layer whose
 /// rasterized output the renderer filters before compositing.
 fn filters_of(cv: &ComputedValues) -> Vec<FilterOp> {
-    cv.get_effects().filter.0.iter().filter_map(filter_op_of).collect()
+    cv.get_effects()
+        .filter
+        .0
+        .iter()
+        .filter_map(filter_op_of)
+        .collect()
 }
 
 /// A transform `m` applied around the absolute point `origin`: `T(O)·M·T(-O)`.
@@ -2856,7 +3238,10 @@ mod tests {
             let mut q = vec![document.document()];
             let mut found = None;
             while let Some(id) = q.pop() {
-                if document.element_name(id).is_some_and(|n| n.local == local_name!("p")) {
+                if document
+                    .element_name(id)
+                    .is_some_and(|n| n.local == local_name!("p"))
+                {
                     found = Some(id);
                     break;
                 }
@@ -2865,7 +3250,10 @@ mod tests {
             found.expect("<p>")
         };
         let cv = primary_cv(&styles, p).expect("p cascade");
-        assert!(text_ellipsis(&cv), "text-overflow: ellipsis + overflow:hidden must be active");
+        assert!(
+            text_ellipsis(&cv),
+            "text-overflow: ellipsis + overflow:hidden must be active"
+        );
     }
 
     /// `text-overflow: ellipsis` truncates an overflowing single line: glyphs past
@@ -2904,11 +3292,17 @@ mod tests {
             narrow.len(),
             wide.len()
         );
-        assert!(!narrow.is_empty(), "some glyphs (incl. the ellipsis) still draw");
+        assert!(
+            !narrow.is_empty(),
+            "some glyphs (incl. the ellipsis) still draw"
+        );
         // Every emitted glyph — the kept run plus the trailing `…` — sits within
         // the 60px content box (a small epsilon for the ellipsis glyph advance).
         let max_x = narrow.iter().copied().fold(f32::MIN, f32::max);
-        assert!(max_x <= 60.0 + 2.0, "all glyphs stay within the content box, max_x = {max_x}");
+        assert!(
+            max_x <= 60.0 + 2.0,
+            "all glyphs stay within the content box, max_x = {max_x}"
+        );
     }
 
     /// Threading guard. The two stages a future parallel pipeline would move
@@ -2936,7 +3330,10 @@ mod tests {
         // Opaque default: no layer at all.
         let opaque = emit_with_sheet(&document, "p { display: block; }");
         assert!(
-            !opaque.commands().iter().any(|c| matches!(c, PaintCmd::PushLayer(_))),
+            !opaque
+                .commands()
+                .iter()
+                .any(|c| matches!(c, PaintCmd::PushLayer(_))),
             "the opaque default opens no stacking layer"
         );
 
@@ -2951,17 +3348,31 @@ mod tests {
             })
             .collect();
         assert_eq!(alphas.len(), 1, "exactly one opacity layer");
-        assert!((alphas[0] - 0.5).abs() < 1e-6, "layer alpha is 0.5, got {}", alphas[0]);
+        assert!(
+            (alphas[0] - 0.5).abs() < 1e-6,
+            "layer alpha is 0.5, got {}",
+            alphas[0]
+        );
         assert_eq!(
-            cmds.iter().filter(|c| matches!(c, PaintCmd::PopLayer)).count(),
+            cmds.iter()
+                .filter(|c| matches!(c, PaintCmd::PopLayer))
+                .count(),
             1,
             "the layer is balanced by one PopLayer"
         );
         // The <p>'s text paints between the push and the pop — inside the group.
-        let push_i = cmds.iter().position(|c| matches!(c, PaintCmd::PushLayer(_))).unwrap();
-        let pop_i = cmds.iter().rposition(|c| matches!(c, PaintCmd::PopLayer)).unwrap();
+        let push_i = cmds
+            .iter()
+            .position(|c| matches!(c, PaintCmd::PushLayer(_)))
+            .unwrap();
+        let pop_i = cmds
+            .iter()
+            .rposition(|c| matches!(c, PaintCmd::PopLayer))
+            .unwrap();
         assert!(
-            cmds[push_i..pop_i].iter().any(|c| matches!(c, PaintCmd::DrawText(_))),
+            cmds[push_i..pop_i]
+                .iter()
+                .any(|c| matches!(c, PaintCmd::DrawText(_))),
             "the faded subtree's text is composited inside the layer"
         );
     }
@@ -2983,8 +3394,7 @@ mod tests {
 
     #[test]
     fn emit_produces_drawrect_for_each_element_and_drawtext_for_text() {
-        let document =
-            StaticDocument::parse("<html><body><p>Hello</p></body></html>");
+        let document = StaticDocument::parse("<html><body><p>Hello</p></body></html>");
         let styles = build_style_plane(&document);
         let viewport = Size {
             width: AvailableSpace::Definite(800.0),
@@ -3017,7 +3427,7 @@ mod tests {
             match cmd {
                 PaintCmd::DrawRect(_) => rect_count += 1,
                 PaintCmd::DrawText(_) => text_count += 1,
-                _ => {}
+                _ => {},
             }
         }
 
@@ -3034,12 +3444,15 @@ mod tests {
     }
 
     /// Emit a paint list for `document` cascaded with `sheet`, at 800×600.
-    fn emit_with_sheet(
-        document: &StaticDocument,
-        sheet: &str,
-    ) -> ServalPaintList {
+    fn emit_with_sheet(document: &StaticDocument, sheet: &str) -> ServalPaintList {
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(document, &mut styles, euclid::Size2D::new(800.0, 600.0), &[sheet], None);
+        run_cascade(
+            document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[sheet],
+            None,
+        );
         let viewport = Size {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
@@ -3066,7 +3479,13 @@ mod tests {
     fn emit_scrolled(html: &str, sheet: &str, scroll: (f32, f32)) -> Vec<PaintCmd> {
         let document = StaticDocument::parse(html);
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&document, &mut styles, euclid::Size2D::new(800.0, 600.0), &[sheet], None);
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[sheet],
+            None,
+        );
         let viewport = Size {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
@@ -3086,6 +3505,262 @@ mod tests {
         )
         .commands()
         .to_vec()
+    }
+
+    fn data_uri_png(width: u32, height: u32) -> String {
+        use base64::Engine as _;
+
+        let img = image::RgbaImage::from_pixel(width, height, image::Rgba([0, 0, 255, 255]));
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .expect("encode PNG");
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        format!("data:image/png;base64,{b64}")
+    }
+
+    fn emit_img_commands(intrinsic: (u32, u32), img_rule: &str) -> Vec<PaintCmd> {
+        let uri = data_uri_png(intrinsic.0, intrinsic.1);
+        let document =
+            StaticDocument::parse(&format!("<html><body><img src=\"{uri}\"></body></html>"));
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        let sheet =
+            format!("html, body {{ display: block; margin: 0; padding: 0; }} img {{ {img_rule} }}");
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[sheet.as_str()],
+            None,
+        );
+        let images = ImagePlane::decode_from_dom(&document);
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, &images, viewport);
+        emit_paint_list_with_layouts(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &images,
+            &BackgroundImagePlane::new(),
+            &FxHashMap::default(),
+            DeviceIntSize::new(800, 600),
+        )
+        .commands()
+        .to_vec()
+    }
+
+    fn emit_external_texture_commands(element: &str, rule: &str) -> Vec<PaintCmd> {
+        let document = StaticDocument::parse(&format!("<html><body>{element}</body></html>"));
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        let sheet = format!(
+            "html, body {{ display: block; margin: 0; padding: 0; }} \
+             canvas, video, external-texture {{ {rule} }}"
+        );
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[sheet.as_str()],
+            None,
+        );
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        emit_paint_list_with_layouts(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &FxHashMap::default(),
+            DeviceIntSize::new(800, 600),
+        )
+        .commands()
+        .to_vec()
+    }
+
+    fn image_bounds(cmds: &[PaintCmd]) -> LayoutRect {
+        let images: Vec<_> = cmds
+            .iter()
+            .filter_map(|c| match c {
+                PaintCmd::DrawImage(i) => Some(i.placement.bounds),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            images.len(),
+            1,
+            "expected one DrawImage, got {}",
+            images.len()
+        );
+        images[0]
+    }
+
+    fn external_texture_bounds(cmds: &[PaintCmd]) -> LayoutRect {
+        let textures: Vec<_> = cmds
+            .iter()
+            .filter_map(|c| match c {
+                PaintCmd::DrawExternalTexture(e) => Some(e.placement.bounds),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            textures.len(),
+            1,
+            "expected one DrawExternalTexture, got {}",
+            textures.len()
+        );
+        textures[0]
+    }
+
+    fn assert_rect(rect: LayoutRect, min_x: f32, min_y: f32, max_x: f32, max_y: f32) {
+        assert!(
+            approx(rect.min.x, min_x),
+            "min.x expected {min_x}, got {}",
+            rect.min.x
+        );
+        assert!(
+            approx(rect.min.y, min_y),
+            "min.y expected {min_y}, got {}",
+            rect.min.y
+        );
+        assert!(
+            approx(rect.max.x, max_x),
+            "max.x expected {max_x}, got {}",
+            rect.max.x
+        );
+        assert!(
+            approx(rect.max.y, max_y),
+            "max.y expected {max_y}, got {}",
+            rect.max.y
+        );
+    }
+
+    fn approx(a: f32, b: f32) -> bool {
+        (a - b).abs() < 0.5
+    }
+
+    #[test]
+    fn object_fit_cover_centers_and_clips_block_img() {
+        let cmds = emit_img_commands(
+            (200, 100),
+            "display:block; width:100px; height:100px; object-fit:cover; object-position:center;",
+        );
+        assert_rect(image_bounds(&cmds), -50.0, 0.0, 150.0, 100.0);
+
+        let draw_i = cmds
+            .iter()
+            .position(|c| matches!(c, PaintCmd::DrawImage(_)))
+            .unwrap();
+        assert!(
+            cmds[..draw_i].iter().any(|c| matches!(
+                c,
+                PaintCmd::PushClip(ClipSpec { kind: ClipKind::Rect(r) })
+                    if approx(r.min.x, 0.0)
+                        && approx(r.min.y, 0.0)
+                        && approx(r.max.x, 100.0)
+                        && approx(r.max.y, 100.0)
+            )),
+            "cover image must be clipped to the content box"
+        );
+        assert!(
+            cmds[draw_i + 1..]
+                .iter()
+                .any(|c| matches!(c, PaintCmd::PopClip)),
+            "cover clip must be balanced after DrawImage"
+        );
+    }
+
+    #[test]
+    fn object_fit_contain_preserves_aspect_inside_block_img() {
+        let cmds = emit_img_commands(
+            (200, 100),
+            "display:block; width:100px; height:100px; object-fit:contain; object-position:center;",
+        );
+        assert_rect(image_bounds(&cmds), 0.0, 25.0, 100.0, 75.0);
+    }
+
+    #[test]
+    fn object_fit_none_uses_intrinsic_size() {
+        let cmds = emit_img_commands(
+            (40, 20),
+            "display:block; width:100px; height:100px; object-fit:none; object-position:center;",
+        );
+        assert_rect(image_bounds(&cmds), 30.0, 40.0, 70.0, 60.0);
+    }
+
+    #[test]
+    fn object_fit_scale_down_does_not_upscale() {
+        let cmds = emit_img_commands(
+            (40, 20),
+            "display:block; width:100px; height:100px; object-fit:scale-down; object-position:center;",
+        );
+        assert_rect(image_bounds(&cmds), 30.0, 40.0, 70.0, 60.0);
+    }
+
+    #[test]
+    fn object_position_offsets_cover_image() {
+        let cmds = emit_img_commands(
+            (200, 100),
+            "display:block; width:100px; height:100px; object-fit:cover; object-position:left top;",
+        );
+        assert_rect(image_bounds(&cmds), 0.0, 0.0, 200.0, 100.0);
+    }
+
+    #[test]
+    fn object_fit_paints_inside_content_box_with_padding_and_border() {
+        let cmds = emit_img_commands(
+            (20, 20),
+            "display:block; width:100px; height:100px; padding:10px; border:5px solid black; object-fit:fill;",
+        );
+        assert_rect(image_bounds(&cmds), 15.0, 15.0, 115.0, 115.0);
+    }
+
+    #[test]
+    fn object_fit_contain_applies_to_canvas_external_texture() {
+        let cmds = emit_external_texture_commands(
+            "<canvas data-serval-external-texture-key=\"7\" width=\"300\" height=\"150\"></canvas>",
+            "display:block; width:100px; height:100px; object-fit:contain; object-position:center;",
+        );
+        assert_rect(external_texture_bounds(&cmds), 0.0, 25.0, 100.0, 75.0);
+    }
+
+    #[test]
+    fn object_fit_cover_clips_video_external_texture() {
+        let cmds = emit_external_texture_commands(
+            "<video data-serval-external-texture-key=\"9\" width=\"300\" height=\"150\"></video>",
+            "display:block; width:100px; height:100px; object-fit:cover; object-position:left top;",
+        );
+        assert_rect(external_texture_bounds(&cmds), 0.0, 0.0, 200.0, 100.0);
+        let draw_i = cmds
+            .iter()
+            .position(|c| matches!(c, PaintCmd::DrawExternalTexture(_)))
+            .unwrap();
+        assert!(
+            cmds[..draw_i].iter().any(|c| matches!(
+                c,
+                PaintCmd::PushClip(ClipSpec { kind: ClipKind::Rect(r) })
+                    if approx(r.min.x, 0.0)
+                        && approx(r.min.y, 0.0)
+                        && approx(r.max.x, 100.0)
+                        && approx(r.max.y, 100.0)
+            )),
+            "cover texture must be clipped to the content box"
+        );
+        assert!(
+            cmds[draw_i + 1..]
+                .iter()
+                .any(|c| matches!(c, PaintCmd::PopClip)),
+            "cover texture clip must be balanced after DrawExternalTexture"
+        );
     }
 
     /// Index of the first `PushTransform` whose translate `origin` is `(x, y)`
@@ -3200,12 +3875,18 @@ mod tests {
                 if (r.color.r - 1.0).abs() < 0.05 && r.color.g < 0.05 && r.color.b < 0.05 =>
             {
                 Some(r.placement.bounds)
-            }
+            },
             _ => None,
         });
         let b = before.expect("block ::before paints a red background box");
-        assert!((b.max.x - b.min.x - 100.0).abs() < 1.0, "::before spans the 100px width, got {b:?}");
-        assert!((b.max.y - b.min.y - 20.0).abs() < 1.0, "::before is 20px tall, got {b:?}");
+        assert!(
+            (b.max.x - b.min.x - 100.0).abs() < 1.0,
+            "::before spans the 100px width, got {b:?}"
+        );
+        assert!(
+            (b.max.y - b.min.y - 20.0).abs() < 1.0,
+            "::before is 20px tall, got {b:?}"
+        );
     }
 
     /// A block `::before` with a `url()` `background-image` paints it. The image
@@ -3229,7 +3910,13 @@ mod tests {
 
         let document = StaticDocument::parse("<html><body><p>hi</p></body></html>");
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&document, &mut styles, euclid::Size2D::new(800.0, 600.0), &[sheet.as_str()], None);
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[sheet.as_str()],
+            None,
+        );
         let viewport = Size {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
@@ -3253,7 +3940,10 @@ mod tests {
         );
 
         assert!(
-            plist.commands().iter().any(|c| matches!(c, PaintCmd::DrawRepeatingImage(_))),
+            plist
+                .commands()
+                .iter()
+                .any(|c| matches!(c, PaintCmd::DrawRepeatingImage(_))),
             "block ::before with a url() background-image paints a repeating image"
         );
     }
@@ -3271,7 +3961,8 @@ mod tests {
             img.put_pixel(x, 3, image::Rgba([0, 255, 0, 255]));
         }
         let mut png = Vec::new();
-        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
         let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
         let sheet = format!(
             "html, body, div {{ display: block; margin: 0; }} \
@@ -3282,7 +3973,13 @@ mod tests {
 
         let document = StaticDocument::parse("<html><body><div></div></body></html>");
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&document, &mut styles, euclid::Size2D::new(800.0, 600.0), &[sheet.as_str()], None);
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[sheet.as_str()],
+            None,
+        );
         let viewport = Size {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
@@ -3315,17 +4012,35 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(borders.len(), 1, "one DrawBorder for the border-image, got {}", borders.len());
+        assert_eq!(
+            borders.len(),
+            1,
+            "one DrawBorder for the border-image, got {}",
+            borders.len()
+        );
         match &borders[0].details {
             BorderDetails::NinePatch(np) => {
-                assert!(matches!(np.source, NinePatchSource::Image(..)), "nine-patch image source");
+                assert!(
+                    matches!(np.source, NinePatchSource::Image(..)),
+                    "nine-patch image source"
+                );
                 // slice:1 → a 1px slice on every side of the 4×4 source.
-                assert_eq!((np.slice.top, np.slice.left), (1, 1), "1px slice, got {:?}", np.slice);
+                assert_eq!(
+                    (np.slice.top, np.slice.left),
+                    (1, 1),
+                    "1px slice, got {:?}",
+                    np.slice
+                );
             },
-            BorderDetails::Normal(_) => panic!("a loaded border-image must emit a nine-patch border"),
+            BorderDetails::Normal(_) => {
+                panic!("a loaded border-image must emit a nine-patch border")
+            },
         }
         assert!(
-            !plist.commands().iter().any(|c| matches!(c, PaintCmd::DrawImage(_))),
+            !plist
+                .commands()
+                .iter()
+                .any(|c| matches!(c, PaintCmd::DrawImage(_))),
             "no pre-sliced DrawImages — the rasterizer owns the slicing"
         );
     }
@@ -3340,7 +4055,13 @@ mod tests {
              style=\"display:block;width:200px;height:120px\"></external-texture></body></html>",
         );
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&document, &mut styles, euclid::Size2D::new(800.0, 600.0), &[], None);
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[],
+            None,
+        );
         let viewport = Size {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
@@ -3371,11 +4092,76 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(ext.len(), 1, "one DrawExternalTexture for the element, got {}", ext.len());
-        assert_eq!(ext[0].texture_key, 42, "carries the element's host texture key");
+        assert_eq!(
+            ext.len(),
+            1,
+            "one DrawExternalTexture for the element, got {}",
+            ext.len()
+        );
+        assert_eq!(
+            ext[0].texture_key, 42,
+            "carries the element's host texture key"
+        );
         assert!(
-            !plist.commands().iter().any(|c| matches!(c, PaintCmd::DrawImage(_))),
+            !plist
+                .commands()
+                .iter()
+                .any(|c| matches!(c, PaintCmd::DrawImage(_))),
             "an external-texture paints no DrawImage — the compositor pass replaces it",
+        );
+    }
+
+    /// A WebGL-backed `<canvas>` advertises the same compositor key that
+    /// `<external-texture>` uses, so live canvas output rides the established
+    /// `DrawExternalTexture` path instead of a separate paint command.
+    #[test]
+    fn webgl_canvas_emits_a_compositor_pass() {
+        let document = StaticDocument::parse(
+            "<html><body><canvas data-serval-external-texture-key=\"7\" \
+             style=\"display:block;width:64px;height:64px\"></canvas></body></html>",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[],
+            None,
+        );
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let bg = BackgroundImagePlane::decode_from_cascade(
+            &document,
+            &styles,
+            &crate::image_decode::NoImageLoader,
+        );
+        let plist = emit_paint_list_with_layouts(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &bg,
+            &FxHashMap::default(),
+            DeviceIntSize::new(800, 600),
+        );
+
+        let ext: Vec<_> = plist
+            .commands()
+            .iter()
+            .filter_map(|c| match c {
+                PaintCmd::DrawExternalTexture(e) => Some(e),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ext.len(), 1, "one DrawExternalTexture for the canvas");
+        assert_eq!(
+            ext[0].texture_key, 7,
+            "carries the WebGL canvas texture key"
         );
     }
 
@@ -3387,7 +4173,7 @@ mod tests {
                 let b = r.placement.bounds;
                 (b.min.x == 0.0 && b.min.y == 0.0 && b.max.x == 800.0 && b.max.y == 600.0)
                     .then_some(r.color)
-            }
+            },
             _ => None,
         })
     }
@@ -3412,8 +4198,10 @@ mod tests {
         // `display: none` on the root hides the whole document — no canvas
         // background propagates (the *-propagation negative reftests).
         let document = StaticDocument::parse("<html><body></body></html>");
-        let plist =
-            emit_with_sheet(&document, "html { background-color: green; display: none; }");
+        let plist = emit_with_sheet(
+            &document,
+            "html { background-color: green; display: none; }",
+        );
         assert!(
             viewport_fill(&plist).is_none(),
             "display:none root must not propagate a canvas background"
@@ -3500,7 +4288,10 @@ mod tests {
             },
             _ => false,
         });
-        assert!(green_box, "inline-block should emit a ~50px green background box");
+        assert!(
+            green_box,
+            "inline-block should emit a ~50px green background box"
+        );
     }
 
     #[test]
@@ -3510,8 +4301,10 @@ mod tests {
         // background paints at its content width, not stretched to the container.
         // (The anonymous wrapper itself paints no box decorations.)
         let document = StaticDocument::parse("<html><body><p>x</p><span>x</span></body></html>");
-        let plist =
-            emit_with_sheet(&document, "span { display: inline-block; background: rgb(200, 0, 0); }");
+        let plist = emit_with_sheet(
+            &document,
+            "span { display: inline-block; background: rgb(200, 0, 0); }",
+        );
         let red_widths: Vec<f32> = plist
             .commands()
             .iter()
@@ -3522,7 +4315,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(!red_widths.is_empty(), "inline-block red background should paint");
+        assert!(
+            !red_widths.is_empty(),
+            "inline-block red background should paint"
+        );
         assert!(
             red_widths.iter().all(|&w| w < 100.0),
             "inline-block background shrink-to-fit, not full 800px width: {red_widths:?}"
@@ -3552,7 +4348,10 @@ mod tests {
         // Each tile is rescaled from 32 to 72/2 = 36 (the first, unclipped, is
         // exactly 36 wide).
         let w = grads[0].placement.bounds.width();
-        assert!((w - 36.0).abs() < 0.5, "round rescales 32→36, tile width {w}");
+        assert!(
+            (w - 36.0).abs() < 0.5,
+            "round rescales 32→36, tile width {w}"
+        );
     }
 
     #[test]
@@ -3589,8 +4388,7 @@ mod tests {
     /// empty Vec the cache-less path produces.
     #[test]
     fn emit_with_layouts_extracts_positioned_glyphs() {
-        let document =
-            StaticDocument::parse("<html><body><p>Hello</p></body></html>");
+        let document = StaticDocument::parse("<html><body><p>Hello</p></body></html>");
         let styles = build_style_plane(&document);
         let viewport = Size {
             width: AvailableSpace::Definite(800.0),
@@ -3631,8 +4429,7 @@ mod tests {
     /// with the paint output, keyed to the run.
     #[test]
     fn emit_with_layouts_populates_font_table() {
-        let document =
-            StaticDocument::parse("<html><body><p>Hello</p></body></html>");
+        let document = StaticDocument::parse("<html><body><p>Hello</p></body></html>");
         let styles = build_style_plane(&document);
         let viewport = Size {
             width: AvailableSpace::Definite(800.0),
@@ -3653,15 +4450,17 @@ mod tests {
 
         // At least one font was collected, and it carries non-empty
         // bytes (a real system font blob).
-        assert!(!plist.fonts().is_empty(), "expected font side-table populated");
+        assert!(
+            !plist.fonts().is_empty(),
+            "expected font side-table populated"
+        );
         assert!(
             plist.fonts().iter().all(|f| !f.data.is_empty()),
             "every FontResource should carry font bytes"
         );
 
         // Every text run with glyphs references a key present in fonts().
-        let font_keys: std::collections::HashSet<_> =
-            plist.fonts().iter().map(|f| f.key).collect();
+        let font_keys: std::collections::HashSet<_> = plist.fonts().iter().map(|f| f.key).collect();
         for cmd in plist.commands() {
             if let PaintCmd::DrawText(t) = cmd {
                 if !t.glyphs.is_empty() {
@@ -3670,7 +4469,10 @@ mod tests {
                         "DrawText font_instance {:?} not in fonts() table",
                         t.font_instance
                     );
-                    assert!(t.font_size > 0.0, "shaped run should have positive font_size");
+                    assert!(
+                        t.font_size > 0.0,
+                        "shaped run should have positive font_size"
+                    );
                 }
             }
         }
@@ -3681,8 +4483,7 @@ mod tests {
     /// run layout or doesn't want to pay for glyph extraction).
     #[test]
     fn emit_without_layouts_produces_empty_glyph_runs() {
-        let document =
-            StaticDocument::parse("<html><body><p>Hello</p></body></html>");
+        let document = StaticDocument::parse("<html><body><p>Hello</p></body></html>");
         let styles = build_style_plane(&document);
         let viewport = Size {
             width: AvailableSpace::Definite(800.0),
@@ -3733,23 +4534,48 @@ mod tests {
             height: AvailableSpace::Definite(600.0),
         };
         let (fragments, built, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
-        let plist = emit_paint_list(&document, &styles, &fragments, &built, DeviceIntSize::new(800, 600));
+        let plist = emit_paint_list(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            DeviceIntSize::new(800, 600),
+        );
         let cmds = plist.commands();
 
-        let pushes = cmds.iter().filter(|c| matches!(c, PaintCmd::PushClip(_))).count();
-        let pops = cmds.iter().filter(|c| matches!(c, PaintCmd::PopClip)).count();
-        assert_eq!(pushes, pops, "PushClip / PopClip balanced: {pushes} vs {pops}");
+        let pushes = cmds
+            .iter()
+            .filter(|c| matches!(c, PaintCmd::PushClip(_)))
+            .count();
+        let pops = cmds
+            .iter()
+            .filter(|c| matches!(c, PaintCmd::PopClip))
+            .count();
+        assert_eq!(
+            pushes, pops,
+            "PushClip / PopClip balanced: {pushes} vs {pops}"
+        );
 
         // The scroller's clip is its 100×40 padding box (no border/padding).
         let clip = cmds
             .iter()
             .find_map(|c| match c {
-                PaintCmd::PushClip(ClipSpec { kind: ClipKind::Rect(r) }) => Some(*r),
+                PaintCmd::PushClip(ClipSpec {
+                    kind: ClipKind::Rect(r),
+                }) => Some(*r),
                 _ => None,
             })
             .expect("an overflow container emits a rect clip");
-        assert!((clip.width() - 100.0).abs() < 0.5, "clip width = box width, got {}", clip.width());
-        assert!((clip.height() - 40.0).abs() < 0.5, "clip height = box height, got {}", clip.height());
+        assert!(
+            (clip.width() - 100.0).abs() < 0.5,
+            "clip width = box width, got {}",
+            clip.width()
+        );
+        assert!(
+            (clip.height() - 40.0).abs() < 0.5,
+            "clip height = box height, got {}",
+            clip.height()
+        );
     }
 
     /// A scroll offset on an overflow container emits a `PushTransform` of
@@ -3785,7 +4611,10 @@ mod tests {
             let mut q = vec![document.document()];
             let mut found = None;
             while let Some(id) = q.pop() {
-                if document.element_name(id).is_some_and(|n| n.local == local_name!("div")) {
+                if document
+                    .element_name(id)
+                    .is_some_and(|n| n.local == local_name!("div"))
+                {
                     found = Some(id);
                     break;
                 }
@@ -3817,8 +4646,16 @@ mod tests {
             .expect("overflow container emits a clip");
         match &cmds[clip_idx + 1] {
             PaintCmd::PushTransform(t) => {
-                assert!(t.origin.x.abs() < 0.01, "scroll x origin 0, got {}", t.origin.x);
-                assert!((t.origin.y + 25.0).abs() < 0.01, "scroll y origin -25, got {}", t.origin.y);
+                assert!(
+                    t.origin.x.abs() < 0.01,
+                    "scroll x origin 0, got {}",
+                    t.origin.x
+                );
+                assert!(
+                    (t.origin.y + 25.0).abs() < 0.01,
+                    "scroll y origin -25, got {}",
+                    t.origin.y
+                );
             },
             other => panic!("expected scroll PushTransform after PushClip, got {other:?}"),
         }
@@ -3860,7 +4697,10 @@ mod tests {
             let mut q = vec![document.document()];
             let mut found = None;
             while let Some(id) = q.pop() {
-                if document.element_name(id).is_some_and(|n| n.local == local_name!("div")) {
+                if document
+                    .element_name(id)
+                    .is_some_and(|n| n.local == local_name!("div"))
+                {
                     found = Some(id);
                     break;
                 }
@@ -3895,7 +4735,9 @@ mod tests {
                             acc_y -= y;
                         }
                     },
-                    PaintCmd::DrawRect(r) if r.color.r > 0.9 && r.color.g < 0.1 && r.color.b < 0.1 => {
+                    PaintCmd::DrawRect(r)
+                        if r.color.r > 0.9 && r.color.g < 0.1 && r.color.b < 0.1 =>
+                    {
                         return acc_y + r.placement.bounds.min.y;
                     },
                     _ => {},
@@ -3942,7 +4784,13 @@ mod tests {
             height: AvailableSpace::Definite(600.0),
         };
         let (fragments, built, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
-        let plist = emit_paint_list(&document, &styles, &fragments, &built, DeviceIntSize::new(800, 600));
+        let plist = emit_paint_list(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            DeviceIntSize::new(800, 600),
+        );
         let cmds = plist.commands();
 
         let red = cmds.iter().position(|c| {
@@ -3966,8 +4814,8 @@ mod tests {
     /// 20px` must place its top-left at (20, 20), not (0, 0).
     #[test]
     fn background_origin_content_box_insets_tile() {
-        use base64::Engine as _;
         use crate::image_decode::{BackgroundImagePlane, NoImageLoader};
+        use base64::Engine as _;
 
         let img = image::RgbaImage::from_pixel(20, 20, image::Rgba([0, 0, 255, 255]));
         let mut png = Vec::new();
@@ -3983,7 +4831,13 @@ mod tests {
              background-size: 20px 20px; background-repeat: no-repeat; \
              background-origin: content-box; background-clip: content-box; }}"
         );
-        run_cascade(&document, &mut styles, euclid::Size2D::new(800.0, 600.0), &[sheet.as_str()], None);
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[sheet.as_str()],
+            None,
+        );
         let viewport = Size {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
@@ -3991,8 +4845,14 @@ mod tests {
         let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
         let bg = BackgroundImagePlane::decode_from_cascade(&document, &styles, &NoImageLoader);
         let plist = emit_paint_list_with_layouts(
-            &document, &styles, &fragments, &built, &text_ctx,
-            &ImagePlane::new(), &bg, &FxHashMap::default(),
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &bg,
+            &FxHashMap::default(),
             DeviceIntSize::new(800, 600),
         );
         let placement = plist.commands().iter().find_map(|c| match c {
@@ -4005,7 +4865,8 @@ mod tests {
         assert!(
             (r.min.x - 20.0).abs() < 0.5 && (r.min.y - 20.0).abs() < 0.5,
             "content-box tile must start at (20,20), got ({}, {})",
-            r.min.x, r.min.y,
+            r.min.x,
+            r.min.y,
         );
     }
 
@@ -4024,7 +4885,10 @@ mod tests {
                 &document,
                 &mut styles,
                 euclid::Size2D::new(800.0, 600.0),
-                &["html, body, p { display: block; margin: 0; }", p_rule.as_str()],
+                &[
+                    "html, body, p { display: block; margin: 0; }",
+                    p_rule.as_str(),
+                ],
                 None,
             );
             let viewport = Size {
@@ -4044,7 +4908,11 @@ mod tests {
                 &FxHashMap::default(),
                 DeviceIntSize::new(800, 600),
             );
-            plist.commands().iter().filter(|c| matches!(c, PaintCmd::DrawRect(_))).count()
+            plist
+                .commands()
+                .iter()
+                .filter(|c| matches!(c, PaintCmd::DrawRect(_)))
+                .count()
         };
 
         assert_eq!(
@@ -4062,17 +4930,14 @@ mod tests {
         use crate::cascade::run_cascade;
         use paint_list_api::items::BorderDetails;
 
-        let document =
-            StaticDocument::parse("<html><body><p>x</p></body></html>");
+        let document = StaticDocument::parse("<html><body><p>x</p></body></html>");
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
         run_cascade(
             &document,
             &mut styles,
             euclid::Size2D::new(800.0, 600.0),
-            &[
-                "p { display: block; width: 100px; height: 50px; \
-                    border: 4px solid rgb(0, 128, 255); }",
-            ],
+            &["p { display: block; width: 100px; height: 50px; \
+                    border: 4px solid rgb(0, 128, 255); }"],
             None,
         );
 
@@ -4130,9 +4995,11 @@ mod tests {
             &document,
             &mut styles,
             euclid::Size2D::new(800.0, 600.0),
-            &["div { display: block; width: 100px; height: 100px; margin: 0; \
+            &[
+                "div { display: block; width: 100px; height: 100px; margin: 0; \
                border: 4px solid black; border-radius: 20px; \
-               background-color: rgb(0, 128, 0); }"],
+               background-color: rgb(0, 128, 0); }",
+            ],
             None,
         );
         let viewport = Size {
@@ -4140,12 +5007,19 @@ mod tests {
             height: AvailableSpace::Definite(600.0),
         };
         let (fragments, built, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
-        let plist = emit_paint_list(&document, &styles, &fragments, &built, DeviceIntSize::new(800, 600));
+        let plist = emit_paint_list(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            DeviceIntSize::new(800, 600),
+        );
 
         let border_radius = plist.commands().iter().find_map(|c| match c {
-            PaintCmd::DrawBorder(BorderItem { details: BorderDetails::Normal(n), .. }) => {
-                Some(n.radius.top_left.width)
-            },
+            PaintCmd::DrawBorder(BorderItem {
+                details: BorderDetails::Normal(n),
+                ..
+            }) => Some(n.radius.top_left.width),
             _ => None,
         });
         assert!(
@@ -4154,9 +5028,9 @@ mod tests {
         );
 
         let clip_radius = plist.commands().iter().find_map(|c| match c {
-            PaintCmd::PushClip(ClipSpec { kind: ClipKind::RoundedRect { radius, .. } }) => {
-                Some(radius.top_left.width)
-            },
+            PaintCmd::PushClip(ClipSpec {
+                kind: ClipKind::RoundedRect { radius, .. },
+            }) => Some(radius.top_left.width),
             _ => None,
         });
         assert!(
@@ -4171,8 +5045,7 @@ mod tests {
     fn emit_omits_drawborder_when_no_border_declared() {
         use crate::cascade::run_cascade;
 
-        let document =
-            StaticDocument::parse("<html><body><p>x</p></body></html>");
+        let document = StaticDocument::parse("<html><body><p>x</p></body></html>");
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
         // No border in this sheet — only background.
         run_cascade(
@@ -4209,8 +5082,7 @@ mod tests {
     /// matched element carries the cascaded color.
     #[test]
     fn emit_color_comes_from_cascade_when_stylesheet_applies() {
-        let document =
-            StaticDocument::parse("<html><body><p>x</p></body></html>");
+        let document = StaticDocument::parse("<html><body><p>x</p></body></html>");
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
         run_cascade(
             &document,
@@ -4259,8 +5131,8 @@ mod tests {
     /// [`bg_tile_style_of`] + [`resolve_bg_tile`] run on the cascade path.
     #[test]
     fn background_size_percent_scales_emitted_tile() {
-        use base64::Engine as _;
         use crate::image_decode::{BackgroundImagePlane, NoImageLoader};
+        use base64::Engine as _;
 
         // 20×20 solid image, inline data-URI so decode_from_cascade
         // decodes it with the no-op loader (no filesystem).
@@ -4269,9 +5141,7 @@ mod tests {
         img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .expect("encode test PNG");
         let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
-        let html = format!(
-            "<html><body><div></div></body></html>"
-        );
+        let html = format!("<html><body><div></div></body></html>");
         let document = StaticDocument::parse(&html);
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
         let sheet = format!(
@@ -4279,14 +5149,24 @@ mod tests {
              background-image: url(data:image/png;base64,{b64}); \
              background-size: 50%; background-repeat: no-repeat; }}"
         );
-        run_cascade(&document, &mut styles, euclid::Size2D::new(800.0, 600.0), &[sheet.as_str()], None);
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[sheet.as_str()],
+            None,
+        );
         let viewport = Size {
             width: AvailableSpace::Definite(800.0),
             height: AvailableSpace::Definite(600.0),
         };
         let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
         let bg = BackgroundImagePlane::decode_from_cascade(&document, &styles, &NoImageLoader);
-        assert_eq!(bg.len(), 1, "the div's background-image must decode (else the emit branch never runs)");
+        assert_eq!(
+            bg.len(),
+            1,
+            "the div's background-image must decode (else the emit branch never runs)"
+        );
 
         let plist = emit_paint_list_with_layouts(
             &document,
@@ -4307,8 +5187,50 @@ mod tests {
         assert!(
             (tile.width - 50.0).abs() < 0.5 && (tile.height - 50.0).abs() < 0.5,
             "background-size: 50% of a 100px box must scale the 20px image to 50×50, got {}×{}",
-            tile.width, tile.height,
+            tile.width,
+            tile.height,
         );
+    }
+
+    #[test]
+    fn background_position_right_offsets_oversized_cover_tile() {
+        use crate::image_decode::{BackgroundImagePlane, NoImageLoader};
+
+        let uri = data_uri_png(16, 8);
+        let document = StaticDocument::parse("<html><body><div></div></body></html>");
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        let sheet = format!(
+            "html, body {{ margin: 0; padding: 0; }} \
+             div {{ display: block; width: 32px; height: 48px; margin: 0; \
+             background-image: url({uri}); background-size: cover; \
+             background-repeat: no-repeat; background-position: right top; }}"
+        );
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[sheet.as_str()],
+            None,
+        );
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let bg = BackgroundImagePlane::decode_from_cascade(&document, &styles, &NoImageLoader);
+        let plist = emit_paint_list_with_layouts(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &bg,
+            &FxHashMap::default(),
+            DeviceIntSize::new(800, 600),
+        );
+
+        assert_rect(image_bounds(plist.commands()), -64.0, 0.0, 32.0, 48.0);
     }
 
     #[test]
@@ -4316,9 +5238,7 @@ mod tests {
         // Sanity-check that children paint after parents (so they
         // appear later in the command list), matching pre-order DOM
         // traversal.
-        let document = StaticDocument::parse(
-            "<html><body><p>a</p><p>b</p></body></html>",
-        );
+        let document = StaticDocument::parse("<html><body><p>a</p><p>b</p></body></html>");
         let styles = build_style_plane(&document);
         let (fragments, built, _) = layout(
             &document,
@@ -4340,14 +5260,14 @@ mod tests {
         // The first command must be PushTransform (compositor model:
         // each fragment opens a new coord space before painting itself).
         match plist.commands().first() {
-            Some(PaintCmd::PushTransform(_)) => {}
+            Some(PaintCmd::PushTransform(_)) => {},
             other => panic!("expected leading PushTransform, got {other:?}"),
         }
 
         // The command right after the leading PushTransform must be a
         // DrawRect — the html element painting itself in local coords.
         match plist.commands().get(1) {
-            Some(PaintCmd::DrawRect(_)) => {}
+            Some(PaintCmd::DrawRect(_)) => {},
             other => panic!("expected DrawRect after leading PushTransform, got {other:?}"),
         }
 
@@ -4357,7 +5277,7 @@ mod tests {
             match cmd {
                 PaintCmd::PushTransform(_) => depth += 1,
                 PaintCmd::PopTransform => depth -= 1,
-                _ => {}
+                _ => {},
             }
             assert!(depth >= 0, "transform stack underflowed at command {cmd:?}");
         }
@@ -4385,12 +5305,19 @@ mod tests {
         fn push_transforms(sheet: &[&str]) -> Vec<LayoutTransform> {
             let document = StaticDocument::parse("<html><body><div></div></body></html>");
             let mut plane: StylePlane<StaticNodeId> = StylePlane::new();
-            run_cascade(&document, &mut plane, euclid::Size2D::new(800.0, 600.0), sheet, None);
+            run_cascade(
+                &document,
+                &mut plane,
+                euclid::Size2D::new(800.0, 600.0),
+                sheet,
+                None,
+            );
             let viewport = Size {
                 width: AvailableSpace::Definite(800.0),
                 height: AvailableSpace::Definite(600.0),
             };
-            let (fragments, built, text_ctx) = layout(&document, &plane, &ImagePlane::new(), viewport);
+            let (fragments, built, text_ctx) =
+                layout(&document, &plane, &ImagePlane::new(), viewport);
             let plist = emit_paint_list_with_layouts(
                 &document,
                 &plane,
@@ -4418,16 +5345,18 @@ mod tests {
             "div{transform:translate(40px,40px)}",
         ]);
         assert!(
-            with.iter().any(|t| (t.m41 - 40.0).abs() < 0.5 && (t.m42 - 40.0).abs() < 0.5),
+            with.iter()
+                .any(|t| (t.m41 - 40.0).abs() < 0.5 && (t.m42 - 40.0).abs() < 0.5),
             "transform:translate(40,40) must fold into a PushTransform (m41/m42 ≈ 40): {with:?}",
         );
 
         // Without a transform, no push translates (box position lives in `origin`,
         // not the CSS-transform matrix).
-        let without =
-            push_transforms(&["html,body,div{display:block;width:80px;height:40px}"]);
+        let without = push_transforms(&["html,body,div{display:block;width:80px;height:40px}"]);
         assert!(
-            without.iter().all(|t| t.m41.abs() < 0.5 && t.m42.abs() < 0.5),
+            without
+                .iter()
+                .all(|t| t.m41.abs() < 0.5 && t.m42.abs() < 0.5),
             "no CSS transform → no translating push: {without:?}",
         );
     }
@@ -4446,7 +5375,15 @@ mod tests {
             0.0, 0.0, 0.0, 1.0,
         );
         let c = conjugate_at((10.0, 0.0), scale2);
-        assert!((c.m11 - 2.0).abs() < 1e-4, "scale preserved: m11 {} != 2", c.m11);
-        assert!((c.m41 + 10.0).abs() < 1e-4, "scale around x=10 → m41 = −10, got {}", c.m41);
+        assert!(
+            (c.m11 - 2.0).abs() < 1e-4,
+            "scale preserved: m11 {} != 2",
+            c.m11
+        );
+        assert!(
+            (c.m41 + 10.0).abs() < 1e-4,
+            "scale around x=10 → m41 = −10, got {}",
+            c.m41
+        );
     }
 }

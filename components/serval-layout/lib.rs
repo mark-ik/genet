@@ -25,6 +25,7 @@
 //!
 //! `render` and `paint_list_from_layout_dom` are the convenience entry points.
 
+mod a11y;
 mod adapter;
 mod adapter_stylo;
 mod box_tree;
@@ -52,45 +53,46 @@ mod text_measure;
 mod ua_defaults;
 mod viewport;
 
+pub use a11y::accesskit_tree;
 pub use adapter::NodeRef;
 pub use adapter_stylo::StyleNodeRef;
-pub use box_tree::{build_box_tree, layout_via_box_tree, BoxTree};
+pub use box_tree::{BoxTree, build_box_tree, layout_via_box_tree};
 pub use caret::{
-    caret_byte_at_point, caret_byte_vertical, caret_color, caret_rect, find_text_rects, range_rects,
-    selection_rects, selection_style, CaretRect, TextRange,
+    CaretRect, TextRange, caret_byte_at_point, caret_byte_vertical, caret_color, caret_rect,
+    find_text_rects, range_rects, selection_rects, selection_style,
 };
 pub use cascade::{
-    apply_interaction, restyle_for_interaction, restyle_structural, restyle_with_snapshots,
-    run_cascade, RestyleOutcome,
+    RestyleOutcome, apply_interaction, restyle_for_interaction, restyle_structural,
+    restyle_with_snapshots, run_cascade,
 };
 pub use cell::ArcRefCell;
 pub use fragment::FragmentPlane;
 pub use host_loader::{
-    inline_stylesheets, inline_stylesheets_from_source, linked_icon_href, linked_stylesheets,
-    linked_stylesheets_with_loader, LocalFileImageLoader, ResourceResolver,
+    LocalFileImageLoader, ResourceResolver, inline_stylesheets, inline_stylesheets_from_source,
+    linked_icon_href, linked_stylesheets, linked_stylesheets_with_loader,
+};
+pub use image_decode::{
+    BackgroundImagePlane, DecodedImage, ImageLoader, ImagePlane, NoImageLoader, decode_image_bytes,
 };
 pub use incremental::{Applied, IncrementalLayout};
-pub use image_decode::{
-    decode_image_bytes, BackgroundImagePlane, DecodedImage, ImageLoader, ImagePlane, NoImageLoader,
-};
-pub use invalidate::{classify, coalesce, Invalidation};
+pub use invalidate::{Invalidation, classify, coalesce};
 pub use layout::layout;
 pub use paint_emit::{
-    emit_paint_list, emit_paint_list_scrolled, emit_paint_list_with_layouts, push_scrollbars,
-    ScrollOffsets, ServalPaintList, SCROLLBAR_COLOR, SCROLLBAR_WIDTH,
+    SCROLLBAR_COLOR, SCROLLBAR_WIDTH, ScrollOffsets, ServalPaintList, emit_paint_list,
+    emit_paint_list_scrolled, emit_paint_list_with_layouts, push_scrollbars,
 };
-pub use viewport::{document_scroll_range, ScrollKey, Viewport};
 pub use serval_lane::{
-    absolute_origin, accumulate_origins, accumulate_painted_origins, accumulated_translate,
-    ServalLaneView,
+    ServalLaneView, absolute_origin, accumulate_origins, accumulate_painted_origins,
+    accumulated_translate,
 };
 pub use snapshot::build_snapshot_map;
 pub use style::{StyleEntry, StylePlane};
-pub use subtree::{render_subtree, SubtreeView};
+pub use subtree::{SubtreeView, render_subtree};
 pub use text_measure::{
-    measure_inline_content, FontFamilySpec, GenericFamilyKind, InlineContent, InlineRun,
-    TextMeasureCtx,
+    FontFamilySpec, GenericFamilyKind, InlineContent, InlineRun, TextMeasureCtx,
+    measure_inline_content,
 };
+pub use viewport::{ScrollKey, Viewport, document_scroll_range};
 
 use layout_dom_api::LayoutDom;
 use std::hash::Hash;
@@ -269,7 +271,16 @@ where
             "lay_out_content complete",
         );
     }
-    ContentLayout { styles, images, bg_images, fragments, built, text_ctx, width, height }
+    ContentLayout {
+        styles,
+        images,
+        bg_images,
+        fragments,
+        built,
+        text_ctx,
+        width,
+        height,
+    }
 }
 
 impl<Id: Copy + Eq + Hash + Send + Sync + 'static> ContentLayout<Id> {
@@ -293,8 +304,12 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> ContentLayout<Id> {
             &self.fragments,
             paint_list_api::DeviceIntSize::new(self.width as i32, self.height as i32),
         );
-        let links =
-            crate::link_harvest::harvest_link_rects(dom, &self.fragments, &self.built, &self.text_ctx);
+        let links = crate::link_harvest::harvest_link_rects(
+            dom,
+            &self.fragments,
+            &self.built,
+            &self.text_ctx,
+        );
         let plist = emit_paint_list_scrolled(
             dom,
             &self.styles,
@@ -361,8 +376,12 @@ where
     // Thin wrapper: build the retained layout, emit one band. One-shot callers keep
     // working; the content host uses the split ([`lay_out_content`] + [`ContentLayout::emit_band`])
     // directly so it cascades once and re-emits bands without re-cascading.
-    lay_out_content(dom, stylesheets, loader, width, height)
-        .emit_band(dom, band_y, band_h, scroll_offsets)
+    lay_out_content(dom, stylesheets, loader, width, height).emit_band(
+        dom,
+        band_y,
+        band_h,
+        scroll_offsets,
+    )
 }
 
 /// Find-in-page over a whole `LayoutDom`: cascade + decode + lay out at `(width,

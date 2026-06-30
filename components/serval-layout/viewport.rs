@@ -81,8 +81,16 @@ impl Viewport {
     /// static viewer) routes its wheel / key default action through, so there is no
     /// second hand-rolled copy (scope doc rule 5).
     pub fn clamp_scroll(&self, desired: (f32, f32), range: (f32, f32)) -> (f32, f32) {
-        let x = if self.scrolls_x() { desired.0.clamp(0.0, range.0) } else { 0.0 };
-        let y = if self.scrolls_y() { desired.1.clamp(0.0, range.1) } else { 0.0 };
+        let x = if self.scrolls_x() {
+            desired.0.clamp(0.0, range.0)
+        } else {
+            0.0
+        };
+        let y = if self.scrolls_y() {
+            desired.1.clamp(0.0, range.1)
+        } else {
+            0.0
+        };
         (x, y)
     }
 }
@@ -151,7 +159,9 @@ where
     }
     let body = dom.dom_children(root).find(|&c| {
         dom.kind(c) == NodeKind::Element
-            && dom.element_name(c).is_some_and(|q| q.local == local_name!("body"))
+            && dom
+                .element_name(c)
+                .is_some_and(|q| q.local == local_name!("body"))
     });
     if let Some(body_cv) = body.and_then(|b| primary_cv(styles, b)) {
         if generates_box(&body_cv) {
@@ -186,8 +196,18 @@ where
     D::NodeId: Copy + Eq + Hash,
 {
     let mut extent = (0.0f32, 0.0f32);
-    extend_scrollable(dom, styles, fragments, dom.document(), (0.0, 0.0), &mut extent);
-    ((extent.0 - size.width as f32).max(0.0), (extent.1 - size.height as f32).max(0.0))
+    extend_scrollable(
+        dom,
+        styles,
+        fragments,
+        dom.document(),
+        (0.0, 0.0),
+        &mut extent,
+    );
+    (
+        (extent.0 - size.width as f32).max(0.0),
+        (extent.1 - size.height as f32).max(0.0),
+    )
 }
 
 /// Accumulate the far (right, bottom) edge of `id`'s fragment and its scrollable
@@ -269,7 +289,11 @@ mod tests {
     fn plain_document_viewport_is_visible_and_scrollable() {
         let overflow = propagated(BLOCK);
         assert_eq!(overflow, (Overflow::Visible, Overflow::Visible));
-        let vp = Viewport { size: DeviceIntSize::new(800, 600), scroll: (0.0, 0.0), overflow };
+        let vp = Viewport {
+            size: DeviceIntSize::new(800, 600),
+            scroll: (0.0, 0.0),
+            overflow,
+        };
         assert!(vp.scrolls_x() && vp.scrolls_y(), "a plain page scrolls");
     }
 
@@ -279,8 +303,15 @@ mod tests {
     fn root_overflow_hidden_disables_viewport_scroll() {
         let overflow = propagated(&format!("{BLOCK} html {{ overflow: hidden; }}"));
         assert_eq!(overflow.1, Overflow::Hidden);
-        let vp = Viewport { size: DeviceIntSize::new(800, 600), scroll: (0.0, 0.0), overflow };
-        assert!(!vp.scrolls_y(), "overflow:hidden on the root stops the document scrolling");
+        let vp = Viewport {
+            size: DeviceIntSize::new(800, 600),
+            scroll: (0.0, 0.0),
+            overflow,
+        };
+        assert!(
+            !vp.scrolls_y(),
+            "overflow:hidden on the root stops the document scrolling"
+        );
     }
 
     /// When the root is `visible`, the body's overflow propagates instead — the
@@ -289,7 +320,11 @@ mod tests {
     #[test]
     fn body_overflow_propagates_when_root_is_visible() {
         let overflow = propagated(&format!("{BLOCK} body {{ overflow: scroll; }}"));
-        assert_eq!(overflow.1, Overflow::Scroll, "root visible → the body's overflow is the viewport's");
+        assert_eq!(
+            overflow.1,
+            Overflow::Scroll,
+            "root visible → the body's overflow is the viewport's"
+        );
     }
 
     /// A non-`visible` root keeps its own overflow; the body is not consulted.
@@ -313,13 +348,24 @@ mod tests {
 
         let document = StaticDocument::parse(html);
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
-        run_cascade(&document, &mut styles, euclid::default::Size2D::new(w, h), &[sheet], None);
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::default::Size2D::new(w, h),
+            &[sheet],
+            None,
+        );
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(w),
             height: taffy::AvailableSpace::Definite(h),
         };
         let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
-        document_scroll_range(&document, &styles, &fragments, DeviceIntSize::new(w as i32, h as i32))
+        document_scroll_range(
+            &document,
+            &styles,
+            &fragments,
+            DeviceIntSize::new(w as i32, h as i32),
+        )
     }
 
     /// The scroll range is the content overflow beyond the viewport (rule 4):
@@ -354,7 +400,11 @@ mod tests {
             800.0,
             600.0,
         );
-        assert_eq!(range, (0.0, 0.0), "a fixed box does not extend the document scroll range");
+        assert_eq!(
+            range,
+            (0.0, 0.0),
+            "a fixed box does not extend the document scroll range"
+        );
     }
 
     /// An overflow-clip container bounds the scroll range to its own box: a 40px
@@ -370,7 +420,10 @@ mod tests {
             800.0,
             600.0,
         );
-        assert_eq!(range.1, 0.0, "the clipped 2000px child does not extend the scroll range");
+        assert_eq!(
+            range.1, 0.0,
+            "the clipped 2000px child does not extend the scroll range"
+        );
     }
 
     /// `clamp_scroll` pins non-scrollable axes at 0 and clamps scrollable axes to
@@ -392,7 +445,10 @@ mod tests {
             (0.0, 0.0),
             "no negative scroll",
         );
-        let hidden = Viewport { overflow: (Overflow::Hidden, Overflow::Hidden), ..scrollable };
+        let hidden = Viewport {
+            overflow: (Overflow::Hidden, Overflow::Hidden),
+            ..scrollable
+        };
         assert_eq!(
             hidden.clamp_scroll((50.0, 500.0), (1000.0, 1400.0)),
             (0.0, 0.0),
