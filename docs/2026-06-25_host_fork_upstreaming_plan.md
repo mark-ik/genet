@@ -1,7 +1,8 @@
 # Upstreaming host (mere/meerkat) forks into serval
 
 **Date**: 2026-06-25
-**Status**: P1 (keystone) executing 2026-06-25. P2-P5 open.
+**Status**: P1-P5 landed 2026-06-26; deferred follow-ups closed 2026-06-26. Rechecked
+2026-06-30 against live code/tests.
 **Source**: a 4-agent "host-fork-outpaces-engine" sweep over mere ↔ serval (the inverse of the mere
 capability-misuse sweep). The mere host is serval's de-facto integration test: where it forked a serval
 capability, it found a private/missing primitive or a correctness gap and fixed it in place. Upstreaming
@@ -126,3 +127,7 @@ only the orrery-specific host path does). So the host is not ahead on hit-testin
     a per-frame scroll-to-keep-visible today, so the meerkat adoption is a *future* focus-scrolls-into-view
     feature, not a present dedup. Left as such.
   - All green: 209 serval-layout, 26 serval-render, 87 + 160 meerkat.
+- 2026-06-30: **P2-P5 rechecked against live code.** The public origin maps, caret/focus glue,
+  `clickable`, `LayoutDom` defaults, `overlay_rect`, and `anchor_point_clamped` are present and covered
+  by focused tests. Meerkat still keeps thin compatibility wrappers for call-site shape, but the tree
+  walks and geometry logic now delegate to Serval-owned primitives.

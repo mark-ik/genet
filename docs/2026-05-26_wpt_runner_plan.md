@@ -1,9 +1,13 @@
 # serval-native WPT runner
 
-Status: **in progress (2026-05-28).** Phase 1 (crash-smoke), phase 2
+Status: **superseded/in progress.** Original status was 2026-05-28. Phase 1 (crash-smoke), phase 2
 (reftest pixel compare, with linked-resource loading + fuzzy + ref
 chains), and phase 3 (testharness.js results, Boa) all built. Phase 4
-(expectations) scoped below.
+(expectations) scoped below. Updated 2026-06-30: discovery is now
+MANIFEST.json-backed by default, and checked Boa expectation baselines for
+full `dom`, focused `dom/abort`, focused `dom/nodes`, and
+`html/webappapis/timers` are enforced by a local/CI guard; see
+`2026-06-24_wpt_harness_exactness_plan.md`.
 
 ## Goal
 
@@ -39,7 +43,11 @@ beneath it; the runner walks only that path.
   scripting tier + a results hookup. **Phase 3.**
 - **manual** / **wdspec**: skipped.
 
-## Discovery (convention-based, no MANIFEST.json yet)
+## Discovery (historical: convention-based; superseded by MANIFEST.json)
+
+Updated 2026-06-29: normal runner commands now discover from
+`tests/wpt/meta/MANIFEST.json`; the convention-based walk below remains only as
+the `--walk-discovery` diagnostic fallback.
 
 Servo's `wptrunner` consumed a generated `MANIFEST.json`; that generator
 was python and is gone. Phase 1 classifies by convention instead:
@@ -233,7 +241,9 @@ A real `MANIFEST.json` reader can replace this later for exactness
    `cloneNode`, `DOMParser`, URL reflected kind, per-tag HTML interfaces.
 4. **Expectations.** A checked-in expected-results file so known
    failures are tolerated and regressions surface (the WPT metadata
-   model, serval-shaped).
+   model, serval-shaped). First slice landed 2026-06-29:
+   `ports/serval-wpt/expectations/testharness/dom_abort_boa.json`
+   checked by `support/wpt/check-testharness-baselines.ps1`.
 
 ## Non-goals (for now)
 
