@@ -50,7 +50,8 @@ Updated 2026-06-29: normal runner commands now discover from
 the `--walk-discovery` diagnostic fallback.
 
 Servo's `wptrunner` consumed a generated `MANIFEST.json`; that generator
-was python and is gone. Phase 1 classifies by convention instead:
+was python and is gone. The old phase-1 classifier remains here only as
+historical context and as the behavior behind `--walk-discovery`:
 
 - Skip references (`*-ref.*`, `ref-*`, `*.ref.*`, files under
   `.../reference/`) and `*-manual.*`.
@@ -59,8 +60,8 @@ was python and is gone. Phase 1 classifies by convention instead:
 - **testharness**: references `testharness.js`.
 - else: treated as a load test (run through the crash-smoke).
 
-A real `MANIFEST.json` reader can replace this later for exactness
-(ref chains, test variants, timeouts).
+A real `MANIFEST.json` reader has replaced this for normal commands, including
+ref chains, generated variants, and timeout metadata.
 
 ## Phases
 
@@ -102,9 +103,10 @@ A real `MANIFEST.json` reader can replace this later for exactness
    report hook), loads `testharness.js` on a fresh `Runtime`, runs the
    scripts, drives completion (dispatch `load` + drain the loop), and reads
    results via the bridge (`Runtime::run_testharness`, `script-runtime-api`).
-   Engine: **Boa** (Nova's regex engine rejects the harness's surrogate
-   sanitizer — see the
-   [pluggable-engines plan](./2026-05-26_pluggable_engines_testharness_plan.md)).
+   Engine: **Boa** by default, with Nova selectable. Nova now has a
+   post-testharness snapshot template for faster per-test startup on stable
+   slices; the broad release-mode `dom` lane still stack-overflows before a
+   final aggregate, so Boa remains the checked baseline/oracle.
    Reports per test (all-pass / with-failures / errored / no-results) and
    an aggregate subtest count. First run on `dom/nodes` (331 files):
    1 all-pass, 219 with-failures, 58 errored, 7 no-results, 46 skipped;
@@ -239,22 +241,27 @@ A real `MANIFEST.json` reader can replace this later for exactness
    **Still deferred:** `CharacterData`/`Comment` methods, `Node` identity
    (`isEqualNode`/`compareDocumentPosition`), `DocumentFragment`,
    `cloneNode`, `DOMParser`, URL reflected kind, per-tag HTML interfaces.
-4. **Expectations.** A checked-in expected-results file so known
+4. **Expectations.** Checked-in expected-results files so known
    failures are tolerated and regressions surface (the WPT metadata
-   model, serval-shaped). First slice landed 2026-06-29:
-   `ports/serval-wpt/expectations/testharness/dom_abort_boa.json`
-   checked by `support/wpt/check-testharness-baselines.ps1`.
+   model, serval-shaped). The default disk-mode guard now checks release-mode
+   Boa baselines for full `dom`, focused `dom/abort`, focused `dom/nodes`,
+   and `html/webappapis/timers` through
+   `support/wpt/check-testharness-baselines.ps1`, and CI runs the same lane.
+   A separate local server-mode/netfetch guard checks
+   `fetch/api/basic` with `--spawn-server` through
+   `support/wpt/check-testharness-fetch-baselines.ps1`.
 
 ## Non-goals (for now)
 
-- The full WPT server (`wpt serve`) and its routing. Phase 1/2 load files
-  directly; tests needing the server (cross-origin, dynamic handlers) are
-  out until a minimal host exists.
+- Making the full WPT server (`wpt serve`) the default execution mode. Phase
+  1/2 still load files directly; a focused server-mode fetch lane exists for
+  `fetch/api/basic`, but cross-origin, dynamic-handler, iframe, websocket, and
+  h3 coverage remain outside the default guard.
 - Parallelism, sharding, retries. Add when the corpus size warrants.
 
 ## Crate
 
 `ports/serval-wpt` (bin). Phase 1 deps: `serval-static-dom`,
-`serval-layout`, `layout_dom_api`. Directory walking is hand-rolled
-(`std::fs`) to avoid a new dependency. Phase 2 adds the paint/netrender
-deps.
+`serval-layout`, `layout_dom_api`. Normal discovery consumes
+`tests/wpt/meta/MANIFEST.json`; the hand-rolled `std::fs` walk remains as the
+`--walk-discovery` diagnostic fallback. Phase 2 adds the paint/netrender deps.
