@@ -1,7 +1,7 @@
 # Event-loop rigor plan (granularity + spec fidelity + optional trace validation)
 
 **Date:** 2026-06-24
-**Status:** plan. Spun out of the gterzian/formal-web harvest (`2026-06-24_formal_web_lessons.md`, ideas 3/4/7 + the two bug-rules) and the grand audit §6 ("the gaps are granularity, not architecture").
+**Status:** E1 landed 2026-06-30. E2 landed + verified 2026-06-30. E3 event-loop/task-source surface landed 2026-06-30. E4 trace capture landed 2026-06-30; TLA+ spec pair + TLC CI still open. Spun out of the gterzian/formal-web harvest (`2026-06-24_formal_web_lessons.md`, ideas 3/4/7 + the two bug-rules) and the grand audit §6 ("the gaps are granularity, not architecture").
 **Thesis:** serval models the WHATWG event loop on engine-neutral primitives (microtask checkpoint, timer task source over a virtual clock, capture/target/bubble dispatch), tested on both Boa and Nova. The shape is right; what is missing is **granularity** (coarse microtask checkpoints, atomic tasks at risk of decomposition) and **rigor** (no mechanical spec-diff, no model check). This plan tightens the granularity, encodes the two bug-rules Terzian fixed in Servo, adopts the spec-annotation discipline, and offers model-checked trace validation as a deferred capability. Cheapest correctness wins first; the heavy rigor last.
 
 ## Phases (done-conditions, not dates)
@@ -28,6 +28,13 @@ Adopt formal-web's `AGENTS.md` discipline, beginning with the event-loop + task-
 Architecture-agnostic and *easier* for serval than formal-web (single-process: one in-process channel + one counter clock, no cross-process monitor or channel-closure quiescence dance). Tap the five named task boundaries (`lib.rs:266` `run_event_loop`, `:309` `run_timers`, `dispatch_event`, `eval`, `pump_microtasks`) to emit an NDJSON event log; write one base + trace TLA+ spec pair for one protocol (the event loop, or Navigation / MessagePort, mirroring formal-web); generate the `*TraceData.tla` constant module from the log and run TLC in CI (the Cirstea/Kuppe method, arXiv 2404.16075). Use the FG model (per-task `running` flags + the lockstep-counter invariant) so it can catch the E2-class bugs automatically.
 - **Done when** a recorded run is model-checked to refine the spec for one protocol, and a deliberately-wrong scheduling change (e.g. splitting the rendering task) fails the check in CI.
 
+## E3 annotation convention
+
+- Spec-mapped code uses `// Step N:` with short verbatim spec text for the step the next line realizes.
+- Serval embedding decisions use ordinary comments without `Step`; keep host policy separate from spec text.
+- `// Note:` is reserved for real code/spec discrepancies, not implementation explanations.
+- Public Rust API docs may keep their host-facing prose; private spec helper docs carry only the spec anchor URL.
+
 ## Sequencing
 
 E1 -> E2 -> E3 -> E4. E1 is a small correctness fix that ships immediately. E2 hardens the realization against the known bug classes (and is mostly verification + targeted fixes). E3 is free discipline that makes E4 tractable. E4 is the months-shaped capability; gate it on the LLM-assisted-spec workflow being worth standing up (Terzian's argument that LLMs collapse the expensive parts is the affordability case at solo pace). Do E4 for one protocol, not the engine.
@@ -38,4 +45,8 @@ E1 -> E2 -> E3 -> E4. E1 is a small correctness fix that ships immediately. E2 h
 
 ## Progress
 
-- 2026-06-24 — Plan created from the formal-web harvest. No code yet. E1 (per-task microtask checkpoint) is the entry point and the cheapest correctness win.
+- 2026-06-24 — Plan created from the formal-web harvest. E1 (per-task microtask checkpoint) is the entry point and the cheapest correctness win.
+- 2026-06-30 — **E1 landed.** `Runtime::run_event_loop` and `Runtime::run_timers` now drive timers one task at a time and run a microtask checkpoint after each fired task. `__runTimers` also stops before selecting another task when deferred fetch work is already pending, preserving the host drive-loop break. Added a deterministic cross-backend guard: a Promise reaction queued by timer N must log before timer N+1. Verified with `cargo test -p script-runtime-api per_timer_microtask_checkpoint_on_boa`, `cargo test -p script-runtime-api per_timer_microtask_checkpoint_on_nova`, and `cargo test -p script-runtime-api event_loop_on_`.
+- 2026-06-30 — **E2 landed + verified.** The named actor path keeps the spec-task boundary at one `ContentCommand`: `run_content` executes each command's ordered substeps inside one delivered message, while `Constellation::drain` snapshots members but drains/applies updates per live owner. Added `teardown_before_batch_drain_does_not_strand_sibling_update` and documented the per-owner harvest invariant in `crates/meerkat/src/constellation/drain.rs`. Verified with `cargo test -p meerkat teardown_before_batch_drain_does_not_strand_sibling_update`.
+- 2026-06-30 — **E3 event-loop/task-source surface landed.** `components/script-runtime-api/lib.rs` now names the microtask checkpoint as a private spec helper, maps `run_event_loop` / `run_timers` task execution and checkpoint boundaries to HTML processing-model step comments, marks the JS timer queue as the local timers task source, routes every runtime checkpoint through the named helper, and labels fetch-settlement host completions as fetch task-source tasks. This is the annotation pattern for the rest of `components/script-*`; it does not yet annotate every DOM/fetch sub-algorithm body.
+- 2026-06-30 — **E4 trace capture landed.** `Runtime` now records deterministic scheduler events for the named boundaries (`eval`, `dispatch_event`, `run_event_loop`, `run_timers`, `pump_microtasks`) plus performed timer tasks, and exports them as NDJSON through `scheduler_trace_ndjson()`. Added cross-backend guards `scheduler_trace_ndjson_on_boa` / `scheduler_trace_ndjson_on_nova`. The remaining E4 work is the TLA+ base spec, generated `TraceData.tla`, and CI/TLC wiring; no local TLC runner was found in this checkout.

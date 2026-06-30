@@ -60,14 +60,24 @@
   // name in the per-tag table get a more specific prototype (HTMLCanvasElement
   // for CANVAS, etc.) — the rest fall back to HTMLElement. The tag lookup is one
   // native call per element wrap.
+  var XHTML_NS = "http://www.w3.org/1999/xhtml";
+
   function wrapNode(ref) {
     if (ref === undefined || ref === null) return null;
     if (wrappers.has(ref)) return wrappers.get(ref);
     var nt = +__nodeType(ref);
     var proto;
+    var customDef = null;
     if (nt === 1) {
-      var tag = __tagName(ref);
-      proto = (tag && elementSubclassProto[tag]) || HTMLElement.prototype;
+      if (__namespaceURI(ref) === XHTML_NS) {
+        var tag = __tagName(ref);
+        customDef = customElementDefinitionForRef(ref, tag);
+        proto = (customDef && customDef.ctor.prototype) ||
+                (tag && elementSubclassProto[tag]) ||
+                (globalThis.HTMLElement ? globalThis.HTMLElement.prototype : Element.prototype);
+      } else {
+        proto = Element.prototype;
+      }
     } else {
       proto = nt === 9 ? Document.prototype
             : nt === 3 ? Text.prototype
@@ -79,12 +89,20 @@
     node.__ref = ref;
     node.nodeType = nt;
     wrappers.set(ref, node);
+    if (customDef) upgradeCustomElement(node, customDef);
     return node;
   }
 
   // Per-tag prototype table populated below as HTML* subclasses come online.
   // Each entry's key is the uppercased tag name `__tagName` returns.
   var elementSubclassProto = {};
+  var htmlInterfaceConstructors = {};
+  var customElementDefinitions = Object.create(null);
+  var autonomousCustomElementDefinitions = Object.create(null);
+  var customizedBuiltInDefinitions = Object.create(null);
+  var upgradedCustomElements = new WeakMap();
+  var connectedCustomElements = new WeakMap();
+  var htmlElementConstructionStack = [];
 
   // Node: the base every node shares (tree + events + textContent). Methods live
   // on the prototype (shared, instanceof-able), not per-object. `this.__ref` is
@@ -103,7 +121,9 @@
   }
   Node.prototype.appendChild = function(child) {
     ensureInsertable(this, child);
-    __appendChild(this.__ref, child.__ref); return child;
+    __appendChild(this.__ref, child.__ref);
+    connectCustomElementTree(child);
+    return child;
   };
   Object.defineProperty(Node.prototype, 'textContent', {
     configurable: true,
@@ -260,6 +280,7 @@
       throw new DOMException("The reference node is not a child of this node.", "NotFoundError");
     }
     __insertBefore(this.__ref, node.__ref, ref ? ref.__ref : undefined);
+    connectCustomElementTree(node);
     return node;
   };
   Node.prototype.replaceChild = function(newChild, oldChild) {
@@ -776,6 +797,111 @@
     for (var i = 0; i < arguments.length; i++) { p.insertBefore(toNode(arguments[i]), ref); }
   };
 
+  function customElementKey(tag, isValue) {
+    return String(tag).toUpperCase() + '\n' + String(isValue);
+  }
+
+  function setElementPrototype(el, proto) {
+    if (Object.setPrototypeOf) Object.setPrototypeOf(el, proto);
+    else el.__proto__ = proto;
+  }
+
+  function isClassConstructor(ctor) {
+    try { return /^class\b/.test(Function.prototype.toString.call(ctor)); }
+    catch (_) { return false; }
+  }
+
+  function customElementDefinitionForRef(ref, tag) {
+    var isValue = __getAttribute(ref, 'is');
+    if (isValue !== null) {
+      return customizedBuiltInDefinitions[customElementKey(tag, isValue)] || null;
+    }
+    return autonomousCustomElementDefinitions[String(tag).toUpperCase()] || null;
+  }
+
+  function customElementDefinitionForElement(el) {
+    if (!el || el.nodeType !== 1 || el.namespaceURI !== XHTML_NS) return null;
+    var isValue = el.getAttribute('is');
+    if (isValue !== null) {
+      return customizedBuiltInDefinitions[customElementKey(el.tagName, isValue)] || null;
+    }
+    return autonomousCustomElementDefinitions[el.tagName] || null;
+  }
+
+  function constructCustomElementWithStack(el, def) {
+    htmlElementConstructionStack.push(el);
+    try {
+      Reflect.construct(def.ctor, [], def.ctor);
+    } finally {
+      if (htmlElementConstructionStack[htmlElementConstructionStack.length - 1] === el) {
+        htmlElementConstructionStack.pop();
+      }
+    }
+  }
+
+  function constructCustomElement(el, def) {
+    if (isClassConstructor(def.ctor)) {
+      constructCustomElementWithStack(el, def);
+    } else {
+      try {
+        def.ctor.call(el);
+      } catch (err) {
+        var msg = String((err && err.message) || err).toLowerCase();
+        if (typeof Reflect === 'object' && Reflect.construct && msg.indexOf('class constructor') !== -1) {
+          constructCustomElementWithStack(el, def);
+          return;
+        }
+        throw err;
+      }
+    }
+  }
+
+  function connectCustomElement(el) {
+    var def = upgradedCustomElements.get(el);
+    if (!def || !el.isConnected || connectedCustomElements.get(el)) return;
+    connectedCustomElements.set(el, true);
+    if (typeof el.connectedCallback === 'function') {
+      el.connectedCallback();
+    }
+  }
+
+  function upgradeCustomElement(el, def) {
+    if (!el || upgradedCustomElements.get(el) === def) return el;
+    setElementPrototype(el, def.ctor.prototype);
+    upgradedCustomElements.set(el, def);
+    constructCustomElement(el, def);
+    connectCustomElement(el);
+    return el;
+  }
+
+  function upgradeCustomElementTree(root) {
+    if (!root) return;
+    if (root.nodeType === 1) {
+      var def = customElementDefinitionForElement(root);
+      if (def) upgradeCustomElement(root, def);
+    }
+    var kids = root.childNodes;
+    for (var i = 0; i < kids.length; i++) {
+      upgradeCustomElementTree(kids[i]);
+    }
+  }
+
+  function connectCustomElementTree(root) {
+    if (!root) return;
+    if (root.nodeType === 1) connectCustomElement(root);
+    var kids = root.childNodes;
+    for (var i = 0; i < kids.length; i++) {
+      connectCustomElementTree(kids[i]);
+    }
+  }
+
+  function customElementIsOption(options) {
+    if (options === undefined || options === null) return null;
+    if (typeof options === 'string') return String(options);
+    if (typeof options === 'object' && options.is !== undefined) return String(options.is);
+    return null;
+  }
+
   // Document : Node, with the construction/lookup methods.
   function Document() {}
   Document.prototype = Object.create(Node.prototype);
@@ -788,10 +914,18 @@
     configurable: true,
     enumerable: true
   });
-  Document.prototype.createElement = function(tag) {
+  Document.prototype.createElement = function(tag, options) {
     tag = String(tag); validateName(tag);
     // HTML document: the local name is lowercased.
-    return wrapNode(__createElement(tag.toLowerCase()));
+    tag = tag.toLowerCase();
+    var el = wrapNode(__createElement(tag));
+    var isValue = customElementIsOption(options);
+    if (isValue !== null) {
+      el.setAttribute('is', isValue);
+    }
+    var def = customElementDefinitionForElement(el);
+    if (def) upgradeCustomElement(el, def);
+    return el;
   };
   Document.prototype.createElementNS = function(ns, qname) {
     ns = (ns === null || ns === undefined) ? null : String(ns);
@@ -830,6 +964,109 @@
   Document.prototype.getElementsByClassName = getElementsByClassName;
   Document.prototype.querySelector = querySelector;
   Document.prototype.querySelectorAll = querySelectorAll;
+  function XPathResult(resultType, value) {
+    this.resultType = resultType;
+    this.booleanValue = false;
+    this.numberValue = 0;
+    this.stringValue = '';
+    this.singleNodeValue = null;
+    this.invalidIteratorState = false;
+    this._nodes = [];
+    this._cursor = 0;
+    this.snapshotLength = 0;
+
+    if (value.kind === 'nodes') {
+      this._nodes = xpathNodes(value);
+      this.singleNodeValue = firstXPathNode(this._nodes);
+      this.snapshotLength = this._nodes.length;
+    }
+    if (resultType === XPathResult.BOOLEAN_TYPE) {
+      this.booleanValue = xpathBooleanValue(value);
+    } else if (resultType === XPathResult.NUMBER_TYPE) {
+      this.numberValue = xpathNumberValue(value);
+    } else if (resultType === XPathResult.STRING_TYPE) {
+      this.stringValue = xpathStringValue(value);
+    }
+  }
+  XPathResult.ANY_TYPE = 0;
+  XPathResult.NUMBER_TYPE = 1;
+  XPathResult.STRING_TYPE = 2;
+  XPathResult.BOOLEAN_TYPE = 3;
+  XPathResult.UNORDERED_NODE_ITERATOR_TYPE = 4;
+  XPathResult.ORDERED_NODE_ITERATOR_TYPE = 5;
+  XPathResult.UNORDERED_NODE_SNAPSHOT_TYPE = 6;
+  XPathResult.ORDERED_NODE_SNAPSHOT_TYPE = 7;
+  XPathResult.ANY_UNORDERED_NODE_TYPE = 8;
+  XPathResult.FIRST_ORDERED_NODE_TYPE = 9;
+  for (var xk in XPathResult) {
+    if (Object.prototype.hasOwnProperty.call(XPathResult, xk)) {
+      XPathResult.prototype[xk] = XPathResult[xk];
+    }
+  }
+  XPathResult.prototype.iterateNext = function() {
+    if (this._cursor >= this._nodes.length) return null;
+    return wrapNode(__reflectNode(this._nodes[this._cursor++]));
+  };
+  XPathResult.prototype.snapshotItem = function(i) {
+    i = i >>> 0;
+    return i < this._nodes.length ? wrapNode(__reflectNode(this._nodes[i])) : null;
+  };
+  globalThis.XPathResult = XPathResult;
+  function xpathNodes(value) {
+    return value.kind === 'nodes' && value.value ? value.value.split(',') : [];
+  }
+  function firstXPathNode(nodes) {
+    return nodes.length ? wrapNode(__reflectNode(nodes[0])) : null;
+  }
+  function xpathStringValue(value) {
+    if (value.kind === 'nodes') {
+      var node = firstXPathNode(xpathNodes(value));
+      return node ? node.textContent : '';
+    }
+    return String(value.value);
+  }
+  function xpathNumberValue(value) {
+    if (value.kind === 'boolean') return value.value === 'true' ? 1 : 0;
+    return Number(xpathStringValue(value));
+  }
+  function xpathBooleanValue(value) {
+    if (value.kind === 'nodes') return xpathNodes(value).length > 0;
+    if (value.kind === 'number') {
+      var n = Number(value.value);
+      return n !== 0 && n === n;
+    }
+    if (value.kind === 'string') return value.value.length > 0;
+    return value.value === 'true';
+  }
+  function parseXPathRecord(record) {
+    var s = String(record);
+    var cut = s.indexOf('\n');
+    var kind = cut < 0 ? s : s.slice(0, cut);
+    var value = cut < 0 ? '' : s.slice(cut + 1);
+    if (kind === 'error') {
+      throw new DOMException(value, 'SyntaxError');
+    }
+    return { kind: kind, value: value };
+  }
+  Document.prototype.evaluate = function(expression, contextNode, namespaceResolver, resultType, result) {
+    var context = contextNode || this;
+    var requested = resultType == null ? XPathResult.ANY_TYPE : (resultType >>> 0);
+    if (requested > XPathResult.FIRST_ORDERED_NODE_TYPE) {
+      throw new DOMException('Unsupported XPathResult type', 'NotSupportedError');
+    }
+    var parsed = parseXPathRecord(__xpathEvaluate(String(expression), context.__ref));
+    var actual = requested;
+    if (requested === XPathResult.ANY_TYPE) {
+      actual = parsed.kind === 'number' ? XPathResult.NUMBER_TYPE
+        : parsed.kind === 'string' ? XPathResult.STRING_TYPE
+        : parsed.kind === 'boolean' ? XPathResult.BOOLEAN_TYPE
+        : XPathResult.ORDERED_NODE_ITERATOR_TYPE;
+    }
+    if (actual >= XPathResult.UNORDERED_NODE_ITERATOR_TYPE && parsed.kind !== 'nodes') {
+      throw new DOMException('XPath expression did not return a node set', 'TypeError');
+    }
+    return new XPathResult(actual, parsed);
+  };
   // DocumentFragment is a query scope too (ParentNode mixin).
   DocumentFragment.prototype.querySelector = querySelector;
   DocumentFragment.prototype.querySelectorAll = querySelectorAll;
@@ -909,46 +1146,66 @@
   globalThis.Node = Node;
   globalThis.Element = Element;
   globalThis.Document = Document;
-  // HTMLElement sits between Element and element instances (HTMLElement.prototype
-  // -> Element.prototype -> Node.prototype). The static-DOM harness only has HTML
-  // elements, so `wrapNode` gives every element this prototype; that makes
-  // `instanceof HTMLElement` and `class X extends HTMLElement` work (the single
-  // biggest missing-global in the WPT sweep) while keeping `instanceof Element`.
-  function HTMLElement() {}
-  HTMLElement.prototype = Object.create(Element.prototype);
-  HTMLElement.prototype.constructor = HTMLElement;
-  globalThis.HTMLElement = HTMLElement;
+  function makeHtmlInterfaceConstructor(name) {
+    var Ctor = function() {
+      if (htmlElementConstructionStack.length) {
+        return htmlElementConstructionStack.pop();
+      }
+    };
+    try { Object.defineProperty(Ctor, 'name', { configurable: true, value: name }); } catch (_) {}
+    return Ctor;
+  }
 
-  // HTMLCanvasElement: the first per-tag subclass. `wrapNode` dispatches a
-  // <canvas> element to this prototype (via `elementSubclassProto.CANVAS`), so
-  // `instanceof HTMLCanvasElement` works and `getContext('webgl')` lives on
-  // the prototype chain rather than each instance. The WebGLRenderingContext
-  // constructor itself is installed by the webgl bootstrap, which runs after
-  // this DOM bootstrap; `getContext` resolves it lazily at call time, so the
-  // forward reference is fine.
-  function HTMLCanvasElement() {}
-  HTMLCanvasElement.prototype = Object.create(HTMLElement.prototype);
-  HTMLCanvasElement.prototype.constructor = HTMLCanvasElement;
-  HTMLCanvasElement.prototype.getContext = function(contextType) {
-    var t = String(contextType || '');
-    // `experimental-webgl` is the legacy alias retained by most browsers for
-    // the WebGL 1.0 context — the conformance tests use both spellings.
-    if (t !== 'webgl' && t !== 'experimental-webgl') return null;
-    if (this.__webglContext) return this.__webglContext;
-    var Ctor = globalThis.WebGLRenderingContext;
-    if (typeof Ctor !== 'function') return null;
-    // The canvas drawing-buffer size comes from the width/height content
-    // attributes, defaulting to the HTML canvas 300x150 when unset/invalid.
-    var w = parseInt(this.getAttribute('width'), 10); if (!(w > 0)) w = 300;
-    var h = parseInt(this.getAttribute('height'), 10); if (!(h > 0)) h = 150;
-    this.__webglContext = new Ctor(w, h);
-    return this.__webglContext;
-  };
-  globalThis.HTMLCanvasElement = HTMLCanvasElement;
-  elementSubclassProto.CANVAS = HTMLCanvasElement.prototype;
+  function installHtmlInterfaceMembers(name, proto) {
+    if (name !== 'HTMLCanvasElement') return;
+    proto.getContext = function(contextType) {
+      var t = String(contextType || '');
+      // `experimental-webgl` is the legacy alias retained by most browsers for
+      // the WebGL 1.0 context; the conformance tests use both spellings.
+      if (t !== 'webgl' && t !== 'experimental-webgl') return null;
+      if (this.__webglContext) return this.__webglContext;
+      var Ctor = globalThis.WebGLRenderingContext;
+      if (typeof Ctor !== 'function') return null;
+      var w = parseInt(this.getAttribute('width'), 10); if (!(w > 0)) w = 300;
+      var h = parseInt(this.getAttribute('height'), 10); if (!(h > 0)) h = 150;
+      this.__webglContext = new Ctor(w, h);
+      if (this.__webglContext._externalTextureKey) {
+        this.setAttribute('data-serval-external-texture-key', this.__webglContext._externalTextureKey);
+      }
+      return this.__webglContext;
+    };
+  }
+
+  function installHtmlInterfaceTable() {
+    var table = globalThis.__servalHtmlInterfaceTable || [];
+    for (var i = 0; i < table.length; i++) {
+      var def = table[i];
+      var parent = htmlInterfaceConstructors[def.parent] || globalThis[def.parent];
+      if (typeof parent !== 'function') {
+        throw new Error('Unknown HTML interface parent: ' + def.parent);
+      }
+      var Ctor = makeHtmlInterfaceConstructor(def.name);
+      Ctor.prototype = Object.create(parent.prototype);
+      Object.defineProperty(Ctor.prototype, 'constructor', {
+        configurable: true,
+        writable: true,
+        value: Ctor
+      });
+      globalThis[def.name] = Ctor;
+      htmlInterfaceConstructors[def.name] = Ctor;
+      installReflectedAttributes(Ctor.prototype, def.reflected || []);
+      installHtmlInterfaceMembers(def.name, Ctor.prototype);
+
+      var tags = def.tags || [];
+      for (var j = 0; j < tags.length; j++) {
+        elementSubclassProto[String(tags[j]).toUpperCase()] = Ctor.prototype;
+      }
+    }
+    try { delete globalThis.__servalHtmlInterfaceTable; } catch (_) {}
+  }
   // (Text / Comment / CharacterData exposed above, with their prototype chain.)
 
-  installReflectedAttributes();
+  installHtmlInterfaceTable();
   installTraversal();
 
   // Live HTMLCollection / NodeList as legacy-platform exotic objects, modeled with
@@ -1145,21 +1402,31 @@
   }
 
   // Reflected IDL attribute accessors on Element.prototype (Lever 1). Driven by a
-  // table of [idlName, attr, kind]; kinds: s=DOMString, b=boolean, e=enumerated
+  // table of [idlName, attr, kind]; kinds: s=DOMString, tc=textContent, b=boolean, e=enumerated
   // (approximate: lowercased pass-through, '' default — keyword canonicalization
   // deferred), l=long, t=tokenlist (a DOMTokenList over the attribute), u=url
   // (resolved against the document base URL via `__resolve_url`). Only `double` is
   // deferred. All over the existing get/set/has/toggle/removeAttribute.
-  function installReflectedAttributes() {
+  function installReflectedAttributes(proto, attrs) {
     function parseHtmlLong(s) {
       if (s === null || s === undefined) return null;
       var m = /^[ \t\n\f\r]*([+-]?[0-9]+)/.exec(String(s));
+      return m ? parseInt(m[1], 10) : null;
+    }
+    function parseHtmlUnsignedLong(s) {
+      if (s === null || s === undefined) return null;
+      var m = /^[ \t\n\f\r]*([0-9]+)/.exec(String(s));
       return m ? parseInt(m[1], 10) : null;
     }
     function toLong(v) {
       v = Number(v);
       if (!isFinite(v)) return 0;
       return (v < 0 ? Math.ceil(v) : Math.floor(v)) | 0;
+    }
+    function toUnsignedLong(v) {
+      v = Number(v);
+      if (!isFinite(v) || v < 0) return 0;
+      return Math.floor(v) >>> 0;
     }
     function def(idl, kind, attr, keywords, miss) {
       // Reflected HTML content-attribute names are lowercase (tabIndex ->
@@ -1170,6 +1437,9 @@
       if (kind === 's') {
         desc.get = function() { var v = this.getAttribute(attr); return v === null ? '' : v; };
         desc.set = function(v) { this.setAttribute(attr, String(v)); };
+      } else if (kind === 'tc') {
+        desc.get = function() { return this.textContent || ''; };
+        desc.set = function(v) { this.textContent = String(v); };
       } else if (kind === 'b') {
         desc.get = function() { return this.hasAttribute(attr); };
         desc.set = function(v) { this.toggleAttribute(attr, !!v); };
@@ -1188,8 +1458,13 @@
         };
         desc.set = function(v) { this.setAttribute(attr, String(v)); };
       } else if (kind === 'l') {
-        desc.get = function() { var n = parseHtmlLong(this.getAttribute(attr)); return n === null ? -1 : n; };
+        var longMissing = miss === null || miss === undefined ? -1 : toLong(miss);
+        desc.get = function() { var n = parseHtmlLong(this.getAttribute(attr)); return n === null ? longMissing : n; };
         desc.set = function(v) { this.setAttribute(attr, String(toLong(v))); };
+      } else if (kind === 'ul') {
+        var unsignedMissing = miss === null || miss === undefined ? 0 : toUnsignedLong(miss);
+        desc.get = function() { var n = parseHtmlUnsignedLong(this.getAttribute(attr)); return n === null ? unsignedMissing : n; };
+        desc.set = function(v) { this.setAttribute(attr, String(toUnsignedLong(v))); };
       } else if (kind === 't') {
         // tokenlist: a DOMTokenList over the content attribute (e.g. relList -> rel).
         desc.get = function() { return makeDOMTokenList(this, attr); };
@@ -1200,55 +1475,12 @@
         desc.get = function() { var v = this.getAttribute(attr); return v === null ? '' : __resolve_url(v); };
         desc.set = function(v) { this.setAttribute(attr, String(v)); };
       }
-      Object.defineProperty(Element.prototype, idl, desc);
+      if (desc.get || desc.set) Object.defineProperty(proto, idl, desc);
     }
-    // Global attributes (tested on every element by the WPT reflection harness).
-    def('title', 's'); def('lang', 's'); def('accessKey', 's');
-    def('autofocus', 'b'); def('hidden', 'b'); def('tabIndex', 'l');
-    def('dir', 'e', 'dir', ['ltr', 'rtl', 'auto']);
-    // Per-element DOMString attributes (conflict-free union from the WPT metadata).
-    var S = ['aLink','abbr','accept','align','alt','archive','axis','background','bgColor','border',
-             'cellPadding','cellSpacing','charset','clear','code','codeType','color','content','coords',
-             'dateTime','dirName','download','event','face','formTarget','frame','frameBorder','headers',
-             'hreflang','integrity','label','link','marginHeight','marginWidth','media','name','nonce',
-             'pattern','ping','placeholder','rel','rev','rules','scheme','scrolling','shape','sizes',
-             'srcdoc','srclang','srcset','standby','step','summary','target','text','useMap','vAlign',
-             'vLink','valueType','version','wrap'];
-    for (var i = 0; i < S.length; i++) def(S[i], 's');
-    // DOMString with a differing content-attribute name.
-    def('acceptCharset', 's', 'accept-charset'); def('ch', 's', 'char'); def('chOff', 's', 'charoff');
-    def('defaultValue', 's', 'value'); def('httpEquiv', 's', 'http-equiv');
-    // Boolean attributes.
-    var B = ['allowFullscreen','autoplay','compact','controls','declare','defer','disabled',
-             'formNoValidate','isMap','loop','multiple','noHref','noModule','noResize','noShade',
-             'noValidate','noWrap','open','playsInline','readOnly','required','reversed','trueSpeed'];
-    for (var j = 0; j < B.length; j++) def(B[j], 'b');
-    def('defaultChecked', 'b', 'checked'); def('defaultMuted', 'b', 'muted'); def('defaultSelected', 'b', 'selected');
-    // Tokenlist reflected attributes (DOMTokenList over the content attribute).
-    def('relList', 't', 'rel');
-    // URL reflected attributes — resolved against the document base URL on get,
-    // raw string on set. (Approximate, like the DOMString set: installed on
-    // Element.prototype rather than per-interface.)
-    var U = ['href', 'src', 'action', 'cite', 'poster'];
-    for (var u = 0; u < U.length; u++) def(U[u], 'u');
-    def('formAction', 'u', 'formaction');
-    // Enumerated reflected attributes (limited-enum, "" missing-value default).
-    // Conflict-free idlName -> keyword set, extracted from the WPT metadata;
-    // `type` / `formMethod` are skipped (multiple keyword sets across interfaces).
-    def('autocomplete', 'e', 'autocomplete', ['on', 'off']);
-    def('crossOrigin', 'e', 'crossorigin', ['anonymous', 'use-credentials']);
-    def('decoding', 'e', 'decoding', ['async', 'sync', 'auto']);
-    def('encoding', 'e', 'encoding', ['application/x-www-form-urlencoded', 'multipart/form-data', 'text/plain']);
-    def('enctype', 'e', 'enctype', ['application/x-www-form-urlencoded', 'multipart/form-data', 'text/plain']);
-    def('formEnctype', 'e', 'formenctype', ['application/x-www-form-urlencoded', 'multipart/form-data', 'text/plain']);
-    def('enterKeyHint', 'e', 'enterkeyhint', ['enter', 'done', 'go', 'next', 'previous', 'search', 'send']);
-    def('inputMode', 'e', 'inputmode', ['none', 'text', 'tel', 'url', 'email', 'numeric', 'decimal', 'search']);
-    def('kind', 'e', 'kind', ['subtitles', 'captions', 'descriptions', 'chapters', 'metadata']);
-    def('loading', 'e', 'loading', ['lazy', 'eager']);
-    def('method', 'e', 'method', ['get', 'post', 'dialog']);
-    def('preload', 'e', 'preload', ['none', 'metadata', 'auto']);
-    def('referrerPolicy', 'e', 'referrerpolicy', ['', 'no-referrer', 'no-referrer-when-downgrade', 'same-origin', 'origin', 'strict-origin', 'origin-when-cross-origin', 'strict-origin-when-cross-origin', 'unsafe-url']);
-    def('scope', 'e', 'scope', ['row', 'col', 'rowgroup', 'colgroup']);
+    for (var i = 0; i < attrs.length; i++) {
+      var a = attrs[i];
+      def(a.idl, a.kind, a.attr, a.keywords || [], a.missing);
+    }
   }
 
   // NodeFilter + createTreeWalker / createNodeIterator (Lever 3), pure JS over the
@@ -1453,12 +1685,10 @@
   // contexts (the static-DOM harness has none).
   globalThis.frames = globalThis.window || globalThis;
 
-  // Minimal CustomElementRegistry: define/get/getName/whenDefined/upgrade.
-  // Records definitions so the constructor-validity and "is defined" checks
-  // pass; it does not upgrade existing elements (no live tree to walk here).
+  // Minimal CustomElementRegistry: define/get/getName/whenDefined/upgrade plus
+  // a first customized-built-ins slice over the HTML interface table.
   (function() {
     function CustomElementRegistry() {}
-    var defs = Object.create(null);
     var byCtor = new Map();
     var pending = Object.create(null);
     CustomElementRegistry.prototype.define = function(name, ctor, options) {
@@ -1468,22 +1698,50 @@
       if (typeof name !== 'string' || name.indexOf('-') === -1) {
         throw new (globalThis.DOMException || TypeError)('invalid custom element name', 'SyntaxError');
       }
-      if (name in defs) {
+      if (name in customElementDefinitions || byCtor.has(ctor)) {
         throw new (globalThis.DOMException || TypeError)('name already defined', 'NotSupportedError');
       }
-      defs[name] = ctor;
+      if (!ctor.prototype || (typeof ctor.prototype !== 'object' && typeof ctor.prototype !== 'function')) {
+        throw new TypeError('constructor prototype must be an object');
+      }
+      var localName = name;
+      var isCustomizedBuiltIn = false;
+      if (options && options.extends !== undefined) {
+        localName = String(options.extends).toLowerCase();
+        validateName(localName);
+        if (localName.indexOf('-') !== -1 || !elementSubclassProto[localName.toUpperCase()]) {
+          throw new (globalThis.DOMException || TypeError)('unknown built-in extension target', 'NotSupportedError');
+        }
+        isCustomizedBuiltIn = true;
+      }
+      var def = {
+        name: name,
+        localName: localName,
+        ctor: ctor,
+        customizedBuiltIn: isCustomizedBuiltIn
+      };
+      customElementDefinitions[name] = def;
+      if (isCustomizedBuiltIn) {
+        customizedBuiltInDefinitions[customElementKey(localName, name)] = def;
+      } else {
+        autonomousCustomElementDefinitions[localName.toUpperCase()] = def;
+      }
       byCtor.set(ctor, name);
       if (pending[name]) { pending[name].forEach(function(r) { r(ctor); }); delete pending[name]; }
+      upgradeCustomElementTree(document);
     };
-    CustomElementRegistry.prototype.get = function(name) { return defs[name]; };
+    CustomElementRegistry.prototype.get = function(name) {
+      var def = customElementDefinitions[name];
+      return def ? def.ctor : undefined;
+    };
     CustomElementRegistry.prototype.getName = function(ctor) {
       return byCtor.has(ctor) ? byCtor.get(ctor) : null;
     };
     CustomElementRegistry.prototype.whenDefined = function(name) {
-      if (name in defs) return Promise.resolve(defs[name]);
+      if (name in customElementDefinitions) return Promise.resolve(customElementDefinitions[name].ctor);
       return new Promise(function(res) { (pending[name] = pending[name] || []).push(res); });
     };
-    CustomElementRegistry.prototype.upgrade = function() {};
+    CustomElementRegistry.prototype.upgrade = function(root) { upgradeCustomElementTree(root); };
     globalThis.CustomElementRegistry = CustomElementRegistry;
     globalThis.customElements = new CustomElementRegistry();
   })();

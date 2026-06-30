@@ -76,7 +76,9 @@ pub(crate) fn clone_into<D: LayoutDom>(
     for child in src.dom_children(src_node) {
         match src.kind(child) {
             NodeKind::Element => {
-                let Some(name) = src.element_name(child) else { continue };
+                let Some(name) = src.element_name(child) else {
+                    continue;
+                };
                 let el = dst.create_element(name.clone());
                 for attr in src.attributes(child) {
                     dst.set_attribute(el, attr.name.clone(), attr.value);
@@ -95,7 +97,8 @@ pub(crate) fn clone_into<D: LayoutDom>(
 
 /// First element child of `node` (e.g. `<html>` under the document).
 fn first_element_child(dom: &ScriptedDom, node: NodeId) -> Option<NodeId> {
-    dom.dom_children(node).find(|&c| dom.element_name(c).is_some())
+    dom.dom_children(node)
+        .find(|&c| dom.element_name(c).is_some())
 }
 
 /// Install the `document`/`Node` surface: native sinks, then the JS bootstrap that
@@ -145,6 +148,9 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     engine.set_function::<CreateElementNS>("__createElementNS", 2)?;
     engine.set_function::<AttributeNames>("__attributeNames", 1)?;
     engine.set_function::<ComputedStyleValue>("__computedStyleValue", 2)?;
+    engine.set_function::<EvaluateXPath>("__xpathEvaluate", 2)?;
+    let html_interfaces = html_interfaces::bootstrap_script();
+    engine.eval(&html_interfaces)?;
     engine.eval(DOM_BOOTSTRAP)?;
     Ok(())
 }
@@ -242,7 +248,9 @@ fn host_cookies<E: ScriptEngine>(cx: &mut E::CallCx<'_>) -> Option<Rc<dyn Cookie
 struct CookieGet;
 impl<E: ScriptEngine> NativeFn<E> for CookieGet {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
-        let cookies = host_cookies::<E>(cx).map(|h| h.get_cookies()).unwrap_or_default();
+        let cookies = host_cookies::<E>(cx)
+            .map(|h| h.get_cookies())
+            .unwrap_or_default();
         cx.make_string(&cookies)
     }
 }
@@ -268,10 +276,7 @@ impl<E: ScriptEngine> NativeFn<E> for CookieSet {
 /// engine report the reflector dead. Pinning must be complete — a node handed
 /// out unpinned could be swept while script still holds it — which is why this
 /// is the sole node-handoff path (no binding calls `reflector_for` directly).
-fn reflect_pinned<E: ScriptEngine>(
-    cx: &mut E::CallCx<'_>,
-    raw: u64,
-) -> Result<E::Value, E::Error> {
+fn reflect_pinned<E: ScriptEngine>(cx: &mut E::CallCx<'_>, raw: u64) -> Result<E::Value, E::Error> {
     if let Some(data) = cx.host_data() {
         if let Some(cell) = data.downcast_ref::<RefCell<HostState>>() {
             cell.borrow_mut().pins.pin(NodeId::from_raw(raw as usize));
@@ -298,15 +303,17 @@ fn find_by_id(dom: &ScriptedDom, root: NodeId, target: &str) -> Option<NodeId> {
     walk(dom, root, target)
 }
 
-
+mod html_interfaces;
 mod query_traverse;
 mod tree;
+mod xpath_eval;
 
 #[cfg(test)]
 mod tests;
 
 use query_traverse::*;
 use tree::*;
+use xpath_eval::*;
 
 /// `document` plus node wrappers. A wrapper is a plain object carrying its reflector
 /// (`__ref`) and the methods that drive the native sinks. ES5-style (no arrows /

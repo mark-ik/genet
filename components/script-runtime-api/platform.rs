@@ -39,7 +39,11 @@ fn location_field(href: Option<&str>, field: &str) -> String {
     // No document URL yet -> `about:blank` (the default top-level location).
     let href = href.unwrap_or("about:blank");
     let Ok(u) = url::Url::parse(href) else {
-        return if field == "href" { href.to_string() } else { String::new() };
+        return if field == "href" {
+            href.to_string()
+        } else {
+            String::new()
+        };
     };
     match field {
         "href" => u.as_str().to_string(),
@@ -63,7 +67,10 @@ fn location_field(href: Option<&str>, field: &str) -> String {
 /// return `input` unchanged. Shared by `location` and `history`.
 fn resolve_against(base: Option<&str>, input: &str) -> String {
     match base.and_then(|b| url::Url::parse(b).ok()) {
-        Some(b) => b.join(input).map(|u| u.to_string()).unwrap_or_else(|_| input.to_owned()),
+        Some(b) => b
+            .join(input)
+            .map(|u| u.to_string())
+            .unwrap_or_else(|_| input.to_owned()),
         None => input.to_owned(),
     }
 }
@@ -72,7 +79,10 @@ fn resolve_against(base: Option<&str>, input: &str) -> String {
 /// The initial URL is the document base, defaulting to `about:blank`.
 fn ensure_history(h: &mut HostState) {
     if h.history.is_empty() {
-        let url = h.base_url.clone().unwrap_or_else(|| "about:blank".to_string());
+        let url = h
+            .base_url
+            .clone()
+            .unwrap_or_else(|| "about:blank".to_string());
         h.history.push(("null".to_string(), url));
         h.history_index = 0;
     }
@@ -142,7 +152,10 @@ impl<E: ScriptEngine> NativeFn<E> for StorageGet {
         let value = match host_local_storage::<E>(cx) {
             Some(provider) => provider.get(&key),
             None => with_host::<E, _>(cx, |h| {
-                h.storage.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone())
+                h.storage
+                    .iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, v)| v.clone())
             })
             .flatten(),
         };
@@ -478,7 +491,8 @@ mod tests {
     /// the WHATWG components.
     fn location_reflects_base_url<E: ScriptEngine>() {
         let mut rt = Runtime::<E>::new().expect("runtime");
-        rt.set_base_url("https://example.com:8080/dir/page.html?q=1#frag").expect("base url");
+        rt.set_base_url("https://example.com:8080/dir/page.html?q=1#frag")
+            .expect("base url");
         rt.eval(
             "console.log(location.href);\
              console.log(location.protocol);\
@@ -513,7 +527,8 @@ mod tests {
     /// and update what the getters (and `__resolve_url`) read.
     fn location_assign_updates_url<E: ScriptEngine>() {
         let mut rt = Runtime::<E>::new().expect("runtime");
-        rt.set_base_url("https://example.com/a/b.html").expect("base url");
+        rt.set_base_url("https://example.com/a/b.html")
+            .expect("base url");
         rt.eval(
             "location.assign('../c.html'); console.log(location.href);\
              location.href = 'd.html'; console.log(location.href);\
@@ -553,14 +568,14 @@ mod tests {
         assert_eq!(
             rt.host().borrow().console,
             vec![
-                "1,1,2",   // getItem('a'), .a, .b
-                "2",       // length
-                "a,b,true", // key(0), key(1), key(2)===null
-                "true",    // getItem('missing')===null
+                "1,1,2",      // getItem('a'), .a, .b
+                "2",          // length
+                "a,b,true",   // key(0), key(1), key(2)===null
+                "true",       // getItem('missing')===null
                 "true,false", // 'a' in / 'missing' in
-                "a|b",     // Object.keys (insertion order)
-                "true,1",  // getItem('a')===null after remove, length
-                "0",       // length after clear
+                "a|b",        // Object.keys (insertion order)
+                "true,1",     // getItem('a')===null after remove, length
+                "0",          // length after clear
             ],
         );
     }
@@ -577,7 +592,11 @@ mod tests {
         }
         impl crate::StorageProvider for Stub {
             fn get(&self, key: &str) -> Option<String> {
-                self.items.borrow().iter().find(|(k, _)| k.as_str() == key).map(|(_, v)| v.clone())
+                self.items
+                    .borrow()
+                    .iter()
+                    .find(|(k, _)| k.as_str() == key)
+                    .map(|(_, v)| v.clone())
             }
             fn set(&self, key: &str, value: &str) {
                 let mut items = self.items.borrow_mut();
@@ -603,7 +622,9 @@ mod tests {
 
         let items = Rc::new(RefCell::new(Vec::new()));
         let mut rt = Runtime::<E>::new().expect("runtime");
-        rt.set_local_storage_provider(Box::new(Stub { items: items.clone() }));
+        rt.set_local_storage_provider(Box::new(Stub {
+            items: items.clone(),
+        }));
         rt.eval(
             "localStorage.setItem('a', '1');\
              localStorage.setItem('b', '2');\

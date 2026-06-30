@@ -156,6 +156,34 @@ pub type SharedHost = Rc<RefCell<HostState>>;
 pub struct Runtime<E: ScriptEngine> {
     engine: E,
     host: SharedHost,
+    scheduler_trace: Vec<SchedulerTraceEvent>,
+    next_trace_seq: u64,
+}
+
+/// One deterministic scheduler trace event, exportable as NDJSON for E4 trace
+/// validation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SchedulerTraceEvent {
+    pub seq: u64,
+    pub boundary: String,
+    pub phase: String,
+    pub detail: Option<String>,
+}
+
+impl SchedulerTraceEvent {
+    fn push_ndjson_line(&self, out: &mut String) {
+        out.push_str("{\"seq\":");
+        out.push_str(&self.seq.to_string());
+        out.push_str(",\"boundary\":");
+        out.push_str(&js_str(&self.boundary));
+        out.push_str(",\"phase\":");
+        out.push_str(&js_str(&self.phase));
+        if let Some(detail) = &self.detail {
+            out.push_str(",\"detail\":");
+            out.push_str(&js_str(detail));
+        }
+        out.push('}');
+    }
 }
 
 impl<E: ScriptEngine> Runtime<E> {
@@ -165,12 +193,22 @@ impl<E: ScriptEngine> Runtime<E> {
         let host: SharedHost = Rc::new(RefCell::new(HostState::default()));
         engine.set_host_data(host.clone());
         install_host_surface(&mut engine)?;
-        Ok(Self { engine, host })
+        Ok(Self {
+            engine,
+            host,
+            scheduler_trace: Vec::new(),
+            next_trace_seq: 0,
+        })
     }
 
     /// Evaluate `source` in the runtime's global scope.
     pub fn eval(&mut self, source: &str) -> Result<E::Value, E::Error> {
-        self.engine.eval(source)
+        // Host boundary: evaluating a top-level script is driven by the embedder;
+        // callers choose when to perform the next microtask checkpoint.
+        self.trace_scheduler("eval", "start", None);
+        let result = self.engine.eval(source);
+        self.trace_scheduler("eval", if result.is_ok() { "end" } else { "error" }, None);
+        result
     }
 
     /// Render an engine error to a diagnostic string (the thrown value's `toString`).
@@ -207,7 +245,16 @@ impl<E: ScriptEngine> Runtime<E> {
     /// Drain pending microtasks (Promise reaction jobs) to quiescence — a microtask
     /// checkpoint. Run it after evaluating script so Promise continuations resolve.
     pub fn run_microtasks(&mut self) {
+        self.perform_microtask_checkpoint();
+    }
+
+    /// https://html.spec.whatwg.org/multipage/webappapis.html#perform-a-microtask-checkpoint
+    fn perform_microtask_checkpoint(&mut self) {
+        // Step 3: "While the event loop's microtask queue is not empty:"
+        // Backend boundary: the VM owns the queue, budget behavior, and kept-object cleanup.
+        self.trace_scheduler("pump_microtasks", "start", None);
         self.engine.pump_microtasks();
+        self.trace_scheduler("pump_microtasks", "end", None);
     }
 
     /// The **input → event bridge**: dispatch a synthetic DOM event of `event_type`
@@ -226,15 +273,27 @@ impl<E: ScriptEngine> Runtime<E> {
         raw_node_id: usize,
         event_type: &str,
     ) -> Result<bool, E::Error> {
-        let v = self.engine.eval(&format!(
+        self.trace_scheduler(
+            "dispatch_event",
+            "start",
+            Some(format!("type={event_type};node={raw_node_id}")),
+        );
+        let v = match self.engine.eval(&format!(
             "__dispatchSynthetic({raw_node_id}, {event_type:?})"
-        ))?;
+        )) {
+            Ok(value) => value,
+            Err(error) => {
+                self.trace_scheduler("dispatch_event", "error", None);
+                return Err(error);
+            },
+        };
         let proceed = self
             .engine
             .value_to_string(&v)
             .map(|s| s != "false")
             .unwrap_or(true);
-        self.engine.pump_microtasks();
+        self.perform_microtask_checkpoint();
+        self.trace_scheduler("dispatch_event", "end", Some(format!("proceed={proceed}")));
         Ok(proceed)
     }
 
@@ -269,14 +328,31 @@ impl<E: ScriptEngine> Runtime<E> {
     /// microtask checkpoint runs before the loop and after each fired timer task.
     /// Returns when the queue drains or the budget is spent.
     pub fn run_event_loop(&mut self, budget: u32) -> Result<(), E::Error> {
-        self.engine.pump_microtasks();
+        self.trace_scheduler("run_event_loop", "start", Some(format!("budget={budget}")));
+        self.perform_microtask_checkpoint();
+        let mut fired_total = 0;
         for _ in 0..budget {
-            let fired = self.run_one_timer_task(None)?;
+            // Step 2.6: "Perform oldestTask's steps."
+            // Serval currently has one runnable task source here: timers.
+            let fired = match self.run_one_timer_task(None) {
+                Ok(fired) => fired,
+                Err(error) => {
+                    self.trace_scheduler("run_event_loop", "error", None);
+                    return Err(error);
+                },
+            };
             if fired == 0 {
                 break;
             }
-            self.engine.pump_microtasks();
+            fired_total += fired;
+            // Step 2.8: "Perform a microtask checkpoint."
+            self.perform_microtask_checkpoint();
         }
+        self.trace_scheduler(
+            "run_event_loop",
+            "end",
+            Some(format!("fired={fired_total}")),
+        );
         Ok(())
     }
 
@@ -340,16 +416,25 @@ impl<E: ScriptEngine> Runtime<E> {
     /// return how many fired. Real-time gating lets a short abort timer fire at its
     /// delay while the far-future testharness timeout stays pending.
     pub fn run_timers(&mut self, budget: u32, now_ms: f64) -> usize {
-        self.engine.pump_microtasks();
+        self.trace_scheduler(
+            "run_timers",
+            "start",
+            Some(format!("budget={budget};now_ms={now_ms}")),
+        );
+        self.perform_microtask_checkpoint();
         let mut fired = 0;
         for _ in 0..budget {
+            // Step 2.6: "Perform oldestTask's steps."
+            // The host drive loop supplies `now_ms`; the JS timer queue chooses one due task.
             let n = self.run_one_timer_task(Some(now_ms)).unwrap_or(0);
             if n == 0 {
                 break;
             }
             fired += n;
-            self.engine.pump_microtasks();
+            // Step 2.8: "Perform a microtask checkpoint."
+            self.perform_microtask_checkpoint();
         }
+        self.trace_scheduler("run_timers", "end", Some(format!("fired={fired}")));
         fired
     }
 
@@ -358,9 +443,19 @@ impl<E: ScriptEngine> Runtime<E> {
             Some(now_ms) => format!("String(globalThis.__runTimers(1,{now_ms}))"),
             None => "String(globalThis.__runTimers(1))".to_string(),
         };
-        let v = self.engine.eval(&expr)?;
+        let v = match self.engine.eval(&expr) {
+            Ok(value) => value,
+            Err(error) => {
+                self.trace_scheduler("timer_task", "error", None);
+                return Err(error);
+            },
+        };
         let s = self.engine.value_to_string(&v)?;
-        Ok(s.parse().unwrap_or(0))
+        let fired = s.parse().unwrap_or(0);
+        if fired > 0 {
+            self.trace_scheduler("timer_task", "performed", Some(format!("fired={fired}")));
+        }
+        Ok(fired)
     }
 
     /// Milliseconds until the next timer is due (relative to the last `run_timers`
@@ -431,16 +526,18 @@ impl<E: ScriptEngine> Runtime<E> {
     pub fn settle_fetch(&mut self, id: u64, outcome: FetchOutcome) {
         let json = fetch::encode_outcome(&outcome);
         let js = format!("globalThis.__fetchSettle({},{});", id, js_str(&json));
+        // Fetch task source: perform the host completion task, then checkpoint.
         let _ = self.engine.eval(&js);
-        self.engine.pump_microtasks();
+        self.perform_microtask_checkpoint();
     }
 
     /// Reject the pending `fetch()` Promise `id` as a network error with `message`
     /// (a `TypeError`, per Fetch). For a deferred host's failed request.
     pub fn fail_fetch(&mut self, id: u64, message: &str) {
         let js = format!("globalThis.__fetchFail({},{});", id, js_str(message));
+        // Fetch task source: perform the host completion task, then checkpoint.
         let _ = self.engine.eval(&js);
-        self.engine.pump_microtasks();
+        self.perform_microtask_checkpoint();
     }
 
     /// Early-settle the pending `fetch()` Promise `id` with a streaming response:
@@ -451,8 +548,9 @@ impl<E: ScriptEngine> Runtime<E> {
     pub fn start_stream(&mut self, id: u64, meta: FetchOutcome) {
         let json = fetch::encode_outcome(&meta);
         let js = format!("globalThis.__fetchStartStream({},{});", id, js_str(&json));
+        // Fetch task source: resolve the response task before body chunks arrive.
         let _ = self.engine.eval(&js);
-        self.engine.pump_microtasks();
+        self.perform_microtask_checkpoint();
     }
 
     /// Push a body chunk to a streaming response started with
@@ -468,19 +566,21 @@ impl<E: ScriptEngine> Runtime<E> {
             lit.push_str(&b.to_string());
         }
         lit.push(']');
+        // Fetch task source: deliver one body-chunk task, then checkpoint.
         let _ = self
             .engine
             .eval(&format!("globalThis.__fetchPushChunk({},{});", id, lit));
-        self.engine.pump_microtasks();
+        self.perform_microtask_checkpoint();
     }
 
     /// Close a streaming response started with [`start_stream`](Self::start_stream):
     /// the body's `ReadableStream` ends and pending reads resolve `done`.
     pub fn close_stream(&mut self, id: u64) {
+        // Fetch task source: deliver the end-of-body task, then checkpoint.
         let _ = self
             .engine
             .eval(&format!("globalThis.__fetchClose({});", id));
-        self.engine.pump_microtasks();
+        self.perform_microtask_checkpoint();
     }
 
     /// Error a streaming response started with [`start_stream`](Self::start_stream):
@@ -488,10 +588,11 @@ impl<E: ScriptEngine> Runtime<E> {
     /// `TypeError`. The response itself stays resolved (the failure is mid-body,
     /// e.g. a `Content-Encoding` decode error), so only body consumption rejects.
     pub fn error_stream(&mut self, id: u64) {
+        // Fetch task source: deliver the body-error task, then checkpoint.
         let _ = self
             .engine
             .eval(&format!("globalThis.__fetchError({});", id));
-        self.engine.pump_microtasks();
+        self.perform_microtask_checkpoint();
     }
 
     /// Reject every still-pending `fetch()` Promise with `message` (a `TypeError`).
@@ -504,8 +605,9 @@ impl<E: ScriptEngine> Runtime<E> {
              if(!e.settled){{e.settled=true;e.reject(new TypeError({m}));}}}}}}}})();",
             m = js_str(message)
         );
+        // Fetch task source: reject outstanding fetches at the host deadline, then checkpoint.
         let _ = self.engine.eval(&js);
-        self.engine.pump_microtasks();
+        self.perform_microtask_checkpoint();
     }
 
     /// How many `fetch()` Promises are still pending. The host drive loop reads this
@@ -551,6 +653,39 @@ impl<E: ScriptEngine> Runtime<E> {
     pub fn engine_mut(&mut self) -> &mut E {
         &mut self.engine
     }
+
+    /// Deterministic scheduler trace events captured since runtime creation or the
+    /// last clear.
+    pub fn scheduler_trace(&self) -> &[SchedulerTraceEvent] {
+        &self.scheduler_trace
+    }
+
+    /// Export the scheduler trace as newline-delimited JSON for E4 trace-data
+    /// generation.
+    pub fn scheduler_trace_ndjson(&self) -> String {
+        let mut out = String::new();
+        for event in &self.scheduler_trace {
+            event.push_ndjson_line(&mut out);
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Clear the scheduler trace without touching JS or host state.
+    pub fn clear_scheduler_trace(&mut self) {
+        self.scheduler_trace.clear();
+        self.next_trace_seq = 0;
+    }
+
+    fn trace_scheduler(&mut self, boundary: &str, phase: &str, detail: Option<String>) {
+        self.next_trace_seq += 1;
+        self.scheduler_trace.push(SchedulerTraceEvent {
+            seq: self.next_trace_seq,
+            boundary: boundary.to_string(),
+            phase: phase.to_string(),
+            detail,
+        });
+    }
 }
 
 impl<E: ScriptEngineSnapshot> Runtime<E> {
@@ -564,7 +699,12 @@ impl<E: ScriptEngineSnapshot> Runtime<E> {
         let mut engine = self.engine.snapshot_clone()?;
         let host: SharedHost = Rc::new(RefCell::new(HostState::default()));
         engine.set_host_data(host.clone());
-        Ok(Self { engine, host })
+        Ok(Self {
+            engine,
+            host,
+            scheduler_trace: Vec::new(),
+            next_trace_seq: 0,
+        })
     }
 }
 
@@ -631,6 +771,8 @@ fn install_host_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error>
 /// queue, drained by `__runTimers(budget)` in `(delay, insertion)` order.
 const EVENT_LOOP_BOOTSTRAP: &str = r#"
 (function() {
+  // HTML timers task source: pending timer tasks wait here until the Rust host
+  // asks `__runTimers` to perform one task boundary.
   var timers = [];
   var nextId = 1;
   var vnow = 0; // virtual clock (ms); advanced by __runTimers in real-time mode
@@ -1251,6 +1393,62 @@ mod tests {
         assert_eq!(rt.host().borrow().console, vec!["first", "micro", "second"]);
     }
 
+    /// E4 trace seed: the runtime emits deterministic NDJSON over the named
+    /// scheduler boundaries so a follow-on generator can lower it into TLA+
+    /// constants.
+    fn scheduler_trace_ndjson_works<E: ScriptEngine>() {
+        let script = "setTimeout(function(){ \
+                          Promise.resolve().then(function(){ console.log('micro'); }); \
+                      }, 0);";
+        let mut rt = Runtime::<E>::new().expect("runtime");
+
+        rt.eval(script).expect("schedule");
+        rt.run_event_loop(10).expect("loop");
+        let document = rt.host().borrow().dom.document().raw();
+        let _ = rt.dispatch_event(document, "click").expect("dispatch");
+
+        rt.eval(script).expect("reschedule");
+        assert_eq!(rt.run_timers(10, 0.0), 1);
+
+        let trace = rt.scheduler_trace();
+        assert!(
+            trace.windows(2).all(|w| w[0].seq + 1 == w[1].seq),
+            "trace seqs must be contiguous: {trace:?}"
+        );
+        for (boundary, phase) in [
+            ("eval", "start"),
+            ("eval", "end"),
+            ("dispatch_event", "start"),
+            ("dispatch_event", "end"),
+            ("run_event_loop", "start"),
+            ("run_event_loop", "end"),
+            ("run_timers", "start"),
+            ("run_timers", "end"),
+            ("timer_task", "performed"),
+            ("pump_microtasks", "start"),
+            ("pump_microtasks", "end"),
+        ] {
+            assert!(
+                trace
+                    .iter()
+                    .any(|event| event.boundary == boundary && event.phase == phase),
+                "missing {boundary}/{phase} in {trace:?}"
+            );
+        }
+
+        let ndjson = rt.scheduler_trace_ndjson();
+        assert!(
+            ndjson
+                .lines()
+                .any(|line| line.contains(r#""boundary":"run_timers""#)),
+            "run_timers boundary missing from NDJSON: {ndjson}"
+        );
+        assert!(
+            ndjson.lines().all(|line| line.starts_with(r#"{"seq":"#)),
+            "each line is one trace object: {ndjson}"
+        );
+    }
+
     #[test]
     fn host_surface_on_boa() {
         host_surface_works::<script_engine_boa::BoaEngine>();
@@ -1516,6 +1714,17 @@ mod tests {
     #[test]
     fn per_timer_microtask_checkpoint_on_nova() {
         per_timer_microtask_checkpoint_works::<script_engine_nova::NovaEngine>();
+    }
+
+    #[test]
+    fn scheduler_trace_ndjson_on_boa() {
+        scheduler_trace_ndjson_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn scheduler_trace_ndjson_on_nova() {
+        scheduler_trace_ndjson_works::<script_engine_nova::NovaEngine>();
     }
 
     #[test]

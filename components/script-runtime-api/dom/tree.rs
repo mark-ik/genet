@@ -11,7 +11,7 @@ pub(crate) struct DocumentRoot;
 impl<E: ScriptEngine> NativeFn<E> for DocumentRoot {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
         match with_dom::<E, _>(cx, |dom| dom.document()) {
-            Some(root) => reflect_pinned::<E>(cx,root.raw() as u64),
+            Some(root) => reflect_pinned::<E>(cx, root.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -42,7 +42,7 @@ impl<E: ScriptEngine> NativeFn<E> for CreateElement {
         let arg = cx.arg(0);
         let tag = cx.value_to_string(&arg)?;
         match with_dom::<E, _>(cx, |dom| dom.create_element(html_qual(&tag))) {
-            Some(id) => reflect_pinned::<E>(cx,id.raw() as u64),
+            Some(id) => reflect_pinned::<E>(cx, id.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -55,7 +55,7 @@ impl<E: ScriptEngine> NativeFn<E> for CreateTextNode {
         let arg = cx.arg(0);
         let data = cx.value_to_string(&arg)?;
         match with_dom::<E, _>(cx, |dom| dom.create_text(&data)) {
-            Some(id) => reflect_pinned::<E>(cx,id.raw() as u64),
+            Some(id) => reflect_pinned::<E>(cx, id.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -121,8 +121,12 @@ impl<E: ScriptEngine> NativeFn<E> for GetElementById {
         };
         let arg = cx.arg(1);
         let id = cx.value_to_string(&arg)?;
-        match with_dom::<E, _>(cx, |dom| find_by_id(dom, NodeId::from_raw(root as usize), &id)).flatten() {
-            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
+        match with_dom::<E, _>(cx, |dom| {
+            find_by_id(dom, NodeId::from_raw(root as usize), &id)
+        })
+        .flatten()
+        {
+            Some(node) => reflect_pinned::<E>(cx, node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -139,8 +143,12 @@ impl<E: ScriptEngine> NativeFn<E> for GetAttribute {
         let name_v = cx.arg(1);
         let name = cx.value_to_string(&name_v)?;
         let value = with_dom::<E, _>(cx, |dom| {
-            dom.attribute(NodeId::from_raw(id as usize), &Namespace::from(""), &LocalName::from(name.as_str()))
-                .map(str::to_string)
+            dom.attribute(
+                NodeId::from_raw(id as usize),
+                &Namespace::from(""),
+                &LocalName::from(name.as_str()),
+            )
+            .map(str::to_string)
         })
         .flatten();
         match value {
@@ -226,7 +234,10 @@ impl<E: ScriptEngine> NativeFn<E> for GetTextContent {
 fn collect_by_tag(dom: &ScriptedDom, root: NodeId, tag: &str) -> Vec<NodeId> {
     fn walk(dom: &ScriptedDom, node: NodeId, tag: &str, out: &mut Vec<NodeId>) {
         for child in dom.dom_children(node).collect::<Vec<_>>() {
-            if dom.element_name(child).is_some_and(|q| tag == "*" || q.local.as_ref().eq_ignore_ascii_case(tag)) {
+            if dom
+                .element_name(child)
+                .is_some_and(|q| tag == "*" || q.local.as_ref().eq_ignore_ascii_case(tag))
+            {
                 out.push(child);
             }
             walk(dom, child, tag, out);
@@ -249,8 +260,10 @@ impl<E: ScriptEngine> NativeFn<E> for ElementsByTagNameCount {
         };
         let tag_v = cx.arg(1);
         let tag = cx.value_to_string(&tag_v)?;
-        let n = with_dom::<E, _>(cx, |dom| collect_by_tag(dom, NodeId::from_raw(root as usize), &tag).len())
-            .unwrap_or(0);
+        let n = with_dom::<E, _>(cx, |dom| {
+            collect_by_tag(dom, NodeId::from_raw(root as usize), &tag).len()
+        })
+        .unwrap_or(0);
         cx.make_string(&n.to_string())
     }
 }
@@ -267,11 +280,18 @@ impl<E: ScriptEngine> NativeFn<E> for ElementsByTagNameItem {
         let tag_v = cx.arg(1);
         let tag = cx.value_to_string(&tag_v)?;
         let i_v = cx.arg(2);
-        let i = cx.value_to_string(&i_v)?.parse::<usize>().unwrap_or(usize::MAX);
-        match with_dom::<E, _>(cx, |dom| collect_by_tag(dom, NodeId::from_raw(root as usize), &tag).get(i).copied())
-            .flatten()
+        let i = cx
+            .value_to_string(&i_v)?
+            .parse::<usize>()
+            .unwrap_or(usize::MAX);
+        match with_dom::<E, _>(cx, |dom| {
+            collect_by_tag(dom, NodeId::from_raw(root as usize), &tag)
+                .get(i)
+                .copied()
+        })
+        .flatten()
         {
-            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx, node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -287,7 +307,7 @@ impl<E: ScriptEngine> NativeFn<E> for ParentNode {
             return Ok(cx.undefined());
         };
         match with_dom::<E, _>(cx, |dom| dom.parent(NodeId::from_raw(id as usize))).flatten() {
-            Some(p) => reflect_pinned::<E>(cx,p.raw() as u64),
+            Some(p) => reflect_pinned::<E>(cx, p.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -302,8 +322,12 @@ impl<E: ScriptEngine> NativeFn<E> for DocumentElement {
         let Some(root) = cx.reflector_data(&scope) else {
             return Ok(cx.undefined());
         };
-        match with_dom::<E, _>(cx, |dom| first_element_child(dom, NodeId::from_raw(root as usize))).flatten() {
-            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
+        match with_dom::<E, _>(cx, |dom| {
+            first_element_child(dom, NodeId::from_raw(root as usize))
+        })
+        .flatten()
+        {
+            Some(node) => reflect_pinned::<E>(cx, node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -317,10 +341,14 @@ impl<E: ScriptEngine> NativeFn<E> for DocumentBody {
         let Some(root) = cx.reflector_data(&scope) else {
             return Ok(cx.undefined());
         };
-        match with_dom::<E, _>(cx, |dom| collect_by_tag(dom, NodeId::from_raw(root as usize), "body").first().copied())
-            .flatten()
+        match with_dom::<E, _>(cx, |dom| {
+            collect_by_tag(dom, NodeId::from_raw(root as usize), "body")
+                .first()
+                .copied()
+        })
+        .flatten()
         {
-            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx, node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -334,10 +362,14 @@ impl<E: ScriptEngine> NativeFn<E> for DocumentHead {
         let Some(root) = cx.reflector_data(&scope) else {
             return Ok(cx.undefined());
         };
-        match with_dom::<E, _>(cx, |dom| collect_by_tag(dom, NodeId::from_raw(root as usize), "head").first().copied())
-            .flatten()
+        match with_dom::<E, _>(cx, |dom| {
+            collect_by_tag(dom, NodeId::from_raw(root as usize), "head")
+                .first()
+                .copied()
+        })
+        .flatten()
         {
-            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx, node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -349,7 +381,7 @@ pub(crate) struct CreateDocument;
 impl<E: ScriptEngine> NativeFn<E> for CreateDocument {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
         match with_dom::<E, _>(cx, |dom| dom.create_document()) {
-            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx, node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -362,7 +394,7 @@ impl<E: ScriptEngine> NativeFn<E> for CreateComment {
         let arg = cx.arg(0);
         let data = cx.value_to_string(&arg)?;
         match with_dom::<E, _>(cx, |dom| dom.create_comment(&data)) {
-            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx, node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -373,7 +405,7 @@ pub(crate) struct CreateFragment;
 impl<E: ScriptEngine> NativeFn<E> for CreateFragment {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
         match with_dom::<E, _>(cx, |dom| dom.create_fragment()) {
-            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx, node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -402,4 +434,3 @@ impl<E: ScriptEngine> NativeFn<E> for NodeType {
         cx.make_string(&n.to_string())
     }
 }
-

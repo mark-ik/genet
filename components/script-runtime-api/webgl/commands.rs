@@ -17,7 +17,19 @@ impl<E: ScriptEngine> NativeFn<E> for CreateContext {
         let width = parse_u32::<E>(cx, 0)?;
         let height = parse_u32::<E>(cx, 1)?;
         let id = create_webgl_context::<E>(cx, width, height);
-        cx.make_string(&id.map(|i| i.to_string()).unwrap_or_else(|| "-1".to_string()))
+        cx.make_string(
+            &id.map(|i| i.to_string())
+                .unwrap_or_else(|| "-1".to_string()),
+        )
+    }
+}
+
+pub(crate) struct ExternalTextureKey;
+impl<E: ScriptEngine> NativeFn<E> for ExternalTextureKey {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let ctx = parse_ctx::<E>(cx)?;
+        let key = with_webgl_ctx::<E, _, _>(cx, ctx, None, |h| h.external_texture_key());
+        cx.make_string(&key.map(|k| k.to_string()).unwrap_or_default())
     }
 }
 
@@ -182,9 +194,8 @@ impl<E: ScriptEngine> NativeFn<E> for GetShaderInfoLog {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
         let ctx = parse_ctx::<E>(cx)?;
         let shader = parse_u64::<E>(cx, 1)?;
-        let log = with_webgl_ctx::<E, _, _>(cx, ctx, String::new(), |h| {
-            h.get_shader_info_log(shader)
-        });
+        let log =
+            with_webgl_ctx::<E, _, _>(cx, ctx, String::new(), |h| h.get_shader_info_log(shader));
         cx.make_string(&log)
     }
 }
@@ -234,9 +245,8 @@ impl<E: ScriptEngine> NativeFn<E> for GetProgramInfoLog {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
         let ctx = parse_ctx::<E>(cx)?;
         let program = parse_u64::<E>(cx, 1)?;
-        let log = with_webgl_ctx::<E, _, _>(cx, ctx, String::new(), |h| {
-            h.get_program_info_log(program)
-        });
+        let log =
+            with_webgl_ctx::<E, _, _>(cx, ctx, String::new(), |h| h.get_program_info_log(program));
         cx.make_string(&log)
     }
 }
@@ -268,7 +278,8 @@ impl<E: ScriptEngine> NativeFn<E> for GetUniformLocation {
         let ctx = parse_ctx::<E>(cx)?;
         let program = parse_u64::<E>(cx, 1)?;
         let name = parse_string::<E>(cx, 2)?;
-        let loc = with_webgl_ctx::<E, _, _>(cx, ctx, -1, |h| h.get_uniform_location(program, &name));
+        let loc =
+            with_webgl_ctx::<E, _, _>(cx, ctx, -1, |h| h.get_uniform_location(program, &name));
         cx.make_string(&loc.to_string())
     }
 }
@@ -422,4 +433,3 @@ impl<E: ScriptEngine> NativeFn<E> for ReadPixelsRgba8 {
         cx.make_string(&binary_string(&pixels))
     }
 }
-

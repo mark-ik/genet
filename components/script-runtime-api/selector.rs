@@ -67,7 +67,10 @@ impl Selectors {
     pub fn query_all<D: LayoutDom>(&self, dom: &D, scope: D::NodeId) -> Vec<D::NodeId> {
         let mut descendants = Vec::new();
         collect_descendants(dom, scope, &mut descendants);
-        descendants.into_iter().filter(|&n| self.matches(dom, n)).collect()
+        descendants
+            .into_iter()
+            .filter(|&n| self.matches(dom, n))
+            .collect()
     }
 
     /// The first descendant of `scope` matching the list, or `None`.
@@ -101,7 +104,9 @@ fn matches_complex<D: LayoutDom>(dom: &D, node: D::NodeId, complex: &Complex) ->
         let target = &parts[i - 1].1;
         match combinator {
             Combinator::Child => {
-                let Some(parent) = dom.parent(current) else { return false };
+                let Some(parent) = dom.parent(current) else {
+                    return false;
+                };
                 if !matches_compound(dom, parent, target) {
                     return false;
                 }
@@ -128,7 +133,9 @@ fn matches_complex<D: LayoutDom>(dom: &D, node: D::NodeId, complex: &Complex) ->
 
 fn matches_compound<D: LayoutDom>(dom: &D, node: D::NodeId, c: &Compound) -> bool {
     // Only elements match a compound selector.
-    let Some(qname) = dom.element_name(node) else { return false };
+    let Some(qname) = dom.element_name(node) else {
+        return false;
+    };
     if let Some(tag) = &c.tag {
         if !qname.local.as_ref().eq_ignore_ascii_case(tag) {
             return false;
@@ -141,7 +148,9 @@ fn matches_compound<D: LayoutDom>(dom: &D, node: D::NodeId, c: &Compound) -> boo
         }
     }
     if !c.classes.is_empty() {
-        let class_attr = dom.attribute(node, &ns, &LocalName::from("class")).unwrap_or("");
+        let class_attr = dom
+            .attribute(node, &ns, &LocalName::from("class"))
+            .unwrap_or("");
         for needed in &c.classes {
             if !class_attr.split_whitespace().any(|h| h == needed) {
                 return false;
@@ -321,7 +330,10 @@ fn parse_attr(inner: &str) -> Option<AttrSel> {
             if inner.is_empty() {
                 return None;
             }
-            Some(AttrSel { name: inner.to_string(), op: AttrOp::Exists })
+            Some(AttrSel {
+                name: inner.to_string(),
+                op: AttrOp::Exists,
+            })
         },
         Some(eq) => {
             let before = &inner[..eq];
@@ -336,7 +348,10 @@ fn parse_attr(inner: &str) -> Option<AttrSel> {
             if name.is_empty() {
                 return None;
             }
-            Some(AttrSel { name: name.to_string(), op })
+            Some(AttrSel {
+                name: name.to_string(),
+                op,
+            })
         },
     }
 }
@@ -388,7 +403,10 @@ mod tests {
             LocalName::from("body"),
         ));
         dom.append_child(root, body);
-        dom.set_inner_html(body, "<div id='a' class='x y'><p class='x'></p><span></span></div>");
+        dom.set_inner_html(
+            body,
+            "<div id='a' class='x y'><p class='x'></p><span></span></div>",
+        );
         dom
     }
 
@@ -396,7 +414,11 @@ mod tests {
         let sels = parse(sel);
         sels.query_all(dom, dom.document())
             .iter()
-            .map(|&n| dom.element_name(n).map(|q| q.local.as_ref().to_string()).unwrap_or_default())
+            .map(|&n| {
+                dom.element_name(n)
+                    .map(|q| q.local.as_ref().to_string())
+                    .unwrap_or_default()
+            })
             .collect()
     }
 

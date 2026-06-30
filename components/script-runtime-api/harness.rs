@@ -67,7 +67,11 @@ impl<E: ScriptEngine> NativeFn<E> for ReportResult {
         };
         if let Some(data) = cx.host_data() {
             if let Some(cell) = data.downcast_ref::<RefCell<HostState>>() {
-                cell.borrow_mut().results.push(TestResult { name, status, message });
+                cell.borrow_mut().results.push(TestResult {
+                    name,
+                    status,
+                    message,
+                });
             }
         }
         Ok(cx.undefined())

@@ -103,7 +103,10 @@ fn dom_identity_works<E: ScriptEngine>() {
     .expect("identity script");
 
     // same node: ===; created === found-by-id; two fresh elements: not ===; doc stable.
-    assert_eq!(rt.host().borrow().console, vec!["true", "true", "false", "true"]);
+    assert_eq!(
+        rt.host().borrow().console,
+        vec!["true", "true", "false", "true"]
+    );
 }
 
 /// Prototype dispatch, exercised against any backend: methods live on
@@ -126,7 +129,10 @@ fn dom_prototype_dispatch_works<E: ScriptEngine>() {
 
     // element is a Node; document is a Document and a Node; the method is shared
     // (same prototype function); parentNode walks back to the document.
-    assert_eq!(rt.host().borrow().console, vec!["true", "true", "true", "true", "true"]);
+    assert_eq!(
+        rt.host().borrow().console,
+        vec!["true", "true", "true", "true", "true"]
+    );
 }
 
 /// `load_dom`, against any backend: a parsed source document becomes the live
@@ -232,7 +238,9 @@ fn event_target_chain_resolves_on_boa() {
 fn cancel_bubble_before_dispatch<E: ScriptEngine>() {
     use serval_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
-    rt.load_dom(&StaticDocument::parse("<html><body><div id=d>x</div></body></html>"));
+    rt.load_dom(&StaticDocument::parse(
+        "<html><body><div id=d>x</div></body></html>",
+    ));
     rt.eval(
         "var fired = [];\
          var d = document.getElementById('d');\
@@ -255,7 +263,8 @@ fn cancel_bubble_before_dispatch<E: ScriptEngine>() {
     let log = rt.host().borrow().console.clone();
     assert!(
         !log[0].contains("window"),
-        "cancelBubble before dispatch must not reach window (got {})", log[0]
+        "cancelBubble before dispatch must not reach window (got {})",
+        log[0]
     );
 }
 
@@ -307,16 +316,16 @@ fn dom_element_surface_works<E: ScriptEngine>() {
     assert_eq!(
         rt.host().borrow().console,
         vec![
-            "true",        // div instanceof Element
-            "1",           // nodeType ELEMENT_NODE
-            "a,x y",       // id, className
-            "true,false",  // hasAttribute
-            "x z,true,2",  // className after add('z')/remove('y'); classList has x; length 2
-            "true",        // toggleAttribute added 'hidden'
-            "2",           // .x matches div + p
-            "hi",          // div > p textContent
-            "1",           // div's span descendants
-            "true",        // p matches .x
+            "true",       // div instanceof Element
+            "1",          // nodeType ELEMENT_NODE
+            "a,x y",      // id, className
+            "true,false", // hasAttribute
+            "x z,true,2", // className after add('z')/remove('y'); classList has x; length 2
+            "true",       // toggleAttribute added 'hidden'
+            "2",          // .x matches div + p
+            "hi",         // div > p textContent
+            "1",          // div's span descendants
+            "true",       // p matches .x
         ],
     );
 }
@@ -361,16 +370,16 @@ fn dom_traversal_works<E: ScriptEngine>() {
     assert_eq!(
         rt.host().borrow().console,
         vec![
-            "3",            // childNodes: text + span#a + span#b
-            "#text,text",   // firstChild nodeName/nodeValue
-            "2",            // childElementCount (two spans)
-            "a,b",          // first/last element child ids
-            "b,null",       // a.nextElementSibling=b, previousElementSibling=null
-            "a,c,b",        // after insertBefore(c, b)
-            "c,b",          // after removeChild(a)
-            "c,d,b",        // after c.after(d)
-            "c,b",          // after d.remove()
-            "true,false",   // contains c (yes), a (removed, no)
+            "3",          // childNodes: text + span#a + span#b
+            "#text,text", // firstChild nodeName/nodeValue
+            "2",          // childElementCount (two spans)
+            "a,b",        // first/last element child ids
+            "b,null",     // a.nextElementSibling=b, previousElementSibling=null
+            "a,c,b",      // after insertBefore(c, b)
+            "c,b",        // after removeChild(a)
+            "c,d,b",      // after c.after(d)
+            "c,b",        // after d.remove()
+            "true,false", // contains c (yes), a (removed, no)
         ],
     );
 }
@@ -410,16 +419,16 @@ fn dom_reflection_ns_works<E: ScriptEngine>() {
     assert_eq!(
         rt.host().borrow().console,
         vec![
-            "string,boolean,number",       // typeof reflected attrs
-            "T,T",                          // title set reflects to attribute
-            "true,true",                    // hidden boolean reflects
-            "false",                        // hidden cleared
-            "3",                            // tabIndex long roundtrip
+            "string,boolean,number",                        // typeof reflected attrs
+            "T,T",                                          // title set reflects to attribute
+            "true,true",                                    // hidden boolean reflects
+            "false",                                        // hidden cleared
+            "3",                                            // tabIndex long roundtrip
             "a,http://www.w3.org/1999/xhtml,A", // localName/namespaceURI/tagName (HTML upper)
             "rect,http://www.w3.org/2000/svg,svg,svg:rect", // createElementNS: localName=rect, tagName=qualified (prefix kept, not upper-cased)
-            "Hi there",                     // document.title whitespace-collapsed
-            "object,1",                     // NodeFilter present
-            "a",                            // tree walker over body finds the <a>
+            "Hi there",                                     // document.title whitespace-collapsed
+            "object,1",                                     // NodeFilter present
+            "a",                                            // tree walker over body finds the <a>
         ],
     );
 }
@@ -440,6 +449,140 @@ fn dom_reflection_ns_on_nova() {
     dom_reflection_ns_works::<script_engine_nova::NovaEngine>();
 }
 
+/// HTML interface table: per-tag constructors/prototypes and reflected IDL attrs
+/// come from the declarative table, not hand-written element cases.
+fn html_interface_table_works<E: ScriptEngine>() {
+    use serval_static_dom::StaticDocument;
+    let mut rt = Runtime::<E>::new().expect("runtime");
+    rt.set_base_url("http://example.test/base/index.html")
+        .expect("base url");
+    rt.load_dom(&StaticDocument::parse(
+        "<html><body><a id='a' href='p'></a><button id='b'></button><canvas id='c'></canvas></body></html>",
+    ));
+
+    rt.eval(
+        "var a = document.getElementById('a');\
+         var b = document.getElementById('b');\
+         var c = document.getElementById('c');\
+         var div = document.createElement('div');\
+         console.log(typeof HTMLAnchorElement + ',' + typeof HTMLButtonElement + ',' + typeof HTMLCanvasElement);\
+         console.log(HTMLCanvasElement.name + ',' + HTMLButtonElement.name);\
+         console.log(String(a instanceof HTMLAnchorElement) + ',' + String(b instanceof HTMLButtonElement) + ',' + String(c instanceof HTMLCanvasElement) + ',' + String(c instanceof HTMLElement));\
+         console.log(String(a instanceof HTMLButtonElement) + ',' + String(b instanceof HTMLAnchorElement));\
+         console.log(a.href + ',' + String('href' in div));\
+         a.text = 'go'; console.log(a.text + ',' + a.textContent + ',' + String(a.getAttribute('text')));\
+         b.disabled = true; console.log(String(b.disabled) + ',' + String(b.hasAttribute('disabled')) + ',' + String('disabled' in div));\
+         console.log(String(c.width) + ',' + String(c.height));\
+         c.width = 640; console.log(c.getAttribute('width') + ',' + String(c.width));\
+         console.log(String(c.getContext === HTMLCanvasElement.prototype.getContext));\
+         console.log(String(document.createElement('BUTTON') instanceof HTMLButtonElement));\
+         var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg:rect');\
+         console.log(String(svg instanceof Element) + ',' + String(svg instanceof HTMLElement));",
+    )
+    .expect("html interface table script");
+
+    assert_eq!(
+        rt.host().borrow().console,
+        vec![
+            "function,function,function",
+            "HTMLCanvasElement,HTMLButtonElement",
+            "true,true,true,true",
+            "false,false",
+            "http://example.test/base/p,false",
+            "go,go,null",
+            "true,true,false",
+            "300,150",
+            "640,640",
+            "true",
+            "true",
+            "true,false",
+        ],
+    );
+}
+
+#[test]
+fn html_interface_table_on_boa() {
+    html_interface_table_works::<script_engine_boa::BoaEngine>();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn html_interface_table_on_nova() {
+    html_interface_table_works::<script_engine_nova::NovaEngine>();
+}
+
+/// First custom-elements I3 slice: use the HTML interface table for customized
+/// built-ins, upgrade existing matching nodes on define, support `{ is }`
+/// creation, and allow explicit upgrade of detached subtrees.
+fn custom_elements_customized_builtins_work<E: ScriptEngine>() {
+    use serval_static_dom::StaticDocument;
+    let mut rt = Runtime::<E>::new().expect("runtime");
+    rt.load_dom(&StaticDocument::parse(
+        "<html><body><button id='old' is='x-fancy'></button><button id='plain'></button><x-card id='card'></x-card></body></html>",
+    ));
+
+    rt.eval(
+        "function FancyButton(){ this.setAttribute('upgraded', 'yes'); }\
+         FancyButton.prototype = Object.create(HTMLButtonElement.prototype);\
+         FancyButton.prototype.constructor = FancyButton;\
+         FancyButton.prototype.connectedCallback = function(){ this.setAttribute('connected', 'yes'); };\
+         customElements.define('x-fancy', FancyButton, { extends: 'button' });\
+         var old = document.getElementById('old');\
+         console.log(String(old instanceof FancyButton) + ',' + String(old instanceof HTMLButtonElement) + ',' + old.getAttribute('upgraded') + ',' + old.getAttribute('connected'));\
+         var made = document.createElement('button', { is: 'x-fancy' });\
+         console.log(made.getAttribute('is') + ',' + String(made instanceof FancyButton) + ',' + made.getAttribute('upgraded') + ',' + String(made.isConnected));\
+         document.body.appendChild(made);\
+         console.log(made.getAttribute('connected'));\
+         console.log(String(document.getElementById('plain') instanceof FancyButton));\
+         function XCard(){ this.flag = 'card'; }\
+         XCard.prototype = Object.create(HTMLElement.prototype);\
+         XCard.prototype.constructor = XCard;\
+         customElements.define('x-card', XCard);\
+         var card = document.getElementById('card');\
+         console.log(String(card instanceof XCard) + ',' + String(card instanceof HTMLElement) + ',' + card.flag);\
+         var detached = document.createElement('button', { is: 'x-late' });\
+         function LateButton(){ this.setAttribute('late', 'yes'); }\
+         LateButton.prototype = Object.create(HTMLButtonElement.prototype);\
+         LateButton.prototype.constructor = LateButton;\
+         customElements.define('x-late', LateButton, { extends: 'button' });\
+         console.log(String(detached instanceof LateButton));\
+         customElements.upgrade(detached);\
+         console.log(String(detached instanceof LateButton) + ',' + detached.getAttribute('late'));\
+         class ClassButton extends HTMLButtonElement { constructor(){ super(); this.classReady = 'ok'; } }\
+         customElements.define('x-classy', ClassButton, { extends: 'button' });\
+         var classy = document.createElement('button', { is: 'x-classy' });\
+         console.log(String(classy instanceof ClassButton) + ',' + String(classy instanceof HTMLButtonElement) + ',' + classy.classReady);\
+         console.log(String(customElements.get('x-fancy') === FancyButton) + ',' + customElements.getName(FancyButton));",
+    )
+    .expect("custom elements customized built-ins script");
+
+    assert_eq!(
+        rt.host().borrow().console,
+        vec![
+            "true,true,yes,yes",
+            "x-fancy,true,yes,false",
+            "yes",
+            "false",
+            "true,true,card",
+            "false",
+            "true,yes",
+            "true,true,ok",
+            "true,x-fancy",
+        ],
+    );
+}
+
+#[test]
+fn custom_elements_customized_builtins_on_boa() {
+    custom_elements_customized_builtins_work::<script_engine_boa::BoaEngine>();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn custom_elements_customized_builtins_on_nova() {
+    custom_elements_customized_builtins_work::<script_engine_nova::NovaEngine>();
+}
+
 /// Probe: does the backend's `Proxy` support the traps a live HTMLCollection
 /// needs (get for integer index, has, ownKeys)? Determines whether the exotic
 /// collection can be a JS Proxy in the bootstrap vs needing an engine primitive.
@@ -458,7 +601,10 @@ fn proxy_capability<E: ScriptEngine>() {
          console.log(Object.keys(p).join(','));",
     )
     .expect("proxy eval");
-    assert_eq!(rt.host().borrow().console, vec!["zero", "1", "true", "0,length"]);
+    assert_eq!(
+        rt.host().borrow().console,
+        vec!["zero", "1", "true", "0,length"]
+    );
 }
 
 /// Live HTMLCollection / NodeList exotic semantics, against any backend:
@@ -493,14 +639,14 @@ fn dom_collections_works<E: ScriptEngine>() {
     assert_eq!(
         rt.host().borrow().console,
         vec![
-            "2,x,y",          // length, [0].id, item(1) name
-            "x,null",         // namedItem hit / miss
-            "y",              // named access c['y']
+            "2,x,y",            // length, [0].id, item(1) name
+            "x,null",           // namedItem hit / miss
+            "y",                // named access c['y']
             "true,false,false", // Symbol.iterator yes; forEach/values no (HTMLCollection)
-            "0,1,x,y",        // getOwnPropertyNames: indices 0,1 then names x,y
-            "3",              // live: after appending a third span
+            "0,1,x,y",          // getOwnPropertyNames: indices 0,1 then names x,y
+            "3",                // live: after appending a third span
             "3,function,false", // childNodes NodeList: 3 kids, has forEach, no namedItem
-            "SPAN,SPAN,SPAN", // forEach over the NodeList
+            "SPAN,SPAN,SPAN",   // forEach over the NodeList
         ],
     );
 }
@@ -516,7 +662,9 @@ fn proxy_capability_on_boa() {
 fn dom_tokenlist_dataset_works<E: ScriptEngine>() {
     use serval_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
-    rt.load_dom(&StaticDocument::parse("<html><body><a id='a' class='x y'></a></body></html>"));
+    rt.load_dom(&StaticDocument::parse(
+        "<html><body><a id='a' class='x y'></a></body></html>",
+    ));
 
     rt.eval(
         "var a = document.getElementById('a');\
@@ -538,17 +686,17 @@ fn dom_tokenlist_dataset_works<E: ScriptEngine>() {
     assert_eq!(
         rt.host().borrow().console,
         vec![
-            "[object DOMTokenList]",     // brand
-            "function,function,true",    // values, forEach, Symbol.iterator
-            "x y,2,x,y",                 // value, length, [0], [1]
-            "true,z y",                  // replace('x','z') -> 'z y'
-            "z,y",                       // forEach over tokens
-            "2,true",                    // relList from rel='next prev'
-            "v",                         // dataset.fooBar -> data-foo-bar
-            "w",                         // data-baz -> dataset.baz
-            "true,false",                // 'fooBar' in dataset, 'nope' not
-            "baz,fooBar",                // Object.keys(dataset) (sorted)
-            "false",                     // delete dataset.baz removed the attr
+            "[object DOMTokenList]",  // brand
+            "function,function,true", // values, forEach, Symbol.iterator
+            "x y,2,x,y",              // value, length, [0], [1]
+            "true,z y",               // replace('x','z') -> 'z y'
+            "z,y",                    // forEach over tokens
+            "2,true",                 // relList from rel='next prev'
+            "v",                      // dataset.fooBar -> data-foo-bar
+            "w",                      // data-baz -> dataset.baz
+            "true,false",             // 'fooBar' in dataset, 'nope' not
+            "baz,fooBar",             // Object.keys(dataset) (sorted)
+            "false",                  // delete dataset.baz removed the attr
         ],
     );
 }
@@ -559,7 +707,8 @@ fn dom_tokenlist_dataset_works<E: ScriptEngine>() {
 fn dom_url_reflection_works<E: ScriptEngine>() {
     use serval_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
-    rt.set_base_url("http://example.com/dir/page.html").expect("base url");
+    rt.set_base_url("http://example.com/dir/page.html")
+        .expect("base url");
     rt.load_dom(&StaticDocument::parse(
         "<html><body><a id='a' href='sub/x.html'></a><img id='i'></body></html>",
     ));
@@ -597,7 +746,9 @@ fn dom_url_reflection_on_boa() {
 fn dom_implementation_works<E: ScriptEngine>() {
     use serval_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
-    rt.load_dom(&StaticDocument::parse("<html><body><p id='main'></p></body></html>"));
+    rt.load_dom(&StaticDocument::parse(
+        "<html><body><p id='main'></p></body></html>",
+    ));
 
     rt.eval(
         "console.log(String(document.implementation.hasFeature('x', 'y')));\
@@ -615,12 +766,12 @@ fn dom_implementation_works<E: ScriptEngine>() {
     assert_eq!(
         rt.host().borrow().console,
         vec![
-            "true",                  // hasFeature always true
-            "Hello,HTML,BODY",       // createHTMLDocument: title, <html>, <body>
-            "sub",                   // getElementById scoped to the created doc
-            "null",                  // primary document does NOT see the created doc's #sub
-            "main-here",             // primary document still finds its own #main
-            "root,urn:ns",           // createDocument: root element + namespace
+            "true",            // hasFeature always true
+            "Hello,HTML,BODY", // createHTMLDocument: title, <html>, <body>
+            "sub",             // getElementById scoped to the created doc
+            "null",            // primary document does NOT see the created doc's #sub
+            "main-here",       // primary document still finds its own #main
+            "root,urn:ns",     // createDocument: root element + namespace
         ],
     );
 }
@@ -648,7 +799,7 @@ fn element_style_inline_cssom<E: ScriptEngine>() {
     assert_eq!(
         rt.host().borrow().console,
         vec![
-            "red,12px,12px",   // .color, .fontSize (camelCase), getPropertyValue
+            "red,12px,12px",     // .color, .fontSize (camelCase), getPropertyValue
             "2,color,font-size", // length, item(0), item(1)
             "color: blue; font-size: 12px; margin-top: 4px; font-weight: bold;",
             "12px,true,false", // removeProperty returns old; 'color' in / 'display' in
@@ -684,7 +835,9 @@ fn get_computed_style_reads_handler<E: ScriptEngine>() {
         }
     }
     let mut rt = Runtime::<E>::new().expect("runtime");
-    rt.load_dom(&StaticDocument::parse("<html><body><div id='d'></div></body></html>"));
+    rt.load_dom(&StaticDocument::parse(
+        "<html><body><div id='d'></div></body></html>",
+    ));
     rt.set_computed_style_handler(Box::new(Stub));
     rt.eval(
         "var cs = getComputedStyle(document.getElementById('d'));\
@@ -697,8 +850,8 @@ fn get_computed_style_reads_handler<E: ScriptEngine>() {
         rt.host().borrow().console,
         vec![
             "rgb(0, 0, 0),16px,block", // color, fontSize (camelCase), getPropertyValue
-            "||",                       // unsupported longhands -> ""
-            "rgb(0, 0, 0)",             // read-only: the set was ignored
+            "||",                      // unsupported longhands -> ""
+            "rgb(0, 0, 0)",            // read-only: the set was ignored
         ],
     );
 }
@@ -735,7 +888,9 @@ fn document_cookie_reads_and_writes_provider<E: ScriptEngine>() {
     let written = Rc::new(RefCell::new(Vec::new()));
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse("<html><body></body></html>"));
-    rt.set_cookie_provider(Box::new(Stub { written: written.clone() }));
+    rt.set_cookie_provider(Box::new(Stub {
+        written: written.clone(),
+    }));
     rt.eval(
         "console.log(document.cookie);\
          document.cookie = 'new=1; Path=/';\
@@ -799,7 +954,9 @@ fn dom_created_doc_queryable<E: ScriptEngine>() {
 fn dom_characterdata_identity_works<E: ScriptEngine>() {
     use serval_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
-    rt.load_dom(&StaticDocument::parse("<html><body><div id='p'></div></body></html>"));
+    rt.load_dom(&StaticDocument::parse(
+        "<html><body><div id='p'></div></body></html>",
+    ));
 
     rt.eval(
         "function thrown(fn){ try { fn(); return 'no-throw'; } catch(e){ return e.name; } }\
@@ -829,20 +986,20 @@ fn dom_characterdata_identity_works<E: ScriptEngine>() {
     assert_eq!(
         rt.host().borrow().console,
         vec![
-            "true,true,true",   // Text instanceof chain
-            "hello,5,hello",    // data, length, nodeValue
-            "true",             // ownerDocument === document
-            "hello world",      // appendData
-            "hello, world",     // insertData at 5
-            " world",           // deleteData first 6
-            " worl",            // substringData(0,5) — read-only, data stays " world"
-            "WORLDd",           // replaceData(0,5,'WORLD') over " world" keeps the 6th char
-            "IndexSizeError",   // substringData out of range
-            "true,true,cm",     // Comment instanceof + data
-            "true",             // isEqualNode: identical
-            "false",            // isEqualNode: differing attr
-            "true,true",        // compareDocumentPosition FOLLOWING / PRECEDING
-            "true,false",       // isConnected: in-tree vs detached
+            "true,true,true", // Text instanceof chain
+            "hello,5,hello",  // data, length, nodeValue
+            "true",           // ownerDocument === document
+            "hello world",    // appendData
+            "hello, world",   // insertData at 5
+            " world",         // deleteData first 6
+            " worl",          // substringData(0,5) — read-only, data stays " world"
+            "WORLDd",         // replaceData(0,5,'WORLD') over " world" keeps the 6th char
+            "IndexSizeError", // substringData out of range
+            "true,true,cm",   // Comment instanceof + data
+            "true",           // isEqualNode: identical
+            "false",          // isEqualNode: differing attr
+            "true,true",      // compareDocumentPosition FOLLOWING / PRECEDING
+            "true,false",     // isConnected: in-tree vs detached
         ],
     );
 }
@@ -889,12 +1046,12 @@ fn dom_fragment_clone_works<E: ScriptEngine>() {
     assert_eq!(
         rt.host().borrow().console,
         vec![
-            "11,true,true",   // fragment nodeType + instanceof chain
-            "1,found",        // one child; getElementById scoped to the fragment
-            "true",           // querySelector('span') finds the nested element
-            "DIV,x,c,0",      // shallow clone: tag/id/class copied, no children
-            "1,SPAN",         // deep clone: child subtree copied
-            "true",           // new DocumentFragment()
+            "11,true,true", // fragment nodeType + instanceof chain
+            "1,found",      // one child; getElementById scoped to the fragment
+            "true",         // querySelector('span') finds the nested element
+            "DIV,x,c,0",    // shallow clone: tag/id/class copied, no children
+            "1,SPAN",       // deep clone: child subtree copied
+            "true",         // new DocumentFragment()
         ],
     );
 }
@@ -1015,7 +1172,12 @@ fn dom_node_events_work<E: ScriptEngine>() {
          child.addEventListener('pasv', function(e){ e.preventDefault(); }, { passive: true });\
          var pe = new Event('pasv', { cancelable: true });\
          var notCanceled = child.dispatchEvent(pe);\
-         console.log('passive-noop:' + (notCanceled && !pe.defaultPrevented));",
+         console.log('passive-noop:' + (notCanceled && !pe.defaultPrevented));\
+         child.addEventListener('mouse', function(e){ var path = e.composedPath(); console.log('mouse:' + (e instanceof MouseEvent) + ':' + e.clientX + ':' + path[0].tagName + ':' + path[1].tagName + ':' + (path[path.length - 1] === window)); });\
+         child.dispatchEvent(new MouseEvent('mouse', { bubbles: true, cancelable: true, clientX: 7, clientY: 9, button: 1 }));\
+         child.addEventListener('wheel', function(e){ e.preventDefault(); }, { passive: true });\
+         var wheel = new MouseEvent('wheel', { bubbles: true, cancelable: true });\
+         console.log('passive-wheel:' + (child.dispatchEvent(wheel) && !wheel.defaultPrevented));",
     )
     .expect("events script");
 
@@ -1036,7 +1198,49 @@ fn dom_node_events_work<E: ScriptEngine>() {
             "once-fired",
             "legacy:legacy:true",
             "passive-noop:true",
+            "mouse:true:7:SPAN:DIV:true",
+            "passive-wheel:true",
         ]
+    );
+}
+
+fn document_evaluate_xpath_works<E: ScriptEngine>() {
+    use serval_static_dom::StaticDocument;
+
+    let mut rt = Runtime::<E>::new().expect("runtime");
+    let src = StaticDocument::parse(
+        "<html><body><main id='main'><h1>Title</h1><p class='lede'>Hello <a href='/x'>link</a></p><p>Second</p></main></body></html>",
+    );
+    rt.load_dom(&src);
+
+    rt.eval(
+        "var h = document.evaluate('string(//h1)', document, null, XPathResult.STRING_TYPE, null);\
+         console.log('h:' + h.stringValue);\
+         var count = document.evaluate('count(//p)', document, null, XPathResult.NUMBER_TYPE, null);\
+         console.log('count:' + count.numberValue);\
+         var lede = document.evaluate('//p[@class=\"lede\"]', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);\
+         console.log('node:' + lede.singleNodeValue.tagName + ':' + lede.singleNodeValue.textContent);\
+         var iter = document.evaluate('//a', document, null, XPathResult.ORDERED_NODE_ITERATOR_TYPE, null);\
+         console.log('iter:' + iter.iterateNext().tagName + ':' + String(iter.iterateNext()));\
+         var main = document.getElementById('main');\
+         var link = document.evaluate('//a', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;\
+         console.log('preceding-main:' + document.evaluate('count(preceding::main)', link, null, XPathResult.NUMBER_TYPE, null).numberValue);\
+         console.log('following-main:' + document.evaluate('following::p', main, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null).snapshotLength);\
+         console.log('nodes-as-scalar:' + document.evaluate('//a', document, null, XPathResult.BOOLEAN_TYPE, null).booleanValue + ':' + document.evaluate('//a', document, null, XPathResult.STRING_TYPE, null).stringValue);",
+    )
+    .expect("xpath script");
+
+    assert_eq!(
+        rt.host().borrow().console,
+        vec![
+            "h:Title",
+            "count:2",
+            "node:P:Hello link",
+            "iter:A:null",
+            "preceding-main:0",
+            "following-main:0",
+            "nodes-as-scalar:true:link",
+        ],
     );
 }
 
@@ -1063,7 +1267,9 @@ fn dispatch_event_fires_a_listener<E: ScriptEngine>() {
     assert_eq!(rt.host().borrow().console, vec!["clicked"]);
 
     // A listener calling preventDefault surfaces as `false` to the host.
-    let proceed = rt.dispatch_event(root, "cancelme").expect("dispatch cancelme");
+    let proceed = rt
+        .dispatch_event(root, "cancelme")
+        .expect("dispatch cancelme");
     assert!(!proceed);
 }
 
@@ -1088,10 +1294,21 @@ fn dom_node_events_on_boa() {
     dom_node_events_work::<script_engine_boa::BoaEngine>();
 }
 
+#[test]
+fn document_evaluate_xpath_on_boa() {
+    document_evaluate_xpath_works::<script_engine_boa::BoaEngine>();
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn dom_node_events_on_nova() {
     dom_node_events_work::<script_engine_nova::NovaEngine>();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn document_evaluate_xpath_on_nova() {
+    document_evaluate_xpath_works::<script_engine_nova::NovaEngine>();
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1135,7 +1352,9 @@ fn dom_read_surface_on_nova() {
 fn dom_throwing_works<E: ScriptEngine>() {
     use serval_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
-    rt.load_dom(&StaticDocument::parse("<html><body><div id='p'></div></body></html>"));
+    rt.load_dom(&StaticDocument::parse(
+        "<html><body><div id='p'></div></body></html>",
+    ));
 
     rt.eval(
         "function thrown(fn){ try { fn(); return 'no-throw'; } catch(e){ return (e && e.name) || 'err'; } }\
@@ -1156,16 +1375,16 @@ fn dom_throwing_works<E: ScriptEngine>() {
     assert_eq!(
         rt.host().borrow().console,
         vec![
-            "InvalidCharacterError",  // createElement('1foo')
-            "InvalidCharacterError",  // createElement('f<oo')
-            "div",                    // createElement('DIV') lowercases
-            ":foo",                   // ':foo' is a valid Name, not lowercased away
-            "InvalidCharacterError",  // setAttribute('a b', ...)
-            "NamespaceError",         // createElementNS(null, 'p:q') — prefix needs ns
-            "InvalidCharacterError",  // 'a:b:c' — malformed qualified name
-            "a:b",                    // valid NS element, tagName not upper (non-HTML ns)
-            "HierarchyRequestError",  // c.appendChild(p) — p is ancestor of c
-            "HierarchyRequestError",  // p.appendChild(p) — self
+            "InvalidCharacterError", // createElement('1foo')
+            "InvalidCharacterError", // createElement('f<oo')
+            "div",                   // createElement('DIV') lowercases
+            ":foo",                  // ':foo' is a valid Name, not lowercased away
+            "InvalidCharacterError", // setAttribute('a b', ...)
+            "NamespaceError",        // createElementNS(null, 'p:q') — prefix needs ns
+            "InvalidCharacterError", // 'a:b:c' — malformed qualified name
+            "a:b",                   // valid NS element, tagName not upper (non-HTML ns)
+            "HierarchyRequestError", // c.appendChild(p) — p is ancestor of c
+            "HierarchyRequestError", // p.appendChild(p) — self
         ],
     );
 }

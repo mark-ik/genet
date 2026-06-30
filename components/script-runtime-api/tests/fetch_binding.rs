@@ -44,7 +44,9 @@ impl FetchHandler for EchoFetch {
 
 fn read(rt: &mut Runtime<BoaEngine>, expr: &str) -> String {
     let v = rt.eval(expr).expect("eval");
-    rt.engine_mut().value_to_string(&v).expect("value_to_string")
+    rt.engine_mut()
+        .value_to_string(&v)
+        .expect("value_to_string")
 }
 
 /// A deferred host: `start` records the id and returns `None` (leaving the Promise
@@ -70,13 +72,20 @@ fn deferred_fetch_settles_later() {
     let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(u64, String)>::new()));
     let cancelled = std::rc::Rc::new(std::cell::RefCell::new(Vec::<u64>::new()));
     let mut rt = Runtime::<BoaEngine>::new().unwrap();
-    rt.set_fetch_handler(Box::new(DeferredRecorder { seen: seen.clone(), cancelled: cancelled.clone() }));
+    rt.set_fetch_handler(Box::new(DeferredRecorder {
+        seen: seen.clone(),
+        cancelled: cancelled.clone(),
+    }));
 
     // (1) A deferred fetch stays pending until the host settles it.
     rt.eval(r#"var D={}; fetch("http://x/a").then(function(r){D.s=r.status; return r.text();}).then(function(t){D.b=t;});"#).unwrap();
     rt.run_microtasks();
     assert_eq!(rt.pending_fetches(), 1, "deferred fetch is pending");
-    assert_eq!(read(&mut rt, "String(D.s)"), "undefined", "not resolved before the host settles");
+    assert_eq!(
+        read(&mut rt, "String(D.s)"),
+        "undefined",
+        "not resolved before the host settles"
+    );
     let id_a = seen.borrow()[0].0;
     rt.settle_fetch(
         id_a,
@@ -93,7 +102,11 @@ fn deferred_fetch_settles_later() {
     );
     assert_eq!(read(&mut rt, "String(D.s)"), "200");
     assert_eq!(read(&mut rt, "D.b"), "hi");
-    assert_eq!(rt.pending_fetches(), 0, "settling removes the pending entry");
+    assert_eq!(
+        rt.pending_fetches(),
+        0,
+        "settling removes the pending entry"
+    );
 
     // (2) fail_fetch rejects with a TypeError (a network error).
     rt.eval(r#"var F={}; fetch("http://x/b").then(function(){F.r="ok";}, function(e){F.r=(e instanceof TypeError)?"TypeError":"other";});"#).unwrap();
@@ -106,8 +119,15 @@ fn deferred_fetch_settles_later() {
     rt.eval(r#"var A={}; var c=new AbortController(); fetch("http://x/c",{signal:c.signal}).then(function(){A.r="ok";}, function(e){A.r=e.name;}); c.abort();"#).unwrap();
     rt.run_microtasks();
     let id_c = seen.borrow()[2].0;
-    assert_eq!(read(&mut rt, "A.r"), "AbortError", "abort rejects with the signal reason");
-    assert!(cancelled.borrow().contains(&id_c), "host cancel() ran for the aborted id");
+    assert_eq!(
+        read(&mut rt, "A.r"),
+        "AbortError",
+        "abort rejects with the signal reason"
+    );
+    assert!(
+        cancelled.borrow().contains(&id_c),
+        "host cancel() ran for the aborted id"
+    );
     assert_eq!(rt.pending_fetches(), 0, "abort removes the pending entry");
 }
 
@@ -129,7 +149,10 @@ fn streaming_response_body_delivers_incrementally() {
     let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(u64, String)>::new()));
     let cancelled = std::rc::Rc::new(std::cell::RefCell::new(Vec::<u64>::new()));
     let mut rt = Runtime::<BoaEngine>::new().unwrap();
-    rt.set_fetch_handler(Box::new(DeferredRecorder { seen: seen.clone(), cancelled }));
+    rt.set_fetch_handler(Box::new(DeferredRecorder {
+        seen: seen.clone(),
+        cancelled,
+    }));
 
     // (1) Incremental read via response.body.getReader(): each chunk surfaces as it
     // is pushed; the reader parks between chunks and ends on close.
@@ -147,16 +170,32 @@ fn streaming_response_body_delivers_incrementally() {
     rt.run_microtasks();
     let id = seen.borrow()[0].0;
     rt.start_stream(id, ok_meta("http://x/stream"));
-    assert_eq!(read(&mut rt, "String(S.status)"), "200", "early-settled with status before body");
-    assert_eq!(read(&mut rt, "String(S.chunks.length)"), "0", "no chunks before any push");
+    assert_eq!(
+        read(&mut rt, "String(S.status)"),
+        "200",
+        "early-settled with status before body"
+    );
+    assert_eq!(
+        read(&mut rt, "String(S.chunks.length)"),
+        "0",
+        "no chunks before any push"
+    );
     rt.push_chunk(id, b"foo");
     assert_eq!(read(&mut rt, "S.chunks.join(',')"), "foo");
     rt.push_chunk(id, b"bar");
     assert_eq!(read(&mut rt, "S.chunks.join(',')"), "foo,bar");
-    assert_eq!(read(&mut rt, "String(S.done)"), "undefined", "not done until close");
+    assert_eq!(
+        read(&mut rt, "String(S.done)"),
+        "undefined",
+        "not done until close"
+    );
     rt.close_stream(id);
     assert_eq!(read(&mut rt, "String(S.done)"), "true");
-    assert_eq!(rt.pending_fetches(), 0, "closing a stream removes the pending entry");
+    assert_eq!(
+        rt.pending_fetches(),
+        0,
+        "closing a stream removes the pending entry"
+    );
 
     // (2) Async drain via text() on a streaming response (resolves a primitive once
     // all chunks have arrived).
@@ -167,7 +206,11 @@ fn streaming_response_body_delivers_incrementally() {
     rt.push_chunk(id2, b"hel");
     rt.push_chunk(id2, b"lo");
     rt.close_stream(id2);
-    assert_eq!(read(&mut rt, "T.text"), "hello", "text() awaits the whole streamed body");
+    assert_eq!(
+        read(&mut rt, "T.text"),
+        "hello",
+        "text() awaits the whole streamed body"
+    );
 }
 
 #[test]
@@ -175,16 +218,23 @@ fn clone_of_live_streaming_body_rejects() {
     let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(u64, String)>::new()));
     let cancelled = std::rc::Rc::new(std::cell::RefCell::new(Vec::<u64>::new()));
     let mut rt = Runtime::<BoaEngine>::new().unwrap();
-    rt.set_fetch_handler(Box::new(DeferredRecorder { seen: seen.clone(), cancelled }));
+    rt.set_fetch_handler(Box::new(DeferredRecorder {
+        seen: seen.clone(),
+        cancelled,
+    }));
 
-    rt.eval(r#"var C={}; fetch("http://x/live").then(function(r){ C.resp = r; });"#).unwrap();
+    rt.eval(r#"var C={}; fetch("http://x/live").then(function(r){ C.resp = r; });"#)
+        .unwrap();
     rt.run_microtasks();
     let id = seen.borrow()[0].0;
     rt.start_stream(id, ok_meta("http://x/live"));
     // C.resp is a live (still-arriving) streaming Response. The buffered tee cannot
     // clone it losslessly, so clone() must throw rather than silently truncate.
     assert_eq!(
-        read(&mut rt, r#"(function(){try{C.resp.clone();return "no-throw";}catch(e){return e instanceof TypeError?"TypeError":"other";}})()"#),
+        read(
+            &mut rt,
+            r#"(function(){try{C.resp.clone();return "no-throw";}catch(e){return e instanceof TypeError?"TypeError":"other";}})()"#
+        ),
         "TypeError"
     );
     rt.close_stream(id);
@@ -222,7 +272,11 @@ fn fetch_resolves_to_response_through_the_handler() {
     assert_eq!(read(&mut rt, "R.url"), "http://example.test/path");
     assert_eq!(read(&mut rt, "R.ct"), "text/plain");
     assert_eq!(read(&mut rt, "R.method"), "GET");
-    assert_eq!(read(&mut rt, "R.accept"), "text/plain", "request headers reach the handler");
+    assert_eq!(
+        read(&mut rt, "R.accept"),
+        "text/plain",
+        "request headers reach the handler"
+    );
     assert_eq!(read(&mut rt, "R.hadBody"), "false", "GET has no body");
     assert_eq!(read(&mut rt, "R.body"), "echo:GET:http://example.test/path");
 }
@@ -256,7 +310,11 @@ fn no_handler_is_a_network_error() {
     )
     .unwrap();
     rt.run_microtasks();
-    assert_eq!(read(&mut rt, "String(R.rejected)"), "true", "no handler rejects with a TypeError");
+    assert_eq!(
+        read(&mut rt, "String(R.rejected)"),
+        "true",
+        "no handler rejects with a TypeError"
+    );
 }
 
 // ---- Fetch API object semantics (no network / handler needed) ----
@@ -266,49 +324,139 @@ fn headers_object_semantics() {
     let mut rt = Runtime::<BoaEngine>::new().unwrap();
     // append combines; get joins with ", "; case-insensitive; iteration sorted.
     assert_eq!(
-        read(&mut rt, r#"(function(){var h=new Headers();h.append("X-A","1");h.append("x-a","2");return h.get("X-A");})()"#),
+        read(
+            &mut rt,
+            r#"(function(){var h=new Headers();h.append("X-A","1");h.append("x-a","2");return h.get("X-A");})()"#
+        ),
         "1, 2"
     );
-    assert_eq!(read(&mut rt, r#"(function(){var h=new Headers({"Content-Type":"text/plain"});return String(h.has("content-type"));})()"#), "true");
-    assert_eq!(read(&mut rt, r#"(function(){var h=new Headers({a:"1"});h.set("A","9");h["delete"]("z");return h.get("a");})()"#), "9");
+    assert_eq!(
+        read(
+            &mut rt,
+            r#"(function(){var h=new Headers({"Content-Type":"text/plain"});return String(h.has("content-type"));})()"#
+        ),
+        "true"
+    );
+    assert_eq!(
+        read(
+            &mut rt,
+            r#"(function(){var h=new Headers({a:"1"});h.set("A","9");h["delete"]("z");return h.get("a");})()"#
+        ),
+        "9"
+    );
     // sorted iteration of names.
     assert_eq!(
-        read(&mut rt, r#"(function(){var h=new Headers();h.append("b","2");h.append("a","1");var ks=[];h.forEach(function(v,k){ks.push(k);});return ks.join(",");})()"#),
+        read(
+            &mut rt,
+            r#"(function(){var h=new Headers();h.append("b","2");h.append("a","1");var ks=[];h.forEach(function(v,k){ks.push(k);});return ks.join(",");})()"#
+        ),
         "a,b"
     );
-    assert_eq!(read(&mut rt, r#"(function(){var h=new Headers();h.append("set-cookie","x=1");h.append("set-cookie","y=2");return h.getSetCookie().join("|");})()"#), "x=1|y=2");
+    assert_eq!(
+        read(
+            &mut rt,
+            r#"(function(){var h=new Headers();h.append("set-cookie","x=1");h.append("set-cookie","y=2");return h.getSetCookie().join("|");})()"#
+        ),
+        "x=1|y=2"
+    );
     // invalid header name throws TypeError.
-    assert_eq!(read(&mut rt, r#"(function(){try{new Headers().append("a b","1");return "noThrow";}catch(e){return e instanceof TypeError ? "TypeError" : "other";}})()"#), "TypeError");
+    assert_eq!(
+        read(
+            &mut rt,
+            r#"(function(){try{new Headers().append("a b","1");return "noThrow";}catch(e){return e instanceof TypeError ? "TypeError" : "other";}})()"#
+        ),
+        "TypeError"
+    );
 }
 
 #[test]
 fn request_object_semantics() {
     let mut rt = Runtime::<BoaEngine>::new().unwrap();
     assert_eq!(read(&mut rt, r#"new Request("http://x/y").method"#), "GET");
-    assert_eq!(read(&mut rt, r#"new Request("http://x/y", {method:"post"}).method"#), "POST");
-    assert_eq!(read(&mut rt, r#"new Request("http://x/y").url"#), "http://x/y");
+    assert_eq!(
+        read(
+            &mut rt,
+            r#"new Request("http://x/y", {method:"post"}).method"#
+        ),
+        "POST"
+    );
+    assert_eq!(
+        read(&mut rt, r#"new Request("http://x/y").url"#),
+        "http://x/y"
+    );
     // GET + body throws.
-    assert_eq!(read(&mut rt, r#"(function(){try{new Request("http://x",{method:"GET",body:"b"});return "noThrow";}catch(e){return e instanceof TypeError?"TypeError":"other";}})()"#), "TypeError");
+    assert_eq!(
+        read(
+            &mut rt,
+            r#"(function(){try{new Request("http://x",{method:"GET",body:"b"});return "noThrow";}catch(e){return e instanceof TypeError?"TypeError":"other";}})()"#
+        ),
+        "TypeError"
+    );
     // clone copies; reading body works.
-    assert_eq!(read(&mut rt, r#"new Request("http://x",{method:"POST",body:"hi"}).clone().method"#), "POST");
+    assert_eq!(
+        read(
+            &mut rt,
+            r#"new Request("http://x",{method:"POST",body:"hi"}).clone().method"#
+        ),
+        "POST"
+    );
     // header init carried.
-    assert_eq!(read(&mut rt, r#"new Request("http://x",{headers:{Accept:"text/html"}}).headers.get("accept")"#), "text/html");
+    assert_eq!(
+        read(
+            &mut rt,
+            r#"new Request("http://x",{headers:{Accept:"text/html"}}).headers.get("accept")"#
+        ),
+        "text/html"
+    );
 }
 
 #[test]
 fn response_object_semantics() {
     let mut rt = Runtime::<BoaEngine>::new().unwrap();
-    assert_eq!(read(&mut rt, r#"new Response("hi",{status:201,statusText:"Created"}).status"#), "201");
+    assert_eq!(
+        read(
+            &mut rt,
+            r#"new Response("hi",{status:201,statusText:"Created"}).status"#
+        ),
+        "201"
+    );
     assert_eq!(read(&mut rt, r#"String(new Response("hi").ok)"#), "true");
-    assert_eq!(read(&mut rt, r#"String(new Response(null,{status:404}).ok)"#), "false");
+    assert_eq!(
+        read(&mut rt, r#"String(new Response(null,{status:404}).ok)"#),
+        "false"
+    );
     // out-of-range status throws RangeError.
-    assert_eq!(read(&mut rt, r#"(function(){try{new Response(null,{status:99});return "noThrow";}catch(e){return e instanceof RangeError?"RangeError":"other";}})()"#), "RangeError");
+    assert_eq!(
+        read(
+            &mut rt,
+            r#"(function(){try{new Response(null,{status:99});return "noThrow";}catch(e){return e instanceof RangeError?"RangeError":"other";}})()"#
+        ),
+        "RangeError"
+    );
     // statics.
     assert_eq!(read(&mut rt, r#"Response.error().type"#), "error");
     assert_eq!(read(&mut rt, r#"String(Response.error().status)"#), "0");
-    assert_eq!(read(&mut rt, r#"String(Response.redirect("http://h/",301).status)"#), "301");
-    assert_eq!(read(&mut rt, r#"Response.redirect("http://h/",301).headers.get("location")"#), "http://h/");
-    assert_eq!(read(&mut rt, r#"Response.json({a:1}).headers.get("content-type")"#), "application/json");
+    assert_eq!(
+        read(
+            &mut rt,
+            r#"String(Response.redirect("http://h/",301).status)"#
+        ),
+        "301"
+    );
+    assert_eq!(
+        read(
+            &mut rt,
+            r#"Response.redirect("http://h/",301).headers.get("location")"#
+        ),
+        "http://h/"
+    );
+    assert_eq!(
+        read(
+            &mut rt,
+            r#"Response.json({a:1}).headers.get("content-type")"#
+        ),
+        "application/json"
+    );
 }
 
 #[test]
@@ -328,9 +476,14 @@ fn body_is_single_use() {
     .unwrap();
     rt.run_microtasks();
     assert_eq!(read(&mut rt, "B.first"), r#"{"k":1}"#);
-    assert_eq!(read(&mut rt, "B.second"), "rejected", "a consumed body cannot be re-read");
+    assert_eq!(
+        read(&mut rt, "B.second"),
+        "rejected",
+        "a consumed body cannot be re-read"
+    );
     // json() parses.
-    rt.eval(r#"var J={}; new Response('{"k":42}').json().then(function(o){J.k=o.k;});"#).unwrap();
+    rt.eval(r#"var J={}; new Response('{"k":42}').json().then(function(o){J.k=o.k;});"#)
+        .unwrap();
     rt.run_microtasks();
     assert_eq!(read(&mut rt, "String(J.k)"), "42");
 }
@@ -339,7 +492,8 @@ fn body_is_single_use() {
 fn url_object_semantics() {
     let mut rt = Runtime::<BoaEngine>::new().unwrap();
     // Components.
-    rt.eval(r#"var u = new URL("http://example.com:8080/a/b?x=1#h");"#).unwrap();
+    rt.eval(r#"var u = new URL("http://example.com:8080/a/b?x=1#h");"#)
+        .unwrap();
     assert_eq!(read(&mut rt, "u.protocol"), "http:");
     assert_eq!(read(&mut rt, "u.hostname"), "example.com");
     assert_eq!(read(&mut rt, "u.port"), "8080");
@@ -348,16 +502,32 @@ fn url_object_semantics() {
     assert_eq!(read(&mut rt, "u.hash"), "#h");
     assert_eq!(read(&mut rt, "u.origin"), "http://example.com:8080");
     // Relative resolution against a base.
-    assert_eq!(read(&mut rt, r#"new URL("c", "http://h/a/b").href"#), "http://h/a/c");
+    assert_eq!(
+        read(&mut rt, r#"new URL("c", "http://h/a/b").href"#),
+        "http://h/a/c"
+    );
     // An invalid URL throws; canParse reports it.
-    assert_eq!(read(&mut rt, r#"(function(){try{new URL("not a url");return "no";}catch(e){return e instanceof TypeError?"TypeError":"other";}})()"#), "TypeError");
-    assert_eq!(read(&mut rt, r#"String(URL.canParse("http://h/"))"#), "true");
+    assert_eq!(
+        read(
+            &mut rt,
+            r#"(function(){try{new URL("not a url");return "no";}catch(e){return e instanceof TypeError?"TypeError":"other";}})()"#
+        ),
+        "TypeError"
+    );
+    assert_eq!(
+        read(&mut rt, r#"String(URL.canParse("http://h/"))"#),
+        "true"
+    );
     assert_eq!(read(&mut rt, r#"String(URL.canParse("nope"))"#), "false");
     // A setter re-serializes through the url crate, and searchParams stays in sync.
-    rt.eval(r#"var u2 = new URL("http://h/?a=1&b=2");"#).unwrap();
+    rt.eval(r#"var u2 = new URL("http://h/?a=1&b=2");"#)
+        .unwrap();
     assert_eq!(read(&mut rt, r#"u2.searchParams.get("a")"#), "1");
     rt.eval(r#"u2.searchParams.set("a","9");"#).unwrap();
-    assert_eq!(read(&mut rt, r#"String(u2.href.indexOf("a=9") >= 0)"#), "true");
+    assert_eq!(
+        read(&mut rt, r#"String(u2.href.indexOf("a=9") >= 0)"#),
+        "true"
+    );
     rt.eval(r#"u2.hostname = "other";"#).unwrap();
     assert_eq!(read(&mut rt, "u2.host"), "other");
 }
@@ -401,26 +571,60 @@ fn abort_controller_and_pre_aborted_fetch() {
     assert_eq!(read(&mut rt, "String(R.same)"), "true");
     assert_eq!(read(&mut rt, "String(R.rejected)"), "true");
     // No public constructor.
-    assert_eq!(read(&mut rt, r#"(function(){try{new AbortSignal();return "no";}catch(e){return "threw";}})()"#), "threw");
+    assert_eq!(
+        read(
+            &mut rt,
+            r#"(function(){try{new AbortSignal();return "no";}catch(e){return "threw";}})()"#
+        ),
+        "threw"
+    );
 }
 
 #[test]
 fn web_globals_present() {
     let mut rt = Runtime::<BoaEngine>::new().unwrap();
     // URLSearchParams.
-    assert_eq!(read(&mut rt, r#"new URLSearchParams("a=1&b=2").get("b")"#), "2");
-    assert_eq!(read(&mut rt, r#"new URLSearchParams([["a","1"],["a","2"]]).getAll("a").join(",")"#), "1,2");
-    assert_eq!(read(&mut rt, r#"new URLSearchParams({x:"y"}).toString()"#), "x=y");
+    assert_eq!(
+        read(&mut rt, r#"new URLSearchParams("a=1&b=2").get("b")"#),
+        "2"
+    );
+    assert_eq!(
+        read(
+            &mut rt,
+            r#"new URLSearchParams([["a","1"],["a","2"]]).getAll("a").join(",")"#
+        ),
+        "1,2"
+    );
+    assert_eq!(
+        read(&mut rt, r#"new URLSearchParams({x:"y"}).toString()"#),
+        "x=y"
+    );
     // TextEncoder / TextDecoder round-trip.
-    assert_eq!(read(&mut rt, r#"String(new TextEncoder().encode("A")[0])"#), "65");
-    assert_eq!(read(&mut rt, r#"new TextDecoder().decode(new TextEncoder().encode("héllo"))"#), "héllo");
+    assert_eq!(
+        read(&mut rt, r#"String(new TextEncoder().encode("A")[0])"#),
+        "65"
+    );
+    assert_eq!(
+        read(
+            &mut rt,
+            r#"new TextDecoder().decode(new TextEncoder().encode("héllo"))"#
+        ),
+        "héllo"
+    );
     // Blob.
     assert_eq!(read(&mut rt, r#"String(new Blob(["hi","!"]).size)"#), "3");
-    rt.eval(r#"var BL={}; new Blob(["hi"]).text().then(function(t){BL.t=t;});"#).unwrap();
+    rt.eval(r#"var BL={}; new Blob(["hi"]).text().then(function(t){BL.t=t;});"#)
+        .unwrap();
     rt.run_microtasks();
     assert_eq!(read(&mut rt, "BL.t"), "hi");
     // FormData.
-    assert_eq!(read(&mut rt, r#"(function(){var f=new FormData();f.append("k","v");return f.get("k");})()"#), "v");
+    assert_eq!(
+        read(
+            &mut rt,
+            r#"(function(){var f=new FormData();f.append("k","v");return f.get("k");})()"#
+        ),
+        "v"
+    );
     // ReadableStream: read the single enqueued chunk, then done.
     rt.eval(
         r#"
@@ -494,9 +698,17 @@ fn binary_body_round_trips_losslessly() {
     )
     .unwrap();
     rt.run_microtasks();
-    assert_eq!(read(&mut rt, "B.len"), "256", "handler received all 256 bytes");
+    assert_eq!(
+        read(&mut rt, "B.len"),
+        "256",
+        "handler received all 256 bytes"
+    );
     assert_eq!(read(&mut rt, "String(B.outLen)"), "256");
-    assert_eq!(read(&mut rt, "String(B.identical)"), "true", "every byte survived the round trip");
+    assert_eq!(
+        read(&mut rt, "String(B.identical)"),
+        "true",
+        "every byte survived the round trip"
+    );
 }
 
 #[test]
@@ -504,7 +716,10 @@ fn stream_backed_body_semantics() {
     let mut rt = Runtime::<BoaEngine>::new().unwrap();
     // A stream already locked / disturbed is not a usable body (from-stream).
     assert_eq!(
-        read(&mut rt, r#"(function(){var s=new ReadableStream();s.getReader();try{new Response(s);return "no";}catch(e){return e instanceof TypeError?"TypeError":"other";}})()"#),
+        read(
+            &mut rt,
+            r#"(function(){var s=new ReadableStream();s.getReader();try{new Response(s);return "no";}catch(e){return e instanceof TypeError?"TypeError":"other";}})()"#
+        ),
         "TypeError"
     );
     // A non-Uint8Array chunk makes consumption fail with a TypeError (bad-chunk).
@@ -546,7 +761,8 @@ fn stream_backed_body_semantics() {
         rd.read();
         U.afterRead = resp.bodyUsed;
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     rt.run_microtasks();
     assert_eq!(read(&mut rt, "String(U.onConstruct)"), "false");
     assert_eq!(read(&mut rt, "String(U.afterGetReader)"), "false");
@@ -571,10 +787,22 @@ fn writable_stream_and_pipe() {
         "#,
     ).unwrap();
     rt.run_microtasks();
-    assert_eq!(read(&mut rt, "String(P.disturbed)"), "true", "pipeTo disturbs synchronously");
+    assert_eq!(
+        read(&mut rt, "String(P.disturbed)"),
+        "true",
+        "pipeTo disturbs synchronously"
+    );
     assert_eq!(read(&mut rt, "String(P.wlocked)"), "true");
-    assert_eq!(read(&mut rt, "String(P.ptDisturbed)"), "true", "pipeThrough disturbs synchronously");
-    assert_eq!(read(&mut rt, "String(P.ptIsReadable)"), "true", "pipeThrough returns the readable");
+    assert_eq!(
+        read(&mut rt, "String(P.ptDisturbed)"),
+        "true",
+        "pipeThrough disturbs synchronously"
+    );
+    assert_eq!(
+        read(&mut rt, "String(P.ptIsReadable)"),
+        "true",
+        "pipeThrough returns the readable"
+    );
     // A WritableStream sink receives writes; a TransformStream relays chunks.
     rt.eval(
         r#"
@@ -590,5 +818,9 @@ fn writable_stream_and_pipe() {
     rt.run_microtasks();
     assert_eq!(read(&mut rt, "W.got"), "hello");
     assert_eq!(read(&mut rt, "String(W.done)"), "true");
-    assert_eq!(read(&mut rt, "T.first"), "xfer", "TransformStream relays the chunk");
+    assert_eq!(
+        read(&mut rt, "T.first"),
+        "xfer",
+        "TransformStream relays the chunk"
+    );
 }

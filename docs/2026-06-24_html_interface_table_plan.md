@@ -1,14 +1,14 @@
 # HTML interface hierarchy + interface-table plan
 
 **Date:** 2026-06-24
-**Status:** plan. Spun out of the grand audit (`2026-06-24_grand_audit.md` §2, lever 4); continues the DOM-binding sweep (`2026-06-02_wpt_dom_sweep_and_binding_globals.md`).
+**Status:** in progress. I1 is landed, the broad I2 table payload is present, and I3 has a first customized-built-ins slice. Spun out of the grand audit (`2026-06-24_grand_audit.md` §2, lever 4); continues the DOM-binding sweep (`2026-06-02_wpt_dom_sweep_and_binding_globals.md`).
 **Thesis:** serval's DOM surface is built from a ~900-line JS bootstrap string with exactly one per-tag subclass wired (HTMLCanvasElement). Scaling to the ~100 HTML interfaces by hand-extending that string does not scale. Build the mechanism first (a declarative interface table the bootstrap consumes), then the ~100-interface payload is incremental, and custom-elements customized-built-ins are unblocked.
 
-## The gap, code-grounded
+## Original gap, code-grounded
 
-- `createElement('button')` returns a generic HTMLElement; per-tag HTML interfaces present = 2 of ~100 (HTMLElement, HTMLCanvasElement).
-- The whole DOM surface is a template-literal bootstrap string starting at `components/script-runtime-api/dom.rs:1066`; `elementSubclassProto` hangs subclasses at `:1154`, `HTMLElement.prototype` at `:1985`, and the only wired subclass (HTMLCanvasElement) is `:1989-2015`.
-- The prototype-chain + reflected-attribute machinery already exists to hang more on; what is missing is a declarative way to declare interfaces and their reflected IDL attributes instead of growing the string.
+- At plan time, `createElement('button')` returned a generic HTMLElement; per-tag HTML interfaces present = 2 of ~100 (HTMLElement, HTMLCanvasElement).
+- At plan time, the whole DOM surface was a template-literal bootstrap string starting at `components/script-runtime-api/dom.rs:1066`; `elementSubclassProto` hung subclasses at `:1154`, `HTMLElement.prototype` at `:1985`, and the only wired subclass (HTMLCanvasElement) was `:1989-2015`.
+- The prototype-chain + reflected-attribute machinery already existed to hang more on; what was missing was a declarative way to declare interfaces and their reflected IDL attributes instead of growing the string.
 
 ## Phases (done-conditions, not dates)
 
@@ -75,4 +75,8 @@ are the load-bearing ones for serval.
 
 ## Progress
 
-- 2026-06-24 — Plan created from the grand audit. No code yet. I1 (the table mechanism) is the entry point and the highest-confidence piece.
+- 2026-06-24 — Plan created from the grand audit. I1 (the table mechanism) was the entry point and the highest-confidence piece.
+- 2026-06-30 — I1 landed: `components/script-runtime-api/dom/html_interfaces.rs` owns the Rust-side interface table, `install_dom_surface` injects it before `bootstrap.js`, and `HTMLCanvasElement` is table-driven rather than bespoke string wiring. Focused verification: `cargo test -p script-runtime-api html_interface_table --lib` passes on Boa and Nova.
+- 2026-06-30 — I2 broad payload present: common HTML interfaces now resolve through the table with per-interface reflected attributes, including anchors, buttons, inputs/forms, image/canvas/media, table family, headings, lists, body/head/title, and related legacy reflected attributes.
+- 2026-06-30 — I3 first slice landed: the registry records autonomous definitions and customized built-ins, `document.createElement(tag, { is })` records the `is` attribute and upgrades when defined, `define()` upgrades matching existing document nodes, class constructors get a construction-stack target for `super()`, and `customElements.upgrade(root)` handles detached subtrees. Focused verification: `cargo test -p script-runtime-api custom_elements_customized_builtins --lib` passes on Boa and Nova.
+- Remaining I3 work: spec-grade reaction queue and microtask timing, `attributeChangedCallback`, `disconnectedCallback`, `adoptedCallback`, construction failure states, fuller custom-element name validation, and a measured WPT delta once the harness count is trustworthy.

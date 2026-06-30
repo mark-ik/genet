@@ -165,7 +165,8 @@ impl<E: ScriptEngine> NativeFn<E> for FetchStart {
         let headers = parse_flat_headers(&headers_flat);
         // The body crosses as a lossless "binary string": each JS char code (0-255)
         // is one byte. `char as u8` recovers the byte (every char is <= 0xFF).
-        let body = (!body_str.is_empty()).then(|| body_str.chars().map(|c| c as u8).collect::<Vec<u8>>());
+        let body =
+            (!body_str.is_empty()).then(|| body_str.chars().map(|c| c as u8).collect::<Vec<u8>>());
         let request = FetchRequest {
             method,
             url,
@@ -275,30 +276,38 @@ impl<E: ScriptEngine> NativeFn<E> for UrlWith {
 
         let result = url::Url::parse(&href).ok().and_then(|mut u| {
             match part.as_str() {
-                "href" => return url::Url::parse(&value).ok().map(|u| url_components_json(&u)),
+                "href" => {
+                    return url::Url::parse(&value)
+                        .ok()
+                        .map(|u| url_components_json(&u));
+                },
                 "protocol" => {
                     let _ = u.set_scheme(value.trim_end_matches(':'));
-                }
+                },
                 "username" => {
                     let _ = u.set_username(&value);
-                }
+                },
                 "password" => {
                     let _ = u.set_password((!value.is_empty()).then_some(value.as_str()));
-                }
+                },
                 "hostname" => {
                     let _ = u.set_host((!value.is_empty()).then_some(value.as_str()));
-                }
+                },
                 "host" => {
                     let (h, p) = value.split_once(':').unwrap_or((value.as_str(), ""));
                     let _ = u.set_host((!h.is_empty()).then_some(h));
                     let _ = u.set_port(p.parse().ok());
-                }
+                },
                 "port" => {
                     let _ = u.set_port(value.parse().ok());
-                }
+                },
                 "pathname" => u.set_path(&value),
-                "search" => u.set_query((!value.is_empty()).then_some(value.trim_start_matches('?'))),
-                "hash" => u.set_fragment((!value.is_empty()).then_some(value.trim_start_matches('#'))),
+                "search" => {
+                    u.set_query((!value.is_empty()).then_some(value.trim_start_matches('?')))
+                },
+                "hash" => {
+                    u.set_fragment((!value.is_empty()).then_some(value.trim_start_matches('#')))
+                },
                 _ => return None,
             }
             Some(url_components_json(&u))
@@ -338,9 +347,15 @@ fn url_components_json(u: &url::Url) -> String {
     s.push_str(",\"pathname\":");
     push_json_str(&mut s, u.path());
     s.push_str(",\"search\":");
-    push_json_str(&mut s, &u.query().map(|q| format!("?{q}")).unwrap_or_default());
+    push_json_str(
+        &mut s,
+        &u.query().map(|q| format!("?{q}")).unwrap_or_default(),
+    );
     s.push_str(",\"hash\":");
-    push_json_str(&mut s, &u.fragment().map(|f| format!("#{f}")).unwrap_or_default());
+    push_json_str(
+        &mut s,
+        &u.fragment().map(|f| format!("#{f}")).unwrap_or_default(),
+    );
     s.push('}');
     s
 }
@@ -357,7 +372,10 @@ fn host_base_url<E: ScriptEngine>(cx: &mut E::CallCx<'_>) -> Option<String> {
 /// relative `input` is returned unchanged.
 fn resolve_against(base: Option<&str>, input: &str) -> String {
     match base.and_then(|b| url::Url::parse(b).ok()) {
-        Some(b) => b.join(input).map(|u| u.to_string()).unwrap_or_else(|_| input.to_owned()),
+        Some(b) => b
+            .join(input)
+            .map(|u| u.to_string())
+            .unwrap_or_else(|_| input.to_owned()),
         None => input.to_owned(),
     }
 }

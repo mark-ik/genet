@@ -58,7 +58,7 @@ impl<E: ScriptEngine> NativeFn<E> for QuerySelector {
         })
         .flatten()
         {
-            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx, node.raw() as u64),
             None => Ok(cx.make_null()),
         }
     }
@@ -76,7 +76,9 @@ impl<E: ScriptEngine> NativeFn<E> for QuerySelectorAllCount {
         let sel_v = cx.arg(1);
         let sel = cx.value_to_string(&sel_v)?;
         let n = with_dom::<E, _>(cx, |dom| {
-            crate::selector::parse(&sel).query_all(dom, NodeId::from_raw(id as usize)).len()
+            crate::selector::parse(&sel)
+                .query_all(dom, NodeId::from_raw(id as usize))
+                .len()
         })
         .unwrap_or(0);
         cx.make_string(&n.to_string())
@@ -95,13 +97,19 @@ impl<E: ScriptEngine> NativeFn<E> for QuerySelectorAllItem {
         let sel_v = cx.arg(1);
         let sel = cx.value_to_string(&sel_v)?;
         let i_v = cx.arg(2);
-        let i = cx.value_to_string(&i_v)?.parse::<usize>().unwrap_or(usize::MAX);
+        let i = cx
+            .value_to_string(&i_v)?
+            .parse::<usize>()
+            .unwrap_or(usize::MAX);
         match with_dom::<E, _>(cx, |dom| {
-            crate::selector::parse(&sel).query_all(dom, NodeId::from_raw(id as usize)).get(i).copied()
+            crate::selector::parse(&sel)
+                .query_all(dom, NodeId::from_raw(id as usize))
+                .get(i)
+                .copied()
         })
         .flatten()
         {
-            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx, node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -150,7 +158,7 @@ fn child_at<E: ScriptEngine>(
         return Ok(cx.undefined());
     };
     match with_dom::<E, _>(cx, |dom| pick(dom, NodeId::from_raw(id as usize))).flatten() {
-        Some(n) => reflect_pinned::<E>(cx,n.raw() as u64),
+        Some(n) => reflect_pinned::<E>(cx, n.raw() as u64),
         None => Ok(cx.undefined()),
     }
 }
@@ -164,8 +172,10 @@ impl<E: ScriptEngine> NativeFn<E> for ChildNodesCount {
         let Some(id) = cx.reflector_data(&node) else {
             return cx.make_string("0");
         };
-        let n = with_dom::<E, _>(cx, |dom| dom.dom_children(NodeId::from_raw(id as usize)).count())
-            .unwrap_or(0);
+        let n = with_dom::<E, _>(cx, |dom| {
+            dom.dom_children(NodeId::from_raw(id as usize)).count()
+        })
+        .unwrap_or(0);
         cx.make_string(&n.to_string())
     }
 }
@@ -179,11 +189,16 @@ impl<E: ScriptEngine> NativeFn<E> for ChildNodesItem {
             return Ok(cx.undefined());
         };
         let i_v = cx.arg(1);
-        let i = cx.value_to_string(&i_v)?.parse::<usize>().unwrap_or(usize::MAX);
-        match with_dom::<E, _>(cx, |dom| dom.dom_children(NodeId::from_raw(id as usize)).nth(i))
-            .flatten()
+        let i = cx
+            .value_to_string(&i_v)?
+            .parse::<usize>()
+            .unwrap_or(usize::MAX);
+        match with_dom::<E, _>(cx, |dom| {
+            dom.dom_children(NodeId::from_raw(id as usize)).nth(i)
+        })
+        .flatten()
         {
-            Some(n) => reflect_pinned::<E>(cx,n.raw() as u64),
+            Some(n) => reflect_pinned::<E>(cx, n.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }
@@ -201,9 +216,10 @@ impl<E: ScriptEngine> NativeFn<E> for NodeName {
         let name = with_dom::<E, _>(cx, |dom| {
             let n = NodeId::from_raw(id as usize);
             match dom.kind(n) {
-                NodeKind::Element => {
-                    dom.element_name(n).map(|q| q.local.as_ref().to_ascii_uppercase()).unwrap_or_default()
-                },
+                NodeKind::Element => dom
+                    .element_name(n)
+                    .map(|q| q.local.as_ref().to_ascii_uppercase())
+                    .unwrap_or_default(),
                 NodeKind::Text => "#text".to_string(),
                 NodeKind::Comment => "#comment".to_string(),
                 NodeKind::Document => "#document".to_string(),
@@ -263,9 +279,15 @@ impl<E: ScriptEngine> NativeFn<E> for InsertBefore {
         let node = cx.arg(1);
         let reference = cx.arg(2);
         if let (Some(p), Some(n)) = (cx.reflector_data(&parent), cx.reflector_data(&node)) {
-            let r = cx.reflector_data(&reference).map(|r| NodeId::from_raw(r as usize));
+            let r = cx
+                .reflector_data(&reference)
+                .map(|r| NodeId::from_raw(r as usize));
             with_dom::<E, _>(cx, |dom| {
-                dom.insert_before(NodeId::from_raw(p as usize), NodeId::from_raw(n as usize), r)
+                dom.insert_before(
+                    NodeId::from_raw(p as usize),
+                    NodeId::from_raw(n as usize),
+                    r,
+                )
             });
         }
         Ok(cx.undefined())
@@ -282,7 +304,8 @@ impl<E: ScriptEngine> NativeFn<E> for LocalNameOf {
             return Ok(cx.make_null());
         };
         let name = with_dom::<E, _>(cx, |dom| {
-            dom.element_name(NodeId::from_raw(id as usize)).map(|q| q.local.as_ref().to_string())
+            dom.element_name(NodeId::from_raw(id as usize))
+                .map(|q| q.local.as_ref().to_string())
         })
         .flatten();
         match name {
@@ -301,7 +324,8 @@ impl<E: ScriptEngine> NativeFn<E> for NamespaceUri {
             return Ok(cx.make_null());
         };
         let ns = with_dom::<E, _>(cx, |dom| {
-            dom.element_name(NodeId::from_raw(id as usize)).map(|q| q.ns.as_ref().to_string())
+            dom.element_name(NodeId::from_raw(id as usize))
+                .map(|q| q.ns.as_ref().to_string())
         })
         .flatten();
         match ns {
@@ -345,9 +369,13 @@ impl<E: ScriptEngine> NativeFn<E> for CreateElementNS {
             Some((p, l)) => (Some(Prefix::from(p)), l.to_string()),
             None => (None, qname),
         };
-        let qual = QualName::new(prefix, Namespace::from(ns.as_str()), LocalName::from(local.as_str()));
+        let qual = QualName::new(
+            prefix,
+            Namespace::from(ns.as_str()),
+            LocalName::from(local.as_str()),
+        );
         match with_dom::<E, _>(cx, |dom| dom.create_element(qual)) {
-            Some(node) => reflect_pinned::<E>(cx,node.raw() as u64),
+            Some(node) => reflect_pinned::<E>(cx, node.raw() as u64),
             None => Ok(cx.undefined()),
         }
     }

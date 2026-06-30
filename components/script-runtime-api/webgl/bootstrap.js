@@ -76,6 +76,7 @@
     this._ctx = parseInt(__webgl_create_context(String(w), String(h)), 10) | 0;
     this.drawingBufferWidth = w;
     this.drawingBufferHeight = h;
+    this._externalTextureKey = __webgl_external_texture_key(String(this._ctx));
   }
   var P = WebGLRenderingContext.prototype;
 

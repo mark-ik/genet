@@ -35,6 +35,7 @@ const GL_VERTEX_SHADER: u32 = 0x8B31;
 const GL_FRAGMENT_SHADER: u32 = 0x8B30;
 const GL_DITHER: u32 = 0x0BD0;
 const GL_SCISSOR_TEST: u32 = 0x0C11;
+const TEST_EXTERNAL_TEXTURE_KEY: u64 = 9001;
 
 /// Test-side WebGL handler. Owns a `WebGlContext` and translates the raw
 /// GLenums / opaque ids the JS bootstrap hands across into webgl-wgpu's typed
@@ -142,6 +143,10 @@ impl WgpuWebGl {
 }
 
 impl WebGlHandler for WgpuWebGl {
+    fn external_texture_key(&self) -> Option<u64> {
+        Some(TEST_EXTERNAL_TEXTURE_KEY)
+    }
+
     fn clear_color(&mut self, r: f32, g: f32, b: f32, a: f32) {
         // webgl-wgpu's clear takes the color directly each call (no
         // bound-color state), so hold it and pass it through on `clear`.
@@ -196,13 +201,19 @@ impl WebGlHandler for WgpuWebGl {
         id
     }
     fn bind_buffer(&mut self, target: u32, buffer: Option<u64>) {
-        let Some(target) = Self::buffer_target(target) else { return };
+        let Some(target) = Self::buffer_target(target) else {
+            return;
+        };
         let resolved = buffer.and_then(|id| self.buffers.borrow().get(&id).copied());
         self.context.borrow_mut().bind_buffer(target, resolved);
     }
     fn buffer_data_f32(&mut self, target: u32, data: &[f32], _usage: u32) {
-        let Some(target) = Self::buffer_target(target) else { return };
-        self.context.borrow_mut().buffer_data_f32(target, data, BufferUsage::StaticDraw);
+        let Some(target) = Self::buffer_target(target) else {
+            return;
+        };
+        self.context
+            .borrow_mut()
+            .buffer_data_f32(target, data, BufferUsage::StaticDraw);
     }
 
     fn create_shader(&mut self, stage: u32) -> u64 {
@@ -217,20 +228,33 @@ impl WebGlHandler for WgpuWebGl {
         id
     }
     fn shader_source(&mut self, shader: u64, source: &str) {
-        let Some(&shader_id) = self.shaders.borrow().get(&shader) else { return };
+        let Some(&shader_id) = self.shaders.borrow().get(&shader) else {
+            return;
+        };
         self.context.borrow_mut().shader_source(shader_id, source);
     }
     fn compile_shader(&mut self, shader: u64) {
-        let Some(&shader_id) = self.shaders.borrow().get(&shader) else { return };
+        let Some(&shader_id) = self.shaders.borrow().get(&shader) else {
+            return;
+        };
         self.context.borrow_mut().compile_shader(shader_id);
     }
     fn get_shader_compile_status(&mut self, shader: u64) -> bool {
-        let Some(&shader_id) = self.shaders.borrow().get(&shader) else { return false };
-        self.context.borrow_mut().get_shader_compile_status(shader_id)
+        let Some(&shader_id) = self.shaders.borrow().get(&shader) else {
+            return false;
+        };
+        self.context
+            .borrow_mut()
+            .get_shader_compile_status(shader_id)
     }
     fn get_shader_info_log(&mut self, shader: u64) -> String {
-        let Some(&shader_id) = self.shaders.borrow().get(&shader) else { return String::new() };
-        self.context.borrow_mut().get_shader_info_log(shader_id).unwrap_or_default()
+        let Some(&shader_id) = self.shaders.borrow().get(&shader) else {
+            return String::new();
+        };
+        self.context
+            .borrow_mut()
+            .get_shader_info_log(shader_id)
+            .unwrap_or_default()
     }
 
     fn create_program(&mut self) -> u64 {
@@ -240,21 +264,38 @@ impl WebGlHandler for WgpuWebGl {
         id
     }
     fn attach_shader(&mut self, program: u64, shader: u64) {
-        let Some(&program_id) = self.programs.borrow().get(&program) else { return };
-        let Some(&shader_id) = self.shaders.borrow().get(&shader) else { return };
-        self.context.borrow_mut().attach_shader(program_id, shader_id);
+        let Some(&program_id) = self.programs.borrow().get(&program) else {
+            return;
+        };
+        let Some(&shader_id) = self.shaders.borrow().get(&shader) else {
+            return;
+        };
+        self.context
+            .borrow_mut()
+            .attach_shader(program_id, shader_id);
     }
     fn link_program(&mut self, program: u64) {
-        let Some(&program_id) = self.programs.borrow().get(&program) else { return };
+        let Some(&program_id) = self.programs.borrow().get(&program) else {
+            return;
+        };
         self.context.borrow_mut().link_program(program_id);
     }
     fn get_program_link_status(&mut self, program: u64) -> bool {
-        let Some(&program_id) = self.programs.borrow().get(&program) else { return false };
-        self.context.borrow_mut().get_program_link_status(program_id)
+        let Some(&program_id) = self.programs.borrow().get(&program) else {
+            return false;
+        };
+        self.context
+            .borrow_mut()
+            .get_program_link_status(program_id)
     }
     fn get_program_info_log(&mut self, program: u64) -> String {
-        let Some(&program_id) = self.programs.borrow().get(&program) else { return String::new() };
-        self.context.borrow_mut().get_program_info_log(program_id).unwrap_or_default()
+        let Some(&program_id) = self.programs.borrow().get(&program) else {
+            return String::new();
+        };
+        self.context
+            .borrow_mut()
+            .get_program_info_log(program_id)
+            .unwrap_or_default()
     }
     fn use_program(&mut self, program: Option<u64>) {
         let resolved = program.and_then(|id| self.programs.borrow().get(&id).copied());
@@ -262,12 +303,22 @@ impl WebGlHandler for WgpuWebGl {
     }
 
     fn get_attrib_location(&mut self, program: u64, name: &str) -> i32 {
-        let Some(&program_id) = self.programs.borrow().get(&program) else { return -1 };
-        self.context.borrow_mut().get_attrib_location(program_id, name)
+        let Some(&program_id) = self.programs.borrow().get(&program) else {
+            return -1;
+        };
+        self.context
+            .borrow_mut()
+            .get_attrib_location(program_id, name)
     }
     fn get_uniform_location(&mut self, program: u64, name: &str) -> i32 {
-        let Some(&program_id) = self.programs.borrow().get(&program) else { return -1 };
-        let Some(loc) = self.context.borrow_mut().get_uniform_location(program_id, name) else {
+        let Some(&program_id) = self.programs.borrow().get(&program) else {
+            return -1;
+        };
+        let Some(loc) = self
+            .context
+            .borrow_mut()
+            .get_uniform_location(program_id, name)
+        else {
             return -1;
         };
         let mut locs = self.uniform_locations.borrow_mut();
@@ -353,7 +404,9 @@ impl WebGlHandler for WgpuWebGl {
             GL_TRIANGLES => PrimitiveMode::Triangles,
             _ => return,
         };
-        self.context.borrow_mut().draw_arrays(topology, first as u32, count as u32);
+        self.context
+            .borrow_mut()
+            .draw_arrays(topology, first as u32, count as u32);
     }
 
     fn get_error(&mut self) -> u32 {
@@ -377,7 +430,9 @@ impl WebGlHandler for WgpuWebGl {
 
 fn read(rt: &mut Runtime<BoaEngine>, expr: &str) -> String {
     let v = rt.eval(expr).expect("eval");
-    rt.engine_mut().value_to_string(&v).expect("value_to_string")
+    rt.engine_mut()
+        .value_to_string(&v)
+        .expect("value_to_string")
 }
 
 #[test]
@@ -517,6 +572,7 @@ fn html_canvas_get_context_webgl_returns_a_rendering_context() {
           sameTwice: sameTwice,
           aliasMatches: aliasMatches,
           unknown: (unknown === null),
+          textureKey: c.getAttribute('data-serval-external-texture-key'),
           r: px[0], g: px[1], b: px[2], a: px[3],
         };
     "#;
@@ -527,6 +583,10 @@ fn html_canvas_get_context_webgl_returns_a_rendering_context() {
     assert_eq!(read(&mut rt, "String(bag.sameTwice)"), "true");
     assert_eq!(read(&mut rt, "String(bag.aliasMatches)"), "true");
     assert_eq!(read(&mut rt, "String(bag.unknown)"), "true");
+    assert_eq!(
+        read(&mut rt, "String(bag.textureKey)"),
+        TEST_EXTERNAL_TEXTURE_KEY.to_string()
+    );
     assert_eq!(read(&mut rt, "String(bag.r)"), "255");
     // 0.5 → u8 round-trip lands at 128 under wgpu's UNORM conversion.
     assert_eq!(read(&mut rt, "String(bag.g)"), "128");

@@ -38,6 +38,13 @@ pub type WebGlFactory = Box<dyn FnMut(u32, u32) -> Box<dyn WebGlHandler>>;
 /// back into its native `wgpu` handles. An `Option<u64>` argument means
 /// "`null`" from JS — typically "unbind".
 pub trait WebGlHandler {
+    /// Host-compositor texture key for this context's default framebuffer, when
+    /// the embedder has registered the matching texture with the paint/compositor
+    /// side. `None` means the context is script-visible only.
+    fn external_texture_key(&self) -> Option<u64> {
+        None
+    }
+
     fn clear_color(&mut self, r: f32, g: f32, b: f32, a: f32);
     fn clear(&mut self, mask: u32);
     fn viewport(&mut self, x: i32, y: i32, width: u32, height: u32);
@@ -137,20 +144,19 @@ fn create_webgl_context<E: ScriptEngine>(
 /// Route to the context at registry index `ctx_id`. A negative index (no
 /// factory / stale context) or an out-of-range one yields `default` — the sink
 /// no-ops, matching the "no handler" behavior of the singleton era.
-fn with_webgl_ctx<E: ScriptEngine, F, R>(
-    cx: &mut E::CallCx<'_>,
-    ctx_id: i64,
-    default: R,
-    f: F,
-) -> R
+fn with_webgl_ctx<E: ScriptEngine, F, R>(cx: &mut E::CallCx<'_>, ctx_id: i64, default: R, f: F) -> R
 where
     F: FnOnce(&mut dyn WebGlHandler) -> R,
 {
     if ctx_id < 0 {
         return default;
     }
-    let Some(data) = cx.host_data() else { return default };
-    let Some(cell) = data.downcast_ref::<RefCell<HostState>>() else { return default };
+    let Some(data) = cx.host_data() else {
+        return default;
+    };
+    let Some(cell) = data.downcast_ref::<RefCell<HostState>>() else {
+        return default;
+    };
     let mut host = cell.borrow_mut();
     match host.webgl_contexts.get_mut(ctx_id as usize) {
         Some(h) => f(h.as_mut()),
@@ -174,10 +180,7 @@ fn parse_ctx<E: ScriptEngine>(cx: &mut E::CallCx<'_>) -> Result<i64, E::Error> {
     Ok(parse_string::<E>(cx, 0)?.parse::<i64>().unwrap_or(-1))
 }
 
-fn parse_string<E: ScriptEngine>(
-    cx: &mut E::CallCx<'_>,
-    index: usize,
-) -> Result<String, E::Error> {
+fn parse_string<E: ScriptEngine>(cx: &mut E::CallCx<'_>, index: usize) -> Result<String, E::Error> {
     let a = cx.arg(index);
     cx.value_to_string(&a)
 }
@@ -236,6 +239,7 @@ fn binary_string(bytes: &[u8]) -> String {
 /// Every sink's arg count includes the leading context-id argument.
 pub(crate) fn install_webgl_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error> {
     engine.set_function::<CreateContext>("__webgl_create_context", 2)?;
+    engine.set_function::<ExternalTextureKey>("__webgl_external_texture_key", 1)?;
     engine.set_function::<ClearColor>("__webgl_clear_color", 5)?;
     engine.set_function::<Clear>("__webgl_clear", 2)?;
     engine.set_function::<Enable>("__webgl_enable", 2)?;
