@@ -84,11 +84,7 @@ fn app_logic(with_middle: bool, attr_on: bool) -> TestView {
     let middle = with_middle.then(|| el::<_, (), ()>("b", "B"));
     let view = el::<_, (), ()>(
         "div",
-        (
-            el::<_, (), ()>("a", "A"),
-            middle,
-            el::<_, (), ()>("c", "C"),
-        ),
+        (el::<_, (), ()>("a", "A"), middle, el::<_, (), ()>("c", "C")),
     );
     if attr_on {
         view.attr("id", "root").attr("class", "panel")
@@ -115,8 +111,7 @@ impl Harness {
         let (root_el, view_state) = view.build(&mut ctx, &mut ());
         // Attach the produced root under the document root.
         let doc_root = dom.borrow().document();
-        dom.borrow_mut()
-            .insert_before(doc_root, root_el.node, None);
+        dom.borrow_mut().insert_before(doc_root, root_el.node, None);
         Self {
             dom,
             ctx,
@@ -274,7 +269,10 @@ fn attribute_set_then_removed() {
     assert!(
         set_attr_changes.iter().all(|m| matches!(
             m,
-            DomMutation::AttributeChanged { old_value: None, .. }
+            DomMutation::AttributeChanged {
+                old_value: None,
+                ..
+            }
         )),
         "set: {set_attr_changes:?}"
     );
@@ -301,7 +299,10 @@ fn attribute_set_then_removed() {
     assert!(
         rm_attr_changes.iter().all(|m| matches!(
             m,
-            DomMutation::AttributeChanged { old_value: Some(_), .. }
+            DomMutation::AttributeChanged {
+                old_value: Some(_),
+                ..
+            }
         )),
         "remove: {rm_attr_changes:?}"
     );
@@ -521,8 +522,8 @@ mod keyboard {
             Key::Character(c) => s.text.push_str(&c),
             Key::Named(NamedKey::Backspace) => {
                 s.text.pop();
-            }
-            Key::Named(_) => {}
+            },
+            Key::Named(_) => {},
         }
     }
 
@@ -551,7 +552,10 @@ mod keyboard {
     fn tab(shift: bool) -> KeyEvent {
         KeyEvent::with_mods(
             Key::Named(NamedKey::Tab),
-            Modifiers { shift, ..Default::default() },
+            Modifiers {
+                shift,
+                ..Default::default()
+            },
         )
     }
 
@@ -587,7 +591,11 @@ mod keyboard {
         // Nothing focused → Tab focuses the first; Tab advances; Tab wraps.
         assert_eq!(runner.focus(), None);
         runner.dispatch_key(tab(false));
-        assert_eq!(runner.focus(), Some(a), "Tab from nothing focuses the first");
+        assert_eq!(
+            runner.focus(),
+            Some(a),
+            "Tab from nothing focuses the first"
+        );
         runner.dispatch_key(tab(false));
         assert_eq!(runner.focus(), Some(b), "Tab advances");
         runner.dispatch_key(tab(false));
@@ -647,7 +655,11 @@ mod keyboard {
 
         runner.dispatch_key(ch("h"));
         runner.dispatch_key(ch("i"));
-        assert_eq!(runner.state().text, "hi", "typed chars append to the buffer");
+        assert_eq!(
+            runner.state().text,
+            "hi",
+            "typed chars append to the buffer"
+        );
 
         runner.dispatch_key(named(NamedKey::Backspace));
         assert_eq!(runner.state().text, "h", "Backspace deletes the last char");
@@ -787,7 +799,10 @@ mod keyboard {
             let d = dom.borrow();
             find_element_by_name(&d, div, "button").expect("a <button>")
         };
-        assert_ne!(button, div, "button is a descendant of the handler-bearing div");
+        assert_ne!(
+            button, div,
+            "button is a descendant of the handler-bearing div"
+        );
 
         // The button has only a click handler, so it is not focusable; aim focus
         // at it directly to exercise the bubble (focus on a child with no key
@@ -831,17 +846,33 @@ mod keyboard {
         // in the focusable set.
         assert_eq!(runner.focus(), None);
         runner.dispatch_key(tab(false));
-        assert_eq!(runner.focus(), Some(button), "focusable() puts the plain button in the Tab order");
+        assert_eq!(
+            runner.focus(),
+            Some(button),
+            "focusable() puts the plain button in the Tab order"
+        );
 
         // Enter and Space each activate it (a synthesized click runs the on_click).
         runner.dispatch_key(named(NamedKey::Enter));
-        assert_eq!(runner.state().count, 1, "Enter activates the focused button");
+        assert_eq!(
+            runner.state().count,
+            1,
+            "Enter activates the focused button"
+        );
         runner.dispatch_key(named(NamedKey::Space));
-        assert_eq!(runner.state().count, 2, "Space activates the focused button");
+        assert_eq!(
+            runner.state().count,
+            2,
+            "Space activates the focused button"
+        );
 
         // A character key is not an activation.
         runner.dispatch_key(ch("x"));
-        assert_eq!(runner.state().count, 2, "a character key does not activate the button");
+        assert_eq!(
+            runner.state().count,
+            2,
+            "a character key does not activate the button"
+        );
     }
 
     /// `clickable(child, handler)` is `focusable(on_click(..))` in one combinator: the div is
@@ -862,7 +893,11 @@ mod keyboard {
         let row = runner.root();
 
         runner.dispatch_key(tab(false));
-        assert_eq!(runner.focus(), Some(row), "clickable() puts the div in the Tab order");
+        assert_eq!(
+            runner.focus(),
+            Some(row),
+            "clickable() puts the div in the Tab order"
+        );
         runner.dispatch_key(named(NamedKey::Enter));
         assert_eq!(runner.state().count, 1, "Enter activates the clickable");
         runner.dispatch_click(row, PointerClick::at((0.0, 0.0)));
@@ -896,7 +931,9 @@ mod keyboard {
                     ),
                 )
             },
-            Editor { text: String::new() },
+            Editor {
+                text: String::new(),
+            },
         );
         let (input, textarea) = {
             let d = dom.borrow();
@@ -911,14 +948,26 @@ mod keyboard {
         // prevents the default, so focus stays — the override.
         runner.set_focus(Some(input));
         runner.dispatch_key(tab(false));
-        assert_eq!(runner.focus(), Some(input), "a Tab handler that prevents default keeps focus put");
-        assert_eq!(runner.state().text, "\t", "the overriding handler inserted a tab character");
+        assert_eq!(
+            runner.focus(),
+            Some(input),
+            "a Tab handler that prevents default keeps focus put"
+        );
+        assert_eq!(
+            runner.state().text,
+            "\t",
+            "the overriding handler inserted a tab character"
+        );
 
         // The plain field does not prevent: Tab there still traverses (wrapping to
         // the first focusable), proving the default survives where unoverridden.
         runner.set_focus(Some(textarea));
         runner.dispatch_key(tab(false));
-        assert_eq!(runner.focus(), Some(input), "an un-prevented Tab still traverses the focusable set");
+        assert_eq!(
+            runner.focus(),
+            Some(input),
+            "an un-prevented Tab still traverses the focusable set"
+        );
     }
 }
 
@@ -1051,7 +1100,11 @@ mod controls {
         type_hi_y(&mut runner);
 
         assert_eq!(runner.state().text(), "hi y", "the field edited its buffer");
-        assert_eq!(runner.state().caret(), 4, "caret sits at the end after typing");
+        assert_eq!(
+            runner.state().caret(),
+            4,
+            "caret sits at the end after typing"
+        );
         assert_eq!(
             field_text(&dom.borrow(), runner.root()),
             "hi y",
@@ -1160,7 +1213,10 @@ mod controls {
                 // uses.
                 el::<_, Form, ()>(
                     "div",
-                    lens(|s: &mut TextInput| text_field(s), |f: &mut Form| &mut f.name),
+                    lens(
+                        |s: &mut TextInput| text_field(s),
+                        |f: &mut Form| &mut f.name,
+                    ),
                 )
             },
             Form {
@@ -1184,7 +1240,8 @@ mod controls {
             "only the lensed field changed"
         );
         assert_eq!(
-            runner.state().other, "untouched",
+            runner.state().other,
+            "untouched",
             "the sibling field must be untouched"
         );
         assert_eq!(
@@ -1246,13 +1303,22 @@ mod controls {
         let cb = runner.root(); // the checkbox is the whole view → its root element
 
         assert_eq!(runner.state(), &false);
-        assert_eq!(attr(&dom.borrow(), cb, "aria-checked").as_deref(), Some("false"));
-        assert_eq!(attr(&dom.borrow(), cb, "class").as_deref(), Some("checkbox"));
+        assert_eq!(
+            attr(&dom.borrow(), cb, "aria-checked").as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            attr(&dom.borrow(), cb, "class").as_deref(),
+            Some("checkbox")
+        );
 
         // Click → checked.
         runner.dispatch_click(cb, PointerClick::at((0.0, 0.0)));
         assert_eq!(runner.state(), &true);
-        assert_eq!(attr(&dom.borrow(), cb, "aria-checked").as_deref(), Some("true"));
+        assert_eq!(
+            attr(&dom.borrow(), cb, "aria-checked").as_deref(),
+            Some("true")
+        );
         assert_eq!(
             attr(&dom.borrow(), cb, "class").as_deref(),
             Some("checkbox checked")
@@ -1269,8 +1335,11 @@ mod controls {
     fn button_runs_its_handler() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
         let inc: fn(&mut u32, PointerClick) = |n, _| *n += 1;
-        let mut runner =
-            ServalAppRunner::<_, _, _, ()>::new(dom.clone(), move |_: &u32| button("inc", inc), 0u32);
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            move |_: &u32| button("inc", inc),
+            0u32,
+        );
         let btn = runner.root();
 
         assert_eq!(
@@ -1301,7 +1370,10 @@ mod controls {
             dom.borrow().element_name(btn).unwrap().local.as_ref(),
             "button"
         );
-        assert_eq!(attr(&dom.borrow(), btn, "class").as_deref(), Some("primary"));
+        assert_eq!(
+            attr(&dom.borrow(), btn, "class").as_deref(),
+            Some("primary")
+        );
 
         runner.dispatch_click(btn, PointerClick::at((0.0, 0.0)));
         assert_eq!(runner.state(), &1);
@@ -1365,13 +1437,21 @@ mod controls {
         // Closed: selected = 0, the root has only the box child (no list).
         assert_eq!(runner.state().selected, 0);
         assert!(!runner.state().open);
-        assert_eq!(dom.borrow().dom_children(root).count(), 1, "closed: box only");
+        assert_eq!(
+            dom.borrow().dom_children(root).count(),
+            1,
+            "closed: box only"
+        );
 
         // Click the box (root's first child) → the list opens.
         let box_node = dom.borrow().dom_children(root).next().expect("box");
         runner.dispatch_click(box_node, PointerClick::at((0.0, 0.0)));
         assert!(runner.state().open, "clicking the box opens the list");
-        assert_eq!(dom.borrow().dom_children(root).count(), 2, "open: box + list");
+        assert_eq!(
+            dom.borrow().dom_children(root).count(),
+            2,
+            "open: box + list"
+        );
 
         // Click the second option (index 1) → selected = 1, list closes.
         let opt1 = {
@@ -1382,11 +1462,18 @@ mod controls {
         runner.dispatch_click(opt1, PointerClick::at((0.0, 0.0)));
         assert_eq!(runner.state().selected, 1, "picking option 1 selects it");
         assert!(!runner.state().open, "picking an option closes the list");
-        assert_eq!(dom.borrow().dom_children(root).count(), 1, "closed again: box only");
+        assert_eq!(
+            dom.borrow().dom_children(root).count(),
+            1,
+            "closed again: box only"
+        );
 
         // The box now shows the new selection.
         let box_node = dom.borrow().dom_children(root).next().expect("box");
-        assert_eq!(text_child(&dom.borrow(), box_node).as_deref(), Some("green"));
+        assert_eq!(
+            text_child(&dom.borrow(), box_node).as_deref(),
+            Some("green")
+        );
     }
 
     /// `Box<dyn AnyView>` whose inner view changes *type* across a rebuild
@@ -1430,9 +1517,19 @@ mod controls {
         {
             let dom = dom.borrow();
             assert_eq!(dom.element_name(root1).unwrap().local.as_ref(), "span");
-            assert_eq!(dom.dom_children(root1).count(), 2, "span has its two text children");
-            assert!(dom.dom_children(dom.document()).any(|c| c == root1), "new node attached");
-            assert!(!dom.dom_children(dom.document()).any(|c| c == root0), "old node detached");
+            assert_eq!(
+                dom.dom_children(root1).count(),
+                2,
+                "span has its two text children"
+            );
+            assert!(
+                dom.dom_children(dom.document()).any(|c| c == root1),
+                "new node attached"
+            );
+            assert!(
+                !dom.dom_children(dom.document()).any(|c| c == root0),
+                "old node detached"
+            );
         }
     }
 
@@ -1451,15 +1548,34 @@ mod controls {
         assert_eq!(runner.state().selected, 0);
 
         // Click the third option (index 2).
-        let opt2 = { dom.borrow().dom_children(root).nth(2).expect("third option") };
+        let opt2 = {
+            dom.borrow()
+                .dom_children(root)
+                .nth(2)
+                .expect("third option")
+        };
         runner.dispatch_click(opt2, PointerClick::at((0.0, 0.0)));
         assert_eq!(runner.state().selected, 2, "clicking option 2 selects it");
 
         // aria-checked reflects the selection: option 2 true, option 0 false.
-        let opt0 = dom.borrow().dom_children(root).next().expect("first option");
-        let opt2 = dom.borrow().dom_children(root).nth(2).expect("third option");
-        assert_eq!(attr(&dom.borrow(), opt2, "aria-checked").as_deref(), Some("true"));
-        assert_eq!(attr(&dom.borrow(), opt0, "aria-checked").as_deref(), Some("false"));
+        let opt0 = dom
+            .borrow()
+            .dom_children(root)
+            .next()
+            .expect("first option");
+        let opt2 = dom
+            .borrow()
+            .dom_children(root)
+            .nth(2)
+            .expect("third option");
+        assert_eq!(
+            attr(&dom.borrow(), opt2, "aria-checked").as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            attr(&dom.borrow(), opt0, "aria-checked").as_deref(),
+            Some("false")
+        );
     }
 
     /// `TextInput` multi-line navigation (the textarea model): up/down move between
@@ -1472,15 +1588,31 @@ mod controls {
         let mut t = TextInput::new("abc\nde\nfghi");
         assert_eq!(t.caret(), 11, "new() puts the caret at the end");
         t.move_up(false);
-        assert_eq!(t.caret(), 6, "up: goal col 4 clamps to end of 'de' (offset 6)");
+        assert_eq!(
+            t.caret(),
+            6,
+            "up: goal col 4 clamps to end of 'de' (offset 6)"
+        );
         t.move_up(false);
         // Tier 2: the goal column stays 4 (the original), so it clamps to the end of the
         // 3-char 'abc' (offset 3) — it does *not* drift to the clamped col 2 of 'de'.
-        assert_eq!(t.caret(), 3, "up: sticky goal col 4 clamps to end of 'abc' (offset 3)");
+        assert_eq!(
+            t.caret(),
+            3,
+            "up: sticky goal col 4 clamps to end of 'abc' (offset 3)"
+        );
         t.move_down(false);
-        assert_eq!(t.caret(), 6, "down: sticky goal col 4 clamps to end of 'de' (offset 6)");
+        assert_eq!(
+            t.caret(),
+            6,
+            "down: sticky goal col 4 clamps to end of 'de' (offset 6)"
+        );
         t.home_line(false);
-        assert_eq!(t.caret(), 4, "home: start of 'de' (offset 4); resets the goal column");
+        assert_eq!(
+            t.caret(),
+            4,
+            "home: start of 'de' (offset 4); resets the goal column"
+        );
         t.end_line(false);
         assert_eq!(t.caret(), 6, "end: end of 'de' (offset 6)");
     }
@@ -1499,10 +1631,13 @@ mod controls {
         let mut runner = ServalAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |_: &Drag| {
-                on_pointer(el::<_, Drag, ()>("div", "track"), |s: &mut Drag, e: PointerEvent| {
-                    s.phases.push(e.phase);
-                    s.last_x = e.local.0;
-                })
+                on_pointer(
+                    el::<_, Drag, ()>("div", "track"),
+                    |s: &mut Drag, e: PointerEvent| {
+                        s.phases.push(e.phase);
+                        s.last_x = e.local.0;
+                    },
+                )
             },
             Drag::default(),
         );
@@ -1512,16 +1647,32 @@ mod controls {
             node,
             PointerEvent::new(PointerPhase::Down, (5.0, 0.0), (100.0, 10.0)),
         );
-        assert_eq!(runner.pointer_capture(), Some(node), "down captures the element");
+        assert_eq!(
+            runner.pointer_capture(),
+            Some(node),
+            "down captures the element"
+        );
 
-        runner.dispatch_pointer_move(PointerEvent::new(PointerPhase::Move, (40.0, 0.0), (100.0, 10.0)));
-        runner.dispatch_pointer_up(PointerEvent::new(PointerPhase::Up, (40.0, 0.0), (100.0, 10.0)));
+        runner.dispatch_pointer_move(PointerEvent::new(
+            PointerPhase::Move,
+            (40.0, 0.0),
+            (100.0, 10.0),
+        ));
+        runner.dispatch_pointer_up(PointerEvent::new(
+            PointerPhase::Up,
+            (40.0, 0.0),
+            (100.0, 10.0),
+        ));
         assert_eq!(runner.pointer_capture(), None, "up clears capture");
         assert_eq!(
             runner.state().phases,
             vec![PointerPhase::Down, PointerPhase::Move, PointerPhase::Up]
         );
-        assert_eq!(runner.state().last_x, 40.0, "the captured handler saw the move's local x");
+        assert_eq!(
+            runner.state().last_x,
+            40.0,
+            "the captured handler saw the move's local x"
+        );
     }
 
     /// Pointer cancellation (G1.3): a drag handler that calls
@@ -1535,12 +1686,15 @@ mod controls {
         let mut runner = ServalAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |_: &()| {
-                on_pointer(el::<_, (), ()>("div", "track"), |_s: &mut (), e: PointerEvent| {
-                    // Prevent the default on the press only; the move does not.
-                    if e.phase == PointerPhase::Down {
-                        e.prop.prevent_default();
-                    }
-                })
+                on_pointer(
+                    el::<_, (), ()>("div", "track"),
+                    |_s: &mut (), e: PointerEvent| {
+                        // Prevent the default on the press only; the move does not.
+                        if e.phase == PointerPhase::Down {
+                            e.prop.prevent_default();
+                        }
+                    },
+                )
             },
             (),
         );
@@ -1550,9 +1704,16 @@ mod controls {
             node,
             PointerEvent::new(PointerPhase::Down, (5.0, 0.0), (100.0, 10.0)),
         );
-        assert!(runner.default_prevented(), "the press handler's prevent_default is recorded");
+        assert!(
+            runner.default_prevented(),
+            "the press handler's prevent_default is recorded"
+        );
 
-        runner.dispatch_pointer_move(PointerEvent::new(PointerPhase::Move, (40.0, 0.0), (100.0, 10.0)));
+        runner.dispatch_pointer_move(PointerEvent::new(
+            PointerPhase::Move,
+            (40.0, 0.0),
+            (100.0, 10.0),
+        ));
         assert!(
             !runner.default_prevented(),
             "the move records its own un-prevented value, not the press's stale true",
@@ -1575,44 +1736,112 @@ mod controls {
         let mut runner = ServalAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |_: &Scroll| {
-                on_wheel(el::<_, Scroll, ()>("div", "scroller"), |s: &mut Scroll, e: WheelEvent| {
-                    s.total_y += e.delta.1;
-                    s.last_local = e.local;
-                    s.notches += 1;
-                })
+                on_wheel(
+                    el::<_, Scroll, ()>("div", "scroller"),
+                    |s: &mut Scroll, e: WheelEvent| {
+                        s.total_y += e.delta.1;
+                        s.last_local = e.local;
+                        s.notches += 1;
+                    },
+                )
             },
             Scroll::default(),
         );
         let scroller = runner.root();
-        assert_eq!(runner.wheel_target(scroller), Some(scroller), "the scroller is its own target");
+        assert_eq!(
+            runner.wheel_target(scroller),
+            Some(scroller),
+            "the scroller is its own target"
+        );
 
         // A notch on the handler node routes to it, carrying delta + cursor-local.
         runner.dispatch_wheel(
             scroller,
-            WheelEvent { delta: (0.0, -30.0), local: (5.0, 8.0), size: (100.0, 50.0) },
+            WheelEvent::new((0.0, -30.0), (5.0, 8.0), (100.0, 50.0)),
         );
         assert_eq!(runner.state().notches, 1, "the wheel reached the handler");
         assert_eq!(runner.state().total_y, -30.0);
-        assert_eq!(runner.state().last_local, (5.0, 8.0), "the handler saw the cursor-local point");
+        assert_eq!(
+            runner.state().last_local,
+            (5.0, 8.0),
+            "the handler saw the cursor-local point"
+        );
 
         // A second notch accumulates — no leftover capture state between notches.
         runner.dispatch_wheel(
             scroller,
-            WheelEvent { delta: (0.0, -12.0), local: (5.0, 8.0), size: (100.0, 50.0) },
+            WheelEvent::new((0.0, -12.0), (5.0, 8.0), (100.0, 50.0)),
         );
         assert_eq!(runner.state().notches, 2);
-        assert_eq!(runner.state().total_y, -42.0, "successive notches accumulate");
+        assert_eq!(
+            runner.state().total_y,
+            -42.0,
+            "successive notches accumulate"
+        );
 
         // A notch whose ancestor chain has no handler (the document, above the
         // scroller) resolves nothing and mutates nothing.
         let doc = dom.borrow().document();
-        assert_eq!(runner.wheel_target(doc), None, "no handler above the scroller");
-        runner.dispatch_wheel(
-            doc,
-            WheelEvent { delta: (0.0, -99.0), local: (0.0, 0.0), size: (0.0, 0.0) },
+        assert_eq!(
+            runner.wheel_target(doc),
+            None,
+            "no handler above the scroller"
         );
+        runner.dispatch_wheel(doc, WheelEvent::new((0.0, -99.0), (0.0, 0.0), (0.0, 0.0)));
         assert_eq!(runner.state().notches, 2, "a handler-less notch is a no-op");
         assert_eq!(runner.state().total_y, -42.0);
+    }
+
+    /// Wheel default-blocking guard: a native wheel handler can cancel the host
+    /// scroll default for one notch, and the next unprevented notch resets the
+    /// runner flag. This mirrors the JS passive-wheel guard in script-runtime.
+    #[test]
+    fn wheel_prevent_default_blocks_one_scroll_notch() {
+        #[derive(Default)]
+        struct Scroll {
+            prevent_next: bool,
+            notches: u32,
+        }
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            |_: &Scroll| {
+                on_wheel(
+                    el::<_, Scroll, ()>("div", "scroller"),
+                    |s: &mut Scroll, e: WheelEvent| {
+                        s.notches += 1;
+                        if s.prevent_next {
+                            e.prevent_default();
+                            s.prevent_next = false;
+                        }
+                    },
+                )
+            },
+            Scroll {
+                prevent_next: true,
+                notches: 0,
+            },
+        );
+        let scroller = runner.root();
+
+        runner.dispatch_wheel(
+            scroller,
+            WheelEvent::new((0.0, -30.0), (5.0, 8.0), (100.0, 50.0)),
+        );
+        assert!(
+            runner.default_prevented(),
+            "prevented notch blocks host scroll default"
+        );
+
+        runner.dispatch_wheel(
+            scroller,
+            WheelEvent::new((0.0, -12.0), (5.0, 8.0), (100.0, 50.0)),
+        );
+        assert!(
+            !runner.default_prevented(),
+            "the next notch records its own unprevented default state"
+        );
+        assert_eq!(runner.state().notches, 2);
     }
 
     /// `slider`: a press sets the value to the pointer fraction, and a drag
@@ -1635,13 +1864,28 @@ mod controls {
         assert!((runner.state().value - 0.5).abs() < 0.001, "press sets 0.5");
 
         // Drag to 80/100 → value 0.8.
-        runner.dispatch_pointer_move(PointerEvent::new(PointerPhase::Move, (80.0, 0.0), (100.0, 12.0)));
-        assert!((runner.state().value - 0.8).abs() < 0.001, "drag tracks to 0.8");
+        runner.dispatch_pointer_move(PointerEvent::new(
+            PointerPhase::Move,
+            (80.0, 0.0),
+            (100.0, 12.0),
+        ));
+        assert!(
+            (runner.state().value - 0.8).abs() < 0.001,
+            "drag tracks to 0.8"
+        );
 
         // Past the right edge clamps to 1.0.
-        runner.dispatch_pointer_move(PointerEvent::new(PointerPhase::Move, (130.0, 0.0), (100.0, 12.0)));
+        runner.dispatch_pointer_move(PointerEvent::new(
+            PointerPhase::Move,
+            (130.0, 0.0),
+            (100.0, 12.0),
+        ));
         assert!((runner.state().value - 1.0).abs() < 0.001, "clamps to 1.0");
-        runner.dispatch_pointer_up(PointerEvent::new(PointerPhase::Up, (130.0, 0.0), (100.0, 12.0)));
+        runner.dispatch_pointer_up(PointerEvent::new(
+            PointerPhase::Up,
+            (130.0, 0.0),
+            (100.0, 12.0),
+        ));
         assert_eq!(runner.pointer_capture(), None, "release ends the drag");
     }
 
@@ -1674,8 +1918,16 @@ mod controls {
         // The ghost is visible via ghost(), but never via the buffer or render.
         assert_eq!(t.ghost(), "ter");
         assert_eq!(t.text(), ">ros", "ghost is not in the committed buffer");
-        assert_eq!(t.render_text(), ">ros", "ghost is not in the rendered (caret) text");
-        assert_eq!(t.caret_byte_in_render(), 4, "the caret sits before the ghost");
+        assert_eq!(
+            t.render_text(),
+            ">ros",
+            "ghost is not in the rendered (caret) text"
+        );
+        assert_eq!(
+            t.caret_byte_in_render(),
+            4,
+            "the caret sits before the ghost"
+        );
 
         // Accepting splices it in, moves the caret to the end, and clears it.
         t.accept_ghost();
@@ -1707,7 +1959,10 @@ mod controls {
     fn shift_named(k: NamedKey) -> KeyEvent {
         KeyEvent::with_mods(
             Key::Named(k),
-            Modifiers { shift: true, ..Default::default() },
+            Modifiers {
+                shift: true,
+                ..Default::default()
+            },
         )
     }
 
@@ -1836,7 +2091,9 @@ mod capture {
     /// handler on the parent div, a default (bubble) handler on the child button.
     /// Each logs its label. Clicking the button must fire the capture parent
     /// *before* the bubble child.
-    fn click_phase_view(_s: &Log) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+    fn click_phase_view(
+        _s: &Log,
+    ) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
         on_click(
             el::<_, Log, ()>(
                 "div",
@@ -1880,7 +2137,9 @@ mod capture {
     /// clobbers the first (the Vec-per-node registry, G2.3). Within the shared
     /// bubble phase they fire in registration order, and `build` registers the
     /// inner before the outer.
-    fn stacked_click_view(_s: &Log) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+    fn stacked_click_view(
+        _s: &Log,
+    ) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
         on_click(
             on_click(el::<_, Log, ()>("button", "+"), |s: &mut Log, _ev| {
                 s.events.push("inner".to_string());
@@ -1932,8 +2191,11 @@ mod capture {
     #[test]
     fn key_capture_parent_fires_before_bubble_child() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner =
-            ServalAppRunner::<_, _, _, ()>::new(dom.clone(), key_phase_view, Log { events: Vec::new() });
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            key_phase_view,
+            Log { events: Vec::new() },
+        );
         let root = runner.root();
 
         let span = {
@@ -2093,10 +2355,13 @@ mod capture {
         on_click(
             el::<_, Log, ()>(
                 "div",
-                on_click(el::<_, Log, ()>("button", "+"), |s: &mut Log, ev: PointerClick| {
-                    s.events.push("child".to_string());
-                    ev.stop_propagation();
-                }),
+                on_click(
+                    el::<_, Log, ()>("button", "+"),
+                    |s: &mut Log, ev: PointerClick| {
+                        s.events.push("child".to_string());
+                        ev.stop_propagation();
+                    },
+                ),
             ),
             |s: &mut Log, _ev| s.events.push("parent-SHOULD-NOT".to_string()),
         )
@@ -2129,11 +2394,16 @@ mod capture {
     /// Propagation cell *after* dispatch (cloning the handle before the event is
     /// moved in) and sees the cancellation — the seam the host uses to gate a
     /// default action (form activation, drag start).
-    fn click_prevent_view(_s: &Log) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
-        on_click(el::<_, Log, ()>("button", "+"), |s: &mut Log, ev: PointerClick| {
-            s.events.push("fired".to_string());
-            ev.prevent_default();
-        })
+    fn click_prevent_view(
+        _s: &Log,
+    ) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+        on_click(
+            el::<_, Log, ()>("button", "+"),
+            |s: &mut Log, ev: PointerClick| {
+                s.events.push("fired".to_string());
+                ev.prevent_default();
+            },
+        )
     }
 
     #[test]
@@ -2163,10 +2433,15 @@ mod capture {
     }
 
     /// A click handler that fires but does NOT prevent the default.
-    fn click_plain_view(_s: &Log) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
-        on_click(el::<_, Log, ()>("button", "+"), |s: &mut Log, _ev: PointerClick| {
-            s.events.push("fired".to_string());
-        })
+    fn click_plain_view(
+        _s: &Log,
+    ) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+        on_click(
+            el::<_, Log, ()>("button", "+"),
+            |s: &mut Log, _ev: PointerClick| {
+                s.events.push("fired".to_string());
+            },
+        )
     }
 
     /// The host-friendly half of the contract: after dispatch, the *runner*
@@ -2203,7 +2478,11 @@ mod capture {
         );
         let button = runner.root();
         runner.dispatch_click(button, PointerClick::at((0.0, 0.0)));
-        assert_eq!(runner.state().events, vec!["fired".to_string()], "handler ran");
+        assert_eq!(
+            runner.state().events,
+            vec!["fired".to_string()],
+            "handler ran"
+        );
         assert!(
             !runner.default_prevented(),
             "no prevent_default → the host's default action proceeds"
