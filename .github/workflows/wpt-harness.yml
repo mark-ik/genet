@@ -1,0 +1,24 @@
+name: WPT harness
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  testharness-baselines:
+    name: testharness baselines
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check WPT testharness baselines
+        shell: pwsh
+        run: support/wpt/check-testharness-baselines.ps1

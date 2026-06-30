@@ -1,0 +1,16 @@
+{
+  "command": "testharness",
+  "engine": "boa",
+  "tests": {
+    "dom/abort/AbortSignal.any.html": "pass",
+    "dom/abort/abort-signal-any-crash.html": "skip",
+    "dom/abort/abort-signal-any.any.html": "fail",
+    "dom/abort/abort-signal-timeout.html": "fail",
+    "dom/abort/crashtests/any-on-abort.html": "skip",
+    "dom/abort/crashtests/timeout-close.html": "skip",
+    "dom/abort/event.any.html": "fail",
+    "dom/abort/reason-constructor.html": "fail",
+    "dom/abort/timeout.any.html": "pass"
+  },
+  "version": 1
+}

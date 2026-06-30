@@ -36,7 +36,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use layout_dom_api::LayoutDom;
-use script_engine_api::{CallCx, NativeFn, ScriptEngine};
+use script_engine_api::{CallCx, NativeFn, ScriptEngine, ScriptEngineSnapshot};
 use serval_scripted_dom::{NodeId, ScriptedDom};
 
 mod dom;
@@ -47,9 +47,9 @@ mod selector;
 mod webgl;
 
 pub use dom::{ComputedStyleHandler, CookieProvider};
-pub use platform::StorageProvider;
 pub use fetch::{FetchHandler, FetchOutcome, FetchRequest};
 pub use harness::TestResult;
+pub use platform::StorageProvider;
 pub use webgl::{WebGlFactory, WebGlHandler};
 
 /// State the runtime's native callbacks share, stored as the engine's single
@@ -226,9 +226,9 @@ impl<E: ScriptEngine> Runtime<E> {
         raw_node_id: usize,
         event_type: &str,
     ) -> Result<bool, E::Error> {
-        let v = self
-            .engine
-            .eval(&format!("__dispatchSynthetic({raw_node_id}, {event_type:?})"))?;
+        let v = self.engine.eval(&format!(
+            "__dispatchSynthetic({raw_node_id}, {event_type:?})"
+        ))?;
         let proceed = self
             .engine
             .value_to_string(&v)
@@ -266,13 +266,17 @@ impl<E: ScriptEngine> Runtime<E> {
     /// Drive the event loop: fire pending timers in `(delay, insertion-order)`
     /// order, up to `budget` firings (the cap bounds `setInterval`, which
     /// re-enqueues itself). Cooperative: delays order tasks, they do not wait. A
-    /// microtask checkpoint runs before and after the timer batch (coarse
-    /// interleaving; per-task checkpoints are a later refinement). Returns when the
-    /// queue drains or the budget is spent.
+    /// microtask checkpoint runs before the loop and after each fired timer task.
+    /// Returns when the queue drains or the budget is spent.
     pub fn run_event_loop(&mut self, budget: u32) -> Result<(), E::Error> {
         self.engine.pump_microtasks();
-        self.engine.eval(&format!("globalThis.__runTimers({budget})"))?;
-        self.engine.pump_microtasks();
+        for _ in 0..budget {
+            let fired = self.run_one_timer_task(None)?;
+            if fired == 0 {
+                break;
+            }
+            self.engine.pump_microtasks();
+        }
         Ok(())
     }
 
@@ -285,10 +289,25 @@ impl<E: ScriptEngine> Runtime<E> {
         harness_src: &str,
         test_src: &str,
     ) -> Result<Vec<TestResult>, E::Error> {
+        self.load_testharness(harness_src)?;
+        self.run_loaded_testharness(test_src)
+    }
+
+    /// Load `testharness.js` and install the result bridge, but do not run a
+    /// test yet. A snapshot-capable engine can clone after this point so each
+    /// test gets a fresh harness heap without re-evaluating the harness source.
+    pub fn load_testharness(&mut self, harness_src: &str) -> Result<(), E::Error> {
         self.engine.eval(harness_src)?;
-        harness::install_bridge(&mut self.engine)?;
+        harness::install_bridge(&mut self.engine)
+    }
+
+    /// Run `test_src` against an already-loaded `testharness.js`, dispatch
+    /// `load`, drain the event loop, and return the reported subtests.
+    pub fn run_loaded_testharness(&mut self, test_src: &str) -> Result<Vec<TestResult>, E::Error> {
+        self.host.borrow_mut().results.clear();
         self.engine.eval(test_src)?;
-        self.engine.eval("window.dispatchEvent(new Event('load'));")?;
+        self.engine
+            .eval("window.dispatchEvent(new Event('load'));")?;
         self.run_event_loop(1000)?;
         Ok(self.host.borrow().results.clone())
     }
@@ -301,28 +320,47 @@ impl<E: ScriptEngine> Runtime<E> {
     /// because deferred replies arrive out of band. Read results with
     /// [`results`](Self::results).
     pub fn begin_testharness(&mut self, harness_src: &str, test_src: &str) -> Result<(), E::Error> {
-        self.engine.eval(harness_src)?;
-        harness::install_bridge(&mut self.engine)?;
+        self.load_testharness(harness_src)?;
+        self.begin_loaded_testharness(test_src)
+    }
+
+    /// Begin a testharness run against an already-loaded harness without
+    /// draining to completion. The caller drives timers/fetch completions and
+    /// reads [`results`](Self::results).
+    pub fn begin_loaded_testharness(&mut self, test_src: &str) -> Result<(), E::Error> {
+        self.host.borrow_mut().results.clear();
         self.engine.eval(test_src)?;
-        self.engine.eval("window.dispatchEvent(new Event('load'));")?;
+        self.engine
+            .eval("window.dispatchEvent(new Event('load'));")?;
         Ok(())
     }
 
-    /// Fire up to `budget` due timers (with microtask checkpoints around the batch)
+    /// Fire up to `budget` due timers (with a microtask checkpoint after each task)
     /// against the virtual clock at `now_ms` (the real elapsed time of the run), and
     /// return how many fired. Real-time gating lets a short abort timer fire at its
     /// delay while the far-future testharness timeout stays pending.
     pub fn run_timers(&mut self, budget: u32, now_ms: f64) -> usize {
         self.engine.pump_microtasks();
-        let fired = self
-            .engine
-            .eval(&format!("String(globalThis.__runTimers({budget},{now_ms}))"))
-            .ok()
-            .and_then(|v| self.engine.value_to_string(&v).ok())
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        self.engine.pump_microtasks();
+        let mut fired = 0;
+        for _ in 0..budget {
+            let n = self.run_one_timer_task(Some(now_ms)).unwrap_or(0);
+            if n == 0 {
+                break;
+            }
+            fired += n;
+            self.engine.pump_microtasks();
+        }
         fired
+    }
+
+    fn run_one_timer_task(&mut self, now_ms: Option<f64>) -> Result<usize, E::Error> {
+        let expr = match now_ms {
+            Some(now_ms) => format!("String(globalThis.__runTimers(1,{now_ms}))"),
+            None => "String(globalThis.__runTimers(1))".to_string(),
+        };
+        let v = self.engine.eval(&expr)?;
+        let s = self.engine.value_to_string(&v)?;
+        Ok(s.parse().unwrap_or(0))
     }
 
     /// Milliseconds until the next timer is due (relative to the last `run_timers`
@@ -336,11 +374,7 @@ impl<E: ScriptEngine> Runtime<E> {
             .and_then(|v| self.engine.value_to_string(&v).ok())
             .and_then(|s| s.parse().ok())
             .unwrap_or(-1.0);
-        if d < 0.0 {
-            None
-        } else {
-            Some(d)
-        }
+        if d < 0.0 { None } else { Some(d) }
     }
 
     /// The per-subtest results collected so far (the driver reads this after the run
@@ -434,14 +468,18 @@ impl<E: ScriptEngine> Runtime<E> {
             lit.push_str(&b.to_string());
         }
         lit.push(']');
-        let _ = self.engine.eval(&format!("globalThis.__fetchPushChunk({},{});", id, lit));
+        let _ = self
+            .engine
+            .eval(&format!("globalThis.__fetchPushChunk({},{});", id, lit));
         self.engine.pump_microtasks();
     }
 
     /// Close a streaming response started with [`start_stream`](Self::start_stream):
     /// the body's `ReadableStream` ends and pending reads resolve `done`.
     pub fn close_stream(&mut self, id: u64) {
-        let _ = self.engine.eval(&format!("globalThis.__fetchClose({});", id));
+        let _ = self
+            .engine
+            .eval(&format!("globalThis.__fetchClose({});", id));
         self.engine.pump_microtasks();
     }
 
@@ -450,7 +488,9 @@ impl<E: ScriptEngine> Runtime<E> {
     /// `TypeError`. The response itself stays resolved (the failure is mid-body,
     /// e.g. a `Content-Encoding` decode error), so only body consumption rejects.
     pub fn error_stream(&mut self, id: u64) {
-        let _ = self.engine.eval(&format!("globalThis.__fetchError({});", id));
+        let _ = self
+            .engine
+            .eval(&format!("globalThis.__fetchError({});", id));
         self.engine.pump_microtasks();
     }
 
@@ -492,7 +532,9 @@ impl<E: ScriptEngine> Runtime<E> {
     /// the real origin. For server-mode WPT runs; disk mode leaves the default
     /// `about:blank` location. A non-absolute `url` is ignored.
     pub fn set_base_url(&mut self, url: &str) -> Result<(), E::Error> {
-        let Ok(u) = url::Url::parse(url) else { return Ok(()) };
+        let Ok(u) = url::Url::parse(url) else {
+            return Ok(());
+        };
         self.host.borrow_mut().base_url = Some(u.to_string());
         // `globalThis.location` is a live view of `base_url` (the `platform`
         // surface's getters re-read it), so updating the host base URL is enough;
@@ -508,6 +550,21 @@ impl<E: ScriptEngine> Runtime<E> {
     /// The underlying engine, for callers needing reflectors or raw globals.
     pub fn engine_mut(&mut self) -> &mut E {
         &mut self.engine
+    }
+}
+
+impl<E: ScriptEngineSnapshot> Runtime<E> {
+    /// Clone this runtime's idle engine heap while replacing host-owned state.
+    ///
+    /// The JS global/bootstrap state is preserved by the engine snapshot. The Rust
+    /// host state (`HostState`, DOM arena, pins, fetch/computed-style handlers, etc.)
+    /// is fresh, because it is owned outside the VM heap and must not leak between
+    /// tests/documents.
+    pub fn snapshot_clone(&mut self) -> Result<Self, E::Error> {
+        let mut engine = self.engine.snapshot_clone()?;
+        let host: SharedHost = Rc::new(RefCell::new(HostState::default()));
+        engine.set_host_data(host.clone());
+        Ok(Self { engine, host })
     }
 }
 
@@ -661,6 +718,8 @@ const EVENT_LOOP_BOOTSTRAP: &str = r#"
     if (realtime && nowMs > vnow) vnow = nowMs;
     var fired = 0;
     while (fired < budget) {
+      var pending = globalThis.__pending;
+      if (pending && Object.keys(pending).length > 0) break;
       var idx = -1, bestKey = 0, bestSeq = 0;
       for (var i = 0; i < timers.length; i++) {
         var t = timers[i];
@@ -803,6 +862,35 @@ const EVENT_TARGET_BOOTSTRAP: &str = r#"
   });
   globalThis.Event = Event;
 
+  function UIEvent(type, init) {
+    Event.call(this, type, init);
+    init = init || {};
+    this.view = init.view || null;
+    this.detail = Number(init.detail || 0);
+  }
+  UIEvent.prototype = Object.create(Event.prototype);
+  UIEvent.prototype.constructor = UIEvent;
+  globalThis.UIEvent = UIEvent;
+
+  function MouseEvent(type, init) {
+    UIEvent.call(this, type, init);
+    init = init || {};
+    this.screenX = Number(init.screenX || 0);
+    this.screenY = Number(init.screenY || 0);
+    this.clientX = Number(init.clientX || 0);
+    this.clientY = Number(init.clientY || 0);
+    this.ctrlKey = !!init.ctrlKey;
+    this.shiftKey = !!init.shiftKey;
+    this.altKey = !!init.altKey;
+    this.metaKey = !!init.metaKey;
+    this.button = Number(init.button || 0);
+    this.buttons = Number(init.buttons || 0);
+    this.relatedTarget = init.relatedTarget || null;
+  }
+  MouseEvent.prototype = Object.create(UIEvent.prototype);
+  MouseEvent.prototype.constructor = MouseEvent;
+  globalThis.MouseEvent = MouseEvent;
+
   var target = new EventTarget();
   globalThis.addEventListener = function(type, cb) { target.addEventListener(type, cb); };
   globalThis.removeEventListener = function(type, cb) { target.removeEventListener(type, cb); };
@@ -874,7 +962,10 @@ fn scroll_arg<E: ScriptEngine>(cx: &mut E::CallCx<'_>, i: usize) -> Result<f64, 
 /// data is unavailable).
 fn read_scroll<E: ScriptEngine>(cx: &mut E::CallCx<'_>) -> (f32, f32) {
     cx.host_data()
-        .and_then(|d| d.downcast_ref::<RefCell<HostState>>().map(|h| h.borrow().viewport_scroll))
+        .and_then(|d| {
+            d.downcast_ref::<RefCell<HostState>>()
+                .map(|h| h.borrow().viewport_scroll)
+        })
         .unwrap_or((0.0, 0.0))
 }
 
@@ -1140,6 +1231,26 @@ mod tests {
         assert_eq!(rt.host().borrow().console, vec!["timer-microtask"]);
     }
 
+    /// A microtask queued by timer task N must run before timer task N+1. This is
+    /// the fine-grained checkpoint shape the batch checkpoint missed.
+    fn per_timer_microtask_checkpoint_works<E: ScriptEngine>() {
+        let script = "setTimeout(function(){ \
+                          console.log('first'); \
+                          Promise.resolve().then(function(){ console.log('micro'); }); \
+                      }, 0); \
+                      setTimeout(function(){ console.log('second'); }, 0);";
+
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.eval(script).expect("schedule");
+        rt.run_event_loop(10).expect("loop");
+        assert_eq!(rt.host().borrow().console, vec!["first", "micro", "second"]);
+
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.eval(script).expect("schedule");
+        assert_eq!(rt.run_timers(10, 0.0), 2);
+        assert_eq!(rt.host().borrow().console, vec!["first", "micro", "second"]);
+    }
+
     #[test]
     fn host_surface_on_boa() {
         host_surface_works::<script_engine_boa::BoaEngine>();
@@ -1160,11 +1271,13 @@ mod tests {
         assert_eq!(rt.host().borrow().console, vec!["true,true"]);
 
         // scrollTo sets absolutely, scrollBy offsets; the host reads the value back.
-        rt.eval("window.scrollTo(0, 500); window.scrollBy(0, 50);").expect("set scroll");
+        rt.eval("window.scrollTo(0, 500); window.scrollBy(0, 50);")
+            .expect("set scroll");
         assert_eq!(rt.host().borrow().viewport_scroll, (0.0, 550.0));
 
         // The options form scrollTo({ left, top }) works too.
-        rt.eval("window.scrollTo({ left: 10, top: 700 });").expect("scroll options");
+        rt.eval("window.scrollTo({ left: 10, top: 700 });")
+            .expect("scroll options");
         assert_eq!(rt.host().borrow().viewport_scroll, (10.0, 700.0));
     }
 
@@ -1188,17 +1301,22 @@ mod tests {
         assert!(rt.host().borrow().scroll_into_view.is_none());
 
         // scrollIntoView records the element as the host's pending target.
-        rt.eval("document.getElementById('a').scrollIntoView();").expect("scrollIntoView a");
+        rt.eval("document.getElementById('a').scrollIntoView();")
+            .expect("scrollIntoView a");
         let a = rt.host().borrow().scroll_into_view.expect("a recorded");
 
         // A later call records a different element (element-specific, last wins).
-        rt.eval("document.getElementById('b').scrollIntoView();").expect("scrollIntoView b");
+        rt.eval("document.getElementById('b').scrollIntoView();")
+            .expect("scrollIntoView b");
         let b = rt.host().borrow().scroll_into_view.expect("b recorded");
         assert_ne!(a, b, "scrollIntoView records the specific element");
 
         // An absolute scroll supersedes a pending scrollIntoView (last command wins).
         rt.eval("window.scrollTo(0, 0);").expect("scrollTo");
-        assert!(rt.host().borrow().scroll_into_view.is_none(), "scrollTo clears the pending target");
+        assert!(
+            rt.host().borrow().scroll_into_view.is_none(),
+            "scrollTo clears the pending target"
+        );
     }
 
     #[test]
@@ -1237,7 +1355,8 @@ mod tests {
         let base = rt.host().borrow().dom.live_node_count();
 
         // `createElement` hands script a reflector → pin-on-mint pins the node.
-        rt.eval("globalThis.d = document.createElement('div');").expect("create");
+        rt.eval("globalThis.d = document.createElement('div');")
+            .expect("create");
         rt.run_microtasks();
         assert_eq!(rt.host().borrow().dom.live_node_count(), base + 1);
 
@@ -1311,8 +1430,14 @@ mod tests {
             .expect("run_testharness");
 
         assert_eq!(results.len(), 2, "two subtests reported: {results:?}");
-        let pass = results.iter().find(|r| r.name == "pass-test").expect("pass-test present");
-        let fail = results.iter().find(|r| r.name == "fail-test").expect("fail-test present");
+        let pass = results
+            .iter()
+            .find(|r| r.name == "pass-test")
+            .expect("pass-test present");
+        let fail = results
+            .iter()
+            .find(|r| r.name == "fail-test")
+            .expect("fail-test present");
         assert!(pass.passed(), "pass-test should PASS: {pass:?}");
         assert_eq!(fail.status, 1, "fail-test should FAIL: {fail:?}");
     }
@@ -1342,6 +1467,30 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn runtime_snapshot_clone_on_nova_preserves_js_and_resets_host_state() {
+        let mut template = Runtime::<script_engine_nova::NovaEngine>::new().expect("runtime");
+        template
+            .eval(
+                "var counter = 1; \
+                 function bump() { counter += 1; return counter; } \
+                 console.log('template');",
+            )
+            .expect("template script");
+
+        let mut clone = template.snapshot_clone().expect("snapshot clone");
+        clone
+            .eval("console.log(String(bump()));")
+            .expect("clone run");
+        template
+            .eval("console.log(String(counter));")
+            .expect("template run");
+
+        assert_eq!(clone.host().borrow().console, vec!["2"]);
+        assert_eq!(template.host().borrow().console, vec!["template", "1"]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn testharness_loads_on_nova() {
         testharness_loads::<script_engine_nova::NovaEngine>();
     }
@@ -1356,6 +1505,17 @@ mod tests {
     #[test]
     fn microtasks_on_nova() {
         microtasks_work::<script_engine_nova::NovaEngine>();
+    }
+
+    #[test]
+    fn per_timer_microtask_checkpoint_on_boa() {
+        per_timer_microtask_checkpoint_works::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn per_timer_microtask_checkpoint_on_nova() {
+        per_timer_microtask_checkpoint_works::<script_engine_nova::NovaEngine>();
     }
 
     #[test]

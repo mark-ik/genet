@@ -1,0 +1,19 @@
+{
+  "command": "testharness",
+  "engine": "boa",
+  "tests": {
+    "html/webappapis/timers/clearinterval-from-callback.any.html": "pass",
+    "html/webappapis/timers/cleartimeout-clearinterval.any.html": "pass",
+    "html/webappapis/timers/evil-spec-example.any.html": "error",
+    "html/webappapis/timers/missing-timeout-setinterval.any.html": "pass",
+    "html/webappapis/timers/negative-setinterval.any.html": "error",
+    "html/webappapis/timers/negative-settimeout.any.html": "error",
+    "html/webappapis/timers/setinterval-cross-realm-callback-report-exception.html": "error",
+    "html/webappapis/timers/setinterval-settimeout-clamping.html": "pass",
+    "html/webappapis/timers/settimeout-cross-realm-callback-report-exception.html": "error",
+    "html/webappapis/timers/timer-nesting-not-inherited-in-microtask.html": "error",
+    "html/webappapis/timers/type-long-setinterval.any.html": "error",
+    "html/webappapis/timers/type-long-settimeout.any.html": "error"
+  },
+  "version": 1
+}

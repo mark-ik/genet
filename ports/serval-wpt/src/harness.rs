@@ -174,6 +174,56 @@ pub fn run_test_with_webgl(
     }
 }
 
+/// A Nova runtime snapshotted after the host surface and `testharness.js` are
+/// loaded. Each test clones this template, installs fresh host state, loads that
+/// test's DOM, and runs only the test body.
+pub struct NovaHarnessTemplate {
+    rt: Runtime<script_engine_nova::NovaEngine>,
+}
+
+impl NovaHarnessTemplate {
+    pub fn new(testharness_js: &str) -> Result<Self, String> {
+        let mut rt = Runtime::<script_engine_nova::NovaEngine>::new()
+            .map_err(|e| format!("runtime init: {e:?}"))?;
+        rt.load_testharness(testharness_js)
+            .map_err(|e| format!("testharness load: {e:?}"))?;
+        Ok(Self { rt })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_test_with_webgl(
+        &mut self,
+        html: &str,
+        loader: &dyn ScriptSrcLoader,
+        base_url: Option<&str>,
+        handler: Option<Box<dyn FetchHandler>>,
+        completion: Option<&dyn CompletionSource>,
+        webgl: Option<WebGlFactory>,
+    ) -> HarnessOutcome {
+        let doc = StaticDocument::parse(html);
+        let mut scripts = Vec::new();
+        collect_scripts(&doc, doc.document(), loader, &mut scripts);
+        let test_src = scripts.join("\n;\n");
+        let mut rt = match self.rt.snapshot_clone() {
+            Ok(rt) => rt,
+            Err(e) => return HarnessOutcome::Threw(format!("runtime snapshot clone: {e:?}")),
+        };
+        prepare_runtime(&mut rt, &doc, base_url, handler, webgl);
+        run_loaded_with(&mut rt, &test_src, completion)
+    }
+
+    pub fn run_test(
+        &mut self,
+        html: &str,
+        loader: &dyn ScriptSrcLoader,
+        base_url: Option<&str>,
+        handler: Option<Box<dyn FetchHandler>>,
+        completion: Option<&dyn CompletionSource>,
+    ) -> HarnessOutcome {
+        self.run_test_with_webgl(html, loader, base_url, handler, completion, None)
+    }
+}
+
 /// Engine-generic core: build a `Runtime<E>`, load the test's body as the live
 /// DOM, set the base URL + fetch handler if given, run the harness, collect
 /// results. With a `completion` source (deferred / server mode) it drives the
@@ -194,6 +244,20 @@ fn run_with<E: ScriptEngine>(
         Ok(rt) => rt,
         Err(e) => return HarnessOutcome::Threw(format!("runtime init: {e:?}")),
     };
+    prepare_runtime(&mut rt, doc, base_url, handler, webgl);
+    if let Err(e) = rt.load_testharness(testharness_js) {
+        return HarnessOutcome::Threw(format!("testharness load: {e:?}"));
+    }
+    run_loaded_with(&mut rt, test_src, completion)
+}
+
+fn prepare_runtime<E: ScriptEngine>(
+    rt: &mut Runtime<E>,
+    doc: &StaticDocument,
+    base_url: Option<&str>,
+    handler: Option<Box<dyn FetchHandler>>,
+    webgl: Option<WebGlFactory>,
+) {
     // The test's body becomes the live DOM, so scripts querying body elements
     // (getElementById / querySelector / document.body) see them.
     rt.load_dom(doc);
@@ -206,10 +270,15 @@ fn run_with<E: ScriptEngine>(
     if let Some(factory) = webgl {
         rt.set_webgl_factory(factory);
     }
+}
 
+fn run_loaded_with<E: ScriptEngine>(
+    rt: &mut Runtime<E>,
+    test_src: &str,
+    completion: Option<&dyn CompletionSource>,
+) -> HarnessOutcome {
     let Some(cs) = completion else {
-        // Synchronous path (disk / sync handler): one-shot, unchanged.
-        return match rt.run_testharness(testharness_js, test_src) {
+        return match rt.run_loaded_testharness(test_src) {
             Ok(results) => HarnessOutcome::Ran(results),
             Err(e) => HarnessOutcome::Threw(truncate(&format!("{e:?}"), 200)),
         };
@@ -221,7 +290,7 @@ fn run_with<E: ScriptEngine>(
     // arrive out of band on the channel. Each turn: run microtasks, drain ready
     // completions, fire due timers, then sleep until the next event (a completion or
     // the next timer's due time) up to the wall-clock deadline.
-    if let Err(e) = rt.begin_testharness(testharness_js, test_src) {
+    if let Err(e) = rt.begin_loaded_testharness(test_src) {
         return HarnessOutcome::Threw(truncate(&format!("{e:?}"), 200));
     }
     let start = Instant::now();
@@ -340,6 +409,79 @@ fn truncate(s: &str, max: usize) -> String {
         s
     } else {
         format!("{}…", s.chars().take(max).collect::<String>())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct EmptyLoader;
+
+    impl ScriptSrcLoader for EmptyLoader {
+        fn load_script(&self, _src: &str) -> Option<String> {
+            None
+        }
+    }
+
+    const MINI_TESTHARNESS: &str = r#"
+var __tests = [];
+var __completion_callbacks = [];
+function setup() {}
+function add_completion_callback(cb) { __completion_callbacks.push(cb); }
+function assert_true(value, message) {
+  if (!value) throw new Error(message || "assert_true failed");
+}
+function test(fn, name) {
+  try {
+    fn();
+    __tests.push({ name: name, status: 0, message: null });
+  } catch (e) {
+    __tests.push({ name: name, status: 1, message: String((e && e.message) || e) });
+  }
+}
+window.addEventListener("load", function() {
+  var snapshot = __tests.slice();
+  for (var i = 0; i < __completion_callbacks.length; i++) {
+    __completion_callbacks[i](snapshot);
+  }
+});
+"#;
+
+    fn unwrap_ran(outcome: HarnessOutcome) -> Vec<TestResult> {
+        match outcome {
+            HarnessOutcome::Ran(results) => results,
+            HarnessOutcome::Threw(message) => panic!("harness threw: {message}"),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn nova_harness_template_reuses_loaded_harness_without_result_leak() {
+        let mut template = NovaHarnessTemplate::new(MINI_TESTHARNESS).expect("template");
+        let loader = EmptyLoader;
+
+        let first = unwrap_ran(template.run_test(
+            r#"<script>test(function(){ assert_true(true); }, "first");</script>"#,
+            &loader,
+            Some("file:///first.html"),
+            None,
+            None,
+        ));
+        let second = unwrap_ran(template.run_test(
+            r#"<script>test(function(){ assert_true(true); }, "second");</script>"#,
+            &loader,
+            Some("file:///second.html"),
+            None,
+            None,
+        ));
+
+        assert_eq!(first.len(), 1, "{first:?}");
+        assert_eq!(first[0].name, "first");
+        assert!(first[0].passed(), "{first:?}");
+        assert_eq!(second.len(), 1, "{second:?}");
+        assert_eq!(second[0].name, "second");
+        assert!(second[0].passed(), "{second:?}");
     }
 }
 

@@ -163,9 +163,18 @@ mod native {
             finish_loading_imported_module(agent, referrer, module_request, payload, result, gc);
         }
     }
+
+    fn leak_host_hooks(jobs: Rc<RefCell<VecDeque<Job>>>) -> &'static ServalHostHooks {
+        Box::leak(Box::new(ServalHostHooks {
+            jobs,
+            module_resolver: Cell::new(None),
+            module_cache: RefCell::new(HashMap::new()),
+        }))
+    }
+
     use script_engine_api::{
         Budget, CallCx, HostData, NativeFn, PromiseToken, PumpOutcome, ReflectorData, ScriptEngine,
-        ScriptEngineLive,
+        ScriptEngineLive, ScriptEngineSnapshot,
     };
 
     /// A queue of `Global`s awaiting release. Nova's `Global` has no `Drop` (freeing
@@ -494,6 +503,45 @@ mod native {
         release: ReleaseQueue,
     }
 
+    impl NovaEngine {
+        /// Clone an idle Nova engine from its current VM heap snapshot.
+        ///
+        /// The clone gets a fresh host hook queue, release queue, and realm host slot.
+        /// Host-owned DOM state is intentionally not copied; callers install it with
+        /// `set_host_data` before running script in the clone.
+        pub fn snapshot_clone(&mut self) -> Result<Self, String> {
+            if !self.jobs.borrow().is_empty() {
+                return Err("cannot snapshot clone NovaEngine with pending jobs".to_string());
+            }
+
+            let original_release = self.release.clone();
+            self.agent.run_in_realm(&self.realm, |agent, _gc| {
+                drain_release(agent, &original_release);
+            });
+
+            let jobs: Rc<RefCell<VecDeque<Job>>> = Rc::new(RefCell::new(VecDeque::new()));
+            let hooks = leak_host_hooks(jobs.clone());
+            let release: ReleaseQueue = Rc::new(RefCell::new(Vec::new()));
+            let mut agent = self.agent.snapshot_clone(hooks);
+            let previous = self.realm.replace_host_defined(
+                &mut agent,
+                Some(Rc::new(NovaHostSlot::new(release.clone()))),
+            );
+            debug_assert!(
+                previous.is_none(),
+                "GcAgent::snapshot_clone clears realm host-defined state"
+            );
+
+            Ok(Self {
+                agent,
+                realm: self.realm,
+                jobs,
+                hooks,
+                release,
+            })
+        }
+    }
+
     impl ScriptEngine for NovaEngine {
         // Nova's `Global` has no `Drop`, so the held value type is a `NovaValue`
         // wrapper that parks its `Global` on the release queue when dropped.
@@ -506,11 +554,7 @@ mod native {
             // shared queue handle). Acceptable for the engine lifetime; the proper
             // fix is a non-'static hooks API upstream.
             let jobs: Rc<RefCell<VecDeque<Job>>> = Rc::new(RefCell::new(VecDeque::new()));
-            let hooks: &'static ServalHostHooks = Box::leak(Box::new(ServalHostHooks {
-                jobs: jobs.clone(),
-                module_resolver: Cell::new(None),
-                module_cache: RefCell::new(HashMap::new()),
-            }));
+            let hooks = leak_host_hooks(jobs.clone());
             let mut agent = GcAgent::new(AgentOptions::default(), hooks);
             let realm = agent.create_default_realm();
             // One release queue, shared between the engine (drained at GC ticks) and
@@ -852,6 +896,12 @@ mod native {
         }
     }
 
+    impl ScriptEngineSnapshot for NovaEngine {
+        fn snapshot_clone(&mut self) -> Result<Self, Self::Error> {
+            NovaEngine::snapshot_clone(self)
+        }
+    }
+
     impl ScriptEngineLive for NovaEngine {
         fn make_reflector(&mut self, data: ReflectorData) -> Result<Self::Value, Self::Error> {
             let release = self.release.clone();
@@ -988,6 +1038,67 @@ mod native {
             engine.eval("setText(node, 'hello from JS')").unwrap();
 
             assert_eq!(*sink.borrow(), vec![(0x42, "hello from JS".to_string())]);
+        }
+
+        #[test]
+        fn snapshot_clone_preserves_js_state_and_replaces_host_slot() {
+            use std::cell::RefCell;
+            use std::rc::Rc;
+
+            type Sink = RefCell<Vec<String>>;
+
+            struct Capture;
+            impl NativeFn<NovaEngine> for Capture {
+                fn call(cx: &mut NovaCallCx<'_>) -> Result<NovaValue, String> {
+                    let value = cx.arg(0);
+                    let value = cx.value_to_string(&value)?;
+                    if let Some(data) = cx.host_data() {
+                        if let Some(sink) = data.downcast_ref::<Sink>() {
+                            sink.borrow_mut().push(value);
+                        }
+                    }
+                    Ok(cx.undefined())
+                }
+            }
+
+            let base_sink: Rc<Sink> = Rc::new(RefCell::new(Vec::new()));
+            let clone_sink: Rc<Sink> = Rc::new(RefCell::new(Vec::new()));
+
+            let mut engine = NovaEngine::new().unwrap();
+            engine.set_function::<Capture>("capture", 1).unwrap();
+            engine.set_host_data(base_sink.clone());
+            engine
+                .eval(
+                    "var counter = 1; \
+                     function bump() { counter += 1; return counter; } \
+                     counter",
+                )
+                .unwrap();
+
+            let mut clone = engine.snapshot_clone().unwrap();
+            clone.set_host_data(clone_sink.clone());
+
+            clone.eval("capture(bump())").unwrap();
+            engine.eval("capture(counter)").unwrap();
+
+            assert_eq!(*clone_sink.borrow(), vec!["2".to_string()]);
+            assert_eq!(*base_sink.borrow(), vec!["1".to_string()]);
+        }
+
+        #[test]
+        fn snapshot_clone_refuses_pending_jobs() {
+            let mut engine = NovaEngine::new().unwrap();
+            engine
+                .eval("Promise.resolve().then(() => { globalThis.done = true; });")
+                .unwrap();
+
+            match engine.snapshot_clone() {
+                Ok(_) => panic!("snapshot clone unexpectedly accepted pending jobs"),
+                Err(err) => assert_eq!(err, "cannot snapshot clone NovaEngine with pending jobs"),
+            }
+
+            engine.pump_microtasks();
+            assert!(engine.snapshot_clone().is_ok());
         }
 
         #[test]

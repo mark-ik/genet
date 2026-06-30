@@ -133,11 +133,7 @@ pub trait ScriptEngine: Sized {
     /// fuel-metered backend (piccolo) overrides this; an untrusted-script host
     /// should prefer this method with a [`Budget::Steps`] bound on those
     /// backends.
-    fn eval_bounded(
-        &mut self,
-        source: &str,
-        _budget: Budget,
-    ) -> Result<Self::Value, Self::Error> {
+    fn eval_bounded(&mut self, source: &str, _budget: Budget) -> Result<Self::Value, Self::Error> {
         self.eval(source)
     }
 
@@ -251,6 +247,20 @@ pub trait ScriptEngine: Sized {
     /// collector, so a just-orphaned node is reaped that same tick (the gc-arena soak's
     /// frame-cadence contract).
     fn force_gc(&mut self) {}
+}
+
+/// Engines that can clone an idle VM heap into a fresh, independently-owned
+/// runtime image.
+///
+/// This is a throughput hook for harness/runtime pools. It is intentionally
+/// optional: backends without precise heap cloning keep using `ScriptEngine::new`.
+pub trait ScriptEngineSnapshot: ScriptEngine {
+    /// Clone the current idle engine state.
+    ///
+    /// The clone must receive fresh host-owned state before script runs. Backends
+    /// should return an error if pending host jobs or active execution make the
+    /// snapshot unsafe.
+    fn snapshot_clone(&mut self) -> Result<Self, Self::Error>;
 }
 
 /// A native (Rust) callback exposed to JS, implemented by a zero-sized type so the

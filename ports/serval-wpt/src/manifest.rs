@@ -14,11 +14,9 @@
 //! <leaf>}}}`). A node whose value is an **object** is a directory; a node whose
 //! value is an **array** is a test **leaf**: `[hash, variant, variant, ...]`.
 //! Each variant is `[url, extras]` for a testharness-family test (one entry per
-//! global / `?query` variant; `.any.js` is pre-expanded here, so no
-//! `synthesize_any_js` is needed) or `[url, references, extras]` for a reftest.
-//! A `null` url means "use the leaf's own path".
-
-#![allow(dead_code)] // wired into the runner's discovery in H1 slice 2.
+//! global / `?query` variant; `.any.js` is pre-expanded here for discovery) or
+//! `[url, references, extras]` for a reftest. A `null` url means "use the leaf's
+//! own path".
 
 use std::path::Path;
 
@@ -67,6 +65,9 @@ pub enum RefMatch {
 /// multi-`?query` test expands to several of these (one per variant URL).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ManifestTest {
+    /// The backing file path inside the tests root. For generated variants such
+    /// as `/dom/foo.any.html`, this remains the source `dom/foo.any.js`.
+    pub source_path: String,
     /// The test URL, `url_base`-relative (e.g. `/FileAPI/Blob/x.any.worker.html`).
     pub url: String,
     pub kind: TestKind,
@@ -82,7 +83,11 @@ impl ManifestTest {
     /// Whether this variant runs in a worker (`.worker.html` / `.any.worker.html`).
     /// The window-shaped runner cannot host workers, so callers skip these.
     pub fn is_worker(&self) -> bool {
-        self.url.contains(".worker.html") || self.url.contains(".worker?")
+        self.url.contains(".worker.")
+            || self.url.contains(".worker?")
+            || self.url.contains(".sharedworker.")
+            || self.url.contains(".serviceworker.")
+            || self.url.contains(".shadowrealm-")
     }
 }
 
@@ -145,13 +150,22 @@ impl Manifest {
         if subset.is_empty() {
             return self.tests();
         }
-        let want = format!("{}{}", self.url_base, subset);
+        let want = subset.trim_start_matches('/');
         self.tests()
             .into_iter()
             .filter(|t| {
-                t.url
-                    .strip_prefix(&want)
-                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+                let matches = |candidate: &str| {
+                    let candidate = candidate.trim_start_matches('/');
+                    candidate
+                        .strip_prefix(&format!(
+                            "{}{}",
+                            self.url_base.trim_start_matches('/'),
+                            want
+                        ))
+                        .or_else(|| candidate.strip_prefix(want))
+                        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+                };
+                matches(&t.url) || matches(&t.source_path)
             })
             .collect()
     }
@@ -169,7 +183,7 @@ impl Manifest {
                     self.walk(child, kind, prefix, out);
                     prefix.truncate(restore);
                 }
-            }
+            },
             // Test leaf: `[hash, variant, variant, ...]`.
             Value::Array(leaf) => {
                 for variant in leaf.iter().skip(1) {
@@ -177,8 +191,8 @@ impl Manifest {
                         out.push(test);
                     }
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
@@ -202,7 +216,14 @@ impl Manifest {
             .and_then(Value::as_str)
             == Some("long");
         let fuzzy = extras.and_then(|e| e.get("fuzzy")).and_then(parse_fuzzy);
-        Some(ManifestTest { url, kind, refs, fuzzy, long_timeout })
+        Some(ManifestTest {
+            source_path: prefix.to_string(),
+            url,
+            kind,
+            refs,
+            fuzzy,
+            long_timeout,
+        })
     }
 }
 
@@ -266,6 +287,10 @@ mod tests {
                                 "hash",
                                 ["/FileAPI/Blob/x.any.html", { "timeout": "long" }],
                                 ["/FileAPI/Blob/x.any.worker.html", {}]
+                            ],
+                            "y.any.js": [
+                                "hash",
+                                ["FileAPI/Blob/y.any.html", {}]
                             ]
                         }
                     }
@@ -287,21 +312,54 @@ mod tests {
     fn enumerates_testharness_variants_and_paths() {
         let tests = fixture().tests();
         // Plain test: null url -> the path under url_base.
-        let size = tests.iter().find(|t| t.url == "/FileAPI/Blob/size.html").expect("size.html");
+        let size = tests
+            .iter()
+            .find(|t| t.url == "/FileAPI/Blob/size.html")
+            .expect("size.html");
         assert_eq!(size.kind, TestKind::Testharness);
         assert!(!size.long_timeout);
         // `.any.js` is pre-expanded: window + worker variants, no synthesize needed.
-        assert!(tests.iter().any(|t| t.url == "/FileAPI/Blob/x.any.html" && t.long_timeout));
-        let worker = tests.iter().find(|t| t.url == "/FileAPI/Blob/x.any.worker.html").expect("worker variant");
-        assert!(worker.is_worker(), "worker variant flagged so the runner can skip it");
+        assert!(
+            tests
+                .iter()
+                .any(|t| t.url == "/FileAPI/Blob/x.any.html" && t.long_timeout)
+        );
+        let worker = tests
+            .iter()
+            .find(|t| t.url == "/FileAPI/Blob/x.any.worker.html")
+            .expect("worker variant");
+        assert!(
+            worker.is_worker(),
+            "worker variant flagged so the runner can skip it"
+        );
+        // Real manifests mix leading-slash and slashless explicit variant URLs.
+        // Subset filtering must treat both as the same URL space.
+        assert!(
+            fixture()
+                .tests_under("FileAPI/Blob")
+                .iter()
+                .any(|t| t.url == "FileAPI/Blob/y.any.html")
+        );
+        assert!(
+            fixture()
+                .tests_under("FileAPI/Blob/x.any.js")
+                .iter()
+                .any(|t| t.url == "/FileAPI/Blob/x.any.html")
+        );
     }
 
     #[test]
     fn parses_reftest_refs_and_fuzzy() {
         let tests = fixture().tests();
-        let r = tests.iter().find(|t| t.url == "/css/ref.html").expect("reftest");
+        let r = tests
+            .iter()
+            .find(|t| t.url == "/css/ref.html")
+            .expect("reftest");
         assert_eq!(r.kind, TestKind::Reftest);
-        assert_eq!(r.refs, vec![("/css/ref-ref.html".to_string(), RefMatch::Equal)]);
+        assert_eq!(
+            r.refs,
+            vec![("/css/ref-ref.html".to_string(), RefMatch::Equal)]
+        );
         assert_eq!(r.fuzzy, Some(((0, 2), (0, 40))));
     }
 
@@ -314,11 +372,20 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/wpt/meta/MANIFEST.json");
         let m = Manifest::load(&path).expect("load real manifest");
         let tests = m.tests();
-        assert!(tests.len() > 10_000, "expected a large corpus, got {}", tests.len());
+        assert!(
+            tests.len() > 10_000,
+            "expected a large corpus, got {}",
+            tests.len()
+        );
         assert!(
             tests.iter().any(|t| t.kind == TestKind::Testharness),
             "has testharness tests",
         );
-        assert!(tests.iter().any(|t| t.kind == TestKind::Reftest && !t.refs.is_empty()), "reftests carry refs");
+        assert!(
+            tests
+                .iter()
+                .any(|t| t.kind == TestKind::Reftest && !t.refs.is_empty()),
+            "reftests carry refs"
+        );
     }
 }

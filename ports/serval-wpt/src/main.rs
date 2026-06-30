@@ -16,6 +16,7 @@
 //!
 //! Cf. `docs/2026-05-26_wpt_runner_plan.md`.
 
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -65,6 +66,17 @@ enum Kind {
 }
 
 impl Kind {
+    fn from_manifest(kind: manifest::TestKind) -> Kind {
+        match kind {
+            manifest::TestKind::Testharness => Kind::Testharness,
+            manifest::TestKind::Reftest | manifest::TestKind::PrintReftest => Kind::Reftest,
+            manifest::TestKind::Crashtest => Kind::Crashtest,
+            manifest::TestKind::Manual
+            | manifest::TestKind::Visual
+            | manifest::TestKind::Wdspec => Kind::Manual,
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             Kind::Reference => "reference",
@@ -96,7 +108,10 @@ fn is_html(path: &Path) -> bool {
 /// that merely mention "xhtml" in a doctype or comment.
 fn is_xml_path(path: &Path) -> bool {
     matches!(
-        path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
         Some("xht" | "xhtml" | "xml")
     )
 }
@@ -142,28 +157,116 @@ enum Outcome {
     ReadError,
 }
 
+#[derive(Clone)]
+struct TestCase {
+    /// Backing file inside `tests_root`. Generated WPT variants such as
+    /// `/foo.any.html` point back to `foo.any.js`.
+    path: PathBuf,
+    /// Runnable WPT URL, tests-root-relative and without the leading slash. This
+    /// is the stable identity used for listings, expectations, and server mode.
+    url: String,
+    kind: Kind,
+    refs: Vec<(String, manifest::RefMatch)>,
+    fuzzy: Option<(u16, u64)>,
+    long_timeout: bool,
+    from_manifest: bool,
+}
+
+impl TestCase {
+    fn from_walk(path: PathBuf, tests_root: &str) -> TestCase {
+        let contents = fs::read(&path)
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default();
+        let kind = classify(&path, &contents);
+        TestCase {
+            url: rel(&path, tests_root),
+            path,
+            kind,
+            refs: Vec::new(),
+            fuzzy: None,
+            long_timeout: false,
+            from_manifest: false,
+        }
+    }
+
+    fn from_manifest(test: manifest::ManifestTest, tests_root: &Path) -> Option<TestCase> {
+        if test.is_worker() {
+            return None;
+        }
+        let source_path = strip_url_path(&test.source_path);
+        if source_path.is_empty() {
+            return None;
+        }
+        Some(TestCase {
+            path: tests_root.join(source_path),
+            url: normalize_test_url(&test.url),
+            kind: Kind::from_manifest(test.kind),
+            refs: test.refs,
+            fuzzy: manifest_fuzzy_upper(test.fuzzy),
+            long_timeout: test.long_timeout,
+            from_manifest: true,
+        })
+    }
+
+    fn name(&self) -> &str {
+        &self.url
+    }
+
+    fn disk_doc_url(&self) -> String {
+        format!("http://web-platform.test/{}", self.url)
+    }
+}
+
+fn normalize_test_url(url: &str) -> String {
+    url.trim_start_matches('/').replace('\\', "/")
+}
+
+fn strip_url_path(url_or_path: &str) -> &str {
+    url_or_path
+        .trim_start_matches('/')
+        .split(['#', '?'])
+        .next()
+        .unwrap_or(url_or_path)
+}
+
+fn manifest_fuzzy_upper(fuzzy: Option<((u32, u32), (u32, u32))>) -> Option<(u16, u64)> {
+    fuzzy.map(|((_, diff_hi), (_, total_hi))| {
+        (diff_hi.min(u32::from(u16::MAX)) as u16, u64::from(total_hi))
+    })
+}
+
 /// Crash-smoke one test: parse + cascade + layout, catching panics.
-fn smoke_test(path: &Path) -> (Kind, Outcome) {
-    let bytes = match fs::read(path) {
-        Ok(b) => b,
-        Err(_) => return (Kind::Load, Outcome::ReadError),
-    };
-    let html = String::from_utf8_lossy(&bytes).into_owned();
-    let kind = classify(path, &html);
+fn smoke_test(test: &TestCase) -> (Kind, Outcome) {
+    let kind = test.kind;
     if !kind.runs_in_phase1() {
         return (kind, Outcome::Skipped);
     }
+    let html = match load_test_document_disk(test) {
+        TestHtml::Html(html) => html,
+        TestHtml::Skip => return (kind, Outcome::Skipped),
+        TestHtml::ReadError => return (kind, Outcome::ReadError),
+    };
 
-    let is_xml = is_xml_path(path);
+    let is_xml = is_xml_path(&test.path);
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
-        let document =
-            if is_xml { StaticDocument::parse_xml(&html) } else { StaticDocument::parse(&html) };
+        let document = if is_xml {
+            StaticDocument::parse_xml(&html)
+        } else {
+            StaticDocument::parse(&html)
+        };
         let sheets = serval_layout::inline_stylesheets_from_source(&html);
         let sheet_refs: Vec<&str> = sheets.iter().map(String::as_str).collect();
         let _fragments = serval_layout::render(&document, &sheet_refs, VIEWPORT_W, VIEWPORT_H);
     }));
 
-    (kind, if result.is_ok() { Outcome::Passed } else { Outcome::Failed })
+    (
+        kind,
+        if result.is_ok() {
+            Outcome::Passed
+        } else {
+            Outcome::Failed
+        },
+    )
 }
 
 /// True for a WPT `.any.js` / `.window.js` / `.worker.js` test (a JS file the
@@ -181,7 +284,9 @@ fn collect(root: &Path, out: &mut Vec<PathBuf>) {
         }
         return;
     }
-    let Ok(entries) = fs::read_dir(root) else { return };
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
     let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
     entries.sort();
     for path in entries {
@@ -215,7 +320,7 @@ fn collect(root: &Path, out: &mut Vec<PathBuf>) {
 /// `run_test` then resolves those `<script src>` the usual way. Returns `None`
 /// for worker-only tests (`.worker.js`, or `.any.js` whose `global=` excludes
 /// window), which this window-shaped runner can't host.
-fn synthesize_any_js(path: &Path) -> Option<String> {
+fn synthesize_any_js(path: &Path, variant_url: Option<&str>) -> Option<String> {
     let name = path.file_name()?.to_str()?;
     if name.ends_with(".worker.js") {
         return None;
@@ -276,7 +381,17 @@ fn synthesize_any_js(path: &Path) -> Option<String> {
     for s in scripts {
         html.push_str(&format!("<script src=\"{s}\"></script>\n"));
     }
-    html.push_str(&format!("<script src=\"{name}\"></script>\n"));
+    let query = variant_url
+        .and_then(|u| {
+            u.split_once('?')
+                .map(|(_, q)| q.split('#').next().unwrap_or(q))
+        })
+        .filter(|q| !q.is_empty());
+    let test_src = match query {
+        Some(q) => format!("{name}?{q}"),
+        None => name.to_string(),
+    };
+    html.push_str(&format!("<script src=\"{test_src}\"></script>\n"));
     Some(html)
 }
 
@@ -298,6 +413,14 @@ struct Args {
     /// printed sample) to this path. Essential for a full-corpus run, whose lists run to
     /// thousands.
     worklist_out: Option<String>,
+    /// Use the legacy directory walk instead of MANIFEST.json. This is retained as a
+    /// diagnostic fallback for custom partial trees; normal WPT commands are
+    /// manifest-backed.
+    walk_discovery: bool,
+    /// Check current per-test statuses against a JSON expectations file.
+    expectations: Option<String>,
+    /// Write current per-test statuses to a JSON expectations file.
+    write_expectations: Option<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -310,28 +433,38 @@ fn parse_args() -> Result<Args, String> {
     let mut spawn_server = false;
     let mut timeout_secs = 30u64;
     let mut worklist_out = None;
+    let mut walk_discovery = false;
+    let mut expectations = None;
+    let mut write_expectations = None;
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--tests-root" => {
                 tests_root = it.next().ok_or("--tests-root needs a value")?;
-            }
+            },
             "--engine" => {
                 let v = it.next().ok_or("--engine needs a value (boa | nova)")?;
                 engine = harness::Engine::parse(&v)
                     .ok_or_else(|| format!("unknown engine: {v} (expected boa | nova)"))?;
-            }
+            },
             "--server-base" => {
                 server_base = Some(it.next().ok_or("--server-base needs a URL")?);
-            }
+            },
             "--spawn-server" => spawn_server = true,
             "--timeout" => {
                 let v = it.next().ok_or("--timeout needs a value (seconds)")?;
                 timeout_secs = v.parse().map_err(|_| format!("invalid --timeout: {v}"))?;
-            }
+            },
             "--worklist-out" => {
                 worklist_out = Some(it.next().ok_or("--worklist-out needs a path")?);
-            }
+            },
+            "--walk-discovery" => walk_discovery = true,
+            "--expectations" => {
+                expectations = Some(it.next().ok_or("--expectations needs a path")?);
+            },
+            "--write-expectations" => {
+                write_expectations = Some(it.next().ok_or("--write-expectations needs a path")?);
+            },
             "-v" | "--verbose" => verbose = true,
             "-h" | "--help" => return Err(usage()),
             _ if arg.starts_with('-') => return Err(format!("unknown flag: {arg}\n{}", usage())),
@@ -350,6 +483,9 @@ fn parse_args() -> Result<Args, String> {
         spawn_server,
         timeout_secs,
         worklist_out,
+        walk_discovery,
+        expectations,
+        write_expectations,
     })
 }
 
@@ -370,6 +506,10 @@ Options:
     --tests-root <dir>   tests root (default: tests/wpt)
     --timeout <secs>     per-test worker timeout for `test262` (default: 30)
     --worklist-out <f>   write the full `test262` Nova-gap + timeout list to <f>
+    --walk-discovery     use the legacy directory walk instead of MANIFEST.json
+    --expectations <f>   fail if testharness results differ from JSON expectations
+    --write-expectations <f>
+                         write current testharness results as JSON expectations
     --engine <name>      testharness JS engine: boa (default) | nova
     --server-base <url>  run testharness against a live `wpt serve` at <url>
                          (server mode; needs --features netfetch)
@@ -390,7 +530,7 @@ fn main() {
         Err(msg) => {
             eprintln!("{msg}");
             std::process::exit(2);
-        }
+        },
     };
 
     // bench needs only the tests root (for resources/testharness.js), not a subset
@@ -419,16 +559,26 @@ fn main() {
         return;
     }
 
-    let root = Path::new(&args.tests_root).join(&args.subset);
-    if !root.exists() {
-        eprintln!("subset path does not exist: {}", root.display());
+    if (args.expectations.is_some() || args.write_expectations.is_some())
+        && args.command != "testharness"
+    {
+        eprintln!(
+            "--expectations / --write-expectations are currently supported for `testharness` only"
+        );
         std::process::exit(2);
     }
 
-    let mut tests = Vec::new();
-    collect(&root, &mut tests);
+    let tests = discover_tests(&args);
     if tests.is_empty() {
-        eprintln!("no HTML tests found under {}", root.display());
+        eprintln!(
+            "no runnable tests found for '{}' under {}",
+            if args.subset.is_empty() {
+                "<all>"
+            } else {
+                &args.subset
+            },
+            args.tests_root
+        );
         std::process::exit(1);
     }
 
@@ -442,8 +592,49 @@ fn main() {
         other => {
             eprintln!("unknown command: {other}\n{}", usage());
             std::process::exit(2);
-        }
+        },
     }
+}
+
+fn manifest_path(tests_root: &str) -> PathBuf {
+    Path::new(tests_root)
+        .parent()
+        .map(|p| p.join("meta/MANIFEST.json"))
+        .unwrap_or_else(|| PathBuf::from("MANIFEST.json"))
+}
+
+fn discover_tests(args: &Args) -> Vec<TestCase> {
+    let tests_root = Path::new(&args.tests_root);
+    if args.walk_discovery {
+        let root = tests_root.join(&args.subset);
+        if !root.exists() {
+            eprintln!("subset path does not exist: {}", root.display());
+            std::process::exit(2);
+        }
+        let mut paths = Vec::new();
+        collect(&root, &mut paths);
+        return paths
+            .into_iter()
+            .map(|path| TestCase::from_walk(path, &args.tests_root))
+            .collect();
+    }
+
+    let path = manifest_path(&args.tests_root);
+    let manifest = match manifest::Manifest::load(&path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!(
+                "manifest load failed ({}): {e}; pass --walk-discovery to use the legacy directory walk",
+                path.display()
+            );
+            std::process::exit(1);
+        },
+    };
+    manifest
+        .tests_under(&args.subset)
+        .into_iter()
+        .filter_map(|test| TestCase::from_manifest(test, tests_root))
+        .collect()
 }
 
 /// Enumerate tests under a subset from MANIFEST.json (harness-exactness H1), for
@@ -451,16 +642,13 @@ fn main() {
 /// manifest sits at `<tests-root>/../meta/MANIFEST.json`. Worker variants are counted
 /// but excluded from the runnable total (this window-shaped runner cannot host them).
 fn manifest_list(args: &Args) {
-    let manifest_path = Path::new(&args.tests_root)
-        .parent()
-        .map(|p| p.join("meta/MANIFEST.json"))
-        .unwrap_or_else(|| PathBuf::from("MANIFEST.json"));
+    let manifest_path = manifest_path(&args.tests_root);
     let manifest = match manifest::Manifest::load(&manifest_path) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("manifest load failed ({}): {e}", manifest_path.display());
             std::process::exit(1);
-        }
+        },
     };
     let tests = manifest.tests_under(&args.subset);
     let mut total = 0usize;
@@ -480,7 +668,11 @@ fn manifest_list(args: &Args) {
     let by_kind: Vec<String> = counts.iter().map(|(k, n)| format!("{k}={n}")).collect();
     println!(
         "manifest: {total} runnable test(s) under '{}' ({}); {workers} worker variant(s) skipped",
-        if args.subset.is_empty() { "<all>" } else { &args.subset },
+        if args.subset.is_empty() {
+            "<all>"
+        } else {
+            &args.subset
+        },
         by_kind.join(", "),
     );
 }
@@ -492,18 +684,20 @@ fn rel(path: &Path, tests_root: &str) -> String {
         .replace('\\', "/")
 }
 
-fn list(tests: &[PathBuf], args: &Args) {
+fn list(tests: &[TestCase], _args: &Args) {
     let mut counts = [0usize; 6];
-    for path in tests {
-        let contents = fs::read(path)
-            .map(|b| String::from_utf8_lossy(&b).into_owned())
-            .unwrap_or_default();
-        let kind = classify(path, &contents);
+    let mut manifest_backed = 0usize;
+    for test in tests {
+        let kind = test.kind;
+        if test.from_manifest {
+            manifest_backed += 1;
+        }
         counts[kind as usize] += 1;
-        println!("{:<12} {}", kind.label(), rel(path, &args.tests_root));
+        let timeout = if test.long_timeout { " long" } else { "" };
+        println!("{:<12} {}{}", kind.label(), test.name(), timeout);
     }
     println!(
-        "\n{} tests: {} reftest, {} testharness, {} crashtest, {} load, {} manual, {} reference",
+        "\n{} test variant(s): {} reftest, {} testharness, {} crashtest, {} load, {} manual, {} reference{}",
         tests.len(),
         counts[Kind::Reftest as usize],
         counts[Kind::Testharness as usize],
@@ -511,39 +705,44 @@ fn list(tests: &[PathBuf], args: &Args) {
         counts[Kind::Load as usize],
         counts[Kind::Manual as usize],
         counts[Kind::Reference as usize],
+        if manifest_backed == tests.len() {
+            " (manifest-backed)"
+        } else {
+            ""
+        },
     );
 }
 
-fn run(tests: &[PathBuf], args: &Args) {
+fn run(tests: &[TestCase], args: &Args) {
     // Quiet the default panic hook so crash-smoke failures do not spam
     // backtraces; the runner reports them itself.
     let prev = panic::take_hook();
     panic::set_hook(Box::new(|_| {}));
 
     let (mut passed, mut failed, mut skipped, mut errored) = (0, 0, 0, 0);
-    for path in tests {
-        let (kind, outcome) = smoke_test(path);
+    for test in tests {
+        let (kind, outcome) = smoke_test(test);
         match outcome {
             Outcome::Passed => {
                 passed += 1;
                 if args.verbose {
-                    println!("PASS  {:<12} {}", kind.label(), rel(path, &args.tests_root));
+                    println!("PASS  {:<12} {}", kind.label(), test.name());
                 }
-            }
+            },
             Outcome::Failed => {
                 failed += 1;
-                println!("FAIL  {:<12} {}", kind.label(), rel(path, &args.tests_root));
-            }
+                println!("FAIL  {:<12} {}", kind.label(), test.name());
+            },
             Outcome::ReadError => {
                 errored += 1;
-                println!("ERROR read    {}", rel(path, &args.tests_root));
-            }
+                println!("ERROR read    {}", test.name());
+            },
             Outcome::Skipped => {
                 skipped += 1;
                 if args.verbose {
-                    println!("SKIP  {:<12} {}", kind.label(), rel(path, &args.tests_root));
+                    println!("SKIP  {:<12} {}", kind.label(), test.name());
                 }
-            }
+            },
         }
     }
 
@@ -586,11 +785,11 @@ fn setup_server(args: &Args) -> Option<net::ServerCtx> {
             eprintln!("server mode: driving fetch against {}", s.origin);
             net::set_page_origin(&s.origin);
             Some(s)
-        }
+        },
         Err(e) => {
             eprintln!("server mode setup failed: {e}");
             std::process::exit(2);
-        }
+        },
     }
 }
 
@@ -600,27 +799,31 @@ fn setup_server(args: &Args) -> Option<net::ServerCtx> {
 enum TestHtml {
     Html(String),
     Skip,
+    ReadError,
 }
 
-fn build_test_html_disk(path: &Path) -> TestHtml {
-    if is_any_js(path) {
-        return match synthesize_any_js(path) {
+fn load_test_document_disk(test: &TestCase) -> TestHtml {
+    if is_any_js(&test.path) {
+        return match synthesize_any_js(&test.path, Some(test.name())) {
             Some(h) => TestHtml::Html(h),
             None => TestHtml::Skip, // worker-only
         };
     }
-    let Ok(bytes) = fs::read(path) else {
-        return TestHtml::Skip;
+    let Ok(bytes) = fs::read(&test.path) else {
+        return TestHtml::ReadError;
     };
-    let raw = String::from_utf8_lossy(&bytes).into_owned();
-    if classify(path, &raw) != Kind::Testharness {
+    TestHtml::Html(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn build_test_html_disk(test: &TestCase) -> TestHtml {
+    if test.kind != Kind::Testharness {
         return TestHtml::Skip;
     }
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let ext = test.path.extension().and_then(|e| e.to_str()).unwrap_or("");
     if ext.eq_ignore_ascii_case("xhtml") || ext.eq_ignore_ascii_case("xht") {
         return TestHtml::Skip; // XML parse mode serval's HTML parser doesn't handle
     }
-    TestHtml::Html(raw)
+    load_test_document_disk(test)
 }
 
 /// The cross-engine pass predicate: a caught run that did not panic or throw,
@@ -633,18 +836,139 @@ fn outcome_passes(result: &Result<harness::HarnessOutcome, Box<dyn std::any::Any
     )
 }
 
+struct ActualRecord {
+    test: String,
+    status: &'static str,
+}
+
+impl ActualRecord {
+    fn new(test: &TestCase, status: &'static str) -> ActualRecord {
+        ActualRecord {
+            test: test.name().to_string(),
+            status,
+        }
+    }
+}
+
+fn finish_expectations(args: &Args, command: &str, actuals: &[ActualRecord]) {
+    if let Some(out) = &args.write_expectations {
+        if let Err(e) = write_expectations(out, command, args.engine.label(), actuals) {
+            eprintln!("failed to write expectations to {out}: {e}");
+            std::process::exit(1);
+        }
+        println!("expectations written to {out} ({} tests)", actuals.len());
+    }
+    if let Some(path) = &args.expectations {
+        match check_expectations(path, actuals) {
+            Ok(()) => println!("expectations: unexpected=0"),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            },
+        }
+    }
+}
+
+fn write_expectations(
+    path: &str,
+    command: &str,
+    engine: &str,
+    actuals: &[ActualRecord],
+) -> Result<(), String> {
+    let mut tests = BTreeMap::new();
+    for actual in actuals {
+        tests.insert(actual.test.clone(), actual.status.to_string());
+    }
+    let value = serde_json::json!({
+        "version": 1,
+        "command": command,
+        "engine": engine,
+        "tests": tests,
+    });
+    let out = Path::new(path);
+    if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(
+        out,
+        serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
+}
+
+fn load_expectations(path: &str) -> Result<BTreeMap<String, String>, String> {
+    let text =
+        fs::read_to_string(path).map_err(|e| format!("expectations read failed ({path}): {e}"))?;
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("expectations parse failed ({path}): {e}"))?;
+    let tests = value.get("tests").unwrap_or(&value);
+    let obj = tests.as_object().ok_or_else(|| {
+        format!("expectations file {path} must be an object or carry a `tests` object")
+    })?;
+    let mut out = BTreeMap::new();
+    for (name, status) in obj {
+        let Some(status) = status.as_str() else {
+            return Err(format!("expectation for {name} must be a string status"));
+        };
+        out.insert(name.clone(), status.to_ascii_lowercase());
+    }
+    Ok(out)
+}
+
+fn check_expectations(path: &str, actuals: &[ActualRecord]) -> Result<(), String> {
+    let expected = load_expectations(path)?;
+    let actual_names: BTreeSet<&str> = actuals.iter().map(|a| a.test.as_str()).collect();
+    let mut unexpected = Vec::new();
+    for actual in actuals {
+        match expected.get(&actual.test) {
+            Some(status) if status == actual.status => {},
+            Some(status) => unexpected.push(format!(
+                "{}: expected {}, got {}",
+                actual.test, status, actual.status
+            )),
+            None => unexpected.push(format!(
+                "{}: missing expectation, got {}",
+                actual.test, actual.status
+            )),
+        }
+    }
+    for expected_name in expected.keys() {
+        if !actual_names.contains(expected_name.as_str()) {
+            let status = expected
+                .get(expected_name)
+                .map(String::as_str)
+                .unwrap_or("<missing>");
+            unexpected.push(format!(
+                "{expected_name}: expected {status}, but test was not run"
+            ));
+        }
+    }
+    if unexpected.is_empty() {
+        return Ok(());
+    }
+    let mut msg = format!("expectations: unexpected={} ({path})", unexpected.len());
+    for line in unexpected.iter().take(40) {
+        msg.push_str("\n  ");
+        msg.push_str(line);
+    }
+    if unexpected.len() > 40 {
+        msg.push_str(&format!("\n  … and {} more", unexpected.len() - 40));
+    }
+    Err(msg)
+}
+
 /// Phase 3 / harness-exactness H2b: run each testharness test on **both** engines
 /// (Boa + Nova) and diff. A test that passes on Boa but fails on Nova is a **Nova
 /// JS-engine gap** (Nova's worklist, the fork-improvement signal); a test that
 /// fails on both is a **serval-platform gap** (layout / DOM). Disk mode only.
-fn compare(tests: &[PathBuf], args: &Args) {
+fn compare(tests: &[TestCase], args: &Args) {
     let tests_root = Path::new(&args.tests_root);
     let testharness_js = match fs::read_to_string(tests_root.join("resources/testharness.js")) {
         Ok(s) => s,
         Err(_) => {
             eprintln!("testharness.js not found under {}", tests_root.display());
             std::process::exit(2);
-        }
+        },
     };
     // Boa / Nova can panic on unimplemented paths; swallow the hooks like `testharness`.
     let prev = panic::take_hook();
@@ -653,35 +977,51 @@ fn compare(tests: &[PathBuf], args: &Args) {
     let (mut both_pass, mut both_fail, mut boa_only, mut nova_only, mut skipped) = (0, 0, 0, 0, 0);
     let mut nova_worklist: Vec<String> = Vec::new();
 
-    for path in tests {
-        let html = match build_test_html_disk(path) {
+    for test in tests {
+        let html = match build_test_html_disk(test) {
             TestHtml::Html(h) => h,
             TestHtml::Skip => {
                 skipped += 1;
                 continue;
-            }
+            },
+            TestHtml::ReadError => {
+                skipped += 1;
+                continue;
+            },
         };
-        let base_dir = path.parent().unwrap_or(tests_root);
-        let disk = harness::DiskLoader { base_dir, tests_root };
+        let base_dir = test.path.parent().unwrap_or(tests_root);
+        let disk = harness::DiskLoader {
+            base_dir,
+            tests_root,
+        };
+        let doc_url = test.disk_doc_url();
         let run = |engine| {
             panic::catch_unwind(AssertUnwindSafe(|| {
-                harness::run_test(&testharness_js, &html, &disk, None, None, None, engine)
+                harness::run_test(
+                    &testharness_js,
+                    &html,
+                    &disk,
+                    Some(&doc_url),
+                    None,
+                    None,
+                    engine,
+                )
             }))
         };
         let boa = run(harness::Engine::Boa);
         let nova = run(harness::Engine::Nova);
-        let name = rel(path, &args.tests_root);
+        let name = test.name();
         match (outcome_passes(&boa), outcome_passes(&nova)) {
             (true, true) => both_pass += 1,
             (false, false) => both_fail += 1,
             (false, true) => nova_only += 1,
             (true, false) => {
                 boa_only += 1;
-                nova_worklist.push(name.clone());
+                nova_worklist.push(name.to_string());
                 if args.verbose {
                     println!("NOVA-GAP  {name}");
                 }
-            }
+            },
         }
     }
     panic::set_hook(prev);
@@ -689,7 +1029,11 @@ fn compare(tests: &[PathBuf], args: &Args) {
     println!(
         "\ncompare [{}]: both-pass={both_pass} both-fail={both_fail} (serval-platform gap) \
          boa-only={boa_only} (Nova gap) nova-only={nova_only} skipped={skipped}",
-        if args.subset.is_empty() { "<all>" } else { &args.subset },
+        if args.subset.is_empty() {
+            "<all>"
+        } else {
+            &args.subset
+        },
     );
     if !nova_worklist.is_empty() {
         println!(
@@ -750,9 +1094,9 @@ fn run_262<E: ScriptEngine>(
             Err(_) => return T262::Fail, // the engine panicked on this source
         };
         let ok = match (negative, ran) {
-            (None, Ok(())) => true,                                  // positive: must not throw
-            (None, Err(_)) => false,                                // positive: threw
-            (Some(_), Ok(())) => false,                             // negative: must throw
+            (None, Ok(())) => true,     // positive: must not throw
+            (None, Err(_)) => false,    // positive: threw
+            (Some(_), Ok(())) => false, // negative: must throw
             (Some(neg), Err(desc)) => negative_matches(&desc, neg), // negative: right type
         };
         if !ok {
@@ -821,7 +1165,9 @@ fn run_262_on(
 ) -> T262 {
     match engine {
         harness::Engine::Boa => run_262::<script_engine_boa::BoaEngine>(hns, test_src, meta, path),
-        harness::Engine::Nova => run_262::<script_engine_nova::NovaEngine>(hns, test_src, meta, path),
+        harness::Engine::Nova => {
+            run_262::<script_engine_nova::NovaEngine>(hns, test_src, meta, path)
+        },
     }
 }
 
@@ -893,7 +1239,9 @@ fn collect_262(dir: &Path, out: &mut Vec<PathBuf>) {
         }
         return;
     }
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
     paths.sort();
     for p in paths {
@@ -919,7 +1267,10 @@ fn test262_cmd(args: &Args) {
     }
     let subset_dir = t262_root.join("test").join(&args.subset);
     if !subset_dir.exists() {
-        eprintln!("test262 subset path does not exist: {}", subset_dir.display());
+        eprintln!(
+            "test262 subset path does not exist: {}",
+            subset_dir.display()
+        );
         std::process::exit(2);
     }
     let mut files = Vec::new();
@@ -957,7 +1308,11 @@ fn test262_cmd(args: &Args) {
     let tests_root = args.tests_root.as_str();
     let exe = std::env::current_exe().ok();
     let exe = exe.as_deref();
-    let subset_label = if args.subset.is_empty() { "<all>" } else { &args.subset };
+    let subset_label = if args.subset.is_empty() {
+        "<all>"
+    } else {
+        &args.subset
+    };
     println!(
         "test262 [{subset_label}]: {} tests x 2 engines on {jobs} worker procs (timeout {}s)…",
         files.len(),
@@ -1002,7 +1357,7 @@ fn test262_cmd(args: &Args) {
                         let timed_out = loop {
                             match child.try_wait() {
                                 Ok(Some(_)) => break false,
-                                Ok(None) => {}
+                                Ok(None) => {},
                                 Err(_) => break false,
                             }
                             if start.elapsed() >= test_timeout {
@@ -1037,7 +1392,7 @@ fn test262_cmd(args: &Args) {
                             (None, None) => {
                                 t.skipped += 1; // worker produced nothing (load/early crash)
                                 continue;
-                            }
+                            },
                         };
                         match (b, n) {
                             (T262::Skip, _) | (_, T262::Skip) => t.skipped += 1,
@@ -1049,7 +1404,7 @@ fn test262_cmd(args: &Args) {
                                 }
                                 t.boa_only += 1;
                                 t.worklist.push(name);
-                            }
+                            },
                             (T262::Fail, T262::Pass) => t.nova_only += 1,
                         }
                     }
@@ -1079,7 +1434,12 @@ fn test262_cmd(args: &Args) {
     println!(
         "\ntest262 compare [{subset_label}]: both-pass={} both-fail={} boa-only={} (Nova gap) \
          nova-only={} timeout={} skipped={} (module/async/missing)",
-        tally.both_pass, tally.both_fail, tally.boa_only, tally.nova_only, tally.timeout, tally.skipped,
+        tally.both_pass,
+        tally.both_fail,
+        tally.boa_only,
+        tally.nova_only,
+        tally.timeout,
+        tally.skipped,
     );
     if !timeouts.is_empty() {
         println!(
@@ -1096,7 +1456,10 @@ fn test262_cmd(args: &Args) {
         }
     }
     if !nova_worklist.is_empty() {
-        println!("\nNova worklist (pass on Boa, fail on Nova) — {} test(s):", nova_worklist.len());
+        println!(
+            "\nNova worklist (pass on Boa, fail on Nova) — {} test(s):",
+            nova_worklist.len()
+        );
         for name in nova_worklist.iter().take(40) {
             println!("  {name}");
         }
@@ -1110,7 +1473,12 @@ fn test262_cmd(args: &Args) {
         let mut buf = format!(
             "# test262 worklist [{subset_label}]\n\
              # both-pass={} both-fail={} boa-only={} nova-only={} timeout={} skipped={}\n",
-            tally.both_pass, tally.both_fail, tally.boa_only, tally.nova_only, tally.timeout, tally.skipped,
+            tally.both_pass,
+            tally.both_fail,
+            tally.boa_only,
+            tally.nova_only,
+            tally.timeout,
+            tally.skipped,
         );
         buf.push_str(&format!(
             "\n## Timeouts (hang or pathological slowness; engine) — {}\n",
@@ -1140,7 +1508,7 @@ fn test262_cmd(args: &Args) {
 }
 
 /// Phase 3: run testharness.js tests and report per-subtest results.
-fn testharness(tests: &[PathBuf], args: &Args) {
+fn testharness(tests: &[TestCase], args: &Args) {
     let tests_root = Path::new(&args.tests_root);
     let th_path = tests_root.join("resources/testharness.js");
     let testharness_js = match fs::read_to_string(&th_path) {
@@ -1148,7 +1516,7 @@ fn testharness(tests: &[PathBuf], args: &Args) {
         Err(_) => {
             eprintln!("testharness.js not found at {}", th_path.display());
             std::process::exit(2);
-        }
+        },
     };
 
     // Server mode (netfetch): connect to / spawn a `wpt serve` so `fetch()` hits a
@@ -1168,68 +1536,97 @@ fn testharness(tests: &[PathBuf], args: &Args) {
 
     let (mut all_pass, mut with_fail, mut errored, mut no_results, mut skipped) = (0, 0, 0, 0, 0);
     let (mut sub_passed, mut sub_total) = (0usize, 0usize);
+    let mut actuals = Vec::new();
+    let mut nova_template = if args.engine == harness::Engine::Nova {
+        match harness::NovaHarnessTemplate::new(&testharness_js) {
+            Ok(template) => Some(template),
+            Err(e) => {
+                eprintln!("Nova harness template init failed: {e}");
+                std::process::exit(2);
+            },
+        }
+    } else {
+        None
+    };
 
-    for path in tests {
+    for test in tests {
+        if test.kind != Kind::Testharness {
+            skipped += 1;
+            actuals.push(ActualRecord::new(test, "skip"));
+            if args.verbose {
+                println!("SKIP  non-testharness {}", test.name());
+            }
+            continue;
+        }
+        let ext = test.path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ext.eq_ignore_ascii_case("xhtml") || ext.eq_ignore_ascii_case("xht") {
+            skipped += 1;
+            actuals.push(ActualRecord::new(test, "skip"));
+            if args.verbose {
+                println!("SKIP  xhtml          {}", test.name());
+            }
+            continue;
+        }
         // Build the testharness HTML: a real .html document's contents, or a
         // synthesized wrapper for a `.any.js` / `.window.js` test.
-        let html = if is_any_js(path) {
-            match synthesize_any_js(path) {
-                Some(h) => h,
-                None => {
-                    skipped += 1;
-                    if args.verbose {
-                        println!("SKIP  worker-only    {}", rel(path, &args.tests_root));
-                    }
-                    continue;
-                }
-            }
-        } else {
-            // Server mode loads the page over HTTP (so `.sub.html` template
-            // substitution happens); disk mode reads the file. `server_page` is
-            // `None` in disk mode, `Some(None)` if a server fetch failed.
+        let html = {
             #[cfg(feature = "netfetch")]
-            let server_page =
-                server.as_ref().map(|s| net::http_get(&s.doc_url(&rel(path, &args.tests_root))));
-            #[cfg(not(feature = "netfetch"))]
-            let server_page: Option<Option<String>> = None;
-            let raw = match server_page {
-                Some(Some(t)) => t,
-                Some(None) => {
-                    errored += 1;
-                    println!("ERROR fetch   {}", rel(path, &args.tests_root));
-                    continue;
-                }
-                None => match fs::read(path) {
-                    Ok(b) => String::from_utf8_lossy(&b).into_owned(),
-                    Err(_) => {
+            if let Some(s) = &server {
+                match net::http_get(&s.doc_url(test.name())) {
+                    Some(t) => t,
+                    None => {
                         errored += 1;
-                        println!("ERROR read    {}", rel(path, &args.tests_root));
+                        actuals.push(ActualRecord::new(test, "error"));
+                        println!("ERROR fetch   {}", test.name());
                         continue;
-                    }
-                },
-            };
-            if classify(path, &raw) != Kind::Testharness {
-                skipped += 1;
-                if args.verbose {
-                    println!("SKIP  non-testharness {}", rel(path, &args.tests_root));
+                    },
                 }
-                continue;
-            }
-            // XHTML is a distinct (XML) parse mode serval's HTML parser doesn't
-            // handle; skip rather than report spurious syntax errors.
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if ext.eq_ignore_ascii_case("xhtml") || ext.eq_ignore_ascii_case("xht") {
-                skipped += 1;
-                if args.verbose {
-                    println!("SKIP  xhtml          {}", rel(path, &args.tests_root));
+            } else {
+                match build_test_html_disk(test) {
+                    TestHtml::Html(h) => h,
+                    TestHtml::Skip => {
+                        skipped += 1;
+                        actuals.push(ActualRecord::new(test, "skip"));
+                        if args.verbose {
+                            println!("SKIP  worker-only    {}", test.name());
+                        }
+                        continue;
+                    },
+                    TestHtml::ReadError => {
+                        errored += 1;
+                        actuals.push(ActualRecord::new(test, "error"));
+                        println!("ERROR read    {}", test.name());
+                        continue;
+                    },
                 }
-                continue;
             }
-            raw
+            #[cfg(not(feature = "netfetch"))]
+            {
+                match build_test_html_disk(test) {
+                    TestHtml::Html(h) => h,
+                    TestHtml::Skip => {
+                        skipped += 1;
+                        actuals.push(ActualRecord::new(test, "skip"));
+                        if args.verbose {
+                            println!("SKIP  worker-only    {}", test.name());
+                        }
+                        continue;
+                    },
+                    TestHtml::ReadError => {
+                        errored += 1;
+                        actuals.push(ActualRecord::new(test, "error"));
+                        println!("ERROR read    {}", test.name());
+                        continue;
+                    },
+                }
+            }
         };
 
-        let base_dir = path.parent().unwrap_or(tests_root);
-        let disk = harness::DiskLoader { base_dir, tests_root };
+        let base_dir = test.path.parent().unwrap_or(tests_root);
+        let disk = harness::DiskLoader {
+            base_dir,
+            tests_root,
+        };
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
             // Server mode: a fresh per-test fetch-event channel feeds the drive loop,
             // so deferred fetches settle out of band, mid-flight abort works, and a
@@ -1239,10 +1636,19 @@ fn testharness(tests: &[PathBuf], args: &Args) {
             #[cfg(feature = "netfetch")]
             if let Some(s) = &server {
                 let (ev_tx, ev_rx) = std::sync::mpsc::channel::<net::FetchEvent>();
-                let doc_url = s.doc_url(&rel(path, &args.tests_root));
+                let doc_url = s.doc_url(test.name());
                 let loader = s.loader(&doc_url);
                 let handler = net::NetFetchHandler::new(ev_tx);
                 let completion = net::ChannelCompletion::new(ev_rx);
+                if let Some(template) = nova_template.as_mut() {
+                    return template.run_test(
+                        &html,
+                        &loader,
+                        Some(&doc_url),
+                        Some(Box::new(handler)),
+                        Some(&completion),
+                    );
+                }
                 return harness::run_test(
                     &testharness_js,
                     &html,
@@ -1253,19 +1659,33 @@ fn testharness(tests: &[PathBuf], args: &Args) {
                     args.engine,
                 );
             }
-            harness::run_test(&testharness_js, &html, &disk, None, None, None, args.engine)
+            let doc_url = test.disk_doc_url();
+            if let Some(template) = nova_template.as_mut() {
+                return template.run_test(&html, &disk, Some(&doc_url), None, None);
+            }
+            harness::run_test(
+                &testharness_js,
+                &html,
+                &disk,
+                Some(&doc_url),
+                None,
+                None,
+                args.engine,
+            )
         }));
-        let name = rel(path, &args.tests_root);
+        let name = test.name();
 
         match result {
             Err(_) => {
                 errored += 1;
+                actuals.push(ActualRecord::new(test, "error"));
                 println!("ERROR panic   {name}");
-            }
+            },
             Ok(harness::HarnessOutcome::Threw(msg)) => {
                 errored += 1;
+                actuals.push(ActualRecord::new(test, "error"));
                 println!("ERROR {name}  ({msg})");
-            }
+            },
             Ok(harness::HarnessOutcome::Ran(results)) => {
                 let total = results.len();
                 let passed = results.iter().filter(|r| r.passed()).count();
@@ -1273,16 +1693,19 @@ fn testharness(tests: &[PathBuf], args: &Args) {
                 sub_total += total;
                 if total == 0 {
                     no_results += 1;
+                    actuals.push(ActualRecord::new(test, "no-results"));
                     if args.verbose {
                         println!("NORES {name}  (harness ran but reported no subtests)");
                     }
                 } else if passed == total {
                     all_pass += 1;
+                    actuals.push(ActualRecord::new(test, "pass"));
                     if args.verbose {
                         println!("PASS  {name}  ({passed}/{total})");
                     }
                 } else {
                     with_fail += 1;
+                    actuals.push(ActualRecord::new(test, "fail"));
                     println!("FAIL  {name}  ({passed}/{total} subtests)");
                     if args.verbose {
                         for r in results.iter().filter(|r| !r.passed()) {
@@ -1291,7 +1714,7 @@ fn testharness(tests: &[PathBuf], args: &Args) {
                         }
                     }
                 }
-            }
+            },
         }
     }
 
@@ -1304,6 +1727,7 @@ fn testharness(tests: &[PathBuf], args: &Args) {
         args.engine.label(),
         tests.len(),
     );
+    finish_expectations(args, "testharness", &actuals);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1320,7 +1744,10 @@ fn reftest_ref(html: &str) -> Option<(MatchKind, String)> {
     let href = LocalName::from("href");
     let mut stack = vec![doc.document()];
     while let Some(id) = stack.pop() {
-        if doc.element_name(id).is_some_and(|q| q.local.as_ref() == "link") {
+        if doc
+            .element_name(id)
+            .is_some_and(|q| q.local.as_ref() == "link")
+        {
             let kind = match doc.attribute(id, &no_ns, &rel) {
                 Some("match") => Some(MatchKind::Match),
                 Some("mismatch") => Some(MatchKind::Mismatch),
@@ -1354,7 +1781,9 @@ fn parse_fuzzy(html: &str) -> Option<(u16, u64)> {
     let content = LocalName::from("content");
     let mut stack = vec![doc.document()];
     while let Some(id) = stack.pop() {
-        if doc.element_name(id).is_some_and(|q| q.local.as_ref() == "meta")
+        if doc
+            .element_name(id)
+            .is_some_and(|q| q.local.as_ref() == "meta")
             && doc.attribute(id, &no_ns, &name) == Some("fuzzy")
         {
             if let Some(c) = doc.attribute(id, &no_ns, &content) {
@@ -1391,13 +1820,12 @@ fn images_match(a: &render::Image, b: &render::Image, fuzzy: Option<(u16, u64)>)
     let (max_diff, max_pixels) = fuzzy.unwrap_or((0, 0));
     let mut differing = 0u64;
     for (pa, pb) in a.pixels().zip(b.pixels()) {
-        let channel_max = pa
-            .0
-            .iter()
-            .zip(pb.0.iter())
-            .map(|(x, y)| (i16::from(*x) - i16::from(*y)).unsigned_abs())
-            .max()
-            .unwrap_or(0);
+        let channel_max =
+            pa.0.iter()
+                .zip(pb.0.iter())
+                .map(|(x, y)| (i16::from(*x) - i16::from(*y)).unsigned_abs())
+                .max()
+                .unwrap_or(0);
         if channel_max > max_diff {
             differing += 1;
             if differing > max_pixels {
@@ -1424,37 +1852,46 @@ struct DiffStats {
 fn diff_stats(a: &render::Image, b: &render::Image) -> DiffStats {
     let total = u64::from(a.width()) * u64::from(a.height());
     if a.dimensions() != b.dimensions() {
-        return DiffStats { same_dims: false, differing: total, total, max_channel_diff: 255 };
+        return DiffStats {
+            same_dims: false,
+            differing: total,
+            total,
+            max_channel_diff: 255,
+        };
     }
     let (mut differing, mut max_channel_diff) = (0u64, 0u16);
     for (pa, pb) in a.pixels().zip(b.pixels()) {
-        let channel_max = pa
-            .0
-            .iter()
-            .zip(pb.0.iter())
-            .map(|(x, y)| (i16::from(*x) - i16::from(*y)).unsigned_abs())
-            .max()
-            .unwrap_or(0);
+        let channel_max =
+            pa.0.iter()
+                .zip(pb.0.iter())
+                .map(|(x, y)| (i16::from(*x) - i16::from(*y)).unsigned_abs())
+                .max()
+                .unwrap_or(0);
         if channel_max > 0 {
             differing += 1;
             max_channel_diff = max_channel_diff.max(channel_max);
         }
     }
-    DiffStats { same_dims: true, differing, total, max_channel_diff }
+    DiffStats {
+        same_dims: true,
+        differing,
+        total,
+        max_channel_diff,
+    }
 }
 
 /// One-line classification of a FAIL's diff shape, for `-v` triage.
 fn diff_label(s: &DiffStats) -> &'static str {
     if !s.same_dims {
-        "dims"          // different output size — layout/sizing divergence pre-paint
+        "dims" // different output size — layout/sizing divergence pre-paint
     } else if s.differing == 0 {
-        "equal?"        // identical yet failed match — a harness/tolerance quirk
+        "equal?" // identical yet failed match — a harness/tolerance quirk
     } else if s.total > 0 && s.differing * 100 / s.total >= 50 {
-        "whole"         // >=50% of pixels differ — wholesale (layout / UA stylesheet)
+        "whole" // >=50% of pixels differ — wholesale (layout / UA stylesheet)
     } else if s.max_channel_diff <= 16 {
-        "aa"            // small per-channel diffs — anti-aliasing / sub-pixel
+        "aa" // small per-channel diffs — anti-aliasing / sub-pixel
     } else {
-        "local"         // localized large diffs — a specific paint/feature gap
+        "local" // localized large diffs — a specific paint/feature gap
     }
 }
 
@@ -1470,11 +1907,13 @@ fn final_ref(start: PathBuf, kind: MatchKind, tests_root: &Path) -> Option<(Path
     for _ in 0..10 {
         match reftest_ref(&html) {
             Some((MatchKind::Match, next_href)) => {
-                let Some(next) = resolve_ref(&ref_path, &next_href, tests_root) else { break };
+                let Some(next) = resolve_ref(&ref_path, &next_href, tests_root) else {
+                    break;
+                };
                 let Ok(bytes) = fs::read(&next) else { break };
                 ref_path = next;
                 html = String::from_utf8_lossy(&bytes).into_owned();
-            }
+            },
             _ => break,
         }
     }
@@ -1498,13 +1937,13 @@ fn images_equal(a: &render::Image, b: &render::Image) -> bool {
     a.dimensions() == b.dimensions() && a.as_raw() == b.as_raw()
 }
 
-fn reftest(tests: &[PathBuf], args: &Args) {
+fn reftest(tests: &[TestCase], args: &Args) {
     let renderer = match render::Renderer::boot() {
         Ok(r) => r,
         Err(e) => {
             eprintln!("cannot boot renderer (reftests need a GPU): {e}");
             std::process::exit(1);
-        }
+        },
     };
     let tests_root = Path::new(&args.tests_root);
 
@@ -1512,34 +1951,43 @@ fn reftest(tests: &[PathBuf], args: &Args) {
     panic::set_hook(Box::new(|_| {}));
 
     let (mut passed, mut failed, mut skipped, mut errored) = (0, 0, 0, 0);
-    let mut buckets: std::collections::HashMap<&'static str, u64> = std::collections::HashMap::new();
-    for path in tests {
-        let Ok(bytes) = fs::read(path) else {
+    let mut buckets: HashMap<&'static str, u64> = HashMap::new();
+    for test in tests {
+        let Ok(bytes) = fs::read(&test.path) else {
             errored += 1;
             continue;
         };
         let test_html = String::from_utf8_lossy(&bytes).into_owned();
-        if classify(path, &test_html) != Kind::Reftest {
+        if test.kind != Kind::Reftest {
             skipped += 1;
             continue;
         }
-        let Some((kind, href)) = reftest_ref(&test_html) else {
-            skipped += 1;
-            continue;
+        let (kind, href) = if let Some((href, cmp)) = test.refs.first() {
+            let kind = match cmp {
+                manifest::RefMatch::Equal => MatchKind::Match,
+                manifest::RefMatch::NotEqual => MatchKind::Mismatch,
+            };
+            (kind, href.clone())
+        } else {
+            let Some((kind, href)) = reftest_ref(&test_html) else {
+                skipped += 1;
+                continue;
+            };
+            (kind, href)
         };
-        let Some(direct_ref) = resolve_ref(path, &href, tests_root) else {
+        let Some(direct_ref) = resolve_ref(&test.path, &href, tests_root) else {
             skipped += 1;
             continue;
         };
         let Some((ref_path, ref_html)) = final_ref(direct_ref, kind, tests_root) else {
             errored += 1;
-            println!("ERROR ref-missing {}", rel(path, &args.tests_root));
+            println!("ERROR ref-missing {}", test.name());
             continue;
         };
         if needs_script(&test_html) || needs_script(&ref_html) {
             skipped += 1;
             if args.verbose {
-                println!("SKIP  script   {}", rel(path, &args.tests_root));
+                println!("SKIP  script   {}", test.name());
             }
             continue;
         }
@@ -1548,25 +1996,32 @@ fn reftest(tests: &[PathBuf], args: &Args) {
         // tighter than it, so a deterministic-to-1/255 render scores stably.
         // A test's explicit <meta fuzzy> widens it where looser.
         let fuzzy = {
-            let (d, p) = parse_fuzzy(&test_html).unwrap_or((0, 0));
+            let (d, p) = test
+                .fuzzy
+                .or_else(|| parse_fuzzy(&test_html))
+                .unwrap_or((0, 0));
             Some((d.max(FUZZ_FLOOR_DIFF), p.max(FUZZ_FLOOR_PIXELS)))
         };
-        let test_dir = path.parent().unwrap_or(tests_root);
+        let test_dir = test.path.parent().unwrap_or(tests_root);
         let ref_dir = ref_path.parent().unwrap_or(tests_root);
-        let test_xml = is_xml_path(path);
+        let test_xml = is_xml_path(&test.path);
         let ref_xml = is_xml_path(&ref_path);
         let rendered = panic::catch_unwind(AssertUnwindSafe(|| {
-            let t = renderer.render_html(&test_html, test_dir, tests_root, REFTEST_W, REFTEST_H, test_xml);
-            let r = renderer.render_html(&ref_html, ref_dir, tests_root, REFTEST_W, REFTEST_H, ref_xml);
+            let t = renderer.render_html(
+                &test_html, test_dir, tests_root, REFTEST_W, REFTEST_H, test_xml,
+            );
+            let r = renderer.render_html(
+                &ref_html, ref_dir, tests_root, REFTEST_W, REFTEST_H, ref_xml,
+            );
             (t, r)
         }));
         let (test_img, ref_img) = match rendered {
             Ok(pair) => pair,
             Err(_) => {
                 failed += 1;
-                println!("FAIL  crash    {}", rel(path, &args.tests_root));
+                println!("FAIL  crash    {}", test.name());
                 continue;
-            }
+            },
         };
 
         let matches = images_match(&test_img, &ref_img, fuzzy);
@@ -1577,11 +2032,15 @@ fn reftest(tests: &[PathBuf], args: &Args) {
         if pass {
             passed += 1;
             if args.verbose {
-                println!("PASS  {}", rel(path, &args.tests_root));
+                println!("PASS  {}", test.name());
             }
         } else {
             failed += 1;
-            let k = if kind == MatchKind::Match { "match   " } else { "mismatch" };
+            let k = if kind == MatchKind::Match {
+                "match   "
+            } else {
+                "mismatch"
+            };
             // Diagnose the diff shape (Lever 2 triage). `match` failures get a
             // bucket from the test-vs-ref pixel diff; `mismatch` failures are
             // "matched when it shouldn't", a different shape, tallied separately.
@@ -1590,18 +2049,22 @@ fn reftest(tests: &[PathBuf], args: &Args) {
                 let label = diff_label(&s);
                 *buckets.entry(label).or_insert(0) += 1;
                 if args.verbose {
-                    let pct = if s.total > 0 { s.differing * 100 / s.total } else { 0 };
+                    let pct = if s.total > 0 {
+                        s.differing * 100 / s.total
+                    } else {
+                        0
+                    };
                     println!(
                         "FAIL  {k} [{label:5}] diff={pct}% maxδ={} {}",
                         s.max_channel_diff,
-                        rel(path, &args.tests_root)
+                        test.name()
                     );
                 } else {
-                    println!("FAIL  {k} [{label:5}] {}", rel(path, &args.tests_root));
+                    println!("FAIL  {k} [{label:5}] {}", test.name());
                 }
             } else {
                 *buckets.entry("mismatch-eq").or_insert(0) += 1;
-                println!("FAIL  {k} {}", rel(path, &args.tests_root));
+                println!("FAIL  {k} {}", test.name());
             }
         }
     }
@@ -1622,7 +2085,14 @@ fn reftest(tests: &[PathBuf], args: &Args) {
         let legend = "dims=size differs | whole=>=50% pixels (layout/UA) | \
                       aa=small per-channel (anti-alias/tolerance) | \
                       local=localized large (feature/paint) | equal?=identical-yet-failed";
-        println!("fail buckets: {}", sorted.iter().map(|(k, n)| format!("{k}={n}")).collect::<Vec<_>>().join("  "));
+        println!(
+            "fail buckets: {}",
+            sorted
+                .iter()
+                .map(|(k, n)| format!("{k}={n}"))
+                .collect::<Vec<_>>()
+                .join("  ")
+        );
         println!("  ({legend})");
     }
     if failed > 0 || errored > 0 {
@@ -1633,38 +2103,130 @@ fn reftest(tests: &[PathBuf], args: &Args) {
 /// Render each reftest in the subset + its reference to side-by-side
 /// PNGs under `.cargo-check-logs/dump/`, for eyeball diagnosis of a
 /// `local`-bucket failure. Writes `<stem>.test.png` / `<stem>.ref.png`.
-fn dump(tests: &[PathBuf], args: &Args) {
+fn dump(tests: &[TestCase], args: &Args) {
     let renderer = match render::Renderer::boot() {
         Ok(r) => r,
         Err(e) => {
             eprintln!("cannot boot renderer (needs a GPU): {e}");
             std::process::exit(1);
-        }
+        },
     };
     let tests_root = Path::new(&args.tests_root);
     let out_dir = Path::new(".cargo-check-logs/dump");
     let _ = fs::create_dir_all(out_dir);
-    for path in tests {
-        let Ok(bytes) = fs::read(path) else { continue };
+    for test in tests {
+        let Ok(bytes) = fs::read(&test.path) else {
+            continue;
+        };
         let test_html = String::from_utf8_lossy(&bytes).into_owned();
-        if classify(path, &test_html) != Kind::Reftest {
+        if test.kind != Kind::Reftest {
             continue;
         }
-        let Some((kind, href)) = reftest_ref(&test_html) else { continue };
-        let Some(direct_ref) = resolve_ref(path, &href, tests_root) else { continue };
-        let Some((ref_path, ref_html)) = final_ref(direct_ref, kind, tests_root) else { continue };
-        let test_dir = path.parent().unwrap_or(tests_root);
+        let (kind, href) = if let Some((href, cmp)) = test.refs.first() {
+            let kind = match cmp {
+                manifest::RefMatch::Equal => MatchKind::Match,
+                manifest::RefMatch::NotEqual => MatchKind::Mismatch,
+            };
+            (kind, href.clone())
+        } else {
+            let Some((kind, href)) = reftest_ref(&test_html) else {
+                continue;
+            };
+            (kind, href)
+        };
+        let Some(direct_ref) = resolve_ref(&test.path, &href, tests_root) else {
+            continue;
+        };
+        let Some((ref_path, ref_html)) = final_ref(direct_ref, kind, tests_root) else {
+            continue;
+        };
+        let test_dir = test.path.parent().unwrap_or(tests_root);
         let ref_dir = ref_path.parent().unwrap_or(tests_root);
-        let t = renderer.render_html(&test_html, test_dir, tests_root, REFTEST_W, REFTEST_H, is_xml_path(path));
-        let r = renderer.render_html(&ref_html, ref_dir, tests_root, REFTEST_W, REFTEST_H, is_xml_path(&ref_path));
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("dump");
+        let t = renderer.render_html(
+            &test_html,
+            test_dir,
+            tests_root,
+            REFTEST_W,
+            REFTEST_H,
+            is_xml_path(&test.path),
+        );
+        let r = renderer.render_html(
+            &ref_html,
+            ref_dir,
+            tests_root,
+            REFTEST_W,
+            REFTEST_H,
+            is_xml_path(&ref_path),
+        );
+        let stem = test
+            .path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("dump");
         let tp = out_dir.join(format!("{stem}.test.png"));
         let rp = out_dir.join(format!("{stem}.ref.png"));
         let _ = t.save(&tp);
         let _ = r.save(&rp);
         let s = diff_stats(&t, &r);
-        let pct = if s.total > 0 { s.differing * 100 / s.total } else { 0 };
-        println!("DUMP {} -> {} / {}  (diff={pct}% maxδ={})", rel(path, &args.tests_root), tp.display(), rp.display(), s.max_channel_diff);
+        let pct = if s.total > 0 {
+            s.differing * 100 / s.total
+        } else {
+            0
+        };
+        println!(
+            "DUMP {} -> {} / {}  (diff={pct}% maxδ={})",
+            test.name(),
+            tp.display(),
+            rp.display(),
+            s.max_channel_diff
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_expectations_path(name: &str) -> String {
+        std::env::temp_dir()
+            .join(format!("serval-wpt-{name}-{}.json", std::process::id()))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn expectations_accept_exact_statuses() {
+        let path = temp_expectations_path("exact");
+        let actuals = vec![
+            ActualRecord {
+                test: "dom/example-a.html".into(),
+                status: "pass",
+            },
+            ActualRecord {
+                test: "dom/example-b.html".into(),
+                status: "fail",
+            },
+        ];
+        write_expectations(&path, "testharness", "boa", &actuals).expect("write expectations");
+        check_expectations(&path, &actuals).expect("expectations match exactly");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn expectations_reject_changed_statuses() {
+        let path = temp_expectations_path("changed");
+        let expected = vec![ActualRecord {
+            test: "dom/example.html".into(),
+            status: "pass",
+        }];
+        write_expectations(&path, "testharness", "boa", &expected).expect("write expectations");
+        let actual = vec![ActualRecord {
+            test: "dom/example.html".into(),
+            status: "fail",
+        }];
+        let err = check_expectations(&path, &actual).expect_err("changed status is unexpected");
+        assert!(err.contains("expected pass, got fail"), "{err}");
+        let _ = fs::remove_file(path);
     }
 }
 
@@ -1733,14 +2295,14 @@ mod net {
                         tokio::spawn(async move {
                             let _ = reply.send(do_get(&url).await);
                         });
-                    }
+                    },
                     Ok(Job::Fetch(key, id, req, reply)) => {
                         let (pull_tx, pull_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
                         pulls.insert(id, pull_tx);
                         let h = tokio::spawn(run_fetch_streaming(id, req, reply, pull_rx))
                             .abort_handle();
                         handles.insert(key, h);
-                    }
+                    },
                     Ok(Job::Pull(id)) => {
                         // Grant one chunk of credit; a dead receiver (task finished)
                         // means the entry is stale, so drop it.
@@ -1749,12 +2311,12 @@ mod net {
                                 pulls.remove(&id);
                             }
                         }
-                    }
+                    },
                     Ok(Job::Cancel(key)) => {
                         if let Some(h) = handles.remove(&key) {
                             h.abort(); // drop the in-flight future
                         }
-                    }
+                    },
                     Err(_) => break, // all senders dropped: shut down
                 }
                 handles.retain(|_, h| !h.is_finished());
@@ -1769,7 +2331,9 @@ mod net {
     fn shared_cache() -> std::sync::Arc<netfetcher::InMemoryHttpCache> {
         static CACHE: std::sync::OnceLock<std::sync::Arc<netfetcher::InMemoryHttpCache>> =
             std::sync::OnceLock::new();
-        CACHE.get_or_init(|| std::sync::Arc::new(netfetcher::InMemoryHttpCache::new())).clone()
+        CACHE
+            .get_or_init(|| std::sync::Arc::new(netfetcher::InMemoryHttpCache::new()))
+            .clone()
     }
 
     /// One process-wide cookie jar, shared across every deferred fetch so a
@@ -1786,11 +2350,7 @@ mod net {
     /// so each context wraps a cheap clone of the shared `Arc`).
     struct SharedJar(std::sync::Arc<netfetcher::InMemoryCookieJar>);
     impl netfetcher::CookieStore for SharedJar {
-        fn cookies_for(
-            &self,
-            url: &url::Url,
-            ctx: netfetcher::SameSiteContext,
-        ) -> Vec<String> {
+        fn cookies_for(&self, url: &url::Url, ctx: netfetcher::SameSiteContext) -> Vec<String> {
             self.0.cookies_for(url, ctx)
         }
         fn set_cookie(&self, url: &url::Url, header: &str) {
@@ -1848,28 +2408,63 @@ mod net {
         if resp.is_network_error() || resp.status < 200 || resp.status >= 300 {
             return None;
         }
-        resp.bytes().await.ok().map(|b| String::from_utf8_lossy(&b).into_owned())
+        resp.bytes()
+            .await
+            .ok()
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
     }
 
     /// The canonical HTTP reason phrase for a status code (netfetcher discards the
     /// wire reason). WPT checks `response.statusText`, so synthesize it.
     fn reason_phrase(status: u16) -> &'static str {
         match status {
-            200 => "OK", 201 => "Created", 202 => "Accepted", 203 => "Non-Authoritative Information",
-            204 => "No Content", 205 => "Reset Content", 206 => "Partial Content",
-            300 => "Multiple Choices", 301 => "Moved Permanently", 302 => "Found", 303 => "See Other",
-            304 => "Not Modified", 307 => "Temporary Redirect", 308 => "Permanent Redirect",
-            400 => "Bad Request", 401 => "Unauthorized", 402 => "Payment Required", 403 => "Forbidden",
-            404 => "Not Found", 405 => "Method Not Allowed", 406 => "Not Acceptable",
-            408 => "Request Timeout", 409 => "Conflict", 410 => "Gone", 411 => "Length Required",
-            412 => "Precondition Failed", 413 => "Payload Too Large", 414 => "URI Too Long",
-            415 => "Unsupported Media Type", 416 => "Range Not Satisfiable", 417 => "Expectation Failed",
-            418 => "I'm a Teapot", 421 => "Misdirected Request", 422 => "Unprocessable Entity",
-            425 => "Too Early", 426 => "Upgrade Required", 428 => "Precondition Required",
-            429 => "Too Many Requests", 431 => "Request Header Fields Too Large",
-            451 => "Unavailable For Legal Reasons", 500 => "Internal Server Error",
-            501 => "Not Implemented", 502 => "Bad Gateway", 503 => "Service Unavailable",
-            504 => "Gateway Timeout", 505 => "HTTP Version Not Supported", _ => "",
+            200 => "OK",
+            201 => "Created",
+            202 => "Accepted",
+            203 => "Non-Authoritative Information",
+            204 => "No Content",
+            205 => "Reset Content",
+            206 => "Partial Content",
+            300 => "Multiple Choices",
+            301 => "Moved Permanently",
+            302 => "Found",
+            303 => "See Other",
+            304 => "Not Modified",
+            307 => "Temporary Redirect",
+            308 => "Permanent Redirect",
+            400 => "Bad Request",
+            401 => "Unauthorized",
+            402 => "Payment Required",
+            403 => "Forbidden",
+            404 => "Not Found",
+            405 => "Method Not Allowed",
+            406 => "Not Acceptable",
+            408 => "Request Timeout",
+            409 => "Conflict",
+            410 => "Gone",
+            411 => "Length Required",
+            412 => "Precondition Failed",
+            413 => "Payload Too Large",
+            414 => "URI Too Long",
+            415 => "Unsupported Media Type",
+            416 => "Range Not Satisfiable",
+            417 => "Expectation Failed",
+            418 => "I'm a Teapot",
+            421 => "Misdirected Request",
+            422 => "Unprocessable Entity",
+            425 => "Too Early",
+            426 => "Upgrade Required",
+            428 => "Precondition Required",
+            429 => "Too Many Requests",
+            431 => "Request Header Fields Too Large",
+            451 => "Unavailable For Legal Reasons",
+            500 => "Internal Server Error",
+            501 => "Not Implemented",
+            502 => "Bad Gateway",
+            503 => "Service Unavailable",
+            504 => "Gateway Timeout",
+            505 => "HTTP Version Not Supported",
+            _ => "",
         }
     }
 
@@ -1951,7 +2546,7 @@ mod net {
             "origin-when-cross-origin" => netfetcher::ReferrerPolicy::OriginWhenCrossOrigin,
             "strict-origin-when-cross-origin" => {
                 netfetcher::ReferrerPolicy::StrictOriginWhenCrossOrigin
-            }
+            },
             "unsafe-url" => netfetcher::ReferrerPolicy::UnsafeUrl,
             _ => netfetcher::ReferrerPolicy::Empty,
         };
@@ -1973,7 +2568,11 @@ mod net {
             status: resp.status,
             status_text: reason_phrase(resp.status).to_string(),
             response_type: map_response_type(resp.response_type),
-            url: resp.url_list.last().map(|u| u.to_string()).unwrap_or_default(),
+            url: resp
+                .url_list
+                .last()
+                .map(|u| u.to_string())
+                .unwrap_or_default(),
             redirected: resp.url_list.len() > 1,
             headers: resp.headers.clone(),
             body: vec![],
@@ -1991,17 +2590,17 @@ mod net {
                     if reply.send(FetchEvent::Chunk(id, bytes.to_vec())).is_err() {
                         return; // the test's channel is gone (run ended)
                     }
-                }
+                },
                 Some(Err(_)) => {
                     // Body decode error (e.g. a bad Content-Encoding): error the
                     // body stream so reads reject, rather than closing it cleanly.
                     let _ = reply.send(FetchEvent::Error(id));
                     return;
-                }
+                },
                 None => {
                     let _ = reply.send(FetchEvent::Close(id));
                     return;
-                }
+                },
             }
         }
     }
@@ -2044,7 +2643,10 @@ mod net {
 
     impl NetFetchHandler {
         pub fn new(reply: std::sync::mpsc::Sender<FetchEvent>) -> Self {
-            Self { reply, keys: std::cell::RefCell::new(std::collections::HashMap::new()) }
+            Self {
+                reply,
+                keys: std::cell::RefCell::new(std::collections::HashMap::new()),
+            }
         }
     }
 
@@ -2109,7 +2711,7 @@ mod net {
                 Ok(ev) => {
                     apply(to_completion(ev));
                     1
-                }
+                },
                 Err(_) => 0,
             }
         }
@@ -2153,9 +2755,14 @@ mod net {
         pub fn connect(origin: String) -> Result<Self, String> {
             let origin = origin.trim_end_matches('/').to_owned();
             if http_get(&format!("{origin}/common/blank.html")).is_none() {
-                return Err(format!("no WPT server reachable at {origin} (is `wpt serve` up?)"));
+                return Err(format!(
+                    "no WPT server reachable at {origin} (is `wpt serve` up?)"
+                ));
             }
-            Ok(Self { origin, _spawned: None })
+            Ok(Self {
+                origin,
+                _spawned: None,
+            })
         }
 
         /// Spawn `python wpt serve` under `tests_root`, discover its plain-http
@@ -2163,7 +2770,10 @@ mod net {
         pub fn spawn(tests_root: &Path) -> Result<Self, String> {
             let handle = ServerHandle::spawn(tests_root)?;
             let origin = handle.origin.clone();
-            Ok(Self { origin, _spawned: Some(handle) })
+            Ok(Self {
+                origin,
+                _spawned: Some(handle),
+            })
         }
 
         /// The document URL for a test, given its path relative to the tests root.
@@ -2172,7 +2782,9 @@ mod net {
         }
 
         pub fn loader(&self, doc_url: &str) -> ServerLoader {
-            ServerLoader { doc_url: doc_url.to_owned() }
+            ServerLoader {
+                doc_url: doc_url.to_owned(),
+            }
         }
     }
 
@@ -2208,7 +2820,7 @@ mod net {
                             port = Some(p);
                             break;
                         }
-                    }
+                    },
                     Err(_) => break,
                 }
             }
@@ -2273,12 +2885,20 @@ mod net {
         fn parses_the_primary_http_port_only() {
             // The canonical server line.
             assert_eq!(
-                parse_http_port("[2026-06-02 21:48:27,647 http on port 8000] INFO - Starting http server on http://web-platform.test:8000"),
+                parse_http_port(
+                    "[2026-06-02 21:48:27,647 http on port 8000] INFO - Starting http server on http://web-platform.test:8000"
+                ),
                 Some(8000)
             );
             // The variant servers must not match (their tag is not ` http on port `).
-            assert_eq!(parse_http_port("[ts http-local on port 62276] INFO - ..."), None);
-            assert_eq!(parse_http_port("[ts http-public on port 62277] INFO - ..."), None);
+            assert_eq!(
+                parse_http_port("[ts http-local on port 62276] INFO - ..."),
+                None
+            );
+            assert_eq!(
+                parse_http_port("[ts http-public on port 62277] INFO - ..."),
+                None
+            );
             assert_eq!(parse_http_port("[ts h2 on port 9000] INFO - ..."), None);
             assert_eq!(parse_http_port("[ts ws on port 62280] INFO - ..."), None);
             // Noise lines.
@@ -2287,7 +2907,10 @@ mod net {
 
         #[test]
         fn doc_url_joins_origin_and_test_path() {
-            let ctx = ServerCtx { origin: "http://web-platform.test:8000".into(), _spawned: None };
+            let ctx = ServerCtx {
+                origin: "http://web-platform.test:8000".into(),
+                _spawned: None,
+            };
             assert_eq!(
                 ctx.doc_url("fetch/api/basic/x.any.js"),
                 "http://web-platform.test:8000/fetch/api/basic/x.any.js"
