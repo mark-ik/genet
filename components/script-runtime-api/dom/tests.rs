@@ -513,30 +513,40 @@ fn html_interface_table_on_nova() {
 
 /// First custom-elements I3 slice: use the HTML interface table for customized
 /// built-ins, upgrade existing matching nodes on define, support `{ is }`
-/// creation, and allow explicit upgrade of detached subtrees.
+/// creation, explicit upgrade of detached subtrees, and Promise-microtask-timed
+/// connected / disconnected / attribute reactions.
 fn custom_elements_customized_builtins_work<E: ScriptEngine>() {
     use serval_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse(
-        "<html><body><button id='old' is='x-fancy'></button><button id='plain'></button><x-card id='card'></x-card></body></html>",
+        "<html><body><button id='old' is='x-fancy' data-state='seed'></button><button id='plain'></button><x-card id='card'></x-card></body></html>",
     ));
 
     rt.eval(
-        "function FancyButton(){ this.setAttribute('upgraded', 'yes'); }\
+        "globalThis.ceLog = [];\
+         function logReaction(s){ ceLog.push(s); }\
+         function FancyButton(){ this.setAttribute('upgraded', 'yes'); }\
+         FancyButton.observedAttributes = ['data-state', 'disabled'];\
          FancyButton.prototype = Object.create(HTMLButtonElement.prototype);\
          FancyButton.prototype.constructor = FancyButton;\
-         FancyButton.prototype.connectedCallback = function(){ this.setAttribute('connected', 'yes'); };\
+         FancyButton.prototype.connectedCallback = function(){ logReaction('connected:' + this.id); this.setAttribute('connected', 'yes'); };\
+         FancyButton.prototype.disconnectedCallback = function(){ logReaction('disconnected:' + this.id); };\
+         FancyButton.prototype.attributeChangedCallback = function(name, oldValue, newValue){ logReaction('attr:' + this.id + ':' + name + ':' + String(oldValue) + '>' + String(newValue)); };\
          customElements.define('x-fancy', FancyButton, { extends: 'button' });\
          var old = document.getElementById('old');\
          console.log(String(old instanceof FancyButton) + ',' + String(old instanceof HTMLButtonElement) + ',' + old.getAttribute('upgraded') + ',' + old.getAttribute('connected'));\
+         old.setAttribute('data-state', 'hot');\
+         old.disabled = true;\
          var made = document.createElement('button', { is: 'x-fancy' });\
          console.log(made.getAttribute('is') + ',' + String(made instanceof FancyButton) + ',' + made.getAttribute('upgraded') + ',' + String(made.isConnected));\
          document.body.appendChild(made);\
-         console.log(made.getAttribute('connected'));\
+         document.body.removeChild(made);\
+         console.log(String(made.isConnected) + ',' + String(made.getAttribute('connected')));\
          console.log(String(document.getElementById('plain') instanceof FancyButton));\
          function XCard(){ this.flag = 'card'; }\
          XCard.prototype = Object.create(HTMLElement.prototype);\
          XCard.prototype.constructor = XCard;\
+         XCard.prototype.connectedCallback = function(){ logReaction('connected-card:' + this.id); };\
          customElements.define('x-card', XCard);\
          var card = document.getElementById('card');\
          console.log(String(card instanceof XCard) + ',' + String(card instanceof HTMLElement) + ',' + card.flag);\
@@ -552,22 +562,33 @@ fn custom_elements_customized_builtins_work<E: ScriptEngine>() {
          customElements.define('x-classy', ClassButton, { extends: 'button' });\
          var classy = document.createElement('button', { is: 'x-classy' });\
          console.log(String(classy instanceof ClassButton) + ',' + String(classy instanceof HTMLButtonElement) + ',' + classy.classReady);\
-         console.log(String(customElements.get('x-fancy') === FancyButton) + ',' + customElements.getName(FancyButton));",
+         console.log(String(customElements.get('x-fancy') === FancyButton) + ',' + customElements.getName(FancyButton));\
+         console.log('events-sync:' + ceLog.length);",
     )
     .expect("custom elements customized built-ins script");
+
+    rt.run_microtasks();
+    rt.eval(
+        "console.log('events:' + ceLog.join('|'));\
+         console.log('post:' + document.getElementById('old').getAttribute('connected') + ',' + String(ceLog.length));",
+    )
+    .expect("custom elements reaction log script");
 
     assert_eq!(
         rt.host().borrow().console,
         vec![
-            "true,true,yes,yes",
+            "true,true,yes,null",
             "x-fancy,true,yes,false",
-            "yes",
+            "false,null",
             "false",
             "true,true,card",
             "false",
             "true,yes",
             "true,true,ok",
             "true,x-fancy",
+            "events-sync:0",
+            "events:attr:old:data-state:null>seed|connected:old|attr:old:data-state:seed>hot|attr:old:disabled:null>|connected:|disconnected:|connected-card:card",
+            "post:yes,7",
         ],
     );
 }

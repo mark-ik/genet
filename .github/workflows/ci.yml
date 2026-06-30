@@ -19,6 +19,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Dependency-cone witnesses
         run: python3 support/ci/check_dependency_cones.py
+      - name: Set up Java for TLC
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Scheduler trace TLA witness
+        run: |
+          curl -L -o "$RUNNER_TEMP/tla2tools.jar" https://github.com/tlaplus/tlaplus/releases/latest/download/tla2tools.jar
+          python3 support/ci/check_scheduler_trace_tla.py --tla-tools-jar "$RUNNER_TEMP/tla2tools.jar"
       - name: Workspace check
         run: cargo check --workspace --all-targets
       - name: Workspace tests

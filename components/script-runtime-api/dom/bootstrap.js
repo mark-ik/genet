@@ -103,6 +103,8 @@
   var upgradedCustomElements = new WeakMap();
   var connectedCustomElements = new WeakMap();
   var htmlElementConstructionStack = [];
+  var customElementReactionQueue = [];
+  var customElementReactionScheduled = false;
 
   // Node: the base every node shares (tree + events + textContent). Methods live
   // on the prototype (shared, instanceof-able), not per-object. `this.__ref` is
@@ -272,6 +274,7 @@
       throw new DOMException("The node to be removed is not a child of this node.", "NotFoundError");
     }
     __removeChild(this.__ref, child.__ref);
+    disconnectCustomElementTree(child);
     return child;
   };
   Node.prototype.insertBefore = function(node, ref) {
@@ -289,6 +292,7 @@
     }
     this.insertBefore(newChild, oldChild);
     __removeChild(this.__ref, oldChild.__ref);
+    disconnectCustomElementTree(oldChild);
     return oldChild;
   };
 
@@ -537,7 +541,10 @@
     name = String(name); validateName(name);
     // In an HTML element, the qualified name is lowercased.
     if (this.namespaceURI === 'http://www.w3.org/1999/xhtml') name = name.toLowerCase();
-    __setAttribute(this.__ref, name, String(value));
+    var oldValue = __getAttribute(this.__ref, name);
+    var newValue = String(value);
+    __setAttribute(this.__ref, name, newValue);
+    customElementAttributeChanged(this, name, oldValue, newValue);
   };
   Element.prototype.getAttribute = function(name) { return __getAttribute(this.__ref, String(name)); };
   // scrollIntoView: record this element as the host's pending scroll-into-view
@@ -549,11 +556,20 @@
     qname = String(qname); validateNS(ns, qname);
     // Stored by qualified name (the attribute namespace is not yet modeled
     // separately; getAttribute(qname) round-trips, which is what the tests read).
-    __setAttribute(this.__ref, qname, String(value));
+    var oldValue = __getAttribute(this.__ref, qname);
+    var newValue = String(value);
+    __setAttribute(this.__ref, qname, newValue);
+    customElementAttributeChanged(this, qname, oldValue, newValue);
   };
   Element.prototype.getAttributeNS = function(ns, local) { return __getAttribute(this.__ref, String(local)); };
   Element.prototype.hasAttribute = function(name) { return __getAttribute(this.__ref, String(name)) !== null; };
-  Element.prototype.removeAttribute = function(name) { __removeAttribute(this.__ref, String(name)); };
+  Element.prototype.removeAttribute = function(name) {
+    name = String(name);
+    if (this.namespaceURI === 'http://www.w3.org/1999/xhtml') name = name.toLowerCase();
+    var oldValue = __getAttribute(this.__ref, name);
+    __removeAttribute(this.__ref, name);
+    customElementAttributeChanged(this, name, oldValue, null);
+  };
   Element.prototype.toggleAttribute = function(name, force) {
     var has = this.hasAttribute(name);
     if (force === undefined) force = !has;
@@ -828,6 +844,54 @@
     return autonomousCustomElementDefinitions[el.tagName] || null;
   }
 
+  function scheduleCustomElementReactions() {
+    if (customElementReactionScheduled) return;
+    customElementReactionScheduled = true;
+    Promise.resolve().then(flushCustomElementReactions);
+  }
+
+  function enqueueCustomElementReaction(el, name, args) {
+    customElementReactionQueue.push({ el: el, name: name, args: args || [] });
+    scheduleCustomElementReactions();
+  }
+
+  function flushCustomElementReactions() {
+    customElementReactionScheduled = false;
+    while (customElementReactionQueue.length) {
+      var reaction = customElementReactionQueue.shift();
+      var cb = reaction.el && reaction.el[reaction.name];
+      if (typeof cb === 'function') cb.apply(reaction.el, reaction.args);
+    }
+    if (customElementReactionQueue.length) scheduleCustomElementReactions();
+  }
+
+  function observesAttribute(def, attr) {
+    var observed = def && def.observedAttributes;
+    if (!observed) return false;
+    for (var i = 0; i < observed.length; i++) {
+      if (observed[i] === attr) return true;
+    }
+    return false;
+  }
+
+  function customElementAttributeChanged(el, attr, oldValue, newValue) {
+    var def = upgradedCustomElements.get(el);
+    if (!def || oldValue === newValue || !observesAttribute(def, attr)) return;
+    enqueueCustomElementReaction(el, 'attributeChangedCallback', [attr, oldValue, newValue]);
+  }
+
+  function enqueueInitialAttributeReactions(el, def) {
+    var observed = def && def.observedAttributes;
+    if (!observed) return;
+    for (var i = 0; i < observed.length; i++) {
+      var attr = observed[i];
+      var value = el.getAttribute(attr);
+      if (value !== null) {
+        enqueueCustomElementReaction(el, 'attributeChangedCallback', [attr, null, value]);
+      }
+    }
+  }
+
   function constructCustomElementWithStack(el, def) {
     htmlElementConstructionStack.push(el);
     try {
@@ -860,9 +924,14 @@
     var def = upgradedCustomElements.get(el);
     if (!def || !el.isConnected || connectedCustomElements.get(el)) return;
     connectedCustomElements.set(el, true);
-    if (typeof el.connectedCallback === 'function') {
-      el.connectedCallback();
-    }
+    enqueueCustomElementReaction(el, 'connectedCallback', []);
+  }
+
+  function disconnectCustomElement(el) {
+    var def = upgradedCustomElements.get(el);
+    if (!def || !connectedCustomElements.get(el)) return;
+    connectedCustomElements.delete(el);
+    enqueueCustomElementReaction(el, 'disconnectedCallback', []);
   }
 
   function upgradeCustomElement(el, def) {
@@ -870,6 +939,7 @@
     setElementPrototype(el, def.ctor.prototype);
     upgradedCustomElements.set(el, def);
     constructCustomElement(el, def);
+    enqueueInitialAttributeReactions(el, def);
     connectCustomElement(el);
     return el;
   }
@@ -892,6 +962,15 @@
     var kids = root.childNodes;
     for (var i = 0; i < kids.length; i++) {
       connectCustomElementTree(kids[i]);
+    }
+  }
+
+  function disconnectCustomElementTree(root) {
+    if (!root) return;
+    if (root.nodeType === 1) disconnectCustomElement(root);
+    var kids = root.childNodes;
+    for (var i = 0; i < kids.length; i++) {
+      disconnectCustomElementTree(kids[i]);
     }
   }
 
@@ -1704,6 +1783,13 @@
       if (!ctor.prototype || (typeof ctor.prototype !== 'object' && typeof ctor.prototype !== 'function')) {
         throw new TypeError('constructor prototype must be an object');
       }
+      var observedAttributes = [];
+      if (ctor.observedAttributes !== undefined && ctor.observedAttributes !== null) {
+        var observed = ctor.observedAttributes;
+        for (var oi = 0; oi < observed.length; oi++) {
+          observedAttributes.push(String(observed[oi]).toLowerCase());
+        }
+      }
       var localName = name;
       var isCustomizedBuiltIn = false;
       if (options && options.extends !== undefined) {
@@ -1718,7 +1804,8 @@
         name: name,
         localName: localName,
         ctor: ctor,
-        customizedBuiltIn: isCustomizedBuiltIn
+        customizedBuiltIn: isCustomizedBuiltIn,
+        observedAttributes: observedAttributes
       };
       customElementDefinitions[name] = def;
       if (isCustomizedBuiltIn) {
