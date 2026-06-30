@@ -36,8 +36,8 @@ use paint::Paint;
 use paint_api::CrossProcessPaintApi;
 use paint_api::display_list::{AxesScrollSensitivity, PaintDisplayListInfo, ScrollType};
 use paint_list_api::{
-    CommonPlacement, DeviceIntSize, EngineId, LayoutPoint, LayoutRect, PaintCmd, PaintEnvelope,
-    ColorF, PrimitiveFlags, RectItem,
+    ColorF, CommonPlacement, DeviceIntSize, EngineId, LayoutPoint, LayoutRect, PaintCmd,
+    PaintEnvelope, PrimitiveFlags, RectItem,
 };
 use paint_types::PipelineId;
 use servo_base::id::{PainterId, PipelineNamespace, PipelineNamespaceId, WebViewId};

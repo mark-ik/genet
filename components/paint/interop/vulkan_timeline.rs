@@ -76,11 +76,12 @@ impl VulkanTimelineSemaphoreSynchronizer {
                 .push_next(&mut type_info)
                 .push_next(&mut export_info);
 
-            let timeline_semaphore = vk_device
-                .create_semaphore(&create_info, None)
-                .map_err(|err| {
-                    InteropError::Vulkan(format!("create_semaphore(timeline): {err}"))
-                })?;
+            let timeline_semaphore =
+                vk_device
+                    .create_semaphore(&create_info, None)
+                    .map_err(|err| {
+                        InteropError::Vulkan(format!("create_semaphore(timeline): {err}"))
+                    })?;
 
             let external_semaphore_fd =
                 ash::khr::external_semaphore_fd::Device::new(&vk_instance, &vk_device);
@@ -170,7 +171,10 @@ impl VulkanTimelineSemaphoreSynchronizer {
 
 impl Drop for VulkanTimelineSemaphoreSynchronizer {
     fn drop(&mut self) {
-        unsafe { self.vk_device.destroy_semaphore(self.timeline_semaphore, None) };
+        unsafe {
+            self.vk_device
+                .destroy_semaphore(self.timeline_semaphore, None)
+        };
     }
 }
 
@@ -222,7 +226,10 @@ mod tests {
         let result = VulkanTimelineSemaphoreSynchronizer::new(&host);
         assert!(matches!(
             result,
-            Err(InteropError::BackendMismatch { expected: "Vulkan", .. })
+            Err(InteropError::BackendMismatch {
+                expected: "Vulkan",
+                ..
+            })
         ));
     }
 

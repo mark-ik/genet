@@ -45,11 +45,11 @@ use paint_api::wgpu_readback::read_texture_to_image;
 use paint_list_api::{DeviceIntSize, PaintEnvelope};
 use paint_types::PipelineId;
 use paint_types::units::{DeviceIntRect, LayoutSize};
-use servo_base::id::{PainterId, PipelineNamespace, PipelineNamespaceId, WebViewId};
 use serval_layout::{
     BackgroundImagePlane, ImagePlane, StylePlane, emit_paint_list_with_layouts, layout, run_cascade,
 };
 use serval_static_dom::StaticDocument;
+use servo_base::id::{PainterId, PipelineNamespace, PipelineNamespaceId, WebViewId};
 
 const VIEWPORT: u32 = 128;
 
@@ -64,7 +64,9 @@ const VIEWPORT: u32 = 128;
 static GPU_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn gpu_serial() -> std::sync::MutexGuard<'static, ()> {
-    GPU_SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    GPU_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// `WebViewId::new` and `PainterId::next` reach into a thread-local
@@ -388,9 +390,7 @@ fn html_to_pixels_inline_img_flows_among_text() {
     let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
     let data_uri = format!("data:image/png;base64,{b64}");
 
-    let html = format!(
-        "<html><body><p>aaaaa <img src=\"{data_uri}\"> aaaaa</p></body></html>"
-    );
+    let html = format!("<html><body><p>aaaaa <img src=\"{data_uri}\"> aaaaa</p></body></html>");
     let image = render_to_image(
         &html,
         &[
@@ -544,10 +544,9 @@ fn draw_image_rasterizes_from_side_table() {
         pixels.extend_from_slice(&green);
     }
 
-    let bounds =
-        |x: f32, y: f32, w: f32, h: f32| -> LayoutRect {
-            LayoutRect::new(LayoutPoint::new(x, y), LayoutPoint::new(x + w, y + h))
-        };
+    let bounds = |x: f32, y: f32, w: f32, h: f32| -> LayoutRect {
+        LayoutRect::new(LayoutPoint::new(x, y), LayoutPoint::new(x + w, y + h))
+    };
 
     let envelope = PaintEnvelope {
         engine: EngineId::SERVAL,
@@ -701,10 +700,7 @@ fn html_to_pixels_img_data_uri_renders() {
     // The <img> has no CSS width/height, so it takes the decoded
     // intrinsic size (16×16) and lays out at body's origin.
     let html = format!("<html><body><img src=\"{data_uri}\"></body></html>");
-    let image = render_to_image(
-        &html,
-        &["body { background-color: rgb(255, 255, 255); }"],
-    );
+    let image = render_to_image(&html, &["body { background-color: rgb(255, 255, 255); }"]);
 
     // Inside the 16×16 image box (top-left): blue.
     assert_eq!(
@@ -717,6 +713,56 @@ fn html_to_pixels_img_data_uri_renders() {
         image.get_pixel(40, 40).0,
         [255, 255, 255, 255],
         "(40, 40) is outside the 16×16 <img>, should be white body"
+    );
+}
+
+/// `object-fit: cover` scales the concrete object, `object-position` chooses
+/// which part of the oversized object is visible, and the renderer clips the
+/// result to the image element's content box.
+#[test]
+fn html_to_pixels_img_object_fit_cover_positions_and_clips() {
+    use base64::Engine as _;
+
+    let mut img = image::RgbaImage::from_pixel(200, 100, image::Rgba([0, 0, 255, 255]));
+    for y in 0..100 {
+        for x in 0..100 {
+            img.put_pixel(x, y, image::Rgba([255, 0, 0, 255]));
+        }
+    }
+    let mut png_bytes = Vec::new();
+    img.write_to(
+        &mut std::io::Cursor::new(&mut png_bytes),
+        image::ImageFormat::Png,
+    )
+    .expect("encode test PNG");
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+    let data_uri = format!("data:image/png;base64,{b64}");
+
+    let html = format!(
+        "<html><body>\
+         <img class=\"left\" src=\"{data_uri}\">\
+         <img class=\"right\" src=\"{data_uri}\">\
+         </body></html>"
+    );
+    let image = render_to_image(
+        &html,
+        &[
+            "html, body { margin: 0; padding: 0; background-color: white; }",
+            "img { display: block; width: 100px; height: 100px; object-fit: cover; } \
+             img.left { object-position: left top; } \
+             img.right { object-position: right top; }",
+        ],
+    );
+
+    assert_eq!(
+        image.get_pixel(50, 50).0,
+        [255, 0, 0, 255],
+        "left-positioned cover image should show the red left half"
+    );
+    assert_eq!(
+        image.get_pixel(50, 115).0,
+        [0, 0, 255, 255],
+        "right-positioned cover image should show the blue right half"
     );
 }
 
@@ -798,15 +844,16 @@ fn html_to_pixels_background_image_tiles_from_css() {
     let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
     let data_uri = format!("data:image/png;base64,{b64}");
 
-    let css = format!(
-        "div {{ width: 40px; height: 40px; background-image: url({data_uri}); }}"
-    );
+    let css = format!("div {{ width: 40px; height: 40px; background-image: url({data_uri}); }}");
     let image = render_to_image(
         "<html><body><div></div></body></html>",
         // `body { margin: 0 }` neutralizes the UA 8px gutter so the div sits at the
         // origin and these pixel coordinates stay valid (this test is about
         // background tiling, not the document gutter).
-        &["body { background-color: rgb(255, 255, 255); margin: 0; }", &css],
+        &[
+            "body { background-color: rgb(255, 255, 255); margin: 0; }",
+            &css,
+        ],
     );
 
     // Inside the 40×40 div: the green tile repeats to cover it. Sample
@@ -1047,8 +1094,16 @@ fn html_to_pixels_clip_path_circle_clips_to_disc() {
             }",
         ],
     );
-    assert_eq!(image.get_pixel(30, 30).0, [255, 0, 0, 255], "(30,30) is the circle center, red");
-    assert_eq!(image.get_pixel(5, 5).0, [255, 255, 255, 255], "(5,5) is outside the circle, white");
+    assert_eq!(
+        image.get_pixel(30, 30).0,
+        [255, 0, 0, 255],
+        "(30,30) is the circle center, red"
+    );
+    assert_eq!(
+        image.get_pixel(5, 5).0,
+        [255, 255, 255, 255],
+        "(5,5) is outside the circle, white"
+    );
 }
 
 /// `clip-path: ellipse(...)` clips to an oval. A 60×60 red div clipped to
@@ -1068,8 +1123,16 @@ fn html_to_pixels_clip_path_ellipse_clips_to_oval() {
             }",
         ],
     );
-    assert_eq!(image.get_pixel(30, 30).0, [255, 0, 0, 255], "(30,30) is the ellipse center, red");
-    assert_eq!(image.get_pixel(30, 3).0, [255, 255, 255, 255], "(30,3) exceeds the y-radius, white");
+    assert_eq!(
+        image.get_pixel(30, 30).0,
+        [255, 0, 0, 255],
+        "(30,30) is the ellipse center, red"
+    );
+    assert_eq!(
+        image.get_pixel(30, 3).0,
+        [255, 255, 255, 255],
+        "(30,3) exceeds the y-radius, white"
+    );
 }
 
 /// `clip-path: inset(...)` clips to an inset rect. A 60×60 red div clipped to
@@ -1089,8 +1152,16 @@ fn html_to_pixels_clip_path_inset_clips_to_rect() {
             }",
         ],
     );
-    assert_eq!(image.get_pixel(30, 30).0, [255, 0, 0, 255], "(30,30) inside the inset rect, red");
-    assert_eq!(image.get_pixel(5, 5).0, [255, 255, 255, 255], "(5,5) in the inset border, white");
+    assert_eq!(
+        image.get_pixel(30, 30).0,
+        [255, 0, 0, 255],
+        "(30,30) inside the inset rect, red"
+    );
+    assert_eq!(
+        image.get_pixel(5, 5).0,
+        [255, 255, 255, 255],
+        "(5,5) in the inset border, white"
+    );
 }
 
 /// `mix-blend-mode: multiply` composites an element into its backdrop by
@@ -1111,7 +1182,11 @@ fn html_to_pixels_mix_blend_mode_multiply() {
         r < 50 && g < 50 && b < 50,
         "(10,10) red multiplied over blue should be ~black, got [{r},{g},{b}]"
     );
-    assert_eq!(image.get_pixel(60, 60).0, [0, 0, 255, 255], "(60,60) is parent-only, blue");
+    assert_eq!(
+        image.get_pixel(60, 60).0,
+        [0, 0, 255, 255],
+        "(60,60) is parent-only, blue"
+    );
 }
 
 /// `filter: invert(1)` reverses each color channel. A red div inverts to cyan
@@ -1157,7 +1232,10 @@ fn html_to_pixels_filter_grayscale_desaturates() {
         ],
     );
     let [r, g, b, _] = image.get_pixel(25, 25).0;
-    assert!(r > 38 && r < 70, "(25,25) red -> sRGB-luminance gray ~54, got [{r},{g},{b}]");
+    assert!(
+        r > 38 && r < 70,
+        "(25,25) red -> sRGB-luminance gray ~54, got [{r},{g},{b}]"
+    );
     assert!(
         (r as i32 - g as i32).abs() <= 4 && (g as i32 - b as i32).abs() <= 4,
         "grayscale output has equal channels, got [{r},{g},{b}]"

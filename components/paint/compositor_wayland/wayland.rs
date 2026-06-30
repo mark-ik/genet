@@ -33,7 +33,7 @@ use std::ffi::c_void;
 use std::sync::{Arc, Mutex};
 
 use wayland_client::backend::{Backend, ObjectId};
-use wayland_client::globals::{registry_queue_init, GlobalListContents};
+use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_buffer::WlBuffer;
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_region::WlRegion;
@@ -142,8 +142,7 @@ impl WaylandState {
         let viewporter: WpViewporter = globals
             .bind(&queue_handle, 1..=1, ())
             .map_err(|_| BackendError::MissingGlobal("wp_viewporter"))?;
-        let alpha_modifier: Option<WpAlphaModifierV1> =
-            globals.bind(&queue_handle, 1..=1, ()).ok();
+        let alpha_modifier: Option<WpAlphaModifierV1> = globals.bind(&queue_handle, 1..=1, ()).ok();
 
         let bound_globals = WaylandGlobals {
             compositor: std::mem::ManuallyDrop::new(compositor),
@@ -175,7 +174,12 @@ impl WaylandState {
             .event_queue
             .roundtrip(&mut state.dispatch_state)
             .map_err(|e| BackendError::Wayland(format!("roundtrip(initial): {e}")))?;
-        state.advertised = state.dispatch_state.advertised.lock().expect("advertised mutex poisoned").clone();
+        state.advertised = state
+            .dispatch_state
+            .advertised
+            .lock()
+            .expect("advertised mutex poisoned")
+            .clone();
 
         Ok(state)
     }
@@ -225,8 +229,8 @@ unsafe fn wayland_client_adopt_surface(
 ) -> Result<WlSurface, String> {
     let id = ObjectId::from_ptr(WlSurface::interface(), raw.cast())
         .map_err(|e| format!("ObjectId::from_ptr: {e:?}"))?;
-    let surface = WlSurface::from_id(connection, id)
-        .map_err(|e| format!("WlSurface::from_id: {e:?}"))?;
+    let surface =
+        WlSurface::from_id(connection, id).map_err(|e| format!("WlSurface::from_id: {e:?}"))?;
     Ok(surface)
 }
 
@@ -321,7 +325,10 @@ impl Dispatch<WlBuffer, BufferSlotUserData> for DispatchState {
     ) {
         use wayland_client::protocol::wl_buffer::Event;
         if matches!(event, Event::Release) {
-            let mut g = user_data.in_flight.lock().expect("in_flight mutex poisoned");
+            let mut g = user_data
+                .in_flight
+                .lock()
+                .expect("in_flight mutex poisoned");
             *g = false;
         }
     }

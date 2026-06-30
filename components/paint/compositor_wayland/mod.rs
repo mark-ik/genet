@@ -153,8 +153,7 @@ impl WaylandSubsurfaceBackend {
         }
 
         let wayland = unsafe { WaylandState::new(display, parent_surface)? };
-        let modifier_table =
-            ModifierTable::new(host, wayland.advertised.clone())?;
+        let modifier_table = ModifierTable::new(host, wayland.advertised.clone())?;
         let chosen = modifier_table.choose()?;
         log::info!(
             "[WaylandSubsurfaceBackend] dmabuf modifier: format=0x{:08X} modifier=0x{:016X}",
@@ -231,7 +230,7 @@ impl WaylandSubsurfaceBackend {
             .map_err(|e| BackendError::Dmabuf(format!("dup fd: {e}")))?;
         params.add(
             dup_fd.as_fd(),
-            0,                               // plane_idx
+            0, // plane_idx
             plane.offset as u32,
             plane.pitch as u32,
             (chosen.drm_modifier >> 32) as u32,
@@ -313,12 +312,9 @@ impl WaylandSubsurfaceBackend {
         self.wayland
             .parent_surface
             .attach(Some(&slot.wl_buffer), 0, 0);
-        self.wayland.parent_surface.damage_buffer(
-            0,
-            0,
-            size.width as i32,
-            size.height as i32,
-        );
+        self.wayland
+            .parent_surface
+            .damage_buffer(0, 0, size.width as i32, size.height as i32);
         self.wayland.parent_surface.commit();
         self.wayland.flush()?;
 
@@ -376,11 +372,11 @@ impl WaylandSubsurfaceBackend {
         wl_subsurface.set_desync();
         wl_subsurface.set_position(0, 0);
 
-        let viewport = self
-            .wayland
-            .globals
-            .viewporter
-            .get_viewport(&wl_surface, &self.wayland.queue_handle, ());
+        let viewport = self.wayland.globals.viewporter.get_viewport(
+            &wl_surface,
+            &self.wayland.queue_handle,
+            (),
+        );
         let alpha_modifier = self
             .wayland
             .globals
@@ -416,8 +412,8 @@ impl WaylandSubsurfaceBackend {
         self.wayland.dispatch_pending()?;
 
         let needs_rotation = transform[1].abs() > 1e-6 || transform[2].abs() > 1e-6;
-        let needs_alpha_bake = !self.wayland.globals.alpha_modifier.is_some()
-            && (opacity - 1.0).abs() > 1e-6;
+        let needs_alpha_bake =
+            !self.wayland.globals.alpha_modifier.is_some() && (opacity - 1.0).abs() > 1e-6;
 
         // Bake path lives in 6.5. Fast path:
         if needs_rotation || needs_alpha_bake {
@@ -442,10 +438,9 @@ impl WaylandSubsurfaceBackend {
             self.wayland.roundtrip()?;
         };
 
-        let surface = self
-            .surfaces
-            .get_mut(&key)
-            .ok_or_else(|| BackendError::Wayland(format!("present({key:?}): surface not declared")))?;
+        let surface = self.surfaces.get_mut(&key).ok_or_else(|| {
+            BackendError::Wayland(format!("present({key:?}): surface not declared"))
+        })?;
 
         let slot = &surface.swap_pool.slots[slot_index];
 
@@ -486,12 +481,9 @@ impl WaylandSubsurfaceBackend {
         // viewporter takes set_source as wl_fixed_t (24.8 fixed-point);
         // wayland-protocols's WpViewport::set_source converts from f64
         // for us.
-        surface.viewport.set_source(
-            0.0,
-            0.0,
-            surface.size.0 as f64,
-            surface.size.1 as f64,
-        );
+        surface
+            .viewport
+            .set_source(0.0, 0.0, surface.size.0 as f64, surface.size.1 as f64);
         surface.viewport.set_destination(dest_w, dest_h);
 
         // Subsurface position from translation.
@@ -523,8 +515,7 @@ impl WaylandSubsurfaceBackend {
 
         // Opacity (via protocol — we're in fast path so it's bound).
         if let Some(am) = &surface.alpha_modifier {
-            let multiplier =
-                (opacity.clamp(0.0, 1.0) * (u32::MAX as f32)).round() as u32;
+            let multiplier = (opacity.clamp(0.0, 1.0) * (u32::MAX as f32)).round() as u32;
             am.set_multiplier(multiplier);
         }
 
@@ -580,7 +571,14 @@ impl WaylandSubsurfaceBackend {
                 Some(p) => p.width != bbox_w || p.height != bbox_h,
                 None => true,
             };
-            (surface.surface_id, need_realloc, bbox_w, bbox_h, min_x, min_y)
+            (
+                surface.surface_id,
+                need_realloc,
+                bbox_w,
+                bbox_h,
+                min_x,
+                min_y,
+            )
         };
 
         // (Re)allocate bake pool on size change.
@@ -620,11 +618,7 @@ impl WaylandSubsurfaceBackend {
             // bake.slots[i].image are distinct fields; both are read-only
             // for the duration of this block.
             let surface = self.surfaces.get(&key).expect("re-borrowed");
-            let dst = &surface
-                .bake
-                .as_ref()
-                .expect("just allocated")
-                .slots[slot_index]
+            let dst = &surface.bake.as_ref().expect("just allocated").slots[slot_index]
                 .image
                 .wgpu_texture;
             self.bake_pipeline.bake(
@@ -648,7 +642,9 @@ impl WaylandSubsurfaceBackend {
         surface
             .viewport
             .set_source(0.0, 0.0, bbox_w as f64, bbox_h as f64);
-        surface.viewport.set_destination(bbox_w as i32, bbox_h as i32);
+        surface
+            .viewport
+            .set_destination(bbox_w as i32, bbox_h as i32);
 
         // Subsurface position = transform translation + bbox offset.
         let tx = (transform[4] + min_x).round() as i32;
@@ -676,17 +672,12 @@ impl WaylandSubsurfaceBackend {
             },
         }
         if let Some(am) = &surface.alpha_modifier {
-            let multiplier =
-                (opacity.clamp(0.0, 1.0) * (u32::MAX as f32)).round() as u32;
+            let multiplier = (opacity.clamp(0.0, 1.0) * (u32::MAX as f32)).round() as u32;
             am.set_multiplier(multiplier);
         }
 
-        let slot_wl_buffer = &surface
-            .bake
-            .as_ref()
-            .expect("just allocated")
-            .slots[slot_index]
-            .wl_buffer;
+        let slot_wl_buffer =
+            &surface.bake.as_ref().expect("just allocated").slots[slot_index].wl_buffer;
         surface.wl_surface.attach(Some(slot_wl_buffer), 0, 0);
         surface
             .wl_surface
@@ -736,7 +727,9 @@ impl OsCompositorBackend for WaylandSubsurfaceBackend {
         clip: Option<[f32; 4]>,
         opacity: f32,
     ) {
-        if let Err(err) = WaylandSubsurfaceBackend::present_inherent(self, key, transform, clip, opacity) {
+        if let Err(err) =
+            WaylandSubsurfaceBackend::present_inherent(self, key, transform, clip, opacity)
+        {
             log::warn!("[WaylandSubsurfaceBackend] present({key:?}): {err}");
         }
     }

@@ -19,8 +19,8 @@
 use netrender::{NetrenderOptions, boot, create_netrender_instance, peniko};
 use paint::{WgpuMasterCaptureBackend, translate_paint_list};
 use paint_list_api::{
-    CommonPlacement, DeviceIntSize, EngineId, LayoutPoint, LayoutRect, PaintCmd, PaintEnvelope,
-    ColorF, PrimitiveFlags, RectItem,
+    ColorF, CommonPlacement, DeviceIntSize, EngineId, LayoutPoint, LayoutRect, PaintCmd,
+    PaintEnvelope, PrimitiveFlags, RectItem,
 };
 
 const VIEWPORT: u32 = 256;

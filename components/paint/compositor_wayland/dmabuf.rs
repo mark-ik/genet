@@ -25,8 +25,8 @@ use ash::vk;
 use smallvec::SmallVec;
 use wayland_client::protocol::wl_buffer::WlBuffer;
 
-use crate::interop::HostWgpuContext;
 use crate::compositor_wayland::errors::BackendError;
+use crate::interop::HostWgpuContext;
 
 /// Single-plane layout from `vkGetImageSubresourceLayout`. For
 /// `DRM_FORMAT_MOD_LINEAR` and most common modifiers, plane count is 1.
@@ -151,11 +151,13 @@ impl ExportableImage {
             let get_fd_info = vk::MemoryGetFdInfoKHR::default()
                 .memory(vk_memory)
                 .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
-            let raw_fd = external_memory_fd.get_memory_fd(&get_fd_info).map_err(|e| {
-                vk_device.free_memory(vk_memory, None);
-                vk_device.destroy_image(vk_image, None);
-                BackendError::Dmabuf(format!("get_memory_fd: {e}"))
-            })?;
+            let raw_fd = external_memory_fd
+                .get_memory_fd(&get_fd_info)
+                .map_err(|e| {
+                    vk_device.free_memory(vk_memory, None);
+                    vk_device.destroy_image(vk_image, None);
+                    BackendError::Dmabuf(format!("get_memory_fd: {e}"))
+                })?;
             use std::os::fd::FromRawFd;
             let dmabuf_fd = OwnedFd::from_raw_fd(raw_fd);
 
@@ -166,9 +168,7 @@ impl ExportableImage {
                 .map_err(|e| {
                     vk_device.free_memory(vk_memory, None);
                     vk_device.destroy_image(vk_image, None);
-                    BackendError::Dmabuf(format!(
-                        "get_image_drm_format_modifier_properties: {e}"
-                    ))
+                    BackendError::Dmabuf(format!("get_image_drm_format_modifier_properties: {e}"))
                 })?;
 
             // For LINEAR-only v1, plane count is 1. Multi-plane modifiers
@@ -288,25 +288,26 @@ fn wrap_vk_image_as_wgpu(
         );
         drop(hal_device);
 
-        host.device.create_texture_from_hal::<wgpu::wgc::api::Vulkan>(
-            hal_texture,
-            &wgpu::TextureDescriptor {
-                label: Some("ExportableImage dmabuf"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
+        host.device
+            .create_texture_from_hal::<wgpu::wgc::api::Vulkan>(
+                hal_texture,
+                &wgpu::TextureDescriptor {
+                    label: Some("ExportableImage dmabuf"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::COPY_DST
+                        | wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
                 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::COPY_DST
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            },
-        )
+            )
     };
 
     Ok(wgpu_texture)
@@ -399,7 +400,11 @@ unsafe fn query_importable_modifiers(
     // is the standard ash idiom.
     let mut count_props = vk::DrmFormatModifierPropertiesListEXT::default();
     let mut fmt_props2 = vk::FormatProperties2::default().push_next(&mut count_props);
-    instance.get_physical_device_format_properties2(phys, vk::Format::R8G8B8A8_UNORM, &mut fmt_props2);
+    instance.get_physical_device_format_properties2(
+        phys,
+        vk::Format::R8G8B8A8_UNORM,
+        &mut fmt_props2,
+    );
 
     let n = count_props.drm_format_modifier_count as usize;
     if n == 0 {
@@ -407,10 +412,14 @@ unsafe fn query_importable_modifiers(
     }
     let mut buf: Vec<vk::DrmFormatModifierPropertiesEXT> =
         vec![vk::DrmFormatModifierPropertiesEXT::default(); n];
-    let mut filled_props = vk::DrmFormatModifierPropertiesListEXT::default()
-        .drm_format_modifier_properties(&mut buf);
+    let mut filled_props =
+        vk::DrmFormatModifierPropertiesListEXT::default().drm_format_modifier_properties(&mut buf);
     let mut fmt_props2 = vk::FormatProperties2::default().push_next(&mut filled_props);
-    instance.get_physical_device_format_properties2(phys, vk::Format::R8G8B8A8_UNORM, &mut fmt_props2);
+    instance.get_physical_device_format_properties2(
+        phys,
+        vk::Format::R8G8B8A8_UNORM,
+        &mut fmt_props2,
+    );
 
     buf.into_iter().map(|p| p.drm_format_modifier).collect()
 }
@@ -482,7 +491,10 @@ mod tests {
     use super::*;
 
     fn fake_table(advertised: WaylandAdvertised, vulkan_importable: Vec<u64>) -> ModifierTable {
-        ModifierTable { advertised, vulkan_importable }
+        ModifierTable {
+            advertised,
+            vulkan_importable,
+        }
     }
 
     #[test]
