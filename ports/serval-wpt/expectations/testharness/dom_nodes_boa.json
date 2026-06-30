@@ -7,7 +7,10 @@
     "dom/nodes/CharacterData-data.html": "pass",
     "dom/nodes/CharacterData-deleteData.html": "pass",
     "dom/nodes/CharacterData-insertData.html": "pass",
-    "dom/nodes/CharacterData-remove.html": "no-results",
+    "dom/nodes/CharacterData-remove.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
     "dom/nodes/CharacterData-replaceData.html": "pass",
     "dom/nodes/CharacterData-substringData.html": "fail",
     "dom/nodes/CharacterData-surrogates.html": "fail",
@@ -15,11 +18,20 @@
     "dom/nodes/ChildNode-before.html": "fail",
     "dom/nodes/ChildNode-replaceWith.html": "fail",
     "dom/nodes/Comment-constructor.html": "fail",
-    "dom/nodes/Comment-in-doctype.xhtml": "skip",
-    "dom/nodes/DOMImplementation-createDocument-with-null-browsing-context-crash.html": "skip",
+    "dom/nodes/Comment-in-doctype.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
+    "dom/nodes/DOMImplementation-createDocument-with-null-browsing-context-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/DOMImplementation-createDocument.html": "fail",
     "dom/nodes/DOMImplementation-createDocumentType.html": "fail",
-    "dom/nodes/DOMImplementation-createHTMLDocument-with-null-browsing-context-crash.html": "skip",
+    "dom/nodes/DOMImplementation-createHTMLDocument-with-null-browsing-context-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/DOMImplementation-createHTMLDocument-with-saved-implementation.html": "fail",
     "dom/nodes/DOMImplementation-createHTMLDocument.html": "fail",
     "dom/nodes/DOMImplementation-hasFeature.html": "pass",
@@ -27,8 +39,14 @@
     "dom/nodes/Document-adoptNode.html": "fail",
     "dom/nodes/Document-characterSet-normalization-1.html": "fail",
     "dom/nodes/Document-characterSet-normalization-2.html": "fail",
-    "dom/nodes/Document-constructor-svg.svg": "no-results",
-    "dom/nodes/Document-constructor-xml.xml": "error",
+    "dom/nodes/Document-constructor-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Document-constructor-xml.xml": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/nodes/Document-constructor.html": "fail",
     "dom/nodes/Document-contentType/contentType/contenttype_bmp.html": "fail",
     "dom/nodes/Document-contentType/contentType/contenttype_css.html": "fail",
@@ -46,22 +64,34 @@
     "dom/nodes/Document-contentType/contentType/createHTMLDocument.html": "fail",
     "dom/nodes/Document-contentType/contentType/xhr_responseType_document.html": "fail",
     "dom/nodes/Document-createAttribute.html": "fail",
-    "dom/nodes/Document-createCDATASection-xhtml.xhtml": "skip",
-    "dom/nodes/Document-createCDATASection.html": "error",
+    "dom/nodes/Document-createCDATASection-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
+    "dom/nodes/Document-createCDATASection.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/nodes/Document-createComment.html": "pass",
     "dom/nodes/Document-createElement-namespace.html": "fail",
     "dom/nodes/Document-createElement.html": "fail",
     "dom/nodes/Document-createElementNS.html": "fail",
     "dom/nodes/Document-createEvent-touchevent.window.html": "pass",
     "dom/nodes/Document-createEvent.https.html": "fail",
-    "dom/nodes/Document-createProcessingInstruction-xhtml.xhtml": "skip",
+    "dom/nodes/Document-createProcessingInstruction-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Document-createProcessingInstruction.html": "fail",
     "dom/nodes/Document-createTextNode.html": "pass",
     "dom/nodes/Document-createTreeWalker.html": "fail",
     "dom/nodes/Document-doctype.html": "fail",
     "dom/nodes/Document-getElementById.html": "fail",
     "dom/nodes/Document-getElementsByClassName.html": "fail",
-    "dom/nodes/Document-getElementsByTagName-xhtml.xhtml": "skip",
+    "dom/nodes/Document-getElementsByTagName-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Document-getElementsByTagName.html": "fail",
     "dom/nodes/Document-getElementsByTagNameNS.html": "fail",
     "dom/nodes/Document-implementation.html": "fail",
@@ -69,34 +99,85 @@
     "dom/nodes/DocumentFragment-constructor.html": "pass",
     "dom/nodes/DocumentFragment-getElementById.html": "fail",
     "dom/nodes/DocumentFragment-querySelectorAll-after-modification.html": "pass",
-    "dom/nodes/DocumentType-literal-xhtml.xhtml": "skip",
+    "dom/nodes/DocumentType-literal-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/DocumentType-literal.html": "fail",
     "dom/nodes/DocumentType-remove.html": "pass",
-    "dom/nodes/Element-childElement-null-svg.svg": "no-results",
-    "dom/nodes/Element-childElement-null-xhtml.xhtml": "skip",
+    "dom/nodes/Element-childElement-null-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-childElement-null-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-childElement-null.html": "pass",
-    "dom/nodes/Element-childElementCount-dynamic-add-svg.svg": "no-results",
-    "dom/nodes/Element-childElementCount-dynamic-add-xhtml.xhtml": "skip",
+    "dom/nodes/Element-childElementCount-dynamic-add-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-childElementCount-dynamic-add-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-childElementCount-dynamic-add.html": "pass",
-    "dom/nodes/Element-childElementCount-dynamic-remove-svg.svg": "no-results",
-    "dom/nodes/Element-childElementCount-dynamic-remove-xhtml.xhtml": "skip",
+    "dom/nodes/Element-childElementCount-dynamic-remove-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-childElementCount-dynamic-remove-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-childElementCount-dynamic-remove.html": "pass",
-    "dom/nodes/Element-childElementCount-nochild-svg.svg": "no-results",
-    "dom/nodes/Element-childElementCount-nochild-xhtml.xhtml": "skip",
+    "dom/nodes/Element-childElementCount-nochild-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-childElementCount-nochild-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-childElementCount-nochild.html": "pass",
-    "dom/nodes/Element-childElementCount-svg.svg": "no-results",
-    "dom/nodes/Element-childElementCount-xhtml.xhtml": "skip",
+    "dom/nodes/Element-childElementCount-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-childElementCount-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-childElementCount.html": "pass",
     "dom/nodes/Element-children.html": "fail",
     "dom/nodes/Element-classlist.html": "fail",
     "dom/nodes/Element-closest.html": "fail",
-    "dom/nodes/Element-firstElementChild-entity-xhtml.xhtml": "skip",
-    "dom/nodes/Element-firstElementChild-entity.svg": "no-results",
-    "dom/nodes/Element-firstElementChild-namespace-svg.svg": "no-results",
-    "dom/nodes/Element-firstElementChild-namespace-xhtml.xhtml": "skip",
+    "dom/nodes/Element-firstElementChild-entity-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
+    "dom/nodes/Element-firstElementChild-entity.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-firstElementChild-namespace-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-firstElementChild-namespace-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-firstElementChild-namespace.html": "pass",
-    "dom/nodes/Element-firstElementChild-svg.svg": "no-results",
-    "dom/nodes/Element-firstElementChild-xhtml.xhtml": "skip",
+    "dom/nodes/Element-firstElementChild-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-firstElementChild-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-firstElementChild.html": "pass",
     "dom/nodes/Element-getElementsByClassName.html": "fail",
     "dom/nodes/Element-getElementsByTagName-change-document-HTMLNess.html": "fail",
@@ -106,24 +187,48 @@
     "dom/nodes/Element-hasAttributes.html": "fail",
     "dom/nodes/Element-insertAdjacentElement.html": "fail",
     "dom/nodes/Element-insertAdjacentText.html": "fail",
-    "dom/nodes/Element-lastElementChild-svg.svg": "no-results",
-    "dom/nodes/Element-lastElementChild-xhtml.xhtml": "skip",
+    "dom/nodes/Element-lastElementChild-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-lastElementChild-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-lastElementChild.html": "pass",
     "dom/nodes/Element-matches-namespaced-elements.html": "fail",
     "dom/nodes/Element-matches.html": "fail",
-    "dom/nodes/Element-nextElementSibling-svg.svg": "no-results",
-    "dom/nodes/Element-nextElementSibling-xhtml.xhtml": "skip",
+    "dom/nodes/Element-nextElementSibling-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-nextElementSibling-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-nextElementSibling.html": "pass",
-    "dom/nodes/Element-previousElementSibling-svg.svg": "no-results",
-    "dom/nodes/Element-previousElementSibling-xhtml.xhtml": "skip",
+    "dom/nodes/Element-previousElementSibling-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-previousElementSibling-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-previousElementSibling.html": "pass",
     "dom/nodes/Element-remove.html": "pass",
     "dom/nodes/Element-removeAttribute.html": "fail",
     "dom/nodes/Element-removeAttributeNS.html": "fail",
     "dom/nodes/Element-setAttribute-crbug-1138487.html": "fail",
     "dom/nodes/Element-setAttribute.html": "fail",
-    "dom/nodes/Element-siblingElement-null-svg.svg": "no-results",
-    "dom/nodes/Element-siblingElement-null-xhtml.xhtml": "skip",
+    "dom/nodes/Element-siblingElement-null-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-siblingElement-null-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-siblingElement-null.html": "pass",
     "dom/nodes/Element-tagName.html": "fail",
     "dom/nodes/Element-webkitMatchesSelector.html": "fail",
@@ -131,11 +236,17 @@
     "dom/nodes/MutationObserver-callback-arguments.html": "fail",
     "dom/nodes/MutationObserver-characterData.html": "fail",
     "dom/nodes/MutationObserver-childList.html": "fail",
-    "dom/nodes/MutationObserver-cross-realm-callback-report-exception.html": "error",
+    "dom/nodes/MutationObserver-cross-realm-callback-report-exception.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/nodes/MutationObserver-disconnect.html": "fail",
     "dom/nodes/MutationObserver-document.html": "fail",
     "dom/nodes/MutationObserver-inner-outer.html": "fail",
-    "dom/nodes/MutationObserver-nested-crash.html": "skip",
+    "dom/nodes/MutationObserver-nested-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/MutationObserver-sanity.html": "fail",
     "dom/nodes/MutationObserver-takeRecords.html": "fail",
     "dom/nodes/MutationObserver-textContent.html": "fail",
@@ -149,29 +260,56 @@
     "dom/nodes/Node-cloneNode-document-allow-declarative-shadow-roots.window.html": "fail",
     "dom/nodes/Node-cloneNode-document-with-doctype.html": "fail",
     "dom/nodes/Node-cloneNode-external-stylesheet-no-bc.sub.html": "pass",
-    "dom/nodes/Node-cloneNode-on-inactive-document-crash.html": "skip",
+    "dom/nodes/Node-cloneNode-on-inactive-document-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/Node-cloneNode-svg.html": "fail",
     "dom/nodes/Node-cloneNode.html": "fail",
-    "dom/nodes/Node-compareDocumentPosition.html": "error",
+    "dom/nodes/Node-compareDocumentPosition.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/nodes/Node-constants.html": "fail",
-    "dom/nodes/Node-contains-xml.xml": "error",
-    "dom/nodes/Node-contains.html": "error",
+    "dom/nodes/Node-contains-xml.xml": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/nodes/Node-contains.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/nodes/Node-insertBefore.html": "fail",
     "dom/nodes/Node-isConnected-shadow-dom.html": "fail",
     "dom/nodes/Node-isConnected.html": "fail",
-    "dom/nodes/Node-isEqualNode-xhtml.xhtml": "skip",
+    "dom/nodes/Node-isEqualNode-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Node-isEqualNode.html": "fail",
     "dom/nodes/Node-isSameNode.html": "fail",
-    "dom/nodes/Node-lookupNamespaceURI.html": "error",
-    "dom/nodes/Node-lookupPrefix.xhtml": "skip",
+    "dom/nodes/Node-lookupNamespaceURI.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/nodes/Node-lookupPrefix.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Node-mutation-adoptNode.html": "fail",
-    "dom/nodes/Node-nodeName-xhtml.xhtml": "skip",
+    "dom/nodes/Node-nodeName-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Node-nodeName.html": "fail",
     "dom/nodes/Node-nodeValue.html": "fail",
     "dom/nodes/Node-normalize.html": "fail",
     "dom/nodes/Node-parentElement.html": "fail",
     "dom/nodes/Node-parentNode.html": "fail",
-    "dom/nodes/Node-properties.html": "error",
+    "dom/nodes/Node-properties.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/nodes/Node-removeChild.html": "fail",
     "dom/nodes/Node-replaceChild.html": "fail",
     "dom/nodes/Node-textContent.html": "fail",
@@ -186,20 +324,41 @@
     "dom/nodes/ParentNode-append.html": "fail",
     "dom/nodes/ParentNode-children.html": "fail",
     "dom/nodes/ParentNode-prepend.html": "fail",
-    "dom/nodes/ParentNode-querySelector-All-xht.xht": "skip",
+    "dom/nodes/ParentNode-querySelector-All-xht.xht": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/ParentNode-querySelector-All.html": "fail",
     "dom/nodes/ParentNode-querySelector-case-insensitive.html": "fail",
     "dom/nodes/ParentNode-querySelector-escapes.html": "fail",
     "dom/nodes/ParentNode-querySelector-scope.html": "fail",
-    "dom/nodes/ParentNode-querySelectorAll-removed-elements.html": "error",
+    "dom/nodes/ParentNode-querySelectorAll-removed-elements.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/nodes/ParentNode-querySelectors-exclusive.html": "pass",
-    "dom/nodes/ParentNode-querySelectors-namespaces.html": "error",
+    "dom/nodes/ParentNode-querySelectors-namespaces.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/nodes/ParentNode-querySelectors-space-and-dash-attribute-value.html": "pass",
     "dom/nodes/ParentNode-replaceChildren.html": "fail",
-    "dom/nodes/ProcessingInstruction-escapes-1.xhtml": "skip",
-    "dom/nodes/ProcessingInstruction-in-doctype.xhtml": "skip",
-    "dom/nodes/ProcessingInstruction-literal-1.xhtml": "skip",
-    "dom/nodes/ProcessingInstruction-literal-2.xhtml": "skip",
+    "dom/nodes/ProcessingInstruction-escapes-1.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
+    "dom/nodes/ProcessingInstruction-in-doctype.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
+    "dom/nodes/ProcessingInstruction-literal-1.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
+    "dom/nodes/ProcessingInstruction-literal-2.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Text-constructor.html": "fail",
     "dom/nodes/Text-splitText.html": "pass",
     "dom/nodes/Text-wholeText.html": "pass",
@@ -209,11 +368,26 @@
     "dom/nodes/attributes-namednodemap.html": "fail",
     "dom/nodes/attributes.html": "fail",
     "dom/nodes/case.html": "fail",
-    "dom/nodes/crashtests/attribute-index-when-no-attributes.html": "skip",
-    "dom/nodes/crashtests/childNodes-last_visited-unwrap-crash.html": "skip",
-    "dom/nodes/crashtests/document-replaceChild-input-documentElement.html": "skip",
-    "dom/nodes/crashtests/documentElement-remove-descendant-query.html": "skip",
-    "dom/nodes/crashtests/multiple-append-mutated-in-unload.https.html": "skip",
+    "dom/nodes/crashtests/attribute-index-when-no-attributes.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "dom/nodes/crashtests/childNodes-last_visited-unwrap-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "dom/nodes/crashtests/document-replaceChild-input-documentElement.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "dom/nodes/crashtests/documentElement-remove-descendant-query.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "dom/nodes/crashtests/multiple-append-mutated-in-unload.https.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/getElementsByClassName-01.htm": "pass",
     "dom/nodes/getElementsByClassName-02.htm": "pass",
     "dom/nodes/getElementsByClassName-03.htm": "pass",
@@ -271,8 +445,14 @@
     "dom/nodes/insertion-removing-steps/script-does-not-run-on-child-removal.window.html": "fail",
     "dom/nodes/moveBefore/Node-moveBefore.html": "fail",
     "dom/nodes/moveBefore/child-style-preserve.html": "fail",
-    "dom/nodes/moveBefore/chrome-338071841-crash.html": "skip",
-    "dom/nodes/moveBefore/chrome-433696404-crash.html": "skip",
+    "dom/nodes/moveBefore/chrome-338071841-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "dom/nodes/moveBefore/chrome-433696404-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/moveBefore/continue-css-animation-left.html": "fail",
     "dom/nodes/moveBefore/continue-css-animation-transform.html": "fail",
     "dom/nodes/moveBefore/continue-css-transition-left-pseudo.html": "fail",
@@ -287,17 +467,26 @@
     "dom/nodes/moveBefore/custom-element-move-reactions.html": "fail",
     "dom/nodes/moveBefore/fieldset-child-blur-event.html": "fail",
     "dom/nodes/moveBefore/fire-focusin-focusout.html": "fail",
-    "dom/nodes/moveBefore/focus-preserve-render.html": "skip",
+    "dom/nodes/moveBefore/focus-preserve-render.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/moveBefore/focus-preserve.html": "fail",
     "dom/nodes/moveBefore/focus-within.html": "fail",
     "dom/nodes/moveBefore/fullscreen-preserve.html": "fail",
     "dom/nodes/moveBefore/hover-style-update.html": "fail",
     "dom/nodes/moveBefore/iframe-document-preserve.window.html": "fail",
-    "dom/nodes/moveBefore/input-moveBefore-crash.html": "skip",
+    "dom/nodes/moveBefore/input-moveBefore-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/moveBefore/listed-form-element-reset.html": "fail",
     "dom/nodes/moveBefore/live-range-updates.html": "fail",
     "dom/nodes/moveBefore/modal-dialog.html": "fail",
-    "dom/nodes/moveBefore/moveBefore-as-flex-item.html": "skip",
+    "dom/nodes/moveBefore/moveBefore-as-flex-item.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/moveBefore/moveBefore-from-light-to-shadow.html": "fail",
     "dom/nodes/moveBefore/moveBefore-id-map.html": "fail",
     "dom/nodes/moveBefore/moveBefore-name-map.html": "fail",
@@ -311,8 +500,14 @@
     "dom/nodes/moveBefore/object-crash-regression.html": "fail",
     "dom/nodes/moveBefore/pointer-events.html": "fail",
     "dom/nodes/moveBefore/popover-preserve.html": "fail",
-    "dom/nodes/moveBefore/preserve-render-blocking-script.html": "error",
-    "dom/nodes/moveBefore/preserve-render-blocking-style.html": "error",
+    "dom/nodes/moveBefore/preserve-render-blocking-script.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/nodes/moveBefore/preserve-render-blocking-style.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/nodes/moveBefore/relevant-mutations.html": "fail",
     "dom/nodes/moveBefore/script-move-before.html": "fail",
     "dom/nodes/moveBefore/select-option-optgroup.html": "fail",
@@ -321,15 +516,24 @@
     "dom/nodes/moveBefore/style-applies.html": "fail",
     "dom/nodes/moveBefore/throws-exception.html": "fail",
     "dom/nodes/name-validation.html": "fail",
-    "dom/nodes/node-appendchild-crash.html": "skip",
+    "dom/nodes/node-appendchild-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/prepend-on-Document.html": "fail",
     "dom/nodes/query-target-in-load-event.html": "fail",
     "dom/nodes/querySelector-mixed-case.html": "fail",
     "dom/nodes/remove-and-adopt-thcrash.html": "fail",
-    "dom/nodes/remove-from-shadow-host-and-adopt-into-iframe.html": "skip",
+    "dom/nodes/remove-from-shadow-host-and-adopt-into-iframe.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/remove-next-sibling-during-replace-with.html": "fail",
     "dom/nodes/remove-unscopable.html": "fail",
-    "dom/nodes/replaceWith-document-element-crash.html": "skip",
+    "dom/nodes/replaceWith-document-element-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/rootNode.html": "fail",
     "dom/nodes/svg-template-querySelector.html": "fail"
   },

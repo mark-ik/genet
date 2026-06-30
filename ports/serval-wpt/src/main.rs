@@ -243,7 +243,7 @@ fn smoke_test(test: &TestCase) -> (Kind, Outcome) {
     }
     let html = match load_test_document_disk(test) {
         TestHtml::Html(html) => html,
-        TestHtml::Skip => return (kind, Outcome::Skipped),
+        TestHtml::Skip(_) => return (kind, Outcome::Skipped),
         TestHtml::ReadError => return (kind, Outcome::ReadError),
     };
 
@@ -798,15 +798,30 @@ fn setup_server(args: &Args) -> Option<net::ServerCtx> {
 /// Mirrors the disk branch of [`testharness`], shared by [`compare`].
 enum TestHtml {
     Html(String),
-    Skip,
+    Skip(&'static str),
     ReadError,
+}
+
+fn worker_family_reason(test: &TestCase) -> &'static str {
+    let name = test.name();
+    if name.contains(".sharedworker.") {
+        "sharedworker-unsupported"
+    } else if name.contains(".serviceworker.") {
+        "serviceworker-unsupported"
+    } else if name.contains(".shadowrealm-") {
+        "shadowrealm-unsupported"
+    } else if name.contains(".worker.") || name.contains(".worker?") {
+        "dedicated-worker-unsupported"
+    } else {
+        "non-window-global"
+    }
 }
 
 fn load_test_document_disk(test: &TestCase) -> TestHtml {
     if is_any_js(&test.path) {
         return match synthesize_any_js(&test.path, Some(test.name())) {
             Some(h) => TestHtml::Html(h),
-            None => TestHtml::Skip, // worker-only
+            None => TestHtml::Skip(worker_family_reason(test)),
         };
     }
     let Ok(bytes) = fs::read(&test.path) else {
@@ -817,11 +832,11 @@ fn load_test_document_disk(test: &TestCase) -> TestHtml {
 
 fn build_test_html_disk(test: &TestCase) -> TestHtml {
     if test.kind != Kind::Testharness {
-        return TestHtml::Skip;
+        return TestHtml::Skip("non-testharness");
     }
     let ext = test.path.extension().and_then(|e| e.to_str()).unwrap_or("");
     if ext.eq_ignore_ascii_case("xhtml") || ext.eq_ignore_ascii_case("xht") {
-        return TestHtml::Skip; // XML parse mode serval's HTML parser doesn't handle
+        return TestHtml::Skip("xhtml"); // XML parse mode serval's HTML parser doesn't handle
     }
     load_test_document_disk(test)
 }
@@ -839,6 +854,7 @@ fn outcome_passes(result: &Result<harness::HarnessOutcome, Box<dyn std::any::Any
 struct ActualRecord {
     test: String,
     status: &'static str,
+    reason: Option<String>,
 }
 
 impl ActualRecord {
@@ -846,6 +862,49 @@ impl ActualRecord {
         ActualRecord {
             test: test.name().to_string(),
             status,
+            reason: None,
+        }
+    }
+
+    fn with_reason(test: &TestCase, status: &'static str, reason: impl Into<String>) -> ActualRecord {
+        ActualRecord {
+            test: test.name().to_string(),
+            status,
+            reason: Some(reason.into()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ExpectedRecord {
+    status: String,
+    reason: Option<String>,
+}
+
+impl ExpectedRecord {
+    fn matches(&self, actual: &ActualRecord) -> bool {
+        self.status == actual.status
+            && self
+                .reason
+                .as_deref()
+                .is_none_or(|reason| actual.reason.as_deref() == Some(reason))
+    }
+
+    fn describe(&self) -> String {
+        match self.reason.as_deref() {
+            Some(reason) => format!("{} ({reason})", self.status),
+            None => self.status.clone(),
+        }
+    }
+}
+
+struct ActualRecordDisplay<'a>(&'a ActualRecord);
+
+impl std::fmt::Display for ActualRecordDisplay<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0.reason.as_deref() {
+            Some(reason) => write!(f, "{} ({reason})", self.0.status),
+            None => f.write_str(self.0.status),
         }
     }
 }
@@ -877,7 +936,14 @@ fn write_expectations(
 ) -> Result<(), String> {
     let mut tests = BTreeMap::new();
     for actual in actuals {
-        tests.insert(actual.test.clone(), actual.status.to_string());
+        let value = match actual.reason.as_deref() {
+            Some(reason) => serde_json::json!({
+                "status": actual.status,
+                "reason": reason,
+            }),
+            None => serde_json::Value::String(actual.status.to_string()),
+        };
+        tests.insert(actual.test.clone(), value);
     }
     let value = serde_json::json!({
         "version": 1,
@@ -896,7 +962,7 @@ fn write_expectations(
     .map_err(|e| e.to_string())
 }
 
-fn load_expectations(path: &str) -> Result<BTreeMap<String, String>, String> {
+fn load_expectations(path: &str) -> Result<BTreeMap<String, ExpectedRecord>, String> {
     let text =
         fs::read_to_string(path).map_err(|e| format!("expectations read failed ({path}): {e}"))?;
     let value: serde_json::Value = serde_json::from_str(&text)
@@ -906,11 +972,39 @@ fn load_expectations(path: &str) -> Result<BTreeMap<String, String>, String> {
         format!("expectations file {path} must be an object or carry a `tests` object")
     })?;
     let mut out = BTreeMap::new();
-    for (name, status) in obj {
-        let Some(status) = status.as_str() else {
-            return Err(format!("expectation for {name} must be a string status"));
+    for (name, expected) in obj {
+        let record = match expected {
+            serde_json::Value::String(status) => ExpectedRecord {
+                status: status.to_ascii_lowercase(),
+                reason: None,
+            },
+            serde_json::Value::Object(fields) => {
+                let Some(status) = fields.get("status").and_then(serde_json::Value::as_str) else {
+                    return Err(format!(
+                        "expectation for {name} must carry a string `status` field"
+                    ));
+                };
+                let reason = match fields.get("reason") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(serde_json::Value::String(reason)) => Some(reason.clone()),
+                    Some(_) => {
+                        return Err(format!(
+                            "expectation for {name} must carry a string `reason` field"
+                        ));
+                    },
+                };
+                ExpectedRecord {
+                    status: status.to_ascii_lowercase(),
+                    reason,
+                }
+            },
+            _ => {
+                return Err(format!(
+                    "expectation for {name} must be a string or an object with `status`"
+                ));
+            },
         };
-        out.insert(name.clone(), status.to_ascii_lowercase());
+        out.insert(name.clone(), record);
     }
     Ok(out)
 }
@@ -921,14 +1015,17 @@ fn check_expectations(path: &str, actuals: &[ActualRecord]) -> Result<(), String
     let mut unexpected = Vec::new();
     for actual in actuals {
         match expected.get(&actual.test) {
-            Some(status) if status == actual.status => {},
-            Some(status) => unexpected.push(format!(
+            Some(record) if record.matches(actual) => {},
+            Some(record) => unexpected.push(format!(
                 "{}: expected {}, got {}",
-                actual.test, status, actual.status
+                actual.test,
+                record.describe(),
+                ActualRecordDisplay(actual)
             )),
             None => unexpected.push(format!(
                 "{}: missing expectation, got {}",
-                actual.test, actual.status
+                actual.test,
+                ActualRecordDisplay(actual)
             )),
         }
     }
@@ -936,8 +1033,8 @@ fn check_expectations(path: &str, actuals: &[ActualRecord]) -> Result<(), String
         if !actual_names.contains(expected_name.as_str()) {
             let status = expected
                 .get(expected_name)
-                .map(String::as_str)
-                .unwrap_or("<missing>");
+                .map(ExpectedRecord::describe)
+                .unwrap_or_else(|| "<missing>".to_string());
             unexpected.push(format!(
                 "{expected_name}: expected {status}, but test was not run"
             ));
@@ -980,7 +1077,7 @@ fn compare(tests: &[TestCase], args: &Args) {
     for test in tests {
         let html = match build_test_html_disk(test) {
             TestHtml::Html(h) => h,
-            TestHtml::Skip => {
+            TestHtml::Skip(_) => {
                 skipped += 1;
                 continue;
             },
@@ -1552,7 +1649,7 @@ fn testharness(tests: &[TestCase], args: &Args) {
     for test in tests {
         if test.kind != Kind::Testharness {
             skipped += 1;
-            actuals.push(ActualRecord::new(test, "skip"));
+            actuals.push(ActualRecord::with_reason(test, "skip", "non-testharness"));
             if args.verbose {
                 println!("SKIP  non-testharness {}", test.name());
             }
@@ -1561,7 +1658,7 @@ fn testharness(tests: &[TestCase], args: &Args) {
         let ext = test.path.extension().and_then(|e| e.to_str()).unwrap_or("");
         if ext.eq_ignore_ascii_case("xhtml") || ext.eq_ignore_ascii_case("xht") {
             skipped += 1;
-            actuals.push(ActualRecord::new(test, "skip"));
+            actuals.push(ActualRecord::with_reason(test, "skip", "xhtml"));
             if args.verbose {
                 println!("SKIP  xhtml          {}", test.name());
             }
@@ -1576,7 +1673,7 @@ fn testharness(tests: &[TestCase], args: &Args) {
                     Some(t) => t,
                     None => {
                         errored += 1;
-                        actuals.push(ActualRecord::new(test, "error"));
+                        actuals.push(ActualRecord::with_reason(test, "error", "fetch-load-failed"));
                         println!("ERROR fetch   {}", test.name());
                         continue;
                     },
@@ -1584,17 +1681,17 @@ fn testharness(tests: &[TestCase], args: &Args) {
             } else {
                 match build_test_html_disk(test) {
                     TestHtml::Html(h) => h,
-                    TestHtml::Skip => {
+                    TestHtml::Skip(reason) => {
                         skipped += 1;
-                        actuals.push(ActualRecord::new(test, "skip"));
+                        actuals.push(ActualRecord::with_reason(test, "skip", reason));
                         if args.verbose {
-                            println!("SKIP  worker-only    {}", test.name());
+                            println!("SKIP  {reason:16} {}", test.name());
                         }
                         continue;
                     },
                     TestHtml::ReadError => {
                         errored += 1;
-                        actuals.push(ActualRecord::new(test, "error"));
+                        actuals.push(ActualRecord::with_reason(test, "error", "read-failed"));
                         println!("ERROR read    {}", test.name());
                         continue;
                     },
@@ -1604,17 +1701,17 @@ fn testharness(tests: &[TestCase], args: &Args) {
             {
                 match build_test_html_disk(test) {
                     TestHtml::Html(h) => h,
-                    TestHtml::Skip => {
+                    TestHtml::Skip(reason) => {
                         skipped += 1;
-                        actuals.push(ActualRecord::new(test, "skip"));
+                        actuals.push(ActualRecord::with_reason(test, "skip", reason));
                         if args.verbose {
-                            println!("SKIP  worker-only    {}", test.name());
+                            println!("SKIP  {reason:16} {}", test.name());
                         }
                         continue;
                     },
                     TestHtml::ReadError => {
                         errored += 1;
-                        actuals.push(ActualRecord::new(test, "error"));
+                        actuals.push(ActualRecord::with_reason(test, "error", "read-failed"));
                         println!("ERROR read    {}", test.name());
                         continue;
                     },
@@ -1678,12 +1775,12 @@ fn testharness(tests: &[TestCase], args: &Args) {
         match result {
             Err(_) => {
                 errored += 1;
-                actuals.push(ActualRecord::new(test, "error"));
+                actuals.push(ActualRecord::with_reason(test, "error", "panic"));
                 println!("ERROR panic   {name}");
             },
             Ok(harness::HarnessOutcome::Threw(msg)) => {
                 errored += 1;
-                actuals.push(ActualRecord::new(test, "error"));
+                actuals.push(ActualRecord::with_reason(test, "error", "evaluation-threw"));
                 println!("ERROR {name}  ({msg})");
             },
             Ok(harness::HarnessOutcome::Ran(results)) => {
@@ -1693,7 +1790,7 @@ fn testharness(tests: &[TestCase], args: &Args) {
                 sub_total += total;
                 if total == 0 {
                     no_results += 1;
-                    actuals.push(ActualRecord::new(test, "no-results"));
+                    actuals.push(ActualRecord::with_reason(test, "no-results", "no-subtests"));
                     if args.verbose {
                         println!("NORES {name}  (harness ran but reported no subtests)");
                     }
@@ -2201,10 +2298,12 @@ mod tests {
             ActualRecord {
                 test: "dom/example-a.html".into(),
                 status: "pass",
+                reason: None,
             },
             ActualRecord {
                 test: "dom/example-b.html".into(),
                 status: "fail",
+                reason: None,
             },
         ];
         write_expectations(&path, "testharness", "boa", &actuals).expect("write expectations");
@@ -2218,14 +2317,55 @@ mod tests {
         let expected = vec![ActualRecord {
             test: "dom/example.html".into(),
             status: "pass",
+            reason: None,
         }];
         write_expectations(&path, "testharness", "boa", &expected).expect("write expectations");
         let actual = vec![ActualRecord {
             test: "dom/example.html".into(),
             status: "fail",
+            reason: None,
         }];
         let err = check_expectations(&path, &actual).expect_err("changed status is unexpected");
         assert!(err.contains("expected pass, got fail"), "{err}");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn expectations_accept_pinned_reasons_and_legacy_strings() {
+        let path = temp_expectations_path("reason");
+        let expected = vec![
+            ActualRecord {
+                test: "dom/example-a.html".into(),
+                status: "skip",
+                reason: Some("worker-only".into()),
+            },
+            ActualRecord {
+                test: "dom/example-b.html".into(),
+                status: "pass",
+                reason: None,
+            },
+        ];
+        write_expectations(&path, "testharness", "boa", &expected).expect("write expectations");
+        check_expectations(&path, &expected).expect("expectations match exact reason");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn expectations_reject_changed_pinned_reason() {
+        let path = temp_expectations_path("reason-changed");
+        let expected = vec![ActualRecord {
+            test: "dom/example.html".into(),
+            status: "skip",
+            reason: Some("worker-only".into()),
+        }];
+        write_expectations(&path, "testharness", "boa", &expected).expect("write expectations");
+        let actual = vec![ActualRecord {
+            test: "dom/example.html".into(),
+            status: "skip",
+            reason: Some("xhtml".into()),
+        }];
+        let err = check_expectations(&path, &actual).expect_err("changed reason is unexpected");
+        assert!(err.contains("expected skip (worker-only), got skip (xhtml)"), "{err}");
         let _ = fs::remove_file(path);
     }
 }

@@ -1,0 +1,111 @@
+{
+  "command": "testharness",
+  "engine": "boa",
+  "tests": {
+    "fetch/api/basic/accept-header.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/block-mime-as-script.html": "fail",
+    "fetch/api/basic/conditional-get.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/error-after-response.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/gc.any.html": "pass",
+    "fetch/api/basic/header-value-combining.any.html": "fail",
+    "fetch/api/basic/header-value-null-byte.any.html": "pass",
+    "fetch/api/basic/historical.any.html": "pass",
+    "fetch/api/basic/http-response-code.any.html": "pass",
+    "fetch/api/basic/integrity.sub.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/keepalive.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/mediasource.window.html": "fail",
+    "fetch/api/basic/mode-no-cors.sub.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/mode-same-origin.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/referrer.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/request-forbidden-headers.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/request-head.any.html": "pass",
+    "fetch/api/basic/request-headers-case.any.html": "fail",
+    "fetch/api/basic/request-headers-nonascii.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/request-headers.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/request-private-network-headers.tentative.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/request-referrer-redirected-worker.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "fetch/api/basic/request-referrer.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/request-upload.any.html": "fail",
+    "fetch/api/basic/request-upload.h2.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/response-null-body.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/response-url.sub.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/scheme-about.any.html": "pass",
+    "fetch/api/basic/scheme-blob.sub.any.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "fetch/api/basic/scheme-data.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/scheme-others.sub.any.html": "pass",
+    "fetch/api/basic/status.h2.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/stream-response.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/stream-safe-creation.any.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "fetch/api/basic/text-utf8.any.html": "pass",
+    "fetch/api/basic/url-parsing.sub.html?encoding=utf8": "fail",
+    "fetch/api/basic/url-parsing.sub.html?encoding=windows-1252": "fail",
+    "fetch/api/basic/url-parsing.sub.html?encoding=x-cp1251": "fail"
+  },
+  "version": 1
+}
