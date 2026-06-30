@@ -23,7 +23,7 @@ use serval_scripted_dom::NodeId;
 use xilem_core::{MessageCtx, MessageResult, Mut, View, ViewId, ViewMarker, ViewPathTracker};
 
 use crate::pod::ServalElement;
-use crate::{ElementView, OptionalAction, ServalCtx};
+use crate::{ElementView, OptionalAction, Propagation, ServalCtx};
 
 // Distinctive marker id (randomly generated) so a stray message on a wrong path
 // is caught rather than silently matching. 0x5748_4C45 == "WHLE".
@@ -43,6 +43,25 @@ pub struct WheelEvent {
     pub delta: (f32, f32),
     pub local: (f32, f32),
     pub size: (f32, f32),
+    /// Clone-through cancellation state. A wheel handler calls
+    /// `prevent_default` to tell the host not to run its own scroll default for
+    /// this notch.
+    pub prop: Propagation,
+}
+
+impl WheelEvent {
+    pub fn new(delta: (f32, f32), local: (f32, f32), size: (f32, f32)) -> Self {
+        Self {
+            delta,
+            local,
+            size,
+            prop: Propagation::new(),
+        }
+    }
+
+    pub fn prevent_default(&self) {
+        self.prop.prevent_default();
+    }
 }
 
 /// Wraps a [`View`] and registers a native wheel handler on its element.
@@ -57,10 +76,7 @@ pub struct OnWheel<V, State, Action, F> {
 /// the runner routes to this element (the nearest wheel-handling ancestor of the
 /// hit node). It mutates app state and may return an [`OptionalAction`]; the
 /// runner rebuilds afterward.
-pub fn on_wheel<V, State, Action, OA, F>(
-    child: V,
-    handler: F,
-) -> OnWheel<V, State, Action, F>
+pub fn on_wheel<V, State, Action, OA, F>(child: V, handler: F) -> OnWheel<V, State, Action, F>
 where
     State: 'static,
     Action: 'static,
@@ -68,7 +84,11 @@ where
     OA: OptionalAction<Action>,
     F: Fn(&mut State, WheelEvent) -> OA + 'static,
 {
-    OnWheel { child, handler, phantom: PhantomData }
+    OnWheel {
+        child,
+        handler,
+        phantom: PhantomData,
+    }
 }
 
 /// Retained state for an [`OnWheel`].
@@ -90,7 +110,11 @@ where
     type ViewState = OnWheelState<V::ViewState>;
     type Element = ServalElement;
 
-    fn build(&self, ctx: &mut ServalCtx, app_state: &mut State) -> (Self::Element, Self::ViewState) {
+    fn build(
+        &self,
+        ctx: &mut ServalCtx,
+        app_state: &mut State,
+    ) -> (Self::Element, Self::ViewState) {
         ctx.with_id(ON_WHEEL_ID, |ctx| {
             let (element, child_state) = self.child.build(ctx, app_state);
             let node = element.node;
@@ -135,7 +159,8 @@ where
     ) {
         ctx.with_id(ON_WHEEL_ID, |ctx| {
             ctx.unregister_wheel(view_state.node);
-            self.child.teardown(&mut view_state.child_state, ctx, element);
+            self.child
+                .teardown(&mut view_state.child_state, ctx, element);
         });
     }
 

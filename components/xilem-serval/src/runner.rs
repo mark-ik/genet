@@ -330,8 +330,7 @@ where
                 // `MessageResult::Action(a)` is the runner's `Action` home: we
                 // collect it for the caller. `Action = ()` collects nothing
                 // meaningful (the Stage 2b path).
-                if let MessageResult::Action(a) =
-                    view.message(view_state, &mut msg, mut_ref, state)
+                if let MessageResult::Action(a) = view.message(view_state, &mut msg, mut_ref, state)
                 {
                     actions.push(a);
                 }
@@ -408,10 +407,17 @@ where
         if focusables.is_empty() {
             return;
         }
-        let next = match self.focus.and_then(|f| focusables.iter().position(|&n| n == f)) {
+        let next = match self
+            .focus
+            .and_then(|f| focusables.iter().position(|&n| n == f))
+        {
             Some(i) => {
                 let len = focusables.len();
-                if forward { (i + 1) % len } else { (i + len - 1) % len }
+                if forward {
+                    (i + 1) % len
+                } else {
+                    (i + len - 1) % len
+                }
             },
             None => {
                 if forward {
@@ -540,7 +546,7 @@ where
                 Key::Named(NamedKey::Tab) => {
                     self.focus_traverse(!event.mods.shift);
                     return actions; // focus_traverse rebuilt
-                }
+                },
                 // Enter/Space activate a focusable control that has a click handler
                 // but no key handler of its own (a plain button) by synthesizing a
                 // click at the element-local origin. A control with an `on_key`
@@ -555,8 +561,8 @@ where
                     // its own default (e.g. Space scrolling the page).
                     self.last_default_prevented = true;
                     return actions; // dispatch_click rebuilt
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
 
@@ -662,7 +668,14 @@ where
         let env = self.ctx.take_environment();
         let mut actions = Vec::new();
         let env = {
-            let Self { state, view, view_state, root, dom, .. } = self;
+            let Self {
+                state,
+                view,
+                view_state,
+                root,
+                dom,
+                ..
+            } = self;
             // Clone into the message: the handler mutates its clone's shared
             // `Propagation` cell, and the original below reads back what it set.
             let mut msg = MessageCtx::new(env, path, DynMessage::new(event.clone()));
@@ -695,6 +708,7 @@ where
     /// resolved element's coordinate space; the host computes them from the
     /// laid-out rect (the headless view layer has no layout).
     pub fn dispatch_wheel(&mut self, target: NodeId, event: WheelEvent) -> Vec<Action> {
+        self.last_default_prevented = false;
         let resolved = {
             let dom = self.dom.borrow();
             let mut current = Some(target);
@@ -742,8 +756,15 @@ where
         let env = self.ctx.take_environment();
         let mut actions = Vec::new();
         let env = {
-            let Self { state, view, view_state, root, dom, .. } = self;
-            let mut msg = MessageCtx::new(env, path, DynMessage::new(event));
+            let Self {
+                state,
+                view,
+                view_state,
+                root,
+                dom,
+                ..
+            } = self;
+            let mut msg = MessageCtx::new(env, path, DynMessage::new(event.clone()));
             let mut_ref = ServalElementMut {
                 node: &mut root.node,
                 dom: dom.clone(),
@@ -755,6 +776,7 @@ where
             msg.finish().0
         };
         self.ctx.set_environment(env);
+        self.last_default_prevented = event.prop.default_prevented();
         self.rebuild();
         actions
     }
@@ -826,8 +848,7 @@ mod tests {
     #[test]
     fn counter_ticks_through_runner() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner =
-            ServalAppRunner::new(dom.clone(), counter_view, Counter { count: 0 });
+        let mut runner = ServalAppRunner::new(dom.clone(), counter_view, Counter { count: 0 });
 
         // The initial tree: a <div> under the document root holding "0".
         let root = runner.root();
