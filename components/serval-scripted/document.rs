@@ -415,6 +415,22 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         scene
     }
 
+    /// Every link's hit rect(s) + href, in full-document px (unscrolled) — see
+    /// [`serval_layout::IncrementalLayout::link_rects`]. Reads the retained cascade
+    /// from the last [`frame`](Self::frame) (the same session the `getComputedStyle`
+    /// bridge shares), so a host ships this alongside the scene and resolves a click
+    /// via a cached rect table, exactly as the HTML/serval lane does. Empty before the
+    /// first frame.
+    #[cfg(feature = "render")]
+    pub fn links(&self) -> Vec<(String, [f32; 4])> {
+        let layout = self.layout.borrow();
+        let Some(session) = layout.as_ref() else {
+            return Vec::new();
+        };
+        let host = self.rt.host().borrow();
+        session.link_rects(&host.dom)
+    }
+
     /// Scroll by a device-px wheel delta, clamped to the last frame's scrollable
     /// range (no re-layout — the next frame reconciles exactly). Returns whether the
     /// offset moved. A no-op before the first [`frame`](Self::frame).
@@ -960,6 +976,31 @@ mod tests {
         );
         let _ = doc.scroll_by(0.0, 100_000.0);
         assert!(!doc.scroll_by(0.0, 100.0), "clamped at the bottom edge");
+    }
+
+    /// `links()` is empty before the first frame; after a frame it reports the href +
+    /// a positive-area rect for a script-injected link, from the retained cascade the
+    /// `getComputedStyle` bridge shares — the same table a host resolves a click
+    /// against, no per-click query into the live DOM needed.
+    fn scripted_links_report_after_a_frame<E: ScriptEngine>() {
+        let html = "<body><script>\
+            var a = document.createElement('a');\
+            a.setAttribute('href', 'https://example.test/');\
+            a.appendChild(document.createTextNode('go'));\
+            document.body.appendChild(a);\
+            </script></body>";
+        let mut doc = ScriptedDocument::<E>::parse(html).expect("runtime inits");
+        assert!(doc.links().is_empty(), "no rects before the first frame");
+        let _ = doc.frame(400, 300);
+        let links = doc.links();
+        // A boxed anchor harvests both its text-line rect and its border-box rect (see
+        // `link_harvest`'s own `block_anchor_harvests_its_box`), so assert on content
+        // rather than count: every rect carries the href, with positive area.
+        assert!(!links.is_empty(), "the script-injected link harvested at least one rect");
+        for (href, rect) in &links {
+            assert_eq!(href, "https://example.test/");
+            assert!(rect[2] > rect[0] && rect[3] > rect[1], "positive-area rect: {rect:?}");
+        }
     }
 
     /// The GC tick reaps a node the script orphaned and dropped its only reference to:
@@ -1787,6 +1828,10 @@ mod tests {
     #[test]
     fn scripted_content_scrolls_on_boa() {
         scripted_content_scrolls::<BoaEngine>();
+    }
+    #[test]
+    fn scripted_links_report_after_a_frame_on_boa() {
+        scripted_links_report_after_a_frame::<BoaEngine>();
     }
     #[test]
     fn pump_collects_orphans_on_boa() {
