@@ -1160,7 +1160,7 @@ enum T262 {
 /// Otherwise it assembles (harness + includes + test) for each strict variant and
 /// evals. A positive test passes iff it does not throw; a negative test passes iff it
 /// throws an error of the expected type (matched against the thrown value's toString).
-/// `async` ($DONE) is the next slice.
+/// `async` tests report completion through `$DONE`; `module` tests run as ES modules.
 fn run_262<E: ScriptEngine>(
     hns: &test262::Harness,
     test_src: &str,
@@ -1168,7 +1168,7 @@ fn run_262<E: ScriptEngine>(
     path: &Path,
 ) -> T262 {
     if meta.flags.r#async {
-        return T262::Skip; // async ($DONE) lands in the next slice
+        return run_262_async::<E>(hns, test_src, meta);
     }
     if meta.flags.module {
         return run_262_module::<E>(hns, test_src, meta, path);
@@ -1240,6 +1240,57 @@ fn run_262_module<E: ScriptEngine>(
             Some((target.to_string_lossy().into_owned(), src))
         };
         rt.eval_module(&test_src, &base, &mut resolve).is_err()
+    }));
+    let threw = match outcome {
+        Ok(t) => t,
+        Err(_) => return T262::Fail,
+    };
+    if threw != negative {
+        T262::Fail
+    } else {
+        T262::Pass
+    }
+}
+
+/// Async test: the test signals completion through `$DONE`, which the harness's
+/// `doneprintHandle.js` reports via `print`. We shim `print` into a JS buffer, run the
+/// test, drive the event loop to settle promise/timer jobs, then read the buffer back
+/// and scan for the `Test262:AsyncTestComplete` sentinel (absent or `…Failure` = fail).
+///
+/// Re-enabled once per-test worker-subprocess isolation existed: each async test runs
+/// in its own reaped process bounded by `--timeout`, so a non-settling test is a clean
+/// timeout, not the cross-test memory blow-up that forced the earlier in-process revert.
+fn run_262_async<E: ScriptEngine>(
+    hns: &test262::Harness,
+    test_src: &str,
+    meta: &test262::Test262Meta,
+) -> T262 {
+    let Ok(preamble) = hns.preamble(meta) else {
+        return T262::Skip; // a missing include file
+    };
+    let negative = meta.negative.is_some();
+    // `print` is defined before `$DONE` is invoked; `doneprintHandle.js` (in the
+    // preamble) calls it on completion. The host captures `console`, but the test262
+    // async harness uses `print`, so route it into a buffer we can read back.
+    let script = format!(
+        "globalThis.__262log='';globalThis.print=function(s){{__262log+=String(s)+'\\n';}};\n{preamble}{test_src}"
+    );
+    let outcome = std::panic::catch_unwind(AssertUnwindSafe(move || -> bool {
+        let Ok(mut rt) = script_runtime_api::Runtime::<E>::new() else {
+            return true;
+        };
+        if rt.eval(&script).is_err() {
+            return true; // threw synchronously before completing
+        }
+        let _ = rt.run_event_loop(1024); // settle promise/timer jobs (breaks when idle)
+        let log = rt
+            .eval("__262log")
+            .ok()
+            .and_then(|v| rt.value_to_string(&v).ok())
+            .unwrap_or_default();
+        let passed = log.contains("Test262:AsyncTestComplete")
+            && !log.contains("Test262:AsyncTestFailure");
+        !passed // threw-style: true = did not pass
     }));
     let threw = match outcome {
         Ok(t) => t,

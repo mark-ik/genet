@@ -217,6 +217,13 @@ impl<E: ScriptEngine> Runtime<E> {
         self.engine.describe_error(error)
     }
 
+    /// Stringify a value through the engine (`String(value)` semantics). Used by
+    /// callers that read a result back out of script — e.g. the test262 async harness,
+    /// which reports completion through a captured `print` buffer.
+    pub fn value_to_string(&mut self, value: &E::Value) -> Result<String, E::Error> {
+        self.engine.value_to_string(value)
+    }
+
     /// Evaluate `source` as an ECMAScript module (`<script type=module>`), resolving
     /// `import`s against `base_url` through the host `resolve` callback (which fetches
     /// dependency source). Returns `Ok(None)` when the backend does not support
