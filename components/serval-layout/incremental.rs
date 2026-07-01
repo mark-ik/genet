@@ -179,6 +179,21 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         &self.fragments
     }
 
+    /// Every `<a href>`'s hit rect(s) + href, in full-document px (unscrolled) — see
+    /// [`link_harvest`](crate::link_harvest) for the coordinate convention and the two
+    /// anchor shapes harvested. A host that owns a flat, non-queryable scene (unlike the
+    /// document lane's retained packet) ships this alongside the scene once per render, so
+    /// a click resolves to a link via a cached rect table instead of a live query. Reuses
+    /// the fields [`ContentLayout::emit_band`](crate::ContentLayout::emit_band) already
+    /// harvests from for the HTML/serval lane; any host retaining an `IncrementalLayout`
+    /// session (the scripted-live rung, pelt's `SmolwebDocument`) gets the same mechanism.
+    pub fn link_rects<D>(&self, dom: &D) -> Vec<(String, [f32; 4])>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        crate::link_harvest::harvest_link_rects(dom, &self.fragments, &self.built, &self.text_ctx)
+    }
+
     /// The absolute (document-space, unscrolled) rect `(x, y, w, h)` of `node`, or `None`
     /// if it has no fragment. Folds the parent-relative taffy locations up the DOM chain
     /// (via [`serval_lane::absolute_origin`](crate::serval_lane::absolute_origin)) so hosts

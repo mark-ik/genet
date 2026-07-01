@@ -182,6 +182,20 @@ impl SmolwebDocument {
         height.max(1) + max_y.round() as u32
     }
 
+    /// Every link's hit rect(s) + href, in full-document px (unscrolled) — see
+    /// [`serval_layout::IncrementalLayout::link_rects`]. A host that composites this
+    /// document's flat scene (rather than querying a retained packet) ships this
+    /// alongside the scene so a click resolves via a cached rect table, the same
+    /// mechanism the HTML/serval lane uses. Empty before the first frame.
+    pub fn links(&self) -> Vec<(String, [f32; 4])> {
+        let Some(session) = self.session.as_ref() else {
+            return Vec::new();
+        };
+        let dom = self.runner.dom();
+        let dom = dom.borrow();
+        session.link_rects(&*dom)
+    }
+
     /// Resolve a click at scene-local `(x, y)` to a navigation target, if it landed on
     /// a link. Uses the current layout (built at `width`×`height` if needed), then
     /// dispatches the click and returns the first navigation its handlers emitted.
@@ -349,6 +363,27 @@ mod tests {
             doc.session.as_ref().expect("framed").viewport_scroll()
         };
         assert_eq!(y0, 0.0, "scroll_to(0) returns to the top");
+    }
+
+    /// `links()` is empty before the first frame, and after framing returns every link
+    /// line's href + rect — the cached table a host resolves a click against.
+    #[test]
+    fn links_reports_hrefs_after_a_frame() {
+        let mut doc = SmolwebDocument::parse(
+            "gemini://x.test/",
+            "=> gemini://x.test/a First\n=> gemini://x.test/b Second\n",
+            SmolwebTheme::Plain,
+        );
+        assert!(doc.links().is_empty(), "no rects before the first frame");
+
+        let _ = doc.frame(400, 300);
+        let links = doc.links();
+        let hrefs: Vec<&str> = links.iter().map(|(href, _)| href.as_str()).collect();
+        assert!(hrefs.contains(&"gemini://x.test/a"));
+        assert!(hrefs.contains(&"gemini://x.test/b"));
+        for (_, rect) in &links {
+            assert!(rect[2] > rect[0] && rect[3] > rect[1], "positive-area rect: {rect:?}");
+        }
     }
 
     /// A short capsule's content height is just its own extent (no scroll needed), not
