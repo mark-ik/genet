@@ -525,6 +525,23 @@ Options:
 }
 
 fn main() {
+    // Deep JS recursion (e.g. re-entrant DOM event dispatch that never terminates) reaches
+    // Nova's 3500-execution-context limit, but each level's native footprint (host dispatch +
+    // bytecode-interpreter frames) is large enough to overflow the OS thread stack first on
+    // the default (~1MB on Windows) — crashing the whole process instead of throwing a
+    // catchable "Maximum call stack size exceeded". Run the entire runner on a large stack so
+    // that limit is reached first. Engine-agnostic (Boa benefits too); also hardens the
+    // test262 workers, whose crash would otherwise count as a skip.
+    let handle = std::thread::Builder::new()
+        .stack_size(512 * 1024 * 1024)
+        .spawn(real_main)
+        .expect("failed to spawn runner thread");
+    if handle.join().is_err() {
+        std::process::exit(101); // the panic message was already printed by the default hook
+    }
+}
+
+fn real_main() {
     let args = match parse_args() {
         Ok(a) => a,
         Err(msg) => {
