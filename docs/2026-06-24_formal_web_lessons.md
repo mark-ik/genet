@@ -52,7 +52,7 @@ The agent concept transfers even though its process binding does not: copy the s
 - `repos/mere/.../2026-06-03_actor_constellation_plan.md` — the two event-loop bug-rules as load-bearing invariants; the task-source design note (idea 2); agent-cluster as the SAB/Atomics boundary.
 - `2026-06-24_grand_audit.md` §6 — BYOB via formal-web's controller (idea 1) and the microtask-checkpoint tightening (idea 3) as the concrete §6 closers; pointer here.
 - `2026-06-06_wasm_enablement_and_crate_rename_plan.md` — agent-cluster -> Web-Worker mapping + `can_block` in the async sub-thread.
-- `2026-06-24_html_interface_table_plan.md` — the runtime WebIDL bindings registry (idea 6) as the reference shape for the table mechanism.
+- `archive/2026-06-24_html_interface_table_plan.md` — the runtime WebIDL bindings registry (idea 6) as the reference shape for the table mechanism. Archived 2026-07-01, all phases done.
 - `2026-06-24_wpt_harness_exactness_plan.md` — the WPT governance model (include.ini + meta/ + `unexpected=0` + dual-reporting micro-tests) and trace validation as an optional rigor capability (new H4).
 
 ## Spun off (new plans, this directory)

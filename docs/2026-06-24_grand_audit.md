@@ -126,7 +126,7 @@ serval is not "a browser engine" in the Servo sense. It is a deliberately decomp
 New, serval (this directory):
 
 - `2026-06-24_wpt_harness_exactness_plan.md` — levers 1, 3, 5 (MANIFEST.json reader, snapshot-clone Runtime pool, corpora re-score + checked-in expectations/regression guard).
-- `2026-06-24_html_interface_table_plan.md` — lever 4 (declarative per-tag HTML interface table + custom-elements unblock).
+- `archive/2026-06-24_html_interface_table_plan.md` — lever 4 (declarative per-tag HTML interface table + custom-elements unblock). Archived 2026-07-01, all phases done; follow-ups in `2026-07-01_html_interface_table_followups.md`.
 - `2026-06-24_capability_activation_plan.md` — §5 sidequests: XPath `Document.evaluate`, serval-extract -> Inspector + crawler, live WebGL `<canvas>` via external-texture, serval CI + witness guard.
 
 New, mere:
