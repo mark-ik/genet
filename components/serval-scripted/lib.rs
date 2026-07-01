@@ -151,7 +151,7 @@ pub fn pump_retire_collect<E: ScriptEngine>(
     (unpinned, collected)
 }
 
-#[cfg(target_pointer_width = "64")]
+#[cfg(all(feature = "scripted-nova", target_pointer_width = "64"))]
 mod native {
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -244,7 +244,7 @@ mod native {
     }
 }
 
-#[cfg(target_pointer_width = "64")]
+#[cfg(all(feature = "scripted-nova", target_pointer_width = "64"))]
 pub use native::run_script;
 
 #[cfg(test)]
@@ -277,7 +277,7 @@ mod pin_tests {
     }
 }
 
-#[cfg(all(test, target_pointer_width = "64"))]
+#[cfg(all(test, feature = "scripted-nova", target_pointer_width = "64"))]
 mod drain_tests {
     use super::*;
     use script_engine_api::ScriptEngineLive;

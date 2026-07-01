@@ -24,7 +24,11 @@ default = ["render"]
 render = ["dep:netrender", "dep:serval-layout", "dep:serval-render"]
 # Optional local conformance fixtures that exercise the same document tests on
 # Nova. The default suite keeps Boa as the baseline worker-compatible backend.
-scripted-nova = []
+# Gates the `dep:script-engine-nova` below too, so a Boa-only consumer never
+# compiles nova_vm at all (it was previously always-on on 64-bit targets
+# regardless of this feature -- an unconditional dependency the `#[cfg(feature =
+# "scripted-nova")]` test gate never actually covered).
+scripted-nova = ["dep:script-engine-nova"]
 
 [dependencies]
 serval-scripted-dom = { path = "../serval-scripted-dom" }
@@ -46,5 +50,6 @@ script-engine-api = { path = "../script-engine-api" }
 script-engine-boa = { path = "../script-engine-boa" }
 
 [target.'cfg(target_pointer_width = "64")'.dependencies]
-# Nova backend on all 64-bit targets, including wasm64.
-script-engine-nova = { path = "../script-engine-nova" }
+# Nova backend on all 64-bit targets, including wasm64. Optional, gated by
+# `scripted-nova` (see [features]).
+script-engine-nova = { path = "../script-engine-nova", optional = true }
