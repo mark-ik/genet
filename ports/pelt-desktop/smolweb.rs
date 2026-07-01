@@ -156,6 +156,32 @@ impl SmolwebDocument {
         session.scroll_for_key(&*dom, key)
     }
 
+    /// Scroll to an absolute vertical offset (device px), clamped to the document's
+    /// scroll range. A no-op before the first frame (the caller should [`frame`](Self::frame)
+    /// once first, e.g. at `(width, height)`, before scrolling to a host-requested band).
+    pub fn scroll_to(&mut self, y: f32) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let dom = self.runner.dom();
+        let dom = dom.borrow();
+        let x = session.viewport_scroll().0;
+        session.set_viewport_scroll(&*dom, (x, y));
+    }
+
+    /// The document's full content height (px): the viewport height plus its maximum
+    /// downward scroll ([`serval_layout::IncrementalLayout::scroll_range`]) at
+    /// `width`×`height`. Builds (or reuses) the session at that size. A host uses this
+    /// to decide whether the capsule needs scroll banding at all.
+    pub fn content_height(&mut self, width: u32, height: u32) -> u32 {
+        self.ensure_session(width, height);
+        let dom = self.runner.dom();
+        let dom = dom.borrow();
+        let session = self.session.as_ref().expect("session built by ensure_session");
+        let (_, max_y) = session.scroll_range(&*dom);
+        height.max(1) + max_y.round() as u32
+    }
+
     /// Resolve a click at scene-local `(x, y)` to a navigation target, if it landed on
     /// a link. Uses the current layout (built at `width`×`height` if needed), then
     /// dispatches the click and returns the first navigation its handlers emitted.
@@ -298,6 +324,40 @@ mod tests {
         let _ = doc.frame(400, 300); // build the session at a short viewport
         assert!(!doc.scroll_by(0.0, -50.0), "at the top, scrolling up clamps (no move)");
         assert!(doc.scroll_by(0.0, 240.0), "a capsule taller than the viewport scrolls down");
+    }
+
+    /// `content_height` reports more than the viewport for a tall capsule, and
+    /// `scroll_to` jumps to an absolute offset (clamped to the scroll range) — the two
+    /// primitives a host's band-scroll protocol needs.
+    #[test]
+    fn content_height_and_scroll_to() {
+        let body: String = (0..200).map(|i| format!("Line {i}\n")).collect();
+        let mut doc = SmolwebDocument::parse("gemini://x.test/", &body, SmolwebTheme::Plain);
+        let height = doc.content_height(400, 300);
+        assert!(height > 300, "a 200-line capsule exceeds a 300px viewport: {height}");
+
+        doc.scroll_to(1_000_000.0);
+        let (_, y) = {
+            let _ = doc.frame(400, 300);
+            doc.session.as_ref().expect("framed").viewport_scroll()
+        };
+        assert!(y > 0.0 && y < 1_000_000.0, "scroll_to clamps to the scroll range: {y}");
+
+        doc.scroll_to(0.0);
+        let (_, y0) = {
+            let _ = doc.frame(400, 300);
+            doc.session.as_ref().expect("framed").viewport_scroll()
+        };
+        assert_eq!(y0, 0.0, "scroll_to(0) returns to the top");
+    }
+
+    /// A short capsule's content height is just its own extent (no scroll needed), not
+    /// artificially inflated to the viewport.
+    #[test]
+    fn short_capsule_content_height_is_not_inflated_past_viewport() {
+        let mut doc = SmolwebDocument::parse("gemini://x.test/", "# Hi\n", SmolwebTheme::Plain);
+        let height = doc.content_height(400, 300);
+        assert_eq!(height, 300, "a short capsule's height floors at the viewport, no scroll range");
     }
 
     /// A gopher menu is detected by scheme and renders a typed item line.
