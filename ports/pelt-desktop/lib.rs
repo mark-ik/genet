@@ -27,6 +27,10 @@ mod net_fetch;
 mod smolweb;
 #[cfg(feature = "smolweb")]
 pub use smolweb::SmolwebDocument;
+// Re-exported so a host that builds a `SmolwebDocument` can name its theme (and, for
+// the App theme, supply a palette) without depending on `smolweb-views` directly.
+#[cfg(feature = "smolweb")]
+pub use smolweb_views::{SmolwebPalette, SmolwebTheme};
 #[cfg(all(feature = "smolweb", feature = "viewer"))]
 pub use smolweb::run_smolweb_viewer;
 #[cfg(all(feature = "smolweb", feature = "viewer", feature = "chrome"))]
