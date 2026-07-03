@@ -198,13 +198,14 @@ const DEFAULT_TILE_CSS: &str = "\
     .tile-split { width: 100%; height: 100%; } \
     .tile-branch { display: flex; } \
     .tile-stack { width: 100%; height: 100%; } \
-    .tile-tabbar { display: flex; height: 36px; background: #33333a; } \
-    .tile-tab { display: flex; align-items: center; padding: 5px 10px; color: #cccccc; background: #2a2a30; margin-right: 2px; } \
+    .tile-tabbar { display: flex; align-items: stretch; height: 44px; padding: 0 2px; background: #33333a; } \
+    .tile-tab { display: flex; align-items: center; min-width: 0; padding: 8px 14px; font-size: 15px; line-height: 1.2; color: #cccccc; background: #2a2a30; margin-right: 3px; } \
     .tile-tab.active { color: #ffffff; background: #4a4a55; } \
-    .tile-close { margin-left: 8px; padding: 0 4px; color: #999999; } \
+    .tile-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } \
+    .tile-close { flex: 0 0 auto; margin-left: 10px; padding: 0 5px; font-size: 15px; color: #999999; } \
     .tile-content { flex: 1 1 0; min-height: 0; background: #ffffff; } \
-    .tile-divider { flex: 0 0 8px; background: #1a1a1f; } \
-    .tile-ghost { display: inline-block; padding: 6px 12px; color: #ffffff; background: #4a4a55; border: 1px solid #6a6a77; opacity: 0.85; }";
+    .tile-divider { flex: 0 0 10px; background: #1a1a1f; } \
+    .tile-ghost { display: inline-block; padding: 8px 14px; font-size: 15px; line-height: 1.2; color: #ffffff; background: #4a4a55; border: 1px solid #6a6a77; opacity: 0.85; }";
 
 /// A rendered tile-tree frame: the frame scene (tab bars + dividers), one layer per
 /// active *document* tile (its content-area rect + its document's scene), the

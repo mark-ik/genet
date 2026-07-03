@@ -46,6 +46,7 @@ pub struct TileShell {
     surface: TileSurface,
     width: u32,
     height: u32,
+    ui_scale: f32,
     cursor: (f32, f32),
     /// The last frame's tile content rects, for routing a click/scroll/drop to the tile
     /// under the cursor.
@@ -82,6 +83,7 @@ impl TileShell {
             surface: TileSurface::new(tree),
             width: 800,
             height: 600,
+            ui_scale: 1.0,
             cursor: (0.0, 0.0),
             tile_rects: Vec::new(),
             divider_drag: None,
@@ -108,6 +110,11 @@ impl TileShell {
     /// Layer the host's theme CSS over the surface's structural default.
     pub fn set_theme(&mut self, css: impl Into<String>) {
         self.surface.set_theme(css);
+    }
+
+    /// Set the shell's UI scale so transient drag visuals match the host's chrome scale.
+    pub fn set_ui_scale(&mut self, scale: f32) {
+        self.ui_scale = scale.clamp(0.5, 4.0);
     }
 
     /// Set the surface size (the next [`frame`](Self::frame) lays out at it).
@@ -140,12 +147,13 @@ impl TileShell {
         if let Some(drag) = self.tab_drag.as_ref() {
             if drag.moved {
                 if let Some(title) = self.surface.tile_title(drag.tile) {
-                    let (gw, gh) = (170u32, 30u32);
+                    let gw = (210.0 * self.ui_scale).round().max(1.0) as u32;
+                    let gh = (40.0 * self.ui_scale).round().max(1.0) as u32;
                     let scene = self.surface.ghost_scene(&title, gw, gh);
                     // Offset so the ghost trails just below-right of the cursor hotspot.
                     let rect = (
-                        self.cursor.0 - 12.0,
-                        self.cursor.1 - 14.0,
+                        self.cursor.0 - (14.0 * self.ui_scale),
+                        self.cursor.1 - (16.0 * self.ui_scale),
                         gw as f32,
                         gh as f32,
                     );
